@@ -19,7 +19,6 @@ This repository contains the open-source protocol implementation and supporting 
 ## Links
 
 - [clear.txt](https://clear.dfos.com) — the builder and cryptography space on DFOS
-- [Protocol reference](https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648) — 42KB of worked examples, byte-level test vectors, and everything needed to reimplement the system
 - [DFOS](https://dfos.com)
 
 ## License

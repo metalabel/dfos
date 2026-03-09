@@ -14,7 +14,7 @@ Two chain types, three operations each.
 
 Both are signed linked lists using the same mechanics — Ed25519 signatures, JWS compact tokens, content-addressed CID links. Take any DFOS proof token, decode it with any JWT library that supports EdDSA, and you have the operation payload and a verified signature.
 
-See [`PROTOCOL.md`](./PROTOCOL.md) for the full specification and the [protocol reference](https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648) for worked examples with byte-level test vectors.
+See [`PROTOCOL.md`](./PROTOCOL.md) for the full specification — 42KB of worked examples, byte-level test vectors, and everything needed to verify or reimplement the system.
 
 ## Install
 
