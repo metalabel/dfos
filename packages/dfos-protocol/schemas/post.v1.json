@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dfos.com/post/v1",
+  "title": "Post",
+  "description": "A post — the primary content type in DFOS. Covers short posts, long-form posts, comments, and replies via the format discriminator.",
+  "type": "object",
+  "required": ["$schema", "format"],
+  "properties": {
+    "$schema": {
+      "const": "https://schemas.dfos.com/post/v1"
+    },
+    "format": {
+      "type": "string",
+      "enum": ["short-post", "long-post", "comment", "reply"],
+      "description": "Immutable content format — set at creation, never changes. Determines rendering and interaction semantics."
+    },
+    "title": {
+      "type": "string",
+      "description": "Post title. Typically used for long-post format."
+    },
+    "body": {
+      "type": "string",
+      "description": "Post body content."
+    },
+    "cover": {
+      "$ref": "#/$defs/media",
+      "description": "Cover image for the post."
+    },
+    "attachments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/media" },
+      "description": "Attached media objects."
+    },
+    "topics": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Topic names this post belongs to. Stored as names for portability."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "media": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Opaque media object identifier."
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri",
+          "description": "Optional URI for the media object."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

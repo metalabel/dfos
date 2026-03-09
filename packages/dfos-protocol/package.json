@@ -1,0 +1,29 @@
+{
+  "name": "@metalabel/dfos-protocol",
+  "version": "0.0.0",
+  "description": "DFOS Protocol — Ed25519 signed chain primitives, registry, and verification",
+  "exports": {
+    ".": "./src/index.ts",
+    "./crypto": "./src/crypto/index.ts",
+    "./chain": "./src/chain/index.ts",
+    "./registry": "./src/registry/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ipld/dag-cbor": "^9.2.5",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
+    "hono": "^4.12.3",
+    "multiformats": "^13.4.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.4",
+    "ajv": "^8.18.0",
+    "ajv-formats": "^3.0.1",
+    "vitest": "^4.0.18"
+  }
+}

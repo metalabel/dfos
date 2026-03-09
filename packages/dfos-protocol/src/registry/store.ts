@@ -1,0 +1,110 @@
+/*
+
+  IN-MEMORY CHAIN STORE
+
+  Reference implementation of chain storage with linear enforcement.
+  Accept same or longer chain, reject forks.
+
+*/
+
+import type { OperationEntry } from './schemas';
+
+export interface StoredChain {
+  /** Ordered array of operations, genesis first */
+  operations: OperationEntry[];
+}
+
+export class ChainStore {
+  private identities = new Map<string, StoredChain>();
+  private entities = new Map<string, StoredChain>();
+  private documents = new Map<string, unknown>();
+
+  // --- identities ---
+
+  getIdentityChain(did: string): StoredChain | undefined {
+    return this.identities.get(did);
+  }
+
+  /**
+   * Submit an identity chain. Returns 'accepted' | 'noop' | 'conflict'.
+   * - accepted: chain was stored or extended
+   * - noop: submitted chain is same as or prefix of stored chain
+   * - conflict: submitted chain diverges from stored chain (fork)
+   */
+  submitIdentityChain(did: string, operations: OperationEntry[]): 'accepted' | 'noop' | 'conflict' {
+    return this.submitChain(this.identities, did, operations);
+  }
+
+  // --- entities ---
+
+  getEntityChain(entityId: string): StoredChain | undefined {
+    return this.entities.get(entityId);
+  }
+
+  submitEntityChain(
+    entityId: string,
+    operations: OperationEntry[],
+  ): 'accepted' | 'noop' | 'conflict' {
+    return this.submitChain(this.entities, entityId, operations);
+  }
+
+  // --- documents ---
+
+  getDocument(cid: string): unknown | undefined {
+    return this.documents.get(cid);
+  }
+
+  setDocument(cid: string, content: unknown): void {
+    this.documents.set(cid, content);
+  }
+
+  // --- operations (lookup across all chains) ---
+
+  getOperation(cid: string): OperationEntry | undefined {
+    for (const chain of this.identities.values()) {
+      const op = chain.operations.find((o) => o.cid === cid);
+      if (op) return op;
+    }
+    for (const chain of this.entities.values()) {
+      const op = chain.operations.find((o) => o.cid === cid);
+      if (op) return op;
+    }
+    return undefined;
+  }
+
+  // --- shared chain submission logic ---
+
+  private submitChain(
+    store: Map<string, StoredChain>,
+    id: string,
+    operations: OperationEntry[],
+  ): 'accepted' | 'noop' | 'conflict' {
+    const existing = store.get(id);
+
+    if (!existing) {
+      store.set(id, { operations });
+      return 'accepted';
+    }
+
+    // check if submitted chain is same or prefix of stored
+    if (operations.length <= existing.operations.length) {
+      for (let i = 0; i < operations.length; i++) {
+        if (operations[i]!.cid !== existing.operations[i]!.cid) {
+          return 'conflict';
+        }
+      }
+      return 'noop';
+    }
+
+    // submitted chain is longer — verify it extends the stored chain
+    for (let i = 0; i < existing.operations.length; i++) {
+      if (operations[i]!.cid !== existing.operations[i]!.cid) {
+        return 'conflict';
+      }
+    }
+
+    // accept the extension
+    store.set(id, { operations });
+    return 'accepted';
+  }
+}

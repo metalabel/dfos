@@ -1,0 +1,166 @@
+import { describe, expect, it } from 'vitest';
+import {
+  createJws,
+  createNewEd25519Keypair,
+  decodeJwsUnsafe,
+  importEd25519Keypair,
+  isValidEd25519Signature,
+  JwsVerificationError,
+  signPayloadEd25519,
+  verifyJws,
+} from '../src/crypto';
+
+describe('ed25519', () => {
+  it('should create a keypair that can sign and verify', () => {
+    const pair1 = createNewEd25519Keypair();
+    const pair2 = createNewEd25519Keypair();
+    const payload = new TextEncoder().encode('hello world');
+    const signature = signPayloadEd25519(payload, pair1.privateKey);
+    expect(isValidEd25519Signature(payload, signature, pair1.publicKey)).toBe(true);
+    expect(isValidEd25519Signature(payload, signature, pair2.publicKey)).toBe(false);
+  });
+
+  it('should allow importing a keypair from a private key', () => {
+    const pair1 = createNewEd25519Keypair();
+    const pair2 = importEd25519Keypair(pair1.privateKey);
+    expect(pair1.publicKey).toEqual(pair2.publicKey);
+  });
+
+  it('should produce deterministic signatures', () => {
+    const pair = createNewEd25519Keypair();
+    const payload = new TextEncoder().encode('deterministic test');
+    const sig1 = signPayloadEd25519(payload, pair.privateKey);
+    const sig2 = signPayloadEd25519(payload, pair.privateKey);
+    expect(sig1).toEqual(sig2);
+  });
+
+  it('should reject tampered signatures', () => {
+    const pair = createNewEd25519Keypair();
+    const payload = new TextEncoder().encode('hello');
+    const signature = signPayloadEd25519(payload, pair.privateKey);
+    const tampered = new Uint8Array(signature);
+    tampered[0] = tampered[0]! ^ 0xff;
+    expect(isValidEd25519Signature(payload, tampered, pair.publicKey)).toBe(false);
+  });
+
+  it('should reject signature for wrong payload', () => {
+    const pair = createNewEd25519Keypair();
+    const payload1 = new TextEncoder().encode('hello');
+    const payload2 = new TextEncoder().encode('world');
+    const signature = signPayloadEd25519(payload1, pair.privateKey);
+    expect(isValidEd25519Signature(payload2, signature, pair.publicKey)).toBe(false);
+  });
+
+  it('should produce 64-byte signatures and 32-byte keys', () => {
+    const pair = createNewEd25519Keypair();
+    const payload = new TextEncoder().encode('test');
+    const signature = signPayloadEd25519(payload, pair.privateKey);
+    expect(signature.length).toBe(64);
+    expect(pair.privateKey.length).toBe(32);
+    expect(pair.publicKey.length).toBe(32);
+  });
+});
+
+describe('jws', () => {
+  const createTestSigner = (privateKey: Uint8Array) => {
+    return async (message: Uint8Array) => signPayloadEd25519(message, privateKey);
+  };
+
+  it('should create and verify a JWS round-trip', async () => {
+    const keypair = createNewEd25519Keypair();
+
+    const token = await createJws({
+      header: { alg: 'EdDSA', typ: 'did:dfos:catalog-op', kid: 'did:dfos:abc123#key_1' },
+      payload: { type: 'create', version: 1, documentCID: 'bafyrei...' },
+      sign: createTestSigner(keypair.privateKey),
+    });
+
+    expect(token).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+
+    const result = verifyJws({ token, publicKey: keypair.publicKey });
+    expect(result.header.alg).toBe('EdDSA');
+    expect(result.header.typ).toBe('did:dfos:catalog-op');
+    expect(result.header.kid).toBe('did:dfos:abc123#key_1');
+    expect(result.payload.type).toBe('create');
+    expect(result.payload.version).toBe(1);
+  });
+
+  it('should reject signature from wrong key', async () => {
+    const keypair1 = createNewEd25519Keypair();
+    const keypair2 = createNewEd25519Keypair();
+
+    const token = await createJws({
+      header: { alg: 'EdDSA', typ: 'test', kid: 'key1' },
+      payload: { data: 'hello' },
+      sign: createTestSigner(keypair1.privateKey),
+    });
+
+    expect(() => verifyJws({ token, publicKey: keypair2.publicKey })).toThrow(JwsVerificationError);
+  });
+
+  it('should reject tampered payload', async () => {
+    const keypair = createNewEd25519Keypair();
+
+    const token = await createJws({
+      header: { alg: 'EdDSA', typ: 'test', kid: 'key1' },
+      payload: { data: 'original' },
+      sign: createTestSigner(keypair.privateKey),
+    });
+
+    const parts = token.split('.');
+    const tamperedPayloadB64 = btoa(JSON.stringify({ data: 'tampered' }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    const tamperedToken = `${parts[0]}.${tamperedPayloadB64}.${parts[2]}`;
+
+    expect(() => verifyJws({ token: tamperedToken, publicKey: keypair.publicKey })).toThrow(
+      JwsVerificationError,
+    );
+  });
+
+  it('should decode JWS without verification', async () => {
+    const keypair = createNewEd25519Keypair();
+
+    const token = await createJws({
+      header: { alg: 'EdDSA', typ: 'did:dfos:identity-op', kid: 'key_abc' },
+      payload: { type: 'update', previousCID: null },
+      sign: createTestSigner(keypair.privateKey),
+    });
+
+    const decoded = decodeJwsUnsafe(token);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.header.kid).toBe('key_abc');
+    expect(decoded!.payload.type).toBe('update');
+  });
+
+  it('should return null for malformed tokens', () => {
+    expect(decodeJwsUnsafe('not-a-jws')).toBeNull();
+    expect(decodeJwsUnsafe('a.b')).toBeNull();
+    expect(decodeJwsUnsafe('')).toBeNull();
+  });
+
+  it('should reject non-EdDSA algorithm', () => {
+    const keypair = createNewEd25519Keypair();
+    const headerB64 = btoa(JSON.stringify({ alg: 'ES256K', typ: 'test', kid: 'key1' }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    const payloadB64 = btoa(JSON.stringify({ data: 'test' }))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    const fakeToken = `${headerB64}.${payloadB64}.fakesig`;
+
+    expect(() => verifyJws({ token: fakeToken, publicKey: keypair.publicKey })).toThrow(
+      'Unsupported algorithm',
+    );
+  });
+
+  it('should reject invalid token format', () => {
+    const keypair = createNewEd25519Keypair();
+    expect(() => verifyJws({ token: 'not.valid', publicKey: keypair.publicKey })).toThrow(
+      'Invalid token format',
+    );
+  });
+});

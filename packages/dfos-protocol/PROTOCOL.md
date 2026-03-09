@@ -1,0 +1,791 @@
+# DFOS Protocol: Complete Reference
+
+- **Date**: 2026-03-08
+- **Status**: Implemented and tested — TypeScript + Python + Go cross-language verification
+- **Source**: `packages/dfos-protocol` (self-contained, zero monorepo dependencies, OSS-ready)
+- **Gist**: https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648 (synced from this file)
+
+---
+
+## Philosophy
+
+DFOS is a dark forest operating system. Content lives in private spaces — visible only to members, governed by the communities that create it. The forest floor is dark by default.
+
+But the cryptographic proof layer is public and verifiable. Every piece of content, every identity, every edit has a signed chain of commitments that anyone can independently verify. You don't need to trust the platform. You don't need access to the database. You need a public key and a chain of JWS tokens.
+
+If you have content — from the official app, from an API export, from a screenshot someone sent you, from a pirate mirror, from anywhere — you can verify it's authentic. Hash the content, check the CID, walk the chain, verify the signature. The content is dark; the proof is light.
+
+The protocol makes this verification radically simple. Two chain types — identity and content — using the same mechanics: Ed25519 signatures, JWS compact tokens, content-addressed CIDs. The protocol is deliberately minimal. It knows about keys and document hashes. It doesn't know about posts, profiles, or any application concept. Document semantics are entirely application layer — free to evolve without protocol changes.
+
+This means the protocol is not coupled to DFOS. Any system could implement the same identity and content chain primitives — a fork, an alternative client, a completely independent platform — and produce interoperable, cross-verifiable proofs. An identity created on one system can sign content on another. A proof chain started here can be extended there. The protocol is a shared substrate, not a product feature. DFOS is one application built on it. There could be others.
+
+The result: a signed content ledger that any standard EdDSA library can verify, in any language, without DFOS-specific dependencies. The dark forest has public roots.
+
+---
+
+This document is a complete, self-contained reference for the DFOS protocol. All artifacts are deterministic and reproducible from fixed seeds. An independent implementer can verify every value using standard Ed25519 + dag-cbor libraries.
+
+**To regenerate**: `pnpm --filter @metalabel/dfos-protocol exec vitest run tests/protocol-reference.spec.ts`
+
+---
+
+## Protocol Overview
+
+The DFOS protocol has three layers:
+
+| Layer                 | Concern                                                                      |
+| --------------------- | ---------------------------------------------------------------------------- |
+| **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links |
+| **Document envelope** | Standard wrapper: `content` + `baseDocumentCID` + `createdByDID` + timestamp |
+| **Content schemas**   | JSON Schema definitions for what goes inside `content` (post, profile, etc.) |
+
+The crypto core is the trust boundary — everything below it is cryptographically verified. The document envelope provides structural metadata (attribution, edit lineage, timestamps). Content schemas define the application-level semantics.
+
+### Crypto Core: Two Chain Types
+
+|                | Identity Chain             | Content Chain                    |
+| -------------- | -------------------------- | -------------------------------- |
+| Commits to     | Key sets (embedded)        | Documents (by CID reference)     |
+| Identifier     | `did:dfos:<hash>`          | `<hash>` (bare)                  |
+| Operations     | create, update, delete     | create, update, delete           |
+| JWS typ        | `did:dfos:identity-op`     | `did:dfos:content-op`            |
+| Self-sovereign | Yes (signs own operations) | No (signed by external identity) |
+
+Both chains are signed linked lists of state commitments. Identity chains embed their state (key sets). Content chains reference their state via `documentCID` — a content-addressed pointer to a document envelope.
+
+### Document Envelope
+
+Every document committed to by a content chain uses a standard envelope, defined by JSON Schema at [`schemas/document-envelope.v1.json`](schemas/document-envelope.v1.json) (`https://schemas.dfos.com/document-envelope/v1`):
+
+```json
+{
+  "content": { "$schema": "https://schemas.dfos.com/post/v1", ... },
+  "baseDocumentCID": "bafyrei..." | null,
+  "createdByDID": "did:dfos:...",
+  "createdAt": "2026-03-07T00:02:00.000Z"
+}
+```
+
+| Field             | Type         | Description                                                                 |
+| ----------------- | ------------ | --------------------------------------------------------------------------- |
+| `content`         | object       | Application-defined content — must include `$schema` URI, opaque to chains  |
+| `baseDocumentCID` | string\|null | CID of the previous document version (edit lineage). Null for first version |
+| `createdByDID`    | string       | DID of the identity that created this document version                      |
+| `createdAt`       | ISO 8601     | When this document version was created                                      |
+
+The `documentCID` in a content chain operation is `CID(dagCborEncode(envelope))`. The envelope provides attribution and edit history at the protocol level. The `content` field is where application-defined JSON Schema types live. The `content` object must include a `$schema` property identifying its content type — this makes every document self-describing and its schema cryptographically committed via the CID.
+
+### Content Schemas
+
+The `content` field inside the document envelope is validated by JSON Schema. The protocol ships a standard library of schemas (post, profile) — see [Standard Document Schemas](#standard-document-schemas). These are conventions, not requirements. Any implementation can define custom schemas.
+
+### Addressing
+
+Three canonical representations:
+
+| Thing                  | Form                       | Example                                                       |
+| ---------------------- | -------------------------- | ------------------------------------------------------------- |
+| Operation or document  | CID (dag-cbor + SHA-256)   | `bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy` |
+| Entity (content chain) | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c`                                      |
+| Identity (key chain)   | `did:dfos:<hash>`          | `did:dfos:e3vvtck42d4eacdnzvtrn6`                             |
+
+Operations and documents are CIDs — standard IPLD content addresses. Entities and identities are derived identifiers — `customAlpha(SHA-256(genesis CID bytes))`. Same derivation for both. Identity chains prepend `did:dfos:` (W3C DID spec). Entity identifiers are bare — just the 22-char hash, no prefix.
+
+Application code may add prefixes for routing (e.g., `post_xxxx`) — these are strippable semantic sugar, not part of the protocol identifier.
+
+---
+
+## Protocol Rules
+
+### Commitment Scheme
+
+The protocol requires a **deterministic payload commitment**: given the same logical operation, the commitment (CID) MUST be identical regardless of implementation language or platform. The commitment scheme is **dag-cbor canonical encoding + SHA-256 + CIDv1**. This is not a recommendation — it is the protocol.
+
+Implementations MUST use dag-cbor canonical encoding as defined by the [IPLD dag-cbor codec specification](https://ipld.io/specs/codecs/dag-cbor/spec/). Raw JSON serialization, pretty-printed JSON, or any non-canonical encoding MUST NOT be used for CID derivation. The dag-cbor hex test vectors in this document allow byte-level verification of any implementation's canonical encoding.
+
+**JWS signing vs CID derivation are intentionally different representations of the same payload.** JWS signs `base64url(JSON.stringify(payload))` — the UTF-8 bytes of the JSON serialization. CID commits to `dagCborCanonicalEncode(payload)` — the dag-cbor canonical encoding of the parsed object. These produce different bytes from the same logical data. This is by design: JWS uses standard JSON for maximum interoperability with existing JWS libraries, while CID uses dag-cbor for deterministic content addressing.
+
+### Chain Validity
+
+A valid chain is a **linear sequence** of operations. Each operation (after genesis) links to its predecessor via `previousOperationCID` / `previousOperationCID`. The chain provides structural ordering independent of timestamps.
+
+**Forks are invalid at the protocol level.** Two operations referencing the same `previousOperationCID` constitute a fork. The protocol does not define fork resolution — this is application-defined. In DFOS's custodial model, forks are prevented by database-level advisory locks. A non-custodial implementation would need its own fork resolution strategy (e.g., longest chain, first-seen, application-specified preference).
+
+**Timestamp ordering**: `createdAt` SHOULD be strictly increasing within a chain. Implementations SHOULD reject operations with non-increasing timestamps as a sanity check against replayed or mis-ordered operations. However, the chain link (CID reference) is the authoritative ordering mechanism, not the timestamp. Implementations MAY relax timestamp ordering in constrained environments where clock synchronization is impractical.
+
+### Signer Validity
+
+An operation is valid only if the signing key was a **controller key in the immediately prior state**. For genesis operations, the signing key MUST be one of the controller keys declared in that same operation — this is the bootstrap: the genesis operation introduces and simultaneously authorizes its own keys.
+
+For content chains: the signing key is resolved via the `kid` (DID URL), which references a key on an external identity. The content chain verifier delegates key resolution to the caller — the protocol does not prescribe how to look up an identity's current key state.
+
+### Terminal States
+
+**`delete` is the only terminal state.** No valid operations may follow a delete in either chain type. An implementation MUST reject any operation that appears after a delete.
+
+`delete` is a terminal marker that prevents future operations on the chain but does NOT remove data. The complete chain — including all prior operations and their signatures — MUST remain intact for verification. Any party holding the chain can still walk it, verify every signature, and confirm the history up to and including the delete. Data removal (e.g., purging content from storage) is an application-layer concern, not a protocol operation.
+
+### Controller Key Requirement
+
+`update` operations on identity chains MUST include at least one controller key. Validation MUST reject any `update` with an empty `controllerKeys` array. This ensures that an identity always has a path forward — if decommissioning is intended, `delete` is the correct terminal operation.
+
+### Content-Null Semantics
+
+An `update` operation on a content chain with `documentCID: null` means **the entity exists but its current content is cleared**. This is not a delete — the chain continues, and a subsequent update can set content again. Think of it as "unpublish" rather than "destroy."
+
+### `typ` Header
+
+The JWS `typ` header (`did:dfos:identity-op`, `did:dfos:content-op`) is advisory — it aids routing and dispatch but is not a security-critical field. Verification checks the signature and chain integrity, not the `typ` value. Implementations SHOULD validate `typ` for correctness but MUST NOT rely on it for security decisions.
+
+### JWT `kid` vs Operation `kid`
+
+JWT tokens (for device auth, MCP sessions, etc.) use `kid` as a simple key identifier for lookup — e.g., `key_ez9a874tckr3dv933d3ckd`. This does NOT follow the same DID URL convention used in operation JWS headers. Operation `kid` uses bare key ID for identity genesis and DID URL (`did:dfos:xxx#key_id`) for everything else. JWT `kid` is always a bare key ID — the JWT's `sub` claim carries the DID separately.
+
+### ID Modulo Bias
+
+The ID encoding uses `byte % 19` where each byte ranges 0-255. Since 256 is not evenly divisible by 19, values 0-8 (alphabet positions) appear with probability ~5.26% while values 9-18 appear with probability ~5.22%. This is a ~0.3% bias — not security-relevant for identifiers but acknowledged here for completeness. A rejection-sampling approach (retry if `byte >= 247`) would eliminate the bias entirely.
+
+### Size Limits
+
+The protocol does not define maximum operation or document sizes. Implementations MAY impose limits appropriate to their deployment context (e.g., maximum JWS token length, maximum document CID count, maximum chain length). DFOS's implementation enforces limits at the application layer.
+
+---
+
+## Standard Document Schemas
+
+The crypto core commits to `documentCID` values without inspecting their contents. The document envelope provides structural metadata. The **content** inside the envelope is where JSON Schema validation applies.
+
+The protocol ships a standard library of content schemas as JSON Schema (draft 2020-12) definitions. These are not required — any implementation can define its own content types. They are provided as a starting point for content built on the DFOS protocol, and they are what DFOS uses internally.
+
+### Schema Convention
+
+Documents declare their type via a `$schema` field pointing to a schema URI:
+
+```json
+{
+  "$schema": "https://schemas.dfos.com/post/v1",
+  "format": "short-post",
+  "body": "Hello world."
+}
+```
+
+Because the `$schema` field is part of the document, it is behind the `documentCID` — cryptographically committed in the content chain. Any verifier can resolve the document, read `$schema`, and validate against the schema.
+
+### Schema Evolution
+
+Schemas are versioned via the URI path (`/post/v1`, `/post/v2`). Evolution rules:
+
+- **Strictly additive within a version** — new optional fields can be added to an existing version at any time without breaking existing documents
+- **Breaking changes require a new version** — removing fields, changing types, or adding new required fields means a new version URI
+- **Implementations declare which versions they understand** — a registry or application can accept `post/v1` and `post/v2` simultaneously, or only `post/v1`
+
+### Standard Schemas
+
+Schema files live in `schemas/` in the protocol package. Each is a standalone JSON Schema (draft 2020-12).
+
+#### Post (`https://schemas.dfos.com/post/v1`)
+
+The primary content type. Covers short posts, long-form posts, comments, and replies via the `format` discriminator.
+
+| Field         | Type     | Required | Description                                                                        |
+| ------------- | -------- | -------- | ---------------------------------------------------------------------------------- |
+| `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                               |
+| `format`      | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — immutable, set at creation |
+| `title`       | string   | no       | Post title (typically for long-post format)                                        |
+| `body`        | string   | no       | Post body content                                                                  |
+| `cover`       | media    | no       | Cover image                                                                        |
+| `attachments` | media[]  | no       | Attached media objects                                                             |
+| `topics`      | string[] | no       | Topic names (stored as names for portability)                                      |
+
+#### Profile (`https://schemas.dfos.com/profile/v1`)
+
+The displayable identity for any agent, person, group, or space.
+
+| Field         | Type   | Required | Description                             |
+| ------------- | ------ | -------- | --------------------------------------- |
+| `$schema`     | string | yes      | `"https://schemas.dfos.com/profile/v1"` |
+| `name`        | string | no       | Display name                            |
+| `description` | string | no       | Short bio or description                |
+| `avatar`      | media  | no       | Avatar image                            |
+| `banner`      | media  | no       | Banner image                            |
+| `background`  | media  | no       | Background image                        |
+
+### Media Object
+
+Several schemas reference media objects. The standard representation:
+
+```json
+{
+  "id": "media_abc123",
+  "uri": "https://cdn.example.com/media/abc123.jpg"
+}
+```
+
+`id` is required (opaque identifier). `uri` is optional.
+
+### Custom Schemas
+
+Any implementation can define custom document schemas following the same pattern — a JSON Schema with a `$schema` const field pointing to a unique URI. The protocol will commit to the document via CID regardless of what's inside. The standard schemas are conventions, not constraints.
+
+---
+
+## Standards and Dependencies
+
+| Component           | Standard / Library                                                         |
+| ------------------- | -------------------------------------------------------------------------- |
+| Key generation      | Ed25519 (RFC 8032) via `@noble/curves/ed25519`                             |
+| Signature algorithm | EdDSA over Ed25519 (pure, no prehash — Ed25519 handles SHA-512 internally) |
+| Key encoding        | W3C Multikey (multicodec `0xed01` + base58btc multibase)                   |
+| Signed envelopes    | JWS Compact Serialization (RFC 7515) with `alg: "EdDSA"`                   |
+| Content addressing  | CIDv1 with dag-cbor codec (`0x71`) + SHA-256 multihash (`0x12`)            |
+| Auth tokens         | JWT (RFC 7519) with `alg: "EdDSA"`                                         |
+| ID encoding         | SHA-256 → custom 19-char alphabet, 22 characters                           |
+
+### ID Alphabet
+
+```
+Alphabet: 2346789acdefhknrtvz  (19 characters)
+Excluded: 0, 1, 5, g, o, b, s, x  (visually ambiguous)
+Length:   22 characters
+Entropy:  ~93.4 bits (19^22)
+```
+
+Process: `SHA-256(input) → for each of first 22 bytes: alphabet[byte % 19]`
+
+DIDs: `did:dfos:` + 22-char ID derived from `SHA-256(genesis CID raw bytes)`
+Key IDs: `key_` + 22-char ID. Convention: derive from public key hash (`key_` + `customAlpha(SHA-256(publicKey))`), making key IDs deterministic and verifiable. Not a protocol requirement — key IDs can be any string.
+
+### Multikey Encoding (W3C Multikey for Ed25519)
+
+```
+Encode:
+  1. Take 32-byte Ed25519 public key
+  2. Prepend multicodec varint prefix [0xed, 0x01] (unsigned varint for 0xed = 237 = ed25519-pub)
+  3. Base58btc encode the 34-byte result
+  4. Prepend 'z' multibase prefix
+  → "z6Mk..."
+
+Decode:
+  1. Strip 'z' multibase prefix
+  2. Base58btc decode → 34 bytes
+  3. First 2 bytes must be [0xed, 0x01] (ed25519-pub multicodec varint)
+  4. Remaining 32 bytes = raw Ed25519 public key
+```
+
+**Worked example:**
+
+```
+Public key (hex):     ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32
+Prefix + key (hex):   ed01 ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32
+Base58btc + 'z':      z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb
+```
+
+Note: `[0xed, 0x01]` is the unsigned varint encoding of 237 (`0xed`). Since `0xed > 0x7f`, it requires two bytes in varint format: `0xed` (low 7 bits + continuation bit) then `0x01` (high bits). This is NOT big-endian `[0x00, 0xed]`.
+
+### CID Construction (dag-cbor + SHA-256)
+
+```
+1. JSON payload → dag-cbor canonical encoding → CBOR bytes
+2. SHA-256(CBOR bytes) → 32-byte hash
+3. Construct CIDv1:
+   - Version: 1 (varint: 0x01)
+   - Codec: dag-cbor (varint: 0x71)
+   - Multihash: SHA-256 (function: 0x12, length: 0x20, digest: 32 bytes)
+4. CID binary = [0x01, 0x71, 0x12, 0x20, ...32 hash bytes]
+5. Base32lower multibase encode → "bafyrei..."
+```
+
+dag-cbor canonical ordering: map keys sorted by encoded byte length first, then lexicographic. JSON numbers map to CBOR integers. Strings to CBOR text strings. Null to CBOR null. Arrays to CBOR arrays. Objects to CBOR maps with sorted keys.
+
+**Worked example (genesis identity operation):**
+
+```
+CBOR bytes (441 bytes, hex):
+a66474797065666372656174656776657273696f6e0168617574684b65797381a3626964781a6b
+65795f72396576333466766332337a393939766561616674386474797065684d756c74696b6579
+727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a535634503359
+6363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441
+747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381
+a3626964781a6b65795f72396576333466766332337a393939766561616674386474797065684d
+756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f
+4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e63
+6f6e74726f6c6c65724b65797381a3626964781a6b65795f72396576333466766332337a393939
+766561616674386474797065684d756c74696b6579727075626c69634b65794d756c7469626173
+6578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c
+6561444c55714c7541536a62
+
+CID bytes (hex): 01711220206a5e6140a5114f1e49f3ca4b339fb2cb8e70bbb34968b23156fd0e3237b486
+CID string:      bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
+```
+
+### DID Derivation (worked example)
+
+```
+Input:  CID bytes (hex) = 01711220206a5e6140a5114f1e49f3ca4b339fb2cb8e70bbb34968b23156fd0e3237b486
+Step 1: SHA-256(CID bytes) = 4360cfbcbbb3f1614c8e02dbfe8d55935e1195cd2129820ab8aef94bde12ea8a
+Step 2: Take first 22 bytes: 43 60 cf bc bb b3 f1 61 4c 8e 02 db fe 8d 55 93 5e 11 95 cd 21 29
+Step 3: For each byte, alphabet[byte % 19]:
+        43=67  → 67%19=10  → 'e'
+        60=96  → 96%19=1   → '3'
+        cf=207 → 207%19=17 → 'v'
+        bc=188 → 188%19=17 → 'v'
+        ...
+Result: e3vvtck42d4eacdnzvtrn6
+DID:    did:dfos:e3vvtck42d4eacdnzvtrn6
+```
+
+---
+
+## Operation Schemas
+
+### Identity Operations
+
+```typescript
+// Genesis — starts the identity chain
+{ version: 1, type: "create",
+  authKeys: MultikeyPublicKey[],
+  assertKeys: MultikeyPublicKey[],
+  controllerKeys: MultikeyPublicKey[],   // must have at least one
+  createdAt: string }                     // ISO 8601, ms precision, UTC
+
+// Key rotation / modification
+{ version: 1, type: "update",
+  previousOperationCID: string,                    // CID of previous operation
+  authKeys: MultikeyPublicKey[],
+  assertKeys: MultikeyPublicKey[],
+  controllerKeys: MultikeyPublicKey[],   // must have at least one
+  createdAt: string }
+
+// Permanent destruction
+{ version: 1, type: "delete",
+  previousOperationCID: string,
+  createdAt: string }
+```
+
+### Content Operations
+
+```typescript
+// Genesis — starts the content chain, commits initial document
+{ version: 1, type: "create",
+  documentCID: string,                    // CID of document content
+  createdAt: string,
+  note: string | null }
+
+// Content change (null documentCID = clear content)
+{ version: 1, type: "update",
+  previousOperationCID: string,
+  documentCID: string | null,
+  createdAt: string,
+  note: string | null }
+
+// Permanent entity destruction
+{ version: 1, type: "delete",
+  previousOperationCID: string,
+  createdAt: string,
+  note: string | null }
+```
+
+### MultikeyPublicKey
+
+```typescript
+{ id: string,                             // e.g. "key_r9ev34fvc23z999veaaft8"
+  type: "Multikey",                       // literal discriminator
+  publicKeyMultibase: string }            // e.g. "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+```
+
+---
+
+## JWS Envelope Format
+
+### Signing
+
+```
+signingInput = base64url(JSON.stringify(header)) + "." + base64url(JSON.stringify(payload))
+signature = ed25519.sign(UTF8_bytes(signingInput), privateKey)
+token = signingInput + "." + base64url(signature)
+```
+
+### kid Rules
+
+| Context                   | kid format  | Example                                                      |
+| ------------------------- | ----------- | ------------------------------------------------------------ |
+| Identity create (genesis) | Bare key ID | `key_r9ev34fvc23z999veaaft8`                                 |
+| Identity update/delete    | DID URL     | `did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8` |
+| All content ops           | DID URL     | `did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd` |
+
+### CID Derivation
+
+```
+operation CID = dagCborCanonicalEncode(operation_payload) → SHA-256 → CIDv1 → base32lower string
+```
+
+The CID is derived from the JWS payload (the unsigned operation JSON), NOT from the JWS token itself.
+
+### DID Derivation
+
+```
+DID = "did:dfos:" + idEncode(SHA-256(genesis_CID_raw_bytes))
+```
+
+Where `idEncode` is the 19-char alphabet encoding described above.
+
+---
+
+## Verification
+
+### Identity Chain
+
+1. Decode each JWS, parse payload as IdentityOperation
+2. First op MUST be `type: "create"` — this is the genesis bootstrap:
+   - The controller keys declared in the genesis payload are trusted because the identity does not exist before this operation. There is no prior state to verify against.
+   - The signing key (resolved from `kid`) MUST be one of the controller keys declared in this same operation. The genesis simultaneously introduces and authorizes its own keys.
+   - Derive the operation CID via dag-cbor canonical encoding. Derive the DID from the CID.
+3. For each subsequent op: verify `previousOperationCID` matches previous op's derived CID. Verify `createdAt` is strictly increasing (SHOULD — see Protocol Rules).
+4. Verify the chain is not in a terminal state (deleted) before applying any operation.
+5. Resolve `kid` — genesis uses bare key ID, non-genesis uses DID URL (extract DID, verify it matches the derived DID; extract key ID).
+6. Find controller key matching key ID **in the current state** (i.e., the state after all preceding operations). Decode multikey → raw Ed25519 public key.
+7. Verify EdDSA JWS signature over the signing input bytes.
+8. Apply state change: `create` initializes key state, `update` replaces key state (must have at least one controller key), `delete` marks terminal.
+
+### Content Chain
+
+1. Decode each JWS, parse payload as ContentOperation
+2. First op must be `type: "create"`
+3. For each subsequent op: verify `previousOperationCID` matches, verify `createdAt` increasing
+4. Resolve `kid` via external key resolver (caller provides)
+5. Verify EdDSA JWS signature
+6. Apply state change (set document, clear, or delete)
+
+---
+
+## Deterministic Reference Artifacts
+
+All values below are deterministic and reproducible. Private keys are derived from `SHA-256(UTF8("dfos-protocol-reference-key-N"))`.
+
+### Key 1 (Genesis Controller)
+
+```
+Seed:        SHA-256("dfos-protocol-reference-key-1")
+Private key: 132d4bebdb6e62359afb930fe15d756a92ad96e6b0d47619988f5a1a55272aac
+Public key:  ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32
+Multikey:    z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb
+Key ID:      key_r9ev34fvc23z999veaaft8
+```
+
+### Key 2 (Rotated Controller)
+
+```
+Seed:        SHA-256("dfos-protocol-reference-key-2")
+Private key: 384f5626906db84f6a773ec46475ff2d4458e92dd4dd13fe03dbb7510f4ca2a8
+Public key:  0f350f994f94d675f04a325bd316ebedd740ca206eaaf609bdb641b5faa0f78c
+Multikey:    z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK
+Key ID:      key_ez9a874tckr3dv933d3ckd
+```
+
+### Identity Chain: Create (Genesis)
+
+Operation:
+
+```json
+{
+  "version": 1,
+  "type": "create",
+  "authKeys": [
+    {
+      "id": "key_r9ev34fvc23z999veaaft8",
+      "type": "Multikey",
+      "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+    }
+  ],
+  "assertKeys": [
+    {
+      "id": "key_r9ev34fvc23z999veaaft8",
+      "type": "Multikey",
+      "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+    }
+  ],
+  "controllerKeys": [
+    {
+      "id": "key_r9ev34fvc23z999veaaft8",
+      "type": "Multikey",
+      "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
+    }
+  ],
+  "createdAt": "2026-03-07T00:00:00.000Z"
+}
+```
+
+JWS Header:
+
+```json
+{ "alg": "EdDSA", "typ": "did:dfos:identity-op", "kid": "key_r9ev34fvc23z999veaaft8" }
+```
+
+JWS Signature (hex):
+
+```
+88803e495be5c2b6ada8ad54bc27b8d252ae32b98c823a39367a3f6afb9aa98bf0e12a8e69e3b964cd10a8cc77a7946c5d961942fad4db4f0d98a1525d02d900
+```
+
+JWS Token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.iIA-SVvlwratqK1UvCe40lKuMrmMgjo5Nno_avuaqYvw4SqOaeO5ZM0QqMx3p5RsXZYZQvrU208NmKFSXQLZAA
+```
+
+Operation CID: `bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy`
+
+**Derived DID: `did:dfos:e3vvtck42d4eacdnzvtrn6`**
+
+### Identity Chain: Update (Key Rotation)
+
+JWS Header:
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:identity-op",
+  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"
+}
+```
+
+Operation:
+
+```json
+{
+  "version": 1,
+  "type": "update",
+  "previousOperationCID": "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy",
+  "authKeys": [
+    {
+      "id": "key_ez9a874tckr3dv933d3ckd",
+      "type": "Multikey",
+      "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
+    }
+  ],
+  "assertKeys": [
+    {
+      "id": "key_ez9a874tckr3dv933d3ckd",
+      "type": "Multikey",
+      "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
+    }
+  ],
+  "controllerKeys": [
+    {
+      "id": "key_ez9a874tckr3dv933d3ckd",
+      "type": "Multikey",
+      "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
+    }
+  ],
+  "createdAt": "2026-03-07T00:01:00.000Z"
+}
+```
+
+JWS Signature (hex):
+
+```
+760bef7f5a52763ad36009aac63d72702fd500c50e855a7d3864ab62ca2cb8de6d48f5ec0c70f12e3ef5512c29f00c4ae2c6158565459c48b4952b9426b3f700
+```
+
+JWS Token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.dgvvf1pSdjrTYAmqxj1ycC_VAMUOhVp9OGSrYsosuN5tSPXsDHDxLj71USwp8AxK4sYVhWVFnEi0lSuUJrP3AA
+```
+
+Operation CID: `bafyreicym4cyiednld73smbx32szaei7xdulqn4g3ste5e2w2ulajr3oqm`
+
+Post-rotation: DID unchanged (`did:dfos:e3vvtck42d4eacdnzvtrn6`), controller rotated to `key_ez9a874tckr3dv933d3ckd`.
+
+### Content Chain: Document + Create
+
+Document (application layer):
+
+```json
+{
+  "content": {
+    "$schema": "https://schemas.dfos.com/post/v1",
+    "format": "short-post",
+    "title": "Hello World",
+    "body": "First post on the protocol."
+  },
+  "baseDocumentCID": null,
+  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "createdAt": "2026-03-07T00:02:00.000Z"
+}
+```
+
+Document CID: `bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne`
+
+Content Create JWS Header:
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:content-op",
+  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd"
+}
+```
+
+Content Create Payload:
+
+```json
+{
+  "version": 1,
+  "type": "create",
+  "documentCID": "bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne",
+  "createdAt": "2026-03-07T00:02:00.000Z",
+  "note": null
+}
+```
+
+Content Create JWS Signature (hex):
+
+```
+e84a21812c7461c1a4643d09a0374e686e283c3bac2dae39308957875cbd955e7df9e4ca7ec4c45b9c1036be714411cc4f439dce67796a10679436e3833dd600
+```
+
+Content Create JWS Token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZG9jdW1lbnRDSUQiOiJiYWZ5cmVpZnB2d3Vhcm1sNjJzZm9nZHBpMnZsbHR2ZzJldjZvNHh0dzc0emZ1ZDdjcGtnNzQyNnpuZSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.6EohgSx0YcGkZD0JoDdOaG4oPDusLa45MIlXh1y9lV59-eTKfsTEW5wQNr5xRBHMT0Odzmd5ahBnlDbjgz3WAA
+```
+
+Content Operation CID: `bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu`
+
+### Content Chain: Update
+
+Content Update Payload:
+
+```json
+{
+  "version": 1,
+  "type": "update",
+  "previousOperationCID": "bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu",
+  "documentCID": "bafyreieuo26zfmjxwpmw5jk6bqzqhvivxcbckgxtyeuc7ypf3p4sihgq4q",
+  "createdAt": "2026-03-07T00:03:00.000Z",
+  "note": "edited title and body"
+}
+```
+
+Updated document:
+
+```json
+{
+  "content": {
+    "$schema": "https://schemas.dfos.com/post/v1",
+    "format": "short-post",
+    "title": "Hello World (edited)",
+    "body": "Updated content."
+  },
+  "baseDocumentCID": "bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne",
+  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "createdAt": "2026-03-07T00:03:00.000Z"
+}
+```
+
+Document CID (edited): `bafyreieuo26zfmjxwpmw5jk6bqzqhvivxcbckgxtyeuc7ypf3p4sihgq4q`
+Content Update CID: `bafyreibb4lsvqmz4j76rsvhkqw3v2b4vp23t7dimm6vl5g5wlninvkemxq`
+
+### EdDSA JWT
+
+Header:
+
+```json
+{ "alg": "EdDSA", "typ": "JWT", "kid": "key_ez9a874tckr3dv933d3ckd" }
+```
+
+Payload:
+
+```json
+{
+  "iss": "dfos",
+  "sub": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "aud": "dfos-api",
+  "exp": 1772902800,
+  "iat": 1772899200,
+  "jti": "session_ref_example_01"
+}
+```
+
+JWT Token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.zhKeXJHHF7a1-MwF4QoUTRptCplAwh20-rLnuWGDFT6uJheN4E_SA5NhqvMNflLHxd7h97gdaVnMZGE67SXEBA
+```
+
+---
+
+## Verification Checklist (For Independent Implementers)
+
+Given the artifacts above, verify:
+
+1. **Multikey decode**: `z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb` → strip `z`, base58btc decode, strip `[0xed, 0x01]` → public key `ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32`
+
+2. **Genesis JWS verify**: split token on `.`, take first two segments as signing input (UTF-8 bytes), base64url-decode third segment as 64-byte signature, `ed25519.verify(signature, signingInputBytes, publicKey)` → true
+
+3. **Genesis CID**: base64url-decode JWS payload → parse JSON → dag-cbor canonical encode → SHA-256 → CIDv1 → should be `bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy`
+
+4. **DID derivation**: take raw CID bytes of genesis CID → SHA-256 → first 22 bytes → `byte % 19` → alphabet lookup → should be `e3vvtck42d4eacdnzvtrn6` → DID = `did:dfos:e3vvtck42d4eacdnzvtrn6`
+
+5. **Rotation JWS**: kid = `did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8` — signed by OLD controller key (key 1). Verify with key 1's public key.
+
+6. **Content create JWS**: kid = `did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd` — signed by NEW controller key (key 2, post-rotation). Verify with key 2's public key.
+
+7. **Document CID**: dag-cbor canonical encode the document JSON → SHA-256 → CIDv1 → should be `bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne`
+
+8. **Content chain integrity**: update's `previousOperationCID` matches create's operation CID
+
+9. **JWT verify**: same signing mechanics as JWS — `ed25519.verify(signature, UTF8(header.payload), key2_publicKey)` → true. Check `exp > currentTime`, `iss == "dfos"`, `aud == "dfos-api"`.
+
+---
+
+## Source Code Reference
+
+All source lives in `packages/dfos-protocol/` — self-contained, zero monorepo dependencies.
+
+| File                                | Contents                                                                                           |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `src/crypto/ed25519.ts`             | `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature` |
+| `src/crypto/jws.ts`                 | `createJws`, `verifyJws`, `decodeJwsUnsafe`, `JwsVerificationError`                                |
+| `src/crypto/jwt.ts`                 | `createJwt`, `verifyJwt`, `decodeJwtUnsafe` (EdDSA only)                                           |
+| `src/crypto/base64url.ts`           | `base64urlEncode`, `base64urlDecode`                                                               |
+| `src/crypto/multiformats.ts`        | `dagCborCanonicalEncode`, `dagCborCanonicalEqual`                                                  |
+| `src/crypto/id.ts`                  | `generateId`, `generateIdNoPrefix`, `isValidId`                                                    |
+| `src/chain/multikey.ts`             | `encodeEd25519Multikey`, `decodeMultikey`                                                          |
+| `src/chain/schemas.ts`              | `IdentityOperation`, `ContentOperation`, `MultikeyPublicKey`, `VerifiedIdentity`                   |
+| `src/chain/identity-chain.ts`       | `signIdentityOperation`, `verifyIdentityChain`                                                     |
+| `src/chain/content-chain.ts`        | `signContentOperation`, `verifyContentChain`                                                       |
+| `src/chain/derivation.ts`           | `deriveChainIdentifier`                                                                            |
+| `src/registry/schemas.ts`           | Registry API Zod types (wire contract)                                                             |
+| `src/registry/server.ts`            | Reference Hono registry server                                                                     |
+| `src/registry/store.ts`             | In-memory chain store with linear enforcement                                                      |
+| `openapi.yaml`                      | OpenAPI 3.1 spec for registry API                                                                  |
+| `schemas/document-envelope.v1.json` | JSON Schema for the document envelope wrapper                                                      |
+| `schemas/post.v1.json`              | JSON Schema for post documents                                                                     |
+| `schemas/profile.v1.json`           | JSON Schema for profile documents                                                                  |
+| `tests/protocol-reference.spec.ts`  | Deterministic artifact generator (this doc's source)                                               |
+| `verify/go/`                        | Go cross-language verification (9 tests)                                                           |
+| `verify/python/`                    | Python cross-language verification (32 checks)                                                     |
+
+---
+
+## Test Coverage (134 checks across 3 languages)
+
+### TypeScript — dfos-protocol (93 tests)
+
+- `tests/crypto.spec.ts` (13): ed25519 keypair/sign/verify, JWS round-trip/wrong key/tampered/decode/malformed
+- `tests/chain.spec.ts` (33): multikey encoding, identity chain (genesis, DID, rotation, delete, errors), content chain (lifecycle, clear, delete, errors)
+- `tests/registry.spec.ts` (18): HTTP contract — submission, resubmission, extension, fork rejection, pagination, cross-chain key resolution, 404s
+- `tests/schemas.spec.ts` (28): JSON Schema compilation + validation for document envelope, post, profile — conforming documents, missing fields, invalid values, additional properties
+- `tests/protocol-reference.spec.ts` (1): deterministic artifact generator
+
+### Python — verify/ (32 checks)
+
+- Key derivation, multikey, dag-cbor bytes, CID/DID derivation, JWS/JWT signatures, document CID
+- Dependencies: `pynacl`, `dag-cbor`, `base58`
+
+### Go — verify/ (9 tests)
+
+- Key derivation, multikey, dag-cbor, CID/DID derivation, JWS/JWT signatures
+- Dependencies: `fxamacker/cbor/v2`, `mr-tron/base58`

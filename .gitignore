@@ -1,0 +1,13 @@
+node_modules
+.pnpm-store
+dist
+build
+.turbo
+*.tsbuildinfo
+coverage
+*.log
+.pnpm-debug.log*
+.DS_Store
+.env.local
+.env
+notes.local
