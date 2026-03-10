@@ -11,6 +11,10 @@ import {
 } from '../src/chain';
 import type { ContentOperation, IdentityOperation, MultikeyPublicKey } from '../src/chain';
 import {
+  ContentOperation as ContentOperationSchema,
+  IdentityOperation as IdentityOperationSchema,
+} from '../src/chain/schemas';
+import {
   base64urlEncode,
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
@@ -1003,5 +1007,89 @@ describe('content chain', () => {
         resolveKey: id.resolveKey,
       }),
     ).rejects.toThrow(/createdAt/i);
+  });
+});
+
+// =============================================================================
+// operation field limits
+// =============================================================================
+
+describe('operation field limits', () => {
+  const validKey: MultikeyPublicKey = {
+    id: 'key_test',
+    type: 'Multikey',
+    publicKeyMultibase: 'z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb',
+  };
+
+  it('should reject key.id exceeding 64 chars', () => {
+    const result = IdentityOperationSchema.safeParse({
+      version: 1,
+      type: 'create',
+      authKeys: [{ ...validKey, id: 'k'.repeat(65) }],
+      assertKeys: [],
+      controllerKeys: [validKey],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject publicKeyMultibase exceeding 128 chars', () => {
+    const result = IdentityOperationSchema.safeParse({
+      version: 1,
+      type: 'create',
+      authKeys: [{ ...validKey, publicKeyMultibase: 'z' + 'A'.repeat(128) }],
+      assertKeys: [],
+      controllerKeys: [validKey],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject more than 16 keys per role', () => {
+    const keys = Array.from({ length: 17 }, (_, i) => ({ ...validKey, id: `key_${i}` }));
+    const result = IdentityOperationSchema.safeParse({
+      version: 1,
+      type: 'create',
+      authKeys: keys,
+      assertKeys: [],
+      controllerKeys: [validKey],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject CID strings exceeding 256 chars', () => {
+    const result = ContentOperationSchema.safeParse({
+      version: 1,
+      type: 'update',
+      previousOperationCID: 'b'.repeat(257),
+      documentCID: 'bafyreivalid',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      note: null,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject note exceeding 256 chars', () => {
+    const result = ContentOperationSchema.safeParse({
+      version: 1,
+      type: 'create',
+      documentCID: 'bafyreivalid',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      note: 'x'.repeat(257),
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should accept values within limits', () => {
+    const result = IdentityOperationSchema.safeParse({
+      version: 1,
+      type: 'create',
+      authKeys: [validKey],
+      assertKeys: [validKey],
+      controllerKeys: [validKey],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(result.success).toBe(true);
   });
 });

@@ -113,11 +113,31 @@ A valid chain is a **linear sequence** of operations. Each operation (after gene
 
 **Timestamp ordering**: `createdAt` SHOULD be strictly increasing within a chain. Implementations SHOULD reject operations with non-increasing timestamps as a sanity check against replayed or mis-ordered operations. However, the chain link (CID reference) is the authoritative ordering mechanism, not the timestamp. Implementations MAY relax timestamp ordering in constrained environments where clock synchronization is impractical.
 
-### Signer Validity
+### Identity Chain Signer Validity
 
-An operation is valid only if the signing key was a **controller key in the immediately prior state**. For genesis operations, the signing key MUST be one of the controller keys declared in that same operation — this is the bootstrap: the genesis operation introduces and simultaneously authorizes its own keys.
+An identity chain operation is valid only if the signing key was a **controller key in the immediately prior state**. For genesis operations, the signing key MUST be one of the controller keys declared in that same operation — this is the bootstrap: the genesis operation introduces and simultaneously authorizes its own keys.
 
-For content chains: the signing key is resolved via the `kid` (DID URL), which references a key on an external identity. The content chain verifier delegates key resolution to the caller — the protocol does not prescribe how to look up an identity's current key state.
+This is a self-sovereign invariant: the identity chain defines its own valid signers via `controllerKeys`, and the protocol enforces this. No external authority is consulted.
+
+### Content Chain Signer Model
+
+Content chain verification requires a **valid EdDSA signature** — nothing more. The protocol does not define which identities may sign operations on a content chain, does not track or enforce key roles, and does not restrict a chain to a single signer.
+
+The signing key is resolved via the `kid` (DID URL), which references a key on an external identity. The content chain verifier delegates key resolution to the caller via a `resolveKey` callback — the protocol does not prescribe how to look up an identity's current key state.
+
+This is a deliberate asymmetry with identity chains. Identity chains are self-sovereign — they define their own valid signers internally. Content chains are externally signed — the signing authority model is entirely an application concern, delegated through `resolveKey`. A content chain with operations signed by multiple different identities is valid at the protocol level, as long as each operation's signature verifies against the resolved key.
+
+**What the protocol enforces:**
+
+- The EdDSA signature on each operation is valid against the key returned by `resolveKey(kid)`
+- Chain integrity (CID links, timestamp ordering, terminal state)
+
+**What the protocol does NOT enforce (application concerns):**
+
+- Which identities are authorized to sign operations on a given chain
+- Which key role (auth, assert, controller) the signing key must have
+- Whether a chain must have a single signer or may have multiple signers
+- Ownership or attribution semantics between signers and entities
 
 ### Terminal States
 
@@ -145,9 +165,26 @@ JWT tokens (for device auth, MCP sessions, etc.) use `kid` as a simple key ident
 
 The ID encoding uses `byte % 19` where each byte ranges 0-255. Since 256 is not evenly divisible by 19, values 0-8 (alphabet positions) appear with probability ~5.26% while values 9-18 appear with probability ~5.22%. This is a ~0.3% bias — not security-relevant for identifiers but acknowledged here for completeness. A rejection-sampling approach (retry if `byte >= 247`) would eliminate the bias entirely.
 
-### Size Limits
+### Operation Field Limits
 
-The protocol does not define maximum operation or document sizes. Implementations MAY impose limits appropriate to their deployment context (e.g., maximum JWS token length, maximum document CID count, maximum chain length). DFOS's implementation enforces limits at the application layer.
+The protocol defines maximum sizes for all operation fields. These are abuse-prevention ceilings — deliberately loose, not tight validation. Implementations MUST reject operations that exceed these bounds. Implementations MAY impose stricter limits.
+
+| Field                                        | Max       | Rationale                              |
+| -------------------------------------------- | --------- | -------------------------------------- |
+| `key.id`                                     | 64 chars  | ~3× typical key ID (`key_` + 22 chars) |
+| `key.publicKeyMultibase`                     | 128 chars | ~2× Ed25519 multikey (~50 chars)       |
+| `authKeys` / `assertKeys` / `controllerKeys` | 16 items  | Generous for key rotation              |
+| `previousOperationCID`                       | 256 chars | ~4× typical CIDv1 (~60 chars)          |
+| `documentCID`                                | 256 chars | Same as above                          |
+| `note`                                       | 256 chars | Short annotation, not prose            |
+
+These limits are enforced by the Zod schemas in `src/chain/schemas.ts`. Any implementation parsing operations MUST reject values exceeding these bounds.
+
+The protocol does NOT limit:
+
+- **Document content size** — the protocol commits to a CID, not the document. Document size limits are application/registry concerns.
+- **Chain length** — no maximum operations per chain.
+- **Number of chains per identity** — application scaling concern.
 
 ---
 
