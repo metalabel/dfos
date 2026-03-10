@@ -81,3 +81,32 @@ jobs:
 
       - name: Run Python verification
         run: python packages/dfos-protocol/verify/python/verify_protocol.py
+
+  verify-rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Rust verification
+        working-directory: packages/dfos-protocol/verify/rust
+        run: cargo test --verbose
+
+  verify-swift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.0'
+
+      - name: Run Swift verification
+        working-directory: packages/dfos-protocol/verify/swift
+        run: swift test

@@ -11,3 +11,6 @@ coverage
 .env.local
 .env
 notes.local
+target
+.build
+.swiftpm
