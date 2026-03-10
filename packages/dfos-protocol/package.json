@@ -1,14 +1,35 @@
 {
   "name": "@metalabel/dfos-protocol",
   "version": "0.0.0",
+  "type": "module",
   "description": "DFOS Protocol — Ed25519 signed chain primitives, registry, and verification",
   "exports": {
-    ".": "./src/index.ts",
-    "./crypto": "./src/crypto/index.ts",
-    "./chain": "./src/chain/index.ts",
-    "./registry": "./src/registry/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./crypto": {
+      "types": "./dist/crypto/index.d.ts",
+      "default": "./dist/crypto/index.js"
+    },
+    "./chain": {
+      "types": "./dist/chain/index.d.ts",
+      "default": "./dist/chain/index.js"
+    },
+    "./registry": {
+      "types": "./dist/registry/index.d.ts",
+      "default": "./dist/registry/index.js"
+    }
   },
+  "files": [
+    "dist",
+    "schemas",
+    "PROTOCOL.md",
+    "openapi.yaml"
+  ],
   "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -24,6 +45,7 @@
     "@types/node": "^24.10.4",
     "ajv": "^8.18.0",
     "ajv-formats": "^3.0.1",
+    "tsup": "^8.5.1",
     "vitest": "^4.0.18"
   }
 }
