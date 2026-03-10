@@ -1,7 +1,7 @@
 # DFOS Protocol: Complete Reference
 
-- **Date**: 2026-03-08
-- **Status**: Implemented and tested — TypeScript + Python + Go cross-language verification
+- **Date**: 2026-03-10
+- **Status**: Implemented and tested — TypeScript + Python + Go cross-language verification. This spec is currently under review. Discuss the DFOS protocol in the [clear.txt](https://clear.dfos.com) space.
 - **Source**: `packages/dfos-protocol` (self-contained, zero monorepo dependencies, OSS-ready)
 - **Gist**: https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648 (synced from this file)
 
@@ -413,6 +413,30 @@ token = signingInput + "." + base64url(signature)
 | Identity update/delete    | DID URL     | `did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8` |
 | All content ops           | DID URL     | `did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd` |
 
+### `cid` Header
+
+Every operation JWS (identity-op and content-op) includes a `cid` field in the protected header. This is the CIDv1 string of the operation payload, derived from `dagCborCanonicalEncode(payload) → SHA-256 → CIDv1 → base32lower`. The `cid` is computed before signing and embedded in the protected header, so it is covered by the EdDSA signature.
+
+**Signing order:**
+
+1. Construct the operation payload
+2. Derive the operation CID: `dagCborCanonicalEncode(payload) → CIDv1`
+3. Build the protected header including `cid`
+4. Sign: `ed25519.sign(UTF8(base64url(header) + "." + base64url(payload)), privateKey)`
+
+**Verification rule:** After verifying the JWS signature and deriving the operation CID from the parsed payload, implementations MUST reject operations where:
+
+- `header.cid` is missing
+- `header.cid` does not match the derived CID
+
+This provides three benefits:
+
+- **Pre-verification routing**: The operation CID can be read from the header without parsing the payload or running dag-cbor encoding
+- **Cross-implementation consistency**: A CID mismatch between header and derived value immediately surfaces dag-cbor encoding disagreements across implementations
+- **Self-documenting tokens**: Each JWS token declares its content-addressed identity
+
+Note: JWT tokens (device auth) do NOT include a `cid` header — this field is specific to operation JWS tokens.
+
 ### CID Derivation
 
 ```
@@ -439,7 +463,7 @@ Where `idEncode` is the 19-char alphabet encoding described above.
 2. First op MUST be `type: "create"` — this is the genesis bootstrap:
    - The controller keys declared in the genesis payload are trusted because the identity does not exist before this operation. There is no prior state to verify against.
    - The signing key (resolved from `kid`) MUST be one of the controller keys declared in this same operation. The genesis simultaneously introduces and authorizes its own keys.
-   - Derive the operation CID via dag-cbor canonical encoding. Derive the DID from the CID.
+   - Derive the operation CID via dag-cbor canonical encoding. Verify `header.cid` matches the derived CID. Derive the DID from the CID.
 3. For each subsequent op: verify `previousOperationCID` matches previous op's derived CID. Verify `createdAt` is strictly increasing (SHOULD — see Protocol Rules).
 4. Verify the chain is not in a terminal state (deleted) before applying any operation.
 5. Resolve `kid` — genesis uses bare key ID, non-genesis uses DID URL (extract DID, verify it matches the derived DID; extract key ID).
@@ -452,9 +476,10 @@ Where `idEncode` is the 19-char alphabet encoding described above.
 1. Decode each JWS, parse payload as ContentOperation
 2. First op must be `type: "create"`
 3. For each subsequent op: verify `previousOperationCID` matches, verify `createdAt` increasing
-4. Resolve `kid` via external key resolver (caller provides)
-5. Verify EdDSA JWS signature
-6. Apply state change (set document, clear, or delete)
+4. Derive the operation CID via dag-cbor canonical encoding. Verify `header.cid` matches the derived CID.
+5. Resolve `kid` via external key resolver (caller provides)
+6. Verify EdDSA JWS signature
+7. Apply state change (set document, clear, or delete)
 
 ---
 
@@ -518,19 +543,24 @@ Operation:
 JWS Header:
 
 ```json
-{ "alg": "EdDSA", "typ": "did:dfos:identity-op", "kid": "key_r9ev34fvc23z999veaaft8" }
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:identity-op",
+  "kid": "key_r9ev34fvc23z999veaaft8",
+  "cid": "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy"
+}
 ```
 
 JWS Signature (hex):
 
 ```
-88803e495be5c2b6ada8ad54bc27b8d252ae32b98c823a39367a3f6afb9aa98bf0e12a8e69e3b964cd10a8cc77a7946c5d961942fad4db4f0d98a1525d02d900
+103af20cad6ebed8b1fb5edc1ee9fdb7a31a705231dab326305d502f37c3e531654ac3af31cb9ef7ba428069f709778b545b55c60a42a21d241925e2a0a2b303
 ```
 
 JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.iIA-SVvlwratqK1UvCe40lKuMrmMgjo5Nno_avuaqYvw4SqOaeO5ZM0QqMx3p5RsXZYZQvrU208NmKFSXQLZAA
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.EDryDK1uvtix-17cHun9t6MacFIx2rMmMF1QLzfD5TFlSsOvMcue97pCgGn3CXeLVFtVxgpCoh0kGSXioKKzAw
 ```
 
 Operation CID: `bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy`
@@ -545,7 +575,8 @@ JWS Header:
 {
   "alg": "EdDSA",
   "typ": "did:dfos:identity-op",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"
+  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8",
+  "cid": "bafyreicym4cyiednld73smbx32szaei7xdulqn4g3ste5e2w2ulajr3oqm"
 }
 ```
 
@@ -584,13 +615,13 @@ Operation:
 JWS Signature (hex):
 
 ```
-760bef7f5a52763ad36009aac63d72702fd500c50e855a7d3864ab62ca2cb8de6d48f5ec0c70f12e3ef5512c29f00c4ae2c6158565459c48b4952b9426b3f700
+31272ea0196038ade3e505fdb45730d68bb4a382e0273886244b19e69bea881af549a800c80bf987ec1a8d086d83c20fedd2e533453895e5b6891adaf78e5c0e
 ```
 
 JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.dgvvf1pSdjrTYAmqxj1ycC_VAMUOhVp9OGSrYsosuN5tSPXsDHDxLj71USwp8AxK4sYVhWVFnEi0lSuUJrP3AA
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNpZCI6ImJhZnlyZWljeW00Y3lpZWRubGQ3M3NtYngzMnN6YWVpN3hkdWxxbjRnM3N0ZTVlMncydWxhanIzb3FtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.MScuoBlgOK3j5QX9tFcw1ou0o4LgJziGJEsZ5pvqiBr1SagAyAv5h-wajQhtg8IP7dLlM0U4leW2iRra945cDg
 ```
 
 Operation CID: `bafyreicym4cyiednld73smbx32szaei7xdulqn4g3ste5e2w2ulajr3oqm`
@@ -623,7 +654,8 @@ Content Create JWS Header:
 {
   "alg": "EdDSA",
   "typ": "did:dfos:content-op",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd"
+  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd",
+  "cid": "bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu"
 }
 ```
 
@@ -642,13 +674,13 @@ Content Create Payload:
 Content Create JWS Signature (hex):
 
 ```
-e84a21812c7461c1a4643d09a0374e686e283c3bac2dae39308957875cbd955e7df9e4ca7ec4c45b9c1036be714411cc4f439dce67796a10679436e3833dd600
+b7f0c3909fd398d7a42065053b6d86f96efc4281385d383d2ca4388330101da2b707ae3dd538abf5bfb0b69fa173098436ed87aa789eaafe404a2a9f16b11b0f
 ```
 
 Content Create JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZG9jdW1lbnRDSUQiOiJiYWZ5cmVpZnB2d3Vhcm1sNjJzZm9nZHBpMnZsbHR2ZzJldjZvNHh0dzc0emZ1ZDdjcGtnNzQyNnpuZSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.6EohgSx0YcGkZD0JoDdOaG4oPDusLa45MIlXh1y9lV59-eTKfsTEW5wQNr5xRBHMT0Odzmd5ahBnlDbjgz3WAA
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWE1ejd6eGtuYWU1ZHM3MmV1aWh1ZjJyZzNpeGw2dDRmYnpqZWZoY29nZzNucXBweW9ncXUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZG9jdW1lbnRDSUQiOiJiYWZ5cmVpZnB2d3Vhcm1sNjJzZm9nZHBpMnZsbHR2ZzJldjZvNHh0dzc0emZ1ZDdjcGtnNzQyNnpuZSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.t_DDkJ_TmNekIGUFO22G-W78QoE4XTg9LKQ4gzAQHaK3B6491Tir9b-wtp-hcwmENu2Hqnieqv5ASiqfFrEbDw
 ```
 
 Content Operation CID: `bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu`
@@ -722,21 +754,23 @@ Given the artifacts above, verify:
 
 1. **Multikey decode**: `z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb` → strip `z`, base58btc decode, strip `[0xed, 0x01]` → public key `ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32`
 
-2. **Genesis JWS verify**: split token on `.`, take first two segments as signing input (UTF-8 bytes), base64url-decode third segment as 64-byte signature, `ed25519.verify(signature, signingInputBytes, publicKey)` → true
+2. **Genesis JWS verify**: split token on `.`, take first two segments as signing input (UTF-8 bytes), base64url-decode third segment as 64-byte signature, `ed25519.verify(signature, signingInputBytes, publicKey)` → true. Note the header now contains `cid` alongside `alg`, `typ`, and `kid`.
 
 3. **Genesis CID**: base64url-decode JWS payload → parse JSON → dag-cbor canonical encode → SHA-256 → CIDv1 → should be `bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy`
 
-4. **DID derivation**: take raw CID bytes of genesis CID → SHA-256 → first 22 bytes → `byte % 19` → alphabet lookup → should be `e3vvtck42d4eacdnzvtrn6` → DID = `did:dfos:e3vvtck42d4eacdnzvtrn6`
+4. **CID header**: Verify each operation JWS header contains `cid` matching the derived operation CID
 
-5. **Rotation JWS**: kid = `did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8` — signed by OLD controller key (key 1). Verify with key 1's public key.
+5. **DID derivation**: take raw CID bytes of genesis CID → SHA-256 → first 22 bytes → `byte % 19` → alphabet lookup → should be `e3vvtck42d4eacdnzvtrn6` → DID = `did:dfos:e3vvtck42d4eacdnzvtrn6`
 
-6. **Content create JWS**: kid = `did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd` — signed by NEW controller key (key 2, post-rotation). Verify with key 2's public key.
+6. **Rotation JWS**: kid = `did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8` — signed by OLD controller key (key 1). Verify with key 1's public key.
 
-7. **Document CID**: dag-cbor canonical encode the document JSON → SHA-256 → CIDv1 → should be `bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne`
+7. **Content create JWS**: kid = `did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd` — signed by NEW controller key (key 2, post-rotation). Verify with key 2's public key.
 
-8. **Content chain integrity**: update's `previousOperationCID` matches create's operation CID
+8. **Document CID**: dag-cbor canonical encode the document JSON → SHA-256 → CIDv1 → should be `bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne`
 
-9. **JWT verify**: same signing mechanics as JWS — `ed25519.verify(signature, UTF8(header.payload), key2_publicKey)` → true. Check `exp > currentTime`, `iss == "dfos"`, `aud == "dfos-api"`.
+9. **Content chain integrity**: update's `previousOperationCID` matches create's operation CID
+
+10. **JWT verify**: same signing mechanics as JWS — `ed25519.verify(signature, UTF8(header.payload), key2_publicKey)` → true. Check `exp > currentTime`, `iss == "dfos"`, `aud == "dfos-api"`.
 
 ---
 
@@ -770,12 +804,12 @@ All source lives in `packages/dfos-protocol/` — self-contained, zero monorepo 
 
 ---
 
-## Test Coverage (134 checks across 3 languages)
+## Test Coverage (140 checks across 3 languages)
 
-### TypeScript — dfos-protocol (93 tests)
+### TypeScript — dfos-protocol (99 tests)
 
 - `tests/crypto.spec.ts` (13): ed25519 keypair/sign/verify, JWS round-trip/wrong key/tampered/decode/malformed
-- `tests/chain.spec.ts` (33): multikey encoding, identity chain (genesis, DID, rotation, delete, errors), content chain (lifecycle, clear, delete, errors)
+- `tests/chain.spec.ts` (39): multikey encoding, identity chain (genesis, DID, rotation, delete, cid header, errors), content chain (lifecycle, clear, delete, cid header, errors)
 - `tests/registry.spec.ts` (18): HTTP contract — submission, resubmission, extension, fork rejection, pagination, cross-chain key resolution, 404s
 - `tests/schemas.spec.ts` (28): JSON Schema compilation + validation for document envelope, post, profile — conforming documents, missing fields, invalid values, additional properties
 - `tests/protocol-reference.spec.ts` (1): deterministic artifact generator

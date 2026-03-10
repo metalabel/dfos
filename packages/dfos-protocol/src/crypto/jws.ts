@@ -17,6 +17,8 @@ export interface JwsHeader {
   alg: 'EdDSA';
   typ: string;
   kid: string;
+  /** CIDv1 of the operation payload (dag-cbor + SHA-256), signed in the protected header */
+  cid?: string;
 }
 
 // -----------------------------------------------------------------------------
