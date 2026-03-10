@@ -44,3 +44,40 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  verify-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: packages/dfos-protocol/verify/go/go.sum
+
+      - name: Run Go verification
+        working-directory: packages/dfos-protocol/verify/go
+        run: go test -v
+
+  verify-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: pip install pynacl dag-cbor base58
+
+      - name: Run Python verification
+        run: python packages/dfos-protocol/verify/python/verify_protocol.py
