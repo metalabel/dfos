@@ -48,14 +48,15 @@ export const signContentOperation = async (input: {
   /** kid for the JWS header — should be a DID URL: "did:dfos:xxx#key_yyy" */
   kid: string;
 }): Promise<{ jwsToken: string; operationCID: string }> => {
+  // derive CID first so it can be embedded in the signed header
+  const encoded = await dagCborCanonicalEncode(input.operation);
+  const operationCID = encoded.cid.toString();
+
   const jwsToken = await createJws({
-    header: { alg: 'EdDSA', typ: 'did:dfos:content-op', kid: input.kid },
+    header: { alg: 'EdDSA', typ: 'did:dfos:content-op', kid: input.kid, cid: operationCID },
     payload: input.operation as unknown as Record<string, unknown>,
     sign: input.signer,
   });
-
-  const encoded = await dagCborCanonicalEncode(input.operation);
-  const operationCID = encoded.cid.toString();
 
   return { jwsToken, operationCID };
 };
@@ -134,6 +135,14 @@ export const verifyContentChain = async (input: {
     // derive operation CID
     const encoded = await dagCborCanonicalEncode(op);
     const operationCID = encoded.cid.toString();
+
+    // verify cid header — must be present and match derived CID
+    if (!decoded.header.cid) {
+      throw new Error(`log[${idx}]: missing cid in protected header`);
+    }
+    if (decoded.header.cid !== operationCID) {
+      throw new Error(`log[${idx}]: cid mismatch in protected header`);
+    }
 
     // update state
     if (idx === 0) {

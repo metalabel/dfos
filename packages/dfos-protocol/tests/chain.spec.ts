@@ -11,6 +11,7 @@ import {
 } from '../src/chain';
 import type { ContentOperation, IdentityOperation, MultikeyPublicKey } from '../src/chain';
 import {
+  base64urlEncode,
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
   decodeJwsUnsafe,
@@ -235,6 +236,65 @@ describe('identity chain', () => {
     });
     const updateHeader = decodeJwsUnsafe(updateJws)!.header;
     expect(updateHeader.kid).toBe(`${gen.identity.did}#${gen.keyId}`); // DID URL
+  });
+
+  // --- cid header ---
+
+  it('should include cid in JWS protected header matching operation CID', async () => {
+    const { jwsToken, operationCID } = await createGenesis();
+    const header = decodeJwsUnsafe(jwsToken)!.header;
+    expect(header.cid).toBe(operationCID);
+  });
+
+  it('should reject missing cid in protected header', async () => {
+    const k = makeKey();
+    const op: IdentityOperation = {
+      version: 1,
+      type: 'create',
+      authKeys: [k.key],
+      assertKeys: [k.key],
+      controllerKeys: [k.key],
+      createdAt: ts(),
+    };
+    // manually construct JWS without cid header
+    const header = { alg: 'EdDSA', typ: 'did:dfos:identity-op', kid: k.keyId };
+    const headerB64 = base64urlEncode(JSON.stringify(header));
+    const payloadB64 = base64urlEncode(JSON.stringify(op as unknown as Record<string, unknown>));
+    const signingInput = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+    const sig = await k.signer(signingInput);
+    const jwsToken = `${headerB64}.${payloadB64}.${base64urlEncode(sig)}`;
+
+    await expect(verifyIdentityChain({ didPrefix: 'did:dfos', log: [jwsToken] })).rejects.toThrow(
+      /missing cid/i,
+    );
+  });
+
+  it('should reject mismatched cid in protected header', async () => {
+    const k = makeKey();
+    const op: IdentityOperation = {
+      version: 1,
+      type: 'create',
+      authKeys: [k.key],
+      assertKeys: [k.key],
+      controllerKeys: [k.key],
+      createdAt: ts(),
+    };
+    // manually construct JWS with wrong cid header
+    const header = {
+      alg: 'EdDSA',
+      typ: 'did:dfos:identity-op',
+      kid: k.keyId,
+      cid: 'bafyreifake',
+    };
+    const headerB64 = base64urlEncode(JSON.stringify(header));
+    const payloadB64 = base64urlEncode(JSON.stringify(op as unknown as Record<string, unknown>));
+    const signingInput = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+    const sig = await k.signer(signingInput);
+    const jwsToken = `${headerB64}.${payloadB64}.${base64urlEncode(sig)}`;
+
+    await expect(verifyIdentityChain({ didPrefix: 'did:dfos', log: [jwsToken] })).rejects.toThrow(
+      /cid mismatch/i,
+    );
   });
 
   // --- error cases ---
@@ -708,6 +768,78 @@ describe('content chain', () => {
     const decoded = decodeJwsUnsafe(jwsToken)!;
     const fromPayload = await dagCborCanonicalEncode(decoded.payload);
     expect(fromPayload.cid.toString()).toBe(operationCID);
+  });
+
+  // --- cid header ---
+
+  it('should include cid in JWS protected header matching operation CID', async () => {
+    const id = makeIdentity();
+    const docCID = await makeDocCID({ test: true });
+    const op: ContentOperation = {
+      version: 1,
+      type: 'create',
+      documentCID: docCID,
+      createdAt: ts(),
+      note: null,
+    };
+    const { jwsToken, operationCID } = await signContentOperation({
+      operation: op,
+      signer: id.signer,
+      kid: id.kid,
+    });
+    const header = decodeJwsUnsafe(jwsToken)!.header;
+    expect(header.cid).toBe(operationCID);
+  });
+
+  it('should reject missing cid in content chain protected header', async () => {
+    const id = makeIdentity();
+    const docCID = await makeDocCID({ test: true });
+    const op: ContentOperation = {
+      version: 1,
+      type: 'create',
+      documentCID: docCID,
+      createdAt: ts(),
+      note: null,
+    };
+    // manually construct JWS without cid header
+    const header = { alg: 'EdDSA', typ: 'did:dfos:content-op', kid: id.kid };
+    const headerB64 = base64urlEncode(JSON.stringify(header));
+    const payloadB64 = base64urlEncode(JSON.stringify(op as unknown as Record<string, unknown>));
+    const signingInput = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+    const sig = await id.signer(signingInput);
+    const jwsToken = `${headerB64}.${payloadB64}.${base64urlEncode(sig)}`;
+
+    await expect(
+      verifyContentChain({ log: [jwsToken], resolveKey: id.resolveKey }),
+    ).rejects.toThrow(/missing cid/i);
+  });
+
+  it('should reject mismatched cid in content chain protected header', async () => {
+    const id = makeIdentity();
+    const docCID = await makeDocCID({ test: true });
+    const op: ContentOperation = {
+      version: 1,
+      type: 'create',
+      documentCID: docCID,
+      createdAt: ts(),
+      note: null,
+    };
+    // manually construct JWS with wrong cid header
+    const header = {
+      alg: 'EdDSA',
+      typ: 'did:dfos:content-op',
+      kid: id.kid,
+      cid: 'bafyreifake',
+    };
+    const headerB64 = base64urlEncode(JSON.stringify(header));
+    const payloadB64 = base64urlEncode(JSON.stringify(op as unknown as Record<string, unknown>));
+    const signingInput = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+    const sig = await id.signer(signingInput);
+    const jwsToken = `${headerB64}.${payloadB64}.${base64urlEncode(sig)}`;
+
+    await expect(
+      verifyContentChain({ log: [jwsToken], resolveKey: id.resolveKey }),
+    ).rejects.toThrow(/cid mismatch/i);
   });
 
   // --- error cases ---

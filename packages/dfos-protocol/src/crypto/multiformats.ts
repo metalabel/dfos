@@ -16,7 +16,8 @@ import { sha256 } from 'multiformats/hashes/sha2';
  */
 export const dagCborCanonicalEncode = async (value: unknown) => {
   return await Block.encode({
-    // strip undefineds and other non-serializable values before encoding
+    // removes any undefineds or other non-serializable values, kinda whack but
+    // it works for now
     value: JSON.parse(JSON.stringify(value)),
     codec: dagCborCodec,
     hasher: sha256,
