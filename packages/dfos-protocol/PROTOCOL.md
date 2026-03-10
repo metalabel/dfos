@@ -1,7 +1,7 @@
 # DFOS Protocol: Complete Reference
 
 - **Date**: 2026-03-10
-- **Status**: Implemented and tested — TypeScript + Python + Go cross-language verification. This spec is currently under review. Discuss the DFOS protocol in the [clear.txt](https://clear.dfos.com) space.
+- **Status**: Implemented and tested — TypeScript + Go + Python + Rust + Swift cross-language verification. This spec is currently under review. Discuss the DFOS protocol in the [clear.txt](https://clear.dfos.com) space.
 - **Source**: `packages/dfos-protocol` (self-contained, zero monorepo dependencies, OSS-ready)
 - **Gist**: https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648 (synced from this file)
 
@@ -107,7 +107,7 @@ Implementations MUST use dag-cbor canonical encoding as defined by the [IPLD dag
 
 ### Chain Validity
 
-A valid chain is a **linear sequence** of operations. Each operation (after genesis) links to its predecessor via `previousOperationCID` / `previousOperationCID`. The chain provides structural ordering independent of timestamps.
+A valid chain is a **linear sequence** of operations. Each operation (after genesis) links to its predecessor via `previousOperationCID`. The chain provides structural ordering independent of timestamps.
 
 **Forks are invalid at the protocol level.** Two operations referencing the same `previousOperationCID` constitute a fork. The protocol does not define fork resolution — this is application-defined. In DFOS's custodial model, forks are prevented by database-level advisory locks. A non-custodial implementation would need its own fork resolution strategy (e.g., longest chain, first-seen, application-specified preference).
 
@@ -245,7 +245,6 @@ Any implementation can define custom document schemas following the same pattern
 
 ```
 Alphabet: 2346789acdefhknrtvz  (19 characters)
-Excluded: 0, 1, 5, g, o, b, s, x  (visually ambiguous)
 Length:   22 characters
 Entropy:  ~93.4 bits (19^22)
 ```
@@ -801,10 +800,12 @@ All source lives in `packages/dfos-protocol/` — self-contained, zero monorepo 
 | `tests/protocol-reference.spec.ts`  | Deterministic artifact generator (this doc's source)                                               |
 | `verify/go/`                        | Go cross-language verification (9 tests)                                                           |
 | `verify/python/`                    | Python cross-language verification (32 checks)                                                     |
+| `verify/rust/`                      | Rust cross-language verification (9 tests)                                                         |
+| `verify/swift/`                     | Swift cross-language verification (8 tests)                                                        |
 
 ---
 
-## Test Coverage (140 checks across 3 languages)
+## Test Coverage (160 checks across 5 languages)
 
 ### TypeScript — dfos-protocol (99 tests)
 
@@ -814,12 +815,22 @@ All source lives in `packages/dfos-protocol/` — self-contained, zero monorepo 
 - `tests/schemas.spec.ts` (28): JSON Schema compilation + validation for document envelope, post, profile — conforming documents, missing fields, invalid values, additional properties
 - `tests/protocol-reference.spec.ts` (1): deterministic artifact generator
 
-### Python — verify/ (32 checks)
+### Python — verify/ (35 checks)
 
-- Key derivation, multikey, dag-cbor bytes, CID/DID derivation, JWS/JWT signatures, document CID
+- Key derivation, multikey, dag-cbor bytes, CID/DID derivation, JWS/JWT signatures, CID header verification, document CID
 - Dependencies: `pynacl`, `dag-cbor`, `base58`
 
 ### Go — verify/ (9 tests)
 
-- Key derivation, multikey, dag-cbor, CID/DID derivation, JWS/JWT signatures
+- Key derivation, multikey, dag-cbor, CID/DID derivation, JWS/JWT signatures, CID header verification
 - Dependencies: `fxamacker/cbor/v2`, `mr-tron/base58`
+
+### Rust — verify/ (9 tests)
+
+- Key derivation, multikey, dag-cbor, CID/DID derivation, JWS/JWT signatures, CID header verification
+- Dependencies: `ed25519-dalek`, `ciborium`, `sha2`, `bs58`, `base64`, `data-encoding`
+
+### Swift — verify/ (8 tests)
+
+- Key derivation, multikey, CID/DID derivation, JWS/JWT signatures, CID header verification
+- Dependencies: Apple `Crypto` (swift-crypto)
