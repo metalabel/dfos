@@ -18,8 +18,13 @@ This repository contains the open-source protocol implementation and supporting 
 
 ## Links
 
+- [Protocol specification](https://protocol.dfos.com) — full protocol spec with worked examples and test vectors
+- [JSON Schemas](https://schemas.dfos.com) — content schemas for DFOS documents
+- [Chain verifier](https://verify.dfos.com) — browser-based chain verification tool
+- [DFOS app](https://app.dfos.com) — the platform
+- [npm package](https://www.npmjs.com/package/@metalabel/dfos-protocol) — `@metalabel/dfos-protocol`
 - [clear.txt](https://clear.dfos.com) — the builder and cryptography space on DFOS
-- [DFOS](https://dfos.com)
+- [dfos.com](https://dfos.com)
 
 ## License
 

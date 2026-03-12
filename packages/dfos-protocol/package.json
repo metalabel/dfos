@@ -1,8 +1,29 @@
 {
   "name": "@metalabel/dfos-protocol",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "description": "DFOS Protocol — Ed25519 signed chain primitives, registry, and verification",
+  "license": "MIT",
+  "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/metalabel/dfos.git",
+    "directory": "packages/dfos-protocol"
+  },
+  "homepage": "https://protocol.dfos.com",
+  "keywords": [
+    "dfos",
+    "protocol",
+    "ed25519",
+    "jws",
+    "did",
+    "verifiable",
+    "identity",
+    "content-addressing",
+    "dag-cbor",
+    "cid",
+    "metalabel"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -24,14 +45,19 @@
   "files": [
     "dist",
     "schemas",
+    "examples",
     "PROTOCOL.md",
-    "openapi.yaml"
+    "openapi.yaml",
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "tsup",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "generate-examples": "vitest run --config vitest.scripts.config.ts",
+    "prepublishOnly": "pnpm build"
   },
   "dependencies": {
     "@ipld/dag-cbor": "^9.2.5",
@@ -46,6 +72,7 @@
     "ajv": "^8.18.0",
     "ajv-formats": "^3.0.1",
     "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
     "vitest": "^4.0.18"
   }
 }
