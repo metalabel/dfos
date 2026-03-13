@@ -7,8 +7,10 @@ export default defineConfig({
     'chain/index': 'src/chain/index.ts',
     'registry/index': 'src/registry/index.ts',
   },
-  format: 'esm',
+  format: ['esm'],
   dts: true,
   clean: true,
-  target: 'node24',
+  outDir: 'dist',
+  splitting: true,
+  target: 'es2022',
 });

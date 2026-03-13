@@ -25,21 +25,29 @@
     "metalabel"
   ],
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
-    "./crypto": {
-      "types": "./dist/crypto/index.d.ts",
-      "default": "./dist/crypto/index.js"
-    },
-    "./chain": {
-      "types": "./dist/chain/index.d.ts",
-      "default": "./dist/chain/index.js"
-    },
-    "./registry": {
-      "types": "./dist/registry/index.d.ts",
-      "default": "./dist/registry/index.js"
+    ".": "./src/index.ts",
+    "./crypto": "./src/crypto/index.ts",
+    "./chain": "./src/chain/index.ts",
+    "./registry": "./src/registry/index.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "import": "./dist/index.js",
+        "types": "./dist/index.d.ts"
+      },
+      "./crypto": {
+        "import": "./dist/crypto/index.js",
+        "types": "./dist/crypto/index.d.ts"
+      },
+      "./chain": {
+        "import": "./dist/chain/index.js",
+        "types": "./dist/chain/index.d.ts"
+      },
+      "./registry": {
+        "import": "./dist/registry/index.js",
+        "types": "./dist/registry/index.d.ts"
+      }
     }
   },
   "files": [
