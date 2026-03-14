@@ -188,6 +188,32 @@ The protocol does NOT limit:
 
 ---
 
+## Chain Interpretation
+
+A content chain is a **signed append-only log** — an ordered sequence of operations, each cryptographically linked to its predecessor, each signed by an external identity. The protocol enforces ordering, authorship, and integrity. It does not prescribe what the chain _means_.
+
+Two natural interpretation patterns emerge from the same primitive:
+
+### Living Document
+
+The chain represents a single evolving thing — a profile, a post, a policy document. Each operation is a **revision**. The resolved state is the latest `documentCID`. History is audit trail: you can walk the chain to see who changed what, when, and verify every version was authentic. Edits are expected. The entity _is_ the current version.
+
+This pattern maps naturally to content with `baseDocumentCID` edit lineage in the document envelope — each new document version points back to the one it replaced.
+
+### Stream
+
+The chain represents a **locus of expression** — a feed, a journal, a log, a series. Each operation is a discrete emission. There is no single "current state" — the chain _is_ the sequence. History isn't audit trail, it's the content itself. The entity is the collection, not any individual entry.
+
+In this pattern, each operation commits to a distinct `documentCID` that stands on its own. Previous documents aren't superseded — they're siblings in a series.
+
+### Protocol Neutrality
+
+The protocol cannot distinguish these patterns because the operation schema is identical in both cases. A `create` followed by three `update` operations looks the same whether it represents "a document edited three times" or "four entries in a series." The difference is a **reading convention** — determined by the application, potentially signaled by the `$schema` of the documents in the chain.
+
+This is intentional. The chain is the primitive. Documents, streams, revisions, endorsements, and patterns not yet imagined are compositions on top of it. The protocol provides the signed append-only log with cryptographic guarantees. What you log is application-defined.
+
+---
+
 ## Standard Document Schemas
 
 The crypto core commits to `documentCID` values without inspecting their contents. The document envelope provides structural metadata. The **content** inside the envelope is where JSON Schema validation applies.
