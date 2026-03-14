@@ -40,7 +40,7 @@ jobs:
         run: pnpm --filter @metalabel/site-protocol build
 
       - name: Deploy to Cloudflare Pages
-        run: pnpm --filter @metalabel/site-protocol deploy -- --branch ${{ github.ref_name }}
+        run: pnpm --filter @metalabel/site-protocol run deploy -- --branch ${{ github.ref_name }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -75,7 +75,7 @@ jobs:
         run: pnpm --filter @metalabel/site-schemas build
 
       - name: Deploy to Cloudflare Pages
-        run: pnpm --filter @metalabel/site-schemas deploy -- --branch ${{ github.ref_name }}
+        run: pnpm --filter @metalabel/site-schemas run deploy -- --branch ${{ github.ref_name }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
