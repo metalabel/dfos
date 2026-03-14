@@ -4,7 +4,7 @@ import { Marked } from 'marked';
 import Base from '../layouts/Base.astro';
 
 // Read PROTOCOL.md at build time from the protocol package
-const protocolMd = fs.readFileSync('../../packages/dfos-protocol/PROTOCOL.md', 'utf-8');
+const protocolMd = fs.readFileSync('../dfos-protocol/PROTOCOL.md', 'utf-8');
 
 function slugify(text: string): string {
   return text

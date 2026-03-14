@@ -7,7 +7,7 @@ export default defineConfig({
   vite: {
     resolve: {
       alias: {
-        '@dfos-protocol': new URL('../../packages/dfos-protocol', import.meta.url).pathname,
+        '@dfos-protocol': new URL('../dfos-protocol', import.meta.url).pathname,
       },
     },
   },

@@ -1,9 +1,9 @@
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import documentEnvelope from '../../../packages/dfos-protocol/schemas/document-envelope.v1.json';
-import post from '../../../packages/dfos-protocol/schemas/post.v1.json';
-import profile from '../../../packages/dfos-protocol/schemas/profile.v1.json';
+import documentEnvelope from '../../dfos-protocol/schemas/document-envelope.v1.json';
+import post from '../../dfos-protocol/schemas/post.v1.json';
+import profile from '../../dfos-protocol/schemas/profile.v1.json';
 
 const app = new Hono();
 

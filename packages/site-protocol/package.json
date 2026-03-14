@@ -1,5 +1,5 @@
 {
-  "name": "@metalabel/dfos-protocol-site",
+  "name": "@metalabel/site-protocol",
   "version": "0.0.0",
   "private": true,
   "type": "module",
