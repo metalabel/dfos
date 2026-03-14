@@ -88,14 +88,20 @@ app.get('/', (c) => {
 <meta name="description" content="JSON Schema definitions for DFOS protocol content types. Document envelopes, posts, profiles.">
 <meta name="robots" content="index, follow, max-snippet:-1">
 <link rel="canonical" href="https://schemas.dfos.com/">
+<link rel="icon" type="image/png" href="https://protocol.dfos.com/icon.png">
+<link rel="apple-touch-icon" href="https://protocol.dfos.com/apple-touch-icon.png">
 <meta property="og:type" content="website">
 <meta property="og:title" content="DFOS Content Schemas">
 <meta property="og:description" content="JSON Schema definitions for DFOS protocol content types.">
 <meta property="og:url" content="https://schemas.dfos.com/">
 <meta property="og:site_name" content="DFOS">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://protocol.dfos.com/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="DFOS Content Schemas">
 <meta name="twitter:description" content="JSON Schema definitions for DFOS protocol content types.">
+<meta name="twitter:image" content="https://protocol.dfos.com/og.png">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",

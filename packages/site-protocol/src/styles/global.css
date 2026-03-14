@@ -376,6 +376,15 @@ footer a:hover {
 
 /* ═══ Responsive ═══ */
 
+@media (max-width: 1100px) {
+  .spec .code-wrap,
+  .spec .table-wrap {
+    width: calc(100% + 3rem);
+    margin-left: -1.5rem;
+    margin-right: -1.5rem;
+  }
+}
+
 @media (max-width: 600px) {
   html {
     font-size: 13px;
