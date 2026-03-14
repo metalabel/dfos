@@ -16,7 +16,7 @@
   --fg-bright: #fff;
   --border: rgba(255, 255, 255, 0.1);
   --surface: rgba(255, 255, 255, 0.04);
-  --max-w: 72ch;
+  --max-w: 80ch;
 }
 
 html {
@@ -226,6 +226,9 @@ img {
 
 .site-nav {
   margin-bottom: 4rem;
+  display: flex;
+  align-items: baseline;
+  gap: 1.5rem;
 }
 
 .site-nav a {
@@ -238,6 +241,28 @@ img {
 
 .site-nav a:hover {
   color: var(--fg);
+}
+
+/* ═══ Copy Button ═══ */
+
+.copy-md {
+  font-family: inherit;
+  font-size: 1rem;
+  color: var(--fg-dim);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.2em 0.6em;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+  margin-left: auto;
+}
+
+.copy-md:hover {
+  color: var(--fg-bright);
+  border-color: var(--fg-dim);
 }
 
 /* ═══ Landing Nav ═══ */
@@ -266,6 +291,29 @@ img {
   padding-left: 2rem;
 }
 
+/* Breakout: tables and code blocks extend wider than prose */
+.spec pre,
+.spec table {
+  width: calc(100% + 10rem);
+  margin-left: -5rem;
+  margin-right: -5rem;
+}
+
+.spec pre {
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+
+.spec th:first-child,
+.spec td:first-child {
+  padding-left: 1.5rem;
+}
+
+.spec th:last-child,
+.spec td:last-child {
+  padding-right: 1.5rem;
+}
+
 /* ═══ Footer ═══ */
 
 footer {
@@ -291,5 +339,23 @@ footer a:hover {
   }
   .anchor {
     display: none;
+  }
+  .spec pre,
+  .spec table {
+    width: calc(100% + 2rem);
+    margin-left: -1rem;
+    margin-right: -1rem;
+  }
+  .spec pre {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  .spec th:first-child,
+  .spec td:first-child {
+    padding-left: 0.75rem;
+  }
+  .spec th:last-child,
+  .spec td:last-child {
+    padding-right: 0.75rem;
   }
 }
