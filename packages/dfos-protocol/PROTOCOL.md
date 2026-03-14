@@ -1,9 +1,10 @@
-# DFOS Protocol: Complete Reference
+# DFOS Protocol
 
-- **Date**: 2026-03-10
-- **Status**: Implemented and tested — TypeScript + Go + Python + Rust + Swift cross-language verification. This spec is currently under review. Discuss the DFOS protocol in the [clear.txt](https://clear.dfos.com) space.
-- **Source**: `packages/dfos-protocol` (self-contained, zero monorepo dependencies, OSS-ready)
-- **Gist**: https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648 (synced from this file)
+Verifiable identity and content chains — Ed25519 signatures, content-addressed CIDs, W3C DIDs. Cross-language verification in TypeScript, Go, Python, Rust, and Swift.
+
+This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
+
+[Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol) · [Gist](https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648)
 
 ---
 
@@ -13,7 +14,7 @@ DFOS is a dark forest operating system. Content lives in private spaces — visi
 
 But the cryptographic proof layer is public and verifiable. Every piece of content, every identity, every edit has a signed chain of commitments that anyone can independently verify. You don't need to trust the platform. You don't need access to the database. You need a public key and a chain of JWS tokens.
 
-If you have content — from the official app, from an API export, from a screenshot someone sent you, from a pirate mirror, from anywhere — you can verify it's authentic. Hash the content, check the CID, walk the chain, verify the signature. The content is dark; the proof is light.
+If you have content — from the official app, from an API export, from a pirate mirror, from anywhere — you can verify it's authentic. Hash the content, check the CID, walk the chain, verify the signature. The content is dark; the proof is light.
 
 The protocol makes this verification radically simple. Two chain types — identity and content — using the same mechanics: Ed25519 signatures, JWS compact tokens, content-addressed CIDs. The protocol is deliberately minimal. It knows about keys and document hashes. It doesn't know about posts, profiles, or any application concept. Document semantics are entirely application layer — free to evolve without protocol changes.
 
@@ -23,9 +24,7 @@ The result: a signed content ledger that any standard EdDSA library can verify, 
 
 ---
 
-This document is a complete, self-contained reference for the DFOS protocol. All artifacts are deterministic and reproducible from fixed seeds. An independent implementer can verify every value using standard Ed25519 + dag-cbor libraries.
-
-**To regenerate**: `pnpm --filter @metalabel/dfos-protocol exec vitest run tests/protocol-reference.spec.ts`
+All artifacts in this document are deterministic and reproducible from fixed seeds. An independent implementer can verify every value using standard Ed25519 + dag-cbor libraries.
 
 ---
 
@@ -185,6 +184,32 @@ The protocol does NOT limit:
 - **Document content size** — the protocol commits to a CID, not the document. Document size limits are application/registry concerns.
 - **Chain length** — no maximum operations per chain.
 - **Number of chains per identity** — application scaling concern.
+
+---
+
+## Chain Interpretation
+
+A content chain is a **signed append-only log** — an ordered sequence of operations, each cryptographically linked to its predecessor, each signed by an external identity. The protocol enforces ordering, authorship, and integrity. It does not prescribe what the chain _means_.
+
+Two natural interpretation patterns emerge from the same primitive:
+
+### Living Document
+
+The chain represents a single evolving thing — a profile, a post, a policy document. Each operation is a **revision**. The resolved state is the latest `documentCID`. History is audit trail: you can walk the chain to see who changed what, when, and verify every version was authentic. Edits are expected. The entity _is_ the current version.
+
+This pattern maps naturally to content with `baseDocumentCID` edit lineage in the document envelope — each new document version points back to the one it replaced.
+
+### Stream
+
+The chain represents a **locus of expression** — a feed, a journal, a log, a series. Each operation is a discrete emission. There is no single "current state" — the chain _is_ the sequence. History isn't audit trail, it's the content itself. The entity is the collection, not any individual entry.
+
+In this pattern, each operation commits to a distinct `documentCID` that stands on its own. Previous documents aren't superseded — they're siblings in a series.
+
+### Protocol Neutrality
+
+The protocol cannot distinguish these patterns because the operation schema is identical in both cases. A `create` followed by three `update` operations looks the same whether it represents "a document edited three times" or "four entries in a series." The difference is a **reading convention** — determined by the application, potentially signaled by the `$schema` of the documents in the chain.
+
+This is intentional. The chain is the primitive. Documents, streams, revisions, endorsements, and patterns not yet imagined are compositions on top of it. The protocol provides the signed append-only log with cryptographic guarantees. What you log is application-defined.
 
 ---
 
@@ -810,64 +835,45 @@ Given the artifacts above, verify:
 
 ---
 
-## Source Code Reference
+## Source and Verification
 
-All source lives in `packages/dfos-protocol/` — self-contained, zero monorepo dependencies.
+All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. 160 checks across 5 languages.
 
-| File                                | Contents                                                                                           |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `src/crypto/ed25519.ts`             | `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature` |
-| `src/crypto/jws.ts`                 | `createJws`, `verifyJws`, `decodeJwsUnsafe`, `JwsVerificationError`                                |
-| `src/crypto/jwt.ts`                 | `createJwt`, `verifyJwt`, `decodeJwtUnsafe` (EdDSA only)                                           |
-| `src/crypto/base64url.ts`           | `base64urlEncode`, `base64urlDecode`                                                               |
-| `src/crypto/multiformats.ts`        | `dagCborCanonicalEncode`, `dagCborCanonicalEqual`                                                  |
-| `src/crypto/id.ts`                  | `generateId`, `generateIdNoPrefix`, `isValidId`                                                    |
-| `src/chain/multikey.ts`             | `encodeEd25519Multikey`, `decodeMultikey`                                                          |
-| `src/chain/schemas.ts`              | `IdentityOperation`, `ContentOperation`, `MultikeyPublicKey`, `VerifiedIdentity`                   |
-| `src/chain/identity-chain.ts`       | `signIdentityOperation`, `verifyIdentityChain`                                                     |
-| `src/chain/content-chain.ts`        | `signContentOperation`, `verifyContentChain`                                                       |
-| `src/chain/derivation.ts`           | `deriveChainIdentifier`                                                                            |
-| `src/registry/schemas.ts`           | Registry API Zod types (wire contract)                                                             |
-| `src/registry/server.ts`            | Reference Hono registry server                                                                     |
-| `src/registry/store.ts`             | In-memory chain store with linear enforcement                                                      |
-| `openapi.yaml`                      | OpenAPI 3.1 spec for registry API                                                                  |
-| `schemas/document-envelope.v1.json` | JSON Schema for the document envelope wrapper                                                      |
-| `schemas/post.v1.json`              | JSON Schema for post documents                                                                     |
-| `schemas/profile.v1.json`           | JSON Schema for profile documents                                                                  |
-| `tests/protocol-reference.spec.ts`  | Deterministic artifact generator (this doc's source)                                               |
-| `verify/go/`                        | Go cross-language verification (9 tests)                                                           |
-| `verify/python/`                    | Python cross-language verification (32 checks)                                                     |
-| `verify/rust/`                      | Rust cross-language verification (9 tests)                                                         |
-| `verify/swift/`                     | Swift cross-language verification (8 tests)                                                        |
+| Module                                                                                                                   | Exports                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| [`crypto/ed25519`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/ed25519.ts)             | `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature` |
+| [`crypto/jws`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jws.ts)                     | `createJws`, `verifyJws`, `decodeJwsUnsafe`                                                        |
+| [`crypto/jwt`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jwt.ts)                     | `createJwt`, `verifyJwt`, `decodeJwtUnsafe`                                                        |
+| [`crypto/base64url`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/base64url.ts)         | `base64urlEncode`, `base64urlDecode`                                                               |
+| [`crypto/multiformats`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/multiformats.ts)   | `dagCborCanonicalEncode`, `dagCborCanonicalEqual`                                                  |
+| [`crypto/id`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/id.ts)                       | `generateId`, `generateIdNoPrefix`, `isValidId`                                                    |
+| [`chain/multikey`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/multikey.ts)             | `encodeEd25519Multikey`, `decodeMultikey`                                                          |
+| [`chain/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/schemas.ts)               | `IdentityOperation`, `ContentOperation`, `MultikeyPublicKey`, `VerifiedIdentity`                   |
+| [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) | `signIdentityOperation`, `verifyIdentityChain`                                                     |
+| [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts)   | `signContentOperation`, `verifyContentChain`                                                       |
+| [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts)         | `deriveChainIdentifier`                                                                            |
+| [`registry/server`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/server.ts)           | Reference Hono registry server                                                                     |
+| [`registry/store`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/store.ts)             | In-memory chain store with linear enforcement                                                      |
+| [`openapi.yaml`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml)                        | OpenAPI 3.1 spec for registry API                                                                  |
+| [`schemas/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/schemas)                                 | JSON Schema for document envelope, post, profile                                                   |
+
+### Cross-Language Verification
+
+| Language   | Tests | Source                                                                                                                                       |
+| ---------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| TypeScript | 99    | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests) — crypto, chain, registry, schemas, artifact generation |
+| Python     | 35    | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) — pynacl, dag-cbor, base58              |
+| Go         | 9     | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go) — fxamacker/cbor, mr-tron/base58                |
+| Rust       | 9     | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust) — ed25519-dalek, ciborium, sha2             |
+| Swift      | 8     | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift) — Apple Crypto                            |
 
 ---
 
-## Test Coverage (160 checks across 5 languages)
+## Special Thanks
 
-### TypeScript — dfos-protocol (99 tests)
+- **Vinny Bellavia** — [stcisgood.com](https://stcisgood.com)
+- **Allison Clift-Jennings** — [Jura Labs](https://juralabs.com)
 
-- `tests/crypto.spec.ts` (13): ed25519 keypair/sign/verify, JWS round-trip/wrong key/tampered/decode/malformed
-- `tests/chain.spec.ts` (39): multikey encoding, identity chain (genesis, DID, rotation, delete, cid header, errors), content chain (lifecycle, clear, delete, cid header, errors)
-- `tests/registry.spec.ts` (18): HTTP contract — submission, resubmission, extension, fork rejection, pagination, cross-chain key resolution, 404s
-- `tests/schemas.spec.ts` (28): JSON Schema compilation + validation for document envelope, post, profile — conforming documents, missing fields, invalid values, additional properties
-- `tests/protocol-reference.spec.ts` (1): deterministic artifact generator
+---
 
-### Python — verify/ (35 checks)
-
-- Key derivation, multikey, dag-cbor bytes, CID/DID derivation, JWS/JWT signatures, CID header verification, document CID
-- Dependencies: `pynacl`, `dag-cbor`, `base58`
-
-### Go — verify/ (9 tests)
-
-- Key derivation, multikey, dag-cbor, CID/DID derivation, JWS/JWT signatures, CID header verification
-- Dependencies: `fxamacker/cbor/v2`, `mr-tron/base58`
-
-### Rust — verify/ (9 tests)
-
-- Key derivation, multikey, dag-cbor, CID/DID derivation, JWS/JWT signatures, CID header verification
-- Dependencies: `ed25519-dalek`, `ciborium`, `sha2`, `bs58`, `base64`, `data-encoding`
-
-### Swift — verify/ (8 tests)
-
-- Key derivation, multikey, CID/DID derivation, JWS/JWT signatures, CID header verification
-- Dependencies: Apple `Crypto` (swift-crypto)
+Yancey · Ilya · Brandon · Lena

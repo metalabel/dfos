@@ -1,0 +1,58 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="DFOS Protocol"
+  description="Ed25519 signed chains, content-addressed proofs, W3C DIDs. Verifiable identity and content without trusting the platform."
+>
+  <main>
+    <header>
+      <h1>DFOS Protocol</h1>
+      <p>
+        Ed25519 signed chains. Content-addressed proofs. W3C DIDs. Verifiable identity and content
+        — without trusting the platform, without accessing the database, without platform-specific
+        tooling.
+      </p>
+      <p class="tagline">The proof is public. The content is private.</p>
+    </header>
+
+    <hr />
+
+    <nav class="landing-nav">
+      <ul>
+        <li>
+          <a href="/spec">Specification</a>
+          <span class="dim"> — complete protocol with worked examples and test vectors</span>
+        </li>
+        <li>
+          <a href="https://schemas.dfos.com">Content Schemas</a>
+          <span class="dim"> — JSON Schema definitions for content types</span>
+        </li>
+        <li>
+          <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">npm</a>
+          <span class="dim"> — @metalabel/dfos-protocol</span>
+        </li>
+        <li>
+          <a href="https://github.com/metalabel/dfos">GitHub</a>
+          <span class="dim"> — metalabel/dfos</span>
+        </li>
+        <li>
+          <a href="https://verify.dfos.com">Chain Verifier</a>
+          <span class="dim"> — browser-based chain verification</span>
+        </li>
+        <li>
+          <a href="https://dfos.com">DFOS</a>
+          <span class="dim"> — the platform</span>
+        </li>
+      </ul>
+    </nav>
+
+    <hr />
+
+    <footer>
+      <p class="dim">Yancey · Ilya · Brandon · Lena</p>
+      <p class="dim"><a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT License</a> · 2026</p>
+    </footer>
+  </main>
+</Base>
