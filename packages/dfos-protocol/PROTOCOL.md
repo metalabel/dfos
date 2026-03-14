@@ -3,7 +3,7 @@
 - **Date**: 2026-03-10
 - **Status**: Implemented and tested — TypeScript + Go + Python + Rust + Swift cross-language verification. This spec is currently under review. Discuss the DFOS protocol in the [clear.txt](https://clear.dfos.com) space.
 - **Source**: `packages/dfos-protocol` (self-contained, zero monorepo dependencies, OSS-ready)
-- **Gist**: https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648 (synced from this file)
+- **Gist**: [github.com/bvalosek/…/PROTOCOL.md](https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648) (synced from this file)
 
 ---
 
