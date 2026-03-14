@@ -1,0 +1,295 @@
+/* ═══ DFOS Protocol ═══ */
+/* Single typeface. Single size. Hierarchy through weight, opacity, spacing, case. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg: #0a0a0a;
+  --fg: rgba(255, 255, 255, 0.82);
+  --fg-dim: rgba(255, 255, 255, 0.4);
+  --fg-bright: #fff;
+  --border: rgba(255, 255, 255, 0.1);
+  --surface: rgba(255, 255, 255, 0.04);
+  --max-w: 72ch;
+}
+
+html {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 4rem 1.5rem;
+}
+
+/* ═══ Headings ═══ */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-size: 1rem;
+  color: var(--fg-bright);
+  margin-top: 3rem;
+  margin-bottom: 1rem;
+  position: relative;
+}
+
+h1 {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  margin-top: 0;
+}
+
+h2 {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border);
+  margin-top: 4rem;
+}
+
+h3 {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+h4,
+h5,
+h6 {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* ═══ Body ═══ */
+
+p {
+  margin-bottom: 1rem;
+}
+
+strong {
+  color: var(--fg-bright);
+  font-weight: 600;
+}
+
+em {
+  font-style: italic;
+}
+
+/* ═══ Links ═══ */
+
+a {
+  color: var(--fg-bright);
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  text-decoration-color: var(--fg-dim);
+}
+
+/* ═══ Heading Anchors ═══ */
+
+.anchor {
+  position: absolute;
+  left: -1.5em;
+  opacity: 0;
+  color: var(--fg-dim);
+  text-decoration: none;
+  font-weight: 400;
+  transition: opacity 0.15s;
+}
+
+:is(h1, h2, h3, h4, h5, h6):hover .anchor {
+  opacity: 1;
+}
+
+/* ═══ Code ═══ */
+
+code {
+  font-family: inherit;
+  font-size: 1rem;
+  background: var(--surface);
+  padding: 0.1em 0.35em;
+  border-radius: 2px;
+}
+
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1.25rem 1.5rem;
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* ═══ Tables ═══ */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  font-weight: 600;
+  color: var(--fg-bright);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ═══ Lists ═══ */
+
+ul,
+ol {
+  margin-bottom: 1rem;
+  padding-left: 2rem;
+}
+
+li {
+  margin-bottom: 0.35rem;
+}
+
+li > ul,
+li > ol {
+  margin-top: 0.35rem;
+  margin-bottom: 0;
+}
+
+/* ═══ Blockquotes ═══ */
+
+blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 1.25rem;
+  color: var(--fg-dim);
+  margin-bottom: 1rem;
+}
+
+/* ═══ Rules ═══ */
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+/* ═══ Images ═══ */
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ═══ Utility ═══ */
+
+.dim {
+  color: var(--fg-dim);
+}
+
+.tagline {
+  font-style: italic;
+  color: var(--fg-dim);
+}
+
+/* ═══ Site Nav ═══ */
+
+.site-nav {
+  margin-bottom: 4rem;
+}
+
+.site-nav a {
+  color: var(--fg-dim);
+  text-decoration: none;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 400;
+}
+
+.site-nav a:hover {
+  color: var(--fg);
+}
+
+/* ═══ Landing Nav ═══ */
+
+.landing-nav ul {
+  list-style: none;
+  padding: 0;
+}
+
+.landing-nav li {
+  margin-bottom: 0.6rem;
+}
+
+.landing-nav a {
+  font-weight: 600;
+}
+
+/* ═══ Spec Article ═══ */
+
+.spec ul {
+  list-style: disc;
+  padding-left: 2rem;
+}
+
+.spec ol {
+  padding-left: 2rem;
+}
+
+/* ═══ Footer ═══ */
+
+footer {
+  margin-top: 0;
+}
+
+footer a {
+  color: var(--fg-dim);
+}
+
+footer a:hover {
+  color: var(--fg);
+}
+
+/* ═══ Responsive ═══ */
+
+@media (max-width: 600px) {
+  html {
+    font-size: 13px;
+  }
+  body {
+    padding: 2rem 1rem;
+  }
+  .anchor {
+    display: none;
+  }
+}

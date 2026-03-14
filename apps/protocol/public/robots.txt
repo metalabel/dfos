@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://protocol.dfos.com/sitemap-index.xml
