@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@metalabel/dfos-protocol": "workspace:*",
     "hono": "^4.12.3"
   },
   "devDependencies": {

@@ -20,17 +20,23 @@ const SCHEMA_HEADERS = {
   'Cache-Control': 'public, max-age=31536000, immutable',
 };
 
-app.use('/*/v*', cors());
-
 function serveSchema(c: Context) {
   const schema = schemas[c.req.path];
   if (!schema) return c.notFound();
-  return c.text(JSON.stringify(schema, null, 2), 200, SCHEMA_HEADERS);
+  return c.text(JSON.stringify(schema, null, 2), 200, {
+    ...SCHEMA_HEADERS,
+    'Access-Control-Allow-Origin': '*',
+  });
 }
 
 app.get('/document-envelope/v1', serveSchema);
 app.get('/post/v1', serveSchema);
 app.get('/profile/v1', serveSchema);
+
+// CORS preflight for schema routes
+app.options('/document-envelope/v1', cors());
+app.options('/post/v1', cors());
+app.options('/profile/v1', cors());
 
 // ── Meta Routes ────────────────────────────────────────────────────────────────
 
@@ -69,7 +75,7 @@ app.get('/llms.txt', (c) => {
       '',
       '## Related',
       '',
-      '- [Protocol Specification](https://protocol.dfos.com): Full DFOS protocol spec',
+      '- [Protocol Specification](https://protocol.dfos.com/spec): Full DFOS protocol spec',
       '- [npm Package](https://www.npmjs.com/package/@metalabel/dfos-protocol): @metalabel/dfos-protocol',
       '- [GitHub](https://github.com/metalabel/dfos): Source code',
     ].join('\n'),

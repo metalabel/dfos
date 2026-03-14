@@ -19,9 +19,10 @@ function slugify(text: string): string {
 const marked = new Marked();
 let html = await marked.parse(protocolMd);
 
-// Strip GFM strikethrough — tildes in table cells (e.g. ~3×) get
-// misinterpreted as ~~strikethrough~~ across cell boundaries
-html = html.replace(/<\/?del>/g, '');
+// Fix GFM strikethrough — tildes in table cells (e.g. ~3×) get
+// misinterpreted as ~~strikethrough~~. Restore the ~ markers.
+html = html.replace(/<del>/g, '~');
+html = html.replace(/<\/del>/g, '');
 
 // Wrap tables in scrollable container for mobile
 html = html.replace(/<table>/g, '<div class="table-wrap"><table>');

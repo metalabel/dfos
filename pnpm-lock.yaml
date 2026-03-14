@@ -69,6 +69,9 @@ importers:
       '@astrojs/sitemap':
         specifier: ^3.3.0
         version: 3.7.0
+      '@metalabel/dfos-protocol':
+        specifier: workspace:*
+        version: link:../dfos-protocol
       astro:
         specifier: ^5.7.0
         version: 5.18.0(@types/node@24.11.0)(rollup@4.59.0)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
@@ -85,6 +88,9 @@ importers:
 
   packages/site-schemas:
     dependencies:
+      '@metalabel/dfos-protocol':
+        specifier: workspace:*
+        version: link:../dfos-protocol
       hono:
         specifier: ^4.12.3
         version: 4.12.3

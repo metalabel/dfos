@@ -10,6 +10,7 @@
     "typecheck": "astro check"
   },
   "dependencies": {
+    "@metalabel/dfos-protocol": "workspace:*",
     "astro": "^5.7.0",
     "@astrojs/sitemap": "^3.3.0",
     "marked": "^15.0.0"
