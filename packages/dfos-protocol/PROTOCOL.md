@@ -873,3 +873,7 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 - **Vinny Bellavia** — [stcisgood.com](https://stcisgood.com)
 - **Allison Clift-Jennings** — [Jura Labs](https://juralabs.com)
+
+---
+
+Yancey · Ilya · Brandon · Lena
