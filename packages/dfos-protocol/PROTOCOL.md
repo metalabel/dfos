@@ -82,11 +82,11 @@ The `content` field inside the document envelope is validated by JSON Schema. Th
 
 Three canonical representations:
 
-| Thing | Form | Example |
-| --- | --- | --- |
-| Operation or document | CID (dag-cbor + SHA-256) | See below |
-| Entity (content chain) | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c` |
-| Identity (key chain) | `did:dfos:<hash>` | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
+| Thing                  | Form                       | Example                           |
+| ---------------------- | -------------------------- | --------------------------------- |
+| Operation or document  | CID (dag-cbor + SHA-256)   | See below                         |
+| Entity (content chain) | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c`          |
+| Identity (key chain)   | `did:dfos:<hash>`          | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
 
 Example CID:
 
@@ -474,11 +474,11 @@ token = signingInput + "." + base64url(signature)
 
 ### kid Rules
 
-| Context | kid format | Example |
-| --- | --- | --- |
+| Context                   | kid format  | Example                      |
+| ------------------------- | ----------- | ---------------------------- |
 | Identity create (genesis) | Bare key ID | `key_r9ev34fvc23z999veaaft8` |
-| Identity update/delete | DID URL | See below |
-| All content ops | DID URL | See below |
+| Identity update/delete    | DID URL     | See below                    |
+| All content ops           | DID URL     | See below                    |
 
 DID URL examples:
 
@@ -916,13 +916,13 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 ### Cross-Language Verification
 
-| Language | Tests | Source |
-| --- | --- | --- |
-| TypeScript | 99 | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests) |
-| Python | 35 | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) |
-| Go | 9 | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go) |
-| Rust | 9 | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust) |
-| Swift | 8 | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift) |
+| Language   | Tests | Source                                                                                               |
+| ---------- | ----- | ---------------------------------------------------------------------------------------------------- |
+| TypeScript | 99    | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)                 |
+| Python     | 35    | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) |
+| Go         | 9     | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go)         |
+| Rust       | 9     | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust)     |
+| Swift      | 8     | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift)   |
 
 ---
 
