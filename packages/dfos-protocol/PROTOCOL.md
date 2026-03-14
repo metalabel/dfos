@@ -82,11 +82,17 @@ The `content` field inside the document envelope is validated by JSON Schema. Th
 
 Three canonical representations:
 
-| Thing                  | Form                       | Example                                                       |
-| ---------------------- | -------------------------- | ------------------------------------------------------------- |
-| Operation or document  | CID (dag-cbor + SHA-256)   | `bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy` |
-| Entity (content chain) | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c`                                      |
-| Identity (key chain)   | `did:dfos:<hash>`          | `did:dfos:e3vvtck42d4eacdnzvtrn6`                             |
+| Thing | Form | Example |
+| --- | --- | --- |
+| Operation or document | CID (dag-cbor + SHA-256) | See below |
+| Entity (content chain) | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c` |
+| Identity (key chain) | `did:dfos:<hash>` | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
+
+Example CID:
+
+```
+bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
+```
 
 Operations and documents are CIDs — standard IPLD content addresses. Entities and identities are derived identifiers — `customAlpha(SHA-256(genesis CID bytes))`. Same derivation for both. Identity chains prepend `did:dfos:` (W3C DID spec). Entity identifiers are bare — just the 22-char hash, no prefix.
 
@@ -468,11 +474,18 @@ token = signingInput + "." + base64url(signature)
 
 ### kid Rules
 
-| Context                   | kid format  | Example                                                      |
-| ------------------------- | ----------- | ------------------------------------------------------------ |
-| Identity create (genesis) | Bare key ID | `key_r9ev34fvc23z999veaaft8`                                 |
-| Identity update/delete    | DID URL     | `did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8` |
-| All content ops           | DID URL     | `did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd` |
+| Context | kid format | Example |
+| --- | --- | --- |
+| Identity create (genesis) | Bare key ID | `key_r9ev34fvc23z999veaaft8` |
+| Identity update/delete | DID URL | See below |
+| All content ops | DID URL | See below |
+
+DID URL examples:
+
+```
+did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8
+did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd
+```
 
 ### `cid` Header
 
@@ -624,7 +637,11 @@ JWS Token:
 eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.EDryDK1uvtix-17cHun9t6MacFIx2rMmMF1QLzfD5TFlSsOvMcue97pCgGn3CXeLVFtVxgpCoh0kGSXioKKzAw
 ```
 
-Operation CID: `bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy`
+Operation CID:
+
+```
+bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
+```
 
 **Derived DID: `did:dfos:e3vvtck42d4eacdnzvtrn6`**
 
@@ -685,7 +702,11 @@ JWS Token:
 eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNpZCI6ImJhZnlyZWljeW00Y3lpZWRubGQ3M3NtYngzMnN6YWVpN3hkdWxxbjRnM3N0ZTVlMncydWxhanIzb3FtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.MScuoBlgOK3j5QX9tFcw1ou0o4LgJziGJEsZ5pvqiBr1SagAyAv5h-wajQhtg8IP7dLlM0U4leW2iRra945cDg
 ```
 
-Operation CID: `bafyreicym4cyiednld73smbx32szaei7xdulqn4g3ste5e2w2ulajr3oqm`
+Operation CID:
+
+```
+bafyreicym4cyiednld73smbx32szaei7xdulqn4g3ste5e2w2ulajr3oqm
+```
 
 Post-rotation: DID unchanged (`did:dfos:e3vvtck42d4eacdnzvtrn6`), controller rotated to `key_ez9a874tckr3dv933d3ckd`.
 
@@ -707,7 +728,11 @@ Document (application layer):
 }
 ```
 
-Document CID: `bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne`
+Document CID:
+
+```
+bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne
+```
 
 Content Create JWS Header:
 
@@ -744,7 +769,11 @@ Content Create JWS Token:
 eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWE1ejd6eGtuYWU1ZHM3MmV1aWh1ZjJyZzNpeGw2dDRmYnpqZWZoY29nZzNucXBweW9ncXUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZG9jdW1lbnRDSUQiOiJiYWZ5cmVpZnB2d3Vhcm1sNjJzZm9nZHBpMnZsbHR2ZzJldjZvNHh0dzc0emZ1ZDdjcGtnNzQyNnpuZSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.t_DDkJ_TmNekIGUFO22G-W78QoE4XTg9LKQ4gzAQHaK3B6491Tir9b-wtp-hcwmENu2Hqnieqv5ASiqfFrEbDw
 ```
 
-Content Operation CID: `bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu`
+Content Operation CID:
+
+```
+bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu
+```
 
 ### Content Chain: Update
 
@@ -777,8 +806,17 @@ Updated document:
 }
 ```
 
-Document CID (edited): `bafyreieuo26zfmjxwpmw5jk6bqzqhvivxcbckgxtyeuc7ypf3p4sihgq4q`
-Content Update CID: `bafyreibb4lsvqmz4j76rsvhkqw3v2b4vp23t7dimm6vl5g5wlninvkemxq`
+Document CID (edited):
+
+```
+bafyreieuo26zfmjxwpmw5jk6bqzqhvivxcbckgxtyeuc7ypf3p4sihgq4q
+```
+
+Content Update CID:
+
+```
+bafyreibb4lsvqmz4j76rsvhkqw3v2b4vp23t7dimm6vl5g5wlninvkemxq
+```
 
 ### EdDSA JWT
 
@@ -813,21 +851,42 @@ eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tk
 
 Given the artifacts above, verify:
 
-1. **Multikey decode**: `z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb` → strip `z`, base58btc decode, strip `[0xed, 0x01]` → public key `ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32`
+1. **Multikey decode**: strip `z`, base58btc decode, strip `[0xed, 0x01]` prefix → raw public key:
+
+   ```
+   z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb
+   → ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32
+   ```
 
 2. **Genesis JWS verify**: split token on `.`, take first two segments as signing input (UTF-8 bytes), base64url-decode third segment as 64-byte signature, `ed25519.verify(signature, signingInputBytes, publicKey)` → true. Note the header now contains `cid` alongside `alg`, `typ`, and `kid`.
 
-3. **Genesis CID**: base64url-decode JWS payload → parse JSON → dag-cbor canonical encode → SHA-256 → CIDv1 → should be `bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy`
+3. **Genesis CID**: base64url-decode JWS payload → parse JSON → dag-cbor canonical encode → SHA-256 → CIDv1 → should be:
+
+   ```
+   bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
+   ```
 
 4. **CID header**: Verify each operation JWS header contains `cid` matching the derived operation CID
 
 5. **DID derivation**: take raw CID bytes of genesis CID → SHA-256 → first 22 bytes → `byte % 19` → alphabet lookup → should be `e3vvtck42d4eacdnzvtrn6` → DID = `did:dfos:e3vvtck42d4eacdnzvtrn6`
 
-6. **Rotation JWS**: kid = `did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8` — signed by OLD controller key (key 1). Verify with key 1's public key.
+6. **Rotation JWS**: signed by OLD controller key (key 1). Verify with key 1's public key. kid:
 
-7. **Content create JWS**: kid = `did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd` — signed by NEW controller key (key 2, post-rotation). Verify with key 2's public key.
+   ```
+   did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8
+   ```
 
-8. **Document CID**: dag-cbor canonical encode the document JSON → SHA-256 → CIDv1 → should be `bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne`
+7. **Content create JWS**: signed by NEW controller key (key 2, post-rotation). Verify with key 2's public key. kid:
+
+   ```
+   did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd
+   ```
+
+8. **Document CID**: dag-cbor canonical encode the document JSON → SHA-256 → CIDv1 → should be:
+
+   ```
+   bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne
+   ```
 
 9. **Content chain integrity**: update's `previousOperationCID` matches create's operation CID
 
@@ -839,33 +898,31 @@ Given the artifacts above, verify:
 
 All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. 160 checks across 5 languages.
 
-| Module                                                                                                                   | Exports                                                                                            |
-| ------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| [`crypto/ed25519`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/ed25519.ts)             | `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature` |
-| [`crypto/jws`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jws.ts)                     | `createJws`, `verifyJws`, `decodeJwsUnsafe`                                                        |
-| [`crypto/jwt`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jwt.ts)                     | `createJwt`, `verifyJwt`, `decodeJwtUnsafe`                                                        |
-| [`crypto/base64url`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/base64url.ts)         | `base64urlEncode`, `base64urlDecode`                                                               |
-| [`crypto/multiformats`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/multiformats.ts)   | `dagCborCanonicalEncode`, `dagCborCanonicalEqual`                                                  |
-| [`crypto/id`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/id.ts)                       | `generateId`, `generateIdNoPrefix`, `isValidId`                                                    |
-| [`chain/multikey`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/multikey.ts)             | `encodeEd25519Multikey`, `decodeMultikey`                                                          |
-| [`chain/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/schemas.ts)               | `IdentityOperation`, `ContentOperation`, `MultikeyPublicKey`, `VerifiedIdentity`                   |
-| [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) | `signIdentityOperation`, `verifyIdentityChain`                                                     |
-| [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts)   | `signContentOperation`, `verifyContentChain`                                                       |
-| [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts)         | `deriveChainIdentifier`                                                                            |
-| [`registry/server`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/server.ts)           | Reference Hono registry server                                                                     |
-| [`registry/store`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/store.ts)             | In-memory chain store with linear enforcement                                                      |
-| [`openapi.yaml`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml)                        | OpenAPI 3.1 spec for registry API                                                                  |
-| [`schemas/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/schemas)                                 | JSON Schema for document envelope, post, profile                                                   |
+- [`crypto/ed25519`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/ed25519.ts) — `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature`
+- [`crypto/jws`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jws.ts) — `createJws`, `verifyJws`, `decodeJwsUnsafe`
+- [`crypto/jwt`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jwt.ts) — `createJwt`, `verifyJwt`, `decodeJwtUnsafe`
+- [`crypto/base64url`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/base64url.ts) — `base64urlEncode`, `base64urlDecode`
+- [`crypto/multiformats`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/multiformats.ts) — `dagCborCanonicalEncode`, `dagCborCanonicalEqual`
+- [`crypto/id`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/id.ts) — `generateId`, `generateIdNoPrefix`, `isValidId`
+- [`chain/multikey`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/multikey.ts) — `encodeEd25519Multikey`, `decodeMultikey`
+- [`chain/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/schemas.ts) — `IdentityOperation`, `ContentOperation`, `MultikeyPublicKey`, `VerifiedIdentity`
+- [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) — `signIdentityOperation`, `verifyIdentityChain`
+- [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts) — `signContentOperation`, `verifyContentChain`
+- [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`
+- [`registry/server`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/server.ts) — Reference Hono registry server
+- [`registry/store`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/store.ts) — In-memory chain store with linear enforcement
+- [`openapi.yaml`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml) — OpenAPI 3.1 spec for registry API
+- [`schemas/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/schemas) — JSON Schema for document envelope, post, profile
 
 ### Cross-Language Verification
 
-| Language   | Tests | Source                                                                                                                                       |
-| ---------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| TypeScript | 99    | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests) — crypto, chain, registry, schemas, artifact generation |
-| Python     | 35    | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) — pynacl, dag-cbor, base58              |
-| Go         | 9     | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go) — fxamacker/cbor, mr-tron/base58                |
-| Rust       | 9     | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust) — ed25519-dalek, ciborium, sha2             |
-| Swift      | 8     | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift) — Apple Crypto                            |
+| Language | Tests | Source |
+| --- | --- | --- |
+| TypeScript | 99 | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests) |
+| Python | 35 | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) |
+| Go | 9 | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go) |
+| Rust | 9 | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust) |
+| Swift | 8 | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift) |
 
 ---
 
