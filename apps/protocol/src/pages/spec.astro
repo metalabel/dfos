@@ -53,6 +53,17 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
       <button class="copy-md" id="copy-md" title="Copy as Markdown">copy as md</button>
     </nav>
     <article class="spec" set:html={html} />
+
+    <hr />
+
+    <footer>
+      <p class="dim">
+        <a href="/">DFOS Protocol</a> · <a href="https://schemas.dfos.com">Schemas</a> ·
+        <a href="https://github.com/metalabel/dfos">GitHub</a> ·
+        <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">npm</a> ·
+        <a href="https://dfos.com">dfos.com</a>
+      </p>
+    </footer>
   </main>
 
   <template id="raw-md">{protocolMd}</template>

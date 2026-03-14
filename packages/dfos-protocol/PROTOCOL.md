@@ -14,7 +14,7 @@ DFOS is a dark forest operating system. Content lives in private spaces — visi
 
 But the cryptographic proof layer is public and verifiable. Every piece of content, every identity, every edit has a signed chain of commitments that anyone can independently verify. You don't need to trust the platform. You don't need access to the database. You need a public key and a chain of JWS tokens.
 
-If you have content — from the official app, from an API export, from a screenshot someone sent you, from a pirate mirror, from anywhere — you can verify it's authentic. Hash the content, check the CID, walk the chain, verify the signature. The content is dark; the proof is light.
+If you have content — from the official app, from an API export, from a pirate mirror, from anywhere — you can verify it's authentic. Hash the content, check the CID, walk the chain, verify the signature. The content is dark; the proof is light.
 
 The protocol makes this verification radically simple. Two chain types — identity and content — using the same mechanics: Ed25519 signatures, JWS compact tokens, content-addressed CIDs. The protocol is deliberately minimal. It knows about keys and document hashes. It doesn't know about posts, profiles, or any application concept. Document semantics are entirely application layer — free to evolve without protocol changes.
 
