@@ -866,3 +866,10 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 | Go         | 9     | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go) — fxamacker/cbor, mr-tron/base58                |
 | Rust       | 9     | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust) — ed25519-dalek, ciborium, sha2             |
 | Swift      | 8     | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift) — Apple Crypto                            |
+
+---
+
+## Special Thanks
+
+- **Vinny Bellavia** — [stcisgood.com](https://stcisgood.com)
+- **Allison Clift-Jennings** — [Jura Labs](https://juralabs.com)
