@@ -1,3 +1,4 @@
+import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import documentEnvelope from '../../../packages/dfos-protocol/schemas/document-envelope.v1.json';
@@ -9,9 +10,9 @@ const app = new Hono();
 // ── Schema Routes ──────────────────────────────────────────────────────────────
 
 const schemas: Record<string, object> = {
-  'document-envelope/v1': documentEnvelope,
-  'post/v1': post,
-  'profile/v1': profile,
+  '/document-envelope/v1': documentEnvelope,
+  '/post/v1': post,
+  '/profile/v1': profile,
 };
 
 const SCHEMA_HEADERS = {
@@ -19,14 +20,17 @@ const SCHEMA_HEADERS = {
   'Cache-Control': 'public, max-age=31536000, immutable',
 };
 
-app.use('/:type/v:version', cors());
+app.use('/*/v*', cors());
 
-app.get('/:type/v:version', (c) => {
-  const key = `${c.req.param('type')}/v${c.req.param('version')}`;
-  const schema = schemas[key];
+function serveSchema(c: Context) {
+  const schema = schemas[c.req.path];
   if (!schema) return c.notFound();
   return c.text(JSON.stringify(schema, null, 2), 200, SCHEMA_HEADERS);
-});
+}
+
+app.get('/document-envelope/v1', serveSchema);
+app.get('/post/v1', serveSchema);
+app.get('/profile/v1', serveSchema);
 
 // ── Meta Routes ────────────────────────────────────────────────────────────────
 
