@@ -16,7 +16,7 @@
   --fg-bright: #fff;
   --border: rgba(255, 255, 255, 0.1);
   --surface: rgba(255, 255, 255, 0.04);
-  --max-w: 80ch;
+  --max-w: 88ch;
 }
 
 html {
@@ -27,6 +27,7 @@ html {
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
 }
 
 body {
@@ -292,16 +293,57 @@ img {
 }
 
 /* Breakout: tables and code blocks extend wider than prose */
-.spec pre,
-.spec table {
-  width: calc(100% + 10rem);
-  margin-left: -5rem;
-  margin-right: -5rem;
+.spec .code-wrap,
+.spec .table-wrap {
+  width: calc(100% + 14rem);
+  margin-left: -7rem;
+  margin-right: -7rem;
 }
 
-.spec pre {
+.spec .code-wrap {
+  position: relative;
+  margin-bottom: 1rem;
+}
+
+.spec .code-wrap pre {
+  margin-bottom: 0;
   padding-left: 1.5rem;
   padding-right: 1.5rem;
+}
+
+.code-copy {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  font-family: inherit;
+  font-size: 1rem;
+  color: var(--fg-dim);
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    color 0.15s;
+  padding: 0.15em 0.4em;
+}
+
+.code-wrap:hover .code-copy {
+  opacity: 1;
+}
+
+.code-copy:hover {
+  color: var(--fg-bright);
+}
+
+.spec .table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.spec .table-wrap table {
+  min-width: 100%;
+  margin-bottom: 0;
 }
 
 .spec th:first-child,
@@ -312,6 +354,10 @@ img {
 .spec th:last-child,
 .spec td:last-child {
   padding-right: 1.5rem;
+}
+
+.spec .table-wrap {
+  margin-bottom: 1.5rem;
 }
 
 /* ═══ Footer ═══ */
@@ -340,15 +386,18 @@ footer a:hover {
   .anchor {
     display: none;
   }
-  .spec pre,
-  .spec table {
+  .spec .code-wrap,
+  .spec .table-wrap {
     width: calc(100% + 2rem);
     margin-left: -1rem;
     margin-right: -1rem;
   }
-  .spec pre {
+  .spec .code-wrap pre {
     padding-left: 0.75rem;
     padding-right: 0.75rem;
+  }
+  .code-copy {
+    opacity: 1;
   }
   .spec th:first-child,
   .spec td:first-child {

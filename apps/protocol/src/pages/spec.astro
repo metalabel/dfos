@@ -23,6 +23,18 @@ let html = await marked.parse(protocolMd);
 // misinterpreted as ~~strikethrough~~ across cell boundaries
 html = html.replace(/<\/?del>/g, '');
 
+// Wrap tables in scrollable container for mobile
+html = html.replace(/<table>/g, '<div class="table-wrap"><table>');
+html = html.replace(/<\/table>/g, '</table></div>');
+
+// Wrap code blocks with copy button
+html = html.replace(
+  /<pre><code(?: class="language-(\w+)")?>/g,
+  (_, lang) =>
+    `<div class="code-wrap"><button class="code-copy" aria-label="Copy code">copy</button><pre><code${lang ? ` class="language-${lang}"` : ''}>`,
+);
+html = html.replace(/<\/code><\/pre>/g, '</code></pre></div>');
+
 // Add IDs and anchor links to headings for deep linking
 html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
   const id = slugify(content);
@@ -52,6 +64,16 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
         const prev = btn.textContent;
         btn.textContent = 'copied';
         setTimeout(() => (btn.textContent = prev), 1500);
+      });
+    });
+    document.querySelectorAll('.code-copy').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var code = btn.parentElement.querySelector('code').textContent;
+        navigator.clipboard.writeText(code).then(function () {
+          var prev = btn.textContent;
+          btn.textContent = 'copied';
+          setTimeout(function () { btn.textContent = prev; }, 1500);
+        });
       });
     });
   </script>
