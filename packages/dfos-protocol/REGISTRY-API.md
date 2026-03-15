@@ -203,6 +203,39 @@ This means a registry is **eventually consistent with the longest valid chain** 
 
 ---
 
+## Authentication
+
+Registry endpoints that require authentication use **EdDSA JWTs** signed with the same Ed25519 keys from identity chains. The JWT convention is not part of the chain protocol — it's an application-layer auth mechanism for services.
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "JWT",
+  "kid": "key_ez9a874tckr3dv933d3ckd"
+}
+```
+
+```json
+{
+  "iss": "dfos",
+  "sub": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "aud": "dfos-api",
+  "exp": 1772902800,
+  "iat": 1772899200,
+  "jti": "session_ref_example_01"
+}
+```
+
+| Field | Description |
+| --- | --- |
+| `kid` | Bare key ID (not a DID URL — the `sub` claim carries the DID) |
+| `sub` | The DID of the authenticating identity |
+| `aud` | Target audience (e.g., `"dfos-api"`) |
+
+The signing mechanics are identical to operation JWS — `ed25519.sign(UTF8(base64url(header) + "." + base64url(payload)), privateKey)`. The key is resolved from the identity chain via `kid` + `sub`.
+
+---
+
 ## Reference Implementation
 
 A complete reference server is available in the protocol package:

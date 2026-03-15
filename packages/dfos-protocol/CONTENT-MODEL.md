@@ -80,6 +80,26 @@ Several schemas reference media objects. The standard representation:
 
 ---
 
+## Chain Interpretation
+
+A content chain is a signed append-only log. The protocol enforces ordering, authorship, and integrity. It does not prescribe what the chain _means_. How an application interprets a content chain depends on the content types committed to it.
+
+### Living Document
+
+The chain represents a single evolving thing — a profile, a post, a policy document. Each operation is a **revision**. The resolved state is the latest `documentCID`. History is audit trail. The entity _is_ the current version.
+
+This is the default interpretation for the standard schemas. The document envelope's `baseDocumentCID` field supports edit lineage — each new document version can point back to the one it replaced.
+
+### Stream
+
+The chain represents a sequence — a feed, a journal, a log. Each operation is a discrete emission, not a revision. There is no single "current state" — the chain _is_ the content. Previous documents aren't superseded, they're siblings in a series.
+
+### Other Patterns
+
+The protocol cannot distinguish these patterns — the operation schema is identical in both cases. The difference is a reading convention, signaled by the `$schema` of the documents. Future content types could define event-sourcing patterns, append-only collections, or interpretations not yet imagined.
+
+---
+
 ## Custom Schemas
 
 Any implementation can define custom document schemas following the same pattern — a JSON Schema with a `$schema` const field pointing to a unique URI. The protocol will commit to the document via CID regardless of what's inside. The standard schemas are conventions, not constraints.
