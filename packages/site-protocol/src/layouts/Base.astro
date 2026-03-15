@@ -51,14 +51,29 @@ const fullTitle = path ? `${title} — DFOS Protocol` : 'DFOS Protocol';
     <script
       is:inline
       type="application/ld+json"
-      set:html={JSON.stringify({
-        '@context': 'https://schema.org',
-        '@type': 'WebSite',
-        name: 'DFOS Protocol',
-        url: 'https://protocol.dfos.com',
-        description:
-          'Ed25519 signed chain primitives, content-addressed proofs, and verifiable identity for the DFOS Protocol.',
-      })}
+      set:html={JSON.stringify(
+        path
+          ? {
+              '@context': 'https://schema.org',
+              '@type': 'TechArticle',
+              headline: title,
+              description,
+              url: canonicalUrl,
+              isPartOf: {
+                '@type': 'WebSite',
+                name: 'DFOS Protocol',
+                url: 'https://protocol.dfos.com',
+              },
+            }
+          : {
+              '@context': 'https://schema.org',
+              '@type': 'WebSite',
+              name: 'DFOS Protocol',
+              url: 'https://protocol.dfos.com',
+              description:
+                'Ed25519 signed chain primitives, content-addressed proofs, and verifiable identity for the DFOS Protocol.',
+            },
+      )}
     />
   </head>
   <body>

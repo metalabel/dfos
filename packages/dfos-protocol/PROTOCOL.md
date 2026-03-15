@@ -30,15 +30,14 @@ All artifacts in this document are deterministic and reproducible from fixed see
 
 ## Protocol Overview
 
-The DFOS protocol has three layers:
+The DFOS protocol has two layers:
 
 | Layer                 | Concern                                                                      |
 | --------------------- | ---------------------------------------------------------------------------- |
 | **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links |
 | **Document envelope** | Standard wrapper: `content` + `baseDocumentCID` + `createdByDID` + timestamp |
-| **Content schemas**   | JSON Schema definitions for what goes inside `content` (post, profile, etc.) |
 
-The crypto core is the trust boundary — everything below it is cryptographically verified. The document envelope provides structural metadata (attribution, edit lineage, timestamps). Content schemas define the application-level semantics.
+The crypto core is the trust boundary — everything below it is cryptographically verified. The document envelope provides structural metadata (attribution, edit lineage, timestamps). What goes inside the envelope's `content` field is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
 
 ### Crypto Core: Two Chain Types
 
@@ -59,7 +58,7 @@ Every document committed to by a content chain uses a standard envelope, defined
 ```json
 {
   "content": { "$schema": "https://schemas.dfos.com/post/v1", ... },
-  "baseDocumentCID": "bafyrei..." | null,
+  "baseDocumentCID": null,
   "createdByDID": "did:dfos:...",
   "createdAt": "2026-03-07T00:02:00.000Z"
 }
@@ -68,15 +67,11 @@ Every document committed to by a content chain uses a standard envelope, defined
 | Field             | Type         | Description                                                                 |
 | ----------------- | ------------ | --------------------------------------------------------------------------- |
 | `content`         | object       | Application-defined content — must include `$schema` URI, opaque to chains  |
-| `baseDocumentCID` | string\|null | CID of the previous document version (edit lineage). Null for first version |
+| `baseDocumentCID` | string\|null | Optional CID of a prior document version. Semantics are application-defined |
 | `createdByDID`    | string       | DID of the identity that created this document version                      |
 | `createdAt`       | ISO 8601     | When this document version was created                                      |
 
-The `documentCID` in a content chain operation is `CID(dagCborEncode(envelope))`. The envelope provides attribution and edit history at the protocol level. The `content` field is where application-defined JSON Schema types live. The `content` object must include a `$schema` property identifying its content type — this makes every document self-describing and its schema cryptographically committed via the CID.
-
-### Content Schemas
-
-The `content` field inside the document envelope is validated by JSON Schema. The protocol ships a standard library of schemas (post, profile) — see [Standard Document Schemas](#standard-document-schemas). These are conventions, not requirements. Any implementation can define custom schemas.
+The `documentCID` in a content chain operation is `CID(dagCborEncode(envelope))`. The envelope provides attribution at the protocol level. The `content` object must include a `$schema` property identifying its content type — this makes every document self-describing and its schema cryptographically committed via the CID.
 
 ### Addressing
 
@@ -144,31 +139,17 @@ This is a deliberate asymmetry with identity chains. Identity chains are self-so
 - Whether a chain must have a single signer or may have multiple signers
 - Ownership or attribution semantics between signers and entities
 
-### Terminal States
+### Terminal States and Special Operations
 
-**`delete` is the only terminal state.** No valid operations may follow a delete in either chain type. An implementation MUST reject any operation that appears after a delete.
+**`delete` is the only terminal state.** No valid operations may follow a delete. An implementation MUST reject any operation after a delete. Delete prevents future operations but does NOT remove data — the complete chain remains intact for verification. Data removal is an application concern.
 
-`delete` is a terminal marker that prevents future operations on the chain but does NOT remove data. The complete chain — including all prior operations and their signatures — MUST remain intact for verification. Any party holding the chain can still walk it, verify every signature, and confirm the history up to and including the delete. Data removal (e.g., purging content from storage) is an application-layer concern, not a protocol operation.
+**Controller key requirement:** `update` operations on identity chains MUST include at least one controller key. If decommissioning is intended, `delete` is the correct terminal operation.
 
-### Controller Key Requirement
-
-`update` operations on identity chains MUST include at least one controller key. Validation MUST reject any `update` with an empty `controllerKeys` array. This ensures that an identity always has a path forward — if decommissioning is intended, `delete` is the correct terminal operation.
-
-### Content-Null Semantics
-
-An `update` operation on a content chain with `documentCID: null` means **the entity exists but its current content is cleared**. This is not a delete — the chain continues, and a subsequent update can set content again. Think of it as "unpublish" rather than "destroy."
+**Content-null:** An `update` on a content chain with `documentCID: null` means the entity exists but its content is cleared. The chain continues — a subsequent update can set content again.
 
 ### `typ` Header
 
-The JWS `typ` header (`did:dfos:identity-op`, `did:dfos:content-op`) is advisory — it aids routing and dispatch but is not a security-critical field. Verification checks the signature and chain integrity, not the `typ` value. Implementations SHOULD validate `typ` for correctness but MUST NOT rely on it for security decisions.
-
-### JWT `kid` vs Operation `kid`
-
-JWT tokens (for device auth, MCP sessions, etc.) use `kid` as a simple key identifier for lookup — e.g., `key_ez9a874tckr3dv933d3ckd`. This does NOT follow the same DID URL convention used in operation JWS headers. Operation `kid` uses bare key ID for identity genesis and DID URL (`did:dfos:xxx#key_id`) for everything else. JWT `kid` is always a bare key ID — the JWT's `sub` claim carries the DID separately.
-
-### ID Modulo Bias
-
-The ID encoding uses `byte % 19` where each byte ranges 0-255. Since 256 is not evenly divisible by 19, values 0-8 (alphabet positions) appear with probability ~5.26% while values 9-18 appear with probability ~5.22%. This is a ~0.3% bias — not security-relevant for identifiers but acknowledged here for completeness. A rejection-sampling approach (retry if `byte >= 247`) would eliminate the bias entirely.
+The JWS `typ` header (`did:dfos:identity-op`, `did:dfos:content-op`) aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions.
 
 ### Operation Field Limits
 
@@ -193,110 +174,6 @@ The protocol does NOT limit:
 
 ---
 
-## Chain Interpretation
-
-A content chain is a **signed append-only log** — an ordered sequence of operations, each cryptographically linked to its predecessor, each signed by an external identity. The protocol enforces ordering, authorship, and integrity. It does not prescribe what the chain _means_.
-
-Two natural interpretation patterns emerge from the same primitive:
-
-### Living Document
-
-The chain represents a single evolving thing — a profile, a post, a policy document. Each operation is a **revision**. The resolved state is the latest `documentCID`. History is audit trail: you can walk the chain to see who changed what, when, and verify every version was authentic. Edits are expected. The entity _is_ the current version.
-
-This pattern maps naturally to content with `baseDocumentCID` edit lineage in the document envelope — each new document version points back to the one it replaced.
-
-### Stream
-
-The chain represents a **locus of expression** — a feed, a journal, a log, a series. Each operation is a discrete emission. There is no single "current state" — the chain _is_ the sequence. History isn't audit trail, it's the content itself. The entity is the collection, not any individual entry.
-
-In this pattern, each operation commits to a distinct `documentCID` that stands on its own. Previous documents aren't superseded — they're siblings in a series.
-
-### Protocol Neutrality
-
-The protocol cannot distinguish these patterns because the operation schema is identical in both cases. A `create` followed by three `update` operations looks the same whether it represents "a document edited three times" or "four entries in a series." The difference is a **reading convention** — determined by the application, potentially signaled by the `$schema` of the documents in the chain.
-
-This is intentional. The chain is the primitive. Documents, streams, revisions, endorsements, and patterns not yet imagined are compositions on top of it. The protocol provides the signed append-only log with cryptographic guarantees. What you log is application-defined.
-
----
-
-## Standard Document Schemas
-
-The crypto core commits to `documentCID` values without inspecting their contents. The document envelope provides structural metadata. The **content** inside the envelope is where JSON Schema validation applies.
-
-The protocol ships a standard library of content schemas as JSON Schema (draft 2020-12) definitions. These are not required — any implementation can define its own content types. They are provided as a starting point for content built on the DFOS protocol, and they are what DFOS uses internally.
-
-### Schema Convention
-
-Documents declare their type via a `$schema` field pointing to a schema URI:
-
-```json
-{
-  "$schema": "https://schemas.dfos.com/post/v1",
-  "format": "short-post",
-  "body": "Hello world."
-}
-```
-
-Because the `$schema` field is part of the document, it is behind the `documentCID` — cryptographically committed in the content chain. Any verifier can resolve the document, read `$schema`, and validate against the schema.
-
-### Schema Evolution
-
-Schemas are versioned via the URI path (`/post/v1`, `/post/v2`). Evolution rules:
-
-- **Strictly additive within a version** — new optional fields can be added to an existing version at any time without breaking existing documents
-- **Breaking changes require a new version** — removing fields, changing types, or adding new required fields means a new version URI
-- **Implementations declare which versions they understand** — a registry or application can accept `post/v1` and `post/v2` simultaneously, or only `post/v1`
-
-### Standard Schemas
-
-Schema files live in `schemas/` in the protocol package. Each is a standalone JSON Schema (draft 2020-12).
-
-#### Post (`https://schemas.dfos.com/post/v1`)
-
-The primary content type. Covers short posts, long-form posts, comments, and replies via the `format` discriminator.
-
-| Field         | Type     | Required | Description                                                                        |
-| ------------- | -------- | -------- | ---------------------------------------------------------------------------------- |
-| `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                               |
-| `format`      | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — immutable, set at creation |
-| `title`       | string   | no       | Post title (typically for long-post format)                                        |
-| `body`        | string   | no       | Post body content                                                                  |
-| `cover`       | media    | no       | Cover image                                                                        |
-| `attachments` | media[]  | no       | Attached media objects                                                             |
-| `topics`      | string[] | no       | Topic names (stored as names for portability)                                      |
-
-#### Profile (`https://schemas.dfos.com/profile/v1`)
-
-The displayable identity for any agent, person, group, or space.
-
-| Field         | Type   | Required | Description                             |
-| ------------- | ------ | -------- | --------------------------------------- |
-| `$schema`     | string | yes      | `"https://schemas.dfos.com/profile/v1"` |
-| `name`        | string | no       | Display name                            |
-| `description` | string | no       | Short bio or description                |
-| `avatar`      | media  | no       | Avatar image                            |
-| `banner`      | media  | no       | Banner image                            |
-| `background`  | media  | no       | Background image                        |
-
-### Media Object
-
-Several schemas reference media objects. The standard representation:
-
-```json
-{
-  "id": "media_abc123",
-  "uri": "https://cdn.example.com/media/abc123.jpg"
-}
-```
-
-`id` is required (opaque identifier). `uri` is optional.
-
-### Custom Schemas
-
-Any implementation can define custom document schemas following the same pattern — a JSON Schema with a `$schema` const field pointing to a unique URI. The protocol will commit to the document via CID regardless of what's inside. The standard schemas are conventions, not constraints.
-
----
-
 ## Standards and Dependencies
 
 | Component           | Standard / Library                                                         |
@@ -306,7 +183,6 @@ Any implementation can define custom document schemas following the same pattern
 | Key encoding        | W3C Multikey (multicodec `0xed01` + base58btc multibase)                   |
 | Signed envelopes    | JWS Compact Serialization (RFC 7515) with `alg: "EdDSA"`                   |
 | Content addressing  | CIDv1 with dag-cbor codec (`0x71`) + SHA-256 multihash (`0x12`)            |
-| Auth tokens         | JWT (RFC 7519) with `alg: "EdDSA"`                                         |
 | ID encoding         | SHA-256 → custom 19-char alphabet, 22 characters                           |
 
 ### ID Alphabet
@@ -317,7 +193,7 @@ Length:   22 characters
 Entropy:  ~93.4 bits (19^22)
 ```
 
-Process: `SHA-256(input) → for each of first 22 bytes: alphabet[byte % 19]`
+Process: `SHA-256(input) → for each of first 22 bytes: alphabet[byte % 19]`. The modulo introduces a ~0.3% bias (256 is not evenly divisible by 19) — not security-relevant for identifiers.
 
 DIDs: `did:dfos:` + 22-char ID derived from `SHA-256(genesis CID raw bytes)`
 Key IDs: `key_` + 22-char ID. Convention: derive from public key hash (`key_` + `customAlpha(SHA-256(publicKey))`), making key IDs deterministic and verifiable. Not a protocol requirement — key IDs can be any string.
@@ -818,33 +694,6 @@ Content Update CID:
 bafyreibb4lsvqmz4j76rsvhkqw3v2b4vp23t7dimm6vl5g5wlninvkemxq
 ```
 
-### EdDSA JWT
-
-Header:
-
-```json
-{ "alg": "EdDSA", "typ": "JWT", "kid": "key_ez9a874tckr3dv933d3ckd" }
-```
-
-Payload:
-
-```json
-{
-  "iss": "dfos",
-  "sub": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "aud": "dfos-api",
-  "exp": 1772902800,
-  "iat": 1772899200,
-  "jti": "session_ref_example_01"
-}
-```
-
-JWT Token:
-
-```
-eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.zhKeXJHHF7a1-MwF4QoUTRptCplAwh20-rLnuWGDFT6uJheN4E_SA5NhqvMNflLHxd7h97gdaVnMZGE67SXEBA
-```
-
 ---
 
 ## Verification Checklist (For Independent Implementers)
@@ -890,7 +739,7 @@ Given the artifacts above, verify:
 
 9. **Content chain integrity**: update's `previousOperationCID` matches create's operation CID
 
-10. **JWT verify**: same signing mechanics as JWS — `ed25519.verify(signature, UTF8(header.payload), key2_publicKey)` → true. Check `exp > currentTime`, `iss == "dfos"`, `aud == "dfos-api"`.
+10. **Chain completeness**: all operation CIDs, DID derivation, key rotation, and content chain linkage verified end-to-end.
 
 ---
 
@@ -900,7 +749,6 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 - [`crypto/ed25519`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/ed25519.ts) — `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature`
 - [`crypto/jws`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jws.ts) — `createJws`, `verifyJws`, `decodeJwsUnsafe`
-- [`crypto/jwt`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jwt.ts) — `createJwt`, `verifyJwt`, `decodeJwtUnsafe`
 - [`crypto/base64url`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/base64url.ts) — `base64urlEncode`, `base64urlDecode`
 - [`crypto/multiformats`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/multiformats.ts) — `dagCborCanonicalEncode`, `dagCborCanonicalEqual`
 - [`crypto/id`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/id.ts) — `generateId`, `generateIdNoPrefix`, `isValidId`
@@ -909,10 +757,12 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) — `signIdentityOperation`, `verifyIdentityChain`
 - [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts) — `signContentOperation`, `verifyContentChain`
 - [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`
-- [`registry/server`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/server.ts) — Reference Hono registry server
-- [`registry/store`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/store.ts) — In-memory chain store with linear enforcement
-- [`openapi.yaml`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml) — OpenAPI 3.1 spec for registry API
-- [`schemas/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/schemas) — JSON Schema for document envelope, post, profile
+
+### Related Specifications
+
+- [DID Method: `did:dfos`](https://protocol.dfos.com/did-method) — W3C DID method specification for identity chains
+- [Content Model](https://protocol.dfos.com/content-model) — Standard content schemas (post, profile) for the document envelope
+- [Registry API](https://protocol.dfos.com/registry-api) — HTTP API for chain storage and resolution
 
 ### Cross-Language Verification
 

@@ -17,8 +17,6 @@ export interface StoredChain {
 export class ChainStore {
   private identities = new Map<string, StoredChain>();
   private entities = new Map<string, StoredChain>();
-  private documents = new Map<string, unknown>();
-
   // --- identities ---
 
   getIdentityChain(did: string): StoredChain | undefined {
@@ -46,16 +44,6 @@ export class ChainStore {
     operations: OperationEntry[],
   ): 'accepted' | 'noop' | 'conflict' {
     return this.submitChain(this.entities, entityId, operations);
-  }
-
-  // --- documents ---
-
-  getDocument(cid: string): unknown | undefined {
-    return this.documents.get(cid);
-  }
-
-  setDocument(cid: string, content: unknown): void {
-    this.documents.set(cid, content);
   }
 
   // --- operations (lookup across all chains) ---

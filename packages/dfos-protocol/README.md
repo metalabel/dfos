@@ -27,9 +27,15 @@ import { createRegistryServer } from '@metalabel/dfos-protocol/registry';
 | `@metalabel/dfos-protocol/crypto`   | Ed25519, JWS, JWT, dag-cbor, base64url, ID generation               |
 | `@metalabel/dfos-protocol/registry` | Hono-based registry server, in-memory store, Zod schemas            |
 
-## Protocol Specification
+## Specifications
 
-See [PROTOCOL.md](./PROTOCOL.md) for the complete protocol specification with worked examples and test vectors.
+| Document                               | Description                                                    |
+| -------------------------------------- | -------------------------------------------------------------- |
+| [PROTOCOL.md](./PROTOCOL.md)           | Core protocol — chains, signatures, verification, test vectors |
+| [DID-METHOD.md](./DID-METHOD.md)       | W3C DID method specification for `did:dfos`                    |
+| [CONTENT-MODEL.md](./CONTENT-MODEL.md) | Standard content schemas (post, profile, media)                |
+| [REGISTRY-API.md](./REGISTRY-API.md)   | HTTP API for chain storage and resolution                      |
+| [openapi.yaml](./openapi.yaml)         | OpenAPI 3.1 machine-readable registry spec                     |
 
 ## Examples
 
@@ -40,10 +46,6 @@ The `examples/` directory contains deterministic reference chain fixtures that c
 - `identity-delete.json` — genesis + delete (terminal)
 - `content-lifecycle.json` — create + update (with both documents)
 - `content-delete.json` — create + delete
-
-## API Documentation
-
-See [openapi.yaml](./openapi.yaml) for the registry API specification.
 
 ## License
 

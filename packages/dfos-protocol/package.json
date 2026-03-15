@@ -55,6 +55,9 @@
     "schemas",
     "examples",
     "PROTOCOL.md",
+    "DID-METHOD.md",
+    "CONTENT-MODEL.md",
+    "REGISTRY-API.md",
     "openapi.yaml",
     "LICENSE",
     "README.md"

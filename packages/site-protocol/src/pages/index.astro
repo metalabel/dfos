@@ -19,15 +19,54 @@ import Base from '../layouts/Base.astro';
 
     <hr />
 
+    <h2>Specifications</h2>
     <nav class="landing-nav">
       <ul>
         <li>
-          <a href="/spec">Specification</a>
-          <span class="dim"> — complete protocol with worked examples and test vectors</span>
+          <a href="/spec">Protocol Specification</a>
+          <span class="dim">
+            — the core protocol: Ed25519 identity chains, content chains, JWS envelopes,
+            CID derivation, document envelope, verification rules, and deterministic test vectors
+          </span>
         </li>
         <li>
-          <a href="https://schemas.dfos.com">Content Schemas</a>
-          <span class="dim"> — JSON Schema definitions for content types</span>
+          <a href="/did-method">DID Method</a>
+          <span class="dim">
+            — W3C DID method specification for <code>did:dfos</code>: self-certifying,
+            transport-agnostic decentralized identifiers
+          </span>
+        </li>
+      </ul>
+    </nav>
+
+    <h2>Ecosystem</h2>
+    <p class="dim">
+      Standard components that build on the protocol — independent specifications for content
+      types and chain storage that work together but can be adopted separately.
+    </p>
+    <nav class="landing-nav">
+      <ul>
+        <li>
+          <a href="/content-model">Content Model</a>
+          <span class="dim">
+            — standard JSON Schema content types (post, profile) for the document envelope
+          </span>
+        </li>
+        <li>
+          <a href="/registry-api">Registry API</a>
+          <span class="dim">
+            — HTTP API for chain submission, identity resolution, and operation retrieval
+          </span>
+        </li>
+      </ul>
+    </nav>
+
+    <h2>Resources</h2>
+    <nav class="landing-nav">
+      <ul>
+        <li>
+          <a href="https://schemas.dfos.com">schemas.dfos.com</a>
+          <span class="dim"> — hosted JSON Schema definitions</span>
         </li>
         <li>
           <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">npm</a>
