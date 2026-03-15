@@ -101,7 +101,7 @@ const ContentUpdate = z.strictObject({
   note: z.string().max(MAX_NOTE).nullable(),
 });
 
-/** Content chain: delete — permanently destroy entity */
+/** Content chain: delete — permanently destroy content */
 const ContentDelete = z.strictObject({
   version: z.literal(1),
   type: z.literal('delete'),

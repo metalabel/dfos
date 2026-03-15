@@ -72,7 +72,7 @@ describe('example fixtures', () => {
           resolveKey: async () => keyBytes,
         });
 
-        expect(result.entityId).toBe(fixture.expected.entityId);
+        expect(result.contentId).toBe(fixture.expected.contentId);
         expect(result.isDeleted).toBe(fixture.expected.isDeleted);
         expect(result.currentDocumentCID).toBe(fixture.expected.currentDocumentCID);
         expect(result.length).toBe(fixture.expected.length);

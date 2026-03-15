@@ -250,7 +250,7 @@ describe('generate examples', () => {
       signerPublicKey: multikey2,
       documents: [document1, document2],
       expected: {
-        entityId: contentChain.entityId,
+        contentId: contentChain.contentId,
         isDeleted: false,
         currentDocumentCID: contentChain.currentDocumentCID,
         length: contentChain.length,
@@ -264,7 +264,7 @@ describe('generate examples', () => {
       signerPublicKey: multikey2,
       documents: [document1],
       expected: {
-        entityId: contentDeleted.entityId,
+        contentId: contentDeleted.contentId,
         isDeleted: true,
         currentDocumentCID: null,
         length: contentDeleted.length,

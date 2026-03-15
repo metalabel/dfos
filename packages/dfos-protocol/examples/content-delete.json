@@ -20,7 +20,7 @@
     }
   ],
   "expected": {
-    "entityId": "67t27rzc83v7c22n9t6z7c",
+    "contentId": "67t27rzc83v7c22n9t6z7c",
     "isDeleted": true,
     "currentDocumentCID": null,
     "length": 2

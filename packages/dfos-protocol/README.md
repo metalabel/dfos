@@ -1,6 +1,6 @@
 # @metalabel/dfos-protocol
 
-Ed25519 signed chain primitives, verifiable content, and registry for the DFOS Protocol.
+Cryptographic identity and content proof — Ed25519 signed chains, content-addressed CIDs, W3C DIDs. The protocol knows about keys and document hashes. It doesn't know about posts, profiles, or any application concept.
 
 ## Install
 

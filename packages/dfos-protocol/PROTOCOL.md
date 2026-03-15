@@ -10,17 +10,11 @@ This spec is under active review. Discuss it in the [clear.txt](https://clear.df
 
 ## Philosophy
 
-DFOS is a dark forest operating system. Content lives in private spaces — visible only to members, governed by the communities that create it. The forest floor is dark by default.
+DFOS is a dark forest operating system. Content lives in private spaces — visible only to members, governed by the communities that create it. The cryptographic proof layer is public: signed chains of commitments that anyone can independently verify with a public key and any standard EdDSA library.
 
-But the cryptographic proof layer is public and verifiable. Every piece of content, every identity, every edit has a signed chain of commitments that anyone can independently verify. You don't need to trust the platform. You don't need access to the database. You need a public key and a chain of JWS tokens.
+Two chain types — identity and content — use the same mechanics: Ed25519 signatures, JWS compact tokens, content-addressed CIDs. The protocol knows about keys and document hashes. It doesn't know about posts, profiles, or any application concept. Document semantics are application layer — free to evolve without protocol changes.
 
-If you have content — from the official app, from an API export, from a pirate mirror, from anywhere — you can verify it's authentic. Hash the content, check the CID, walk the chain, verify the signature. The content is dark; the proof is light.
-
-The protocol makes this verification radically simple. Two chain types — identity and content — using the same mechanics: Ed25519 signatures, JWS compact tokens, content-addressed CIDs. The protocol is deliberately minimal. It knows about keys and document hashes. It doesn't know about posts, profiles, or any application concept. Document semantics are entirely application layer — free to evolve without protocol changes.
-
-This means the protocol is not coupled to DFOS. Any system could implement the same identity and content chain primitives — a fork, an alternative client, a completely independent platform — and produce interoperable, cross-verifiable proofs. An identity created on one system can sign content on another. A proof chain started here can be extended there. The protocol is a shared substrate, not a product feature. DFOS is one application built on it. There could be others.
-
-The result: a signed content ledger that any standard EdDSA library can verify, in any language, without DFOS-specific dependencies. The dark forest has public roots.
+The protocol is not coupled to the DFOS platform. Any system implementing the same chain primitives produces interoperable, cross-verifiable proofs. An identity created on one system can sign content on another.
 
 ---
 
@@ -73,11 +67,11 @@ The `documentCID` in a content chain operation is `CID(dagCborEncode(envelope))`
 
 Three canonical representations:
 
-| Thing                  | Form                       | Example                           |
-| ---------------------- | -------------------------- | --------------------------------- |
-| Operation or document  | CID (dag-cbor + SHA-256)   | See below                         |
-| Entity (content chain) | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c`          |
-| Identity (key chain)   | `did:dfos:<hash>`          | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
+| Thing                 | Form                       | Example                           |
+| --------------------- | -------------------------- | --------------------------------- |
+| Operation or document | CID (dag-cbor + SHA-256)   | See below                         |
+| Content chain         | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c`          |
+| Identity chain        | `did:dfos:<hash>`          | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
 
 Example CID:
 
@@ -85,7 +79,7 @@ Example CID:
 bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
 ```
 
-Operations and documents are CIDs — standard IPLD content addresses. Entities and identities are derived identifiers — `customAlpha(SHA-256(genesis CID bytes))`. Same derivation for both. Identity chains prepend `did:dfos:` (W3C DID spec). Entity identifiers are bare — just the 22-char hash, no prefix.
+Operations and documents are CIDs — standard IPLD content addresses. Content chains and identity chains use derived identifiers — `customAlpha(SHA-256(genesis CID bytes))`. Same derivation for both. Identity chains prepend `did:dfos:` (W3C DID spec). Content identifiers are bare — just the 22-char hash, no prefix.
 
 Application code may add prefixes for routing (e.g., `post_xxxx`) — these are strippable semantic sugar, not part of the protocol identifier.
 
@@ -95,11 +89,14 @@ Application code may add prefixes for routing (e.g., `post_xxxx`) — these are 
 
 ### Commitment Scheme
 
-The protocol requires a **deterministic payload commitment**: given the same logical operation, the commitment (CID) MUST be identical regardless of implementation language or platform. The commitment scheme is **dag-cbor canonical encoding + SHA-256 + CIDv1**.
+Both operations and documents are content-addressed via **CID** (`dagCborCanonicalEncode(payload)` → SHA-256 → CIDv1). Operations are additionally signed via **JWS**.
 
-Implementations MUST use dag-cbor canonical encoding as defined by the [IPLD dag-cbor codec specification](https://ipld.io/specs/codecs/dag-cbor/spec/). Raw JSON serialization, pretty-printed JSON, or any non-canonical encoding MUST NOT be used for CID derivation. The dag-cbor hex test vectors in this document allow byte-level verification of any implementation's canonical encoding.
+| Representation | Encoding                                                                                                       | Purpose                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| CID            | `dagCborCanonicalEncode(payload)` → SHA-256 → CIDv1                                                            | Deterministic content addressing for operations and documents |
+| JWS            | `base64url(JSON.stringify(header))` + `.` + `base64url(JSON.stringify(payload))` → EdDSA signature covers both | Signature verification for operations                         |
 
-JWS signs `base64url(JSON.stringify(payload))` — the UTF-8 bytes of the JSON serialization. CID commits to `dagCborCanonicalEncode(payload)` — the dag-cbor canonical encoding of the same logical payload. JWS uses standard JSON for library interoperability; CID uses dag-cbor for deterministic content addressing.
+CID uses [dag-cbor canonical encoding](https://ipld.io/specs/codecs/dag-cbor/spec/) for determinism — given the same logical payload, the CID MUST be identical regardless of implementation language or platform. JWS uses standard JSON for library interoperability. The dag-cbor hex test vectors in this document allow byte-level verification.
 
 ### Chain Validity
 
@@ -131,7 +128,7 @@ Identity chains are self-sovereign — they define their own valid signers via `
 - Which identities are authorized to sign operations on a given chain
 - Which key role (auth, assert, controller) the signing key must have
 - Whether a chain must have a single signer or may have multiple signers
-- Ownership or attribution semantics between signers and entities
+- Ownership or attribution semantics between signers and content chains
 
 ### Terminal States and Special Operations
 
@@ -139,7 +136,7 @@ Identity chains are self-sovereign — they define their own valid signers via `
 
 **Controller key requirement:** `update` operations on identity chains MUST include at least one controller key. If decommissioning is intended, `delete` is the correct terminal operation.
 
-**Content-null:** An `update` on a content chain with `documentCID: null` means the entity exists but its content is cleared. The chain continues — a subsequent update can set content again.
+**Content-null:** An `update` on a content chain with `documentCID: null` means the content exists but its document is cleared. The chain continues — a subsequent update can set content again.
 
 ### `typ` Header
 
@@ -315,7 +312,7 @@ DID:    did:dfos:e3vvtck42d4eacdnzvtrn6
   createdAt: string,
   note: string | null }
 
-// Permanent entity destruction
+// Permanent destruction
 { version: 1, type: "delete",
   previousOperationCID: string,
   createdAt: string,
@@ -746,7 +743,7 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/schemas.ts) — `IdentityOperation`, `ContentOperation`, `MultikeyPublicKey`, `VerifiedIdentity`
 - [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) — `signIdentityOperation`, `verifyIdentityChain`
 - [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts) — `signContentOperation`, `verifyContentChain`
-- [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`
+- [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`, `deriveContentId`
 
 ### Related Specifications
 
@@ -770,7 +767,3 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 - **Vinny Bellavia** — [stcisgood.com](https://stcisgood.com)
 - **Allison Clift-Jennings** — [Jura Labs](https://juralabs.com)
-
----
-
-Yancey · Ilya · Brandon · Lena

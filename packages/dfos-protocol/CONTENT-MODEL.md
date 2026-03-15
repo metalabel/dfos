@@ -86,7 +86,7 @@ A content chain is a signed append-only log. The protocol enforces ordering, aut
 
 ### Living Document
 
-The chain represents a single evolving thing — a profile, a post, a policy document. Each operation is a **revision**. The resolved state is the latest `documentCID`. History is audit trail. The entity _is_ the current version.
+The chain represents a single evolving thing — a profile, a post, a policy document. Each operation is a **revision**. The resolved state is the latest `documentCID`. History is audit trail. The content _is_ the current version.
 
 This is the default interpretation for the standard schemas. The document envelope's `baseDocumentCID` field supports edit lineage — each new document version can point back to the one it replaced.
 
