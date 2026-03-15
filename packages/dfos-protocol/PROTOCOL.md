@@ -24,10 +24,6 @@ The result: a signed content ledger that any standard EdDSA library can verify, 
 
 ---
 
-All artifacts in this document are deterministic and reproducible from fixed seeds. An independent implementer can verify every value using standard Ed25519 + dag-cbor libraries.
-
----
-
 ## Protocol Overview
 
 The DFOS protocol has two layers:
@@ -99,17 +95,17 @@ Application code may add prefixes for routing (e.g., `post_xxxx`) — these are 
 
 ### Commitment Scheme
 
-The protocol requires a **deterministic payload commitment**: given the same logical operation, the commitment (CID) MUST be identical regardless of implementation language or platform. The commitment scheme is **dag-cbor canonical encoding + SHA-256 + CIDv1**. This is not a recommendation — it is the protocol.
+The protocol requires a **deterministic payload commitment**: given the same logical operation, the commitment (CID) MUST be identical regardless of implementation language or platform. The commitment scheme is **dag-cbor canonical encoding + SHA-256 + CIDv1**.
 
 Implementations MUST use dag-cbor canonical encoding as defined by the [IPLD dag-cbor codec specification](https://ipld.io/specs/codecs/dag-cbor/spec/). Raw JSON serialization, pretty-printed JSON, or any non-canonical encoding MUST NOT be used for CID derivation. The dag-cbor hex test vectors in this document allow byte-level verification of any implementation's canonical encoding.
 
-**JWS signing vs CID derivation are intentionally different representations of the same payload.** JWS signs `base64url(JSON.stringify(payload))` — the UTF-8 bytes of the JSON serialization. CID commits to `dagCborCanonicalEncode(payload)` — the dag-cbor canonical encoding of the parsed object. These produce different bytes from the same logical data. This is by design: JWS uses standard JSON for maximum interoperability with existing JWS libraries, while CID uses dag-cbor for deterministic content addressing.
+JWS signs `base64url(JSON.stringify(payload))` — the UTF-8 bytes of the JSON serialization. CID commits to `dagCborCanonicalEncode(payload)` — the dag-cbor canonical encoding of the same logical payload. JWS uses standard JSON for library interoperability; CID uses dag-cbor for deterministic content addressing.
 
 ### Chain Validity
 
 A valid chain is a **linear sequence** of operations. Each operation (after genesis) links to its predecessor via `previousOperationCID`. The chain provides structural ordering independent of timestamps.
 
-**Forks are invalid at the protocol level.** Two operations referencing the same `previousOperationCID` constitute a fork. The protocol does not define fork resolution — this is application-defined. In DFOS's custodial model, forks are prevented by database-level advisory locks. A non-custodial implementation would need its own fork resolution strategy (e.g., longest chain, first-seen, application-specified preference).
+**Forks are invalid at the protocol level.** Two operations referencing the same `previousOperationCID` constitute a fork. The protocol does not define fork resolution — this is application-defined (e.g., longest chain, first-seen, advisory locks).
 
 **Timestamp ordering**: `createdAt` SHOULD be strictly increasing within a chain. Implementations SHOULD reject operations with non-increasing timestamps as a sanity check against replayed or mis-ordered operations. However, the chain link (CID reference) is the authoritative ordering mechanism, not the timestamp. Implementations MAY relax timestamp ordering in constrained environments where clock synchronization is impractical.
 
@@ -121,11 +117,9 @@ This is a self-sovereign invariant: the identity chain defines its own valid sig
 
 ### Content Chain Signer Model
 
-Content chain verification requires a **valid EdDSA signature** — nothing more. The protocol does not define which identities may sign operations on a content chain, does not track or enforce key roles, and does not restrict a chain to a single signer.
+Content chain verification requires a **valid EdDSA signature** and delegates key resolution to the caller. The `kid` in each operation's JWS header is a DID URL (`did:dfos:<id>#<keyId>`). The verifier calls `resolveKey(kid)` to obtain the raw Ed25519 public key bytes for that key on that identity. How the resolver obtains and validates the identity's key state is application-defined.
 
-The signing key is resolved via the `kid` (DID URL), which references a key on an external identity. The content chain verifier delegates key resolution to the caller via a `resolveKey` callback — the protocol does not prescribe how to look up an identity's current key state.
-
-This is a deliberate asymmetry with identity chains. Identity chains are self-sovereign — they define their own valid signers internally. Content chains are externally signed — the signing authority model is entirely an application concern, delegated through `resolveKey`. A content chain with operations signed by multiple different identities is valid at the protocol level, as long as each operation's signature verifies against the resolved key.
+Identity chains are self-sovereign — they define their own valid signers via `controllerKeys`. Content chains are externally signed — a content chain with operations signed by multiple different identities is valid at the protocol level, as long as each signature verifies against the resolved key.
 
 **What the protocol enforces:**
 
@@ -153,7 +147,7 @@ The JWS `typ` header (`did:dfos:identity-op`, `did:dfos:content-op`) aids routin
 
 ### Operation Field Limits
 
-The protocol defines maximum sizes for all operation fields. These are abuse-prevention ceilings — deliberately loose, not tight validation. Implementations MUST reject operations that exceed these bounds. Implementations MAY impose stricter limits.
+The protocol defines maximum sizes for all operation fields as abuse-prevention ceilings. Implementations MUST reject operations that exceed these bounds. Implementations MAY impose stricter limits.
 
 | Field                                        | Max       | Rationale                              |
 | -------------------------------------------- | --------- | -------------------------------------- |
@@ -379,11 +373,7 @@ Every operation JWS (identity-op and content-op) includes a `cid` field in the p
 - `header.cid` is missing
 - `header.cid` does not match the derived CID
 
-This provides three benefits:
-
-- **Pre-verification routing**: The operation CID can be read from the header without parsing the payload or running dag-cbor encoding
-- **Cross-implementation consistency**: A CID mismatch between header and derived value immediately surfaces dag-cbor encoding disagreements across implementations
-- **Self-documenting tokens**: Each JWS token declares its content-addressed identity
+A CID mismatch between header and derived value immediately surfaces dag-cbor encoding disagreements across implementations.
 
 Note: JWT tokens (device auth) do NOT include a `cid` header — this field is specific to operation JWS tokens.
 
@@ -435,7 +425,7 @@ Where `idEncode` is the 19-char alphabet encoding described above.
 
 ## Deterministic Reference Artifacts
 
-All values below are deterministic and reproducible. Private keys are derived from `SHA-256(UTF8("dfos-protocol-reference-key-N"))`.
+All artifacts below are deterministic and reproducible from fixed seeds. An independent implementer can verify every value using standard Ed25519 + dag-cbor libraries. Private keys are derived from `SHA-256(UTF8("dfos-protocol-reference-key-N"))`.
 
 ### Key 1 (Genesis Controller)
 
@@ -707,7 +697,7 @@ Given the artifacts above, verify:
    → ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32
    ```
 
-2. **Genesis JWS verify**: split token on `.`, take first two segments as signing input (UTF-8 bytes), base64url-decode third segment as 64-byte signature, `ed25519.verify(signature, signingInputBytes, publicKey)` → true. Note the header now contains `cid` alongside `alg`, `typ`, and `kid`.
+2. **Genesis JWS verify**: split token on `.`, take first two segments as signing input (UTF-8 bytes), base64url-decode third segment as 64-byte signature, `ed25519.verify(signature, signingInputBytes, publicKey)` → true. The header contains `cid` alongside `alg`, `typ`, and `kid`.
 
 3. **Genesis CID**: base64url-decode JWS payload → parse JSON → dag-cbor canonical encode → SHA-256 → CIDv1 → should be:
 

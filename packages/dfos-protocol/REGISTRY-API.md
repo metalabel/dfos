@@ -182,7 +182,7 @@ All error responses follow a standard shape:
 | Error Code    | Used By                                                    |
 | ------------- | ---------------------------------------------------------- |
 | `BAD_REQUEST` | Invalid chain, malformed request                           |
-| `NOT_FOUND`   | Identity, entity, operation, or document not found         |
+| `NOT_FOUND`   | Identity, entity, or operation not found                   |
 | `CONFLICT`    | Fork detected — submitted chain diverges from stored chain |
 
 ---
