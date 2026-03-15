@@ -15,11 +15,16 @@ This repository contains the open-source protocol implementation and supporting 
 | Package                                                | Description                                                                         |
 | ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
 | [`@metalabel/dfos-protocol`](./packages/dfos-protocol) | Ed25519 signed chain primitives, identity and content verification, registry server |
+| [`site-protocol`](./packages/site-protocol)            | Astro site for [protocol.dfos.com](https://protocol.dfos.com)                       |
+| [`site-schemas`](./packages/site-schemas)              | Hono worker for [schemas.dfos.com](https://schemas.dfos.com)                        |
 
 ## Links
 
-- [Protocol specification](https://protocol.dfos.com) — full protocol spec with worked examples and test vectors
-- [JSON Schemas](https://schemas.dfos.com) — content schemas for DFOS documents
+- [Protocol specification](https://protocol.dfos.com/spec) — core protocol with worked examples and test vectors
+- [DID Method](https://protocol.dfos.com/did-method) — W3C DID method specification for `did:dfos`
+- [Content Model](https://protocol.dfos.com/content-model) — standard JSON Schema content types
+- [Registry API](https://protocol.dfos.com/registry-api) — HTTP API for chain storage and resolution
+- [JSON Schemas](https://schemas.dfos.com) — hosted schema definitions for DFOS documents
 - [Chain verifier](https://verify.dfos.com) — browser-based chain verification tool
 - [DFOS app](https://app.dfos.com) — the platform
 - [npm package](https://www.npmjs.com/package/@metalabel/dfos-protocol) — `@metalabel/dfos-protocol`
