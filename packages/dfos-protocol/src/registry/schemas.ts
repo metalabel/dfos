@@ -110,16 +110,6 @@ export const ResolveOperationResponse = z.strictObject({
 export type ResolveOperationResponse = z.infer<typeof ResolveOperationResponse>;
 
 // -----------------------------------------------------------------------------
-// GET /documents/:cid
-// -----------------------------------------------------------------------------
-
-export const ResolveDocumentResponse = z.strictObject({
-  cid: z.string(),
-  content: z.unknown(),
-});
-export type ResolveDocumentResponse = z.infer<typeof ResolveDocumentResponse>;
-
-// -----------------------------------------------------------------------------
 // errors
 // -----------------------------------------------------------------------------
 

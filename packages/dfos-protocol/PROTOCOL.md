@@ -30,15 +30,14 @@ All artifacts in this document are deterministic and reproducible from fixed see
 
 ## Protocol Overview
 
-The DFOS protocol has three layers:
+The DFOS protocol has two layers:
 
 | Layer                 | Concern                                                                      |
 | --------------------- | ---------------------------------------------------------------------------- |
 | **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links |
 | **Document envelope** | Standard wrapper: `content` + `baseDocumentCID` + `createdByDID` + timestamp |
-| **Content schemas**   | JSON Schema definitions for what goes inside `content` (post, profile, etc.) |
 
-The crypto core is the trust boundary — everything below it is cryptographically verified. The document envelope provides structural metadata (attribution, edit lineage, timestamps). Content schemas define the application-level semantics.
+The crypto core is the trust boundary — everything below it is cryptographically verified. The document envelope provides structural metadata (attribution, edit lineage, timestamps). What goes inside the envelope's `content` field is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
 
 ### Crypto Core: Two Chain Types
 
@@ -73,10 +72,6 @@ Every document committed to by a content chain uses a standard envelope, defined
 | `createdAt`       | ISO 8601     | When this document version was created                                      |
 
 The `documentCID` in a content chain operation is `CID(dagCborEncode(envelope))`. The envelope provides attribution and edit history at the protocol level. The `content` field is where application-defined JSON Schema types live. The `content` object must include a `$schema` property identifying its content type — this makes every document self-describing and its schema cryptographically committed via the CID.
-
-### Content Schemas
-
-The `content` field inside the document envelope is validated by JSON Schema. The protocol ships a standard library of schemas (post, profile) — see [Standard Document Schemas](#standard-document-schemas). These are conventions, not requirements. Any implementation can define custom schemas.
 
 ### Addressing
 
@@ -216,84 +211,6 @@ In this pattern, each operation commits to a distinct `documentCID` that stands 
 The protocol cannot distinguish these patterns because the operation schema is identical in both cases. A `create` followed by three `update` operations looks the same whether it represents "a document edited three times" or "four entries in a series." The difference is a **reading convention** — determined by the application, potentially signaled by the `$schema` of the documents in the chain.
 
 This is intentional. The chain is the primitive. Documents, streams, revisions, endorsements, and patterns not yet imagined are compositions on top of it. The protocol provides the signed append-only log with cryptographic guarantees. What you log is application-defined.
-
----
-
-## Standard Document Schemas
-
-The crypto core commits to `documentCID` values without inspecting their contents. The document envelope provides structural metadata. The **content** inside the envelope is where JSON Schema validation applies.
-
-The protocol ships a standard library of content schemas as JSON Schema (draft 2020-12) definitions. These are not required — any implementation can define its own content types. They are provided as a starting point for content built on the DFOS protocol, and they are what DFOS uses internally.
-
-### Schema Convention
-
-Documents declare their type via a `$schema` field pointing to a schema URI:
-
-```json
-{
-  "$schema": "https://schemas.dfos.com/post/v1",
-  "format": "short-post",
-  "body": "Hello world."
-}
-```
-
-Because the `$schema` field is part of the document, it is behind the `documentCID` — cryptographically committed in the content chain. Any verifier can resolve the document, read `$schema`, and validate against the schema.
-
-### Schema Evolution
-
-Schemas are versioned via the URI path (`/post/v1`, `/post/v2`). Evolution rules:
-
-- **Strictly additive within a version** — new optional fields can be added to an existing version at any time without breaking existing documents
-- **Breaking changes require a new version** — removing fields, changing types, or adding new required fields means a new version URI
-- **Implementations declare which versions they understand** — a registry or application can accept `post/v1` and `post/v2` simultaneously, or only `post/v1`
-
-### Standard Schemas
-
-Schema files live in `schemas/` in the protocol package. Each is a standalone JSON Schema (draft 2020-12).
-
-#### Post (`https://schemas.dfos.com/post/v1`)
-
-The primary content type. Covers short posts, long-form posts, comments, and replies via the `format` discriminator.
-
-| Field         | Type     | Required | Description                                                                        |
-| ------------- | -------- | -------- | ---------------------------------------------------------------------------------- |
-| `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                               |
-| `format`      | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — immutable, set at creation |
-| `title`       | string   | no       | Post title (typically for long-post format)                                        |
-| `body`        | string   | no       | Post body content                                                                  |
-| `cover`       | media    | no       | Cover image                                                                        |
-| `attachments` | media[]  | no       | Attached media objects                                                             |
-| `topics`      | string[] | no       | Topic names (stored as names for portability)                                      |
-
-#### Profile (`https://schemas.dfos.com/profile/v1`)
-
-The displayable identity for any agent, person, group, or space.
-
-| Field         | Type   | Required | Description                             |
-| ------------- | ------ | -------- | --------------------------------------- |
-| `$schema`     | string | yes      | `"https://schemas.dfos.com/profile/v1"` |
-| `name`        | string | no       | Display name                            |
-| `description` | string | no       | Short bio or description                |
-| `avatar`      | media  | no       | Avatar image                            |
-| `banner`      | media  | no       | Banner image                            |
-| `background`  | media  | no       | Background image                        |
-
-### Media Object
-
-Several schemas reference media objects. The standard representation:
-
-```json
-{
-  "id": "media_abc123",
-  "uri": "https://cdn.example.com/media/abc123.jpg"
-}
-```
-
-`id` is required (opaque identifier). `uri` is optional.
-
-### Custom Schemas
-
-Any implementation can define custom document schemas following the same pattern — a JSON Schema with a `$schema` const field pointing to a unique URI. The protocol will commit to the document via CID regardless of what's inside. The standard schemas are conventions, not constraints.
 
 ---
 
@@ -909,10 +826,11 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) — `signIdentityOperation`, `verifyIdentityChain`
 - [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts) — `signContentOperation`, `verifyContentChain`
 - [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`
-- [`registry/server`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/server.ts) — Reference Hono registry server
-- [`registry/store`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/store.ts) — In-memory chain store with linear enforcement
-- [`openapi.yaml`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml) — OpenAPI 3.1 spec for registry API
-- [`schemas/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/schemas) — JSON Schema for document envelope, post, profile
+### Related Specifications
+
+- [DID Method: `did:dfos`](https://protocol.dfos.com/did-method) — W3C DID method specification for identity chains
+- [Content Model](https://protocol.dfos.com/content-model) — Standard content schemas (post, profile) for the document envelope
+- [Registry API](https://protocol.dfos.com/registry-api) — HTTP API for chain storage and resolution
 
 ### Cross-Language Verification
 

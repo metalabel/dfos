@@ -364,26 +364,4 @@ describe('protocol registry', () => {
     });
   });
 
-  // =========================================================================
-  // GET /documents/:cid
-  // =========================================================================
-
-  describe('GET /documents/:cid', () => {
-    it('should resolve a submitted document by CID', async () => {
-      const content = { type: 'post', title: 'Hello' };
-      const encoded = await dagCborCanonicalEncode(content);
-      const cid = encoded.cid.toString();
-      store.setDocument(cid, content);
-
-      const res = await get(`/documents/${cid}`);
-      expect(res.status).toBe(200);
-      expect(res.body.cid).toBe(cid);
-      expect(res.body.content).toEqual(content);
-    });
-
-    it('should return 404 for unknown document', async () => {
-      const res = await get('/documents/bafyreifake');
-      expect(res.status).toBe(404);
-    });
-  });
 });

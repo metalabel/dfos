@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import type { APIRoute } from 'astro';
 
 export const GET: APIRoute = () => {
-  const content = fs.readFileSync('../dfos-protocol/PROTOCOL.md', 'utf-8');
+  const protocol = fs.readFileSync('../dfos-protocol/PROTOCOL.md', 'utf-8');
+  const didMethod = fs.readFileSync('../dfos-protocol/DID-METHOD.md', 'utf-8');
+  const contentModel = fs.readFileSync('../dfos-protocol/CONTENT-MODEL.md', 'utf-8');
+  const registryApi = fs.readFileSync('../dfos-protocol/REGISTRY-API.md', 'utf-8');
+
+  const content = [protocol, '---', '', didMethod, '---', '', contentModel, '---', '', registryApi].join('\n');
 
   return new Response(content, {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' },

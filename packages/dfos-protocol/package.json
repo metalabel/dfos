@@ -55,6 +55,7 @@
     "schemas",
     "examples",
     "PROTOCOL.md",
+    "DID-METHOD.md",
     "openapi.yaml",
     "LICENSE",
     "README.md"

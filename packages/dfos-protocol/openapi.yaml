@@ -203,29 +203,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /documents/{cid}:
-    get:
-      operationId: resolveDocument
-      summary: Resolve a document by CID
-      description: |
-        This is the only endpoint that touches actual content.
-        All other endpoints deal purely in chain mechanics.
-      parameters:
-        - $ref: '#/components/parameters/cid'
-      responses:
-        '200':
-          description: Document found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Document'
-        '404':
-          description: Document not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-
 # ---------------------------------------------------------------------------
 
 components:
@@ -387,15 +364,6 @@ components:
           type: string
         jwsToken:
           type: string
-
-    Document:
-      type: object
-      required: [cid, content]
-      properties:
-        cid:
-          type: string
-        content:
-          description: Opaque document content (application-defined)
 
     Error:
       type: object

@@ -236,13 +236,5 @@ export const createRegistryServer = (store = new ChainStore()) => {
     return c.json({ cid: op.cid, jwsToken: op.jwsToken });
   });
 
-  // --- GET /documents/:cid ---
-  app.get('/documents/:cid', (c) => {
-    const cid = c.req.param('cid');
-    const content = store.getDocument(cid);
-    if (content === undefined) return c.json(err('NOT_FOUND', 'document not found'), 404);
-    return c.json({ cid, content });
-  });
-
   return { app, store };
 };
