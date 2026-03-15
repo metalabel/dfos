@@ -16,3 +16,4 @@ target
 .swiftpm
 .astro
 .wrangler
+*.local.md
