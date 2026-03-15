@@ -73,11 +73,11 @@ The `documentCID` in a content chain operation is `CID(dagCborEncode(envelope))`
 
 Three canonical representations:
 
-| Thing                  | Form                       | Example                           |
-| ---------------------- | -------------------------- | --------------------------------- |
-| Operation or document  | CID (dag-cbor + SHA-256)   | See below                         |
-| Entity (content chain) | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c`          |
-| Identity (key chain)   | `did:dfos:<hash>`          | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
+| Thing                 | Form                       | Example                           |
+| --------------------- | -------------------------- | --------------------------------- |
+| Operation or document | CID (dag-cbor + SHA-256)   | See below                         |
+| Content chain         | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c`          |
+| Identity chain        | `did:dfos:<hash>`          | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
 
 Example CID:
 
@@ -85,7 +85,7 @@ Example CID:
 bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
 ```
 
-Operations and documents are CIDs — standard IPLD content addresses. Entities and identities are derived identifiers — `customAlpha(SHA-256(genesis CID bytes))`. Same derivation for both. Identity chains prepend `did:dfos:` (W3C DID spec). Entity identifiers are bare — just the 22-char hash, no prefix.
+Operations and documents are CIDs — standard IPLD content addresses. Content chains and identity chains use derived identifiers — `customAlpha(SHA-256(genesis CID bytes))`. Same derivation for both. Identity chains prepend `did:dfos:` (W3C DID spec). Content identifiers are bare — just the 22-char hash, no prefix.
 
 Application code may add prefixes for routing (e.g., `post_xxxx`) — these are strippable semantic sugar, not part of the protocol identifier.
 
@@ -139,7 +139,7 @@ Identity chains are self-sovereign — they define their own valid signers via `
 
 **Controller key requirement:** `update` operations on identity chains MUST include at least one controller key. If decommissioning is intended, `delete` is the correct terminal operation.
 
-**Content-null:** An `update` on a content chain with `documentCID: null` means the entity exists but its content is cleared. The chain continues — a subsequent update can set content again.
+**Content-null:** An `update` on a content chain with `documentCID: null` means the content exists but its document is cleared. The chain continues — a subsequent update can set content again.
 
 ### `typ` Header
 
@@ -315,7 +315,7 @@ DID:    did:dfos:e3vvtck42d4eacdnzvtrn6
   createdAt: string,
   note: string | null }
 
-// Permanent entity destruction
+// Permanent destruction
 { version: 1, type: "delete",
   previousOperationCID: string,
   createdAt: string,
@@ -746,7 +746,7 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/schemas.ts) — `IdentityOperation`, `ContentOperation`, `MultikeyPublicKey`, `VerifiedIdentity`
 - [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) — `signIdentityOperation`, `verifyIdentityChain`
 - [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts) — `signContentOperation`, `verifyContentChain`
-- [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`
+- [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`, `deriveContentId`
 
 ### Related Specifications
 

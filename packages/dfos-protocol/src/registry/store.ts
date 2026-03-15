@@ -15,12 +15,12 @@ export interface StoredChain {
 }
 
 export class ChainStore {
-  private identities = new Map<string, StoredChain>();
-  private entities = new Map<string, StoredChain>();
-  // --- identities ---
+  private idcontentChains = new Map<string, StoredChain>();
+  private contentChains = new Map<string, StoredChain>();
+  // --- idcontentChains ---
 
   getIdentityChain(did: string): StoredChain | undefined {
-    return this.identities.get(did);
+    return this.idcontentChains.get(did);
   }
 
   /**
@@ -30,30 +30,30 @@ export class ChainStore {
    * - conflict: submitted chain diverges from stored chain (fork)
    */
   submitIdentityChain(did: string, operations: OperationEntry[]): 'accepted' | 'noop' | 'conflict' {
-    return this.submitChain(this.identities, did, operations);
+    return this.submitChain(this.idcontentChains, did, operations);
   }
 
-  // --- entities ---
+  // --- contentChains ---
 
-  getEntityChain(entityId: string): StoredChain | undefined {
-    return this.entities.get(entityId);
+  getContentChain(contentId: string): StoredChain | undefined {
+    return this.contentChains.get(contentId);
   }
 
-  submitEntityChain(
-    entityId: string,
+  submitContentChain(
+    contentId: string,
     operations: OperationEntry[],
   ): 'accepted' | 'noop' | 'conflict' {
-    return this.submitChain(this.entities, entityId, operations);
+    return this.submitChain(this.contentChains, contentId, operations);
   }
 
   // --- operations (lookup across all chains) ---
 
   getOperation(cid: string): OperationEntry | undefined {
-    for (const chain of this.identities.values()) {
+    for (const chain of this.idcontentChains.values()) {
       const op = chain.operations.find((o) => o.cid === cid);
       if (op) return op;
     }
-    for (const chain of this.entities.values()) {
+    for (const chain of this.contentChains.values()) {
       const op = chain.operations.find((o) => o.cid === cid);
       if (op) return op;
     }

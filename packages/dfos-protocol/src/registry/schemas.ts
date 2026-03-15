@@ -67,7 +67,7 @@ export const IdentityOperationsResponse = PaginatedOperations;
 export type IdentityOperationsResponse = z.infer<typeof IdentityOperationsResponse>;
 
 // -----------------------------------------------------------------------------
-// POST /entities
+// POST /content
 // -----------------------------------------------------------------------------
 
 export const SubmitContentChainRequest = z.strictObject({
@@ -76,7 +76,7 @@ export const SubmitContentChainRequest = z.strictObject({
 export type SubmitContentChainRequest = z.infer<typeof SubmitContentChainRequest>;
 
 export const SubmitContentChainResponse = z.strictObject({
-  entityId: z.string(),
+  contentId: z.string(),
   isDeleted: z.boolean(),
   currentDocumentCID: z.string().nullable(),
   genesisCID: z.string(),
@@ -85,19 +85,19 @@ export const SubmitContentChainResponse = z.strictObject({
 export type SubmitContentChainResponse = z.infer<typeof SubmitContentChainResponse>;
 
 // -----------------------------------------------------------------------------
-// GET /entities/:entityId
+// GET /content/:contentId
 // -----------------------------------------------------------------------------
 
-export const ResolveEntityResponse = SubmitContentChainResponse;
-export type ResolveEntityResponse = SubmitContentChainResponse;
+export const ResolveContentResponse = SubmitContentChainResponse;
+export type ResolveContentResponse = SubmitContentChainResponse;
 
 // -----------------------------------------------------------------------------
-// GET /entities/:entityId/operations
+// GET /content/:contentId/operations
 // -----------------------------------------------------------------------------
 
-export const EntityOperationsParams = PaginationParams;
-export const EntityOperationsResponse = PaginatedOperations;
-export type EntityOperationsResponse = z.infer<typeof EntityOperationsResponse>;
+export const ContentOperationsParams = PaginationParams;
+export const ContentOperationsResponse = PaginatedOperations;
+export type ContentOperationsResponse = z.infer<typeof ContentOperationsResponse>;
 
 // -----------------------------------------------------------------------------
 // GET /operations/:cid

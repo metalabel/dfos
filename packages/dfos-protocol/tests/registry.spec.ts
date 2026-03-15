@@ -280,11 +280,11 @@ describe('protocol registry', () => {
   });
 
   // =========================================================================
-  // POST /entities + GET /entities/:entityId
+  // POST /content + GET /content/:contentId
   // =========================================================================
 
-  describe('POST /entities + GET /entities/:entityId', () => {
-    it('should accept a content chain and derive entity ID', async () => {
+  describe('POST /content + GET /content/:contentId', () => {
+    it('should accept a content chain and derive content ID', async () => {
       // first submit an identity
       const gen = await createIdentityChain();
       const idRes = await post('/identities', { chain: [gen.jwsToken] });
@@ -306,16 +306,16 @@ describe('protocol registry', () => {
         kid,
       });
 
-      const res = await post('/entities', { chain: [jwsToken] });
+      const res = await post('/content', { chain: [jwsToken] });
       expect(res.status).toBe(201);
-      expect(res.body.entityId).toMatch(/^[2346789acdefhknrtvz]{22}$/);
+      expect(res.body.contentId).toMatch(/^[2346789acdefhknrtvz]{22}$/);
       expect(res.body.currentDocumentCID).toBe(docCID);
       expect(res.body.isDeleted).toBe(false);
 
       // resolve it
-      const resolveRes = await get(`/entities/${res.body.entityId}`);
+      const resolveRes = await get(`/content/${res.body.contentId}`);
       expect(resolveRes.status).toBe(200);
-      expect(resolveRes.body.entityId).toBe(res.body.entityId);
+      expect(resolveRes.body.contentId).toBe(res.body.contentId);
     });
 
     it('should return 400 if signing identity is not registered', async () => {
@@ -333,12 +333,12 @@ describe('protocol registry', () => {
         signer: k.signer,
         kid: `did:dfos:unknown#${k.keyId}`,
       });
-      const res = await post('/entities', { chain: [jwsToken] });
+      const res = await post('/content', { chain: [jwsToken] });
       expect(res.status).toBe(400);
     });
 
-    it('should return 404 for unknown entity', async () => {
-      const res = await get('/entities/nonexistent22charshash');
+    it('should return 404 for unknown content', async () => {
+      const res = await get('/content/nonexistent22charshash');
       expect(res.status).toBe(404);
     });
   });

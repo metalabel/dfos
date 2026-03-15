@@ -101,13 +101,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /entities:
+  /content:
     post:
       operationId: submitContentChain
       summary: Submit or extend a content chain
       description: |
         Verifies the chain (resolving signing keys from stored identity chains),
-        derives the entity ID from the genesis CID, and stores it.
+        derives the content ID from the genesis CID, and stores it.
         Same status code semantics as identity submission.
       requestBody:
         required: true
@@ -121,13 +121,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EntityState'
+                $ref: '#/components/schemas/ContentState'
         '200':
           description: Chain already stored (noop)
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EntityState'
+                $ref: '#/components/schemas/ContentState'
         '400':
           description: Invalid chain
           content:
@@ -141,32 +141,32 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /entities/{entityId}:
+  /content/{contentId}:
     get:
-      operationId: resolveEntity
-      summary: Resolve current entity state
+      operationId: resolveContent
+      summary: Resolve current content state
       parameters:
-        - $ref: '#/components/parameters/entityId'
+        - $ref: '#/components/parameters/contentId'
       responses:
         '200':
-          description: Entity state
+          description: Content state
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EntityState'
+                $ref: '#/components/schemas/ContentState'
         '404':
-          description: Entity not found
+          description: Content not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
 
-  /entities/{entityId}/operations:
+  /content/{contentId}/operations:
     get:
-      operationId: listEntityOperations
+      operationId: listContentOperations
       summary: List content chain operations (newest-first, paginated)
       parameters:
-        - $ref: '#/components/parameters/entityId'
+        - $ref: '#/components/parameters/contentId'
         - $ref: '#/components/parameters/cursor'
         - $ref: '#/components/parameters/limit'
       responses:
@@ -177,7 +177,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/PaginatedOperations'
         '404':
-          description: Entity not found
+          description: Content not found
           content:
             application/json:
               schema:
@@ -216,8 +216,8 @@ components:
         pattern: '^did:dfos:[2346789acdefhknrtvz]{22}$'
       example: 'did:dfos:e3vvtck42d4eacdnzvtrn6'
 
-    entityId:
-      name: entityId
+    contentId:
+      name: contentId
       in: path
       required: true
       schema:
@@ -305,11 +305,11 @@ components:
           items:
             $ref: '#/components/schemas/MultikeyPublicKey'
 
-    EntityState:
+    ContentState:
       type: object
-      required: [entityId, isDeleted, currentDocumentCID, genesisCID, headCID]
+      required: [contentId, isDeleted, currentDocumentCID, genesisCID, headCID]
       properties:
-        entityId:
+        contentId:
           type: string
           example: '67t27rzc83v7c22n9t6z7c'
         isDeleted:

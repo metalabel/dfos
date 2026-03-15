@@ -12,7 +12,7 @@
 */
 
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
-import { deriveEntityId } from './derivation';
+import { deriveContentId } from './derivation';
 import { ContentOperation } from './schemas';
 import type { Signer } from './schemas';
 
@@ -21,8 +21,8 @@ import type { Signer } from './schemas';
 // -----------------------------------------------------------------------------
 
 export interface VerifiedContentChain {
-  /** Entity identifier — bare 22-char hash derived from genesis CID */
-  entityId: string;
+  /** Content identifier — bare 22-char hash derived from genesis CID */
+  contentId: string;
   /** CID of the genesis operation */
   genesisCID: string;
   /** CID of the most recent operation */
@@ -79,7 +79,7 @@ export const verifyContentChain = async (input: {
   if (input.log.length === 0) throw new Error('log must have at least one operation');
 
   const state = {
-    entityId: null as string | null,
+    contentId: null as string | null,
     genesisCID: null as string | null,
     headCID: null as string | null,
     isDeleted: false,
@@ -147,7 +147,7 @@ export const verifyContentChain = async (input: {
     // update state
     if (idx === 0) {
       state.genesisCID = operationCID;
-      state.entityId = deriveEntityId(encoded.cid.bytes);
+      state.contentId = deriveContentId(encoded.cid.bytes);
     }
     state.headCID = operationCID;
     state.previousCID = operationCID;
@@ -168,7 +168,7 @@ export const verifyContentChain = async (input: {
   }
 
   return {
-    entityId: state.entityId!,
+    contentId: state.contentId!,
     genesisCID: state.genesisCID!,
     headCID: state.headCID!,
     isDeleted: state.isDeleted,
