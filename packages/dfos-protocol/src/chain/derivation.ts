@@ -23,11 +23,11 @@ export const deriveChainIdentifier = (cidBytes: Uint8Array, prefix: string): str
 };
 
 /**
- * Derive a bare entity identifier from CID bytes
+ * Derive a bare content identifier from CID bytes
  *
  * Returns the raw 22-char hash with no prefix. Applications may add
  * their own prefix for routing (e.g., post_xxxx) — that's semantic sugar.
  */
-export const deriveEntityId = (cidBytes: Uint8Array): string => {
+export const deriveContentId = (cidBytes: Uint8Array): string => {
   return generateIdNoPrefix({ seed: cidBytes });
 };

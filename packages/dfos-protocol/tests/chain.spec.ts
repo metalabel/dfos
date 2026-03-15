@@ -525,7 +525,7 @@ describe('content chain', () => {
       resolveKey: id.resolveKey,
     });
 
-    expect(result.entityId).toMatch(/^[2346789acdefhknrtvz]{22}$/);
+    expect(result.contentId).toMatch(/^[2346789acdefhknrtvz]{22}$/);
     expect(result.genesisCID).toBeTruthy();
     expect(result.headCID).toBe(result.genesisCID);
     expect(result.currentDocumentCID).toBe(docCID);
@@ -638,7 +638,7 @@ describe('content chain', () => {
       type: 'delete',
       previousOperationCID: createCID,
       createdAt: ts(1),
-      note: 'removing entity',
+      note: 'removing content',
     };
     const { jwsToken: deleteJws } = await signContentOperation({
       operation: deleteOp,

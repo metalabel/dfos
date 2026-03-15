@@ -164,8 +164,8 @@ export const createRegistryServer = (store = new ChainStore()) => {
     return c.json(paginate(chain.operations, cursor, limit));
   });
 
-  // --- POST /entities ---
-  app.post('/entities', async (c) => {
+  // --- POST /content ---
+  app.post('/content', async (c) => {
     const body = await c.req.json<{ chain: string[] }>();
     if (!body.chain || !Array.isArray(body.chain) || body.chain.length === 0) {
       return c.json(err('BAD_REQUEST', 'chain must be a non-empty array of JWS tokens'), 400);
@@ -180,14 +180,14 @@ export const createRegistryServer = (store = new ChainStore()) => {
       return c.json(err('BAD_REQUEST', `chain verification failed: ${(e as Error).message}`), 400);
     }
 
-    const result = store.submitEntityChain(verified.entityId, operations);
+    const result = store.submitContentChain(verified.contentId, operations);
     if (result === 'conflict') {
       return c.json(err('CONFLICT', 'submitted chain conflicts with stored chain'), 409);
     }
 
     return c.json(
       {
-        entityId: verified.entityId,
+        contentId: verified.contentId,
         isDeleted: verified.isDeleted,
         currentDocumentCID: verified.currentDocumentCID,
         genesisCID: verified.genesisCID,
@@ -197,11 +197,11 @@ export const createRegistryServer = (store = new ChainStore()) => {
     );
   });
 
-  // --- GET /entities/:entityId ---
-  app.get('/entities/:entityId', (c) => {
-    const entityId = c.req.param('entityId');
-    const chain = store.getEntityChain(entityId);
-    if (!chain) return c.json(err('NOT_FOUND', 'entity not found'), 404);
+  // --- GET /content/:contentId ---
+  app.get('/content/:contentId', (c) => {
+    const contentId = c.req.param('contentId');
+    const chain = store.getContentChain(contentId);
+    if (!chain) return c.json(err('NOT_FOUND', 'content not found'), 404);
 
     const genesis = chain.operations[0]!;
     const head = chain.operations[chain.operations.length - 1]!;
@@ -210,7 +210,7 @@ export const createRegistryServer = (store = new ChainStore()) => {
     const headType = headPayload?.type as string;
 
     return c.json({
-      entityId,
+      contentId,
       isDeleted: headType === 'delete',
       currentDocumentCID:
         headType === 'delete' ? null : ((headPayload?.documentCID as string | null) ?? null),
@@ -219,11 +219,11 @@ export const createRegistryServer = (store = new ChainStore()) => {
     });
   });
 
-  // --- GET /entities/:entityId/operations ---
-  app.get('/entities/:entityId/operations', (c) => {
-    const entityId = c.req.param('entityId');
-    const chain = store.getEntityChain(entityId);
-    if (!chain) return c.json(err('NOT_FOUND', 'entity not found'), 404);
+  // --- GET /content/:contentId/operations ---
+  app.get('/content/:contentId/operations', (c) => {
+    const contentId = c.req.param('contentId');
+    const chain = store.getContentChain(contentId);
+    if (!chain) return c.json(err('NOT_FOUND', 'content not found'), 404);
     const { cursor, limit } = paginationParams(c.req);
     return c.json(paginate(chain.operations, cursor, limit));
   });

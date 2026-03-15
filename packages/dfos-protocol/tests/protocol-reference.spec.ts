@@ -316,7 +316,7 @@ describe('protocol reference artifacts', () => {
     });
 
     console.log('\n--- Verified Content Chain ---');
-    console.log('Entity ID:       ', contentChain.entityId);
+    console.log('Content ID:       ', contentChain.contentId);
     console.log('Genesis CID:     ', contentChain.genesisCID);
     console.log('Head CID:        ', contentChain.headCID);
     console.log('Current doc CID: ', contentChain.currentDocumentCID);
@@ -373,7 +373,7 @@ describe('protocol reference artifacts', () => {
     console.log('      kid:         ', updParts.header.kid, '(DID URL)');
 
     console.log('\nCONTENT CHAIN');
-    console.log('  Entity ID:       ', contentChain.entityId);
+    console.log('  Content ID:       ', contentChain.contentId);
     console.log('  Genesis CID:     ', contentChain.genesisCID);
     console.log('  Head CID:        ', contentChain.headCID);
     console.log('  [0] create  CID: ', contentCreateCID);

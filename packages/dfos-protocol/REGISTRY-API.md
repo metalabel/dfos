@@ -2,7 +2,7 @@
 
 Minimal HTTP API for chain storage, retrieval, and resolution. Any server implementing these endpoints with these semantics is a compatible DFOS registry.
 
-The protocol is transport-agnostic — chains can be exchanged through any mechanism. This API defines one standard transport binding: a REST interface for submitting chains, resolving identities and entities, and retrieving operations and documents.
+The protocol is transport-agnostic — chains can be exchanged through any mechanism. This API defines one standard transport binding: a REST interface for submitting chains, resolving identities and content, and retrieving operations and documents.
 
 [Protocol Specification](https://protocol.dfos.com/spec) · [OpenAPI Spec](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml) · [Reference Implementation](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/registry/server.ts)
 
@@ -17,7 +17,7 @@ Six endpoints, two concerns:
 | Concern             | Endpoints                                       |
 | ------------------- | ----------------------------------------------- |
 | **Identity chains** | Submit chain, resolve identity, list operations |
-| **Content chains**  | Submit chain, resolve entity, list operations   |
+| **Content chains**  | Submit chain, resolve content, list operations  |
 | **Lookup**          | Resolve operation by CID                        |
 
 All request and response bodies are JSON (`application/json`).
@@ -105,9 +105,9 @@ Returns operations newest-first, paginated.
 
 ## Content Endpoints
 
-### `POST /entities` — Submit or extend a content chain
+### `POST /content` — Submit or extend a content chain
 
-Same mechanics as identity submission. The registry verifies the chain (resolving signing keys from stored identity chains), derives the entity ID from the genesis CID, and stores it.
+Same mechanics as identity submission. The registry verifies the chain (resolving signing keys from stored identity chains), derives the content ID from the genesis CID, and stores it.
 
 **Request:** Same `{ "chain": [...] }` format as identity submission.
 
@@ -115,21 +115,21 @@ Same mechanics as identity submission. The registry verifies the chain (resolvin
 
 ---
 
-### `GET /entities/{entityId}` — Resolve current entity state
+### `GET /content/{contentId}` — Resolve current content state
 
-Returns the current state for a content chain entity.
+Returns the current state for a content chain.
 
 **Parameters:**
 
-| Name       | In   | Pattern                     | Example                  |
-| ---------- | ---- | --------------------------- | ------------------------ |
-| `entityId` | path | `[2346789acdefhknrtvz]{22}` | `67t27rzc83v7c22n9t6z7c` |
+| Name        | In   | Pattern                     | Example                  |
+| ----------- | ---- | --------------------------- | ------------------------ |
+| `contentId` | path | `[2346789acdefhknrtvz]{22}` | `67t27rzc83v7c22n9t6z7c` |
 
-**Response (`EntityState`):**
+**Response (`ContentState`):**
 
 ```json
 {
-  "entityId": "67t27rzc83v7c22n9t6z7c",
+  "contentId": "67t27rzc83v7c22n9t6z7c",
   "isDeleted": false,
   "currentDocumentCID": "bafyrei...",
   "genesisCID": "bafyrei...",
@@ -145,7 +145,7 @@ Returns the current state for a content chain entity.
 
 ---
 
-### `GET /entities/{entityId}/operations` — List content chain operations
+### `GET /content/{contentId}/operations` — List content chain operations
 
 Same pagination mechanics as identity operations.
 
@@ -182,7 +182,7 @@ All error responses follow a standard shape:
 | Error Code    | Used By                                                    |
 | ------------- | ---------------------------------------------------------- |
 | `BAD_REQUEST` | Invalid chain, malformed request                           |
-| `NOT_FOUND`   | Identity, entity, or operation not found                   |
+| `NOT_FOUND`   | Identity, content, or operation not found                  |
 | `CONFLICT`    | Fork detected — submitted chain diverges from stored chain |
 
 ---
