@@ -102,10 +102,7 @@ A resolved `did:dfos` DID Document is constructed from the current state of the 
 
 ```json
 {
-  "@context": [
-    "https://www.w3.org/ns/did/v1",
-    "https://w3id.org/security/multikey/v1"
-  ],
+  "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
   "id": "did:dfos:e3vvtck42d4eacdnzvtrn6",
   "controller": "did:dfos:e3vvtck42d4eacdnzvtrn6",
   "verificationMethod": [
@@ -116,15 +113,9 @@ A resolved `did:dfos` DID Document is constructed from the current state of the 
       "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
     }
   ],
-  "authentication": [
-    "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"
-  ],
-  "assertionMethod": [
-    "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"
-  ],
-  "capabilityInvocation": [
-    "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"
-  ]
+  "authentication": ["did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"],
+  "assertionMethod": ["did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"],
+  "capabilityInvocation": ["did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"]
 }
 ```
 
@@ -132,11 +123,11 @@ A resolved `did:dfos` DID Document is constructed from the current state of the 
 
 Identity chain operations declare three key sets. These map to W3C verification relationships as follows:
 
-| Identity Chain Key Set | W3C Verification Relationship | Purpose |
-| --- | --- | --- |
-| `authKeys` | `authentication` | Prove control of the DID (e.g., login, session establishment) |
-| `assertKeys` | `assertionMethod` | Issue verifiable assertions (e.g., sign content chain operations) |
-| `controllerKeys` | `capabilityInvocation` | Manage the DID itself (sign identity chain update/delete operations) |
+| Identity Chain Key Set | W3C Verification Relationship | Purpose                                                              |
+| ---------------------- | ----------------------------- | -------------------------------------------------------------------- |
+| `authKeys`             | `authentication`              | Prove control of the DID (e.g., login, session establishment)        |
+| `assertKeys`           | `assertionMethod`             | Issue verifiable assertions (e.g., sign content chain operations)    |
+| `controllerKeys`       | `capabilityInvocation`        | Manage the DID itself (sign identity chain update/delete operations) |
 
 Each key in the identity chain state becomes a `verificationMethod` entry. The `id` is constructed as a DID URL: `did:dfos:<id>#<keyId>`. The `type` is `Multikey`. The `publicKeyMultibase` is the W3C Multikey encoding (multicodec `0xed01` prefix + base58btc + `z` multibase prefix).
 
@@ -189,13 +180,13 @@ Given a DID `did:dfos:<id>`:
 
 #### 5.2.2 Resolution Metadata
 
-| Property | Value |
-| --- | --- |
-| `contentType` | `application/did+ld+json` |
-| `created` | `createdAt` from the genesis operation |
-| `updated` | `createdAt` from the most recent operation |
-| `deactivated` | `true` if the chain's terminal operation is `type: "delete"` |
-| `operationCount` | Number of operations in the chain |
+| Property         | Value                                                        |
+| ---------------- | ------------------------------------------------------------ |
+| `contentType`    | `application/did+ld+json`                                    |
+| `created`        | `createdAt` from the genesis operation                       |
+| `updated`        | `createdAt` from the most recent operation                   |
+| `deactivated`    | `true` if the chain's terminal operation is `type: "delete"` |
+| `operationCount` | Number of operations in the chain                            |
 
 #### 5.2.3 Self-Certification
 
@@ -315,21 +306,21 @@ A complete reference implementation is available as the `@metalabel/dfos-protoco
 
 ### 9.1 Normative References
 
-| Reference | URI |
-| --- | --- |
-| W3C DID Core 1.0 | https://www.w3.org/TR/did-core/ |
-| W3C Multikey | https://www.w3.org/TR/controller-document/#multikey |
-| RFC 2119 (Key Words) | https://www.rfc-editor.org/rfc/rfc2119 |
-| RFC 7515 (JWS) | https://www.rfc-editor.org/rfc/rfc7515 |
-| RFC 8032 (Ed25519) | https://www.rfc-editor.org/rfc/rfc8032 |
-| DFOS Protocol Specification | https://protocol.dfos.com/spec |
+| Reference                   | URI                                                 |
+| --------------------------- | --------------------------------------------------- |
+| W3C DID Core 1.0            | https://www.w3.org/TR/did-core/                     |
+| W3C Multikey                | https://www.w3.org/TR/controller-document/#multikey |
+| RFC 2119 (Key Words)        | https://www.rfc-editor.org/rfc/rfc2119              |
+| RFC 7515 (JWS)              | https://www.rfc-editor.org/rfc/rfc7515              |
+| RFC 8032 (Ed25519)          | https://www.rfc-editor.org/rfc/rfc8032              |
+| DFOS Protocol Specification | https://protocol.dfos.com/spec                      |
 
 ### 9.2 Informative References
 
-| Reference | URI |
-| --- | --- |
-| W3C DID Spec Registries | https://w3c.github.io/did-spec-registries/ |
-| Multicodec Table | https://github.com/multiformats/multicodec |
-| CIDv1 Specification | https://github.com/multiformats/cid |
-| dag-cbor Codec | https://ipld.io/specs/codecs/dag-cbor/spec/ |
-| DFOS Registry OpenAPI | https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml |
+| Reference               | URI                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| W3C DID Spec Registries | https://w3c.github.io/did-spec-registries/                                      |
+| Multicodec Table        | https://github.com/multiformats/multicodec                                      |
+| CIDv1 Specification     | https://github.com/multiformats/cid                                             |
+| dag-cbor Codec          | https://ipld.io/specs/codecs/dag-cbor/spec/                                     |
+| DFOS Registry OpenAPI   | https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml |

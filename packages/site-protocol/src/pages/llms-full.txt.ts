@@ -7,7 +7,18 @@ export const GET: APIRoute = () => {
   const contentModel = fs.readFileSync('../dfos-protocol/CONTENT-MODEL.md', 'utf-8');
   const registryApi = fs.readFileSync('../dfos-protocol/REGISTRY-API.md', 'utf-8');
 
-  const content = [protocol, '---', '', didMethod, '---', '', contentModel, '---', '', registryApi].join('\n');
+  const content = [
+    protocol,
+    '---',
+    '',
+    didMethod,
+    '---',
+    '',
+    contentModel,
+    '---',
+    '',
+    registryApi,
+  ].join('\n');
 
   return new Response(content, {
     headers: { 'Content-Type': 'text/plain; charset=utf-8' },

@@ -14,11 +14,11 @@ The registry stores verified chains and serves resolved state. It enforces **lin
 
 Six endpoints, two concerns:
 
-| Concern | Endpoints |
-| --- | --- |
+| Concern             | Endpoints                                       |
+| ------------------- | ----------------------------------------------- |
 | **Identity chains** | Submit chain, resolve identity, list operations |
-| **Content chains** | Submit chain, resolve entity, list operations |
-| **Lookup** | Resolve operation by CID |
+| **Content chains**  | Submit chain, resolve entity, list operations   |
+| **Lookup**          | Resolve operation by CID                        |
 
 All request and response bodies are JSON (`application/json`).
 
@@ -34,25 +34,22 @@ Submit an ordered array of JWS tokens (genesis-first). The registry verifies the
 
 ```json
 {
-  "chain": [
-    "eyJhbGciOiJFZERTQSI...",
-    "eyJhbGciOiJFZERTQSI..."
-  ]
+  "chain": ["eyJhbGciOiJFZERTQSI...", "eyJhbGciOiJFZERTQSI..."]
 }
 ```
 
-| Field | Type | Description |
-| --- | --- | --- |
+| Field   | Type     | Description                                                |
+| ------- | -------- | ---------------------------------------------------------- |
 | `chain` | string[] | Ordered JWS compact tokens, genesis-first. Minimum 1 item. |
 
 **Responses:**
 
-| Status | Meaning |
-| --- | --- |
-| `201` | Chain accepted (new or extended) — returns `IdentityState` |
-| `200` | Chain already stored, no change — returns `IdentityState` |
-| `400` | Invalid chain (verification failed) |
-| `409` | Fork conflict with stored chain |
+| Status | Meaning                                                    |
+| ------ | ---------------------------------------------------------- |
+| `201`  | Chain accepted (new or extended) — returns `IdentityState` |
+| `200`  | Chain already stored, no change — returns `IdentityState`  |
+| `400`  | Invalid chain (verification failed)                        |
+| `409`  | Fork conflict with stored chain                            |
 
 ---
 
@@ -62,8 +59,8 @@ Returns the current key state for a DID.
 
 **Parameters:**
 
-| Name | In | Pattern | Example |
-| --- | --- | --- | --- |
+| Name  | In   | Pattern                              | Example                           |
+| ----- | ---- | ------------------------------------ | --------------------------------- |
 | `did` | path | `did:dfos:[2346789acdefhknrtvz]{22}` | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
 
 **Response (`IdentityState`):**
@@ -86,11 +83,11 @@ Returns operations newest-first, paginated.
 
 **Parameters:**
 
-| Name | In | Description |
-| --- | --- | --- |
-| `did` | path | The DID to list operations for |
+| Name     | In    | Description                                                  |
+| -------- | ----- | ------------------------------------------------------------ |
+| `did`    | path  | The DID to list operations for                               |
 | `cursor` | query | Opaque pagination cursor (CID of last item on previous page) |
-| `limit` | query | Page size, 1–100, default 25 |
+| `limit`  | query | Page size, 1–100, default 25                                 |
 
 **Response (`PaginatedOperations`):**
 
@@ -124,8 +121,8 @@ Returns the current state for a content chain entity.
 
 **Parameters:**
 
-| Name | In | Pattern | Example |
-| --- | --- | --- | --- |
+| Name       | In   | Pattern                     | Example                  |
+| ---------- | ---- | --------------------------- | ------------------------ |
 | `entityId` | path | `[2346789acdefhknrtvz]{22}` | `67t27rzc83v7c22n9t6z7c` |
 
 **Response (`EntityState`):**
@@ -140,11 +137,11 @@ Returns the current state for a content chain entity.
 }
 ```
 
-| Field | Description |
-| --- | --- |
+| Field                | Description                                         |
+| -------------------- | --------------------------------------------------- |
 | `currentDocumentCID` | CID of current document, null if cleared or deleted |
-| `genesisCID` | CID of the genesis operation |
-| `headCID` | CID of the most recent operation |
+| `genesisCID`         | CID of the genesis operation                        |
+| `headCID`            | CID of the most recent operation                    |
 
 ---
 
@@ -182,11 +179,11 @@ All error responses follow a standard shape:
 }
 ```
 
-| Error Code | Used By |
-| --- | --- |
-| `BAD_REQUEST` | Invalid chain, malformed request |
-| `NOT_FOUND` | Identity, entity, operation, or document not found |
-| `CONFLICT` | Fork detected — submitted chain diverges from stored chain |
+| Error Code    | Used By                                                    |
+| ------------- | ---------------------------------------------------------- |
+| `BAD_REQUEST` | Invalid chain, malformed request                           |
+| `NOT_FOUND`   | Identity, entity, operation, or document not found         |
+| `CONFLICT`    | Fork detected — submitted chain diverges from stored chain |
 
 ---
 
@@ -226,11 +223,11 @@ Registry endpoints that require authentication use **EdDSA JWTs** signed with th
 }
 ```
 
-| Field | Description |
-| --- | --- |
+| Field | Description                                                   |
+| ----- | ------------------------------------------------------------- |
 | `kid` | Bare key ID (not a DID URL — the `sub` claim carries the DID) |
-| `sub` | The DID of the authenticating identity |
-| `aud` | Target audience (e.g., `"dfos-api"`) |
+| `sub` | The DID of the authenticating identity                        |
+| `aud` | Target audience (e.g., `"dfos-api"`)                          |
 
 The signing mechanics are identical to operation JWS — `ed25519.sign(UTF8(base64url(header) + "." + base64url(payload)), privateKey)`. The key is resolved from the identity chain via `kid` + `sub`.
 

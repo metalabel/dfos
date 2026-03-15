@@ -363,5 +363,4 @@ describe('protocol registry', () => {
       expect(res.status).toBe(404);
     });
   });
-
 });
