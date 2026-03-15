@@ -131,7 +131,7 @@ Identity chains are self-sovereign — they define their own valid signers via `
 - Which identities are authorized to sign operations on a given chain
 - Which key role (auth, assert, controller) the signing key must have
 - Whether a chain must have a single signer or may have multiple signers
-- Ownership or attribution semantics between signers and entities
+- Ownership or attribution semantics between signers and content chains
 
 ### Terminal States and Special Operations
 

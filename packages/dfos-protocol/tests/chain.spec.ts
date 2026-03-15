@@ -638,7 +638,7 @@ describe('content chain', () => {
       type: 'delete',
       previousOperationCID: createCID,
       createdAt: ts(1),
-      note: 'removing entity',
+      note: 'removing content',
     };
     const { jwsToken: deleteJws } = await signContentOperation({
       operation: deleteOp,

@@ -15,12 +15,12 @@ export interface StoredChain {
 }
 
 export class ChainStore {
-  private idcontentChains = new Map<string, StoredChain>();
+  private identityChains = new Map<string, StoredChain>();
   private contentChains = new Map<string, StoredChain>();
-  // --- idcontentChains ---
+  // --- identityChains ---
 
   getIdentityChain(did: string): StoredChain | undefined {
-    return this.idcontentChains.get(did);
+    return this.identityChains.get(did);
   }
 
   /**
@@ -30,7 +30,7 @@ export class ChainStore {
    * - conflict: submitted chain diverges from stored chain (fork)
    */
   submitIdentityChain(did: string, operations: OperationEntry[]): 'accepted' | 'noop' | 'conflict' {
-    return this.submitChain(this.idcontentChains, did, operations);
+    return this.submitChain(this.identityChains, did, operations);
   }
 
   // --- contentChains ---
@@ -49,7 +49,7 @@ export class ChainStore {
   // --- operations (lookup across all chains) ---
 
   getOperation(cid: string): OperationEntry | undefined {
-    for (const chain of this.idcontentChains.values()) {
+    for (const chain of this.identityChains.values()) {
       const op = chain.operations.find((o) => o.cid === cid);
       if (op) return op;
     }
