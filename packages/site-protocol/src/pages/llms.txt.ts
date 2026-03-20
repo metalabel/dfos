@@ -20,7 +20,7 @@ export const GET: APIRoute = () => {
     '',
     '## Full Content',
     '',
-    '- [llms-full.txt](https://protocol.dfos.com/llms-full.txt): All specifications as plain text',
+    '- [llms-full.txt](https://protocol.dfos.com/llms-full.txt): Complete markdown dump — all specifications, overview, and FAQ as plain text',
     '',
     '## Related',
     '',
