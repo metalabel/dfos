@@ -51,7 +51,7 @@ export const faqs: FaqEntry[] = [
   {
     question: 'How do identity chains relate to DIDs?',
     answer:
-      'Every identity chain is also a DID. The DID (did:dfos:<hash>) is derived deterministically from the hash of the chain\'s genesis operation — making it self-certifying. Given the chain, anyone can verify that it belongs to the claimed DID without trusting the source. The DID method specification defines how did:dfos identifiers conform to the W3C DID standard.',
+      "Every identity chain is also a DID. The DID (did:dfos:<hash>) is derived deterministically from the hash of the chain's genesis operation — making it self-certifying. Given the chain, anyone can verify that it belongs to the claimed DID without trusting the source. The DID method specification defines how did:dfos identifiers conform to the W3C DID standard.",
     answerHtml:
       'Every identity chain is also a DID. The DID (did:dfos:&lt;hash&gt;) is derived deterministically from the hash of the chain\'s genesis operation — making it self-certifying. Given the chain, anyone can verify that it belongs to the claimed DID without trusting the source. The <a href="/did-method">DID method specification</a> defines how did:dfos identifiers conform to the W3C DID standard.',
   },
