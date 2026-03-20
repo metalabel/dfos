@@ -10,19 +10,19 @@
 }
 
 :root {
-  --bg: #0a0a0a;
+  --bg: #121214;
   --fg: rgba(255, 255, 255, 0.82);
   --fg-dim: rgba(255, 255, 255, 0.4);
   --fg-bright: #fff;
   --border: rgba(255, 255, 255, 0.1);
   --surface: rgba(255, 255, 255, 0.04);
-  --max-w: 88ch;
+  --max-w: 78ch;
 }
 
 html {
   font-family: 'JetBrains Mono', monospace;
   font-size: 14px;
-  line-height: 1.75;
+  line-height: 1.85;
   color: var(--fg);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -33,7 +33,7 @@ html {
 body {
   max-width: var(--max-w);
   margin: 0 auto;
-  padding: 4rem 1.5rem;
+  padding: 5rem 2rem;
 }
 
 /* ═══ Headings ═══ */
@@ -80,7 +80,7 @@ h6 {
 /* ═══ Body ═══ */
 
 p {
-  margin-bottom: 1rem;
+  margin-bottom: 1.25rem;
 }
 
 strong {
@@ -125,7 +125,7 @@ a:hover {
 
 code {
   font-family: inherit;
-  font-size: 1rem;
+  font-size: 13px;
   background: var(--surface);
   padding: 0.1em 0.35em;
   border-radius: 2px;
@@ -138,12 +138,14 @@ pre {
   padding: 1.5rem 2rem;
   overflow-x: auto;
   margin-bottom: 1.5rem;
+  font-size: 13px;
 }
 
 pre code {
   background: none;
   padding: 0;
   border-radius: 0;
+  font-size: inherit;
 }
 
 /* ═══ Tables ═══ */
@@ -159,6 +161,7 @@ td {
   text-align: left;
   padding: 0.6rem 1.25rem;
   border-bottom: 1px solid var(--border);
+  font-size: 13px;
 }
 
 th {
@@ -337,11 +340,18 @@ img {
 .spec .table-wrap {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: 2px;
 }
 
 .spec .table-wrap table {
   min-width: 100%;
   margin-bottom: 0;
+}
+
+.spec .table-wrap tr:last-child th,
+.spec .table-wrap tr:last-child td {
+  border-bottom: none;
 }
 
 .spec th:first-child,
@@ -356,6 +366,24 @@ img {
 
 .spec .table-wrap {
   margin-bottom: 2rem;
+}
+
+/* ═══ FAQ ═══ */
+
+.faq-item {
+  margin-bottom: 2.5rem;
+}
+
+.faq-item h2 {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+
+.faq-item p {
+  color: var(--fg);
 }
 
 /* ═══ Footer ═══ */
@@ -383,9 +411,15 @@ footer a:hover {
   }
 }
 
+@media (min-width: 601px) {
+  html {
+    font-size: 15px;
+  }
+}
+
 @media (max-width: 600px) {
   html {
-    font-size: 13px;
+    font-size: 14px;
   }
   body {
     padding: 2rem 1rem;

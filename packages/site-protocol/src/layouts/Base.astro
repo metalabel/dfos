@@ -5,11 +5,59 @@ interface Props {
   title: string;
   description: string;
   path?: string;
+  /** Override the default JSON-LD structured data. */
+  schema?: object | object[];
 }
 
-const { title, description, path = '' } = Astro.props;
+const { title, description, path = '', schema } = Astro.props;
 const canonicalUrl = `https://protocol.dfos.com${path}`;
-const fullTitle = path ? `${title} — DFOS Protocol` : 'DFOS Protocol';
+const fullTitle = path
+  ? `${title} — DFOS Protocol`
+  : 'DFOS Protocol — Cryptographic Identity and Content Verification';
+
+const defaultSchema = path
+  ? [
+      {
+        '@context': 'https://schema.org',
+        '@type': 'TechArticle',
+        headline: title,
+        description,
+        url: canonicalUrl,
+        isPartOf: {
+          '@type': 'WebSite',
+          name: 'DFOS Protocol',
+          url: 'https://protocol.dfos.com',
+        },
+      },
+      {
+        '@context': 'https://schema.org',
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          {
+            '@type': 'ListItem',
+            position: 1,
+            name: 'DFOS Protocol',
+            item: 'https://protocol.dfos.com',
+          },
+          {
+            '@type': 'ListItem',
+            position: 2,
+            name: title,
+            item: canonicalUrl,
+          },
+        ],
+      },
+    ]
+  : {
+      '@context': 'https://schema.org',
+      '@type': 'WebSite',
+      name: 'DFOS Protocol',
+      url: 'https://protocol.dfos.com',
+      description:
+        'Cryptographic identity and content verification — Ed25519 signed chains, content-addressed proofs, W3C DIDs.',
+    };
+
+const jsonLd = schema ?? defaultSchema;
 ---
 
 <!doctype html>
@@ -44,37 +92,24 @@ const fullTitle = path ? `${title} — DFOS Protocol` : 'DFOS Protocol';
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
+      rel="preload"
+      as="style"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+    />
+    <link
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
     />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+        rel="stylesheet"
+      />
+    </noscript>
 
-    <script
-      is:inline
-      type="application/ld+json"
-      set:html={JSON.stringify(
-        path
-          ? {
-              '@context': 'https://schema.org',
-              '@type': 'TechArticle',
-              headline: title,
-              description,
-              url: canonicalUrl,
-              isPartOf: {
-                '@type': 'WebSite',
-                name: 'DFOS Protocol',
-                url: 'https://protocol.dfos.com',
-              },
-            }
-          : {
-              '@context': 'https://schema.org',
-              '@type': 'WebSite',
-              name: 'DFOS Protocol',
-              url: 'https://protocol.dfos.com',
-              description:
-                'Ed25519 signed chain primitives, content-addressed proofs, and verifiable identity for the DFOS Protocol.',
-            },
-      )}
-    />
+    <script is:inline type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
   </head>
   <body>
     <slot />
