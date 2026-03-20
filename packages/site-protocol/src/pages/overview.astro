@@ -1,0 +1,151 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Overview"
+  description="Why the DFOS Protocol exists — cryptographic identity without platform trust, offline verification, and verifiable content in private spaces."
+  path="/overview"
+>
+  <main>
+    <nav class="site-nav">
+      <a href="/">DFOS Protocol</a>
+    </nav>
+
+    <article>
+      <h1>Overview</h1>
+
+      <section>
+        <p>
+          The DFOS Protocol is a system for proving identity and content authorship using
+          cryptography alone — no platform trust, no network dependency, no shared ledger.
+        </p>
+        <p>
+          It specifies how <a href="/spec">Ed25519 signed chains</a> establish identity, commit
+          content, and produce proofs that anyone can verify with a public key and any standard
+          signature library. The protocol is transport-agnostic: a proof obtained from an API, a
+          file on a USB drive, or a peer-to-peer exchange all verify the same way.
+        </p>
+      </section>
+
+      <h2>The Problem</h2>
+      <section>
+        <p>
+          Identity on the internet is platform-granted. Your account, your content history, your
+          social graph — all exist at the discretion of the service you're using. If the platform
+          changes its rules, locks your account, or shuts down, your identity goes with it.
+        </p>
+        <p>
+          This is a structural problem, not a policy problem. The architecture of platform identity
+          means someone else always holds the keys.
+        </p>
+      </section>
+
+      <h2>The Approach</h2>
+      <section>
+        <p>
+          The DFOS Protocol inverts this. Identity derives from cryptographic keys you control —
+          not from a username on someone else's server. An identity is an append-only chain of
+          signed operations: key rotations, content commitments, and state transitions. The chain
+          is self-certifying — given the chain data, anyone can verify it belongs to the claimed
+          <a href="/did-method"><code>did:dfos</code></a> identifier without trusting the source.
+        </p>
+        <p>
+          Content works the same way. A content chain is a signed sequence of commitments to
+          content-addressed documents. The protocol sees document hashes, not documents — it
+          doesn't know what a "post" or "profile" is. Application semantics live in a
+          <a href="/content-model">separate content layer</a>, free to evolve without protocol
+          changes.
+        </p>
+      </section>
+
+      <h2>The Dark Forest</h2>
+      <section>
+        <p>
+          The internet is a dark forest. The most meaningful creative and social activity doesn't
+          happen on the public web — it happens in private groups, closed communities, invite-only
+          spaces. DFOS is built for this topology.
+        </p>
+        <p>
+          Content lives in private, member-governed spaces — visible only to participants. The
+          cryptographic proof layer is the only public surface: signed chains of commitments that
+          anyone can independently verify. You can prove you authored something without revealing
+          what it is.
+        </p>
+        <p class="tagline">
+          The proof is public. The content is private.
+        </p>
+      </section>
+
+      <h2>Verification Model</h2>
+      <section>
+        <p>
+          Verification is a pure function. Given a chain and a public key, any Ed25519
+          implementation in any language returns valid or invalid. No network call. No consensus
+          check. No registry lookup. The chain carries everything needed to verify it.
+        </p>
+        <p>
+          The reference implementation is in TypeScript. Cross-language verification implementations
+          exist in Go, Python, Rust, and Swift — all verifying the same
+          <a href="/spec#deterministic-test-vectors">deterministic test vectors</a> from the
+          protocol specification.
+        </p>
+      </section>
+
+      <h2>Design Principles</h2>
+      <section>
+        <ul>
+          <li>
+            <strong>Self-certifying.</strong> Identity is derived from cryptographic operations,
+            not granted by an authority. The DID is a deterministic hash of the genesis operation.
+          </li>
+          <li>
+            <strong>Transport-agnostic.</strong> No privileged registry, blockchain, or API.
+            Chains can be obtained and verified from any source.
+          </li>
+          <li>
+            <strong>Offline-first.</strong> Verification requires no network. A chain exported
+            today is verifiable by code that doesn't exist yet.
+          </li>
+          <li>
+            <strong>Protocol-only.</strong> The spec defines cryptographic primitives — signed
+            chains, CID derivation, DID resolution, merkle trees, beacons. Application semantics
+            are a separate concern.
+          </li>
+          <li>
+            <strong>Platform-independent.</strong> Not coupled to the DFOS platform. Any system
+            implementing the same primitives produces interoperable, cross-verifiable proofs.
+          </li>
+        </ul>
+      </section>
+
+      <h2>Status</h2>
+      <section>
+        <p>
+          The protocol specification is under active review and development. It is open source
+          under the MIT license. Discussion happens in the
+          <a href="https://clear.dfos.com">clear.txt</a> space on DFOS.
+        </p>
+        <p>
+          Read the <a href="/spec">full specification</a>, explore the
+          <a href="/faq">FAQ</a>, or browse the
+          <a href="https://github.com/metalabel/dfos">source on GitHub</a>.
+        </p>
+      </section>
+    </article>
+
+    <hr />
+
+    <footer>
+      <nav class="dim" aria-label="Site">
+        <a href="/">DFOS Protocol</a> ·
+        <a href="/spec">Specification</a> ·
+        <a href="/did-method">DID Method</a> ·
+        <a href="/content-model">Content Model</a> ·
+        <a href="/faq">FAQ</a> ·
+        <a href="https://github.com/metalabel/dfos">GitHub</a> ·
+        <a href="https://dfos.com">dfos.com</a>
+      </nav>
+    </footer>
+  </main>
+</Base>

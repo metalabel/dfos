@@ -14,13 +14,14 @@ import Base from '../layouts/Base.astro';
     <section class="framing">
       <p>
         The DFOS Protocol is a system for cryptographic identity and content proof. It specifies
-        how identity chains, content chains, beacons, merkle trees, and verification work —
-        independent of any particular platform, implementation, or infrastructure.
+        how <a href="/spec">identity chains, content chains, beacons, merkle trees</a>, and
+        verification work — independent of any particular platform, implementation, or
+        infrastructure.
       </p>
       <p>
         Identity derives from signed operations, not platform accounts. Proofs are self-contained
-        — they verify offline, in any language, with no network dependency. A chain exported today
-        is verifiable by code that may not even exist yet.
+        — they <a href="/overview">verify offline</a>, in any language, with no network dependency.
+        A chain exported today is verifiable by code that may not even exist yet.
       </p>
       <p class="tagline">
         In the dark forest, identity and content authority derive from math alone.
@@ -54,6 +55,24 @@ import Base from '../layouts/Base.astro';
           <span class="dim">
             — standard JSON Schema content types (post, profile, manifest) committed via
             content-addressed CIDs
+          </span>
+        </li>
+      </ul>
+    </nav>
+
+    <h2>About</h2>
+    <nav class="landing-nav">
+      <ul>
+        <li>
+          <a href="/overview">Overview</a>
+          <span class="dim">
+            — why the protocol exists, what it does, how verification works
+          </span>
+        </li>
+        <li>
+          <a href="/faq">FAQ</a>
+          <span class="dim">
+            — common questions about the protocol, its design, and how it compares to alternatives
           </span>
         </li>
       </ul>

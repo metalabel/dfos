@@ -358,6 +358,21 @@ img {
   margin-bottom: 2rem;
 }
 
+/* ═══ FAQ ═══ */
+
+.faq-item {
+  margin-bottom: 2.5rem;
+}
+
+.faq-item h3 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+
+.faq-item p {
+  color: var(--fg);
+}
+
 /* ═══ Footer ═══ */
 
 footer {
