@@ -12,18 +12,25 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   encodeEd25519Multikey,
+  signBeacon,
   signContentOperation,
   signIdentityOperation,
   verifyContentChain,
   verifyIdentityChain,
 } from '../src/chain';
-import type { ContentOperation, IdentityOperation, MultikeyPublicKey } from '../src/chain';
+import type {
+  BeaconPayload,
+  ContentOperation,
+  IdentityOperation,
+  MultikeyPublicKey,
+} from '../src/chain';
 import {
   dagCborCanonicalEncode,
   generateId,
   importEd25519Keypair,
   signPayloadEd25519,
 } from '../src/crypto';
+import { buildMerkleTree, generateMerkleProof } from '../src/merkle';
 
 const sha256 = async (input: string) =>
   new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)));
@@ -200,6 +207,42 @@ const main = async () => {
   });
 
   // ================================================================
+  // MERKLE TREE + BEACON FIXTURES
+  // ================================================================
+
+  // Use the content chain's contentId plus 4 more deterministic IDs
+  const merkleContentIds = ['alpha', 'bravo', 'charlie', 'delta', 'echo'];
+  const { root: merkleRoot, leafCount } = await buildMerkleTree(merkleContentIds);
+  if (!merkleRoot) throw new Error('merkle root is null');
+
+  // Generate inclusion proof for "charlie"
+  const charlieProof = await generateMerkleProof(merkleContentIds, 'charlie');
+  if (!charlieProof) throw new Error('charlie proof is null');
+
+  // Sign a beacon with key1 (controller)
+  const kid1 = `${identity.did}#${keyId1}`;
+  const beaconPayload: BeaconPayload = {
+    version: 1,
+    type: 'beacon',
+    did: identity.did,
+    merkleRoot,
+    createdAt: '2026-03-07T00:05:00.000Z',
+  };
+  const { jwsToken: beaconJws, beaconCID } = await signBeacon({
+    payload: beaconPayload,
+    signer: signer1,
+    kid: kid1,
+  });
+
+  // Witness countersignature with key2
+  const kid2Beacon = `${identity.did}#${keyId2}`;
+  const { jwsToken: beaconWitnessJws } = await signBeacon({
+    payload: beaconPayload,
+    signer: signer2,
+    kid: kid2Beacon,
+  });
+
+  // ================================================================
   // WRITE FIXTURES
   // ================================================================
 
@@ -290,7 +333,35 @@ const main = async () => {
     },
   });
 
-  console.log('\ndone — 5 fixtures generated');
+  write('merkle-tree', {
+    description:
+      'Merkle tree: 5 content IDs → sorted → leaf hashes → root, with inclusion proof for "charlie"',
+    type: 'merkle',
+    contentIds: merkleContentIds,
+    expected: {
+      sortedIds: [...merkleContentIds].sort(),
+      root: merkleRoot,
+      leafCount,
+      charlieProof,
+    },
+  });
+
+  write('beacon', {
+    description: 'Beacon: signed merkle root announcement with witness countersignature',
+    type: 'beacon',
+    controllerJws: beaconJws,
+    witnessJws: beaconWitnessJws,
+    controllerPublicKey: multikey1,
+    witnessPublicKey: multikey2,
+    expected: {
+      beaconCID,
+      did: identity.did,
+      merkleRoot,
+      createdAt: beaconPayload.createdAt,
+    },
+  });
+
+  console.log('\ndone — 7 fixtures generated');
 };
 
 main().catch((err) => {
