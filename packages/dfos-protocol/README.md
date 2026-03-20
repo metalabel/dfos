@@ -44,6 +44,8 @@ The `examples/` directory contains deterministic reference chain fixtures that c
 - `identity-delete.json` — genesis + delete (terminal)
 - `content-lifecycle.json` — create + update (with both documents)
 - `content-delete.json` — create + delete
+- `merkle-tree.json` — 5 content IDs → sorted tree → root, with inclusion proof
+- `beacon.json` — signed merkle root announcement with witness countersignature
 
 ## License
 

@@ -397,8 +397,8 @@ A beacon is a signed announcement of a merkle root — a periodic commitment ove
   "version": 1,
   "type": "beacon",
   "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "merkleRoot": "a3f8b2c1d4e5f6071829304a5b6c7d8e9f0a1b2c3d4e5f6071829304a5b6c7d8",
-  "createdAt": "2026-03-07T00:04:00.000Z"
+  "merkleRoot": "7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e",
+  "createdAt": "2026-03-07T00:05:00.000Z"
 }
 ```
 
@@ -416,10 +416,40 @@ A beacon is a signed announcement of a merkle root — a periodic commitment ove
 {
   "alg": "EdDSA",
   "typ": "did:dfos:beacon",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd",
-  "cid": "bafyrei..."
+  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8",
+  "cid": "bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu"
 }
 ```
+
+### Worked Example: Beacon
+
+Using the reference identity (`did:dfos:e3vvtck42d4eacdnzvtrn6`) and key 1 from the identity chain examples. The beacon commits to a merkle root over 5 content IDs (see Merkle Tree worked example below).
+
+**Beacon CID** (dag-cbor canonical encode → CIDv1):
+
+```
+bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu
+```
+
+**Controller JWS** (key 1 signs):
+
+```
+kid:          did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8
+typ:          did:dfos:beacon
+cid:          bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu
+```
+
+**Witness countersignature** (key 2 signs the same payload — same CID, different kid):
+
+```
+kid:          did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd
+typ:          did:dfos:beacon
+cid:          bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu
+```
+
+Both JWS tokens commit to identical bytes (same CID). The controller/witness distinction is determined at verification time by comparing the `kid` DID to the payload `did`.
+
+Full JWS tokens are in [`examples/beacon.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/beacon.json).
 
 ### Beacon Semantics
 
@@ -445,9 +475,83 @@ Beacons commit to a set of content IDs via a pure SHA-256 binary Merkle tree. Th
 
 An empty set of content IDs produces a `null` root. A single content ID produces a root equal to `hex(SHA-256(UTF-8(contentId)))`.
 
+### Worked Example: Merkle Tree
+
+5 content IDs: `["alpha", "bravo", "charlie", "delta", "echo"]`
+
+Already sorted lexicographically. Hash each leaf:
+
+```
+alpha   → SHA-256("alpha")   → 8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8
+bravo   → SHA-256("bravo")   → 4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398
+charlie → SHA-256("charlie") → 36ef585cd42d49706cd2827a77d86c91bfdaf87a3f22b8f0e0308bd2c16cf85f
+delta   → SHA-256("delta")   → 18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
+echo    → SHA-256("echo")    → 092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d
+```
+
+Build tree bottom-up, pairing left-to-right. Odd nodes promote unpaired:
+
+```
+Level 0 (leaves):    [alpha]  [bravo]  [charlie]  [delta]  [echo]
+Level 1:             [alpha‖bravo]     [charlie‖delta]     [echo]  ← promoted
+Level 2:             [L1-left‖L1-mid]                      [echo]  ← promoted
+Level 3 (root):      [L2-left‖echo]
+```
+
+Interior hashes:
+
+```
+SHA-256(alpha‖bravo)          → 90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3
+SHA-256(charlie‖delta)        → 6b55e77bef32937d9ccce2bd4b18127b0483f0be8e5b63c30bcc2b0d09f7dd44
+SHA-256(alpha‖bravo ‖ charlie‖delta) → 23c83cb862e3b6a86eb2dfa0ea8ba0edcf1c3f3b8f14abc5eb9d72eab2edc2f7
+```
+
+**Root** (level 3):
+
+```
+SHA-256(23c83c...edc2f7 ‖ 092c79...f7431d) → 7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e
+```
+
 ### Inclusion Proofs
 
 A Merkle inclusion proof demonstrates that a specific content ID is part of the committed set without revealing the full set. The proof consists of sibling hashes along the path from leaf to root, plus a direction (left/right) for each step.
+
+### Worked Example: Inclusion Proof for "charlie"
+
+Starting from the leaf hash of "charlie" (`36ef58...`), walk to the root using sibling hashes:
+
+```
+Step 1: charlie (index 2) paired with delta (index 3)
+        sibling: 4f4a9410...045398 (delta leaf)  position: right
+        → SHA-256(charlie ‖ delta) → 6b55e77b...f7dd44
+
+Step 2: charlie‖delta paired with alpha‖bravo
+        sibling: 90d39555...a9b4f3 (alpha‖bravo) position: left
+        → SHA-256(alpha‖bravo ‖ charlie‖delta) → 23c83cb8...edc2f7
+
+Step 3: L2-left paired with echo (promoted)
+        sibling: 092c79e8...f7431d (echo leaf)   position: right
+        → SHA-256(L2-left ‖ echo) → 7e80d478...fda28e ✓ matches root
+```
+
+Proof path (from [`examples/merkle-tree.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/merkle-tree.json)):
+
+```json
+[
+  {
+    "hash": "4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398",
+    "position": "right"
+  },
+  {
+    "hash": "90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3",
+    "position": "left"
+  },
+  {
+    "hash": "092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d",
+    "position": "right"
+  }
+]
+```
 
 ---
 
@@ -817,7 +921,7 @@ Given the artifacts above, verify:
 
 ## Source and Verification
 
-All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. 235 checks across 5 languages.
+All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. 237 checks across 5 languages.
 
 - [`crypto/ed25519`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/ed25519.ts) — `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature`
 - [`crypto/jws`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jws.ts) — `createJws`, `verifyJws`, `decodeJwsUnsafe`
@@ -843,7 +947,7 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 | Language   | Tests | Source                                                                                               |
 | ---------- | ----- | ---------------------------------------------------------------------------------------------------- |
-| TypeScript | 149   | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)                 |
+| TypeScript | 151   | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)                 |
 | Python     | 48    | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) |
 | Go         | 13    | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go)         |
 | Rust       | 13    | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust)     |
