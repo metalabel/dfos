@@ -364,7 +364,10 @@ img {
   margin-bottom: 2.5rem;
 }
 
-.faq-item h3 {
+.faq-item h2 {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
   margin-top: 0;
   margin-bottom: 0.5rem;
 }

@@ -89,7 +89,7 @@ const faqSchema = {
       {
         faqs.map((faq) => (
           <section class="faq-item">
-            <h3>{faq.question}</h3>
+            <h2>{faq.question}</h2>
             <p set:html={faq.answer} />
           </section>
         ))

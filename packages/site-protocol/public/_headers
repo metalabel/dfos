@@ -16,8 +16,22 @@
 /*.txt
   Cache-Control: public, max-age=3600, must-revalidate
 
-/*.html
+/*.xml
   Cache-Control: public, max-age=3600, must-revalidate
 
-/*.xml
+# HTML pages — Cloudflare Pages serves clean URLs (/overview/, /faq/, etc.)
+# so /*.html won't match. Specific route patterns cover the actual pages.
+/
+  Cache-Control: public, max-age=3600, must-revalidate
+/overview/
+  Cache-Control: public, max-age=3600, must-revalidate
+/faq/
+  Cache-Control: public, max-age=3600, must-revalidate
+/spec/
+  Cache-Control: public, max-age=3600, must-revalidate
+/did-method/
+  Cache-Control: public, max-age=3600, must-revalidate
+/content-model/
+  Cache-Control: public, max-age=3600, must-revalidate
+/poster/
   Cache-Control: public, max-age=3600, must-revalidate
