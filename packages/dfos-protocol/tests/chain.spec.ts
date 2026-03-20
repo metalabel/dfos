@@ -510,7 +510,9 @@ describe('content chain', () => {
     const op: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: docCID,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -541,7 +543,9 @@ describe('content chain', () => {
     const createOp: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: doc1,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -554,8 +558,10 @@ describe('content chain', () => {
     const updateOp: ContentOperation = {
       version: 1,
       type: 'update',
+      did: id.did,
       previousOperationCID: createCID,
       documentCID: doc2,
+      baseDocumentCID: null,
       createdAt: ts(1),
       note: 'edited title',
     };
@@ -583,7 +589,9 @@ describe('content chain', () => {
     const createOp: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: doc1,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -596,8 +604,10 @@ describe('content chain', () => {
     const clearOp: ContentOperation = {
       version: 1,
       type: 'update',
+      did: id.did,
       previousOperationCID: createCID,
       documentCID: null, // clear
+      baseDocumentCID: null,
       createdAt: ts(1),
       note: 'cleared content',
     };
@@ -623,7 +633,9 @@ describe('content chain', () => {
     const createOp: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: doc1,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -636,6 +648,7 @@ describe('content chain', () => {
     const deleteOp: ContentOperation = {
       version: 1,
       type: 'delete',
+      did: id.did,
       previousOperationCID: createCID,
       createdAt: ts(1),
       note: 'removing content',
@@ -666,7 +679,15 @@ describe('content chain', () => {
 
     // create
     const r1 = await signContentOperation({
-      operation: { version: 1, type: 'create', documentCID: doc1, createdAt: ts(0), note: null },
+      operation: {
+        version: 1,
+        type: 'create',
+        did: id.did,
+        documentCID: doc1,
+        baseDocumentCID: null,
+        createdAt: ts(0),
+        note: null,
+      },
       signer: id.signer,
       kid: id.kid,
     });
@@ -677,8 +698,10 @@ describe('content chain', () => {
       operation: {
         version: 1,
         type: 'update',
+        did: id.did,
         previousOperationCID: r1.operationCID,
         documentCID: doc2,
+        baseDocumentCID: null,
         createdAt: ts(1),
         note: null,
       },
@@ -692,8 +715,10 @@ describe('content chain', () => {
       operation: {
         version: 1,
         type: 'update',
+        did: id.did,
         previousOperationCID: r2.operationCID,
         documentCID: doc3,
+        baseDocumentCID: null,
         createdAt: ts(2),
         note: 'final',
       },
@@ -707,6 +732,7 @@ describe('content chain', () => {
       operation: {
         version: 1,
         type: 'delete',
+        did: id.did,
         previousOperationCID: r3.operationCID,
         createdAt: ts(3),
         note: 'removing',
@@ -735,7 +761,9 @@ describe('content chain', () => {
     const op: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: docCID,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -758,7 +786,9 @@ describe('content chain', () => {
     const op: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: docCID,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -782,7 +812,9 @@ describe('content chain', () => {
     const op: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: docCID,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -801,7 +833,9 @@ describe('content chain', () => {
     const op: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: docCID,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -824,7 +858,9 @@ describe('content chain', () => {
     const op: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: docCID,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -860,8 +896,10 @@ describe('content chain', () => {
     const op: ContentOperation = {
       version: 1,
       type: 'update',
+      did: id.did,
       previousOperationCID: 'bafyreifake',
       documentCID: 'bafyreifake',
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -882,7 +920,9 @@ describe('content chain', () => {
     const createOp: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: doc,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -895,8 +935,10 @@ describe('content chain', () => {
     const updateOp: ContentOperation = {
       version: 1,
       type: 'update',
+      did: id.did,
       previousOperationCID: 'wrong-cid',
       documentCID: doc,
+      baseDocumentCID: null,
       createdAt: ts(1),
       note: null,
     };
@@ -916,7 +958,15 @@ describe('content chain', () => {
     const doc = await makeDocCID({ test: true });
 
     const r1 = await signContentOperation({
-      operation: { version: 1, type: 'create', documentCID: doc, createdAt: ts(0), note: null },
+      operation: {
+        version: 1,
+        type: 'create',
+        did: id.did,
+        documentCID: doc,
+        baseDocumentCID: null,
+        createdAt: ts(0),
+        note: null,
+      },
       signer: id.signer,
       kid: id.kid,
     });
@@ -924,6 +974,7 @@ describe('content chain', () => {
       operation: {
         version: 1,
         type: 'delete',
+        did: id.did,
         previousOperationCID: r1.operationCID,
         createdAt: ts(1),
         note: null,
@@ -935,8 +986,10 @@ describe('content chain', () => {
       operation: {
         version: 1,
         type: 'update',
+        did: id.did,
         previousOperationCID: r2.operationCID,
         documentCID: doc,
+        baseDocumentCID: null,
         createdAt: ts(2),
         note: null,
       },
@@ -960,7 +1013,9 @@ describe('content chain', () => {
     const op: ContentOperation = {
       version: 1,
       type: 'create',
+      did: id.did,
       documentCID: doc,
+      baseDocumentCID: null,
       createdAt: ts(),
       note: null,
     };
@@ -984,7 +1039,15 @@ describe('content chain', () => {
     const doc = await makeDocCID({ test: true });
 
     const r1 = await signContentOperation({
-      operation: { version: 1, type: 'create', documentCID: doc, createdAt: ts(0), note: null },
+      operation: {
+        version: 1,
+        type: 'create',
+        did: id.did,
+        documentCID: doc,
+        baseDocumentCID: null,
+        createdAt: ts(0),
+        note: null,
+      },
       signer: id.signer,
       kid: id.kid,
     });
@@ -992,8 +1055,10 @@ describe('content chain', () => {
       operation: {
         version: 1,
         type: 'update',
+        did: id.did,
         previousOperationCID: r1.operationCID,
         documentCID: doc,
+        baseDocumentCID: null,
         createdAt: ts(-5), // in the past
         note: null,
       },
@@ -1007,6 +1072,36 @@ describe('content chain', () => {
         resolveKey: id.resolveKey,
       }),
     ).rejects.toThrow(/createdAt/i);
+  });
+
+  it('should reject kid DID that does not match payload did', async () => {
+    const author = makeIdentity();
+    const other = makeIdentity();
+    const doc = await makeDocCID({ test: true });
+
+    const op: ContentOperation = {
+      version: 1,
+      type: 'create',
+      did: author.did,
+      documentCID: doc,
+      baseDocumentCID: null,
+      createdAt: ts(),
+      note: null,
+    };
+
+    // sign with other's kid (DID mismatch with payload.did)
+    const { jwsToken } = await signContentOperation({
+      operation: op,
+      signer: other.signer,
+      kid: other.kid,
+    });
+
+    await expect(
+      verifyContentChain({
+        log: [jwsToken],
+        resolveKey: other.resolveKey,
+      }),
+    ).rejects.toThrow(/kid DID does not match/i);
   });
 });
 
@@ -1058,12 +1153,27 @@ describe('operation field limits', () => {
     expect(result.success).toBe(false);
   });
 
+  it('should reject did exceeding 256 chars', () => {
+    const result = ContentOperationSchema.safeParse({
+      version: 1,
+      type: 'create',
+      did: 'did:dfos:' + 'x'.repeat(248),
+      documentCID: 'bafyreivalid',
+      baseDocumentCID: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      note: null,
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('should reject CID strings exceeding 256 chars', () => {
     const result = ContentOperationSchema.safeParse({
       version: 1,
       type: 'update',
+      did: 'did:dfos:test',
       previousOperationCID: 'b'.repeat(257),
       documentCID: 'bafyreivalid',
+      baseDocumentCID: null,
       createdAt: '2026-01-01T00:00:00.000Z',
       note: null,
     });
@@ -1074,7 +1184,9 @@ describe('operation field limits', () => {
     const result = ContentOperationSchema.safeParse({
       version: 1,
       type: 'create',
+      did: 'did:dfos:test',
       documentCID: 'bafyreivalid',
+      baseDocumentCID: null,
       createdAt: '2026-01-01T00:00:00.000Z',
       note: 'x'.repeat(257),
     });

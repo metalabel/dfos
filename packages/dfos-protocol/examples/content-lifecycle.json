@@ -2,8 +2,8 @@
   "description": "Content chain: create + update (with both documents)",
   "type": "content",
   "chain": [
-    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWE1ejd6eGtuYWU1ZHM3MmV1aWh1ZjJyZzNpeGw2dDRmYnpqZWZoY29nZzNucXBweW9ncXUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZG9jdW1lbnRDSUQiOiJiYWZ5cmVpZnB2d3Vhcm1sNjJzZm9nZHBpMnZsbHR2ZzJldjZvNHh0dzc0emZ1ZDdjcGtnNzQyNnpuZSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.t_DDkJ_TmNekIGUFO22G-W78QoE4XTg9LKQ4gzAQHaK3B6491Tir9b-wtp-hcwmENu2Hqnieqv5ASiqfFrEbDw",
-    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWJiNGxzdnFtejRqNzZyc3Zoa3F3M3YyYjR2cDIzdDdkaW1tNnZsNWc1d2xuaW52a2VteHEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYTV6N3p4a25hZTVkczcyZXVpaHVmMnJnM2l4bDZ0NGZiemplZmhjb2dnM25xcHB5b2dxdSIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV1bzI2emZtanh3cG13NWprNmJxenFodml2eGNiY2tneHR5ZXVjN3lwZjNwNHNpaGdxNHEiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoiLCJub3RlIjoiZWRpdGVkIHRpdGxlIGFuZCBib2R5In0.v2BnXflq3lAiDqCpCuAoXUURY1scOGb9AMHHfCMxj1bD0GJOgdV_klv7KfqDLlSfF3Sn6CK1RDeLniF_UTKXAQ"
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWFlZGhqcTY0YWFqcHdvY2lhaGw1dzM3ajZ1b3hyNW1vam9xNWRuYWg2ZnB2eHI1ZDRseHUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWh6d3VvdXBmZzNkeGlwNnhtZ3pteHN5d3lpaTJqZW94eHpiZ3gzenhtMmluN2tub2kzZzQiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.Rv6vlz5MfrwqDUrSVIGs4ZfeBbkQUSBcXhxwZ6hfudSr5MxhYl08hTqLDOA0W1NMjN0Hs0IW9jXTwLwP1dMDBg",
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWg2ZTVjYmppdHBvemh6aGdtZmt0bWlvaG14eW4zdWN3aHFkM21qaXhpenZ3bWxodjdobTQifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFlZGhqcTY0YWFqcHdvY2lhaGw1dzM3ajZ1b3hyNW1vam9xNWRuYWg2ZnB2eHI1ZDRseHUiLCJkb2N1bWVudENJRCI6ImJhZnlyZWlkaDdlMzZjdnd5M3V3NXlwaXRjcWs3dW9rdGJra2tqN2U2aHhoa3k0bzc1cnhuN2t4aWx1IiwiYmFzZURvY3VtZW50Q0lEIjoiYmFmeXJlaWh6d3VvdXBmZzNkeGlwNnhtZ3pteHN5d3lpaTJqZW94eHpiZ3gzenhtMmluN2tub2kzZzQiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoiLCJub3RlIjoiZWRpdGVkIHRpdGxlIGFuZCBib2R5In0.46H3WBKigCzUrIOvS2ekYJFdK1OeLhqvcZTj8FBqFNKO1ivs3oC0ui_hzTKkKO-8uevMjf9-k0GOjyw2u16PDA"
   ],
   "signerPublicKey": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK",
   "documents": [
@@ -12,7 +12,8 @@
         "$schema": "https://schemas.dfos.com/post/v1",
         "format": "short-post",
         "title": "Hello World",
-        "body": "First post on the protocol."
+        "body": "First post on the protocol.",
+        "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
       },
       "baseDocumentCID": null,
       "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6",
@@ -23,17 +24,18 @@
         "$schema": "https://schemas.dfos.com/post/v1",
         "format": "short-post",
         "title": "Hello World (edited)",
-        "body": "Updated content."
+        "body": "Updated content.",
+        "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
       },
-      "baseDocumentCID": "bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne",
+      "baseDocumentCID": "bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4",
       "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6",
       "createdAt": "2026-03-07T00:03:00.000Z"
     }
   ],
   "expected": {
-    "contentId": "67t27rzc83v7c22n9t6z7c",
+    "contentId": "a82z92a3hndk6c97thcrn8",
     "isDeleted": false,
-    "currentDocumentCID": "bafyreieuo26zfmjxwpmw5jk6bqzqhvivxcbckgxtyeuc7ypf3p4sihgq4q",
+    "currentDocumentCID": "bafyreidh7e36cvwy3uw5ypitcqk7uoktbkkkj7e6hxhky4o75rxn7kxilu",
     "length": 2
   }
 }

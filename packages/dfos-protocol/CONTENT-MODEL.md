@@ -1,8 +1,8 @@
 # DFOS Content Model
 
-Standard content schemas for documents committed to DFOS content chains. JSON Schema (draft 2020-12) definitions for what goes inside the document envelope's `content` field.
+Standard content schemas for documents committed to DFOS content chains. JSON Schema (draft 2020-12) definitions for content objects committed directly by CID.
 
-These schemas are conventions, not protocol requirements. The DFOS Protocol commits to documents by CID without inspecting their contents — any valid JSON object with a `$schema` field can be committed. The content model defines the vocabulary that DFOS uses internally, provided as a starting point for applications built on the protocol.
+These schemas are conventions, not protocol requirements. The DFOS Protocol commits to content objects by CID without inspecting their contents — any valid JSON object with a `$schema` field can be committed. The content model defines the vocabulary that DFOS uses internally, provided as a starting point for applications built on the protocol.
 
 [Protocol Specification](https://protocol.dfos.com/spec) · [schemas.dfos.com](https://schemas.dfos.com) · [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/schemas)
 
@@ -10,7 +10,13 @@ These schemas are conventions, not protocol requirements. The DFOS Protocol comm
 
 ## Schema Convention
 
-Every document committed to a content chain is wrapped in a [document envelope](https://protocol.dfos.com/spec#document-envelope). The envelope's `content` field holds the application-defined payload. The protocol requires one thing of this payload: it must include a `$schema` property identifying its content type.
+Content objects are committed directly to a content chain by CID. The CID is derived from the canonical dag-cbor encoding of the content object itself:
+
+```
+documentCID = CID(dagCborCanonicalEncode(contentObject))
+```
+
+The protocol requires one thing of the content object: it must include a `$schema` property identifying its content type.
 
 ```json
 {
@@ -20,7 +26,7 @@ Every document committed to a content chain is wrapped in a [document envelope](
 }
 ```
 
-Because `$schema` is part of the document, it is behind the `documentCID` — cryptographically committed in the content chain. Any verifier can resolve the document, read `$schema`, and validate against the schema. Documents are self-describing.
+Because `$schema` is part of the content object, it is behind the `documentCID` — cryptographically committed in the content chain. Any verifier can resolve the document, read `$schema`, and validate against the schema. Documents are self-describing.
 
 ---
 
@@ -42,28 +48,63 @@ Schema files live in [`schemas/`](https://github.com/metalabel/dfos/tree/main/pa
 
 The primary content type. Covers short posts, long-form posts, comments, and replies via the `format` discriminator.
 
-| Field         | Type     | Required | Description                                                                        |
-| ------------- | -------- | -------- | ---------------------------------------------------------------------------------- |
-| `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                               |
-| `format`      | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — immutable, set at creation |
-| `title`       | string   | no       | Post title (typically for long-post format)                                        |
-| `body`        | string   | no       | Post body content                                                                  |
-| `cover`       | media    | no       | Cover image                                                                        |
-| `attachments` | media[]  | no       | Attached media objects                                                             |
-| `topics`      | string[] | no       | Topic names (stored as names for portability)                                      |
+| Field          | Type     | Required | Description                                                                        |
+| -------------- | -------- | -------- | ---------------------------------------------------------------------------------- |
+| `$schema`      | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                               |
+| `format`       | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — immutable, set at creation |
+| `title`        | string   | no       | Post title (typically for long-post format)                                        |
+| `body`         | string   | no       | Post body content                                                                  |
+| `cover`        | media    | no       | Cover image                                                                        |
+| `attachments`  | media[]  | no       | Attached media objects                                                             |
+| `topics`       | string[] | no       | Topic names (stored as names for portability)                                      |
+| `createdByDID` | string   | no       | DID of the content author — distinct from the chain operation signer               |
+
+`createdByDID` answers "who authored this content", which may differ from the signer of the chain operation (the `kid` DID). For example, an agent acting on behalf of a user commits the operation, but `createdByDID` records the human author.
 
 ### Profile (`https://schemas.dfos.com/profile/v1`)
 
 The displayable identity for any agent, person, group, or space.
 
-| Field         | Type   | Required | Description                             |
-| ------------- | ------ | -------- | --------------------------------------- |
-| `$schema`     | string | yes      | `"https://schemas.dfos.com/profile/v1"` |
-| `name`        | string | no       | Display name                            |
-| `description` | string | no       | Short bio or description                |
-| `avatar`      | media  | no       | Avatar image                            |
-| `banner`      | media  | no       | Banner image                            |
-| `background`  | media  | no       | Background image                        |
+| Field          | Type   | Required | Description                             |
+| -------------- | ------ | -------- | --------------------------------------- |
+| `$schema`      | string | yes      | `"https://schemas.dfos.com/profile/v1"` |
+| `name`         | string | no       | Display name                            |
+| `description`  | string | no       | Short bio or description                |
+| `avatar`       | media  | no       | Avatar image                            |
+| `banner`       | media  | no       | Banner image                            |
+| `background`   | media  | no       | Background image                        |
+| `createdByDID` | string | no       | DID of the identity subject             |
+
+### Manifest (`https://schemas.dfos.com/manifest/v1`)
+
+A semantic index mapping path-like labels to protocol object references. The navigation layer for a DID's content.
+
+| Field     | Type   | Required | Description                                         |
+| --------- | ------ | -------- | --------------------------------------------------- |
+| `$schema` | string | yes      | `"https://schemas.dfos.com/manifest/v1"`            |
+| `entries` | object | yes      | Map of path-like keys to protocol object references |
+
+Entry keys: lowercase alphanumeric with dots, underscores, hyphens, forward slashes. 2–128 chars. Must start and end with alphanumeric. Examples: `profile`, `posts`, `drafts/post-1`, `v1.0/release-notes`.
+
+Entry values are protocol object references, self-describing by format:
+
+- **contentId** (22-char bare hash) — references a living content chain
+- **DID** (`did:dfos:...`) — references an identity
+- **CID** (`bafyrei...`) — references a specific immutable document snapshot
+
+```json
+{
+  "$schema": "https://schemas.dfos.com/manifest/v1",
+  "entries": {
+    "profile": "67t27rzc83v7c22n9t6z7c",
+    "posts": "a4b8c2d3e5f6g7h8i9j0k1",
+    "dark-publisher": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+    "pinned-charter": "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy"
+  }
+}
+```
+
+Manifests are content chains — same signing, same verification, same CIDs. A manifest's contentId appears in the DID's content set like any other chain. The semantic index (the document) is dark forest content — requires authorization to read. The operation chain (proof substrate) is public.
 
 ### Media Object
 
@@ -88,7 +129,7 @@ A content chain is a signed append-only log. The protocol enforces ordering, aut
 
 The chain represents a single evolving thing — a profile, a post, a policy document. Each operation is a **revision**. The resolved state is the latest `documentCID`. History is audit trail. The content _is_ the current version.
 
-This is the default interpretation for the standard schemas. The document envelope's `baseDocumentCID` field supports edit lineage — each new document version can point back to the one it replaced.
+This is the default interpretation for the standard schemas. Edit lineage is tracked via `baseDocumentCID` on the content operation payload — each new operation can reference the document CID it replaced.
 
 ### Stream
 

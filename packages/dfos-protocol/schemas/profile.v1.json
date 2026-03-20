@@ -28,6 +28,11 @@
     "background": {
       "$ref": "#/$defs/media",
       "description": "Background image."
+    },
+    "createdByDID": {
+      "type": "string",
+      "pattern": "^did:",
+      "description": "DID of the identity that authored this content. Optional — omit when the signer IS the author."
     }
   },
   "additionalProperties": false,

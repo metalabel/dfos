@@ -35,9 +35,6 @@ importers:
       '@noble/hashes':
         specifier: ^2.0.1
         version: 2.0.1
-      hono:
-        specifier: ^4.12.3
-        version: 4.12.3
       multiformats:
         specifier: ^13.4.2
         version: 13.4.2

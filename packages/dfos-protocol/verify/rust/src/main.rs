@@ -26,7 +26,7 @@ mod tests {
 
     const ROTATION_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNpZCI6ImJhZnlyZWljeW00Y3lpZWRubGQ3M3NtYngzMnN6YWVpN3hkdWxxbjRnM3N0ZTVlMncydWxhanIzb3FtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.MScuoBlgOK3j5QX9tFcw1ou0o4LgJziGJEsZ5pvqiBr1SagAyAv5h-wajQhtg8IP7dLlM0U4leW2iRra945cDg";
 
-    const CONTENT_CREATE_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWE1ejd6eGtuYWU1ZHM3MmV1aWh1ZjJyZzNpeGw2dDRmYnpqZWZoY29nZzNucXBweW9ncXUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZG9jdW1lbnRDSUQiOiJiYWZ5cmVpZnB2d3Vhcm1sNjJzZm9nZHBpMnZsbHR2ZzJldjZvNHh0dzc0emZ1ZDdjcGtnNzQyNnpuZSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.t_DDkJ_TmNekIGUFO22G-W78QoE4XTg9LKQ4gzAQHaK3B6491Tir9b-wtp-hcwmENu2Hqnieqv5ASiqfFrEbDw";
+    const CONTENT_CREATE_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWFlZGhqcTY0YWFqcHdvY2lhaGw1dzM3ajZ1b3hyNW1vam9xNWRuYWg2ZnB2eHI1ZDRseHUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWh6d3VvdXBmZzNkeGlwNnhtZ3pteHN5d3lpaTJqZW94eHpiZ3gzenhtMmluN2tub2kzZzQiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.Rv6vlz5MfrwqDUrSVIGs4ZfeBbkQUSBcXhxwZ6hfudSr5MxhYl08hTqLDOA0W1NMjN0Hs0IW9jXTwLwP1dMDBg";
 
     const JWT_TOKEN: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.zhKeXJHHF7a1-MwF4QoUTRptCplAwh20-rLnuWGDFT6uJheN4E_SA5NhqvMNflLHxd7h97gdaVnMZGE67SXEBA";
 
@@ -268,7 +268,7 @@ mod tests {
         let expected_kid = format!("{}#key_ez9a874tckr3dv933d3ckd", EXPECTED_DID);
         assert_eq!(header["kid"], expected_kid, "wrong kid");
         assert_eq!(
-            header["cid"], "bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu",
+            header["cid"], "bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu",
             "wrong cid"
         );
         assert_eq!(payload["type"], "create", "wrong payload type");
@@ -284,5 +284,119 @@ mod tests {
         assert_eq!(payload["iss"], "dfos", "wrong iss");
         assert_eq!(payload["sub"], EXPECTED_DID, "wrong sub");
         assert_eq!(payload["aud"], "dfos-api", "wrong aud");
+    }
+
+    // =========================================================================
+    // Merkle tree, beacon, and countersignature tests
+    // =========================================================================
+
+    const EXPECTED_MERKLE_ROOT: &str =
+        "7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e";
+
+    const BEACON_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0._1RgZpMv63-M3ZUeTNX679xkAeX3TY0PJ0ImH7422cKA7I88Hf8bBVQMVVhP3oNdvX7i7Q4se5EP3kk5aEuxDQ";
+
+    const EXPECTED_BEACON_CID: &str =
+        "bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu";
+
+    const BEACON_WITNESS_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0.awA8ctmLHjJCHZcH0lav7HpadkIoGiG2WR-pCf-0XfPVi9dD8Z2at0E7iAnOUnVEc5VthBo-mMklSIJFK28IDw";
+
+    #[test]
+    fn test_merkle_tree() {
+        let mut ids = vec!["alpha", "bravo", "charlie", "delta", "echo"];
+        ids.sort();
+
+        let leaves: Vec<[u8; 32]> = ids.iter().map(|id| Sha256::digest(id.as_bytes()).into()).collect();
+
+        // verify leaf hash
+        assert_eq!(
+            hex::encode(leaves[0]),
+            "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8",
+            "alpha leaf mismatch"
+        );
+
+        // build tree bottom-up
+        let mut level: Vec<Vec<u8>> = leaves.iter().map(|l| l.to_vec()).collect();
+        while level.len() > 1 {
+            let mut next = Vec::new();
+            let mut i = 0;
+            while i < level.len() {
+                if i + 1 < level.len() {
+                    let mut combined = level[i].clone();
+                    combined.extend_from_slice(&level[i + 1]);
+                    let h: [u8; 32] = Sha256::digest(&combined).into();
+                    next.push(h.to_vec());
+                } else {
+                    next.push(level[i].clone());
+                }
+                i += 2;
+            }
+            level = next;
+        }
+
+        assert_eq!(
+            hex::encode(&level[0]),
+            EXPECTED_MERKLE_ROOT,
+            "merkle root mismatch"
+        );
+    }
+
+    #[test]
+    fn test_merkle_proof_verification() {
+        let proof_path = vec![
+            ("4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398", "right"),
+            ("90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3", "left"),
+            ("092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d", "right"),
+        ];
+
+        let leaf: [u8; 32] = Sha256::digest(b"charlie").into();
+        let mut current = leaf.to_vec();
+
+        for (hash_hex, position) in &proof_path {
+            let sibling = hex::decode(hash_hex).unwrap();
+            let combined = if *position == "left" {
+                [sibling.as_slice(), current.as_slice()].concat()
+            } else {
+                [current.as_slice(), sibling.as_slice()].concat()
+            };
+            let h: [u8; 32] = Sha256::digest(&combined).into();
+            current = h.to_vec();
+        }
+
+        assert_eq!(
+            hex::encode(&current),
+            EXPECTED_MERKLE_ROOT,
+            "merkle proof verification failed"
+        );
+    }
+
+    #[test]
+    fn test_beacon_jws_verification() {
+        let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
+        let (header, payload) = verify_jws(BEACON_JWS, &pub1);
+
+        assert_eq!(header["typ"], "did:dfos:beacon", "wrong typ");
+        let expected_kid = format!("{}#key_r9ev34fvc23z999veaaft8", EXPECTED_DID);
+        assert_eq!(header["kid"], expected_kid, "wrong kid");
+        assert_eq!(header["cid"], EXPECTED_BEACON_CID, "wrong cid");
+        assert_eq!(payload["type"], "beacon", "wrong payload type");
+        assert_eq!(payload["merkleRoot"], EXPECTED_MERKLE_ROOT, "wrong merkleRoot");
+    }
+
+    #[test]
+    fn test_beacon_countersignature_verification() {
+        let (_, pub2) = derive_public_key(b"dfos-protocol-reference-key-2");
+        let (header, payload) = verify_jws(BEACON_WITNESS_JWS, &pub2);
+
+        assert_eq!(header["typ"], "did:dfos:beacon", "wrong typ");
+        let expected_kid = format!("{}#key_ez9a874tckr3dv933d3ckd", EXPECTED_DID);
+        assert_eq!(header["kid"], expected_kid, "wrong kid");
+        assert_eq!(
+            header["cid"], EXPECTED_BEACON_CID,
+            "countersignature CID should match original beacon CID"
+        );
+        assert_eq!(
+            payload["merkleRoot"], EXPECTED_MERKLE_ROOT,
+            "countersignature payload should match original"
+        );
     }
 }

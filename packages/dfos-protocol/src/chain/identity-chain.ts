@@ -85,6 +85,11 @@ export const verifyIdentityChain = async (input: {
     }
     const op = result.data;
 
+    // verify typ
+    if (decoded.header.typ !== 'did:dfos:identity-op') {
+      throw new Error(`log[${idx}]: invalid typ: ${decoded.header.typ}`);
+    }
+
     // terminal state checks
     if (state.isDeleted) throw new Error(`log[${idx}]: cannot modify a deleted identity`);
 

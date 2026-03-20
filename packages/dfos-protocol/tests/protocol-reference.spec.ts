@@ -219,17 +219,13 @@ describe('protocol reference artifacts', () => {
     const signer2 = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair2.privateKey);
     const kid2 = `${identity2.did}#${keyId2}`;
 
-    // Create a document (application layer — protocol treats as opaque)
+    // Create a document (application layer — flat content object, no envelope)
     const document = {
-      content: {
-        $schema: 'https://schemas.dfos.com/post/v1',
-        format: 'short-post',
-        title: 'Hello World',
-        body: 'First post on the protocol.',
-      },
-      baseDocumentCID: null,
+      $schema: 'https://schemas.dfos.com/post/v1',
+      format: 'short-post',
+      title: 'Hello World',
+      body: 'First post on the protocol.',
       createdByDID: identity2.did,
-      createdAt: '2026-03-07T00:02:00.000Z',
     };
 
     const docBlock = await dagCborCanonicalEncode(document);
@@ -243,7 +239,9 @@ describe('protocol reference artifacts', () => {
     const createContentOp: ContentOperation = {
       version: 1,
       type: 'create',
+      did: identity2.did,
       documentCID,
+      baseDocumentCID: null,
       createdAt: '2026-03-07T00:02:00.000Z',
       note: null,
     };
@@ -272,15 +270,11 @@ describe('protocol reference artifacts', () => {
     DIV('STEP 6: Content Chain — Update');
 
     const document2 = {
-      content: {
-        $schema: 'https://schemas.dfos.com/post/v1',
-        format: 'short-post',
-        title: 'Hello World (edited)',
-        body: 'Updated content.',
-      },
-      baseDocumentCID: documentCID,
+      $schema: 'https://schemas.dfos.com/post/v1',
+      format: 'short-post',
+      title: 'Hello World (edited)',
+      body: 'Updated content.',
       createdByDID: identity2.did,
-      createdAt: '2026-03-07T00:03:00.000Z',
     };
     const doc2Block = await dagCborCanonicalEncode(document2);
     const documentCID2 = doc2Block.cid.toString();
@@ -288,8 +282,10 @@ describe('protocol reference artifacts', () => {
     const updateContentOp: ContentOperation = {
       version: 1,
       type: 'update',
+      did: identity2.did,
       previousOperationCID: contentCreateCID,
       documentCID: documentCID2,
+      baseDocumentCID: documentCID,
       createdAt: '2026-03-07T00:03:00.000Z',
       note: 'edited title and body',
     };

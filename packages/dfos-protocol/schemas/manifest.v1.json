@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dfos.com/manifest/v1",
+  "title": "Manifest",
+  "description": "A manifest — a named map of protocol object references for semantic navigation. Keys are path-like labels. Values are protocol references: content chain identifiers (22-char bare hash), DIDs (did:dfos:...), or CIDs (bafyrei...). The document layer of the dark forest. Discovery is social or out-of-band.",
+  "type": "object",
+  "required": ["$schema", "entries"],
+  "properties": {
+    "$schema": {
+      "const": "https://schemas.dfos.com/manifest/v1"
+    },
+    "entries": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9._/-]*[a-z0-9]$",
+        "minLength": 2,
+        "maxLength": 128
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9:._/-]*$",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "description": "Named entries mapping path-like keys to protocol object references (contentId, DID, or CID)."
+    }
+  },
+  "additionalProperties": false
+}

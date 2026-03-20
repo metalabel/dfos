@@ -101,6 +101,11 @@ export const verifyContentChain = async (input: {
     }
     const op = result.data;
 
+    // verify typ
+    if (decoded.header.typ !== 'did:dfos:content-op') {
+      throw new Error(`log[${idx}]: invalid typ: ${decoded.header.typ}`);
+    }
+
     // terminal state check
     if (state.isDeleted) throw new Error(`log[${idx}]: cannot extend a deleted chain`);
 
@@ -123,8 +128,16 @@ export const verifyContentChain = async (input: {
       }
     }
 
-    // verify JWS signature via key resolver
+    // verify kid DID matches payload did
     const kid = decoded.header.kid;
+    const hashIdx = kid.indexOf('#');
+    if (hashIdx < 0) throw new Error(`log[${idx}]: kid must be a DID URL`);
+    const kidDid = kid.substring(0, hashIdx);
+    if (kidDid !== op.did) {
+      throw new Error(`log[${idx}]: kid DID does not match operation did`);
+    }
+
+    // verify JWS signature via key resolver
     const publicKey = await input.resolveKey(kid);
     try {
       verifyJws({ token: jwsToken, publicKey });

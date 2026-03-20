@@ -20,14 +20,16 @@ The protocol is not coupled to the DFOS platform. Any system implementing the sa
 
 ## Protocol Overview
 
-The DFOS protocol has two layers:
+The DFOS protocol has four components:
 
-| Layer                 | Concern                                                                      |
+| Component             | Concern                                                                      |
 | --------------------- | ---------------------------------------------------------------------------- |
 | **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links |
-| **Document envelope** | Standard wrapper: `content` + `baseDocumentCID` + `createdByDID` + timestamp |
+| **Beacons**           | Signed merkle root announcements — periodic commitment over content sets     |
+| **Countersignatures** | Witness attestation — third-party signatures over existing chain operations  |
+| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for beacon roots    |
 
-The crypto core is the trust boundary — everything below it is cryptographically verified. The document envelope provides structural metadata (attribution, edit lineage, timestamps). What goes inside the envelope's `content` field is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
+The crypto core is the trust boundary — everything below it is cryptographically verified. Documents are flat content objects, content-addressed directly: `documentCID = CID(dagCborCanonicalEncode(contentObject))`. What goes inside the content object is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
 
 ### Crypto Core: Two Chain Types
 
@@ -39,45 +41,19 @@ The crypto core is the trust boundary — everything below it is cryptographical
 | JWS typ        | `did:dfos:identity-op`     | `did:dfos:content-op`            |
 | Self-sovereign | Yes (signs own operations) | No (signed by external identity) |
 
-Both chains are signed linked lists of state commitments. Identity chains embed their state (key sets). Content chains reference their state via `documentCID` — a content-addressed pointer to a document envelope.
-
-### Document Envelope
-
-Every document committed to by a content chain uses a standard envelope, defined by JSON Schema at [`schemas/document-envelope.v1.json`](schemas/document-envelope.v1.json) (`https://schemas.dfos.com/document-envelope/v1`):
-
-```json
-{
-  "content": { "$schema": "https://schemas.dfos.com/post/v1", ... },
-  "baseDocumentCID": null,
-  "createdByDID": "did:dfos:...",
-  "createdAt": "2026-03-07T00:02:00.000Z"
-}
-```
-
-| Field             | Type         | Description                                                                 |
-| ----------------- | ------------ | --------------------------------------------------------------------------- |
-| `content`         | object       | Application-defined content — must include `$schema` URI, opaque to chains  |
-| `baseDocumentCID` | string\|null | Optional CID of a prior document version. Semantics are application-defined |
-| `createdByDID`    | string       | DID of the identity that created this document version                      |
-| `createdAt`       | ISO 8601     | When this document version was created                                      |
-
-The `documentCID` in a content chain operation is `CID(dagCborEncode(envelope))`. The envelope provides attribution at the protocol level. The `content` object must include a `$schema` property identifying its content type — this makes every document self-describing and its schema cryptographically committed via the CID.
+Both chains are signed linked lists of state commitments. Identity chains embed their state (key sets). Content chains reference their state via `documentCID` — a content-addressed pointer to a flat content object.
 
 ### Addressing
 
-Three canonical representations:
+Three addressing modes, self-describing by format:
 
-| Thing                 | Form                       | Example                           |
-| --------------------- | -------------------------- | --------------------------------- |
-| Operation or document | CID (dag-cbor + SHA-256)   | See below                         |
-| Content chain         | `<hash>` (bare, no prefix) | `67t27rzc83v7c22n9t6z7c`          |
-| Identity chain        | `did:dfos:<hash>`          | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
+| Thing                 | Form                     | Example                           |
+| --------------------- | ------------------------ | --------------------------------- |
+| Operation or document | CID (dag-cbor + SHA-256) | `bafyrei...` (base32lower)        |
+| Content chain         | contentId (22-char hash) | `a82z92a3hndk6c97thcrn8`          |
+| Identity chain        | DID                      | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
 
-Example CID:
-
-```
-bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
-```
+CIDs are specific immutable artifacts — a pointer to an exact operation or document. Content IDs are living content chain entities — the 22-char bare hash derived from the genesis CID. DIDs are living identity chain entities.
 
 Operations and documents are CIDs — standard IPLD content addresses. Content chains and identity chains use derived identifiers — `customAlpha(SHA-256(genesis CID bytes))`. Same derivation for both. Identity chains prepend `did:dfos:` (W3C DID spec). Content identifiers are bare — just the 22-char hash, no prefix.
 
@@ -118,10 +94,13 @@ Content chain verification requires a **valid EdDSA signature** and delegates ke
 
 Identity chains are self-sovereign — they define their own valid signers via `controllerKeys`. Content chains are externally signed — a content chain with operations signed by multiple different identities is valid at the protocol level, as long as each signature verifies against the resolved key.
 
+**Signer-payload consistency**: The `kid` DID in the JWS header MUST match the `did` field in the content operation payload. This enables discrimination between author operations and countersignatures — if the kid DID differs from the payload `did`, it is a countersignature (witness attestation), not a chain operation.
+
 **What the protocol enforces:**
 
 - The EdDSA signature on each operation is valid against the key returned by `resolveKey(kid)`
 - Chain integrity (CID links, timestamp ordering, terminal state)
+- The `kid` DID matches the payload `did` for chain operations
 
 **What the protocol does NOT enforce (application concerns):**
 
@@ -140,7 +119,16 @@ Identity chains are self-sovereign — they define their own valid signers via `
 
 ### `typ` Header
 
-The JWS `typ` header (`did:dfos:identity-op`, `did:dfos:content-op`) aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions.
+The JWS `typ` header uses protocol-specific values (not IANA media types):
+
+| `typ` value            | Usage                     |
+| ---------------------- | ------------------------- |
+| `did:dfos:identity-op` | Identity chain operations |
+| `did:dfos:content-op`  | Content chain operations  |
+| `did:dfos:beacon`      | Beacon announcements      |
+| `JWT`                  | Device auth tokens        |
+
+These are non-standard per JOSE convention, documented intentionally. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions.
 
 ### Operation Field Limits
 
@@ -148,6 +136,7 @@ The protocol defines maximum sizes for all operation fields as abuse-prevention 
 
 | Field                                        | Max       | Rationale                              |
 | -------------------------------------------- | --------- | -------------------------------------- |
+| `did`                                        | 256 chars | ~8× typical `did:dfos:` (~31 chars)    |
 | `key.id`                                     | 64 chars  | ~3× typical key ID (`key_` + 22 chars) |
 | `key.publicKeyMultibase`                     | 128 chars | ~2× Ed25519 multikey (~50 chars)       |
 | `authKeys` / `assertKeys` / `controllerKeys` | 16 items  | Generous for key rotation              |
@@ -301,19 +290,24 @@ DID:    did:dfos:e3vvtck42d4eacdnzvtrn6
 ```typescript
 // Genesis — starts the content chain, commits initial document
 { version: 1, type: "create",
-  documentCID: string,                    // CID of document content
+  did: string,                           // author DID, committed to by CID
+  documentCID: string,                   // CID of flat content object
+  baseDocumentCID: string | null,        // edit lineage — CID of prior document version
   createdAt: string,
   note: string | null }
 
 // Content change (null documentCID = clear content)
 { version: 1, type: "update",
+  did: string,                           // author DID
   previousOperationCID: string,
   documentCID: string | null,
+  baseDocumentCID: string | null,
   createdAt: string,
   note: string | null }
 
 // Permanent destruction
 { version: 1, type: "delete",
+  did: string,                           // author DID
   previousOperationCID: string,
   createdAt: string,
   note: string | null }
@@ -392,6 +386,90 @@ Where `idEncode` is the 19-char alphabet encoding described above.
 
 ---
 
+## Beacons
+
+A beacon is a signed announcement of a merkle root — a periodic commitment over a set of content IDs. Beacons are floating signed artifacts, not chained. They provide a compact, verifiable snapshot of an identity's content set at a point in time.
+
+### Beacon Payload
+
+```json
+{
+  "version": 1,
+  "type": "beacon",
+  "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "merkleRoot": "a3f8b2c1d4e5f6071829304a5b6c7d8e9f0a1b2c3d4e5f6071829304a5b6c7d8",
+  "createdAt": "2026-03-07T00:04:00.000Z"
+}
+```
+
+| Field        | Type   | Description                                             |
+| ------------ | ------ | ------------------------------------------------------- |
+| `version`    | 1      | Protocol version                                        |
+| `type`       | string | Literal `"beacon"`                                      |
+| `did`        | string | DID of the identity publishing the beacon               |
+| `merkleRoot` | string | Hex-encoded SHA-256 root (64 chars, `/^[0-9a-f]{64}$/`) |
+| `createdAt`  | string | ISO 8601 timestamp                                      |
+
+### Beacon JWS Header
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:beacon",
+  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd",
+  "cid": "bafyrei..."
+}
+```
+
+### Beacon Semantics
+
+Beacons are not chained — there is no `previousOperationCID`. For a given DID, the latest beacon with a strictly-greater `createdAt` timestamp wins. Beacons replace, not accumulate.
+
+**Clock skew tolerance**: Implementations MUST reject beacons with a `createdAt` more than 5 minutes in the future relative to the verifier's clock. This prevents pre-dating attacks while accommodating reasonable clock drift.
+
+**merkleRoot**: A hex-encoded SHA-256 hash (64 characters). This is a commitment, not a CID — it uses raw SHA-256, not dag-cbor encoding. See the Merkle Tree section below for construction. An empty content set produces a `null` merkle root (no beacon needed).
+
+---
+
+## Merkle Trees
+
+Beacons commit to a set of content IDs via a pure SHA-256 binary Merkle tree. The tree has no dag-cbor dependency — it uses only SHA-256 over raw bytes.
+
+### Construction
+
+1. **Collect** all content IDs (22-char bare hashes) in the set
+2. **Sort** content IDs lexicographically (UTF-8 byte order)
+3. **Hash leaves**: for each content ID, `SHA-256(UTF-8(contentId))` → 32-byte leaf hash
+4. **Build tree**: recursively pair adjacent hashes. For each pair, `SHA-256(left || right)` → 32 bytes. If a level has an odd number of nodes, the last node is promoted to the next level unpaired.
+5. **Root**: the final 32-byte hash, hex-encoded to a 64-character string
+
+An empty set of content IDs produces a `null` root. A single content ID produces a root equal to `hex(SHA-256(UTF-8(contentId)))`.
+
+### Inclusion Proofs
+
+A Merkle inclusion proof demonstrates that a specific content ID is part of the committed set without revealing the full set. The proof consists of sibling hashes along the path from leaf to root, plus a direction (left/right) for each step.
+
+---
+
+## Countersignatures
+
+A countersignature is a witness attestation — a third-party identity signing the same CID-committed bytes as an existing chain operation. Countersignatures use the same JWS format and `typ` (`did:dfos:content-op`) as the original operation.
+
+### Discrimination Rule
+
+The protocol distinguishes author operations from countersignatures by comparing the `kid` DID in the JWS header to the `did` field in the operation payload:
+
+- **`kid` DID === payload `did`** → author operation (chain operation)
+- **`kid` DID !== payload `did`** → witness countersignature
+
+### Semantics
+
+A countersignature proves that a witness identity has seen and attested to a specific operation. The witness signs the exact same payload (same CID), but with their own key. The countersignature's JWS header will contain the witness's `kid` (their DID URL), while the payload's `did` field remains the original author's DID.
+
+Countersignatures are not part of the chain — they do not have `previousOperationCID` links and do not affect chain state. They are auxiliary attestations stored alongside chain operations.
+
+---
+
 ## Verification
 
 ### Identity Chain
@@ -414,9 +492,10 @@ Where `idEncode` is the 19-char alphabet encoding described above.
 2. First op must be `type: "create"`
 3. For each subsequent op: verify `previousOperationCID` matches, verify `createdAt` increasing
 4. Derive the operation CID via dag-cbor canonical encoding. Verify `header.cid` matches the derived CID.
-5. Resolve `kid` via external key resolver (caller provides)
-6. Verify EdDSA JWS signature
-7. Apply state change (set document, clear, or delete)
+5. Verify the `kid` DID matches the payload `did` field (mismatches indicate a countersignature, not a chain operation)
+6. Resolve `kid` via external key resolver (caller provides)
+7. Verify EdDSA JWS signature
+8. Apply state change (set document, clear, or delete)
 
 ---
 
@@ -497,7 +576,7 @@ JWS Signature (hex):
 JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.EDryDK1uvtix-17cHun9t6MacFIx2rMmMF1QLzfD5TFlSsOvMcue97pCgGn3CXeLVFtVxgpCoh0kGSXioKKzAw
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTF2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.EDryDK1uvtix-17cHun9t6MacFIx2rMmMF1QLzfD5TFlSsOvMcue97pCgGn3CXeLVFtVxgpCoh0kGSXioKKzAw
 ```
 
 Operation CID:
@@ -575,26 +654,22 @@ Post-rotation: DID unchanged (`did:dfos:e3vvtck42d4eacdnzvtrn6`), controller rot
 
 ### Content Chain: Document + Create
 
-Document (application layer):
+Document (flat content object):
 
 ```json
 {
-  "content": {
-    "$schema": "https://schemas.dfos.com/post/v1",
-    "format": "short-post",
-    "title": "Hello World",
-    "body": "First post on the protocol."
-  },
-  "baseDocumentCID": null,
-  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "createdAt": "2026-03-07T00:02:00.000Z"
+  "$schema": "https://schemas.dfos.com/post/v1",
+  "format": "short-post",
+  "title": "Hello World",
+  "body": "First post on the protocol.",
+  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
 }
 ```
 
 Document CID:
 
 ```
-bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne
+bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4
 ```
 
 Content Create JWS Header:
@@ -604,7 +679,7 @@ Content Create JWS Header:
   "alg": "EdDSA",
   "typ": "did:dfos:content-op",
   "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd",
-  "cid": "bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu"
+  "cid": "bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu"
 }
 ```
 
@@ -614,7 +689,9 @@ Content Create Payload:
 {
   "version": 1,
   "type": "create",
-  "documentCID": "bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne",
+  "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "documentCID": "bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4",
+  "baseDocumentCID": null,
   "createdAt": "2026-03-07T00:02:00.000Z",
   "note": null
 }
@@ -623,19 +700,19 @@ Content Create Payload:
 Content Create JWS Signature (hex):
 
 ```
-b7f0c3909fd398d7a42065053b6d86f96efc4281385d383d2ca4388330101da2b707ae3dd538abf5bfb0b69fa173098436ed87aa789eaafe404a2a9f16b11b0f
+46feaf973e4c7ebc2a0d4ad25481ace197de05b91051205c5e1c7067a85fb9d4abe4cc61625d3c853a8b0ce0345b534c8cdd07b34216f635d3c0bc0fd5d30306
 ```
 
 Content Create JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWE1ejd6eGtuYWU1ZHM3MmV1aWh1ZjJyZzNpeGw2dDRmYnpqZWZoY29nZzNucXBweW9ncXUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZG9jdW1lbnRDSUQiOiJiYWZ5cmVpZnB2d3Vhcm1sNjJzZm9nZHBpMnZsbHR2ZzJldjZvNHh0dzc0emZ1ZDdjcGtnNzQyNnpuZSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.t_DDkJ_TmNekIGUFO22G-W78QoE4XTg9LKQ4gzAQHaK3B6491Tir9b-wtp-hcwmENu2Hqnieqv5ASiqfFrEbDw
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWFlZGhqcTY0YWFqcHdvY2lhaGw1dzM3ajZ1b3hyNW1vam9xNWRuYWg2ZnB2eHI1ZDRseHUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWh6d3VvdXBmZzNkeGlwNnhtZ3pteHN5d3lpaTJqZW94eHpiZ3gzenhtMmluN2tub2kzZzQiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.Rv6vlz5MfrwqDUrSVIGs4ZfeBbkQUSBcXhxwZ6hfudSr5MxhYl08hTqLDOA0W1NMjN0Hs0IW9jXTwLwP1dMDBg
 ```
 
 Content Operation CID:
 
 ```
-bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu
+bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu
 ```
 
 ### Content Chain: Update
@@ -646,39 +723,45 @@ Content Update Payload:
 {
   "version": 1,
   "type": "update",
-  "previousOperationCID": "bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu",
-  "documentCID": "bafyreieuo26zfmjxwpmw5jk6bqzqhvivxcbckgxtyeuc7ypf3p4sihgq4q",
+  "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "previousOperationCID": "bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu",
+  "documentCID": "bafyreidh7e36cvwy3uw5ypitcqk7uoktbkkkj7e6hxhky4o75rxn7kxilu",
+  "baseDocumentCID": "bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4",
   "createdAt": "2026-03-07T00:03:00.000Z",
   "note": "edited title and body"
 }
 ```
 
-Updated document:
+Updated document (flat content object):
 
 ```json
 {
-  "content": {
-    "$schema": "https://schemas.dfos.com/post/v1",
-    "format": "short-post",
-    "title": "Hello World (edited)",
-    "body": "Updated content."
-  },
-  "baseDocumentCID": "bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne",
-  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "createdAt": "2026-03-07T00:03:00.000Z"
+  "$schema": "https://schemas.dfos.com/post/v1",
+  "format": "short-post",
+  "title": "Hello World (edited)",
+  "body": "Updated content.",
+  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
 }
 ```
 
 Document CID (edited):
 
 ```
-bafyreieuo26zfmjxwpmw5jk6bqzqhvivxcbckgxtyeuc7ypf3p4sihgq4q
+bafyreidh7e36cvwy3uw5ypitcqk7uoktbkkkj7e6hxhky4o75rxn7kxilu
 ```
 
 Content Update CID:
 
 ```
-bafyreibb4lsvqmz4j76rsvhkqw3v2b4vp23t7dimm6vl5g5wlninvkemxq
+bafyreih6e5cbjitpozhzhgmfktmiohmxyn3ucwhqd3mjixizvwmlhv7hm4
+```
+
+### Content Chain Verified State
+
+```
+Content ID:   a82z92a3hndk6c97thcrn8
+Genesis CID:  bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu
+Head CID:     bafyreih6e5cbjitpozhzhgmfktmiohmxyn3ucwhqd3mjixizvwmlhv7hm4
 ```
 
 ---
@@ -718,21 +801,23 @@ Given the artifacts above, verify:
    did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd
    ```
 
-8. **Document CID**: dag-cbor canonical encode the document JSON → SHA-256 → CIDv1 → should be:
+8. **Document CID**: dag-cbor canonical encode the flat content object → SHA-256 → CIDv1 → should be:
 
    ```
-   bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne
+   bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4
    ```
 
-9. **Content chain integrity**: update's `previousOperationCID` matches create's operation CID
+9. **Content operation `did` field**: verify the `did` field in each content operation matches the `kid` DID in the JWS header
 
-10. **Chain completeness**: all operation CIDs, DID derivation, key rotation, and content chain linkage verified end-to-end.
+10. **Content chain integrity**: update's `previousOperationCID` matches create's operation CID
+
+11. **Chain completeness**: all operation CIDs, DID derivation, key rotation, and content chain linkage verified end-to-end.
 
 ---
 
 ## Source and Verification
 
-All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. 160 checks across 5 languages.
+All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. 235 checks across 5 languages.
 
 - [`crypto/ed25519`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/ed25519.ts) — `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature`
 - [`crypto/jws`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jws.ts) — `createJws`, `verifyJws`, `decodeJwsUnsafe`
@@ -744,22 +829,25 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) — `signIdentityOperation`, `verifyIdentityChain`
 - [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts) — `signContentOperation`, `verifyContentChain`
 - [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`, `deriveContentId`
+- [`chain/beacon`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/beacon.ts) — `signBeacon`, `verifyBeacon`
+- [`chain/countersign`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/countersign.ts) — `signCountersignature`, `verifyCountersignature`
+- [`merkle/tree`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/merkle/tree.ts) — `buildMerkleTree`, `hashLeaf`
+- [`merkle/proof`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/merkle/proof.ts) — `generateMerkleProof`, `verifyMerkleProof`
 
 ### Related Specifications
 
 - [DID Method: `did:dfos`](https://protocol.dfos.com/did-method) — W3C DID method specification for identity chains
-- [Content Model](https://protocol.dfos.com/content-model) — Standard content schemas (post, profile) for the document envelope
-- [Registry API](https://protocol.dfos.com/registry-api) — HTTP API for chain storage and resolution
+- [Content Model](https://protocol.dfos.com/content-model) — Standard content schemas (post, profile) for document content objects
 
 ### Cross-Language Verification
 
 | Language   | Tests | Source                                                                                               |
 | ---------- | ----- | ---------------------------------------------------------------------------------------------------- |
-| TypeScript | 99    | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)                 |
-| Python     | 35    | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) |
-| Go         | 9     | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go)         |
-| Rust       | 9     | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust)     |
-| Swift      | 8     | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift)   |
+| TypeScript | 149   | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)                 |
+| Python     | 48    | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) |
+| Go         | 13    | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go)         |
+| Rust       | 13    | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust)     |
+| Swift      | 12    | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift)   |
 
 ---
 

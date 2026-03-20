@@ -15,7 +15,7 @@ const loadSchema = (name: string) => JSON.parse(readFileSync(resolve(schemasDir,
 
 const postSchema = loadSchema('post.v1.json');
 const profileSchema = loadSchema('profile.v1.json');
-const envelopeSchema = loadSchema('document-envelope.v1.json');
+const manifestSchema = loadSchema('manifest.v1.json');
 const ajv = new Ajv({ strict: true, allErrors: true });
 addFormats(ajv);
 
@@ -32,8 +32,8 @@ describe('schema compilation', () => {
     expect(() => ajv.compile(profileSchema)).not.toThrow();
   });
 
-  it('document-envelope.v1.json compiles', () => {
-    expect(() => ajv.compile(envelopeSchema)).not.toThrow();
+  it('manifest.v1.json compiles', () => {
+    expect(() => ajv.compile(manifestSchema)).not.toThrow();
   });
 });
 
@@ -65,6 +65,27 @@ describe('post schema validation', () => {
         topics: ['announcements', 'engineering'],
       }),
     ).toBe(true);
+  });
+
+  it('accepts a post with createdByDID', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        body: 'Hello world.',
+        createdByDID: 'did:dfos:abc123',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects createdByDID without did: prefix', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        createdByDID: 'not-a-did',
+      }),
+    ).toBe(false);
   });
 
   it('accepts a comment', () => {
@@ -167,6 +188,16 @@ describe('profile schema validation', () => {
     ).toBe(true);
   });
 
+  it('accepts a profile with createdByDID', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        name: 'Alice',
+        createdByDID: 'did:dfos:abc123',
+      }),
+    ).toBe(true);
+  });
+
   it('rejects missing $schema', () => {
     expect(validate({ name: 'Alice' })).toBe(false);
   });
@@ -183,142 +214,172 @@ describe('profile schema validation', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Document envelope schema
+// Manifest schema
 // ---------------------------------------------------------------------------
 
-describe('document envelope schema validation', () => {
-  const validate = ajv.compile(envelopeSchema);
+describe('manifest schema validation', () => {
+  const validate = ajv.compile(manifestSchema);
 
-  it('accepts a minimal envelope with post content', () => {
+  it('accepts a minimal manifest', () => {
     expect(
       validate({
-        content: {
-          $schema: 'https://schemas.dfos.com/post/v1',
-          format: 'short-post',
-          body: 'Hello world.',
-        },
-        baseDocumentCID: null,
-        createdByDID: 'did:dfos:e3vvtck42d4eacdnzvtrn6',
-        createdAt: '2026-03-07T00:02:00.000Z',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: {},
       }),
     ).toBe(true);
   });
 
-  it('accepts an envelope with edit lineage', () => {
+  it('accepts a manifest with contentId entries', () => {
     expect(
       validate({
-        content: {
-          $schema: 'https://schemas.dfos.com/post/v1',
-          format: 'short-post',
-          title: 'Edited',
-          body: 'Updated content.',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: {
+          profile: '67t27rzc83v7c22n9t6z7c',
+          posts: 'a4b8c2d3e5f6g7h8i9j0k1',
         },
-        baseDocumentCID: 'bafyreifpvwuarml62sfogdpi2vlltvg2ev6o4xtw74zfud7cpkg7426zne',
-        createdByDID: 'did:dfos:e3vvtck42d4eacdnzvtrn6',
-        createdAt: '2026-03-07T00:03:00.000Z',
       }),
     ).toBe(true);
   });
 
-  it('accepts an envelope with profile content', () => {
+  it('accepts a manifest with DID entries', () => {
     expect(
       validate({
-        content: {
-          $schema: 'https://schemas.dfos.com/profile/v1',
-          name: 'Alice',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: {
+          'dark-publisher': 'did:dfos:e3vvtck42d4eacdnzvtrn6',
         },
-        baseDocumentCID: null,
-        createdByDID: 'did:example:alice',
-        createdAt: '2026-03-07T00:00:00.000Z',
       }),
     ).toBe(true);
   });
 
-  it('accepts an envelope with custom content schema', () => {
+  it('accepts a manifest with CID entries', () => {
     expect(
       validate({
-        content: {
-          $schema: 'https://schemas.example.com/custom/v1',
-          whatever: 'custom fields are fine',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: {
+          'pinned-charter': 'bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy',
         },
-        baseDocumentCID: null,
-        createdByDID: 'did:dfos:abc',
-        createdAt: '2026-01-01T00:00:00.000Z',
       }),
     ).toBe(true);
   });
 
-  it('rejects content missing $schema', () => {
+  it('accepts path-like keys', () => {
     expect(
       validate({
-        content: { format: 'short-post', body: 'No schema' },
-        baseDocumentCID: null,
-        createdByDID: 'did:dfos:abc',
-        createdAt: '2026-01-01T00:00:00.000Z',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: {
+          'drafts/post-1': '67t27rzc83v7c22n9t6z7c',
+          'collaborators/vinny': 'did:dfos:e3vvtck42d4eacdnzvtrn6',
+          'v1.0/release-notes': 'a4b8c2d3e5f6g7h8i9j0k1',
+          'my_content.main': '67t27rzc83v7c22n9t6z7c',
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects keys starting with special characters', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: { '/leading-slash': '67t27rzc83v7c22n9t6z7c' },
       }),
     ).toBe(false);
   });
 
-  it('rejects missing content', () => {
+  it('rejects keys ending with special characters', () => {
     expect(
       validate({
-        baseDocumentCID: null,
-        createdByDID: 'did:dfos:abc',
-        createdAt: '2026-01-01T00:00:00.000Z',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: { 'trailing-slash/': '67t27rzc83v7c22n9t6z7c' },
       }),
     ).toBe(false);
   });
 
-  it('rejects missing baseDocumentCID', () => {
+  it('rejects single-character keys', () => {
     expect(
       validate({
-        content: { $schema: 'https://schemas.dfos.com/post/v1' },
-        createdByDID: 'did:dfos:abc',
-        createdAt: '2026-01-01T00:00:00.000Z',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: { x: '67t27rzc83v7c22n9t6z7c' },
       }),
     ).toBe(false);
   });
 
-  it('rejects missing createdByDID', () => {
+  it('rejects uppercase keys', () => {
     expect(
       validate({
-        content: { $schema: 'https://schemas.dfos.com/post/v1' },
-        baseDocumentCID: null,
-        createdAt: '2026-01-01T00:00:00.000Z',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: { Profile: '67t27rzc83v7c22n9t6z7c' },
       }),
     ).toBe(false);
   });
 
-  it('rejects createdByDID without did: prefix', () => {
+  it('rejects keys with spaces', () => {
     expect(
       validate({
-        content: { $schema: 'https://schemas.dfos.com/post/v1' },
-        baseDocumentCID: null,
-        createdByDID: 'not-a-did',
-        createdAt: '2026-01-01T00:00:00.000Z',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: { 'my posts': '67t27rzc83v7c22n9t6z7c' },
       }),
     ).toBe(false);
   });
 
-  it('rejects additional properties on envelope', () => {
+  it('rejects empty string values', () => {
     expect(
       validate({
-        content: { $schema: 'https://schemas.dfos.com/post/v1' },
-        baseDocumentCID: null,
-        createdByDID: 'did:dfos:abc',
-        createdAt: '2026-01-01T00:00:00.000Z',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: { profile: '' },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects missing entries', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects missing $schema', () => {
+    expect(
+      validate({
+        entries: { profile: 'abc123' },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects non-string entry values', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: { profile: 123 },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects additional properties', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: {},
         extra: 'not allowed',
       }),
     ).toBe(false);
   });
 
-  it('rejects non-object content', () => {
+  it('rejects prose values (not identifier-shaped)', () => {
     expect(
       validate({
-        content: 'not an object',
-        baseDocumentCID: null,
-        createdByDID: 'did:dfos:abc',
-        createdAt: '2026-01-01T00:00:00.000Z',
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: { profile: 'Hello World' },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects values starting with uppercase', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/manifest/v1',
+        entries: { profile: 'NotAnIdentifier' },
       }),
     ).toBe(false);
   });

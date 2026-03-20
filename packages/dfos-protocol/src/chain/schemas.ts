@@ -15,6 +15,8 @@ const MAX_CID = 256;
 const MAX_NOTE = 256;
 /** Max number of keys per role (auth, assert, controller) */
 const MAX_KEYS_PER_ROLE = 16;
+/** Max length for DID strings (did:dfos:xxx ~31 chars typical) */
+const MAX_DID = 256;
 
 // ---
 
@@ -72,7 +74,7 @@ export type IdentityOperation = z.infer<typeof IdentityOperation>;
 // ---
 
 export const VerifiedIdentity = z.strictObject({
-  did: z.string(),
+  did: z.string().max(MAX_DID),
   isDeleted: z.boolean(),
   authKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
   assertKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
@@ -86,7 +88,9 @@ export type VerifiedIdentity = z.infer<typeof VerifiedIdentity>;
 const ContentCreate = z.strictObject({
   version: z.literal(1),
   type: z.literal('create'),
+  did: z.string().max(MAX_DID),
   documentCID: CIDString,
+  baseDocumentCID: CIDString.nullable(),
   createdAt: Iso8601,
   note: z.string().max(MAX_NOTE).nullable(),
 });
@@ -95,8 +99,10 @@ const ContentCreate = z.strictObject({
 const ContentUpdate = z.strictObject({
   version: z.literal(1),
   type: z.literal('update'),
+  did: z.string().max(MAX_DID),
   previousOperationCID: CIDString,
   documentCID: CIDString.nullable(),
+  baseDocumentCID: CIDString.nullable(),
   createdAt: Iso8601,
   note: z.string().max(MAX_NOTE).nullable(),
 });
@@ -105,6 +111,7 @@ const ContentUpdate = z.strictObject({
 const ContentDelete = z.strictObject({
   version: z.literal(1),
   type: z.literal('delete'),
+  did: z.string().max(MAX_DID),
   previousOperationCID: CIDString,
   createdAt: Iso8601,
   note: z.string().max(MAX_NOTE).nullable(),
@@ -116,3 +123,15 @@ export const ContentOperation = z.discriminatedUnion('type', [
   ContentDelete,
 ]);
 export type ContentOperation = z.infer<typeof ContentOperation>;
+
+// ---
+
+/** Beacon: floating signed merkle root announcement */
+export const BeaconPayload = z.strictObject({
+  version: z.literal(1),
+  type: z.literal('beacon'),
+  did: z.string().max(MAX_DID),
+  merkleRoot: z.string().regex(/^[0-9a-f]{64}$/),
+  createdAt: Iso8601,
+});
+export type BeaconPayload = z.infer<typeof BeaconPayload>;

@@ -2,8 +2,8 @@
   "description": "Content chain: create + delete",
   "type": "content",
   "chain": [
-    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWE1ejd6eGtuYWU1ZHM3MmV1aWh1ZjJyZzNpeGw2dDRmYnpqZWZoY29nZzNucXBweW9ncXUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZG9jdW1lbnRDSUQiOiJiYWZ5cmVpZnB2d3Vhcm1sNjJzZm9nZHBpMnZsbHR2ZzJldjZvNHh0dzc0emZ1ZDdjcGtnNzQyNnpuZSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.t_DDkJ_TmNekIGUFO22G-W78QoE4XTg9LKQ4gzAQHaK3B6491Tir9b-wtp-hcwmENu2Hqnieqv5ASiqfFrEbDw",
-    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWVwamFzN3JzdHV5aWI0eDY0NHYyeXJxN3c3MmV0dG5xcWozbzdhcmRhcWN1NnVzZml6b3kifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYTV6N3p4a25hZTVkczcyZXVpaHVmMnJnM2l4bDZ0NGZiemplZmhjb2dnM25xcHB5b2dxdSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDM6MDAuMDAwWiIsIm5vdGUiOiJyZW1vdmluZyBjb250ZW50In0.VkfUjFIz40nBOMzCTtoO1nhExzQHB4QX9PIOe2MmDwC-nilMStTwdiRcxRskPRg0gw8eM5Mz9hNQ8dZfCJ9JAg"
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWFlZGhqcTY0YWFqcHdvY2lhaGw1dzM3ajZ1b3hyNW1vam9xNWRuYWg2ZnB2eHI1ZDRseHUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWh6d3VvdXBmZzNkeGlwNnhtZ3pteHN5d3lpaTJqZW94eHpiZ3gzenhtMmluN2tub2kzZzQiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.Rv6vlz5MfrwqDUrSVIGs4ZfeBbkQUSBcXhxwZ6hfudSr5MxhYl08hTqLDOA0W1NMjN0Hs0IW9jXTwLwP1dMDBg",
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWQydjUyN2lxMzZ2dnUyNWc3b3BjczJudjRjbmRhcWdrd29naHEzdHB3Z215cnBxZWVuZ2EifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFlZGhqcTY0YWFqcHdvY2lhaGw1dzM3ajZ1b3hyNW1vam9xNWRuYWg2ZnB2eHI1ZDRseHUiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoiLCJub3RlIjoicmVtb3ZpbmcgY29udGVudCJ9.9DTnVeYjVV6Kc971etvWeNn9iMme7RnrRZRmYBO0iaYeePJDblL_p2uuEIuxtAQQp1bATpsQ475zpK6N2A0eAg"
   ],
   "signerPublicKey": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK",
   "documents": [
@@ -12,7 +12,8 @@
         "$schema": "https://schemas.dfos.com/post/v1",
         "format": "short-post",
         "title": "Hello World",
-        "body": "First post on the protocol."
+        "body": "First post on the protocol.",
+        "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
       },
       "baseDocumentCID": null,
       "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6",
@@ -20,7 +21,7 @@
     }
   ],
   "expected": {
-    "contentId": "67t27rzc83v7c22n9t6z7c",
+    "contentId": "a82z92a3hndk6c97thcrn8",
     "isDeleted": true,
     "currentDocumentCID": null,
     "length": 2

@@ -1,0 +1,1434 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DFOS Protocol Architecture</title>
+    <style>
+      :root {
+        --bg: #0a0a0c;
+        --surface: #111115;
+        --surface-2: #18181d;
+        --surface-3: #1f1f26;
+        --border: #2a2a35;
+        --border-light: #3a3a48;
+        --text: #e8e8ed;
+        --text-dim: #8888a0;
+        --text-muted: #55556a;
+        --accent: #7c6aff;
+        --accent-dim: #5a4abd;
+        --green: #3dd68c;
+        --green-dim: #1a3d2e;
+        --red: #ff6b6b;
+        --red-dim: #3d1a1a;
+        --yellow: #ffd43b;
+        --yellow-dim: #3d351a;
+        --cyan: #66d9ef;
+        --cyan-dim: #1a2d3d;
+        --orange: #ff9f43;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.6;
+        font-size: 13px;
+        padding: 0;
+      }
+
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 60px 40px 120px;
+      }
+
+      h1 {
+        font-size: 28px;
+        font-weight: 300;
+        letter-spacing: 4px;
+        text-transform: uppercase;
+        color: var(--text-dim);
+        margin-bottom: 8px;
+      }
+
+      h1 span {
+        color: var(--accent);
+        font-weight: 600;
+      }
+
+      .subtitle {
+        color: var(--text-muted);
+        font-size: 12px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin-bottom: 60px;
+      }
+
+      h2 {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 24px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      h3 {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+        margin-bottom: 12px;
+      }
+
+      p,
+      li {
+        color: var(--text-dim);
+        line-height: 1.7;
+      }
+      p {
+        margin-bottom: 12px;
+      }
+
+      section {
+        margin-bottom: 64px;
+      }
+
+      /* Layer stack */
+      .layer-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        margin-bottom: 48px;
+      }
+
+      .layer {
+        display: grid;
+        grid-template-columns: 120px 1fr 180px;
+        gap: 20px;
+        align-items: start;
+        padding: 20px 24px;
+        border-radius: 6px;
+        border-left: 3px solid var(--border);
+        background: var(--surface);
+      }
+
+      .layer:hover {
+        background: var(--surface-2);
+      }
+
+      .layer-id {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        padding-top: 2px;
+      }
+
+      .layer-desc {
+        font-size: 12px;
+      }
+      .layer-desc strong {
+        color: var(--text);
+      }
+
+      .layer-artifacts {
+        font-size: 11px;
+        color: var(--text-muted);
+        text-align: right;
+      }
+
+      .layer-artifacts code {
+        display: inline-block;
+        background: var(--surface-3);
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 10px;
+        margin: 1px 0;
+        color: var(--text-dim);
+      }
+
+      .layer[data-zone='public'] {
+        border-left-color: var(--green);
+      }
+      .layer[data-zone='choice'] {
+        border-left-color: var(--yellow);
+      }
+      .layer[data-zone='dark'] {
+        border-left-color: var(--red);
+      }
+
+      /* Zone legend */
+      .zone-legend {
+        display: flex;
+        gap: 32px;
+        margin-bottom: 32px;
+        font-size: 11px;
+      }
+
+      .zone-legend .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+
+      .dot-public {
+        background: var(--green);
+      }
+      .dot-choice {
+        background: var(--yellow);
+      }
+      .dot-dark {
+        background: var(--red);
+      }
+
+      /* Artifact cards */
+      .artifacts {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      .artifact {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 20px;
+      }
+
+      .artifact-label {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin-bottom: 12px;
+      }
+
+      .artifact pre {
+        background: var(--surface-3);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 12px 16px;
+        font-size: 11px;
+        overflow-x: auto;
+        color: var(--text-dim);
+        line-height: 1.5;
+        margin: 8px 0;
+      }
+
+      .artifact pre .key {
+        color: var(--cyan);
+      }
+      .artifact pre .val {
+        color: var(--green);
+      }
+      .artifact pre .str {
+        color: var(--yellow);
+      }
+      .artifact pre .com {
+        color: var(--text-muted);
+        font-style: italic;
+      }
+
+      /* Flow diagrams */
+      .flow {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        margin: 24px 0;
+        position: relative;
+      }
+
+      .flow-step {
+        display: grid;
+        grid-template-columns: 40px 1fr;
+        gap: 16px;
+        align-items: start;
+        padding: 12px 0;
+      }
+
+      .flow-num {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--surface-2);
+        border: 1px solid var(--border-light);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--accent);
+      }
+
+      .flow-content {
+        padding-top: 5px;
+      }
+      .flow-content strong {
+        color: var(--text);
+      }
+      .flow-content .note {
+        color: var(--text-muted);
+        font-size: 11px;
+      }
+
+      .flow-connector {
+        width: 1px;
+        height: 12px;
+        background: var(--border);
+        margin-left: 16px;
+      }
+
+      /* Resolution table */
+      .res-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 16px 0;
+        font-size: 12px;
+      }
+
+      .res-table th {
+        text-align: left;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .res-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-dim);
+        vertical-align: top;
+      }
+
+      .res-table td:first-child {
+        font-family: 'SF Mono', monospace;
+        color: var(--cyan);
+        white-space: nowrap;
+      }
+
+      .res-table tr:hover td {
+        background: var(--surface);
+      }
+
+      .tag {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 3px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+      }
+
+      .tag-public {
+        background: var(--green-dim);
+        color: var(--green);
+      }
+      .tag-dark {
+        background: var(--red-dim);
+        color: var(--red);
+      }
+      .tag-choice {
+        background: var(--yellow-dim);
+        color: var(--yellow);
+      }
+
+      /* Trust diagram */
+      .trust-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        margin: 24px 0;
+      }
+
+      .trust-box {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 24px;
+      }
+
+      .trust-box h4 {
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 12px;
+        color: var(--text);
+      }
+
+      .trust-box ul {
+        list-style: none;
+        font-size: 12px;
+      }
+
+      .trust-box li {
+        padding: 4px 0;
+        padding-left: 16px;
+        position: relative;
+      }
+
+      .trust-box li::before {
+        content: '>';
+        position: absolute;
+        left: 0;
+        color: var(--accent);
+      }
+
+      /* Gradient bar */
+      .gradient-bar {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 2px;
+        margin: 24px 0;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+
+      .gradient-segment {
+        padding: 16px;
+        text-align: center;
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .gradient-segment .label {
+        font-size: 10px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        margin-top: 4px;
+        font-weight: 400;
+      }
+
+      .g1 {
+        background: #0d2818;
+        color: var(--green);
+      }
+      .g2 {
+        background: #1a2d1a;
+        color: #88cc88;
+      }
+      .g3 {
+        background: #2d2d1a;
+        color: var(--yellow);
+      }
+      .g4 {
+        background: #2d1a1a;
+        color: var(--red);
+      }
+
+      /* Witness tiers */
+      .tier-cards {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      .tier-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 24px;
+      }
+
+      .tier-card .tier-label {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 4px;
+      }
+
+      .tier-card h4 {
+        font-size: 14px;
+        margin-bottom: 12px;
+      }
+
+      /* Dark identity diagram */
+      .dark-id-diagram {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 32px;
+        margin: 24px 0;
+        text-align: center;
+      }
+
+      .dark-id-row {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 12px;
+        margin: 8px 0;
+        font-size: 12px;
+      }
+
+      .dark-id-node {
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 11px;
+      }
+
+      .node-public {
+        background: var(--green-dim);
+        color: var(--green);
+        border: 1px solid #2a5a3a;
+      }
+
+      .node-dark {
+        background: var(--red-dim);
+        color: var(--red);
+        border: 1px dashed #5a2a2a;
+      }
+
+      .node-manifest {
+        background: var(--surface-3);
+        color: var(--yellow);
+        border: 1px solid var(--border-light);
+      }
+
+      .dark-id-arrow {
+        color: var(--text-muted);
+        font-size: 16px;
+      }
+
+      .dark-id-label {
+        font-size: 10px;
+        color: var(--text-muted);
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        margin-top: 4px;
+      }
+
+      /* Merkle diagram */
+      .merkle-diagram {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 32px;
+        margin: 24px 0;
+        font-size: 11px;
+      }
+
+      .merkle-row {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        margin: 6px 0;
+      }
+
+      .merkle-node {
+        padding: 6px 12px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        text-align: center;
+        min-width: 80px;
+      }
+
+      .merkle-root {
+        background: var(--accent-dim);
+        color: var(--accent);
+        border: 1px solid var(--accent);
+      }
+      .merkle-interior {
+        background: var(--surface-3);
+        color: var(--text-dim);
+        border: 1px solid var(--border-light);
+      }
+      .merkle-leaf {
+        background: var(--cyan-dim);
+        color: var(--cyan);
+        border: 1px solid #2a4a5a;
+      }
+      .merkle-promoted {
+        background: var(--yellow-dim);
+        color: var(--yellow);
+        border: 1px dashed var(--yellow);
+      }
+
+      .merkle-arrows {
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 10px;
+        letter-spacing: 2px;
+      }
+
+      .divider {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 48px 0;
+      }
+
+      .footnote {
+        font-size: 11px;
+        color: var(--text-muted);
+        border-top: 1px solid var(--border);
+        padding-top: 24px;
+        margin-top: 48px;
+      }
+
+      @media (max-width: 768px) {
+        .page {
+          padding: 32px 20px 80px;
+        }
+        .layer {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+        .layer-artifacts {
+          text-align: left;
+        }
+        .artifacts {
+          grid-template-columns: 1fr;
+        }
+        .trust-grid {
+          grid-template-columns: 1fr;
+        }
+        .tier-cards {
+          grid-template-columns: 1fr;
+        }
+        .gradient-bar {
+          grid-template-columns: 1fr;
+        }
+        .dark-id-row {
+          flex-direction: column;
+          gap: 4px;
+        }
+        .dark-id-arrow {
+          transform: rotate(90deg);
+        }
+        .merkle-row {
+          flex-wrap: wrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>DFOS <span>Protocol</span> Architecture</h1>
+      <p class="subtitle">
+        v0.1.0 &middot; Verifiable identity &middot; Dark forest content &middot; Public proofs
+      </p>
+
+      <!-- ==================== LAYER STACK ==================== -->
+      <section>
+        <h2>Protocol Layers</h2>
+
+        <div class="zone-legend">
+          <span><span class="dot dot-public"></span> Public proof substrate</span>
+          <span><span class="dot dot-choice"></span> Controller's choice</span>
+          <span><span class="dot dot-dark"></span> Dark forest content</span>
+        </div>
+
+        <div class="layer-stack">
+          <div class="layer" data-zone="public">
+            <div class="layer-id" style="color: var(--green)">L0 &middot; Crypto</div>
+            <div class="layer-desc">
+              <strong
+                >Ed25519 signatures, dag-cbor encoding, CIDv1 content addressing, JWS
+                envelopes.</strong
+              >
+              The trust boundary. Everything above this is cryptographically verified.
+              Self-certifying &mdash; no external authority needed. All verifiers check
+              <code>typ</code> headers for defense in depth.
+            </div>
+            <div class="layer-artifacts">
+              <code>Ed25519</code> <code>dag-cbor</code> <code>CIDv1</code> <code>JWS</code>
+            </div>
+          </div>
+
+          <div class="layer" data-zone="public">
+            <div class="layer-id" style="color: var(--green)">L1 &middot; Identity</div>
+            <div class="layer-desc">
+              <strong>Self-sovereign identity chains.</strong>
+              Append-only logs of key management operations. DID derived from genesis CID hash.
+              Create, rotate keys, delete. The chain defines its own valid signers via controller
+              keys. <code>typ: did:dfos:identity-op</code>
+            </div>
+            <div class="layer-artifacts">
+              <code>did:dfos:*</code> <code>identity-op</code> <code>create</code>
+              <code>update</code> <code>delete</code>
+            </div>
+          </div>
+
+          <div class="layer" data-zone="public">
+            <div class="layer-id" style="color: var(--green)">L2 &middot; Content</div>
+            <div class="layer-desc">
+              <strong>Externally signed content chains.</strong>
+              Append-only logs of document commitments. Each operation includes
+              <code>did</code> (author DID, committed to by CID) and commits to a
+              <code>documentCID</code>. The <code>baseDocumentCID</code> tracks document edit
+              lineage. The protocol sees hashes, not content. <code>typ: did:dfos:content-op</code>
+            </div>
+            <div class="layer-artifacts">
+              <code>contentId</code> <code>content-op</code> <code>did</code>
+              <code>documentCID</code> <code>baseDocumentCID</code>
+            </div>
+          </div>
+
+          <div class="layer" data-zone="public">
+            <div class="layer-id" style="color: var(--green)">L3 &middot; Beacon</div>
+            <div class="layer-desc">
+              <strong>Signed merkle root announcements.</strong>
+              Floating artifacts declaring the DID's current content set. Pure SHA-256 binary Merkle
+              tree over sorted contentIds &mdash; the root is a 64-char hex hash that reveals
+              nothing about what's inside. Not chained &mdash; latest <code>createdAt</code> wins.
+              5-minute future clock skew tolerance. <code>typ: did:dfos:beacon</code>
+            </div>
+            <div class="layer-artifacts">
+              <code>beacon</code> <code>merkleRoot</code> <code>SHA-256</code>
+            </div>
+          </div>
+
+          <div class="layer" data-zone="public">
+            <div class="layer-id" style="color: var(--green)">L3.5 &middot; Witness</div>
+            <div class="layer-desc">
+              <strong>Countersignatures &mdash; third-party attestation.</strong>
+              Same CID, different signer. Works for both content operations and beacons. The
+              <code>kid</code> DID in the JWS header tells you who signed. When it matches payload
+              <code>did</code> = author. When it differs = witness. No ambiguity from a single JWS
+              alone.
+            </div>
+            <div class="layer-artifacts">
+              <code>countersign</code> <code>kid !== did</code> <code>witness</code>
+            </div>
+          </div>
+
+          <div class="layer" data-zone="choice">
+            <div class="layer-id" style="color: var(--yellow)">L4 &middot; Structure</div>
+            <div class="layer-desc">
+              <strong>Merkle tree data &mdash; the content set.</strong>
+              The sorted binary tree behind the beacon root. A set of contentIds &mdash; no values,
+              just membership. Controller decides whether to share: root only, root + inclusion
+              proofs, or full tree. Enables enumeration and verification.
+            </div>
+            <div class="layer-artifacts">
+              <code>sorted tree</code> <code>inclusion proofs</code> <code>set membership</code>
+            </div>
+          </div>
+
+          <div class="layer" data-zone="dark">
+            <div class="layer-id" style="color: var(--red)">L5 &middot; Documents</div>
+            <div class="layer-desc">
+              <strong>Dark forest content.</strong>
+              The actual payloads behind documentCIDs. Posts, profiles, manifests, attestations
+              &mdash; all flat content objects with a <code>$schema</code>. Content-addressed
+              directly: <code>CID(dagCborCanonicalEncode(contentObject))</code>. Authorized access
+              only. The protocol proves they exist without revealing what they say.
+            </div>
+            <div class="layer-artifacts">
+              <code>post/v1</code> <code>profile/v1</code> <code>manifest/v1</code>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== FOUR COMPONENTS ==================== -->
+      <section>
+        <h2>Four Protocol Components</h2>
+
+        <table class="res-table">
+          <thead>
+            <tr>
+              <th>Component</th>
+              <th>Concern</th>
+              <th>JWS typ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Crypto core</td>
+              <td>
+                Identity chains + content chains &mdash; Ed25519 signatures, JWS tokens, CID links
+              </td>
+              <td>
+                <code style="color: var(--yellow)">identity-op</code>
+                <code style="color: var(--yellow)">content-op</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Beacons</td>
+              <td>
+                Signed merkle root announcements &mdash; periodic commitment over content sets
+              </td>
+              <td><code style="color: var(--yellow)">beacon</code></td>
+            </tr>
+            <tr>
+              <td>Countersignatures</td>
+              <td>
+                Witness attestation &mdash; third-party signatures over operations and beacons
+              </td>
+              <td>
+                <code style="color: var(--yellow)">content-op</code>
+                <code style="color: var(--yellow)">beacon</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Merkle trees</td>
+              <td>
+                SHA-256 binary trees over content IDs &mdash; inclusion proofs for beacon roots
+              </td>
+              <td><span style="color: var(--text-muted)">n/a (pure SHA-256)</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ==================== DISCLOSURE GRADIENT ==================== -->
+      <section>
+        <h2>Disclosure Gradient</h2>
+        <p>
+          The DID controller decides how much to reveal. Each level exposes more without requiring
+          the next.
+        </p>
+
+        <div class="gradient-bar">
+          <div class="gradient-segment g1">
+            Root hash
+            <div class="label">Always public</div>
+          </div>
+          <div class="gradient-segment g2">
+            Merkle tree
+            <div class="label">Controller's choice</div>
+          </div>
+          <div class="gradient-segment g3">
+            Manifest index
+            <div class="label">Authorized access</div>
+          </div>
+          <div class="gradient-segment g4">
+            Document content
+            <div class="label">Dark forest</div>
+          </div>
+        </div>
+
+        <p>
+          An observer at the leftmost level sees: a hash changed. At the second level: which
+          contentIds exist. At the third: what they mean semantically. At the fourth: what they
+          actually say. Each level requires increasing trust or authorization.
+        </p>
+      </section>
+
+      <!-- ==================== SIGNED ARTIFACTS ==================== -->
+      <section>
+        <h2>Signed Artifacts</h2>
+
+        <div class="artifacts">
+          <div class="artifact">
+            <div class="artifact-label">Identity Operation</div>
+            <pre><span class="com">// JWS header</span>
+{ <span class="key">"alg"</span>: <span class="str">"EdDSA"</span>,
+  <span class="key">"typ"</span>: <span class="str">"did:dfos:identity-op"</span>,
+  <span class="key">"kid"</span>: <span class="str">"did:dfos:...#key_..."</span>,
+  <span class="key">"cid"</span>: <span class="str">"bafyrei..."</span> }
+
+<span class="com">// payload (create)</span>
+{ <span class="key">"version"</span>: <span class="val">1</span>,
+  <span class="key">"type"</span>: <span class="str">"create"</span>,
+  <span class="key">"authKeys"</span>: [<span class="com">MultikeyPublicKey[]</span>],
+  <span class="key">"assertKeys"</span>: [<span class="com">MultikeyPublicKey[]</span>],
+  <span class="key">"controllerKeys"</span>: [<span class="com">MultikeyPublicKey[]</span>],
+  <span class="key">"createdAt"</span>: <span class="str">"2026-03-07T..."</span> }</pre>
+          </div>
+
+          <div class="artifact">
+            <div class="artifact-label">Content Operation</div>
+            <pre><span class="com">// JWS header</span>
+{ <span class="key">"alg"</span>: <span class="str">"EdDSA"</span>,
+  <span class="key">"typ"</span>: <span class="str">"did:dfos:content-op"</span>,
+  <span class="key">"kid"</span>: <span class="str">"did:dfos:...#key_..."</span>,
+  <span class="key">"cid"</span>: <span class="str">"bafyrei..."</span> }
+
+<span class="com">// payload (create) &mdash; did committed to by CID</span>
+{ <span class="key">"version"</span>: <span class="val">1</span>,
+  <span class="key">"type"</span>: <span class="str">"create"</span>,
+  <span class="key">"did"</span>: <span class="str">"did:dfos:abc123"</span>,
+  <span class="key">"documentCID"</span>: <span class="str">"bafyrei..."</span>,
+  <span class="key">"baseDocumentCID"</span>: <span class="val">null</span>,
+  <span class="key">"createdAt"</span>: <span class="str">"2026-03-07T..."</span>,
+  <span class="key">"note"</span>: <span class="val">null</span> }</pre>
+          </div>
+
+          <div class="artifact">
+            <div class="artifact-label">Beacon (Root Announcement)</div>
+            <pre><span class="com">// JWS header</span>
+{ <span class="key">"alg"</span>: <span class="str">"EdDSA"</span>,
+  <span class="key">"typ"</span>: <span class="str">"did:dfos:beacon"</span>,
+  <span class="key">"kid"</span>: <span class="str">"did:dfos:...#key_..."</span>,
+  <span class="key">"cid"</span>: <span class="str">"bafyrei..."</span> }
+
+<span class="com">// payload &mdash; floating, no backlink</span>
+{ <span class="key">"version"</span>: <span class="val">1</span>,
+  <span class="key">"type"</span>: <span class="str">"beacon"</span>,
+  <span class="key">"did"</span>: <span class="str">"did:dfos:abc123"</span>,
+  <span class="key">"merkleRoot"</span>: <span class="str">"7e80d478...28e"</span>,
+  <span class="key">"createdAt"</span>: <span class="str">"2026-03-07T..."</span> }</pre>
+            <p style="font-size: 11px; margin-top: 8px">
+              <code>merkleRoot</code> is hex SHA-256 (64 chars), not a CID. Signed by controller
+              key. Latest <code>createdAt</code> supersedes. 5-min future clock skew tolerance.
+            </p>
+          </div>
+
+          <div class="artifact">
+            <div class="artifact-label">Countersignature (Witness)</div>
+            <pre><span class="com">// content operation countersign</span>
+{ <span class="key">"typ"</span>: <span class="str">"did:dfos:content-op"</span>,
+  <span class="key">"kid"</span>: <span class="str">"did:dfos:<span style="color:var(--orange)">witness</span>...#key_..."</span>,
+  <span class="key">"cid"</span>: <span class="str">"bafyrei..."</span> }
+<span class="com">// same payload &rarr; same CID, different signer</span>
+
+<span class="com">// beacon countersign</span>
+{ <span class="key">"typ"</span>: <span class="str">"did:dfos:beacon"</span>,
+  <span class="key">"kid"</span>: <span class="str">"did:dfos:<span style="color:var(--orange)">witness</span>...#key_..."</span>,
+  <span class="key">"cid"</span>: <span class="str">"bafyrei..."</span> }
+<span class="com">// same beacon payload &rarr; same CID</span></pre>
+            <p style="font-size: 11px; margin-top: 8px">
+              Works for both content operations and beacons. Same <code>typ</code> as the original.
+              Discrimination: <code>kid</code> DID vs payload <code>did</code>.
+            </p>
+          </div>
+        </div>
+
+        <div class="trust-grid" style="margin-bottom: 24px">
+          <div class="trust-box" style="border-left: 3px solid var(--cyan)">
+            <h4 style="color: var(--cyan)">Author vs Witness &mdash; the <code>did</code> rule</h4>
+            <p style="font-size: 12px">
+              Every content operation and beacon payload includes a <code>did</code> field committed
+              to by the CID. Any JWS token for that CID is self-describing:
+            </p>
+            <div style="margin: 12px 0; font-size: 12px">
+              <div
+                style="
+                  padding: 8px 12px;
+                  background: var(--green-dim);
+                  border-radius: 4px;
+                  margin-bottom: 4px;
+                "
+              >
+                <code style="color: var(--green)">kid DID === payload.did</code> &nbsp;&rarr;&nbsp;
+                <strong style="color: var(--green)">Author / Controller</strong>
+              </div>
+              <div style="padding: 8px 12px; background: var(--yellow-dim); border-radius: 4px">
+                <code style="color: var(--yellow)">kid DID !== payload.did</code> &nbsp;&rarr;&nbsp;
+                <strong style="color: var(--yellow)">Countersignature (witness)</strong>
+              </div>
+            </div>
+            <p style="font-size: 11px; color: var(--text-muted)">
+              Decode, compare, done. No chain context needed. Works identically for content ops and
+              beacons.
+            </p>
+          </div>
+          <div class="trust-box" style="border-left: 3px solid var(--cyan)">
+            <h4 style="color: var(--cyan)"><code>typ</code> header discrimination</h4>
+            <div style="font-size: 12px; margin-top: 8px">
+              <div style="padding: 6px 0; border-bottom: 1px solid var(--border)">
+                <code style="color: var(--yellow)">did:dfos:identity-op</code>
+                <span style="color: var(--text-muted); font-size: 11px">
+                  &mdash; identity chain operations</span
+                >
+              </div>
+              <div style="padding: 6px 0; border-bottom: 1px solid var(--border)">
+                <code style="color: var(--yellow)">did:dfos:content-op</code>
+                <span style="color: var(--text-muted); font-size: 11px">
+                  &mdash; content chain ops + countersigns</span
+                >
+              </div>
+              <div style="padding: 6px 0; border-bottom: 1px solid var(--border)">
+                <code style="color: var(--yellow)">did:dfos:beacon</code>
+                <span style="color: var(--text-muted); font-size: 11px">
+                  &mdash; beacon announcements + countersigns</span
+                >
+              </div>
+              <div style="padding: 6px 0">
+                <code style="color: var(--yellow)">JWT</code>
+                <span style="color: var(--text-muted); font-size: 11px">
+                  &mdash; device auth tokens (no CID)</span
+                >
+              </div>
+            </div>
+            <p style="font-size: 11px; color: var(--text-muted); margin-top: 8px">
+              All verifiers validate <code>typ</code>. Defense in depth &mdash; Zod schema
+              discrimination is the primary safety net.
+            </p>
+          </div>
+        </div>
+
+        <div class="artifacts">
+          <div class="artifact">
+            <div class="artifact-label">Document &mdash; Post (dark forest)</div>
+            <pre><span class="com">// flat content object, committed to by CID</span>
+{ <span class="key">"$schema"</span>: <span class="str">"https://schemas.dfos.com/post/v1"</span>,
+  <span class="key">"format"</span>: <span class="str">"short-post"</span>,
+  <span class="key">"createdByDID"</span>: <span class="str">"did:dfos:..."</span>,
+  <span class="key">"title"</span>: <span class="str">"Hello World"</span>,
+  <span class="key">"body"</span>: <span class="str">"First post on the protocol."</span> }</pre>
+          </div>
+
+          <div class="artifact">
+            <div class="artifact-label">Document &mdash; Manifest (dark forest)</div>
+            <pre><span class="com">// semantic index &mdash; the navigation layer</span>
+{ <span class="key">"$schema"</span>: <span class="str">"https://schemas.dfos.com/manifest/v1"</span>,
+  <span class="key">"entries"</span>: {
+    <span class="key">"profile"</span>: <span class="str">"67t27rzc83v7c22n9t6z7c"</span>,
+    <span class="key">"posts"</span>: <span class="str">"a4b8c2d3e5f6g7h8i9j0k1"</span>,
+    <span class="key">"dark-publisher"</span>: <span class="str">"did:dfos:proxy_xyz"</span>
+  } }</pre>
+            <p style="font-size: 11px; margin-top: 8px">
+              Points to contentIds, DIDs, other manifests. The semantic graph is dark forest content
+              &mdash; invisible without authorization.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== MERKLE TREE ==================== -->
+      <section>
+        <h2>Merkle Tree Construction</h2>
+        <p>
+          Pure SHA-256 binary tree over content identifiers. No dag-cbor, no CIDs. The tree is a
+          commitment scheme, not content-addressed data.
+        </p>
+
+        <div class="merkle-diagram">
+          <div class="merkle-row">
+            <div class="merkle-node merkle-root">
+              ROOT<br /><span style="font-size: 9px; opacity: 0.7">SHA-256(H(ab) || H(cd,e))</span>
+            </div>
+          </div>
+          <div class="merkle-arrows">&darr;&darr;</div>
+          <div class="merkle-row">
+            <div class="merkle-node merkle-interior">
+              H(ab)<br /><span style="font-size: 9px; opacity: 0.7">SHA-256(a || b)</span>
+            </div>
+            <div class="merkle-node merkle-interior">
+              H(cd,e)<br /><span style="font-size: 9px; opacity: 0.7">SHA-256(H(cd) || e)</span>
+            </div>
+          </div>
+          <div class="merkle-arrows">&darr;&darr;&darr;&darr;</div>
+          <div class="merkle-row">
+            <div class="merkle-node merkle-leaf">alpha</div>
+            <div class="merkle-node merkle-leaf">bravo</div>
+            <div class="merkle-node merkle-interior" style="font-size: 9px">H(cd)</div>
+            <div class="merkle-node merkle-promoted">echo &uarr;</div>
+          </div>
+          <div class="merkle-arrows" style="margin-left: 200px">&darr;&darr;</div>
+          <div class="merkle-row" style="margin-left: 170px">
+            <div class="merkle-node merkle-leaf">charlie</div>
+            <div class="merkle-node merkle-leaf">delta</div>
+          </div>
+        </div>
+
+        <div class="flow">
+          <div class="flow-step">
+            <div class="flow-num">1</div>
+            <div class="flow-content">
+              <strong>Deduplicate + sort</strong> contentIds lexicographically (UTF-8 byte order)
+            </div>
+          </div>
+          <div class="flow-connector"></div>
+          <div class="flow-step">
+            <div class="flow-num">2</div>
+            <div class="flow-content">
+              <strong>Hash leaves:</strong> for each contentId,
+              <code>SHA-256(UTF-8(contentId))</code> &rarr; 32-byte leaf hash
+            </div>
+          </div>
+          <div class="flow-connector"></div>
+          <div class="flow-step">
+            <div class="flow-num">3</div>
+            <div class="flow-content">
+              <strong>Build tree:</strong> pair adjacent hashes,
+              <code>SHA-256(left || right)</code> &rarr; 32 bytes. Odd nodes promoted unpaired.
+            </div>
+          </div>
+          <div class="flow-connector"></div>
+          <div class="flow-step">
+            <div class="flow-num">4</div>
+            <div class="flow-content">
+              <strong>Root:</strong> final 32-byte hash, hex-encoded &rarr; 64-char lowercase hex
+              string. Empty set &rarr; <code>null</code> (no beacon needed).
+            </div>
+          </div>
+        </div>
+
+        <p style="font-size: 12px">
+          Inclusion proofs: sibling hashes along the path from leaf to root, plus direction
+          (left/right) for each step. Verifier recomputes root from leaf + proof, compares to
+          claimed root. 231 cross-language checks verify this construction in Go, Python, Rust,
+          Swift, and TypeScript.
+        </p>
+      </section>
+
+      <!-- ==================== RESOLUTION ==================== -->
+      <section>
+        <h2>Relay Resolution Paths</h2>
+        <p>Four lookups. No global enumeration. No reverse indexes.</p>
+
+        <table class="res-table">
+          <thead>
+            <tr>
+              <th>Lookup</th>
+              <th>Returns</th>
+              <th>Visibility</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>did</td>
+              <td>Identity HEAD + full op chain (current key state)</td>
+              <td><span class="tag tag-public">public</span></td>
+            </tr>
+            <tr>
+              <td>did</td>
+              <td>Latest beacon (merkle root hash + witnesses)</td>
+              <td><span class="tag tag-public">public</span></td>
+            </tr>
+            <tr>
+              <td>contentId</td>
+              <td>Content HEAD + full op chain</td>
+              <td><span class="tag tag-public">public</span></td>
+            </tr>
+            <tr>
+              <td>operationCID</td>
+              <td>JWS token(s) &mdash; original + countersignatures</td>
+              <td><span class="tag tag-public">public</span></td>
+            </tr>
+            <tr>
+              <td>did &rarr; contentIds</td>
+              <td>Requires Merkle tree data (controller's choice to share)</td>
+              <td><span class="tag tag-choice">controller's choice</span></td>
+            </tr>
+            <tr>
+              <td>documentCID</td>
+              <td>Document bytes</td>
+              <td><span class="tag tag-dark">dark forest</span></td>
+            </tr>
+            <tr>
+              <td>contentId &rarr; signer DID</td>
+              <td>
+                Via <code>did</code> field in operation payload (committed to by CID) and
+                <code>kid</code> in JWS header
+              </td>
+              <td><span class="tag tag-public">always visible</span></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p style="margin-top: 16px; font-size: 12px">
+          <strong>Discovery is dark. Attribution is visible.</strong> Knowing a DID doesn't let you
+          find its content. Knowing a contentId lets you find its signer. The asymmetry is the dark
+          forest.
+        </p>
+      </section>
+
+      <!-- ==================== RESOLUTION FLOW ==================== -->
+      <section>
+        <h2>Full Resolution Flow</h2>
+        <p>
+          End-to-end dark forest content resolution. Every step independently verifiable. Proof from
+          Alice, chain from Bob, document from a USB drive &mdash; verification is identical.
+        </p>
+
+        <div class="flow">
+          <div class="flow-step">
+            <div class="flow-num">1</div>
+            <div class="flow-content">
+              <strong>Merkle Proof</strong> &mdash; obtain beacon from relay, verify DID's signature
+              and <code>typ: did:dfos:beacon</code>. Get inclusion proof for contentId against root.
+              <div class="note">Result: cryptographic proof this DID claims this content chain</div>
+            </div>
+          </div>
+          <div class="flow-connector"></div>
+          <div class="flow-step">
+            <div class="flow-num">2</div>
+            <div class="flow-content">
+              <strong>Chain Resolution</strong> &mdash; look up contentId on any relay. Get
+              operation chain (JWS tokens). Verify CID links, signatures, <code>typ</code> headers,
+              signer DID matches payload <code>did</code>, timestamp ordering.
+              <div class="note">
+                Result: verified chain with known head, known signer, known documentCID
+              </div>
+            </div>
+          </div>
+          <div class="flow-connector"></div>
+          <div class="flow-step">
+            <div class="flow-num">3</div>
+            <div class="flow-content">
+              <strong>Document Resolution</strong> &mdash; obtain document bytes from authorized
+              source. Encode as dag-cbor, derive CID. Verify it matches documentCID in head
+              operation.
+              <div class="note">
+                Result: verified document &mdash; these bytes are exactly what the chain committed
+                to
+              </div>
+            </div>
+          </div>
+          <div class="flow-connector"></div>
+          <div class="flow-step">
+            <div class="flow-num">4</div>
+            <div class="flow-content">
+              <strong>Manifest Navigation</strong> &mdash; if document is a manifest, parse the
+              semantic index. Each entry points to another contentId. Repeat from step 1. Recursive,
+              arbitrarily deep, same flow at every level.
+              <div class="note">
+                Result: verified semantic navigation of a DID's dark forest content
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== DARK IDENTITY ==================== -->
+      <section>
+        <h2>Dark Identity Aliasing</h2>
+        <p>
+          The signer DID on the relay can be a proxy. The connection to the real identity is buried
+          in dark forest manifest content. The protocol doesn't distinguish real from proxy &mdash;
+          they're all just DIDs.
+        </p>
+
+        <div class="dark-id-diagram">
+          <div class="dark-id-row">
+            <div class="dark-id-node node-dark">
+              Real DID<br /><span style="font-size: 10px; opacity: 0.7">did:dfos:real_abc</span>
+            </div>
+            <div class="dark-id-arrow">&rarr;</div>
+            <div class="dark-id-node node-manifest">
+              Manifest (dark)<br /><span style="font-size: 10px; opacity: 0.7"
+                >{ "proxy": "did:dfos:dark_xyz" }</span
+              >
+            </div>
+            <div class="dark-id-arrow">&rarr;</div>
+            <div class="dark-id-node node-public">
+              Proxy DID<br /><span style="font-size: 10px; opacity: 0.7">did:dfos:dark_xyz</span>
+            </div>
+          </div>
+          <div style="margin-top: 16px">
+            <div class="dark-id-row">
+              <div class="dark-id-label" style="color: var(--red)">
+                only visible with manifest access
+              </div>
+              <div style="width: 60px"></div>
+              <div class="dark-id-label" style="color: var(--red)">
+                linkage is dark forest content
+              </div>
+              <div style="width: 60px"></div>
+              <div class="dark-id-label" style="color: var(--green)">
+                visible on relay as signer
+              </div>
+            </div>
+          </div>
+          <p style="margin-top: 20px; font-size: 11px; color: var(--text-muted)">
+            Arbitrarily deep nesting. Each layer uses the same protocol primitives. The graph is
+            invisible without manifest access at each level.
+          </p>
+        </div>
+      </section>
+
+      <!-- ==================== TRUST ARCHITECTURE ==================== -->
+      <section>
+        <h2>Trust Architecture</h2>
+
+        <div class="trust-grid">
+          <div class="trust-box">
+            <h4>First-party (the DID controller)</h4>
+            <ul>
+              <li>Identity chain &mdash; key management</li>
+              <li>Content chains &mdash; document commitments</li>
+              <li>Beacon &mdash; content set commitment</li>
+              <li>Manifests &mdash; semantic navigation (dark)</li>
+              <li>Documents &mdash; the actual content (dark)</li>
+            </ul>
+            <p style="margin-top: 12px; font-size: 11px; color: var(--text-muted)">
+              Self-asserted, self-signed, self-certifying. The protocol verifies everything from
+              cryptographic primitives. No third party needed. Runs on a laptop with no network.
+            </p>
+          </div>
+
+          <div class="trust-box">
+            <h4>Third-party (validators / witnesses)</h4>
+            <ul>
+              <li>Operation countersignatures &mdash; "I verified this op"</li>
+              <li>Beacon countersignatures &mdash; "I saw this root"</li>
+              <li>Attestation chains &mdash; rich witnessing records</li>
+              <li>Independent timestamps &mdash; validator's clock</li>
+              <li>Equivocation detection &mdash; conflicting roots</li>
+            </ul>
+            <p style="margin-top: 12px; font-size: 11px; color: var(--text-muted)">
+              Corroboration that first-party assertions can't provide. The protocol is complete
+              without validators. Validators add independent timestamps, availability proof, and
+              equivocation detection.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== WITNESSING ==================== -->
+      <section>
+        <h2>Two Tiers of Witnessing</h2>
+
+        <div class="tier-cards">
+          <div class="tier-card">
+            <div class="tier-label">Tier 1</div>
+            <h4>Countersignatures</h4>
+            <p>
+              Same CID, different JWS signer. Works for both
+              <strong>content operations</strong> (<code>typ: content-op</code>) and
+              <strong>beacons</strong> (<code>typ: beacon</code>). The payload contains
+              <code>did</code> (the author/controller). When JWS <code>kid</code> DID matches
+              payload <code>did</code> = author. When they differ = witness. Ed25519 is
+              deterministic: same key + same payload = same signature, enabling dedup by JWS token
+              string.
+            </p>
+            <p style="margin-top: 8px">
+              <strong>Boolean:</strong> "Is this vouched for?" Cheap. No metadata. Collected
+              per-operation and per-beacon.
+            </p>
+          </div>
+
+          <div class="tier-card">
+            <div class="tier-label">Tier 2</div>
+            <h4>Attestation Content Chains</h4>
+            <p>
+              Validator maintains their own content chains with structured attestation documents.
+              Rich metadata: timestamps, subject DID, checks performed. Auditable, queryable,
+              historical.
+            </p>
+            <p style="margin-top: 8px">
+              <strong>Record:</strong> "Who witnessed what, when, with what checks?" The validator's
+              own dark forest content. Same protocol primitives all the way down.
+            </p>
+          </div>
+        </div>
+
+        <p style="margin-top: 16px; font-size: 12px">
+          A validator might do both: countersign in real-time (tier 1) and maintain an attestation
+          stream for audit (tier 2). The countersignature is the fast path. The attestation chain is
+          the record.
+        </p>
+      </section>
+
+      <!-- ==================== RELAY ==================== -->
+      <section>
+        <h2>Relay Architecture</h2>
+        <p>
+          HTTPS servers that store, serve, and sync protocol artifacts. Each relay defines its own
+          policy &mdash; what it serves, to whom, for which DIDs. The protocol package
+          (<code>@metalabel/dfos-protocol</code>) is a pure verification library &mdash; zero HTTP,
+          storage, or runtime opinions. The relay is a separate artifact.
+        </p>
+
+        <div class="artifacts">
+          <div class="artifact">
+            <div class="artifact-label">Relay serves</div>
+            <pre><span class="com">// Proof substrate (always)</span>
+<span class="key">Identity ops</span>    &mdash; DID resolution, key state
+<span class="key">Content ops</span>     &mdash; chain verification
+<span class="key">Root beacons</span>    &mdash; merkle root announcements
+<span class="key">JWS lookups</span>     &mdash; operation CID &rarr; signatures
+<span class="key">Witnesses</span>       &mdash; countersignatures per CID
+
+<span class="com">// Optional (operator policy)</span>
+<span class="key">Merkle tree</span>      &mdash; full tree for enumeration
+<span class="key">Documents</span>       &mdash; dark forest content (authed)
+<span class="key">SSE stream</span>      &mdash; real-time operation feed</pre>
+          </div>
+
+          <div class="artifact">
+            <div class="artifact-label">Relay sync</div>
+            <pre><span class="com">// Relay-to-relay reconciliation</span>
+<span class="val">1.</span> Exchange root beacons for tracked DIDs
+<span class="val">2.</span> Compare roots &mdash; if equal, in sync
+<span class="val">3.</span> If different, exchange content ops
+   to reconcile chain heads
+<span class="val">4.</span> MST (Merkle Search Tree) for
+   efficient delta transfer
+
+<span class="com">// Phase 1: HTTPS + hardcoded peers</span>
+<span class="com">// Phase 2: DNS discovery</span>
+<span class="com">// Phase 3: Relay directory</span>
+<span class="com">// Phase 4: libp2p (if needed)</span></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== PROOF/CONTENT ==================== -->
+      <section>
+        <h2>The Dark Forest Gap</h2>
+
+        <div class="trust-grid">
+          <div class="trust-box" style="border-left: 3px solid var(--green)">
+            <h4 style="color: var(--green)">Proof Substrate (public)</h4>
+            <p style="font-size: 12px">
+              Everything needed to verify without reading. Identity chains, content chain
+              operations, root beacons, countersignatures. Who signed what, when, how many
+              operations, which witnesses attested. The skeleton.
+            </p>
+            <p style="font-size: 12px; margin-top: 8px">
+              <strong>You can see that content exists.</strong>
+            </p>
+          </div>
+
+          <div class="trust-box" style="border-left: 3px solid var(--red)">
+            <h4 style="color: var(--red)">Content Substrate (dark)</h4>
+            <p style="font-size: 12px">
+              The actual documents behind CID commitments. Posts, profiles, manifests, identity
+              linkages. Application semantics. What things actually say. Who is really behind what.
+            </p>
+            <p style="font-size: 12px; margin-top: 8px">
+              <strong>You cannot see what it says.</strong>
+            </p>
+          </div>
+        </div>
+
+        <p style="font-size: 12px; text-align: center; color: var(--text-muted); margin-top: 8px">
+          The gap between these two is where sovereignty lives. The proof layer is infrastructure.
+          The content layer is meaning. The protocol proves without revealing.
+        </p>
+      </section>
+
+      <hr class="divider" />
+
+      <div class="footnote">
+        <p>
+          DFOS Protocol v0.1.0 &middot; Ed25519 &middot; dag-cbor &middot; CIDv1 &middot; SHA-256
+          Merkle &middot; W3C DIDs &middot; Self-certifying &middot; Transport-agnostic
+        </p>
+        <p style="margin-top: 4px">
+          231 cross-language checks &middot; TypeScript 145 &middot; Python 48 &middot; Go 13
+          &middot; Rust 13 &middot; Swift 12
+        </p>
+        <p style="margin-top: 8px">
+          <a href="https://protocol.dfos.com" style="color: var(--accent); text-decoration: none"
+            >protocol.dfos.com</a
+          >
+          &middot;
+          <a
+            href="https://github.com/metalabel/dfos"
+            style="color: var(--accent); text-decoration: none"
+            >github.com/metalabel/dfos</a
+          >
+        </p>
+        <p style="margin-top: 8px; font-size: 10px">v0.1.0 architecture &middot; 2026-03-20</p>
+      </div>
+    </div>
+  </body>
+</html>
