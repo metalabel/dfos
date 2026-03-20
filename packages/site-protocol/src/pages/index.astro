@@ -14,8 +14,8 @@ import Base from '../layouts/Base.astro';
     <section class="framing">
       <p>
         The DFOS Protocol is a system for cryptographic identity and content proof. It specifies
-        how identity chains, content chains, and verification work — independent of any particular
-        platform, implementation, or infrastructure.
+        how identity chains, content chains, beacons, merkle trees, and verification work —
+        independent of any particular platform, implementation, or infrastructure.
       </p>
       <p>
         Identity derives from signed operations, not platform accounts. Proofs are self-contained
@@ -38,8 +38,8 @@ import Base from '../layouts/Base.astro';
         <li>
           <a href="/spec">Protocol Specification</a>
           <span class="dim">
-            — the core protocol: Ed25519 identity chains, content chains, JWS envelopes,
-            CID derivation, document envelope, verification rules, and deterministic test vectors
+            — the core protocol: Ed25519 identity chains, content chains, beacons, merkle trees,
+            countersignatures, CID derivation, verification rules, and deterministic test vectors
           </span>
         </li>
         <li>
@@ -49,26 +49,11 @@ import Base from '../layouts/Base.astro';
             transport-agnostic decentralized identifiers
           </span>
         </li>
-      </ul>
-    </nav>
-
-    <h2>Ecosystem</h2>
-    <p class="dim">
-      Standard components that build on the protocol — independent specifications for content
-      types and chain storage that work together but can be adopted separately.
-    </p>
-    <nav class="landing-nav">
-      <ul>
         <li>
           <a href="/content-model">Content Model</a>
           <span class="dim">
-            — standard JSON Schema content types (post, profile) for the document envelope
-          </span>
-        </li>
-        <li>
-          <a href="/registry-api">Registry API</a>
-          <span class="dim">
-            — HTTP API for chain submission, identity resolution, and operation retrieval
+            — standard JSON Schema content types (post, profile, manifest) committed via
+            content-addressed CIDs
           </span>
         </li>
       </ul>
@@ -77,6 +62,10 @@ import Base from '../layouts/Base.astro';
     <h2>Resources</h2>
     <nav class="landing-nav">
       <ul>
+        <li>
+          <a href="/poster">Architecture Poster</a>
+          <span class="dim"> — visual protocol architecture reference</span>
+        </li>
         <li>
           <a href="https://schemas.dfos.com">schemas.dfos.com</a>
           <span class="dim"> — hosted JSON Schema definitions</span>

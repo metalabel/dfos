@@ -201,7 +201,7 @@ The critical property of `did:dfos` resolution: **the DID is verified against th
 
 The `did:dfos` method is transport-agnostic. Any system that can deliver an ordered sequence of JWS tokens (the identity chain) is a valid transport. Examples include:
 
-- **HTTP API** — The DFOS Registry API ([OpenAPI spec](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml)) provides a REST interface for chain storage and retrieval.
+- **HTTP API** — Any HTTP service that stores and retrieves ordered JWS logs can serve as a transport binding.
 - **Peer-to-peer exchange** — Chains can be exchanged directly between parties.
 - **Local storage** — Chains can be stored in local files, databases, or key-value stores.
 - **Bundle export** — Applications can export chains as portable bundles (e.g., JSON arrays of JWS tokens).
@@ -317,10 +317,9 @@ A complete reference implementation is available as the `@metalabel/dfos-protoco
 
 ### 9.2 Informative References
 
-| Reference               | URI                                                                             |
-| ----------------------- | ------------------------------------------------------------------------------- |
-| W3C DID Spec Registries | https://w3c.github.io/did-spec-registries/                                      |
-| Multicodec Table        | https://github.com/multiformats/multicodec                                      |
-| CIDv1 Specification     | https://github.com/multiformats/cid                                             |
-| dag-cbor Codec          | https://ipld.io/specs/codecs/dag-cbor/spec/                                     |
-| DFOS Registry OpenAPI   | https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/openapi.yaml |
+| Reference               | URI                                         |
+| ----------------------- | ------------------------------------------- |
+| W3C DID Spec Registries | https://w3c.github.io/did-spec-registries/  |
+| Multicodec Table        | https://github.com/multiformats/multicodec  |
+| CIDv1 Specification     | https://github.com/multiformats/cid         |
+| dag-cbor Codec          | https://ipld.io/specs/codecs/dag-cbor/spec/ |

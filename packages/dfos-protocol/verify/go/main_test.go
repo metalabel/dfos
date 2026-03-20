@@ -30,7 +30,7 @@ import (
 const (
 	genesisJWS       = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.EDryDK1uvtix-17cHun9t6MacFIx2rMmMF1QLzfD5TFlSsOvMcue97pCgGn3CXeLVFtVxgpCoh0kGSXioKKzAw"
 	rotationJWS       = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNpZCI6ImJhZnlyZWljeW00Y3lpZWRubGQ3M3NtYngzMnN6YWVpN3hkdWxxbjRnM3N0ZTVlMncydWxhanIzb3FtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.MScuoBlgOK3j5QX9tFcw1ou0o4LgJziGJEsZ5pvqiBr1SagAyAv5h-wajQhtg8IP7dLlM0U4leW2iRra945cDg"
-	contentCreateJWS  = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWE1ejd6eGtuYWU1ZHM3MmV1aWh1ZjJyZzNpeGw2dDRmYnpqZWZoY29nZzNucXBweW9ncXUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZG9jdW1lbnRDSUQiOiJiYWZ5cmVpZnB2d3Vhcm1sNjJzZm9nZHBpMnZsbHR2ZzJldjZvNHh0dzc0emZ1ZDdjcGtnNzQyNnpuZSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.t_DDkJ_TmNekIGUFO22G-W78QoE4XTg9LKQ4gzAQHaK3B6491Tir9b-wtp-hcwmENu2Hqnieqv5ASiqfFrEbDw"
+	contentCreateJWS  = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWFlZGhqcTY0YWFqcHdvY2lhaGw1dzM3ajZ1b3hyNW1vam9xNWRuYWg2ZnB2eHI1ZDRseHUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWh6d3VvdXBmZzNkeGlwNnhtZ3pteHN5d3lpaTJqZW94eHpiZ3gzenhtMmluN2tub2kzZzQiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.Rv6vlz5MfrwqDUrSVIGs4ZfeBbkQUSBcXhxwZ6hfudSr5MxhYl08hTqLDOA0W1NMjN0Hs0IW9jXTwLwP1dMDBg"
 	jwtToken          = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.zhKeXJHHF7a1-MwF4QoUTRptCplAwh20-rLnuWGDFT6uJheN4E_SA5NhqvMNflLHxd7h97gdaVnMZGE67SXEBA"
 	expectedGenCID    = "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy"
 	expectedDID       = "did:dfos:e3vvtck42d4eacdnzvtrn6"
@@ -293,7 +293,7 @@ func TestJWSContentCreateVerification(t *testing.T) {
 	if header["kid"] != expectedDID+"#key_ez9a874tckr3dv933d3ckd" {
 		t.Fatal("wrong kid")
 	}
-	if header["cid"] != "bafyreia5z7zxknae5ds72euihuf2rg3ixl6t4fbzjefhcogg3nqppyogqu" {
+	if header["cid"] != "bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu" {
 		t.Fatalf("wrong cid: %s", header["cid"])
 	}
 }
@@ -320,4 +320,123 @@ func hexDecode(s string) ([]byte, error) {
 		fmt.Sscanf(s[i:i+2], "%02x", &b[i/2])
 	}
 	return b, nil
+}
+
+// =============================================================================
+// Merkle tree, beacon, and countersignature tests
+// =============================================================================
+
+const (
+	expectedMerkleRoot  = "7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e"
+	beaconJWS           = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0._1RgZpMv63-M3ZUeTNX679xkAeX3TY0PJ0ImH7422cKA7I88Hf8bBVQMVVhP3oNdvX7i7Q4se5EP3kk5aEuxDQ"
+	expectedBeaconCID   = "bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu"
+	beaconWitnessJWS    = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0.awA8ctmLHjJCHZcH0lav7HpadkIoGiG2WR-pCf-0XfPVi9dD8Z2at0E7iAnOUnVEc5VthBo-mMklSIJFK28IDw"
+)
+
+func TestMerkleTree(t *testing.T) {
+	ids := []string{"alpha", "bravo", "charlie", "delta", "echo"}
+	sort.Strings(ids)
+
+	// hash leaves
+	leaves := make([][]byte, len(ids))
+	for i, id := range ids {
+		h := sha256.Sum256([]byte(id))
+		leaves[i] = h[:]
+	}
+
+	// verify leaf hashes
+	if fmt.Sprintf("%x", leaves[0]) != "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8" {
+		t.Fatal("alpha leaf hash mismatch")
+	}
+
+	// build tree bottom-up
+	level := leaves
+	for len(level) > 1 {
+		var next [][]byte
+		for i := 0; i < len(level); i += 2 {
+			if i+1 < len(level) {
+				h := sha256.Sum256(append(level[i], level[i+1]...))
+				next = append(next, h[:])
+			} else {
+				next = append(next, level[i])
+			}
+		}
+		level = next
+	}
+
+	root := fmt.Sprintf("%x", level[0])
+	if root != expectedMerkleRoot {
+		t.Fatalf("merkle root mismatch: got %s", root)
+	}
+}
+
+func TestMerkleProofVerification(t *testing.T) {
+	type proofStep struct {
+		hash     string
+		position string
+	}
+	path := []proofStep{
+		{"4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398", "right"},
+		{"90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3", "left"},
+		{"092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d", "right"},
+	}
+
+	current := sha256.Sum256([]byte("charlie"))
+	currentSlice := current[:]
+
+	for _, step := range path {
+		sibling, _ := hexDecode(step.hash)
+		var h [32]byte
+		if step.position == "left" {
+			h = sha256.Sum256(append(sibling, currentSlice...))
+		} else {
+			h = sha256.Sum256(append(currentSlice, sibling...))
+		}
+		currentSlice = h[:]
+	}
+
+	if fmt.Sprintf("%x", currentSlice) != expectedMerkleRoot {
+		t.Fatalf("merkle proof verification failed: got %s", fmt.Sprintf("%x", currentSlice))
+	}
+}
+
+func TestBeaconJWSVerification(t *testing.T) {
+	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
+	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
+
+	header, payload := verifyJWS(beaconJWS, pub1)
+	if header["typ"] != "did:dfos:beacon" {
+		t.Fatal("wrong typ")
+	}
+	if header["kid"] != expectedDID+"#key_r9ev34fvc23z999veaaft8" {
+		t.Fatal("wrong kid")
+	}
+	if header["cid"] != expectedBeaconCID {
+		t.Fatalf("wrong cid: %s", header["cid"])
+	}
+	if payload["type"] != "beacon" {
+		t.Fatal("wrong payload type")
+	}
+	if payload["merkleRoot"] != expectedMerkleRoot {
+		t.Fatalf("wrong merkleRoot: %s", payload["merkleRoot"])
+	}
+}
+
+func TestBeaconCountersignatureVerification(t *testing.T) {
+	seed2 := sha256.Sum256([]byte("dfos-protocol-reference-key-2"))
+	pub2 := ed25519.NewKeyFromSeed(seed2[:]).Public().(ed25519.PublicKey)
+
+	header, payload := verifyJWS(beaconWitnessJWS, pub2)
+	if header["typ"] != "did:dfos:beacon" {
+		t.Fatal("wrong typ")
+	}
+	if header["kid"] != expectedDID+"#key_ez9a874tckr3dv933d3ckd" {
+		t.Fatal("wrong kid")
+	}
+	if header["cid"] != expectedBeaconCID {
+		t.Fatal("countersignature CID should match original beacon CID")
+	}
+	if payload["merkleRoot"] != expectedMerkleRoot {
+		t.Fatal("countersignature payload should match original")
+	}
 }

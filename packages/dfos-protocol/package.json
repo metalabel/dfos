@@ -1,8 +1,8 @@
 {
   "name": "@metalabel/dfos-protocol",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "type": "module",
-  "description": "DFOS Protocol — Ed25519 signed chain primitives, registry, and verification",
+  "description": "DFOS Protocol — Ed25519 signed chain primitives, beacons, merkle trees, and verification",
   "license": "MIT",
   "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
   "repository": {
@@ -28,7 +28,7 @@
     ".": "./src/index.ts",
     "./crypto": "./src/crypto/index.ts",
     "./chain": "./src/chain/index.ts",
-    "./registry": "./src/registry/index.ts"
+    "./merkle": "./src/merkle/index.ts"
   },
   "publishConfig": {
     "exports": {
@@ -44,9 +44,9 @@
         "import": "./dist/chain/index.js",
         "types": "./dist/chain/index.d.ts"
       },
-      "./registry": {
-        "import": "./dist/registry/index.js",
-        "types": "./dist/registry/index.d.ts"
+      "./merkle": {
+        "import": "./dist/merkle/index.js",
+        "types": "./dist/merkle/index.d.ts"
       }
     }
   },
@@ -57,8 +57,6 @@
     "PROTOCOL.md",
     "DID-METHOD.md",
     "CONTENT-MODEL.md",
-    "REGISTRY-API.md",
-    "openapi.yaml",
     "LICENSE",
     "README.md"
   ],
@@ -67,14 +65,13 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "generate-examples": "vitest run --config vitest.scripts.config.ts",
+    "generate-examples": "tsx scripts/generate-examples.ts",
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
     "@ipld/dag-cbor": "^9.2.5",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
-    "hono": "^4.12.3",
     "multiformats": "^13.4.2",
     "zod": "^4.3.6"
   },

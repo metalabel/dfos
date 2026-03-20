@@ -35,6 +35,11 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Topic names this post belongs to. Stored as names for portability."
+    },
+    "createdByDID": {
+      "type": "string",
+      "pattern": "^did:",
+      "description": "DID of the identity that authored this content. Optional — omit when the signer IS the author."
     }
   },
   "additionalProperties": false,
