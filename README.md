@@ -1,6 +1,6 @@
 # DFOS
 
-The DFOS Protocol is a system for cryptographic identity and content proof. It specifies how identity chains, content chains, and verification work — independent of any particular platform, implementation, or infrastructure.
+The DFOS Protocol is a system for cryptographic identity and content proof. It specifies how identity chains, content chains, beacons, merkle trees, and verification work — independent of any particular platform, implementation, or infrastructure.
 
 Identity derives from signed operations, not platform accounts. Proofs are self-contained — they verify offline, in any language, with no network dependency. A chain exported today is verifiable by code that may not even exist yet.
 
@@ -10,18 +10,18 @@ This repository contains the open-source protocol implementation and supporting 
 
 ## Packages
 
-| Package                                                | Description                                                                         |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| [`@metalabel/dfos-protocol`](./packages/dfos-protocol) | Ed25519 signed chain primitives, identity and content verification, registry server |
-| [`site-protocol`](./packages/site-protocol)            | Astro site for [protocol.dfos.com](https://protocol.dfos.com)                       |
-| [`site-schemas`](./packages/site-schemas)              | Hono worker for [schemas.dfos.com](https://schemas.dfos.com)                        |
+| Package                                                | Description                                                              |
+| ------------------------------------------------------ | ------------------------------------------------------------------------ |
+| [`@metalabel/dfos-protocol`](./packages/dfos-protocol) | Ed25519 signed chain primitives, beacons, merkle trees, and verification |
+| [`site-protocol`](./packages/site-protocol)            | Astro site for [protocol.dfos.com](https://protocol.dfos.com)            |
+| [`site-schemas`](./packages/site-schemas)              | Hono worker for [schemas.dfos.com](https://schemas.dfos.com)             |
 
 ## Links
 
 - [Protocol specification](https://protocol.dfos.com/spec) — core protocol with worked examples and test vectors
 - [DID Method](https://protocol.dfos.com/did-method) — W3C DID method specification for `did:dfos`
 - [Content Model](https://protocol.dfos.com/content-model) — standard JSON Schema content types
-- [Registry API](https://protocol.dfos.com/registry-api) — HTTP API for chain storage and resolution
+- [Architecture Poster](https://protocol.dfos.com/poster) — visual protocol architecture reference
 - [JSON Schemas](https://schemas.dfos.com) — hosted schema definitions for DFOS documents
 - [Chain verifier](https://verify.dfos.com) — browser-based chain verification tool
 - [DFOS app](https://app.dfos.com) — the platform
