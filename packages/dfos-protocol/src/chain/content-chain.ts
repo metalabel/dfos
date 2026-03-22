@@ -9,8 +9,15 @@
   external identity's keys. The protocol treats documents as opaque CIDs —
   document semantics (types, schemas, content) are application layer concerns.
 
+  Authorization model:
+  - The creator DID (signer of the genesis operation) owns the chain
+  - The creator can sign subsequent operations directly (no credential needed)
+  - Other DIDs require a DFOSContentWrite VC-JWT in the operation's
+    `authorization` field, issued by the creator DID
+
 */
 
+import { decodeCredentialUnsafe, VC_TYPE_CONTENT_WRITE, verifyCredential } from '../credentials';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { deriveContentId } from './derivation';
 import { ContentOperation } from './schemas';
@@ -33,6 +40,8 @@ export interface VerifiedContentChain {
   currentDocumentCID: string | null;
   /** Number of operations in the chain */
   length: number;
+  /** The DID that created the chain (signer of genesis operation) */
+  creatorDID: string;
 }
 
 // -----------------------------------------------------------------------------
@@ -66,15 +75,30 @@ export const signContentOperation = async (input: {
 // -----------------------------------------------------------------------------
 
 /**
- * Verify a content chain's structural integrity and signatures
+ * Verify a content chain's structural integrity, signatures, and authorization
  *
  * The caller provides a key resolver to look up public keys from kid values.
  * This keeps the content chain protocol independent of identity resolution.
+ *
+ * Authorization rules:
+ * - Genesis (create) operation: the signer is the chain creator, always authorized
+ * - Subsequent operations signed by the creator DID: authorized (no credential needed)
+ * - Subsequent operations signed by a different DID: must include an `authorization`
+ *   field containing a valid DFOSContentWrite VC-JWT issued by the creator DID
  */
 export const verifyContentChain = async (input: {
   log: string[];
   /** Resolve a kid (DID URL) to the raw Ed25519 public key bytes */
   resolveKey: (kid: string) => Promise<Uint8Array>;
+  /**
+   * Enforce creator-sovereignty authorization. When true, non-creator signers
+   * must include a DFOSContentWrite VC-JWT in the operation's `authorization`
+   * field. When false (default), any signer with a valid signature is accepted.
+   *
+   * Web relays should set this to true. Applications migrating to VC-based
+   * authorization can enable this once all chains include authorization fields.
+   */
+  enforceAuthorization?: boolean;
 }): Promise<VerifiedContentChain> => {
   if (input.log.length === 0) throw new Error('log must have at least one operation');
 
@@ -86,6 +110,7 @@ export const verifyContentChain = async (input: {
     currentDocumentCID: null as string | null,
     previousCID: null as string | null,
     lastCreatedAt: null as string | null,
+    creatorDID: null as string | null,
   };
 
   for (const [idx, jwsToken] of input.log.entries()) {
@@ -145,6 +170,65 @@ export const verifyContentChain = async (input: {
       throw new Error(`log[${idx}]: invalid signature`);
     }
 
+    // --- authorization check ---
+    if (idx === 0) {
+      // genesis: signer is the creator, always authorized
+      state.creatorDID = op.did;
+    } else if (op.did !== state.creatorDID && input.enforceAuthorization) {
+      // delegated operation: signer differs from creator, requires authorization VC
+      const authorization =
+        op.type !== 'create' ? (op as { authorization?: string }).authorization : undefined;
+      if (!authorization) {
+        throw new Error(
+          `log[${idx}]: signer ${op.did} is not the chain creator — authorization VC required`,
+        );
+      }
+
+      // extract the kid from the VC to resolve the creator's signing key
+      const vcDecoded = decodeCredentialUnsafe(authorization);
+      if (!vcDecoded) {
+        throw new Error(`log[${idx}]: failed to decode authorization VC`);
+      }
+      const vcKid = vcDecoded.header.kid;
+      if (!vcKid || !vcKid.includes('#')) {
+        throw new Error(`log[${idx}]: authorization VC kid must be a DID URL`);
+      }
+
+      let creatorPublicKey: Uint8Array;
+      try {
+        creatorPublicKey = await input.resolveKey(vcKid);
+      } catch {
+        throw new Error(`log[${idx}]: cannot resolve creator key for authorization verification`);
+      }
+
+      // verify the authorization VC
+      const opCreatedAtUnix = Math.floor(new Date(op.createdAt).getTime() / 1000);
+      try {
+        const credential = verifyCredential({
+          token: authorization,
+          publicKey: creatorPublicKey,
+          subject: op.did,
+          expectedType: VC_TYPE_CONTENT_WRITE,
+          currentTime: opCreatedAtUnix,
+        });
+
+        // verify VC issuer is the chain creator
+        if (credential.iss !== state.creatorDID) {
+          throw new Error('VC issuer is not the chain creator');
+        }
+
+        // if VC is narrowed to a contentId, it must match this chain
+        if (credential.contentId && credential.contentId !== state.contentId) {
+          throw new Error(
+            `VC contentId ${credential.contentId} does not match chain ${state.contentId}`,
+          );
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'unknown error';
+        throw new Error(`log[${idx}]: authorization verification failed: ${message}`);
+      }
+    }
+
     // derive operation CID
     const encoded = await dagCborCanonicalEncode(op);
     const operationCID = encoded.cid.toString();
@@ -187,5 +271,6 @@ export const verifyContentChain = async (input: {
     isDeleted: state.isDeleted,
     currentDocumentCID: state.currentDocumentCID,
     length: input.log.length,
+    creatorDID: state.creatorDID!,
   };
 };

@@ -24,6 +24,7 @@ import type {
   IdentityOperation,
   MultikeyPublicKey,
 } from '../src/chain';
+import { createCredential, VC_TYPE_CONTENT_READ, VC_TYPE_CONTENT_WRITE } from '../src/credentials';
 import {
   dagCborCanonicalEncode,
   generateId,
@@ -31,6 +32,9 @@ import {
   signPayloadEd25519,
 } from '../src/crypto';
 import { buildMerkleTree, generateMerkleProof } from '../src/merkle';
+
+/** Fixed iat for deterministic credential examples (2026-03-07T00:00:00Z) */
+const FIXED_IAT = Math.floor(new Date('2026-03-07T00:00:00.000Z').getTime() / 1000);
 
 const sha256 = async (input: string) =>
   new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)));
@@ -243,6 +247,166 @@ const main = async () => {
   });
 
   // ================================================================
+  // KEY 3 — DELEGATE IDENTITY
+  // ================================================================
+
+  // key3 is a third identity (separate DID) used as delegate in credential + chain fixtures
+  const seed3 = await sha256('dfos-protocol-reference-key-3');
+  const keypair3 = importEd25519Keypair(seed3);
+  const multikey3 = encodeEd25519Multikey(keypair3.publicKey);
+  const keyId3 = generateId('key', { seed: keypair3.publicKey });
+  const signer3 = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair3.privateKey);
+
+  const key3: MultikeyPublicKey = {
+    id: keyId3,
+    type: 'Multikey',
+    publicKeyMultibase: multikey3,
+  };
+
+  // derive a proper DID for key3 via identity genesis
+  const key3GenesisOp: IdentityOperation = {
+    version: 1,
+    type: 'create',
+    authKeys: [key3],
+    assertKeys: [key3],
+    controllerKeys: [key3],
+    createdAt: '2026-03-07T00:09:00.000Z',
+  };
+  const { jwsToken: key3GenesisJws } = await signIdentityOperation({
+    operation: key3GenesisOp,
+    signer: signer3,
+    keyId: keyId3,
+  });
+  const identity3 = await verifyIdentityChain({ didPrefix: 'did:dfos', log: [key3GenesisJws] });
+
+  // ================================================================
+  // CREDENTIAL FIXTURES
+  // ================================================================
+
+  // Write credential: key1 (controller) authorizes key3 (different DID) to write content chains
+  const writeCredentialJws = await createCredential({
+    iss: identity.did,
+    sub: identity3.did,
+    exp: Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000),
+    kid: kid1,
+    type: VC_TYPE_CONTENT_WRITE,
+    iat: FIXED_IAT,
+    sign: signer1,
+  });
+
+  // Write credential with contentId narrowing
+  const narrowWriteCredentialJws = await createCredential({
+    iss: identity.did,
+    sub: identity3.did,
+    exp: Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000),
+    kid: kid1,
+    type: VC_TYPE_CONTENT_WRITE,
+    contentId: contentChain.contentId,
+    iat: FIXED_IAT,
+    sign: signer1,
+  });
+
+  // Read credential: key1 (controller) grants read access to key3
+  const readCredentialJws = await createCredential({
+    iss: identity.did,
+    sub: identity3.did,
+    exp: Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000),
+    kid: kid1,
+    type: VC_TYPE_CONTENT_READ,
+    iat: FIXED_IAT,
+    sign: signer1,
+  });
+
+  // ================================================================
+  // DELEGATED CONTENT CHAIN FIXTURE
+  // ================================================================
+
+  // create a fresh content chain owned by identity (key1 controller)
+  const delegatedDoc1 = {
+    $schema: 'https://schemas.dfos.com/post/v1',
+    format: 'short-post',
+    title: 'Original Post',
+    body: 'Content created by the chain owner.',
+    createdByDID: identity.did,
+  };
+  const delegatedDoc1Block = await dagCborCanonicalEncode(delegatedDoc1);
+  const delegatedDocCID1 = delegatedDoc1Block.cid.toString();
+
+  const delegatedCreateOp: ContentOperation = {
+    version: 1,
+    type: 'create',
+    did: identity.did,
+    documentCID: delegatedDocCID1,
+    baseDocumentCID: null,
+    createdAt: '2026-03-07T00:10:00.000Z',
+    note: null,
+  };
+  const { jwsToken: delegatedCreateJws, operationCID: delegatedCreateCID } =
+    await signContentOperation({
+      operation: delegatedCreateOp,
+      signer: signer1,
+      kid: kid1,
+    });
+
+  // verify to get contentId for narrowing
+  const kid3 = `${identity3.did}#${keyId3}`;
+
+  const delegatedChainGenesis = await verifyContentChain({
+    log: [delegatedCreateJws],
+    resolveKey: async () => keypair1.publicKey,
+  });
+
+  // key1 issues write VC to key3 (the delegate)
+  const delegateWriteVC = await createCredential({
+    iss: identity.did,
+    sub: identity3.did,
+    exp: Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000),
+    kid: kid1,
+    type: VC_TYPE_CONTENT_WRITE,
+    contentId: delegatedChainGenesis.contentId,
+    iat: FIXED_IAT,
+    sign: signer1,
+  });
+
+  // key3 signs an update with the write VC
+  const delegatedDoc2 = {
+    $schema: 'https://schemas.dfos.com/post/v1',
+    format: 'short-post',
+    title: 'Delegated Edit',
+    body: 'Content updated by an authorized delegate.',
+    createdByDID: identity3.did,
+  };
+  const delegatedDoc2Block = await dagCborCanonicalEncode(delegatedDoc2);
+  const delegatedDocCID2 = delegatedDoc2Block.cid.toString();
+
+  const delegatedUpdateOp: ContentOperation = {
+    version: 1,
+    type: 'update',
+    did: identity3.did,
+    previousOperationCID: delegatedCreateCID,
+    documentCID: delegatedDocCID2,
+    baseDocumentCID: delegatedDocCID1,
+    createdAt: '2026-03-07T00:11:00.000Z',
+    note: 'delegated edit by key3',
+    authorization: delegateWriteVC,
+  };
+  const { jwsToken: delegatedUpdateJws } = await signContentOperation({
+    operation: delegatedUpdateOp,
+    signer: signer3,
+    kid: kid3,
+  });
+
+  // verify the delegated chain
+  const delegatedContentChain = await verifyContentChain({
+    log: [delegatedCreateJws, delegatedUpdateJws],
+    resolveKey: async (resolvedKid: string) => {
+      if (resolvedKid.includes(keyId1)) return keypair1.publicKey;
+      if (resolvedKid.includes(keyId3)) return keypair3.publicKey;
+      throw new Error(`unknown kid: ${resolvedKid}`);
+    },
+  });
+
+  // ================================================================
   // WRITE FIXTURES
   // ================================================================
 
@@ -361,7 +525,65 @@ const main = async () => {
     },
   });
 
-  console.log('\ndone — 7 fixtures generated');
+  write('credential-write', {
+    description: 'VC-JWT: DFOSContentWrite credential (broad + narrowed)',
+    type: 'credential',
+    broadCredential: writeCredentialJws,
+    narrowCredential: narrowWriteCredentialJws,
+    issuerPublicKey: multikey1,
+    subjectPublicKey: multikey3,
+    expected: {
+      iss: identity.did,
+      sub: identity3.did,
+      vcType: VC_TYPE_CONTENT_WRITE,
+      narrowContentId: contentChain.contentId,
+    },
+  });
+
+  write('credential-read', {
+    description: 'VC-JWT: DFOSContentRead credential',
+    type: 'credential',
+    credential: readCredentialJws,
+    issuerPublicKey: multikey1,
+    subjectPublicKey: multikey3,
+    expected: {
+      iss: identity.did,
+      sub: identity3.did,
+      vcType: VC_TYPE_CONTENT_READ,
+    },
+  });
+
+  write('content-delegated', {
+    description: 'Content chain: creator signs genesis, delegate signs update with write VC',
+    type: 'content-delegated',
+    chain: [delegatedCreateJws, delegatedUpdateJws],
+    creatorPublicKey: multikey1,
+    delegatePublicKey: multikey3,
+    documents: [
+      {
+        content: delegatedDoc1,
+        baseDocumentCID: null,
+        createdByDID: identity.did,
+        createdAt: '2026-03-07T00:10:00.000Z',
+      },
+      {
+        content: delegatedDoc2,
+        baseDocumentCID: delegatedDocCID1,
+        createdByDID: identity3.did,
+        createdAt: '2026-03-07T00:11:00.000Z',
+      },
+    ],
+    authorization: delegateWriteVC,
+    expected: {
+      contentId: delegatedContentChain.contentId,
+      creatorDID: identity.did,
+      isDeleted: false,
+      currentDocumentCID: delegatedContentChain.currentDocumentCID,
+      length: 2,
+    },
+  });
+
+  console.log('\ndone — 10 fixtures generated');
 };
 
 main().catch((err) => {

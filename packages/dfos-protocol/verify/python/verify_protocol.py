@@ -31,6 +31,10 @@ CONTENT_CREATE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLC
 
 JWT_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.zhKeXJHHF7a1-MwF4QoUTRptCplAwh20-rLnuWGDFT6uJheN4E_SA5NhqvMNflLHxd7h97gdaVnMZGE67SXEBA"
 
+BROAD_WRITE_VC = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50V3JpdGUiXSwiY3JlZGVudGlhbFN1YmplY3QiOnt9fX0.KoN20I8kerQAg7qjDN1Ju-IFi2gMjGhG2v6crWMGxheJdsY6OhfjvLu5LM_zty3IRVdmaBN-4fJngt3yscSJCg"
+
+READ_VC = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50UmVhZCJdLCJjcmVkZW50aWFsU3ViamVjdCI6e319fQ.07JK8NPIzcoWRXqT961znL1642OF2xBVaJsBZ0CP6LTBF96IYtAX8_Xch2SgmrCzhZQN1XgbiIcgSmuTUQtsCA"
+
 EXPECTED_GENESIS_CID = "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy"
 EXPECTED_DID = "did:dfos:e3vvtck42d4eacdnzvtrn6"
 EXPECTED_MULTIKEY1 = "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
@@ -274,6 +278,21 @@ check("Beacon countersig typ", result["header"]["typ"] == "did:dfos:beacon")
 check("Beacon countersig kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_ez9a874tckr3dv933d3ckd")
 check("Beacon countersig same CID", result["header"]["cid"] == EXPECTED_BEACON_CID)
 check("Beacon countersig same payload", result["payload"]["merkleRoot"] == EXPECTED_MERKLE_ROOT)
+
+# --- 14. VC-JWT Credential Verification ---
+print("\n14. VC-JWT Credential Verification (key 1)")
+result = verify_jws(BROAD_WRITE_VC, pub1)
+check("Write VC signature valid", True)
+check("Write VC header typ", result["header"]["typ"] == "vc+jwt")
+check("Write VC header kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_r9ev34fvc23z999veaaft8")
+check("Write VC payload iss", result["payload"]["iss"] == EXPECTED_DID)
+check("Write VC payload sub", result["payload"]["sub"] == EXPECTED_DID)
+check("Write VC type contains DFOSContentWrite", "DFOSContentWrite" in result["payload"]["vc"]["type"])
+check("Write VC context contains W3C v2", "https://www.w3.org/ns/credentials/v2" in result["payload"]["vc"]["@context"])
+
+result = verify_jws(READ_VC, pub1)
+check("Read VC signature valid", True)
+check("Read VC type contains DFOSContentRead", "DFOSContentRead" in result["payload"]["vc"]["type"])
 
 # --- Summary ---
 print(f"\n{'=' * 70}")
