@@ -9,6 +9,9 @@ export const GET: APIRoute = () => {
   const didMethod = fs.readFileSync('../dfos-protocol/DID-METHOD.md', 'utf-8');
   const contentModel = fs.readFileSync('../dfos-protocol/CONTENT-MODEL.md', 'utf-8');
 
+  // Implementation docs — read from sibling packages
+  const webRelay = fs.readFileSync('../dfos-web-relay/RELAY.md', 'utf-8');
+
   // Site content — sourced from shared modules (same data renders the pages)
   const overview = overviewMarkdown.trim();
   const faq = faqsToMarkdown(faqs);
@@ -34,6 +37,10 @@ export const GET: APIRoute = () => {
     '---',
     '',
     contentModel,
+    '',
+    '---',
+    '',
+    webRelay,
     '',
     '---',
     '',

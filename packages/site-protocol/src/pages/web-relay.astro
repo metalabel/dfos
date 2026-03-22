@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import { Marked } from 'marked';
 import Base from '../layouts/Base.astro';
 
-// Read PROTOCOL.md at build time from the protocol package
-const protocolMd = fs.readFileSync('../dfos-protocol/PROTOCOL.md', 'utf-8');
+// Read RELAY.md at build time from the web relay package
+const relayMd = fs.readFileSync('../dfos-web-relay/RELAY.md', 'utf-8');
 
 function slugify(text: string): string {
   return text
@@ -17,7 +17,7 @@ function slugify(text: string): string {
 }
 
 const marked = new Marked();
-let html = await marked.parse(protocolMd);
+let html = await marked.parse(relayMd);
 
 // Fix GFM strikethrough — tildes in table cells (e.g. ~3×) get
 // misinterpreted as ~~strikethrough~~. Restore the ~ markers.
@@ -44,9 +44,9 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
 ---
 
 <Base
-  title="Specification"
-  description="Complete DFOS protocol specification — Ed25519 signed chain primitives, beacons, merkle trees, countersignatures, identity and content verification, with worked examples and test vectors."
-  path="/spec"
+  title="Web Relay"
+  description="DFOS Web Relay — verifying HTTP relay for identity chains, content chains, beacons, countersignatures, and content blobs."
+  path="/web-relay"
 >
   <main>
     <nav class="site-nav">
@@ -60,9 +60,9 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
     <footer>
       <nav class="dim" aria-label="Site">
         <a href="/">DFOS Protocol</a> · <a href="/overview">Overview</a> ·
+        <a href="/spec">Specification</a> ·
         <a href="/did-method">DID Method</a> ·
         <a href="/content-model">Content Model</a> ·
-        <a href="/web-relay">Web Relay</a> ·
         <a href="/faq">FAQ</a> ·
         <a href="https://github.com/metalabel/dfos">GitHub</a> ·
         <a href="https://dfos.com">dfos.com</a>
@@ -70,7 +70,7 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
     </footer>
   </main>
 
-  <template id="raw-md">{protocolMd}</template>
+  <template id="raw-md">{relayMd}</template>
   <script is:inline>
     document.getElementById('copy-md').addEventListener('click', function () {
       const md = document.getElementById('raw-md').content.textContent;
