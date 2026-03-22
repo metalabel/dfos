@@ -1,0 +1,358 @@
+/*
+
+  RELAY
+
+  Hono app factory — createRelay(options) returns a portable Hono application
+  implementing the DFOS web relay HTTP interface.
+
+  Proof plane routes are public. Content plane routes require authentication
+  via DID-signed auth tokens and optional VC-JWT credentials.
+
+*/
+
+import { VC_TYPE_CONTENT_READ, verifyCredential } from '@metalabel/dfos-protocol/credentials';
+import type { VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
+import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { Hono } from 'hono';
+import { z } from 'zod';
+import { authenticateRequest } from './auth';
+import { createCurrentKeyResolver, ingestOperations } from './ingest';
+import type { RelayOptions, RelayStore, StoredContentChain } from './types';
+
+// -----------------------------------------------------------------------------
+// request schemas
+// -----------------------------------------------------------------------------
+
+const IngestBody = z.object({
+  operations: z.array(z.string()).min(1).max(100),
+});
+
+// -----------------------------------------------------------------------------
+// factory
+// -----------------------------------------------------------------------------
+
+/**
+ * Create a DFOS web relay Hono application
+ *
+ * The returned app is portable — mount it on any Hono-compatible runtime
+ * (Node.js, Cloudflare Workers, Deno, Bun, etc.).
+ */
+export const createRelay = (options: RelayOptions): Hono => {
+  const { relayDID, store } = options;
+  const app = new Hono();
+
+  // -------------------------------------------------------------------------
+  // well-known
+  // -------------------------------------------------------------------------
+
+  app.get('/.well-known/dfos-relay', (c) => {
+    return c.json({
+      did: relayDID,
+      protocol: 'dfos-web-relay',
+      version: '0.1.0',
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // proof plane — public routes
+  // -------------------------------------------------------------------------
+
+  /** Submit operations for ingestion */
+  app.post('/operations', async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'invalid JSON body' }, 400);
+    }
+
+    const parsed = IngestBody.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid request', details: parsed.error.issues }, 400);
+    }
+
+    const results = await ingestOperations(parsed.data.operations, store);
+    return c.json({ results });
+  });
+
+  /** Get an operation by CID */
+  app.get('/operations/:cid', async (c) => {
+    const cid = c.req.param('cid');
+    const op = await store.getOperation(cid);
+    if (!op) return c.json({ error: 'not found' }, 404);
+
+    return c.json({
+      cid: op.cid,
+      jwsToken: op.jwsToken,
+      chainType: op.chainType,
+      chainId: op.chainId,
+    });
+  });
+
+  /** Get an identity chain by DID */
+  app.get('/identities/:did{.+}', async (c) => {
+    const did = c.req.param('did');
+    const chain = await store.getIdentityChain(did);
+    if (!chain) return c.json({ error: 'not found' }, 404);
+
+    return c.json({
+      did: chain.did,
+      log: chain.log,
+      state: chain.state,
+    });
+  });
+
+  /** Get a content chain by content ID */
+  app.get('/content/:contentId', async (c) => {
+    const contentId = c.req.param('contentId');
+    const chain = await store.getContentChain(contentId);
+    if (!chain) return c.json({ error: 'not found' }, 404);
+
+    return c.json({
+      contentId: chain.contentId,
+      genesisCID: chain.genesisCID,
+      log: chain.log,
+      state: chain.state,
+    });
+  });
+
+  /** Get countersignatures for an operation or beacon CID */
+  app.get('/countersignatures/:cid', async (c) => {
+    const cid = c.req.param('cid');
+
+    // check if it's a known operation or beacon CID
+    const op = await store.getOperation(cid);
+    if (!op) {
+      // not an operation — check if any beacon has this CID
+      const countersigs = await store.getCountersignatures(cid);
+      if (countersigs.length === 0) return c.json({ error: 'not found' }, 404);
+      return c.json({ cid, countersignatures: countersigs });
+    }
+
+    const countersigs = await store.getCountersignatures(cid);
+    return c.json({ operationCID: cid, countersignatures: countersigs });
+  });
+
+  /** Get countersignatures for an operation CID (legacy path) */
+  app.get('/operations/:cid/countersignatures', async (c) => {
+    const cid = c.req.param('cid');
+    const op = await store.getOperation(cid);
+    if (!op) return c.json({ error: 'not found' }, 404);
+
+    const countersigs = await store.getCountersignatures(cid);
+    return c.json({ operationCID: cid, countersignatures: countersigs });
+  });
+
+  /** Get the latest beacon for a DID */
+  app.get('/beacons/:did{.+}', async (c) => {
+    const did = c.req.param('did');
+    const beacon = await store.getBeacon(did);
+    if (!beacon) return c.json({ error: 'not found' }, 404);
+
+    return c.json({
+      did: beacon.did,
+      jwsToken: beacon.jwsToken,
+      beaconCID: beacon.beaconCID,
+      payload: beacon.state.payload,
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // content plane — authenticated routes
+  // -------------------------------------------------------------------------
+
+  /** Upload a blob for a content chain */
+  app.put('/content/:contentId/blob', async (c) => {
+    const contentId = c.req.param('contentId');
+    const documentCID = c.req.header('x-document-cid');
+
+    if (!documentCID) {
+      return c.json({ error: 'missing X-Document-CID header' }, 400);
+    }
+
+    // authenticate
+    const auth = await authenticateRequest(c.req.header('authorization'), relayDID, store);
+    if (!auth) return c.json({ error: 'authentication required' }, 401);
+
+    // verify chain exists and caller is the creator
+    const chain = await store.getContentChain(contentId);
+    if (!chain) return c.json({ error: 'content chain not found' }, 404);
+    if (chain.state.creatorDID !== auth.iss) {
+      return c.json({ error: 'not the chain creator' }, 403);
+    }
+
+    // verify documentCID is referenced in the chain — check current head
+    // (the chain's current documentCID or any operation's documentCID)
+    const chainLog = chain.log;
+    let documentReferenced = false;
+    for (const token of chainLog) {
+      const decoded = decodeJwsUnsafe(token);
+      if (!decoded) continue;
+      const payload = decoded.payload as Record<string, unknown>;
+      if (payload['documentCID'] === documentCID) {
+        documentReferenced = true;
+        break;
+      }
+    }
+    if (!documentReferenced) {
+      return c.json({ error: 'documentCID not referenced in chain' }, 400);
+    }
+
+    // read blob bytes and verify they match the claimed documentCID
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    try {
+      const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+      const encoded = await dagCborCanonicalEncode(parsed);
+      if (encoded.cid.toString() !== documentCID) {
+        return c.json({ error: 'blob bytes do not match documentCID' }, 400);
+      }
+    } catch {
+      return c.json({ error: 'blob bytes do not match documentCID' }, 400);
+    }
+
+    await store.putBlob({ creatorDID: auth.iss, documentCID }, bytes);
+
+    return c.json({ status: 'stored', contentId, documentCID });
+  });
+
+  /** Download a blob for a content chain */
+  app.get('/content/:contentId/blob', async (c) => {
+    return await readBlob({
+      contentId: c.req.param('contentId'),
+      ref: 'head',
+      authHeader: c.req.header('authorization'),
+      credHeader: c.req.header('x-credential'),
+      relayDID,
+      store,
+    });
+  });
+
+  app.get('/content/:contentId/blob/:ref', async (c) => {
+    return await readBlob({
+      contentId: c.req.param('contentId'),
+      ref: c.req.param('ref'),
+      authHeader: c.req.header('authorization'),
+      credHeader: c.req.header('x-credential'),
+      relayDID,
+      store,
+    });
+  });
+
+  return app;
+};
+
+// -----------------------------------------------------------------------------
+// blob read — extracted from routes for clean typing
+// -----------------------------------------------------------------------------
+
+const jsonResponse = (body: Record<string, unknown>, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+
+const readBlob = async (params: {
+  contentId: string;
+  ref: string;
+  authHeader: string | undefined;
+  credHeader: string | undefined;
+  relayDID: string;
+  store: RelayStore;
+}): Promise<Response> => {
+  const { contentId, ref, authHeader, credHeader, relayDID, store } = params;
+
+  // authenticate
+  const auth = await authenticateRequest(authHeader, relayDID, store);
+  if (!auth) return jsonResponse({ error: 'authentication required' }, 401);
+
+  // look up chain
+  const chain = await store.getContentChain(contentId);
+  if (!chain) return jsonResponse({ error: 'content chain not found' }, 404);
+
+  // verify read credential — unless the caller is the chain creator
+  const credError = await verifyReadCredential(auth, chain, contentId, credHeader, store);
+  if (credError) return credError;
+
+  // resolve documentCID for the requested ref
+  let documentCID: string | null = null;
+  let operationFound = ref === 'head';
+
+  if (ref === 'head') {
+    documentCID = chain.state.currentDocumentCID;
+  } else {
+    for (const token of chain.log) {
+      const decoded = decodeJwsUnsafe(token);
+      if (!decoded) continue;
+      if (decoded.header.cid === ref) {
+        operationFound = true;
+        const payload = decoded.payload as Record<string, unknown>;
+        documentCID = typeof payload['documentCID'] === 'string' ? payload['documentCID'] : null;
+        break;
+      }
+    }
+  }
+
+  if (!operationFound) return jsonResponse({ error: 'operation not found in chain' }, 404);
+  if (!documentCID) return jsonResponse({ error: 'no document at this ref' }, 404);
+
+  const blob = await store.getBlob({ creatorDID: chain.state.creatorDID, documentCID });
+  if (!blob) return jsonResponse({ error: 'blob not found' }, 404);
+
+  return new Response(blob, {
+    headers: {
+      'content-type': 'application/octet-stream',
+      'x-document-cid': documentCID,
+    },
+  });
+};
+
+/** Verify the read credential if the caller is not the chain creator. Returns an error Response or null. */
+const verifyReadCredential = async (
+  auth: VerifiedAuthToken,
+  chain: StoredContentChain,
+  contentId: string,
+  credHeader: string | undefined,
+  store: RelayStore,
+): Promise<Response | null> => {
+  if (auth.iss === chain.state.creatorDID) return null;
+
+  if (!credHeader) {
+    return jsonResponse({ error: 'DFOSContentRead credential required' }, 403);
+  }
+
+  const resolveKey = createCurrentKeyResolver(store);
+  try {
+    const vcDecoded = decodeJwsUnsafe(credHeader);
+    if (!vcDecoded) throw new Error('invalid credential format');
+    const vcHeader = vcDecoded.header as { kid?: string };
+    if (!vcHeader.kid) throw new Error('credential missing kid');
+
+    const kidHashIdx = vcHeader.kid.indexOf('#');
+    if (kidHashIdx < 0) throw new Error('credential kid must be a DID URL');
+    const vcIssuerDID = vcHeader.kid.substring(0, kidHashIdx);
+    if (vcIssuerDID !== chain.state.creatorDID) {
+      throw new Error('credential must be issued by the chain creator');
+    }
+
+    const creatorKey = await resolveKey(vcHeader.kid);
+    const credential = verifyCredential({
+      token: credHeader,
+      publicKey: creatorKey,
+      subject: auth.iss,
+      expectedType: VC_TYPE_CONTENT_READ,
+    });
+
+    if (credential.iss !== chain.state.creatorDID) {
+      throw new Error('credential issuer is not the chain creator');
+    }
+
+    if (credential.contentId && credential.contentId !== contentId) {
+      return jsonResponse({ error: 'credential contentId does not match' }, 403);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'credential verification failed';
+    return jsonResponse({ error: message }, 403);
+  }
+
+  return null;
+};

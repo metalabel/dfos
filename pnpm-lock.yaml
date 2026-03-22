@@ -61,6 +61,28 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@24.11.0)(tsx@4.21.0)(yaml@2.8.2)
 
+  packages/dfos-web-relay:
+    dependencies:
+      hono:
+        specifier: ^4.12.5
+        version: 4.12.8
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      '@metalabel/dfos-protocol':
+        specifier: workspace:*
+        version: link:../dfos-protocol
+      '@types/node':
+        specifier: ^24.10.4
+        version: 24.11.0
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.2)
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@24.11.0)(tsx@4.21.0)(yaml@2.8.2)
+
   packages/site-protocol:
     dependencies:
       '@astrojs/sitemap':
@@ -1474,6 +1496,10 @@ packages:
 
   hono@4.12.3:
     resolution: {integrity: sha512-SFsVSjp8sj5UumXOOFlkZOG6XS9SJDKw0TbwFeV+AJ8xlST8kxK5Z/5EYa111UY8732lK2S/xB653ceuaoGwpg==}
+    engines: {node: '>=16.9.0'}
+
+  hono@4.12.8:
+    resolution: {integrity: sha512-VJCEvtrezO1IAR+kqEYnxUOoStaQPGrCmX3j4wDTNOcD1uRPFpGlwQUIW8niPuvHXaTUxeOUl5MMDGrl+tmO9A==}
     engines: {node: '>=16.9.0'}
 
   html-escaper@3.0.3:
@@ -3924,6 +3950,8 @@ snapshots:
       space-separated-tokens: 2.0.2
 
   hono@4.12.3: {}
+
+  hono@4.12.8: {}
 
   html-escaper@3.0.3: {}
 

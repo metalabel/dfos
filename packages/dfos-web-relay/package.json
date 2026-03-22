@@ -1,0 +1,65 @@
+{
+  "name": "@metalabel/dfos-web-relay",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "DFOS Web Relay — verifying HTTP relay for identity chains, content chains, beacons, and content blobs",
+  "license": "MIT",
+  "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/metalabel/dfos.git",
+    "directory": "packages/dfos-web-relay"
+  },
+  "homepage": "https://protocol.dfos.com",
+  "keywords": [
+    "dfos",
+    "relay",
+    "web-relay",
+    "hono",
+    "ed25519",
+    "jws",
+    "did",
+    "verifiable",
+    "identity",
+    "content-addressing",
+    "metalabel"
+  ],
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "import": "./dist/index.js",
+        "types": "./dist/index.d.ts"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "RELAY.md",
+    "openapi.yaml",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build"
+  },
+  "dependencies": {
+    "hono": "^4.12.5",
+    "zod": "^4.3.6"
+  },
+  "peerDependencies": {
+    "@metalabel/dfos-protocol": "^0.1.0"
+  },
+  "devDependencies": {
+    "@metalabel/dfos-protocol": "workspace:*",
+    "@types/node": "^24.10.4",
+    "tsup": "^8.5.1",
+    "vitest": "^4.0.18"
+  }
+}

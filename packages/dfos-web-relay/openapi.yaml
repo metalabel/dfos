@@ -1,0 +1,561 @@
+openapi: 3.1.0
+info:
+  title: DFOS Web Relay
+  version: 0.1.0
+  description: |
+    HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves
+    identity chains, content chains, beacons, countersignatures, and content blobs.
+
+    Two data planes:
+    - **Proof plane** (public): signed chain operations, beacons, countersignatures
+    - **Content plane** (authenticated): raw content blobs gated by DID auth tokens and VC-JWT credentials
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+paths:
+  /.well-known/dfos-relay:
+    get:
+      operationId: getRelayMetadata
+      summary: Relay metadata
+      description: Returns the relay's DID, protocol identifier, and version.
+      tags: [Meta]
+      responses:
+        '200':
+          description: Relay metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [did, protocol, version]
+                properties:
+                  did:
+                    type: string
+                    description: The relay's DID
+                    example: 'did:dfos:e3vvtck42d4eacdnzvtrn6'
+                  protocol:
+                    type: string
+                    enum: [dfos-web-relay]
+                  version:
+                    type: string
+                    example: '0.1.0'
+
+  /operations:
+    post:
+      operationId: ingestOperations
+      summary: Submit operations for ingestion
+      description: |
+        Accept a batch of JWS tokens — identity operations, content operations,
+        beacons, and countersignatures. The relay classifies, dependency-sorts,
+        verifies, and stores each token.
+      tags: [Proof Plane]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operations]
+              properties:
+                operations:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: string
+                    description: JWS compact serialization token
+      responses:
+        '200':
+          description: Ingestion results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IngestionResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /operations/{cid}:
+    get:
+      operationId: getOperation
+      summary: Get an operation by CID
+      tags: [Proof Plane]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: CIDv1 of the operation
+      responses:
+        '200':
+          description: Operation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoredOperation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /operations/{cid}/countersignatures:
+    get:
+      operationId: getCountersignatures
+      summary: Get countersignatures for an operation
+      tags: [Proof Plane]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Countersignatures
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operationCID, countersignatures]
+                properties:
+                  operationCID:
+                    type: string
+                  countersignatures:
+                    type: array
+                    items:
+                      type: string
+                      description: JWS compact serialization (witness signature)
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /identities/{did}:
+    get:
+      operationId: getIdentityChain
+      summary: Get an identity chain by DID
+      tags: [Proof Plane]
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 'DID of the identity (e.g., did:dfos:e3vvtck42d4eacdnzvtrn6)'
+      responses:
+        '200':
+          description: Identity chain state and log
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityChainResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /content/{contentId}:
+    get:
+      operationId: getContentChain
+      summary: Get a content chain by content ID
+      tags: [Proof Plane]
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Content identifier (22-char hash)
+      responses:
+        '200':
+          description: Content chain state and log
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentChainResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /content/{contentId}/blob:
+    put:
+      operationId: uploadBlob
+      summary: Upload a content blob
+      description: |
+        Upload raw bytes for a document referenced by a content chain.
+        Requires auth token. Caller must be the chain creator.
+      tags: [Content Plane]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Document-CID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: The documentCID this blob corresponds to
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Blob stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, contentId, documentCID]
+                properties:
+                  status:
+                    type: string
+                    enum: [stored]
+                  contentId:
+                    type: string
+                  documentCID:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    get:
+      operationId: downloadBlob
+      summary: Download a content blob at head
+      description: |
+        Download the raw bytes of the current document at chain head.
+        Requires auth token. Non-creators must present a DFOSContentRead credential.
+      tags: [Content Plane]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Credential
+          in: header
+          required: false
+          schema:
+            type: string
+          description: DFOSContentRead VC-JWT (required for non-creators)
+      responses:
+        '200':
+          description: Blob data
+          headers:
+            X-Document-CID:
+              schema:
+                type: string
+              description: The documentCID of the returned blob
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /content/{contentId}/blob/{ref}:
+    get:
+      operationId: downloadBlobAtRef
+      summary: Download a content blob at a specific operation
+      description: |
+        Download the raw bytes of the document committed by a specific operation.
+        The ref parameter is an operation CID within the chain.
+      tags: [Content Plane]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Operation CID within the chain
+        - name: X-Credential
+          in: header
+          required: false
+          schema:
+            type: string
+          description: DFOSContentRead VC-JWT (required for non-creators)
+      responses:
+        '200':
+          description: Blob data
+          headers:
+            X-Document-CID:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /countersignatures/{cid}:
+    get:
+      operationId: getCountersignaturesByCID
+      summary: Get countersignatures for any CID (operation or beacon)
+      tags: [Proof Plane]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: CIDv1 of the operation or beacon
+      responses:
+        '200':
+          description: Countersignatures
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cid, countersignatures]
+                properties:
+                  cid:
+                    type: string
+                  countersignatures:
+                    type: array
+                    items:
+                      type: string
+                      description: JWS compact serialization (witness signature)
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /beacons/{did}:
+    get:
+      operationId: getBeacon
+      summary: Get the latest beacon for a DID
+      tags: [Proof Plane]
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Latest beacon
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BeaconResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: DID-signed auth token JWT
+
+  schemas:
+    IngestionResult:
+      type: object
+      required: [cid, status]
+      properties:
+        cid:
+          type: string
+          description: CID of the operation
+        status:
+          type: string
+          enum: [accepted, rejected]
+        error:
+          type: string
+          description: Error message if rejected
+        kind:
+          type: string
+          enum: [identity-op, content-op, beacon, countersig, beacon-countersig]
+        chainId:
+          type: string
+          description: Chain identifier (DID or contentId)
+
+    StoredOperation:
+      type: object
+      required: [cid, jwsToken, chainType, chainId]
+      properties:
+        cid:
+          type: string
+        jwsToken:
+          type: string
+        chainType:
+          type: string
+          enum: [identity, content]
+        chainId:
+          type: string
+
+    IdentityChainResponse:
+      type: object
+      required: [did, log, state]
+      properties:
+        did:
+          type: string
+        log:
+          type: array
+          items:
+            type: string
+          description: Ordered JWS tokens from genesis to head
+        state:
+          type: object
+          required: [did, isDeleted, authKeys, assertKeys, controllerKeys]
+          properties:
+            did:
+              type: string
+            isDeleted:
+              type: boolean
+            authKeys:
+              type: array
+              items:
+                $ref: '#/components/schemas/MultikeyPublicKey'
+            assertKeys:
+              type: array
+              items:
+                $ref: '#/components/schemas/MultikeyPublicKey'
+            controllerKeys:
+              type: array
+              items:
+                $ref: '#/components/schemas/MultikeyPublicKey'
+
+    ContentChainResponse:
+      type: object
+      required: [contentId, genesisCID, log, state]
+      properties:
+        contentId:
+          type: string
+        genesisCID:
+          type: string
+        log:
+          type: array
+          items:
+            type: string
+        state:
+          type: object
+          required:
+            [contentId, genesisCID, headCID, isDeleted, currentDocumentCID, length, creatorDID]
+          properties:
+            contentId:
+              type: string
+            genesisCID:
+              type: string
+            headCID:
+              type: string
+            isDeleted:
+              type: boolean
+            currentDocumentCID:
+              type: string
+              nullable: true
+            length:
+              type: integer
+            creatorDID:
+              type: string
+
+    BeaconResponse:
+      type: object
+      required: [did, jwsToken, beaconCID, payload]
+      properties:
+        did:
+          type: string
+        jwsToken:
+          type: string
+        beaconCID:
+          type: string
+        payload:
+          type: object
+          required: [version, type, did, merkleRoot, createdAt]
+          properties:
+            version:
+              type: integer
+              enum: [1]
+            type:
+              type: string
+              enum: [beacon]
+            did:
+              type: string
+            merkleRoot:
+              type: string
+              pattern: '^[0-9a-f]{64}$'
+            createdAt:
+              type: string
+              format: date-time
+
+    MultikeyPublicKey:
+      type: object
+      required: [id, type, publicKeyMultibase]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [Multikey]
+        publicKeyMultibase:
+          type: string
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+tags:
+  - name: Meta
+    description: Relay metadata and discovery
+  - name: Proof Plane
+    description: Public routes for signed chain operations, beacons, and countersignatures
+  - name: Content Plane
+    description: Authenticated routes for content blob storage and retrieval
