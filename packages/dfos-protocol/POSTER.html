@@ -686,7 +686,24 @@
           </div>
 
           <div class="layer" data-zone="public">
-            <div class="layer-id" style="color: var(--green)">L3 &middot; Beacon</div>
+            <div class="layer-id" style="color: var(--green)">L2 &middot; Credentials</div>
+            <div class="layer-desc">
+              <strong>Auth tokens and VC-JWT credentials.</strong>
+              DID-signed JWTs (<code>typ: JWT</code>) for relay authentication. W3C VC Data Model v2
+              credentials (<code>typ: vc+jwt</code>) for authorization &mdash;
+              <code>DFOSContentWrite</code> (embedded in delegated content ops) and
+              <code>DFOSContentRead</code> (presented to relay). Optional
+              <code>contentId</code> narrowing. Creator-sovereignty model: genesis signer owns the
+              chain.
+            </div>
+            <div class="layer-artifacts">
+              <code>JWT</code> <code>vc+jwt</code> <code>DFOSContentWrite</code>
+              <code>DFOSContentRead</code>
+            </div>
+          </div>
+
+          <div class="layer" data-zone="public">
+            <div class="layer-id" style="color: var(--green)">L2 &middot; Beacon</div>
             <div class="layer-desc">
               <strong>Signed merkle root announcements.</strong>
               Floating artifacts declaring the DID's current content set. Pure SHA-256 binary Merkle
@@ -700,7 +717,7 @@
           </div>
 
           <div class="layer" data-zone="public">
-            <div class="layer-id" style="color: var(--green)">L3.5 &middot; Witness</div>
+            <div class="layer-id" style="color: var(--green)">L3 &middot; Witness</div>
             <div class="layer-desc">
               <strong>Countersignatures &mdash; third-party attestation.</strong>
               Same CID, different signer. Works for both content operations and beacons. The
@@ -744,7 +761,7 @@
 
       <!-- ==================== FOUR COMPONENTS ==================== -->
       <section>
-        <h2>Four Protocol Components</h2>
+        <h2>Five Protocol Components</h2>
 
         <table class="res-table">
           <thead>
@@ -763,6 +780,14 @@
               <td>
                 <code style="color: var(--yellow)">identity-op</code>
                 <code style="color: var(--yellow)">content-op</code>
+              </td>
+            </tr>
+            <tr>
+              <td>Credentials</td>
+              <td>Auth tokens (DID-signed JWT) and VC-JWT credentials for authorization</td>
+              <td>
+                <code style="color: var(--yellow)">JWT</code>
+                <code style="color: var(--yellow)">vc+jwt</code>
               </td>
             </tr>
             <tr>
@@ -907,6 +932,51 @@
           </div>
         </div>
 
+        <div class="artifacts" style="margin-bottom: 16px">
+          <div class="artifact">
+            <div class="artifact-label">Auth Token (Relay AuthN)</div>
+            <pre><span class="com">// JWT header</span>
+{ <span class="key">"alg"</span>: <span class="str">"EdDSA"</span>,
+  <span class="key">"typ"</span>: <span class="str">"JWT"</span>,
+  <span class="key">"kid"</span>: <span class="str">"did:dfos:...#key_..."</span> }
+
+<span class="com">// payload &mdash; short-lived, audience-scoped</span>
+{ <span class="key">"iss"</span>: <span class="str">"did:dfos:abc123"</span>,
+  <span class="key">"sub"</span>: <span class="str">"did:dfos:abc123"</span>,
+  <span class="key">"aud"</span>: <span class="str">"relay.example.com"</span>,
+  <span class="key">"exp"</span>: <span class="val">1772845200</span>,
+  <span class="key">"iat"</span>: <span class="val">1772841600</span> }</pre>
+            <p style="font-size: 11px; margin-top: 8px">
+              Proves the caller controls a DID. No <code>cid</code> header &mdash; ephemeral session
+              token. <code>aud</code> prevents cross-relay replay.
+            </p>
+          </div>
+
+          <div class="artifact">
+            <div class="artifact-label">VC-JWT Credential (AuthZ)</div>
+            <pre><span class="com">// VC-JWT header (W3C VC Data Model v2)</span>
+{ <span class="key">"alg"</span>: <span class="str">"EdDSA"</span>,
+  <span class="key">"typ"</span>: <span class="str">"vc+jwt"</span>,
+  <span class="key">"kid"</span>: <span class="str">"did:dfos:...#key_..."</span> }
+
+<span class="com">// payload &mdash; creator delegates to collaborator</span>
+{ <span class="key">"iss"</span>: <span class="str">"did:dfos:creator"</span>,
+  <span class="key">"sub"</span>: <span class="str">"did:dfos:delegate"</span>,
+  <span class="key">"exp"</span>: <span class="val">1798761600</span>,
+  <span class="key">"iat"</span>: <span class="val">1772841600</span>,
+  <span class="key">"vc"</span>: {
+    <span class="key">"@context"</span>: [<span class="str">"https://...credentials/v2"</span>],
+    <span class="key">"type"</span>: [<span class="str">"VerifiableCredential"</span>,
+            <span class="str">"DFOSContentWrite"</span>],
+    <span class="key">"credentialSubject"</span>: {} } }</pre>
+            <p style="font-size: 11px; margin-top: 8px">
+              Two types: <code>DFOSContentWrite</code> (chain ops) and
+              <code>DFOSContentRead</code> (relay access). Optional
+              <code>contentId</code> narrowing. Empty <code>credentialSubject</code> = broad access.
+            </p>
+          </div>
+        </div>
+
         <div class="trust-grid" style="margin-bottom: 24px">
           <div class="trust-box" style="border-left: 3px solid var(--cyan)">
             <h4 style="color: var(--cyan)">Author vs Witness &mdash; the <code>did</code> rule</h4>
@@ -957,10 +1027,16 @@
                   &mdash; beacon announcements + countersigns</span
                 >
               </div>
-              <div style="padding: 6px 0">
+              <div style="padding: 6px 0; border-bottom: 1px solid var(--border)">
                 <code style="color: var(--yellow)">JWT</code>
                 <span style="color: var(--text-muted); font-size: 11px">
-                  &mdash; device auth tokens (no CID)</span
+                  &mdash; auth tokens (relay AuthN, no CID)</span
+                >
+              </div>
+              <div style="padding: 6px 0">
+                <code style="color: var(--yellow)">vc+jwt</code>
+                <span style="color: var(--text-muted); font-size: 11px">
+                  &mdash; VC-JWT credentials (W3C VC v2)</span
                 >
               </div>
             </div>
@@ -1072,7 +1148,7 @@
         <p style="font-size: 12px">
           Inclusion proofs: sibling hashes along the path from leaf to root, plus direction
           (left/right) for each step. Verifier recomputes root from leaf + proof, compares to
-          claimed root. 231 cross-language checks verify this construction in Go, Python, Rust,
+          claimed root. 293 cross-language checks verify this construction in Go, Python, Rust,
           Swift, and TypeScript.
         </p>
       </section>
@@ -1253,6 +1329,7 @@
             <ul>
               <li>Identity chain &mdash; key management</li>
               <li>Content chains &mdash; document commitments</li>
+              <li>Credentials &mdash; auth tokens + VC-JWT delegation</li>
               <li>Beacon &mdash; content set commitment</li>
               <li>Manifests &mdash; semantic navigation (dark)</li>
               <li>Documents &mdash; the actual content (dark)</li>
@@ -1410,11 +1487,12 @@
       <div class="footnote">
         <p>
           DFOS Protocol v0.1.0 &middot; Ed25519 &middot; dag-cbor &middot; CIDv1 &middot; SHA-256
-          Merkle &middot; W3C DIDs &middot; Self-certifying &middot; Transport-agnostic
+          Merkle &middot; W3C DIDs &middot; VC-JWT &middot; Self-certifying &middot;
+          Transport-agnostic
         </p>
         <p style="margin-top: 4px">
-          231 cross-language checks &middot; TypeScript 145 &middot; Python 48 &middot; Go 13
-          &middot; Rust 13 &middot; Swift 12
+          293 cross-language checks &middot; TypeScript 190 &middot; Python 59 &middot; Go 15
+          &middot; Rust 15 &middot; Swift 14
         </p>
         <p style="margin-top: 8px">
           <a href="https://protocol.dfos.com" style="color: var(--accent); text-decoration: none"

@@ -14,6 +14,7 @@ import {
   ContentOperation as ContentOperationSchema,
   IdentityOperation as IdentityOperationSchema,
 } from '../src/chain/schemas';
+import { createCredential, VC_TYPE_CONTENT_READ, VC_TYPE_CONTENT_WRITE } from '../src/credentials';
 import {
   base64urlEncode,
   createNewEd25519Keypair,
@@ -1102,6 +1103,461 @@ describe('content chain', () => {
         resolveKey: other.resolveKey,
       }),
     ).rejects.toThrow(/kid DID does not match/i);
+  });
+});
+
+// =============================================================================
+// delegated content chain operations
+// =============================================================================
+
+describe('delegated content chain', () => {
+  const makeIdentity = () => {
+    const keypair = createNewEd25519Keypair();
+    const keyId = generateId('key');
+    const did = `did:dfos:${generateId('test').substring(5)}`;
+    const kid = `${did}#${keyId}`;
+    const signer = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair.privateKey);
+    return { keypair, keyId, did, kid, signer };
+  };
+
+  const ts = (offset = 0) => new Date(Date.now() + offset * 60_000).toISOString();
+
+  const makeDocCID = async (content: object) => {
+    const encoded = await dagCborCanonicalEncode(content);
+    return encoded.cid.toString();
+  };
+
+  const futureUnix = (minutes: number) => Math.floor(Date.now() / 1000) + minutes * 60;
+  const pastUnix = (minutes: number) => Math.floor(Date.now() / 1000) - minutes * 60;
+
+  // helper: create a genesis chain and return everything needed for delegation tests
+  const createGenesisChain = async () => {
+    const creator = makeIdentity();
+    const doc = await makeDocCID({ type: 'post', title: 'genesis' });
+
+    const createOp: ContentOperation = {
+      version: 1,
+      type: 'create',
+      did: creator.did,
+      documentCID: doc,
+      baseDocumentCID: null,
+      createdAt: ts(0),
+      note: null,
+    };
+    const { jwsToken: createJws, operationCID: createCID } = await signContentOperation({
+      operation: createOp,
+      signer: creator.signer,
+      kid: creator.kid,
+    });
+
+    // build key resolver that knows both creator and delegates
+    const keys = new Map<string, Uint8Array>();
+    keys.set(creator.kid, creator.keypair.publicKey);
+
+    const resolveKey = async (kid: string) => {
+      const key = keys.get(kid);
+      if (!key) throw new Error(`unknown kid: ${kid}`);
+      return key;
+    };
+
+    const addDelegate = (delegate: ReturnType<typeof makeIdentity>) => {
+      keys.set(delegate.kid, delegate.keypair.publicKey);
+    };
+
+    return { creator, createJws, createCID, doc, resolveKey, addDelegate };
+  };
+
+  it('should accept delegated update with valid write VC', async () => {
+    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const delegate = makeIdentity();
+    addDelegate(delegate);
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'delegated edit' });
+
+    // creator issues write VC to delegate
+    const vc = await createCredential({
+      iss: creator.did,
+      sub: delegate.did,
+      exp: futureUnix(60),
+      kid: creator.kid,
+      type: VC_TYPE_CONTENT_WRITE,
+      sign: creator.signer,
+    });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: 'delegated edit',
+      authorization: vc,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+
+    const result = await verifyContentChain({
+      log: [createJws, updateJws],
+      resolveKey,
+      enforceAuthorization: true,
+    });
+
+    expect(result.length).toBe(2);
+    expect(result.currentDocumentCID).toBe(doc2);
+    expect(result.creatorDID).toBe(creator.did);
+    expect(result.isDeleted).toBe(false);
+  });
+
+  it('should accept delegated update with contentId-narrowed VC', async () => {
+    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const delegate = makeIdentity();
+    addDelegate(delegate);
+
+    // first verify the chain to get the contentId
+    const chain = await verifyContentChain({ log: [createJws], resolveKey });
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'narrowed edit' });
+
+    // creator issues narrowed write VC
+    const vc = await createCredential({
+      iss: creator.did,
+      sub: delegate.did,
+      exp: futureUnix(60),
+      kid: creator.kid,
+      type: VC_TYPE_CONTENT_WRITE,
+      contentId: chain.contentId,
+      sign: creator.signer,
+    });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: null,
+      authorization: vc,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+
+    const result = await verifyContentChain({
+      log: [createJws, updateJws],
+      resolveKey,
+      enforceAuthorization: true,
+    });
+
+    expect(result.length).toBe(2);
+    expect(result.currentDocumentCID).toBe(doc2);
+  });
+
+  it('should reject delegated update without authorization', async () => {
+    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const delegate = makeIdentity();
+    addDelegate(delegate);
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'unauthorized' });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: null,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+
+    await expect(
+      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+    ).rejects.toThrow(/authorization VC required/i);
+  });
+
+  it('should reject delegated update with expired VC', async () => {
+    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const delegate = makeIdentity();
+    addDelegate(delegate);
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'expired vc' });
+
+    // VC that expired well before the operation's createdAt
+    const vc = await createCredential({
+      iss: creator.did,
+      sub: delegate.did,
+      exp: pastUnix(60),
+      kid: creator.kid,
+      type: VC_TYPE_CONTENT_WRITE,
+      sign: creator.signer,
+    });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: null,
+      authorization: vc,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+
+    await expect(
+      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+    ).rejects.toThrow(/authorization verification failed/i);
+  });
+
+  it('should reject delegated update with wrong subject', async () => {
+    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const delegate = makeIdentity();
+    const other = makeIdentity();
+    addDelegate(delegate);
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'wrong sub' });
+
+    // VC issued to a different DID than the actual signer
+    const vc = await createCredential({
+      iss: creator.did,
+      sub: other.did,
+      exp: futureUnix(60),
+      kid: creator.kid,
+      type: VC_TYPE_CONTENT_WRITE,
+      sign: creator.signer,
+    });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: null,
+      authorization: vc,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+
+    await expect(
+      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+    ).rejects.toThrow(/authorization verification failed/i);
+  });
+
+  it('should reject delegated update with future-issued VC (iat > op.createdAt)', async () => {
+    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const delegate = makeIdentity();
+    addDelegate(delegate);
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'future vc' });
+
+    // VC issued far in the future relative to the operation's createdAt
+    const vc = await createCredential({
+      iss: creator.did,
+      sub: delegate.did,
+      exp: futureUnix(120),
+      kid: creator.kid,
+      type: VC_TYPE_CONTENT_WRITE,
+      iat: futureUnix(60),
+      sign: creator.signer,
+    });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: null,
+      authorization: vc,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+
+    await expect(
+      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+    ).rejects.toThrow(/authorization verification failed/i);
+  });
+
+  it('should reject delegated update with wrong contentId narrowing', async () => {
+    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const delegate = makeIdentity();
+    addDelegate(delegate);
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'wrong chain' });
+
+    // VC narrowed to a different contentId
+    const vc = await createCredential({
+      iss: creator.did,
+      sub: delegate.did,
+      exp: futureUnix(60),
+      kid: creator.kid,
+      type: VC_TYPE_CONTENT_WRITE,
+      contentId: 'wrong_content_id',
+      sign: creator.signer,
+    });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: null,
+      authorization: vc,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+
+    await expect(
+      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+    ).rejects.toThrow(/authorization verification failed/i);
+  });
+
+  it('should reject delegated update with read VC (wrong type)', async () => {
+    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const delegate = makeIdentity();
+    addDelegate(delegate);
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'read vc' });
+
+    // Read VC cannot authorize writes
+    const vc = await createCredential({
+      iss: creator.did,
+      sub: delegate.did,
+      exp: futureUnix(60),
+      kid: creator.kid,
+      type: VC_TYPE_CONTENT_READ,
+      sign: creator.signer,
+    });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: null,
+      authorization: vc,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+
+    await expect(
+      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+    ).rejects.toThrow(/authorization verification failed/i);
+  });
+
+  it('should still accept creator operations without VC (backward compat)', async () => {
+    const { creator, createJws, createCID, resolveKey } = await createGenesisChain();
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'creator edit' });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: creator.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: null,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: creator.signer,
+      kid: creator.kid,
+    });
+
+    const result = await verifyContentChain({
+      log: [createJws, updateJws],
+      resolveKey,
+    });
+
+    expect(result.length).toBe(2);
+    expect(result.creatorDID).toBe(creator.did);
+  });
+
+  it('should accept non-creator signer when enforceAuthorization is not set', async () => {
+    const { createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const delegate = makeIdentity();
+    addDelegate(delegate);
+
+    const doc2 = await makeDocCID({ type: 'post', title: 'delegate edit' });
+
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt: ts(1),
+      note: null,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+
+    // without enforceAuthorization, non-creator signers are accepted (pre-credential behavior)
+    const result = await verifyContentChain({
+      log: [createJws, updateJws],
+      resolveKey,
+    });
+
+    expect(result.length).toBe(2);
+  });
+
+  it('should return creatorDID in verified chain result', async () => {
+    const { creator, createJws, resolveKey } = await createGenesisChain();
+
+    const result = await verifyContentChain({
+      log: [createJws],
+      resolveKey,
+    });
+
+    expect(result.creatorDID).toBe(creator.did);
   });
 });
 

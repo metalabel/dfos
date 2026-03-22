@@ -28,7 +28,8 @@
     ".": "./src/index.ts",
     "./crypto": "./src/crypto/index.ts",
     "./chain": "./src/chain/index.ts",
-    "./merkle": "./src/merkle/index.ts"
+    "./merkle": "./src/merkle/index.ts",
+    "./credentials": "./src/credentials/index.ts"
   },
   "publishConfig": {
     "exports": {
@@ -47,6 +48,10 @@
       "./merkle": {
         "import": "./dist/merkle/index.js",
         "types": "./dist/merkle/index.d.ts"
+      },
+      "./credentials": {
+        "import": "./dist/credentials/index.js",
+        "types": "./dist/credentials/index.d.ts"
       }
     }
   },

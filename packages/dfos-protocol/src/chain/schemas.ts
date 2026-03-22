@@ -105,6 +105,8 @@ const ContentUpdate = z.strictObject({
   baseDocumentCID: CIDString.nullable(),
   createdAt: Iso8601,
   note: z.string().max(MAX_NOTE).nullable(),
+  /** VC-JWT authorizing this operation when signer is not the chain creator */
+  authorization: z.string().optional(),
 });
 
 /** Content chain: delete — permanently destroy content */
@@ -115,6 +117,8 @@ const ContentDelete = z.strictObject({
   previousOperationCID: CIDString,
   createdAt: Iso8601,
   note: z.string().max(MAX_NOTE).nullable(),
+  /** VC-JWT authorizing this operation when signer is not the chain creator */
+  authorization: z.string().optional(),
 });
 
 export const ContentOperation = z.discriminatedUnion('type', [

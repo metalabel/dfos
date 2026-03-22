@@ -6,6 +6,7 @@ export default defineConfig({
     'crypto/index': 'src/crypto/index.ts',
     'chain/index': 'src/chain/index.ts',
     'merkle/index': 'src/merkle/index.ts',
+    'credentials/index': 'src/credentials/index.ts',
   },
   format: ['esm'],
   dts: true,

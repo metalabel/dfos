@@ -300,6 +300,10 @@ mod tests {
 
     const BEACON_WITNESS_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0.awA8ctmLHjJCHZcH0lav7HpadkIoGiG2WR-pCf-0XfPVi9dD8Z2at0E7iAnOUnVEc5VthBo-mMklSIJFK28IDw";
 
+    const BROAD_WRITE_VC: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50V3JpdGUiXSwiY3JlZGVudGlhbFN1YmplY3QiOnt9fX0.KoN20I8kerQAg7qjDN1Ju-IFi2gMjGhG2v6crWMGxheJdsY6OhfjvLu5LM_zty3IRVdmaBN-4fJngt3yscSJCg";
+
+    const READ_VC: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50UmVhZCJdLCJjcmVkZW50aWFsU3ViamVjdCI6e319fQ.07JK8NPIzcoWRXqT961znL1642OF2xBVaJsBZ0CP6LTBF96IYtAX8_Xch2SgmrCzhZQN1XgbiIcgSmuTUQtsCA";
+
     #[test]
     fn test_merkle_tree() {
         let mut ids = vec!["alpha", "bravo", "charlie", "delta", "echo"];
@@ -397,6 +401,44 @@ mod tests {
         assert_eq!(
             payload["merkleRoot"], EXPECTED_MERKLE_ROOT,
             "countersignature payload should match original"
+        );
+    }
+
+    #[test]
+    fn test_vcjwt_write_credential_verification() {
+        let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
+        let (header, payload) = verify_jws(BROAD_WRITE_VC, &pub1);
+
+        assert_eq!(header["typ"], "vc+jwt", "wrong typ");
+        let expected_kid = format!("{}#key_r9ev34fvc23z999veaaft8", EXPECTED_DID);
+        assert_eq!(header["kid"], expected_kid, "wrong kid");
+        assert_eq!(payload["iss"], EXPECTED_DID, "wrong iss");
+        assert_eq!(payload["sub"], EXPECTED_DID, "wrong sub");
+
+        let vc = payload["vc"].as_object().expect("vc should be an object");
+        let types = vc["type"].as_array().expect("type should be an array");
+        assert!(
+            types.iter().any(|t| t.as_str() == Some("DFOSContentWrite")),
+            "vc type should contain DFOSContentWrite"
+        );
+    }
+
+    #[test]
+    fn test_vcjwt_read_credential_verification() {
+        let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
+        let (header, payload) = verify_jws(READ_VC, &pub1);
+
+        assert_eq!(header["typ"], "vc+jwt", "wrong typ");
+        let expected_kid = format!("{}#key_r9ev34fvc23z999veaaft8", EXPECTED_DID);
+        assert_eq!(header["kid"], expected_kid, "wrong kid");
+        assert_eq!(payload["iss"], EXPECTED_DID, "wrong iss");
+        assert_eq!(payload["sub"], EXPECTED_DID, "wrong sub");
+
+        let vc = payload["vc"].as_object().expect("vc should be an object");
+        let types = vc["type"].as_array().expect("type should be an array");
+        assert!(
+            types.iter().any(|t| t.as_str() == Some("DFOSContentRead")),
+            "vc type should contain DFOSContentRead"
         );
     }
 }

@@ -1,0 +1,44 @@
+{
+  "description": "Content chain: creator signs genesis, delegate signs update with write VC",
+  "type": "content-delegated",
+  "chain": [
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwiY2lkIjoiYmFmeXJlaWFmeG9ka290ZzJpZGE1eHBjZWR2MzdrMmtqZDdqbmJ5Z2hhamhub3VvYm9qaWF4eGo1eGkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWduN2dmdXU1NHdvMmdlZzN0ZjV0ZXBlcGxibGt0YWhqZnpxanB1aml6YzdhMmJvZXljY2EiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MTA6MDAuMDAwWiIsIm5vdGUiOm51bGx9.oanyS9rbkqrxd1j8T172jVG4ILKFwW2t1JhkQLxsFqHMMURqA5Hl-0GzGFrfSkQT02Nq5RMYXzhcToqbjoV8AQ",
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpuemtmODM4ZWZyNDI0NDMzcm4ycnprI2tleV9hOHIyNzQzNGFhcjc2YWU3MmM4NzdmIiwiY2lkIjoiYmFmeXJlaWJtMjRmNjY3cGlsNHhiZ2M3emZhM3lvdXRkandya3B4YTJjbWQ3Zm50aWxhYWljMmRlNzQifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWFmeG9ka290ZzJpZGE1eHBjZWR2MzdrMmtqZDdqbmJ5Z2hhamhub3VvYm9qaWF4eGo1eGkiLCJkb2N1bWVudENJRCI6ImJhZnlyZWlmbml5bmQ2aGV2NjQ2dW9hamFjM2VnYWs3cDJxZmhyaGhvNG1mbXBwYTNydGNqcGV0Z2RlIiwiYmFzZURvY3VtZW50Q0lEIjoiYmFmeXJlaWduN2dmdXU1NHdvMmdlZzN0ZjV0ZXBlcGxibGt0YWhqZnpxanB1aml6YzdhMmJvZXljY2EiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjExOjAwLjAwMFoiLCJub3RlIjoiZGVsZWdhdGVkIGVkaXQgYnkga2V5MyIsImF1dGhvcml6YXRpb24iOiJleUpoYkdjaU9pSkZaRVJUUVNJc0luUjVjQ0k2SW5aaksycDNkQ0lzSW10cFpDSTZJbVJwWkRwa1ptOXpPbVV6ZG5aMFkyczBNbVEwWldGalpHNTZkblJ5YmpZamEyVjVYM0k1WlhZek5HWjJZekl6ZWprNU9YWmxZV0ZtZERnaWZRLmV5SnBjM01pT2lKa2FXUTZaR1p2Y3pwbE0zWjJkR05yTkRKa05HVmhZMlJ1ZW5aMGNtNDJJaXdpYzNWaUlqb2laR2xrT21SbWIzTTZibnByWmpnek9HVm1jalF5TkRRek0zSnVNbko2YXlJc0ltVjRjQ0k2TVRjNU9EYzJNVFl3TUN3aWFXRjBJam94TnpjeU9EUXhOakF3TENKMll5STZleUpBWTI5dWRHVjRkQ0k2V3lKb2RIUndjem92TDNkM2R5NTNNeTV2Y21jdmJuTXZZM0psWkdWdWRHbGhiSE12ZGpJaVhTd2lkSGx3WlNJNld5SldaWEpwWm1saFlteGxRM0psWkdWdWRHbGhiQ0lzSWtSR1QxTkRiMjUwWlc1MFYzSnBkR1VpWFN3aVkzSmxaR1Z1ZEdsaGJGTjFZbXBsWTNRaU9uc2lZMjl1ZEdWdWRFbGtJam9pWVdNeU5ubzRlbXRyWlRZM2VqUTRZV1l6Y21ob09TSjlmWDAuZG5vN2lkcnVTMUZDVzl2ZEp5TjAyT1g0a05vcEh0RGlvRE5feHo3MzdBb2tmT1FZa0c3VHFzcXlmM3VPQ0p1MTRtZmhLbGNsb2RMT01LcVBGcGJNQkEifQ.8CiWJSk5Aw0OntAj_vxMawd4rDx42SwhlaPFpevthXVYqXLIOjEeyUO59YnbfQ4dSoz2PfEoRTrBnm4oXIPYAg"
+  ],
+  "creatorPublicKey": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb",
+  "delegatePublicKey": "z6MkvsvmSh2dGnu2qw1Tnw7M5fz98ycfuYGxqnpfgmPkLv7o",
+  "documents": [
+    {
+      "content": {
+        "$schema": "https://schemas.dfos.com/post/v1",
+        "format": "short-post",
+        "title": "Original Post",
+        "body": "Content created by the chain owner.",
+        "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
+      },
+      "baseDocumentCID": null,
+      "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+      "createdAt": "2026-03-07T00:10:00.000Z"
+    },
+    {
+      "content": {
+        "$schema": "https://schemas.dfos.com/post/v1",
+        "format": "short-post",
+        "title": "Delegated Edit",
+        "body": "Content updated by an authorized delegate.",
+        "createdByDID": "did:dfos:nzkf838efr424433rn2rzk"
+      },
+      "baseDocumentCID": "bafyreign7gfuu54wo2geg3tf5tepeplblktahjfzqjpujizc7a2boeycca",
+      "createdByDID": "did:dfos:nzkf838efr424433rn2rzk",
+      "createdAt": "2026-03-07T00:11:00.000Z"
+    }
+  ],
+  "authorization": "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50V3JpdGUiXSwiY3JlZGVudGlhbFN1YmplY3QiOnsiY29udGVudElkIjoiYWMyNno4emtrZTY3ejQ4YWYzcmhoOSJ9fX0.dno7idruS1FCW9vdJyN02OX4kNopHtDioDN_xz737AokfOQYkG7Tqsqyf3uOCJu14mfhKlclodLOMKqPFpbMBA",
+  "expected": {
+    "contentId": "ac26z8zkke67z48af3rhh9",
+    "creatorDID": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+    "isDeleted": false,
+    "currentDocumentCID": "bafyreifniynd6hev646uoajac3egak7p2qfhrhho4mfmppa3rtcjpetgde",
+    "length": 2
+  }
+}

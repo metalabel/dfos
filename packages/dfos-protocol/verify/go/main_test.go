@@ -331,6 +331,8 @@ const (
 	beaconJWS           = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0._1RgZpMv63-M3ZUeTNX679xkAeX3TY0PJ0ImH7422cKA7I88Hf8bBVQMVVhP3oNdvX7i7Q4se5EP3kk5aEuxDQ"
 	expectedBeaconCID   = "bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu"
 	beaconWitnessJWS    = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0.awA8ctmLHjJCHZcH0lav7HpadkIoGiG2WR-pCf-0XfPVi9dD8Z2at0E7iAnOUnVEc5VthBo-mMklSIJFK28IDw"
+	broadWriteVC        = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50V3JpdGUiXSwiY3JlZGVudGlhbFN1YmplY3QiOnt9fX0.KoN20I8kerQAg7qjDN1Ju-IFi2gMjGhG2v6crWMGxheJdsY6OhfjvLu5LM_zty3IRVdmaBN-4fJngt3yscSJCg"
+	readVC              = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50UmVhZCJdLCJjcmVkZW50aWFsU3ViamVjdCI6e319fQ.07JK8NPIzcoWRXqT961znL1642OF2xBVaJsBZ0CP6LTBF96IYtAX8_Xch2SgmrCzhZQN1XgbiIcgSmuTUQtsCA"
 )
 
 func TestMerkleTree(t *testing.T) {
@@ -438,5 +440,65 @@ func TestBeaconCountersignatureVerification(t *testing.T) {
 	}
 	if payload["merkleRoot"] != expectedMerkleRoot {
 		t.Fatal("countersignature payload should match original")
+	}
+}
+
+func TestVCJWTWriteCredentialVerification(t *testing.T) {
+	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
+	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
+
+	header, payload := verifyJWS(broadWriteVC, pub1)
+	if header["typ"] != "vc+jwt" {
+		t.Fatal("wrong typ")
+	}
+	if header["kid"] != expectedDID+"#key_r9ev34fvc23z999veaaft8" {
+		t.Fatalf("wrong kid: %s", header["kid"])
+	}
+	if payload["iss"] != expectedDID {
+		t.Fatalf("wrong iss: %s", payload["iss"])
+	}
+	if payload["sub"] != expectedDID {
+		t.Fatalf("wrong sub: %s", payload["sub"])
+	}
+	vcMap := payload["vc"].(map[string]any)
+	vcTypes := vcMap["type"].([]any)
+	found := false
+	for _, vt := range vcTypes {
+		if vt == "DFOSContentWrite" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("vc type missing DFOSContentWrite")
+	}
+}
+
+func TestVCJWTReadCredentialVerification(t *testing.T) {
+	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
+	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
+
+	header, payload := verifyJWS(readVC, pub1)
+	if header["typ"] != "vc+jwt" {
+		t.Fatal("wrong typ")
+	}
+	if header["kid"] != expectedDID+"#key_r9ev34fvc23z999veaaft8" {
+		t.Fatalf("wrong kid: %s", header["kid"])
+	}
+	if payload["iss"] != expectedDID {
+		t.Fatalf("wrong iss: %s", payload["iss"])
+	}
+	if payload["sub"] != expectedDID {
+		t.Fatalf("wrong sub: %s", payload["sub"])
+	}
+	vcMap := payload["vc"].(map[string]any)
+	vcTypes := vcMap["type"].([]any)
+	found := false
+	for _, vt := range vcTypes {
+		if vt == "DFOSContentRead" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("vc type missing DFOSContentRead")
 	}
 }
