@@ -1,4 +1,4 @@
-package protocol
+package dfos
 
 import (
 	"bytes"
@@ -781,7 +781,211 @@ func TestNormalizeJSONNumbers(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 20. Number encoding CID — integer vs float produces different CIDs
+// 20. SignIdentityUpdate — key rotation produces valid JWS
+// ---------------------------------------------------------------------------
+
+func TestSignIdentityUpdate(t *testing.T) {
+	priv1, pub1 := refKey1()
+	_, pub2 := refKey2()
+	kid1 := "key_r9ev34fvc23z999veaaft8"
+
+	mk1 := NewMultikeyPublicKey(kid1, pub1)
+
+	// first create an identity
+	_, did, genCID, err := SignIdentityCreate(
+		[]MultikeyPublicKey{mk1}, []MultikeyPublicKey{mk1}, nil, kid1, priv1,
+	)
+	if err != nil {
+		t.Fatalf("SignIdentityCreate: %v", err)
+	}
+
+	// now sign an update that rotates in key2
+	kid2 := "key_newkey00000000000000"
+	mk2 := NewMultikeyPublicKey(kid2, pub2)
+	didKid := did + "#" + kid1
+
+	token, opCID, err := SignIdentityUpdate(
+		genCID,
+		[]MultikeyPublicKey{mk1}, // keep controller
+		[]MultikeyPublicKey{mk2}, // rotate auth to key2
+		nil,
+		didKid, priv1,
+	)
+	if err != nil {
+		t.Fatalf("SignIdentityUpdate: %v", err)
+	}
+
+	// verify signature with the signing key
+	h, p, err := VerifyJWS(token, pub1)
+	if err != nil {
+		t.Fatalf("VerifyJWS: %v", err)
+	}
+	if h.Typ != "did:dfos:identity-op" {
+		t.Fatalf("typ: got %s", h.Typ)
+	}
+	if h.CID != opCID {
+		t.Fatalf("CID mismatch")
+	}
+	if p["type"] != "update" {
+		t.Fatalf("payload type: got %v", p["type"])
+	}
+	if p["previousOperationCID"] != genCID {
+		t.Fatalf("previousOperationCID: got %v", p["previousOperationCID"])
+	}
+
+	// verify the new auth key is in the payload
+	authKeys, ok := p["authKeys"].([]any)
+	if !ok || len(authKeys) != 1 {
+		t.Fatal("expected 1 auth key in update payload")
+	}
+
+	// should fail verification with the wrong key
+	_, _, err = VerifyJWS(token, pub2)
+	if err == nil {
+		t.Fatal("expected verification to fail with wrong key")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 21. SignIdentityDelete — terminal delete operation
+// ---------------------------------------------------------------------------
+
+func TestSignIdentityDelete(t *testing.T) {
+	priv1, pub1 := refKey1()
+	kid := "key_r9ev34fvc23z999veaaft8"
+	mk := NewMultikeyPublicKey(kid, pub1)
+
+	_, did, genCID, err := SignIdentityCreate(
+		[]MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, nil, kid, priv1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	didKid := did + "#" + kid
+	token, opCID, err := SignIdentityDelete(genCID, didKid, priv1)
+	if err != nil {
+		t.Fatalf("SignIdentityDelete: %v", err)
+	}
+
+	h, p, err := VerifyJWS(token, pub1)
+	if err != nil {
+		t.Fatalf("VerifyJWS: %v", err)
+	}
+	if h.Typ != "did:dfos:identity-op" {
+		t.Fatalf("typ: got %s", h.Typ)
+	}
+	if h.CID != opCID {
+		t.Fatalf("CID mismatch")
+	}
+	if p["type"] != "delete" {
+		t.Fatalf("payload type: got %v", p["type"])
+	}
+	if p["previousOperationCID"] != genCID {
+		t.Fatalf("previousOperationCID: got %v", p["previousOperationCID"])
+	}
+
+	// delete payload should NOT have key arrays
+	if _, ok := p["authKeys"]; ok {
+		t.Fatal("delete payload should not have authKeys")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 22. SignContentDelete — terminal delete operation
+// ---------------------------------------------------------------------------
+
+func TestSignContentDelete(t *testing.T) {
+	priv1, pub1 := refKey1()
+	did := expectedDID
+	kid := did + "#key_test"
+	docCID := "bafyreihzwuoupfg3dxip6xmgzmxsywyi2jeoxxzbgx3zxm2in7knoi3g4"
+
+	_, _, genCID, err := SignContentCreate(did, docCID, kid, "", priv1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	token, opCID, err := SignContentDelete(did, genCID, kid, "removing this content", "", priv1)
+	if err != nil {
+		t.Fatalf("SignContentDelete: %v", err)
+	}
+
+	h, p, err := VerifyJWS(token, pub1)
+	if err != nil {
+		t.Fatalf("VerifyJWS: %v", err)
+	}
+	if h.Typ != "did:dfos:content-op" {
+		t.Fatalf("typ: got %s", h.Typ)
+	}
+	if h.CID != opCID {
+		t.Fatalf("CID mismatch")
+	}
+	if p["type"] != "delete" {
+		t.Fatalf("payload type: got %v", p["type"])
+	}
+	if p["previousOperationCID"] != genCID {
+		t.Fatalf("previousOperationCID: got %v", p["previousOperationCID"])
+	}
+	if p["note"] != "removing this content" {
+		t.Fatalf("note: got %v", p["note"])
+	}
+	if p["did"] != did {
+		t.Fatalf("did: got %v", p["did"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 23. SignContentUpdateWithOptions — authorization and baseDocumentCID
+// ---------------------------------------------------------------------------
+
+func TestSignContentUpdateWithOptions(t *testing.T) {
+	priv1, pub1 := refKey1()
+	did := expectedDID
+	kid := did + "#key_test"
+	docCID := "bafyreihzwuoupfg3dxip6xmgzmxsywyi2jeoxxzbgx3zxm2in7knoi3g4"
+
+	_, _, genCID, err := SignContentCreate(did, docCID, kid, "", priv1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newDocCID := "bafyreifoo000000000000000000000000000000000000000000000000bar"
+	baseCID := docCID
+	authz := "eyJhbGciOiJFZERTQSJ9.fake-credential-token"
+
+	token, opCID, err := SignContentUpdateWithOptions(did, genCID, newDocCID, kid, priv1, ContentUpdateOptions{
+		Note:            "delegated update",
+		BaseDocumentCID: baseCID,
+		Authorization:   authz,
+	})
+	if err != nil {
+		t.Fatalf("SignContentUpdateWithOptions: %v", err)
+	}
+
+	h, p, err := VerifyJWS(token, pub1)
+	if err != nil {
+		t.Fatalf("VerifyJWS: %v", err)
+	}
+	if h.CID != opCID {
+		t.Fatal("CID mismatch")
+	}
+	if p["type"] != "update" {
+		t.Fatalf("payload type: got %v", p["type"])
+	}
+	if p["baseDocumentCID"] != baseCID {
+		t.Fatalf("baseDocumentCID: got %v", p["baseDocumentCID"])
+	}
+	if p["authorization"] != authz {
+		t.Fatalf("authorization: got %v", p["authorization"])
+	}
+	if p["note"] != "delegated update" {
+		t.Fatalf("note: got %v", p["note"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 24. Number encoding CID — integer vs float produces different CIDs
 // ---------------------------------------------------------------------------
 
 func TestNumberEncodingCID(t *testing.T) {
@@ -828,5 +1032,374 @@ func TestNumberEncodingCID(t *testing.T) {
 	}
 	if normalizedCID != numberTestCID {
 		t.Fatalf("DagCborCID with float input should normalize to integer CID: got %s, want %s", normalizedCID, numberTestCID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 25. SignCountersignature — re-signs operation with witness key
+// ---------------------------------------------------------------------------
+
+func TestSignCountersignature(t *testing.T) {
+	priv1, pub1 := refKey1()
+	priv2, pub2 := refKey2()
+
+	kid1 := "key_r9ev34fvc23z999veaaft8"
+	mk1 := NewMultikeyPublicKey(kid1, pub1)
+
+	// create an identity
+	token, did, _, err := SignIdentityCreate(
+		[]MultikeyPublicKey{mk1}, []MultikeyPublicKey{mk1}, nil, kid1, priv1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// countersign with key2
+	witnessKid := "did:dfos:witness0000000000000#key_witness"
+	csToken, err := SignCountersignature(token, witnessKid, priv2)
+	if err != nil {
+		t.Fatalf("SignCountersignature: %v", err)
+	}
+
+	// verify the countersignature with key2
+	h, p, err := VerifyJWS(csToken, pub2)
+	if err != nil {
+		t.Fatalf("VerifyJWS countersig: %v", err)
+	}
+	if h.Kid != witnessKid {
+		t.Fatalf("kid: got %s, want %s", h.Kid, witnessKid)
+	}
+	if h.Typ != "did:dfos:identity-op" {
+		t.Fatalf("typ: got %s", h.Typ)
+	}
+	if p["type"] != "create" {
+		t.Fatalf("payload type: got %v", p["type"])
+	}
+
+	// original should still verify with key1
+	_, _, err = VerifyJWS(token, pub1)
+	if err != nil {
+		t.Fatalf("original should still verify: %v", err)
+	}
+
+	// countersig should NOT verify with key1
+	_, _, err = VerifyJWS(csToken, pub1)
+	if err == nil {
+		t.Fatal("countersig should not verify with original key")
+	}
+
+	_ = did
+}
+
+// ---------------------------------------------------------------------------
+// 26. SignBeaconCountersignature — re-signs beacon with witness key
+// ---------------------------------------------------------------------------
+
+func TestSignBeaconCountersignature(t *testing.T) {
+	priv1, pub1 := refKey1()
+	priv2, pub2 := refKey2()
+
+	did := expectedDID
+	kid1 := did + "#key_r9ev34fvc23z999veaaft8"
+	merkle := BuildMerkleRoot([]string{"content1", "content2"})
+
+	// create a beacon
+	beaconToken, _, err := SignBeacon(did, merkle, kid1, priv1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// extract payload for countersigning
+	beaconPayload, err := PayloadFromJWS(beaconToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// countersign
+	witnessKid := "did:dfos:witness0000000000000#key_w"
+	csToken, err := SignBeaconCountersignature(beaconPayload, witnessKid, priv2)
+	if err != nil {
+		t.Fatalf("SignBeaconCountersignature: %v", err)
+	}
+
+	// verify with witness key
+	h, p, err := VerifyJWS(csToken, pub2)
+	if err != nil {
+		t.Fatalf("VerifyJWS beacon countersig: %v", err)
+	}
+	if h.Kid != witnessKid {
+		t.Fatalf("kid: got %s", h.Kid)
+	}
+	if h.Typ != "did:dfos:beacon" {
+		t.Fatalf("typ: got %s", h.Typ)
+	}
+	if p["type"] != "beacon" {
+		t.Fatalf("payload type: got %v", p["type"])
+	}
+
+	// original should still verify with key1
+	_, _, err = VerifyJWS(beaconToken, pub1)
+	if err != nil {
+		t.Fatalf("original beacon should still verify: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 27. PayloadFromJWS — extracts payload map
+// ---------------------------------------------------------------------------
+
+func TestPayloadFromJWS(t *testing.T) {
+	payload, err := PayloadFromJWS(genesisJWS)
+	if err != nil {
+		t.Fatalf("PayloadFromJWS: %v", err)
+	}
+	if payload["type"] != "create" {
+		t.Fatalf("payload type: got %v", payload["type"])
+	}
+
+	// invalid token
+	_, err = PayloadFromJWS("not-a-token")
+	if err == nil {
+		t.Fatal("expected error for invalid token")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 28. SignContentUpdate — backward-compatible wrapper
+// ---------------------------------------------------------------------------
+
+func TestSignContentUpdate(t *testing.T) {
+	priv1, pub1 := refKey1()
+	did := expectedDID
+	kid := did + "#key_test"
+	docCID := "bafyreihzwuoupfg3dxip6xmgzmxsywyi2jeoxxzbgx3zxm2in7knoi3g4"
+
+	_, _, genCID, err := SignContentCreate(did, docCID, kid, "", priv1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newDocCID := "bafyreifoo000000000000000000000000000000000000000000000000bar"
+	token, opCID, err := SignContentUpdate(did, genCID, newDocCID, kid, "update note", priv1)
+	if err != nil {
+		t.Fatalf("SignContentUpdate: %v", err)
+	}
+
+	h, p, err := VerifyJWS(token, pub1)
+	if err != nil {
+		t.Fatalf("VerifyJWS: %v", err)
+	}
+	if h.CID != opCID {
+		t.Fatal("CID mismatch")
+	}
+	if p["type"] != "update" {
+		t.Fatalf("payload type: got %v", p["type"])
+	}
+	if p["note"] != "update note" {
+		t.Fatalf("note: got %v", p["note"])
+	}
+	if p["previousOperationCID"] != genCID {
+		t.Fatalf("previousOperationCID: got %v", p["previousOperationCID"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 29. DeriveID — deterministic
+// ---------------------------------------------------------------------------
+
+func TestDeriveID(t *testing.T) {
+	id1 := DeriveID([]byte("seed-a"))
+	id2 := DeriveID([]byte("seed-a"))
+	id3 := DeriveID([]byte("seed-b"))
+
+	if id1 != id2 {
+		t.Fatal("same seed should produce same ID")
+	}
+	if id1 == id3 {
+		t.Fatal("different seeds should produce different IDs")
+	}
+	if len(id1) != 22 {
+		t.Fatalf("ID length: got %d, want 22", len(id1))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 30. DecodeMultikey error cases
+// ---------------------------------------------------------------------------
+
+func TestDecodeMultikeyErrors(t *testing.T) {
+	// wrong prefix
+	_, err := DecodeMultikey("x6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb")
+	if err == nil {
+		t.Fatal("expected error for wrong prefix")
+	}
+
+	// empty
+	_, err = DecodeMultikey("")
+	if err == nil {
+		t.Fatal("expected error for empty")
+	}
+
+	// wrong multicodec prefix (valid base58 but not ed25519-pub)
+	_, err = DecodeMultikey("z111111111111111111111111111111111")
+	if err == nil {
+		t.Fatal("expected error for wrong multicodec")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 31. DecodeJWSUnsafe — error paths
+// ---------------------------------------------------------------------------
+
+func TestDecodeJWSUnsafeErrors(t *testing.T) {
+	// too few parts
+	_, _, err := DecodeJWSUnsafe("onlyonepart")
+	if err == nil {
+		t.Fatal("expected error for 1-part token")
+	}
+
+	// invalid base64 in header
+	_, _, err = DecodeJWSUnsafe("!!!.valid.valid")
+	if err == nil {
+		t.Fatal("expected error for invalid header base64")
+	}
+
+	// invalid base64 in payload
+	validHeader := Base64urlEncodeString(`{"alg":"EdDSA","typ":"test","kid":"k"}`)
+	_, _, err = DecodeJWSUnsafe(validHeader + ".!!!.sig")
+	if err == nil {
+		t.Fatal("expected error for invalid payload base64")
+	}
+
+	// valid base64 but not valid JSON in header
+	_, _, err = DecodeJWSUnsafe(Base64urlEncodeString("not json") + "." + Base64urlEncodeString("{}") + ".sig")
+	if err == nil {
+		t.Fatal("expected error for non-JSON header")
+	}
+
+	// valid base64 but not valid JSON in payload
+	_, _, err = DecodeJWSUnsafe(validHeader + "." + Base64urlEncodeString("not json") + ".sig")
+	if err == nil {
+		t.Fatal("expected error for non-JSON payload")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 32. VerifyJWS — error paths
+// ---------------------------------------------------------------------------
+
+func TestVerifyJWSErrors(t *testing.T) {
+	_, pub1 := refKey1()
+
+	// too few parts
+	_, _, err := VerifyJWS("bad", pub1)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	// invalid signature base64
+	validHeader := Base64urlEncodeString(`{"alg":"EdDSA","typ":"test","kid":"k"}`)
+	validPayload := Base64urlEncodeString(`{"foo":"bar"}`)
+	_, _, err = VerifyJWS(validHeader+"."+validPayload+".!!!", pub1)
+	if err == nil {
+		t.Fatal("expected error for invalid sig base64")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 33. DecodeJWTUnsafe — edge cases
+// ---------------------------------------------------------------------------
+
+func TestDecodeJWTUnsafeEdgeCases(t *testing.T) {
+	// valid token without cid in header
+	priv1, _ := refKey1()
+	token, _ := CreateAuthToken("did:dfos:test", "aud", "key_1", 1*time.Hour, priv1)
+	h, p, err := DecodeJWTUnsafe(token)
+	if err != nil {
+		t.Fatalf("DecodeJWTUnsafe: %v", err)
+	}
+	if h["alg"] != "EdDSA" {
+		t.Fatalf("alg: %s", h["alg"])
+	}
+	if _, hasCID := h["cid"]; hasCID {
+		t.Fatal("JWT auth token should not have cid in header map")
+	}
+	if p["iss"] != "did:dfos:test" {
+		t.Fatalf("iss: %v", p["iss"])
+	}
+
+	// malformed token
+	_, _, err = DecodeJWTUnsafe("bad-token")
+	if err == nil {
+		t.Fatal("expected error for malformed token")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 34. VerifyCredential — additional edge cases
+// ---------------------------------------------------------------------------
+
+func TestVerifyCredentialEdgeCases(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(nil)
+
+	// token with only 2 parts
+	_, err := VerifyCredential("a.b", nil, "", "")
+	if err == nil {
+		t.Fatal("expected error for 2-part token")
+	}
+
+	// token with invalid base64 header
+	_, err = VerifyCredential("!!!.valid.valid", nil, "", "")
+	if err == nil {
+		t.Fatal("expected error for invalid header")
+	}
+
+	// credential with kid that has no # (not a DID URL)
+	iss := "did:dfos:test123"
+	sub := "did:dfos:sub456"
+	kidNoFragment := "did:dfos:test123" // missing #key_xxx
+	token, _ := CreateCredential(iss, sub, kidNoFragment, "DFOSContentRead", 1*time.Hour, "", priv)
+	_, err = VerifyCredential(token, priv.Public().(ed25519.PublicKey), sub, "DFOSContentRead")
+	if err == nil {
+		t.Fatal("expected error for kid without fragment")
+	}
+
+	// credential with kid DID not matching iss
+	wrongKid := "did:dfos:other#key_1"
+	token2, _ := CreateCredential(iss, sub, wrongKid, "DFOSContentRead", 1*time.Hour, "", priv)
+	_, err = VerifyCredential(token2, priv.Public().(ed25519.PublicKey), sub, "DFOSContentRead")
+	if err == nil {
+		t.Fatal("expected error for kid DID mismatch")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 35. PayloadFromJWS — round-trip
+// ---------------------------------------------------------------------------
+
+func TestPayloadFromJWSRoundTrip(t *testing.T) {
+	priv1, _ := refKey1()
+	kid := "key_test"
+	mk := NewMultikeyPublicKey(kid, priv1.Public().(ed25519.PublicKey))
+
+	token, _, _, err := SignIdentityCreate(
+		[]MultikeyPublicKey{mk}, []MultikeyPublicKey{mk}, nil, kid, priv1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload, err := PayloadFromJWS(token)
+	if err != nil {
+		t.Fatalf("PayloadFromJWS: %v", err)
+	}
+	if payload["type"] != "create" {
+		t.Fatalf("type: %v", payload["type"])
+	}
+
+	// invalid base64 in payload part
+	_, err = PayloadFromJWS("valid." + Base64urlEncodeString("not json") + ".sig")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON payload")
 	}
 }

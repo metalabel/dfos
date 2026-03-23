@@ -25,13 +25,18 @@
     "metalabel"
   ],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./node": "./src/serve.ts"
   },
   "publishConfig": {
     "exports": {
       ".": {
         "import": "./dist/index.js",
         "types": "./dist/index.d.ts"
+      },
+      "./node": {
+        "import": "./dist/serve.js",
+        "types": "./dist/serve.d.ts"
       }
     }
   },

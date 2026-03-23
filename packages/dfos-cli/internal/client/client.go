@@ -94,20 +94,21 @@ func (c *Client) GetOperation(cid string) (map[string]any, error) {
 	return c.getJSON("/operations/" + cid)
 }
 
-// GetCountersignatures fetches countersignatures for a CID.
+// GetCountersignatures fetches countersignatures for a CID (operation or beacon).
 func (c *Client) GetCountersignatures(cid string) (map[string]any, error) {
 	return c.getJSON("/countersignatures/" + cid)
 }
 
-// UploadBlob uploads a content blob.
-func (c *Client) UploadBlob(contentID string, documentCID string, data []byte, authToken string) error {
-	req, err := http.NewRequest("PUT", c.BaseURL+"/content/"+contentID+"/blob", bytes.NewReader(data))
+// UploadBlob uploads a content blob, keyed by the operation CID that
+// introduced the documentCID. The caller must be either the chain creator
+// or the signer of the referenced operation.
+func (c *Client) UploadBlob(contentID string, operationCID string, data []byte, authToken string) error {
+	req, err := http.NewRequest("PUT", c.BaseURL+"/content/"+contentID+"/blob/"+operationCID, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("X-Document-CID", documentCID)
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -122,9 +123,14 @@ func (c *Client) UploadBlob(contentID string, documentCID string, data []byte, a
 	return nil
 }
 
-// DownloadBlob downloads a content blob.
-func (c *Client) DownloadBlob(contentID string, authToken string, credential string) ([]byte, string, error) {
-	req, err := http.NewRequest("GET", c.BaseURL+"/content/"+contentID+"/blob", nil)
+// DownloadBlob downloads a content blob. If ref is non-empty, downloads blob at
+// that specific operation CID (historical version) instead of chain head.
+func (c *Client) DownloadBlob(contentID string, authToken string, credential string, ref ...string) ([]byte, string, error) {
+	path := "/content/" + contentID + "/blob"
+	if len(ref) > 0 && ref[0] != "" {
+		path += "/" + ref[0]
+	}
+	req, err := http.NewRequest("GET", c.BaseURL+path, nil)
 	if err != nil {
 		return nil, "", err
 	}

@@ -106,6 +106,7 @@ export interface RelayStore {
   putBlob(key: BlobKey, data: Uint8Array): Promise<void>;
 
   // --- countersignatures ---
+  // Implementations MUST deduplicate by witness DID per target CID.
 
   getCountersignatures(operationCID: string): Promise<string[]>;
   addCountersignature(operationCID: string, jwsToken: string): Promise<void>;

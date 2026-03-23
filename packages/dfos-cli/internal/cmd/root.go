@@ -66,6 +66,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newContentCmd())
 	root.AddCommand(newBeaconCmd())
 	root.AddCommand(newWitnessCmd())
+	root.AddCommand(newCountersigsCmd())
 	root.AddCommand(newAuthCmd())
 	root.AddCommand(newRelayCmd())
 	root.AddCommand(newAPICmd())
@@ -120,6 +121,9 @@ func requireIdentity() (*config.ResolvedContext, *store.StoredIdentity, error) {
 	}
 	if id == nil {
 		return nil, nil, fmt.Errorf("identity '%s' not found in local store", ctx.IdentityName)
+	}
+	if id.State.IsDeleted {
+		return nil, nil, fmt.Errorf("identity '%s' is deleted — cannot sign operations", ctx.IdentityName)
 	}
 	return ctx, id, nil
 }

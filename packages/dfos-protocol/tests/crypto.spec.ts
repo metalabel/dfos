@@ -165,6 +165,116 @@ describe('jws', () => {
   });
 });
 
+describe('id', () => {
+  // dynamic imports since these are not in the crypto barrel via jws/ed25519
+  const getId = () => import('../src/crypto/id');
+
+  describe('isValidId', () => {
+    it('should accept a valid prefixed ID', async () => {
+      const { generateId, isValidId } = await getId();
+      const id = generateId('msg');
+      expect(isValidId('msg', id)).toBe(true);
+    });
+
+    it('should reject wrong prefix', async () => {
+      const { generateId, isValidId } = await getId();
+      const id = generateId('msg');
+      expect(isValidId('post', id)).toBe(false);
+    });
+
+    it('should reject wrong length', async () => {
+      const { isValidId } = await getId();
+      expect(isValidId('msg', 'msg_tooshort')).toBe(false);
+      expect(isValidId('msg', 'msg_')).toBe(false);
+    });
+
+    it('should reject missing prefix separator', async () => {
+      const { isValidId } = await getId();
+      expect(isValidId('msg', 'msgxxxxxxxxxxxxxxxxxxxxxxxx')).toBe(false);
+    });
+  });
+
+  describe('normalizedId', () => {
+    it('should return lowered ID when prefix matches', async () => {
+      const { normalizedId } = await getId();
+      const result = normalizedId('msg', 'MSG_ABCDEF1234567890ABCDEF');
+      expect(result).toBe('msg_abcdef1234567890abcdef');
+    });
+
+    it('should prepend prefix when ID has no underscore', async () => {
+      const { normalizedId } = await getId();
+      const result = normalizedId('msg', 'abcdef1234567890abcdef');
+      expect(result).toBe('msg_abcdef1234567890abcdef');
+    });
+
+    it('should throw on wrong prefix', async () => {
+      const { normalizedId } = await getId();
+      expect(() => normalizedId('msg', 'post_abcdef1234567890abcdef')).toThrow(
+        'unexpected id prefix',
+      );
+    });
+  });
+});
+
+describe('jwt', () => {
+  const getJwt = () => import('../src/crypto/jwt');
+
+  describe('decodeJwtUnsafe', () => {
+    it('should decode a valid JWT', async () => {
+      const { createJwt, decodeJwtUnsafe } = await getJwt();
+      const keypair = createNewEd25519Keypair();
+      const token = await createJwt({
+        header: { alg: 'EdDSA', typ: 'JWT', kid: 'did:dfos:test#key_1' },
+        payload: {
+          iss: 'did:dfos:test',
+          sub: 'did:dfos:test',
+          exp: Math.floor(Date.now() / 1000) + 3600,
+          iat: Math.floor(Date.now() / 1000),
+        },
+        sign: async (msg) => signPayloadEd25519(msg, keypair.privateKey),
+      });
+      const result = decodeJwtUnsafe(token);
+      expect(result).not.toBeNull();
+      expect(result!.header.alg).toBe('EdDSA');
+      expect(result!.header.typ).toBe('JWT');
+      expect(result!.payload.iss).toBe('did:dfos:test');
+    });
+
+    it('should return null for malformed tokens', async () => {
+      const { decodeJwtUnsafe } = await getJwt();
+      expect(decodeJwtUnsafe('not-a-jwt')).toBeNull();
+      expect(decodeJwtUnsafe('a.b')).toBeNull();
+      expect(decodeJwtUnsafe('')).toBeNull();
+      expect(decodeJwtUnsafe('x.y.z')).toBeNull(); // invalid base64
+    });
+  });
+});
+
+describe('multiformats utilities', () => {
+  it('parseDagCborCID should parse a valid CID string', async () => {
+    const { dagCborCanonicalEncode, parseDagCborCID } = await import('../src/crypto/multiformats');
+    const block = await dagCborCanonicalEncode({ hello: 'world' });
+    const cidStr = block.cid.toString();
+    const parsed = parseDagCborCID(cidStr);
+    expect(parsed.toString()).toBe(cidStr);
+  });
+
+  it('parseDagCborCID should throw on invalid CID', async () => {
+    const { parseDagCborCID } = await import('../src/crypto/multiformats');
+    expect(() => parseDagCborCID('not-a-cid')).toThrow();
+  });
+
+  it('isCanonicallyEqual should return true for equivalent objects', async () => {
+    const { isCanonicallyEqual } = await import('../src/crypto/multiformats');
+    expect(await isCanonicallyEqual({ a: 1, b: 2 }, { b: 2, a: 1 })).toBe(true);
+  });
+
+  it('isCanonicallyEqual should return false for different objects', async () => {
+    const { isCanonicallyEqual } = await import('../src/crypto/multiformats');
+    expect(await isCanonicallyEqual({ a: 1 }, { a: 2 })).toBe(false);
+  });
+});
+
 describe('number encoding determinism', () => {
   it('should encode integers as CBOR integers, producing the correct CID', async () => {
     const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');

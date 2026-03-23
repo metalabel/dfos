@@ -1,4 +1,4 @@
-package protocol
+package dfos
 
 import (
 	"crypto/ed25519"

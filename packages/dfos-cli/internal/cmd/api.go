@@ -10,7 +10,7 @@ import (
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/protocol"
+	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/store"
 	"github.com/spf13/cobra"
 )
