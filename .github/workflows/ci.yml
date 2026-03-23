@@ -45,6 +45,28 @@ jobs:
       - name: Test
         run: pnpm test
 
+  dfos-cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-cli/go.sum
+
+      - name: Build dfos-cli
+        working-directory: packages/dfos-cli
+        run: go build ./cmd/dfos
+
+      - name: Test dfos-cli
+        working-directory: packages/dfos-cli
+        run: go test ./...
+
   verify-go:
     runs-on: ubuntu-latest
     timeout-minutes: 5
