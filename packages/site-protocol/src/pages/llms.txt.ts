@@ -21,6 +21,7 @@ export const GET: APIRoute = () => {
     '## Implementation',
     '',
     '- [Web Relay](https://protocol.dfos.com/web-relay): Verifying HTTP relay for identity chains, content chains, beacons, countersignatures, and content blobs',
+    '- [CLI](https://protocol.dfos.com/cli): Go command-line interface for managing identities, signing operations, and interacting with relays',
     '',
     '## Full Content',
     '',
