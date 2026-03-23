@@ -441,4 +441,77 @@ mod tests {
             "vc type should contain DFOSContentRead"
         );
     }
+
+    // =========================================================================
+    // Number encoding determinism tests
+    // =========================================================================
+
+    #[test]
+    fn test_number_encoding_determinism() {
+        // dag-cbor key order: "type" (4) before "version" (7)
+        let cbor_bytes = dag_cbor_encode_map(vec![
+            ("type", Value::Text("test".to_string())),
+            ("version", Value::Integer(1.into())),
+        ]);
+
+        assert_eq!(
+            hex::encode(&cbor_bytes),
+            "a2647479706564746573746776657273696f6e01",
+            "CBOR bytes mismatch for integer 1"
+        );
+
+        let cid_bytes = make_cid_bytes(&cbor_bytes);
+        let cid_str = cid_to_base32(&cid_bytes);
+        assert_eq!(
+            cid_str,
+            "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa",
+            "CID mismatch for integer 1"
+        );
+    }
+
+    #[test]
+    fn test_number_encoding_from_json() {
+        // Parse JSON and convert to ciborium Value, mimicking the
+        // JSON deserialization → CBOR encoding pipeline.
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"version": 1, "type": "test"}"#).unwrap();
+
+        // Extract fields and build CBOR map in dag-cbor key order
+        // ("type" length 4 before "version" length 7)
+        let type_str = json["type"].as_str().unwrap().to_string();
+        let version_int = json["version"].as_i64().unwrap();
+
+        let cbor_bytes = dag_cbor_encode_map(vec![
+            ("type", Value::Text(type_str)),
+            ("version", Value::Integer(version_int.into())),
+        ]);
+
+        let cid_bytes = make_cid_bytes(&cbor_bytes);
+        let cid_str = cid_to_base32(&cid_bytes);
+        assert_eq!(
+            cid_str,
+            "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa",
+            "CID from JSON deserialization should match integer-encoded CID"
+        );
+    }
+
+    #[test]
+    fn test_number_encoding_float_produces_wrong_cid() {
+        // Using a CBOR float (1.0) instead of integer (1) produces a different,
+        // known-wrong CID — demonstrating why float encoding must be rejected.
+        // dag-cbor key order: "type" (4) before "version" (7)
+        let cbor_bytes = dag_cbor_encode_map(vec![
+            ("type", Value::Text("test".to_string())),
+            ("version", Value::Float(1.0)),
+        ]);
+
+        let cid_bytes = make_cid_bytes(&cbor_bytes);
+        let cid_str = cid_to_base32(&cid_bytes);
+
+        let correct_cid = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa";
+        let wrong_cid = "bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q";
+
+        assert_eq!(cid_str, wrong_cid, "float 1.0 should produce the known-wrong CID");
+        assert_ne!(cid_str, correct_cid, "float 1.0 must NOT produce the correct integer CID");
+    }
 }

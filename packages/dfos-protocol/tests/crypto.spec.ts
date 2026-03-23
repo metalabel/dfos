@@ -164,3 +164,43 @@ describe('jws', () => {
     );
   });
 });
+
+describe('number encoding determinism', () => {
+  it('should encode integers as CBOR integers, producing the correct CID', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    const payload = { version: 1, type: 'test' };
+    const result = await dagCborCanonicalEncode(payload);
+
+    const cborHex = Buffer.from(result.bytes).toString('hex');
+    expect(cborHex).toBe('a2647479706564746573746776657273696f6e01');
+    expect(result.cid.toString()).toBe(
+      'bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa',
+    );
+
+    // byte at offset 19 should be 0x01 (CBOR integer), not 0xf9 (float header)
+    expect(result.bytes[19]).toBe(0x01);
+  });
+
+  it('should produce the same CID when payload is round-tripped through JSON', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+
+    // simulate JSON round-trip (as happens when decoding a JWS payload)
+    const jsonStr = '{"version": 1, "type": "test"}';
+    const decoded = JSON.parse(jsonStr);
+    const result = await dagCborCanonicalEncode(decoded);
+
+    expect(result.cid.toString()).toBe(
+      'bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa',
+    );
+  });
+
+  it('should handle version 1 and 1.0 identically in JS (no float distinction)', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+
+    // JS does not distinguish 1 and 1.0 — both are the same number
+    const result1 = await dagCborCanonicalEncode({ version: 1, type: 'test' });
+    const result2 = await dagCborCanonicalEncode({ version: 1.0, type: 'test' });
+
+    expect(result1.cid.toString()).toBe(result2.cid.toString());
+  });
+});

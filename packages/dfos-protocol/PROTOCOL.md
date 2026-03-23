@@ -219,7 +219,33 @@ Note: `[0xed, 0x01]` is the unsigned varint encoding of 237 (`0xed`). Since `0xe
 5. Base32lower multibase encode → "bafyrei..."
 ```
 
-dag-cbor canonical ordering: map keys sorted by encoded byte length first, then lexicographic. JSON numbers map to CBOR integers. Strings to CBOR text strings. Null to CBOR null. Arrays to CBOR arrays. Objects to CBOR maps with sorted keys.
+dag-cbor canonical ordering: map keys sorted by encoded byte length first, then lexicographic. Strings to CBOR text strings. Null to CBOR null. Arrays to CBOR arrays. Objects to CBOR maps with sorted keys.
+
+#### Number Encoding (Critical for CID Determinism)
+
+JSON has a single number type (IEEE 754 double). CBOR has distinct integer and floating-point types with different byte encodings. This difference is the most common source of CID divergence across implementations.
+
+**Rule: JSON numbers that are mathematically integers (no fractional part) MUST be encoded as CBOR integers (major type 0/1), never as CBOR floats.** This is consistent with the [IPLD data model](https://ipld.io/docs/data-model/) integer/float distinction and required by the [dag-cbor codec spec](https://ipld.io/specs/codecs/dag-cbor/spec/).
+
+Why this matters: CBOR integer `1` encodes as a single byte `0x01`. CBOR float `1.0` encodes as three bytes `0xf9 0x3c 0x00` (half-precision). Same logical value, different bytes, different SHA-256, different CID. An implementation that encodes `version: 1` as a float will produce a valid CBOR document but a wrong CID — silent, undetectable without cross-implementation testing.
+
+**Common trap**: Languages that decode JSON into untyped maps (Go's `map[string]any`, Python's `dict`, etc.) typically represent all JSON numbers as floating-point. When this decoded value is then CBOR-encoded, it becomes a CBOR float instead of an integer. Implementations MUST normalize number types after JSON deserialization and before CBOR encoding.
+
+**Integer bounds**: dag-cbor integers are limited to the range `[-(2^64), 2^64 - 1]`. All integer fields in the current protocol (`version: 1`) are small positive values. Future protocol extensions SHOULD NOT introduce integer fields that exceed JSON's safe integer range (`2^53 - 1`), as JSON serialization would lose precision.
+
+**Verification test vector** — encodes `{"version": 1, "type": "test"}`:
+
+```
+Integer encoding (CORRECT):
+  CBOR: a2647479706564746573746776657273696f6e01
+  CID:  bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa
+
+Float encoding (WRONG — different bytes, different CID):
+  CBOR: a2647479706564746573746776657273696f6ef93c00
+  CID:  bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q
+```
+
+If your implementation produces the float CID, your number encoding is incorrect. The byte at offset 19 in the CBOR output is the discriminator: `0x01` = correct (CBOR integer), `0xf9` = wrong (CBOR float16 header).
 
 **Worked example (genesis identity operation):**
 
@@ -1040,6 +1066,12 @@ Given the artifacts above, verify:
 12. **VC-JWT credential verify**: using the issuer's public key, verify a `DFOSContentWrite` or `DFOSContentRead` credential: check EdDSA signature, `typ: "vc+jwt"`, expiration, `kid` DID URL format, `kid` DID matches `iss`, `vc` claim structure matches W3C VC Data Model v2, credential type matches expected DFOS type. Test vectors in [`examples/credential-write.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-write.json) and [`examples/credential-read.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-read.json).
 
 13. **Delegated content chain verify**: using [`examples/content-delegated.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/content-delegated.json), verify a content chain where the genesis is signed by the creator and a subsequent update is signed by a delegate with an embedded `DFOSContentWrite` VC-JWT in the `authorization` field. The VC must be issued by the creator DID, with `sub` matching the delegate DID.
+
+14. **Number encoding determinism**: dag-cbor encode `{"version": 1, "type": "test"}` and verify:
+    - CBOR hex is `a2647479706564746573746776657273696f6e01` (20 bytes)
+    - CID is `bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa`
+    - Byte at offset 19 is `0x01` (CBOR integer 1), NOT `0xf9` (CBOR float header)
+    - If your implementation decodes this payload from JSON (e.g., from a JWS token) and then re-encodes to dag-cbor, the CID MUST still match. This catches the JSON `float64` → CBOR float trap.
 
 ---
 

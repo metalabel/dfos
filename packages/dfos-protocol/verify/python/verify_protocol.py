@@ -294,6 +294,45 @@ result = verify_jws(READ_VC, pub1)
 check("Read VC signature valid", True)
 check("Read VC type contains DFOSContentRead", "DFOSContentRead" in result["payload"]["vc"]["type"])
 
+# Number encoding determinism tests
+print("\n15. Number Encoding Determinism")
+
+def test_number_encoding_determinism():
+    payload = {"version": 1, "type": "test"}
+    cbor_bytes = dag_cbor.encode(payload)
+    expected_hex = "a2647479706564746573746776657273696f6e01"
+    check("Integer CBOR hex", cbor_bytes.hex() == expected_hex,
+          f"got {cbor_bytes.hex()}")
+    cid_bytes = make_cid_bytes(cbor_bytes)
+    cid_string = cid_to_base32(cid_bytes)
+    expected_cid = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
+    check("Integer CID", cid_string == expected_cid, f"got {cid_string}")
+
+def test_number_encoding_from_json():
+    payload = json.loads('{"version": 1, "type": "test"}')
+    cbor_bytes = dag_cbor.encode(payload)
+    cid_bytes = make_cid_bytes(cbor_bytes)
+    cid_string = cid_to_base32(cid_bytes)
+    expected_cid = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
+    check("JSON int parsed as int (not float)", cid_string == expected_cid,
+          f"got {cid_string}")
+
+def test_number_encoding_float_produces_wrong_cid():
+    payload = {"version": 1.0, "type": "test"}
+    cbor_bytes = dag_cbor.encode(payload)
+    cid_bytes = make_cid_bytes(cbor_bytes)
+    cid_string = cid_to_base32(cid_bytes)
+    known_wrong_cid = "bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q"
+    correct_cid = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
+    check("Float CID matches known-wrong CID", cid_string == known_wrong_cid,
+          f"got {cid_string}")
+    check("Float CID differs from correct CID", cid_string != correct_cid,
+          f"unexpectedly matched correct CID")
+
+test_number_encoding_determinism()
+test_number_encoding_from_json()
+test_number_encoding_float_produces_wrong_cid()
+
 # --- Summary ---
 print(f"\n{'=' * 70}")
 print(f"Results: {passed} passed, {failed} failed")

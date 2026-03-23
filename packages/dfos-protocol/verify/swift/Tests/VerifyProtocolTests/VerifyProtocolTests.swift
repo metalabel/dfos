@@ -409,3 +409,87 @@ let readVC = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdn
     #expect(types.contains("VerifiableCredential"))
     #expect(types.contains("DFOSContentRead"))
 }
+
+// =============================================================================
+// Minimal DAG-CBOR encoder (map + text + uint + float64 only)
+// =============================================================================
+
+/// Encode a single CBOR value. Supported types: String, Int, Double, [String: Any].
+/// Map keys are sorted by (length, lexicographic) per RFC 7049 canonical ordering.
+func encodeCBOR(_ value: Any) -> [UInt8] {
+    switch value {
+    case let s as String:
+        let bytes = Array(s.utf8)
+        return [UInt8(0x60 | bytes.count)] + bytes
+    case let i as Int:
+        precondition(i >= 0 && i < 24, "only small non-negative integers supported")
+        return [UInt8(i)]
+    case let d as Double:
+        // major type 7, additional 27 = 64-bit IEEE 754
+        let bits = d.bitPattern
+        var result: [UInt8] = [0xfb]
+        for shift in stride(from: 56, through: 0, by: -8) {
+            result.append(UInt8((bits >> shift) & 0xff))
+        }
+        return result
+    case let m as [String: Any]:
+        precondition(m.count < 24, "only small maps supported")
+        var header = [UInt8(0xa0 | m.count)]
+        // DAG-CBOR canonical key order: sort by encoded key bytes (length, then lexicographic)
+        let sortedKeys = m.keys.sorted { a, b in
+            let ab = Array(a.utf8), bb = Array(b.utf8)
+            if ab.count != bb.count { return ab.count < bb.count }
+            return ab.lexicographicallyPrecedes(bb)
+        }
+        var body: [UInt8] = []
+        for key in sortedKeys {
+            body += encodeCBOR(key)
+            body += encodeCBOR(m[key]!)
+        }
+        return header + body
+    default:
+        fatalError("unsupported CBOR value type: \(type(of: value))")
+    }
+}
+
+// MARK: - Number encoding determinism tests
+
+@Test func testNumberEncodingDeterminism() {
+    // Integer 1 must encode as CBOR uint, not float — keys sorted: "type" (4) before "version" (7)
+    let payload: [String: Any] = ["version": 1, "type": "test"]
+    let cborBytes = encodeCBOR(payload)
+
+    #expect(hexEncode(cborBytes) == "a2647479706564746573746776657273696f6e01")
+
+    let cidBytes = makeCIDBytes(cborBytes)
+    let cid = cidToBase32(cidBytes)
+    #expect(cid == "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa")
+}
+
+@Test func testNumberEncodingFromJSON() {
+    // JSONSerialization must preserve integer type (not promote to Double) through the pipeline
+    let jsonData = Data(#"{"version": 1, "type": "test"}"#.utf8)
+    let parsed = try! JSONSerialization.jsonObject(with: jsonData) as! [String: Any]
+
+    // Confirm Swift parsed "1" as Int (not Double) — this is the invariant being tested
+    #expect(parsed["version"] is Int)
+
+    let cborBytes = encodeCBOR(parsed)
+    let cidBytes = makeCIDBytes(cborBytes)
+    let cid = cidToBase32(cidBytes)
+    #expect(cid == "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa")
+}
+
+@Test func testNumberEncodingFloatProducesWrongCID() {
+    // Explicitly using Double 1.0 produces a different (wrong) CID — documents the failure mode
+    let wrongCID = "bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q"
+    let correctCID = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
+
+    let payload: [String: Any] = ["version": Double(1.0), "type": "test"]
+    let cborBytes = encodeCBOR(payload)
+    let cidBytes = makeCIDBytes(cborBytes)
+    let cid = cidToBase32(cidBytes)
+
+    #expect(cid == wrongCID)
+    #expect(cid != correctCID)
+}
