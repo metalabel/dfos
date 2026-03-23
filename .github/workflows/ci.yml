@@ -59,6 +59,10 @@ jobs:
           go-version-file: packages/dfos-cli/go.mod
           cache-dependency-path: packages/dfos-cli/go.sum
 
+      - name: Test dfos-protocol-go
+        working-directory: packages/dfos-protocol-go
+        run: go test ./...
+
       - name: Build dfos-cli
         working-directory: packages/dfos-cli
         run: go build ./cmd/dfos
