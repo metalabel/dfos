@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/protocol"
+	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -29,6 +29,7 @@ func newContentCmd() *cobra.Command {
 	cmd.AddCommand(newContentLogCmd())
 	cmd.AddCommand(newContentGrantCmd())
 	cmd.AddCommand(newContentUpdateCmd())
+	cmd.AddCommand(newContentDeleteCmd())
 	cmd.AddCommand(newContentVerifyCmd())
 	cmd.AddCommand(newContentRemoveCmd())
 	return cmd
@@ -164,7 +165,7 @@ func newContentCreateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("create auth token: %w", err)
 				}
-				if err := c.UploadBlob(contentID, documentCID, docBytes, authToken); err != nil {
+				if err := c.UploadBlob(contentID, opCID, docBytes, authToken); err != nil {
 					return fmt.Errorf("upload blob: %w", err)
 				}
 
@@ -287,6 +288,7 @@ func newContentDownloadCmd() *cobra.Command {
 	var outputFile string
 	var credential string
 	var relayName string
+	var ref string
 
 	cmd := &cobra.Command{
 		Use:   "download <contentId>",
@@ -303,8 +305,9 @@ func newContentDownloadCmd() *cobra.Command {
 
 			// try local blob — enforce same access rules as relay:
 			// creator can read without credential, everyone else needs one
+			// skip local fallback if --ref is specified or content is deleted
 			sc, _ := store.LoadContent(contentID)
-			if sc != nil {
+			if sc != nil && ref == "" && !sc.State.IsDeleted {
 				isCreator := id.DID == sc.State.CreatorDID
 				if isCreator {
 					blob, err := store.LoadBlob(contentID)
@@ -364,7 +367,7 @@ func newContentDownloadCmd() *cobra.Command {
 				return err
 			}
 
-			blob, _, err := c.DownloadBlob(contentID, authToken, credential)
+			blob, _, err := c.DownloadBlob(contentID, authToken, credential, ref)
 			if err != nil {
 				return fmt.Errorf("download: %w", err)
 			}
@@ -375,6 +378,7 @@ func newContentDownloadCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "Write to file instead of stdout")
 	cmd.Flags().StringVar(&credential, "credential", "", "DFOSContentRead VC-JWT credential")
 	cmd.Flags().StringVar(&relayName, "relay", "", "Relay to download from")
+	cmd.Flags().StringVar(&ref, "ref", "", "Download blob at specific operation CID (historical version)")
 	return cmd
 }
 
@@ -425,7 +429,7 @@ func newContentPublishCmd() *cobra.Command {
 				}
 			}
 
-			// upload blob if we have it
+			// upload blob if we have it (use the head operation CID)
 			if sc.State.CurrentDocumentCID != nil {
 				blob, err := store.LoadBlob(contentID)
 				if err == nil {
@@ -435,7 +439,7 @@ func newContentPublishCmd() *cobra.Command {
 
 					info, _ := c.GetRelayInfo()
 					authToken, _ := protocol.CreateAuthToken(id.DID, info.DID, kid, 5*time.Minute, privKey)
-					c.UploadBlob(contentID, *sc.State.CurrentDocumentCID, blob, authToken)
+					c.UploadBlob(contentID, sc.State.HeadCID, blob, authToken)
 				}
 			}
 
@@ -653,6 +657,8 @@ func newContentGrantCmd() *cobra.Command {
 func newContentUpdateCmd() *cobra.Command {
 	var note string
 	var relayName string
+	var authorization string
+	var baseDocumentCID string
 
 	cmd := &cobra.Command{
 		Use:   "update <contentId> <file|->",
@@ -663,6 +669,10 @@ func newContentUpdateCmd() *cobra.Command {
 			sc, err := store.LoadContent(contentID)
 			if err != nil || sc == nil {
 				return fmt.Errorf("content chain '%s' not found", contentID)
+			}
+
+			if sc.State.IsDeleted {
+				return fmt.Errorf("content chain is deleted — cannot update")
 			}
 
 			_, id, err := requireIdentity()
@@ -698,7 +708,14 @@ func newContentUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			jwsToken, opCID, err := protocol.SignContentUpdate(id.DID, sc.State.HeadCID, documentCID, kid, note, privKey)
+			jwsToken, opCID, err := protocol.SignContentUpdateWithOptions(
+				id.DID, sc.State.HeadCID, documentCID, kid, privKey,
+				protocol.ContentUpdateOptions{
+					Note:            note,
+					BaseDocumentCID: baseDocumentCID,
+					Authorization:   authorization,
+				},
+			)
 			if err != nil {
 				return err
 			}
@@ -730,7 +747,7 @@ func newContentUpdateCmd() *cobra.Command {
 
 				info, _ := c.GetRelayInfo()
 				authToken, _ := protocol.CreateAuthToken(id.DID, info.DID, kid, 5*time.Minute, privKey)
-				c.UploadBlob(contentID, documentCID, docBytes, authToken)
+				c.UploadBlob(contentID, opCID, docBytes, authToken)
 			}
 
 			store.SaveContent(sc)
@@ -745,6 +762,93 @@ func newContentUpdateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&note, "note", "", "Operation note")
 	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOSContentWrite VC-JWT for delegated writes")
+	cmd.Flags().StringVar(&baseDocumentCID, "base-document-cid", "", "CID of the base document this update is derived from")
+	return cmd
+}
+
+func newContentDeleteCmd() *cobra.Command {
+	var note string
+	var relayName string
+	var authorization string
+
+	cmd := &cobra.Command{
+		Use:   "delete <contentId>",
+		Short: "Permanently delete a content chain (sign delete operation)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			contentID := args[0]
+			sc, err := store.LoadContent(contentID)
+			if err != nil || sc == nil {
+				return fmt.Errorf("content chain '%s' not found", contentID)
+			}
+
+			if sc.State.IsDeleted {
+				return fmt.Errorf("content chain is already deleted")
+			}
+
+			_, id, err := requireIdentity()
+			if err != nil {
+				return err
+			}
+
+			if len(id.State.AuthKeys) == 0 {
+				return fmt.Errorf("identity has no auth keys")
+			}
+			authKeyID := id.State.AuthKeys[0].ID
+			kid := id.DID + "#" + authKeyID
+			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+			if err != nil {
+				return fmt.Errorf("auth key not in keychain: %w", err)
+			}
+
+			jwsToken, opCID, err := protocol.SignContentDelete(id.DID, sc.State.HeadCID, kid, note, authorization, privKey)
+			if err != nil {
+				return fmt.Errorf("sign delete: %w", err)
+			}
+
+			// update local state
+			sc.Log = append(sc.Log, jwsToken)
+			sc.State.HeadCID = opCID
+			sc.State.IsDeleted = true
+			sc.State.CurrentDocumentCID = nil
+			sc.State.Length++
+
+			// publish if relay specified
+			rn := relayName
+			if rn == "" {
+				rn = relayFlag
+			}
+			if rn != "" {
+				c, _, err := getRelayClient(rn)
+				if err != nil {
+					return err
+				}
+				results, err := c.SubmitOperations([]string{jwsToken})
+				if err != nil {
+					return fmt.Errorf("submit: %w", err)
+				}
+				if len(results) > 0 && results[0].Status != "accepted" {
+					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				}
+			}
+
+			store.SaveContent(sc)
+
+			if jsonFlag {
+				outputJSON(map[string]any{"contentId": contentID, "operationCID": opCID, "deleted": true})
+			} else {
+				fmt.Printf("Content deleted:\n")
+				fmt.Printf("  Content ID:     %s\n", contentID)
+				fmt.Printf("  Operation CID:  %s\n", opCID)
+				fmt.Printf("  This content chain can no longer be extended.\n")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&note, "note", "", "Operation note")
+	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOSContentWrite VC-JWT for delegated deletes")
 	return cmd
 }
 

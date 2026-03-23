@@ -6,6 +6,7 @@
 
 */
 
+import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
   BlobKey,
   RelayStore,
@@ -77,7 +78,21 @@ export class MemoryRelayStore implements RelayStore {
 
   async addCountersignature(operationCID: string, jwsToken: string): Promise<void> {
     const existing = this.countersignatures.get(operationCID) ?? [];
-    if (existing.includes(jwsToken)) return; // idempotent
+
+    // dedup by witness DID (kid DID prefix), not just exact token match
+    const decoded = decodeJwsUnsafe(jwsToken);
+    if (decoded) {
+      const kid = decoded.header.kid as string;
+      const witnessDID = kid.includes('#') ? kid.split('#')[0] : kid;
+      for (const cs of existing) {
+        const d = decodeJwsUnsafe(cs);
+        if (!d) continue;
+        const existingKid = d.header.kid as string;
+        const existingDID = existingKid.includes('#') ? existingKid.split('#')[0] : existingKid;
+        if (existingDID === witnessDID) return; // same witness, dedup
+      }
+    }
+
     existing.push(jwsToken);
     this.countersignatures.set(operationCID, existing);
   }

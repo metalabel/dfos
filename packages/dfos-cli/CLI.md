@@ -299,13 +299,16 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `GET`  | `identity show [name\|did]`      | Show identity state                         |
 | `GET`  | `identity keys [name\|did]`      | Show key state + keychain availability      |
 | `POST` | `identity create --name`         | Generate keys + sign genesis                |
+| `POST` | `identity update`                | Rotate keys (sign update operation)         |
+| `POST` | `identity delete`                | Permanently delete identity                 |
 | `POST` | `identity publish [name]`        | Submit identity chain to a relay            |
 | `GET`  | `identity fetch <did>`           | Download identity chain from relay          |
 | `GET`  | `content show <id>`              | Show content chain state                    |
 | `GET`  | `content log <id>`               | Show operation history                      |
 | `GET`  | `content download <id>`          | Download blob (stdout or file)              |
 | `POST` | `content create <file\|->`       | Create content chain                        |
-| `POST` | `content update <id> <file\|->`  | Update content chain                        |
+| `POST` | `content update <id> <file\|->`  | Update content chain (supports delegation)  |
+| `POST` | `content delete <id>`            | Permanently delete content chain            |
 | `POST` | `content publish <id>`           | Submit content chain + blob to a relay      |
 | `GET`  | `content fetch <id>`             | Download content chain from relay           |
 | `POST` | `content grant <id> <did>`       | Issue read/write credential                 |
@@ -314,6 +317,7 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `beacon announce <id...>`        | Build merkle root, sign, submit             |
 | `POST` | `beacon countersign <did\|name>` | Countersign someone's beacon                |
 | `POST` | `witness <cid>`                  | Countersign an operation                    |
+| `GET`  | `countersigs <cid>`              | Show countersignatures for operation/beacon |
 | `GET`  | `auth token`                     | Mint short-lived auth token (stdout)        |
 | `GET`  | `auth status`                    | Show current auth state                     |
 | `*`    | `api <METHOD> <path>`            | Raw HTTP to relay with optional `--auth`    |
@@ -329,8 +333,6 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 
 ## What's Deferred
 
-- **Key rotation** (`identity rotate`): generate new keys, sign update operation
-- **Chain deletion** (`identity delete`, `content delete`): sign delete operation
 - **Schema validation**: validate documents against bundled JSON schemas (currently warns on missing `$schema` only)
 - **Key backup/recovery**: mnemonic seed phrases or encrypted export
 - **Shell completion**: cobra generates these, needs testing and docs

@@ -161,44 +161,42 @@ export const createRelay = (options: RelayOptions): Hono => {
   // content plane — authenticated routes
   // -------------------------------------------------------------------------
 
-  /** Upload a blob for a content chain */
-  app.put('/content/:contentId/blob', async (c) => {
+  /** Upload a blob for a content chain, keyed by operation CID */
+  app.put('/content/:contentId/blob/:operationCID', async (c) => {
     const contentId = c.req.param('contentId');
-    const documentCID = c.req.header('x-document-cid');
-
-    if (!documentCID) {
-      return c.json({ error: 'missing X-Document-CID header' }, 400);
-    }
+    const operationCID = c.req.param('operationCID');
 
     // authenticate
     const auth = await authenticateRequest(c.req.header('authorization'), relayDID, store);
     if (!auth) return c.json({ error: 'authentication required' }, 401);
 
-    // verify chain exists and caller is the creator
+    // verify chain exists
     const chain = await store.getContentChain(contentId);
     if (!chain) return c.json({ error: 'content chain not found' }, 404);
-    if (chain.state.creatorDID !== auth.iss) {
-      return c.json({ error: 'not the chain creator' }, 403);
-    }
 
-    // verify documentCID is referenced in the chain — check current head
-    // (the chain's current documentCID or any operation's documentCID)
-    const chainLog = chain.log;
-    let documentReferenced = false;
-    for (const token of chainLog) {
+    // find the referenced operation in the chain and extract documentCID + signer
+    let documentCID: string | null = null;
+    let operationSignerDID: string | null = null;
+    for (const token of chain.log) {
       const decoded = decodeJwsUnsafe(token);
       if (!decoded) continue;
+      if (decoded.header.cid !== operationCID) continue;
       const payload = decoded.payload as Record<string, unknown>;
-      if (payload['documentCID'] === documentCID) {
-        documentReferenced = true;
-        break;
-      }
-    }
-    if (!documentReferenced) {
-      return c.json({ error: 'documentCID not referenced in chain' }, 400);
+      documentCID = typeof payload['documentCID'] === 'string' ? payload['documentCID'] : null;
+      operationSignerDID = typeof payload['did'] === 'string' ? payload['did'] : null;
+      break;
     }
 
-    // read blob bytes and verify they match the claimed documentCID
+    if (!documentCID) {
+      return c.json({ error: 'operation not found in chain or has no documentCID' }, 404);
+    }
+
+    // authorize: caller must be chain creator or the operation signer
+    if (auth.iss !== chain.state.creatorDID && auth.iss !== operationSignerDID) {
+      return c.json({ error: 'not authorized — must be chain creator or operation signer' }, 403);
+    }
+
+    // read blob bytes and verify they match the documentCID from the operation
     const bytes = new Uint8Array(await c.req.arrayBuffer());
     try {
       const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
@@ -210,9 +208,9 @@ export const createRelay = (options: RelayOptions): Hono => {
       return c.json({ error: 'blob bytes do not match documentCID' }, 400);
     }
 
-    await store.putBlob({ creatorDID: auth.iss, documentCID }, bytes);
+    await store.putBlob({ creatorDID: chain.state.creatorDID, documentCID }, bytes);
 
-    return c.json({ status: 'stored', contentId, documentCID });
+    return c.json({ status: 'stored', contentId, documentCID, operationCID });
   });
 
   /** Download a blob for a content chain */

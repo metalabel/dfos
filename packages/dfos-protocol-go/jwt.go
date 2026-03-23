@@ -1,4 +1,4 @@
-package protocol
+package dfos
 
 import (
 	"crypto/ed25519"
@@ -236,6 +236,5 @@ func DecodeJWTUnsafe(token string) (header map[string]string, payload map[string
 	if h.CID != "" {
 		hm["cid"] = h.CID
 	}
-	_ = fmt.Sprintf("") // avoid unused import
 	return hm, p, nil
 }

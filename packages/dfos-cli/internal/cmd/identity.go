@@ -6,7 +6,7 @@ import (
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/protocol"
+	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -22,6 +22,8 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityListCmd())
 	cmd.AddCommand(newIdentityShowCmd())
 	cmd.AddCommand(newIdentityKeysCmd())
+	cmd.AddCommand(newIdentityUpdateCmd())
+	cmd.AddCommand(newIdentityDeleteCmd())
 	cmd.AddCommand(newIdentityPublishCmd())
 	cmd.AddCommand(newIdentityFetchCmd())
 	cmd.AddCommand(newIdentityRemoveCmd())
@@ -155,6 +157,219 @@ func newIdentityCreateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Human-readable name for this identity (required)")
+	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	return cmd
+}
+
+func newIdentityUpdateCmd() *cobra.Command {
+	var relayName string
+	var rotateAuth bool
+	var rotateController bool
+
+	cmd := &cobra.Command{
+		Use:   "update",
+		Short: "Update identity (rotate keys)",
+		Long:  "Sign an identity update operation. Use --rotate-auth or --rotate-controller to generate new keys and rotate out the old ones.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !rotateAuth && !rotateController {
+				return fmt.Errorf("specify --rotate-auth and/or --rotate-controller")
+			}
+
+			_, id, err := requireIdentity()
+			if err != nil {
+				return err
+			}
+
+			if id.State.IsDeleted {
+				return fmt.Errorf("identity is deleted — cannot update")
+			}
+
+			// we need the current controller key to sign the update
+			if len(id.State.ControllerKeys) == 0 {
+				return fmt.Errorf("identity has no controller keys")
+			}
+			controllerKeyID := id.State.ControllerKeys[0].ID
+			controllerPriv, err := keys.GetPrivateKey(id.DID + "#" + controllerKeyID)
+			if err != nil {
+				return fmt.Errorf("controller key not in keychain: %w", err)
+			}
+
+			// determine the head operation CID
+			lastToken := id.Log[len(id.Log)-1]
+			h, _, err := protocol.DecodeJWSUnsafe(lastToken)
+			if err != nil {
+				return fmt.Errorf("decode last operation: %w", err)
+			}
+			previousCID := h.CID
+
+			// build new key sets
+			newAuthKeys := id.State.AuthKeys
+			newControllerKeys := id.State.ControllerKeys
+			newAssertKeys := id.State.AssertKeys
+
+			var rotatedKeys []string
+
+			if rotateAuth {
+				newAuthKeyID := protocol.GenerateKeyID()
+				_, newAuthPub, err := keys.GenerateKey(id.DID + "#" + newAuthKeyID)
+				if err != nil {
+					return fmt.Errorf("generate new auth key: %w", err)
+				}
+				newAuthKeys = []protocol.MultikeyPublicKey{protocol.NewMultikeyPublicKey(newAuthKeyID, newAuthPub)}
+				rotatedKeys = append(rotatedKeys, "auth:"+newAuthKeyID)
+			}
+
+			if rotateController {
+				newControllerKeyID := protocol.GenerateKeyID()
+				_, newControllerPub, err := keys.GenerateKey(id.DID + "#" + newControllerKeyID)
+				if err != nil {
+					return fmt.Errorf("generate new controller key: %w", err)
+				}
+				newControllerKeys = []protocol.MultikeyPublicKey{protocol.NewMultikeyPublicKey(newControllerKeyID, newControllerPub)}
+				rotatedKeys = append(rotatedKeys, "controller:"+newControllerKeyID)
+			}
+
+			kid := id.DID + "#" + controllerKeyID
+			jwsToken, opCID, err := protocol.SignIdentityUpdate(
+				previousCID,
+				newControllerKeys, newAuthKeys, newAssertKeys,
+				kid, controllerPriv,
+			)
+			if err != nil {
+				return fmt.Errorf("sign update: %w", err)
+			}
+
+			// update local state
+			id.Log = append(id.Log, jwsToken)
+			id.State.AuthKeys = newAuthKeys
+			id.State.ControllerKeys = newControllerKeys
+			id.State.AssertKeys = newAssertKeys
+
+			// publish if relay specified
+			rn := relayName
+			if rn == "" {
+				rn = relayFlag
+			}
+			if rn != "" {
+				c, _, err := getRelayClient(rn)
+				if err != nil {
+					return err
+				}
+				results, err := c.SubmitOperations([]string{jwsToken})
+				if err != nil {
+					return fmt.Errorf("submit: %w", err)
+				}
+				if len(results) > 0 && results[0].Status != "accepted" {
+					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				}
+			}
+
+			if err := store.SaveIdentity(id); err != nil {
+				return err
+			}
+
+			if jsonFlag {
+				outputJSON(map[string]any{
+					"did":          id.DID,
+					"operationCID": opCID,
+					"rotatedKeys":  rotatedKeys,
+				})
+			} else {
+				fmt.Printf("Identity updated:\n")
+				fmt.Printf("  DID:            %s\n", id.DID)
+				fmt.Printf("  Operation CID:  %s\n", opCID)
+				fmt.Printf("  Operations:     %d\n", len(id.Log))
+				for _, rk := range rotatedKeys {
+					fmt.Printf("  New key:        %s\n", rk)
+				}
+				fmt.Printf("  Old keys remain in keychain for chain re-verification.\n")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	cmd.Flags().BoolVar(&rotateAuth, "rotate-auth", false, "Generate new auth key and rotate out old one(s)")
+	cmd.Flags().BoolVar(&rotateController, "rotate-controller", false, "Generate new controller key and rotate out old one(s)")
+	return cmd
+}
+
+func newIdentityDeleteCmd() *cobra.Command {
+	var relayName string
+
+	cmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Permanently delete an identity (sign delete operation)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, id, err := requireIdentity()
+			if err != nil {
+				return err
+			}
+
+			if id.State.IsDeleted {
+				return fmt.Errorf("identity is already deleted")
+			}
+
+			// require controller key
+			if len(id.State.ControllerKeys) == 0 {
+				return fmt.Errorf("identity has no controller keys")
+			}
+			controllerKeyID := id.State.ControllerKeys[0].ID
+			controllerPriv, err := keys.GetPrivateKey(id.DID + "#" + controllerKeyID)
+			if err != nil {
+				return fmt.Errorf("controller key not in keychain: %w", err)
+			}
+
+			// determine head CID
+			lastToken := id.Log[len(id.Log)-1]
+			h, _, err := protocol.DecodeJWSUnsafe(lastToken)
+			if err != nil {
+				return fmt.Errorf("decode last operation: %w", err)
+			}
+
+			kid := id.DID + "#" + controllerKeyID
+			jwsToken, opCID, err := protocol.SignIdentityDelete(h.CID, kid, controllerPriv)
+			if err != nil {
+				return fmt.Errorf("sign delete: %w", err)
+			}
+
+			// update local state
+			id.Log = append(id.Log, jwsToken)
+			id.State.IsDeleted = true
+
+			// publish if relay specified
+			rn := relayName
+			if rn == "" {
+				rn = relayFlag
+			}
+			if rn != "" {
+				c, _, err := getRelayClient(rn)
+				if err != nil {
+					return err
+				}
+				results, err := c.SubmitOperations([]string{jwsToken})
+				if err != nil {
+					return fmt.Errorf("submit: %w", err)
+				}
+				if len(results) > 0 && results[0].Status != "accepted" {
+					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				}
+			}
+
+			if err := store.SaveIdentity(id); err != nil {
+				return err
+			}
+
+			if jsonFlag {
+				outputJSON(map[string]any{"did": id.DID, "operationCID": opCID, "deleted": true})
+			} else {
+				fmt.Printf("Identity deleted:\n")
+				fmt.Printf("  DID:            %s\n", id.DID)
+				fmt.Printf("  Operation CID:  %s\n", opCID)
+				fmt.Printf("  This identity can no longer sign operations.\n")
+			}
+			return nil
+		},
+	}
 	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
 	return cmd
 }

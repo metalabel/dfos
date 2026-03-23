@@ -86,6 +86,8 @@ First-seen-wins. If a chain head has already advanced past the `previousOperatio
 
 Duplicate submissions (same operation CID) are silently accepted (idempotent).
 
+Duplicate countersignatures (same witness DID, same target CID) MUST be deduplicated. The relay MUST NOT increase the countersignature count on resubmission. Resubmission SHOULD return `accepted` (idempotent).
+
 ### Result Ordering
 
 Ingestion results are returned in the same order as the input `operations` array, regardless of internal processing order. `results[i]` corresponds to `operations[i]`.
@@ -105,16 +107,18 @@ The relay does not currently sign operations or participate in the protocol as a
 
 ## Content Plane Access
 
-### Blob Upload (`PUT /content/:contentId/blob`)
+### Blob Upload (`PUT /content/:contentId/blob/:operationCID`)
+
+The upload path mirrors the download path — the operation CID identifies which operation's document is being uploaded.
 
 Requirements:
 
 - Valid auth token (Bearer header)
-- The authenticated DID must be the content chain creator
-- The `X-Document-CID` header must reference a `documentCID` that appears in the chain's operation log
-- The uploaded bytes must hash to the claimed `documentCID` (dag-cbor + sha-256 verification)
+- The operation CID must reference an operation in this content chain that has a `documentCID`
+- The authenticated DID must be either the chain creator OR the signer of the referenced operation (enabling delegated uploads)
+- The uploaded bytes must hash to the operation's `documentCID` (dag-cbor + sha-256 verification)
 
-Blobs are stored by `(creatorDID, documentCID)` — if multiple content chains by the same creator reference the same document, the blob is shared (deduplication).
+Blobs are stored by `(creatorDID, documentCID)` — always keyed to the chain creator regardless of who uploads. If multiple content chains by the same creator reference the same document, the blob is shared (deduplication).
 
 ### Blob Download (`GET /content/:contentId/blob[/:ref]`)
 
@@ -196,7 +200,7 @@ The returned Hono app exposes:
 | `GET`  | `/identities/:did`                   | proof   | none                    |
 | `GET`  | `/content/:contentId`                | proof   | none                    |
 | `GET`  | `/beacons/:did`                      | proof   | none                    |
-| `PUT`  | `/content/:contentId/blob`           | content | auth token              |
+| `PUT`  | `/content/:contentId/blob/:opCID`    | content | auth token              |
 | `GET`  | `/content/:contentId/blob[/:ref]`    | content | auth token + credential |
 
 ---

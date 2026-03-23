@@ -13,6 +13,7 @@ import {
   createAuthToken,
   createCredential,
   VC_TYPE_CONTENT_READ,
+  VC_TYPE_CONTENT_WRITE,
 } from '@metalabel/dfos-protocol/credentials';
 import {
   createNewEd25519Keypair,
@@ -136,6 +137,16 @@ describe('web relay', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ operations }),
+    });
+
+  const putBlob = (contentId: string, operationCID: string, authToken: string, body: Uint8Array) =>
+    req(`/content/${contentId}/blob/${operationCID}`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${authToken}`,
+        'content-type': 'application/octet-stream',
+      },
+      body,
     });
 
   // ---------------------------------------------------------------------------
@@ -549,6 +560,48 @@ describe('web relay', () => {
       expect(csBody.countersignatures).toHaveLength(1);
     });
 
+    it('should count distinct witnesses independently', async () => {
+      const author = await createIdentity();
+      const witness1 = await createIdentity();
+      const witness2 = await createIdentity();
+      const content = await createContentOp(author);
+
+      await postOps([author.jwsToken, witness1.jwsToken, witness2.jwsToken, content.jwsToken]);
+
+      const decoded = (await import('@metalabel/dfos-protocol/crypto')).decodeJwsUnsafe(
+        content.jwsToken,
+      );
+      const { ContentOperation } = await import('@metalabel/dfos-protocol/chain');
+      const opPayload = ContentOperation.safeParse(decoded!.payload).data!;
+
+      // witness1 countersigns
+      const { jwsToken: cs1 } = await signCountersignature({
+        operationPayload: opPayload,
+        signer: witness1.authKey.signer,
+        kid: `${witness1.did}#${witness1.authKey.keyId}`,
+      });
+
+      // witness2 countersigns
+      const { jwsToken: cs2 } = await signCountersignature({
+        operationPayload: opPayload,
+        signer: witness2.authKey.signer,
+        kid: `${witness2.did}#${witness2.authKey.keyId}`,
+      });
+
+      await postOps([cs1, cs2]);
+
+      // should have exactly 2 distinct countersignatures
+      const csRes = await req(`/countersignatures/${content.operationCID}`);
+      const csBody = await json(csRes);
+      expect(csBody.countersignatures).toHaveLength(2);
+
+      // resubmit both — count must not change
+      await postOps([cs1, cs2]);
+      const csRes2 = await req(`/countersignatures/${content.operationCID}`);
+      const csBody2 = await json(csRes2);
+      expect(csBody2.countersignatures).toHaveLength(2);
+    });
+
     it('should accept a beacon countersignature from a witness', async () => {
       const controller = await createIdentity();
       const witness = await createIdentity();
@@ -598,6 +651,73 @@ describe('web relay', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // countersignature query endpoints
+  // ---------------------------------------------------------------------------
+
+  describe('countersignature query', () => {
+    it('should return same results from both countersig query paths', async () => {
+      const author = await createIdentity();
+      const witness = await createIdentity();
+      const content = await createContentOp(author);
+      await postOps([author.jwsToken, witness.jwsToken, content.jwsToken]);
+
+      const decoded = (await import('@metalabel/dfos-protocol/crypto')).decodeJwsUnsafe(
+        content.jwsToken,
+      );
+      const { ContentOperation } = await import('@metalabel/dfos-protocol/chain');
+      const opPayload = ContentOperation.safeParse(decoded!.payload).data!;
+
+      const witnessKid = `${witness.did}#${witness.authKey.keyId}`;
+      const { jwsToken: csToken } = await signCountersignature({
+        operationPayload: opPayload,
+        signer: witness.authKey.signer,
+        kid: witnessKid,
+      });
+      await postOps([csToken]);
+
+      // query via general path
+      const generalRes = await req(`/countersignatures/${content.operationCID}`);
+      expect(generalRes.status).toBe(200);
+      const generalBody = await json(generalRes);
+
+      // query via legacy per-operation path
+      const legacyRes = await req(`/operations/${content.operationCID}/countersignatures`);
+      expect(legacyRes.status).toBe(200);
+      const legacyBody = await json(legacyRes);
+
+      // both should return the same countersignatures
+      expect(generalBody.countersignatures).toHaveLength(1);
+      expect(legacyBody.countersignatures).toHaveLength(1);
+      expect(generalBody.countersignatures[0]).toBe(legacyBody.countersignatures[0]);
+    });
+
+    it('should return 404 for countersigs on unknown CID', async () => {
+      const res = await req(
+        '/countersignatures/bafyreibogus000000000000000000000000000000000000000000000',
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it('should return 404 for operation countersigs on unknown operation', async () => {
+      const res = await req(
+        '/operations/bafyreibogus000000000000000000000000000000000000000000000/countersignatures',
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it('should return empty array for operation with no countersigs', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      // query countersigs on the identity genesis op — nobody has countersigned it
+      const csRes = await req(`/countersignatures/${identity.operationCID}`);
+      expect(csRes.status).toBe(200);
+      const csBody = await json(csRes);
+      expect(csBody.countersignatures).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // content plane — blob upload/download
   // ---------------------------------------------------------------------------
 
@@ -618,15 +738,7 @@ describe('web relay', () => {
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
 
       // upload
-      const uploadRes = await req(`/content/${contentId}/blob`, {
-        method: 'PUT',
-        headers: {
-          authorization: `Bearer ${authToken}`,
-          'x-document-cid': content.documentCID,
-          'content-type': 'application/octet-stream',
-        },
-        body: docBytes,
-      });
+      const uploadRes = await putBlob(contentId, content.operationCID, authToken, docBytes);
       expect(uploadRes.status).toBe(200);
 
       // download as creator (no credential needed)
@@ -650,15 +762,12 @@ describe('web relay', () => {
       const authToken = await createTestAuthToken(identity);
 
       // upload wrong bytes — doesn't match documentCID
-      const uploadRes = await req(`/content/${contentId}/blob`, {
-        method: 'PUT',
-        headers: {
-          authorization: `Bearer ${authToken}`,
-          'x-document-cid': content.documentCID,
-          'content-type': 'application/octet-stream',
-        },
-        body: new TextEncoder().encode('completely wrong data'),
-      });
+      const uploadRes = await putBlob(
+        contentId,
+        content.operationCID,
+        authToken,
+        new TextEncoder().encode('completely wrong data'),
+      );
       expect(uploadRes.status).toBe(400);
       const body = await json(uploadRes);
       expect(body.error).toContain('documentCID');
@@ -672,9 +781,8 @@ describe('web relay', () => {
       const chainLookup = await postOps([content.jwsToken]);
       const contentId = (await json(chainLookup)).results[0].chainId;
 
-      const res = await req(`/content/${contentId}/blob`, {
+      const res = await req(`/content/${contentId}/blob/${content.operationCID}`, {
         method: 'PUT',
-        headers: { 'x-document-cid': content.documentCID },
         body: new Uint8Array([1, 2, 3]),
       });
       expect(res.status).toBe(401);
@@ -692,15 +800,7 @@ describe('web relay', () => {
       // upload blob as creator (encode doc as blob to match CID)
       const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await req(`/content/${contentId}/blob`, {
-        method: 'PUT',
-        headers: {
-          authorization: `Bearer ${creatorToken}`,
-          'x-document-cid': content.documentCID,
-          'content-type': 'application/octet-stream',
-        },
-        body: docBytes,
-      });
+      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
 
       // create a read credential from creator to reader
       const now = Math.floor(Date.now() / 1000);
@@ -739,14 +839,7 @@ describe('web relay', () => {
       // upload blob (encode doc to match CID)
       const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await req(`/content/${contentId}/blob`, {
-        method: 'PUT',
-        headers: {
-          authorization: `Bearer ${creatorToken}`,
-          'x-document-cid': content.documentCID,
-        },
-        body: docBytes,
-      });
+      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
 
       // try to download as reader without credential
       const readerToken = await createTestAuthToken(reader);
@@ -769,14 +862,7 @@ describe('web relay', () => {
       // upload blob as creator
       const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await req(`/content/${contentId}/blob`, {
-        method: 'PUT',
-        headers: {
-          authorization: `Bearer ${creatorToken}`,
-          'x-document-cid': content.documentCID,
-        },
-        body: docBytes,
-      });
+      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
 
       // attacker issues a read credential to reader (not the creator!)
       const now = Math.floor(Date.now() / 1000);
@@ -856,6 +942,554 @@ describe('web relay', () => {
         headers: { authorization: `Bearer ${newAuthToken}` },
       });
       expect(newAuthRes.status).toBe(404); // 404 = authenticated but no content, not 401
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // identity delete lifecycle
+  // ---------------------------------------------------------------------------
+
+  describe('identity delete', () => {
+    it('should accept identity delete and set isDeleted', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      const deleteOp: IdentityOperation = {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: identity.operationCID,
+        createdAt: ts(2),
+      };
+
+      const { jwsToken: deleteToken } = await signIdentityOperation({
+        operation: deleteOp,
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+
+      const res = await postOps([deleteToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('accepted');
+
+      // verify state shows deleted
+      const chainRes = await req(`/identities/${identity.did}`);
+      const chainBody = await json(chainRes);
+      expect(chainBody.state.isDeleted).toBe(true);
+      expect(chainBody.log).toHaveLength(2);
+    });
+
+    it('should reject operations on a deleted identity', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      // delete the identity
+      const deleteOp: IdentityOperation = {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: identity.operationCID,
+        createdAt: ts(2),
+      };
+      const { jwsToken: deleteToken, operationCID: deleteCID } = await signIdentityOperation({
+        operation: deleteOp,
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+      await postOps([deleteToken]);
+
+      // try to extend with an update
+      const newKey = makeKey();
+      const updateOp: IdentityOperation = {
+        version: 1,
+        type: 'update',
+        previousOperationCID: deleteCID,
+        authKeys: [newKey.key],
+        assertKeys: [],
+        controllerKeys: [identity.controller.key],
+        createdAt: ts(3),
+      };
+      const { jwsToken: updateToken } = await signIdentityOperation({
+        operation: updateOp,
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+
+      const res = await postOps([updateToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // content delete lifecycle
+  // ---------------------------------------------------------------------------
+
+  describe('content delete', () => {
+    it('should accept content delete and set isDeleted', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      const deleteOp: ContentOperation = {
+        version: 1,
+        type: 'delete',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        createdAt: ts(2),
+        note: 'removing content',
+      };
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+      const { jwsToken: deleteToken } = await signContentOperation({
+        operation: deleteOp,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      const res = await postOps([deleteToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('accepted');
+
+      // verify state shows deleted
+      const chainRes = await req(`/content/${contentId}`);
+      const chainBody = await json(chainRes);
+      expect(chainBody.state.isDeleted).toBe(true);
+      expect(chainBody.state.currentDocumentCID).toBeNull();
+      expect(chainBody.log).toHaveLength(2);
+    });
+
+    it('should reject operations on deleted content', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      // delete the content
+      const deleteOp: ContentOperation = {
+        version: 1,
+        type: 'delete',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        createdAt: ts(2),
+        note: null,
+      };
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+      const { jwsToken: deleteToken, operationCID: deleteCID } = await signContentOperation({
+        operation: deleteOp,
+        signer: identity.authKey.signer,
+        kid,
+      });
+      await postOps([deleteToken]);
+
+      // try to extend with an update
+      const document2 = { type: 'post', title: 'updated' };
+      const doc2Encoded = await dagCborCanonicalEncode(
+        document2 as unknown as Record<string, unknown>,
+      );
+      const updateOp: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: identity.did,
+        previousOperationCID: deleteCID,
+        documentCID: doc2Encoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(3),
+        note: null,
+      };
+      const { jwsToken: updateToken } = await signContentOperation({
+        operation: updateOp,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      const res = await postOps([updateToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+    });
+
+    it('should return 404 when downloading blob at head of deleted content', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // upload blob while content is alive
+      const authToken = await createTestAuthToken(identity);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, authToken, docBytes);
+
+      // delete the content
+      const deleteOp: ContentOperation = {
+        version: 1,
+        type: 'delete',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        createdAt: ts(2),
+        note: null,
+      };
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+      const { jwsToken: deleteToken } = await signContentOperation({
+        operation: deleteOp,
+        signer: identity.authKey.signer,
+        kid,
+      });
+      await postOps([deleteToken]);
+
+      // downloading at head should 404 — currentDocumentCID is null after delete
+      const downloadRes = await req(`/content/${contentId}/blob`, {
+        headers: { authorization: `Bearer ${authToken}` },
+      });
+      expect(downloadRes.status).toBe(404);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // fork rejection
+  // ---------------------------------------------------------------------------
+
+  describe('fork rejection', () => {
+    it('should reject content operation with stale previousOperationCID', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+
+      // create two competing updates off the same previousOperationCID
+      const doc1 = { type: 'post', title: 'update-a' };
+      const doc1Encoded = await dagCborCanonicalEncode(doc1 as unknown as Record<string, unknown>);
+      const updateA: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        documentCID: doc1Encoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(2),
+        note: null,
+      };
+      const { jwsToken: tokenA } = await signContentOperation({
+        operation: updateA,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      const doc2 = { type: 'post', title: 'update-b' };
+      const doc2Encoded = await dagCborCanonicalEncode(doc2 as unknown as Record<string, unknown>);
+      const updateB: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        documentCID: doc2Encoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(3),
+        note: null,
+      };
+      const { jwsToken: tokenB } = await signContentOperation({
+        operation: updateB,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      // submit A first — should succeed
+      const resA = await postOps([tokenA]);
+      expect((await json(resA)).results[0].status).toBe('accepted');
+
+      // submit B — should be rejected (fork, stale previousOperationCID)
+      const resB = await postOps([tokenB]);
+      expect((await json(resB)).results[0].status).toBe('rejected');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // delegated content write
+  // ---------------------------------------------------------------------------
+
+  describe('delegated content write', () => {
+    it('should accept content update with DFOSContentWrite credential', async () => {
+      const creator = await createIdentity();
+      const delegate = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, delegate.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // creator issues write credential to delegate
+      const now = Math.floor(Date.now() / 1000);
+      const writeCredential = await createCredential({
+        iss: creator.did,
+        sub: delegate.did,
+        exp: now + 300,
+        kid: `${creator.did}#${creator.authKey.keyId}`,
+        type: VC_TYPE_CONTENT_WRITE,
+        iat: now,
+        sign: creator.authKey.signer,
+        contentId,
+      });
+
+      // delegate signs an update with the authorization credential
+      const newDoc = { type: 'post', title: 'delegated update' };
+      const newDocEncoded = await dagCborCanonicalEncode(
+        newDoc as unknown as Record<string, unknown>,
+      );
+
+      const updateOp: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: delegate.did,
+        previousOperationCID: content.operationCID,
+        documentCID: newDocEncoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(2),
+        note: null,
+        authorization: writeCredential,
+      };
+
+      const delegateKid = `${delegate.did}#${delegate.authKey.keyId}`;
+      const { jwsToken: updateToken } = await signContentOperation({
+        operation: updateOp,
+        signer: delegate.authKey.signer,
+        kid: delegateKid,
+      });
+
+      const res = await postOps([updateToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('accepted');
+
+      // chain should now have 2 ops
+      const chainRes = await req(`/content/${contentId}`);
+      const chainBody = await json(chainRes);
+      expect(chainBody.log).toHaveLength(2);
+    });
+
+    it('should reject delegated update without authorization credential', async () => {
+      const creator = await createIdentity();
+      const delegate = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, delegate.jwsToken, content.jwsToken]);
+
+      // delegate signs an update WITHOUT authorization
+      const newDoc = { type: 'post', title: 'unauthorized update' };
+      const newDocEncoded = await dagCborCanonicalEncode(
+        newDoc as unknown as Record<string, unknown>,
+      );
+
+      const updateOp: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: delegate.did,
+        previousOperationCID: content.operationCID,
+        documentCID: newDocEncoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(2),
+        note: null,
+      };
+
+      const delegateKid = `${delegate.did}#${delegate.authKey.keyId}`;
+      const { jwsToken: updateToken } = await signContentOperation({
+        operation: updateOp,
+        signer: delegate.authKey.signer,
+        kid: delegateKid,
+      });
+
+      const res = await postOps([updateToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+    });
+
+    it('should allow delegate to upload blob for their operation', async () => {
+      const creator = await createIdentity();
+      const delegate = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, delegate.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // creator issues write credential to delegate
+      const now = Math.floor(Date.now() / 1000);
+      const writeCredential = await createCredential({
+        iss: creator.did,
+        sub: delegate.did,
+        exp: now + 300,
+        kid: `${creator.did}#${creator.authKey.keyId}`,
+        type: VC_TYPE_CONTENT_WRITE,
+        iat: now,
+        sign: creator.authKey.signer,
+        contentId,
+      });
+
+      // delegate signs an update
+      const newDoc = { type: 'post', title: 'delegated with blob' };
+      const newDocEncoded = await dagCborCanonicalEncode(
+        newDoc as unknown as Record<string, unknown>,
+      );
+
+      const updateOp: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: delegate.did,
+        previousOperationCID: content.operationCID,
+        documentCID: newDocEncoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(2),
+        note: null,
+        authorization: writeCredential,
+      };
+
+      const delegateKid = `${delegate.did}#${delegate.authKey.keyId}`;
+      const { jwsToken: updateToken, operationCID: updateCID } = await signContentOperation({
+        operation: updateOp,
+        signer: delegate.authKey.signer,
+        kid: delegateKid,
+      });
+
+      await postOps([updateToken]);
+
+      // delegate uploads blob for their own operation
+      const delegateAuthToken = await createTestAuthToken(delegate);
+      const newDocBytes = new TextEncoder().encode(JSON.stringify(newDoc));
+      const uploadRes = await putBlob(contentId, updateCID, delegateAuthToken, newDocBytes);
+      expect(uploadRes.status).toBe(200);
+
+      // verify download works at the delegate's operation ref
+      const creatorAuthToken = await createTestAuthToken(creator);
+      const downloadRes = await req(`/content/${contentId}/blob/${updateCID}`, {
+        headers: { authorization: `Bearer ${creatorAuthToken}` },
+      });
+      expect(downloadRes.status).toBe(200);
+      const downloaded = new Uint8Array(await downloadRes.arrayBuffer());
+      expect(downloaded).toEqual(newDocBytes);
+    });
+
+    it('should reject blob upload by non-signer of the operation', async () => {
+      const creator = await createIdentity();
+      const bystander = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, bystander.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // bystander tries to upload blob for creator's operation
+      const bystanderToken = await createTestAuthToken(bystander);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      const uploadRes = await putBlob(contentId, content.operationCID, bystanderToken, docBytes);
+      expect(uploadRes.status).toBe(403);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // auth token edge cases
+  // ---------------------------------------------------------------------------
+
+  describe('auth token edge cases', () => {
+    it('should reject auth token with wrong audience', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // upload blob first with valid token
+      const authToken = await createTestAuthToken(identity);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, authToken, docBytes);
+
+      // create auth token targeting WRONG relay DID
+      const wrongAudToken = await createAuthToken({
+        iss: identity.did,
+        aud: 'did:dfos:wrongrelaydid000000000',
+        exp: Math.floor(Date.now() / 1000) + 300,
+        kid: `${identity.did}#${identity.authKey.keyId}`,
+        iat: Math.floor(Date.now() / 1000),
+        sign: identity.authKey.signer,
+      });
+
+      const res = await req(`/content/${contentId}/blob`, {
+        headers: { authorization: `Bearer ${wrongAudToken}` },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('should reject expired auth token', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // create auth token that's already expired
+      const now = Math.floor(Date.now() / 1000);
+      const expiredToken = await createAuthToken({
+        iss: identity.did,
+        aud: RELAY_DID,
+        exp: now - 60, // expired 1 minute ago
+        kid: `${identity.did}#${identity.authKey.keyId}`,
+        iat: now - 120,
+        sign: identity.authKey.signer,
+      });
+
+      const res = await req(`/content/${contentId}/blob`, {
+        headers: { authorization: `Bearer ${expiredToken}` },
+      });
+      expect(res.status).toBe(401);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // blob download at historical ref
+  // ---------------------------------------------------------------------------
+
+  describe('blob at historical ref', () => {
+    it('should download blob at specific operation CID ref', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // upload blob for v1
+      const authToken = await createTestAuthToken(identity);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, authToken, docBytes);
+
+      // download at the genesis operation CID ref
+      const refRes = await req(`/content/${contentId}/blob/${content.operationCID}`, {
+        headers: { authorization: `Bearer ${authToken}` },
+      });
+      expect(refRes.status).toBe(200);
+      const refBody = new Uint8Array(await refRes.arrayBuffer());
+      expect(refBody).toEqual(docBytes);
+    });
+
+    it('should download blob at head ref', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      const authToken = await createTestAuthToken(identity);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, authToken, docBytes);
+
+      const res = await req(`/content/${contentId}/blob/head`, {
+        headers: { authorization: `Bearer ${authToken}` },
+      });
+      expect(res.status).toBe(200);
     });
   });
 

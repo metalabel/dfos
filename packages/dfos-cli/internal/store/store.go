@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/protocol"
+	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
 // LocalMeta tracks local provenance of a stored entity.

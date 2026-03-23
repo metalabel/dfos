@@ -2,8 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/protocol"
+	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/spf13/cobra"
 )
 
@@ -79,5 +80,73 @@ func newWitnessCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&relayName, "relay", "", "Relay to fetch operation from and submit to")
+	return cmd
+}
+
+func newCountersigsCmd() *cobra.Command {
+	var relayName string
+	cmd := &cobra.Command{
+		Use:   "countersigs <cid>",
+		Short: "Show countersignatures for an operation or beacon CID",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cid := args[0]
+
+			ctx, _ := resolveCtx()
+			rn := relayName
+			if rn == "" {
+				rn = relayFlag
+			}
+			if rn == "" && ctx != nil {
+				rn = ctx.RelayName
+			}
+			if rn == "" {
+				return fmt.Errorf("--relay is required")
+			}
+
+			c, _, err := getRelayClient(rn)
+			if err != nil {
+				return err
+			}
+
+			data, err := c.GetCountersignatures(cid)
+			if err != nil {
+				return fmt.Errorf("fetch countersignatures: %w", err)
+			}
+
+			csArr, _ := data["countersignatures"].([]any)
+
+			if jsonFlag {
+				outputJSON(data)
+				return nil
+			}
+
+			if len(csArr) == 0 {
+				fmt.Printf("No countersignatures for %s\n", cid)
+				return nil
+			}
+
+			fmt.Printf("Countersignatures for %s (%d):\n\n", cid, len(csArr))
+			for i, cs := range csArr {
+				csStr, ok := cs.(string)
+				if !ok {
+					continue
+				}
+				h, _, _ := protocol.DecodeJWSUnsafe(csStr)
+				witness := "?"
+				if h != nil && h.Kid != "" {
+					// extract DID from kid (did:dfos:xxx#key_yyy → did:dfos:xxx)
+					if idx := strings.Index(h.Kid, "#"); idx > 0 {
+						witness = h.Kid[:idx]
+					} else {
+						witness = h.Kid
+					}
+				}
+				fmt.Printf("  [%d] witness: %s\n", i, witness)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&relayName, "relay", "", "Relay to query")
 	return cmd
 }
