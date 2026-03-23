@@ -10,11 +10,14 @@ This repository contains the open-source protocol implementation and supporting 
 
 ## Packages
 
-| Package                                                | Description                                                              |
-| ------------------------------------------------------ | ------------------------------------------------------------------------ |
-| [`@metalabel/dfos-protocol`](./packages/dfos-protocol) | Ed25519 signed chain primitives, beacons, merkle trees, and verification |
-| [`site-protocol`](./packages/site-protocol)            | Astro site for [protocol.dfos.com](https://protocol.dfos.com)            |
-| [`site-schemas`](./packages/site-schemas)              | Hono worker for [schemas.dfos.com](https://schemas.dfos.com)             |
+| Package                                                  | Language   | Description                                                              |
+| -------------------------------------------------------- | ---------- | ------------------------------------------------------------------------ |
+| [`@metalabel/dfos-protocol`](./packages/dfos-protocol)   | TypeScript | Ed25519 signed chain primitives, beacons, merkle trees, and verification |
+| [`dfos-protocol-go`](./packages/dfos-protocol-go)        | Go         | Go protocol library — signing, verification, CID derivation, credentials |
+| [`@metalabel/dfos-web-relay`](./packages/dfos-web-relay) | TypeScript | Portable HTTP relay with Go conformance test suite                       |
+| [`dfos-cli`](./packages/dfos-cli)                        | Go         | CLI for managing identities, content, beacons, and relay interactions    |
+| [`site-protocol`](./packages/site-protocol)              | Astro      | Static site for [protocol.dfos.com](https://protocol.dfos.com)           |
+| [`site-schemas`](./packages/site-schemas)                | Hono       | Worker for [schemas.dfos.com](https://schemas.dfos.com)                  |
 
 ## Links
 

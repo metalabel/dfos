@@ -53,6 +53,19 @@ The `examples/` directory contains deterministic reference fixtures that can be 
 - `merkle-tree.json` — 5 content IDs → sorted tree → root, with inclusion proof
 - `beacon.json` — signed merkle root announcement with witness countersignature
 
+## Cross-Language Verification
+
+The `verify/` directory contains independent verification suites that re-derive CIDs and verify signatures from the reference fixtures — proving protocol correctness across implementations:
+
+| Language | Path             | Status  |
+| -------- | ---------------- | ------- |
+| Go       | `verify/go/`     | Passing |
+| Python   | `verify/python/` | Passing |
+| Rust     | `verify/rust/`   | Passing |
+| Swift    | `verify/swift/`  | Passing |
+
+Each suite uses only its language's native Ed25519, dag-cbor, and multihash implementations — no shared code with the TypeScript reference.
+
 ## License
 
 MIT
