@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import { Marked } from 'marked';
 import Base from '../layouts/Base.astro';
 
-// Read CONTENT-MODEL.md at build time from the protocol package
-const contentModelMd = fs.readFileSync('../dfos-protocol/CONTENT-MODEL.md', 'utf-8');
+// Read CLI.md at build time from the CLI package
+const cliMd = fs.readFileSync('../dfos-cli/CLI.md', 'utf-8');
 
 function slugify(text: string): string {
   return text
@@ -17,7 +17,7 @@ function slugify(text: string): string {
 }
 
 const marked = new Marked();
-let html = await marked.parse(contentModelMd);
+let html = await marked.parse(cliMd);
 
 // Fix GFM strikethrough — tildes in table cells (e.g. ~3×) get
 // misinterpreted as ~~strikethrough~~. Restore the ~ markers.
@@ -44,9 +44,9 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
 ---
 
 <Base
-  title="Content Model"
-  description="Standard JSON Schema content types for DFOS — post, profile, and manifest schemas committed via content-addressed CIDs."
-  path="/content-model"
+  title="CLI"
+  description="DFOS CLI — Go command-line interface for managing identities, content chains, beacons, and credentials against protocol relays."
+  path="/cli"
 >
   <main>
     <nav class="site-nav">
@@ -62,8 +62,8 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
         <a href="/">DFOS Protocol</a> · <a href="/overview">Overview</a> ·
         <a href="/spec">Specification</a> ·
         <a href="/did-method">DID Method</a> ·
+        <a href="/content-model">Content Model</a> ·
         <a href="/web-relay">Web Relay</a> ·
-        <a href="/cli">CLI</a> ·
         <a href="/faq">FAQ</a> ·
         <a href="https://github.com/metalabel/dfos">GitHub</a> ·
         <a href="https://dfos.com">dfos.com</a>
@@ -71,7 +71,7 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
     </footer>
   </main>
 
-  <template id="raw-md">{contentModelMd}</template>
+  <template id="raw-md">{cliMd}</template>
   <script is:inline>
     document.getElementById('copy-md').addEventListener('click', function () {
       const md = document.getElementById('raw-md').content.textContent;

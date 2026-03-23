@@ -11,6 +11,7 @@ export const GET: APIRoute = () => {
 
   // Implementation docs — read from sibling packages
   const webRelay = fs.readFileSync('../dfos-web-relay/RELAY.md', 'utf-8');
+  const cli = fs.readFileSync('../dfos-cli/CLI.md', 'utf-8');
 
   // Site content — sourced from shared modules (same data renders the pages)
   const overview = overviewMarkdown.trim();
@@ -41,6 +42,10 @@ export const GET: APIRoute = () => {
     '---',
     '',
     webRelay,
+    '',
+    '---',
+    '',
+    cli,
     '',
     '---',
     '',
