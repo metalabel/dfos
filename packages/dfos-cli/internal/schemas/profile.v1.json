@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dfos.com/profile/v1",
+  "title": "Profile",
+  "description": "A profile — the displayable identity for any agent, person, group, or space. Lowest common denominator of a presence in the system.",
+  "type": "object",
+  "required": ["$schema"],
+  "properties": {
+    "$schema": {
+      "const": "https://schemas.dfos.com/profile/v1"
+    },
+    "name": {
+      "type": "string",
+      "description": "Display name."
+    },
+    "description": {
+      "type": "string",
+      "description": "Short bio or description."
+    },
+    "avatar": {
+      "$ref": "#/$defs/media",
+      "description": "Avatar image."
+    },
+    "banner": {
+      "$ref": "#/$defs/media",
+      "description": "Banner image."
+    },
+    "background": {
+      "$ref": "#/$defs/media",
+      "description": "Background image."
+    },
+    "createdByDID": {
+      "type": "string",
+      "pattern": "^did:",
+      "description": "DID of the identity that authored this content. Optional — omit when the signer IS the author."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "media": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Opaque media object identifier."
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri",
+          "description": "Optional URI for the media object."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
