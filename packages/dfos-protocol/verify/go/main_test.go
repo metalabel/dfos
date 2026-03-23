@@ -502,3 +502,97 @@ func TestVCJWTReadCredentialVerification(t *testing.T) {
 		t.Fatal("vc type missing DFOSContentRead")
 	}
 }
+
+// =============================================================================
+// Number encoding determinism tests
+// =============================================================================
+
+const (
+	// Test vector: {"version": 1, "type": "test"} with integer encoding
+	numberTestCBOR = "a2647479706564746573746776657273696f6e01"
+	numberTestCID  = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
+	// Wrong CID that would result from float encoding of version: 1.0
+	numberTestWrongCID = "bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q"
+)
+
+func TestNumberEncodingDeterminism(t *testing.T) {
+	// Encode with explicit integer type — this should always be correct
+	em, _ := cbor.CoreDetEncOptions().EncMode()
+	payload := map[string]any{"version": int64(1), "type": "test"}
+	cborBytes, err := em.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := fmt.Sprintf("%x", cborBytes)
+	if got != numberTestCBOR {
+		t.Fatalf("CBOR mismatch:\n  got:  %s\n  want: %s", got, numberTestCBOR)
+	}
+
+	cidBytes := makeCIDBytes(cborBytes)
+	cidStr := cidToBase32(cidBytes)
+	if cidStr != numberTestCID {
+		t.Fatalf("CID mismatch: got %s, want %s", cidStr, numberTestCID)
+	}
+}
+
+func TestNumberEncodingFromJSON(t *testing.T) {
+	// Simulate the JSON round-trip that catches the float64 trap:
+	// JSON decode → map[string]any → CBOR encode → CID
+	// In Go, json.Unmarshal decodes 1 as float64(1), not int(1).
+	// Implementations MUST normalize before CBOR encoding.
+	jsonInput := `{"version": 1, "type": "test"}`
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(jsonInput), &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	// Before normalization: version is float64
+	if _, isFloat := decoded["version"].(float64); !isFloat {
+		t.Log("Note: this language does not decode JSON integers as float64 — normalization may not be needed")
+	}
+
+	// Normalize: convert whole float64s to int64
+	for k, v := range decoded {
+		if f, ok := v.(float64); ok && f == float64(int64(f)) {
+			decoded[k] = int64(f)
+		}
+	}
+
+	em, _ := cbor.CoreDetEncOptions().EncMode()
+	cborBytes, err := em.Marshal(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cidBytes := makeCIDBytes(cborBytes)
+	cidStr := cidToBase32(cidBytes)
+	if cidStr != numberTestCID {
+		t.Fatalf("CID after JSON round-trip: got %s, want %s (did you normalize float64 → int64?)", cidStr, numberTestCID)
+	}
+
+	// Verify we did NOT get the wrong (float) CID
+	if cidStr == numberTestWrongCID {
+		t.Fatal("CID matches the WRONG float-encoding CID — number normalization is broken")
+	}
+}
+
+func TestNumberEncodingFloatProducesWrongCID(t *testing.T) {
+	// Explicitly verify that float encoding produces the known-wrong CID.
+	// This confirms our test vector is correct and the trap is real.
+	em, _ := cbor.CoreDetEncOptions().EncMode()
+	payload := map[string]any{"version": float64(1.0), "type": "test"}
+	cborBytes, err := em.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cidBytes := makeCIDBytes(cborBytes)
+	cidStr := cidToBase32(cidBytes)
+	if cidStr != numberTestWrongCID {
+		t.Fatalf("Float CID mismatch: got %s, want %s", cidStr, numberTestWrongCID)
+	}
+	if cidStr == numberTestCID {
+		t.Fatal("Float encoding should NOT produce the correct CID")
+	}
+}
