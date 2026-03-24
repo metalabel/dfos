@@ -240,9 +240,20 @@ const ingestIdentityOp = async (jwsToken: string, store: RelayStore): Promise<In
   const encoded = await dagCborCanonicalEncode(payload);
   const cid = encoded.cid.toString();
 
-  // idempotent: already stored
+  // idempotent: already stored (exact same JWS token)
   const existing = await store.getOperation(cid);
-  if (existing) return { cid, status: 'accepted', kind: 'identity-op', chainId: existing.chainId };
+  if (existing) {
+    if (existing.jwsToken !== jwsToken) {
+      // Same CID but different JWS — a re-sign of the same payload.
+      // Ed25519 is deterministic, so a different token means a different key or header.
+      return {
+        cid,
+        status: 'rejected',
+        error: 'operation already exists with a different signature',
+      };
+    }
+    return { cid, status: 'accepted', kind: 'identity-op', chainId: existing.chainId };
+  }
 
   // determine if this is a genesis or extension
   const opType = (payload as Record<string, unknown>)['type'];
@@ -283,9 +294,30 @@ const ingestContentOp = async (jwsToken: string, store: RelayStore): Promise<Ing
   const encoded = await dagCborCanonicalEncode(payload);
   const cid = encoded.cid.toString();
 
-  // idempotent
+  // idempotent: already stored (exact same JWS token)
   const existing = await store.getOperation(cid);
-  if (existing) return { cid, status: 'accepted', kind: 'content-op', chainId: existing.chainId };
+  if (existing) {
+    if (existing.jwsToken !== jwsToken) {
+      // Same CID but different JWS — self-countersign attempt. The witness
+      // DID matches the author DID so this is semantically meaningless.
+      return {
+        cid,
+        status: 'rejected',
+        error: 'operation already exists with a different signature',
+      };
+    }
+    return { cid, status: 'accepted', kind: 'content-op', chainId: existing.chainId };
+  }
+
+  // reject content operations from deleted identities — deletion revokes
+  // all authority, including outstanding DFOSContentWrite credentials
+  const signerDID = (payload as Record<string, unknown>)['did'];
+  if (typeof signerDID === 'string') {
+    const signerIdentity = await store.getIdentityChain(signerDID);
+    if (signerIdentity?.state.isDeleted) {
+      return { cid, status: 'rejected', error: 'signer identity is deleted' };
+    }
+  }
 
   const resolveKey = createKeyResolver(store);
   const opType = (payload as Record<string, unknown>)['type'];
@@ -325,6 +357,13 @@ const ingestContentOp = async (jwsToken: string, store: RelayStore): Promise<Ing
   if (!chain)
     return { cid, status: 'rejected', error: `content chain not found: ${prevOp.chainId}` };
 
+  // reject if the content creator's identity is deleted — this also blocks
+  // delegates holding DFOSContentWrite credentials from a deleted creator
+  const creatorIdentity = await store.getIdentityChain(chain.state.creatorDID);
+  if (creatorIdentity?.state.isDeleted) {
+    return { cid, status: 'rejected', error: 'content creator identity is deleted' };
+  }
+
   // first-seen-wins: reject if chain head has moved past the expected previous
   if (chain.state.headCID !== previousCID) {
     return { cid, status: 'rejected', error: 'chain has diverged (first-seen-wins)' };
@@ -360,6 +399,13 @@ const ingestBeacon = async (jwsToken: string, store: RelayStore): Promise<Ingest
 
   const did = verified.payload.did;
   const cid = verified.beaconCID;
+
+  // reject beacons from deleted identities — deletion means the identity
+  // stops being an active participant, even though keys persist in state
+  const identity = await store.getIdentityChain(did);
+  if (identity?.state.isDeleted) {
+    return { cid, status: 'rejected', error: 'identity is deleted' };
+  }
 
   // replace-on-newer: only store if this beacon is more recent
   const existing = await store.getBeacon(did);
