@@ -246,7 +246,11 @@ const ingestIdentityOp = async (jwsToken: string, store: RelayStore): Promise<In
     if (existing.jwsToken !== jwsToken) {
       // Same CID but different JWS — a re-sign of the same payload.
       // Ed25519 is deterministic, so a different token means a different key or header.
-      return { cid, status: 'rejected', error: 'operation already exists with a different signature' };
+      return {
+        cid,
+        status: 'rejected',
+        error: 'operation already exists with a different signature',
+      };
     }
     return { cid, status: 'accepted', kind: 'identity-op', chainId: existing.chainId };
   }
@@ -296,7 +300,11 @@ const ingestContentOp = async (jwsToken: string, store: RelayStore): Promise<Ing
     if (existing.jwsToken !== jwsToken) {
       // Same CID but different JWS — self-countersign attempt. The witness
       // DID matches the author DID so this is semantically meaningless.
-      return { cid, status: 'rejected', error: 'operation already exists with a different signature' };
+      return {
+        cid,
+        status: 'rejected',
+        error: 'operation already exists with a different signature',
+      };
     }
     return { cid, status: 'accepted', kind: 'content-op', chainId: existing.chainId };
   }
