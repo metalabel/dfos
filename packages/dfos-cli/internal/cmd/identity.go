@@ -652,23 +652,38 @@ func newIdentityFetchCmd() *cobra.Command {
 				},
 			}
 
+			// Preserve local metadata from existing entry so fetch
+			// never clobbers a locally-created identity's origin,
+			// publishedTo list, or name.
+			if existing, _ := store.LoadIdentity(did); existing != nil {
+				storedID.Local.Origin = existing.Local.Origin
+				storedID.Local.PublishedTo = existing.Local.PublishedTo
+				storedID.Local.BlobPath = existing.Local.BlobPath
+				if name == "" {
+					storedID.Local.Name = existing.Local.Name
+				}
+			}
+
 			if err := store.SaveIdentity(storedID); err != nil {
 				return err
 			}
 
 			// register in config if named
-			if name != "" {
-				cfg.Identities[name] = config.IdentityConfig{DID: did}
+			if storedID.Local.Name != "" {
+				cfg.Identities[storedID.Local.Name] = config.IdentityConfig{DID: did}
 				config.Save(cfg)
 			}
 
 			if jsonFlag {
-				outputJSON(map[string]any{"did": did, "name": name, "operations": len(log), "origin": "fetched"})
+				outputJSON(map[string]any{"did": did, "name": storedID.Local.Name, "operations": len(log), "origin": storedID.Local.Origin})
 			} else {
 				fmt.Printf("Fetched identity: %s\n", did)
 				fmt.Printf("  Operations: %d\n", len(log))
-				if name != "" {
-					fmt.Printf("  Name:       %s\n", name)
+				if storedID.Local.Name != "" {
+					fmt.Printf("  Name:       %s\n", storedID.Local.Name)
+				}
+				if storedID.Local.Origin == "created" {
+					fmt.Printf("  (local metadata preserved)\n")
 				}
 			}
 			return nil

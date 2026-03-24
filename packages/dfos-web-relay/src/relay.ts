@@ -332,6 +332,13 @@ const verifyReadCredential = async (
       throw new Error('credential must be issued by the chain creator');
     }
 
+    // reject credentials from deleted issuers — identity deletion revokes
+    // all authority, including outstanding credentials
+    const issuerIdentity = await store.getIdentityChain(vcIssuerDID);
+    if (issuerIdentity?.state.isDeleted) {
+      throw new Error('credential issuer identity is deleted');
+    }
+
     const creatorKey = await resolveKey(vcHeader.kid);
     const credential = verifyCredential({
       token: credHeader,

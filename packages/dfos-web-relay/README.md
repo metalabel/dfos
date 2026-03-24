@@ -68,16 +68,21 @@ RELAY_URL=http://localhost:4444 go test -v -count=1 ./conformance/
 RELAY_URL=https://registry.imajin.ai/relay go test -v -count=1 ./conformance/
 ```
 
-38 tests covering:
+69 tests covering:
 
 - Well-known discovery
-- Identity lifecycle (create, update, delete, batch, idempotency)
-- Content lifecycle (create, update, delete, fork rejection)
+- Identity lifecycle (create, update, delete, batch, idempotency, controller key rotation)
+- Content lifecycle (create, update, delete, fork rejection, post-delete rejection, notes, long chains)
+- Content update after auth key rotation, multiple independent chains
 - Operations by CID
-- Beacons and countersignatures (including dedup by witness DID)
-- Blob upload/download (CID verification, auth, credential-based access)
-- Delegated content operations (write credentials, delegated blob upload)
+- Beacons (create, replacement, not-found, unknown/deleted identity)
+- Countersignatures (dedup, empty result, multi-witness, self-countersign, non-existent operation)
+- Blob upload/download (CID verification, auth, credential-based access, multi-version, idempotent upload)
+- Delegated content operations (write credentials, delegated blob upload, delegated delete)
+- Credentials (expiry, scope mismatch, type enforcement, deleted issuer behavior)
+- Signature verification (tampered signature, wrong signing key)
 - Auth edge cases (wrong audience, expired token, rotated-out key)
+- Batch processing (3-step dependency sort, content-identity sort, large batch, dedup, mixed valid/invalid, multi-chain)
 - Input validation (malformed JSON, empty operations, invalid JWS)
 
 The conformance suite depends on [`dfos-protocol-go`](../dfos-protocol-go) for protocol operations.

@@ -88,6 +88,20 @@ Duplicate submissions (same operation CID) are silently accepted (idempotent).
 
 Duplicate countersignatures (same witness DID, same target CID) MUST be deduplicated. The relay MUST NOT increase the countersignature count on resubmission. Resubmission SHOULD return `accepted` (idempotent).
 
+### Deletion Semantics
+
+Deletion means the identity stops being an active participant. Historical operations remain verifiable — keys persist in state for signature verification — but no new acts flow from a deleted identity.
+
+Specifically:
+
+- **Identity operations after deletion**: Rejected. A deleted identity chain is sealed.
+- **Content operations after deletion**: Rejected. A deleted content chain is sealed.
+- **Beacons from deleted identities**: Rejected. A deleted identity MUST NOT publish new beacons.
+- **Credentials from deleted issuers**: Rejected. Identity deletion revokes all authority, including outstanding `DFOSContentRead` and `DFOSContentWrite` credentials issued by the deleted identity. Credentials that were valid at time of issuance cease to be honored once the issuer is deleted.
+- **Countersignatures on existing operations**: Still accepted. Deletion of the original author does not prevent other identities from attesting to operations that already exist in the relay.
+
+Self-countersignatures — where the witness DID matches the operation author DID — are rejected. A countersignature's semantic is "a distinct witness attests." Signing your own operation is redundant with the original signature.
+
 ### Result Ordering
 
 Ingestion results are returned in the same order as the input `operations` array, regardless of internal processing order. `results[i]` corresponds to `operations[i]`.
