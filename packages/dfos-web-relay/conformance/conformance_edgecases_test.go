@@ -604,3 +604,53 @@ func TestCredentialFromDeletedIssuer(t *testing.T) {
 	}
 	dlRes.Body.Close()
 }
+
+// TestDelegatedWriteFromDeletedCreator verifies that a delegate holding a
+// DFOSContentWrite credential cannot mutate a content chain after the
+// credential issuer (chain creator) has been deleted.
+func TestDelegatedWriteFromDeletedCreator(t *testing.T) {
+	base := relayURL(t)
+	creator := createIdentity(t, base)
+	cc := createContent(t, base, creator)
+
+	delegate := createIdentity(t, base)
+
+	// issue write credential while creator is alive
+	creatorKid := creator.did + "#" + creator.auth.keyID
+	cred, err := dfos.CreateCredential(
+		creator.did, delegate.did, creatorKid, "DFOSContentWrite",
+		5*time.Minute, cc.contentID, creator.auth.priv,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// delete the creator identity
+	ctrlKid := creator.did + "#" + creator.controller.keyID
+	delToken, _, _ := dfos.SignIdentityDelete(creator.genCID, ctrlKid, creator.controller.priv)
+	postOperations(t, base, []string{delToken}).Body.Close()
+
+	// delegate tries to update content with write credential from deleted creator
+	doc2 := map[string]any{"type": "post", "title": "sneaky post-delete write"}
+	docCID2, _, _ := dfos.DocumentCID(doc2)
+	delegateKid := delegate.did + "#" + delegate.auth.keyID
+	token, _, err := dfos.SignContentUpdateWithOptions(
+		delegate.did, cc.genCID, docCID2, delegateKid, delegate.auth.priv,
+		dfos.ContentUpdateOptions{Authorization: cred},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := postOperations(t, base, []string{token})
+	body := readBody(t, res)
+	var results struct {
+		Results []struct {
+			Error string `json:"error"`
+		} `json:"results"`
+	}
+	json.Unmarshal(body, &results)
+	if len(results.Results) == 0 || results.Results[0].Error == "" {
+		t.Fatal("expected rejection for delegated write from deleted creator")
+	}
+}

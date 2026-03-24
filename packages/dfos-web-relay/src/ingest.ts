@@ -301,6 +301,16 @@ const ingestContentOp = async (jwsToken: string, store: RelayStore): Promise<Ing
     return { cid, status: 'accepted', kind: 'content-op', chainId: existing.chainId };
   }
 
+  // reject content operations from deleted identities — deletion revokes
+  // all authority, including outstanding DFOSContentWrite credentials
+  const signerDID = (payload as Record<string, unknown>)['did'];
+  if (typeof signerDID === 'string') {
+    const signerIdentity = await store.getIdentityChain(signerDID);
+    if (signerIdentity?.state.isDeleted) {
+      return { cid, status: 'rejected', error: 'signer identity is deleted' };
+    }
+  }
+
   const resolveKey = createKeyResolver(store);
   const opType = (payload as Record<string, unknown>)['type'];
   const isGenesis = opType === 'create';
@@ -338,6 +348,13 @@ const ingestContentOp = async (jwsToken: string, store: RelayStore): Promise<Ing
   const chain = await store.getContentChain(prevOp.chainId);
   if (!chain)
     return { cid, status: 'rejected', error: `content chain not found: ${prevOp.chainId}` };
+
+  // reject if the content creator's identity is deleted — this also blocks
+  // delegates holding DFOSContentWrite credentials from a deleted creator
+  const creatorIdentity = await store.getIdentityChain(chain.state.creatorDID);
+  if (creatorIdentity?.state.isDeleted) {
+    return { cid, status: 'rejected', error: 'content creator identity is deleted' };
+  }
 
   // first-seen-wins: reject if chain head has moved past the expected previous
   if (chain.state.headCID !== previousCID) {

@@ -84,7 +84,7 @@ Each operation is verified against the relay's stored state:
 
 First-seen-wins. If a chain head has already advanced past the `previousOperationCID` referenced by an incoming operation, the new operation is rejected. The relay does not attempt to resolve forks — the first valid extension wins.
 
-Duplicate submissions (same operation CID) are silently accepted (idempotent).
+Duplicate submissions (same operation CID, same JWS token) are silently accepted (idempotent). Submissions with the same CID but a different JWS token are rejected — since Ed25519 is deterministic, a different token for the same payload means a different signing key, which is either a self-countersign attempt or an unauthorized re-sign.
 
 Duplicate countersignatures (same witness DID, same target CID) MUST be deduplicated. The relay MUST NOT increase the countersignature count on resubmission. Resubmission SHOULD return `accepted` (idempotent).
 

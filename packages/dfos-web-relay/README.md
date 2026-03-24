@@ -68,7 +68,7 @@ RELAY_URL=http://localhost:4444 go test -v -count=1 ./conformance/
 RELAY_URL=https://registry.imajin.ai/relay go test -v -count=1 ./conformance/
 ```
 
-69 tests covering:
+71 tests covering:
 
 - Well-known discovery
 - Identity lifecycle (create, update, delete, batch, idempotency, controller key rotation)
