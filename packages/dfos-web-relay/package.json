@@ -59,7 +59,7 @@
     "zod": "^4.3.6"
   },
   "peerDependencies": {
-    "@metalabel/dfos-protocol": "^0.4.0"
+    "@metalabel/dfos-protocol": "workspace:^"
   },
   "devDependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
