@@ -1,6 +1,6 @@
 {
   "name": "@metalabel/dfos",
-  "version": "0.0.0",
+  "version": "0.4.1",
   "type": "module",
   "packageManager": "pnpm@10.26.0",
   "engines": {
@@ -13,7 +13,8 @@
     "lint": "prettier --check .",
     "typecheck": "turbo run typecheck",
     "build": "turbo run build",
-    "test": "turbo run test"
+    "test": "turbo run test",
+    "version:sync": "node scripts/version-sync.mjs"
   },
   "devDependencies": {
     "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
