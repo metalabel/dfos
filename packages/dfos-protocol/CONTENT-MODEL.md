@@ -1,10 +1,12 @@
 # DFOS Content Model
 
+> **Version 0.4.0** · _2026-03-24_
+
 Standard content schemas for documents committed to DFOS content chains. JSON Schema (draft 2020-12) definitions for content objects committed directly by CID.
 
 These schemas are conventions, not protocol requirements. The DFOS Protocol commits to content objects by CID without inspecting their contents — any valid JSON object with a `$schema` field can be committed. The content model defines the vocabulary that DFOS uses internally, provided as a starting point for applications built on the protocol.
 
-[Protocol Specification](https://protocol.dfos.com/spec) · [schemas.dfos.com](https://schemas.dfos.com) · [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/schemas)
+[Protocol Specification](./PROTOCOL.md) · [schemas.dfos.com](https://schemas.dfos.com) · [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/schemas)
 
 ---
 

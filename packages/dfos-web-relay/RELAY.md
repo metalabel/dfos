@@ -1,5 +1,7 @@
 # DFOS Web Relay
 
+> **Version 0.4.0** · _2026-03-24_
+
 An HTTP relay for the DFOS protocol — receives, verifies, stores, and serves identity chains, content chains, beacons, countersignatures, and content blobs.
 
 This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.

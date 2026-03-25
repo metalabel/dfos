@@ -28,6 +28,15 @@ html = html.replace(/<\/del>/g, '');
 html = html.replace(/<table>/g, '<div class="table-wrap"><table>');
 html = html.replace(/<\/table>/g, '</table></div>');
 
+// Rewrite local markdown links to site URLs
+html = html.replace(/href="\.\/PROTOCOL\.md"/g, 'href="/spec"');
+html = html.replace(/href="\.\/DID-METHOD\.md"/g, 'href="/did-method"');
+html = html.replace(/href="\.\/CONTENT-MODEL\.md"/g, 'href="/content-model"');
+html = html.replace(/href="\.\/RELAY\.md"/g, 'href="/web-relay"');
+html = html.replace(/href="\.\.\/dfos-protocol\/PROTOCOL\.md"/g, 'href="/spec"');
+html = html.replace(/href="\.\.\/dfos-protocol\/DID-METHOD\.md"/g, 'href="/did-method"');
+html = html.replace(/href="\.\.\/dfos-protocol\/CONTENT-MODEL\.md"/g, 'href="/content-model"');
+
 // Wrap code blocks with copy button
 html = html.replace(
   /<pre><code(?: class="language-(\w+)")?>/g,
