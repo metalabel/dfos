@@ -20,15 +20,16 @@ The protocol is not coupled to the DFOS platform. Any system implementing the sa
 
 ## Protocol Overview
 
-The DFOS protocol has five components:
+The DFOS protocol has six components:
 
-| Component             | Concern                                                                      |
-| --------------------- | ---------------------------------------------------------------------------- |
-| **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links |
-| **Credentials**       | Auth tokens (DID-signed JWT) and VC-JWT credentials for authorization        |
-| **Beacons**           | Signed merkle root announcements — periodic commitment over content sets     |
-| **Countersignatures** | Witness attestation — third-party signatures over existing chain operations  |
-| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for beacon roots    |
+| Component             | Concern                                                                         |
+| --------------------- | ------------------------------------------------------------------------------- |
+| **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links    |
+| **Credentials**       | Auth tokens (DID-signed JWT) and VC-JWT credentials for authorization           |
+| **Beacons**           | Signed merkle root announcements — periodic commitment over content sets        |
+| **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data |
+| **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op    |
+| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for beacon roots       |
 
 The crypto core is the trust boundary — everything below it is cryptographically verified. Documents are flat content objects, content-addressed directly: `documentCID = CID(dagCborCanonicalEncode(contentObject))`. What goes inside the content object is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
 
@@ -126,6 +127,8 @@ The JWS `typ` header uses protocol-specific values (not IANA media types):
 | `did:dfos:identity-op` | Identity chain operations                     |
 | `did:dfos:content-op`  | Content chain operations                      |
 | `did:dfos:beacon`      | Beacon announcements                          |
+| `did:dfos:artifact`    | Standalone signed inline documents            |
+| `did:dfos:countersign` | Standalone witness attestations               |
 | `JWT`                  | Auth tokens (DID-signed relay authentication) |
 | `vc+jwt`               | VC-JWT credentials (W3C VC Data Model v2)     |
 
@@ -584,15 +587,9 @@ typ:          did:dfos:beacon
 cid:          bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu
 ```
 
-**Witness countersignature** (key 2 signs the same payload — same CID, different kid):
+**Witness countersignature** (a separate identity countersigns the beacon by CID):
 
-```
-kid:          did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd
-typ:          did:dfos:beacon
-cid:          bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu
-```
-
-Both JWS tokens commit to identical bytes (same CID). The controller/witness distinction is determined at verification time by comparing the `kid` DID to the payload `did`.
+A countersignature is a standalone operation with its own CID and `typ: did:dfos:countersign`. See the [Countersignatures](#countersignatures) section below.
 
 Full JWS tokens are in [`examples/beacon.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/beacon.json).
 
@@ -700,22 +697,78 @@ Proof path (from [`examples/merkle-tree.json`](https://github.com/metalabel/dfos
 
 ---
 
+## Artifacts
+
+Artifacts are standalone signed inline documents — immutable, CID-addressable proof plane primitives. Unlike chain operations which extend a sequence, an artifact is a single signed statement with no predecessor or successor.
+
+### Payload
+
+```json
+{
+  "version": 1,
+  "type": "artifact",
+  "did": "did:dfos:...",
+  "content": {
+    "$schema": "https://schemas.dfos.com/profile/v1",
+    "name": "Example"
+  },
+  "createdAt": "2026-03-25T00:00:00.000Z"
+}
+```
+
+The `content` object MUST include a `$schema` string that identifies the artifact's schema. The schema acts as a discriminator — consumers use it to determine how to interpret the artifact's content. Schema names are free-form strings (no protocol-level registry).
+
+### Constraints
+
+- **JWS `typ` header**: `did:dfos:artifact`
+- **Max payload size**: 16384 bytes CBOR-encoded. Protocol constant — not configurable
+- **Immutability**: Once published, an artifact is never updated or replaced
+- **CID-addressable**: Each artifact is addressed by the CID of its CBOR-encoded payload
+
+### Verification
+
+1. JWS signature verification against the signing DID's current key state
+2. CID integrity — `header.cid` matches the CID computed from dag-cbor canonical encoding the raw payload
+3. Payload schema validation — `version`, `type: "artifact"`, `did`, `content` with `$schema`, `createdAt`
+4. Size limit — CBOR-encoded payload does not exceed 16384 bytes
+
+---
+
 ## Countersignatures
 
-A countersignature is a witness attestation — a third-party identity signing the same CID-committed bytes as an existing chain operation. Countersignatures use the same JWS format and `typ` (`did:dfos:content-op`) as the original operation.
+A countersignature is a standalone witness attestation — a signed statement that references a target operation by CID. Each countersignature has its own `typ` header (`did:dfos:countersign`), its own payload, and its own CID distinct from the target.
 
-### Discrimination Rule
+### Payload
 
-The protocol distinguishes author operations from countersignatures by comparing the `kid` DID in the JWS header to the `did` field in the operation payload:
+```json
+{
+  "version": 1,
+  "type": "countersign",
+  "did": "did:dfos:witness...",
+  "targetCID": "bafy...",
+  "createdAt": "2026-03-25T00:00:00.000Z"
+}
+```
 
-- **`kid` DID === payload `did`** → author operation (chain operation)
-- **`kid` DID !== payload `did`** → witness countersignature
+The `did` field is the witness identity — the DID signing the attestation. The `targetCID` references the operation being attested to.
 
-### Semantics
+### Properties
 
-A countersignature proves that a witness identity has seen and attested to a specific operation. The witness signs the exact same payload (same CID), but with their own key. The countersignature's JWS header will contain the witness's `kid` (their DID URL), while the payload's `did` field remains the original author's DID.
+- **JWS `typ` header**: `did:dfos:countersign`
+- **Own CID**: Each countersignature has its own CID derived from its own payload, distinct from the target. This avoids the ambiguity of multiple JWS tokens sharing the same CID
+- **Stateless verification**: Signature + CID integrity + payload schema. No chain state required to verify the cryptographic validity of a countersignature
+- **Composable**: The `targetCID` can reference any CID-addressable operation — content ops, beacons, artifacts, identity ops, even other countersignatures
+- **Immutable**: Once published, a countersignature is permanent
 
-Countersignatures are not part of the chain — they do not have `previousOperationCID` links and do not affect chain state. They are auxiliary attestations stored alongside chain operations.
+### Verification
+
+1. Decode JWS, verify `typ` is `did:dfos:countersign`
+2. Parse and validate countersign payload (`version`, `type: "countersign"`, `did`, `targetCID`, `createdAt`)
+3. Verify the `kid` DID matches the payload `did` (the witness must sign with their own key)
+4. CID integrity — `header.cid` matches the CID computed from dag-cbor canonical encoding the raw payload
+5. Verify EdDSA JWS signature against the witness's public key
+
+Relay-level semantic checks (target exists, witness ≠ author, deduplication) are enforcement concerns, not protocol verification.
 
 ---
 
@@ -741,7 +794,7 @@ Countersignatures are not part of the chain — they do not have `previousOperat
 2. First op must be `type: "create"` — the signer is the chain creator
 3. For each subsequent op: verify `previousOperationCID` matches, verify `createdAt` increasing
 4. Derive the operation CID via dag-cbor canonical encoding. Verify `header.cid` matches the derived CID.
-5. Verify the `kid` DID matches the payload `did` field (mismatches indicate a countersignature, not a chain operation)
+5. Verify the `kid` DID matches the payload `did` field
 6. Resolve `kid` via external key resolver (caller provides)
 7. Verify EdDSA JWS signature
 8. If `enforceAuthorization` is enabled and the signer DID differs from the chain creator: verify the `authorization` field contains a valid `DFOSContentWrite` VC-JWT issued by the creator DID, with `sub` matching the signer, not expired at `op.createdAt`, and `contentId` (if present) matching this chain
@@ -1077,7 +1130,7 @@ Given the artifacts above, verify:
 
 ## Source and Verification
 
-All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. 293 checks across 5 languages.
+All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. 266 checks across 5 languages.
 
 - [`crypto/ed25519`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/ed25519.ts) — `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature`
 - [`crypto/jws`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jws.ts) — `createJws`, `verifyJws`, `decodeJwsUnsafe`
@@ -1086,11 +1139,12 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`crypto/multiformats`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/multiformats.ts) — `dagCborCanonicalEncode`, `dagCborCanonicalEqual`
 - [`crypto/id`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/id.ts) — `generateId`, `generateIdNoPrefix`, `isValidId`
 - [`chain/multikey`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/multikey.ts) — `encodeEd25519Multikey`, `decodeMultikey`
-- [`chain/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/schemas.ts) — `IdentityOperation`, `ContentOperation`, `MultikeyPublicKey`, `VerifiedIdentity`
-- [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) — `signIdentityOperation`, `verifyIdentityChain`
-- [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts) — `signContentOperation`, `verifyContentChain`
+- [`chain/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/schemas.ts) — `IdentityOperation`, `ContentOperation`, `ArtifactPayload`, `CountersignPayload`, `MultikeyPublicKey`, `VerifiedIdentity`
+- [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) — `signIdentityOperation`, `verifyIdentityChain`, `verifyIdentityExtensionFromTrustedState`
+- [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts) — `signContentOperation`, `verifyContentChain`, `verifyContentExtensionFromTrustedState`
 - [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`, `deriveContentId`
 - [`chain/beacon`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/beacon.ts) — `signBeacon`, `verifyBeacon`
+- [`chain/artifact`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/artifact.ts) — `signArtifact`, `verifyArtifact`
 - [`chain/countersign`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/countersign.ts) — `signCountersignature`, `verifyCountersignature`
 - [`credentials/auth-token`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/auth-token.ts) — `createAuthToken`, `verifyAuthToken`
 - [`credentials/credential`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/credential.ts) — `createCredential`, `verifyCredential`, `decodeCredentialUnsafe`
@@ -1102,16 +1156,17 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 - [DID Method: `did:dfos`](https://protocol.dfos.com/did-method) — W3C DID method specification for identity chains
 - [Content Model](https://protocol.dfos.com/content-model) — Standard content schemas (post, profile) for document content objects
+- [Web Relay](https://protocol.dfos.com/web-relay) — HTTP relay specification for ingestion, state, and content plane
 
 ### Cross-Language Verification
 
 | Language   | Tests | Source                                                                                               |
 | ---------- | ----- | ---------------------------------------------------------------------------------------------------- |
-| TypeScript | 190   | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)                 |
-| Python     | 59    | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) |
-| Go         | 15    | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go)         |
-| Rust       | 15    | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust)     |
-| Swift      | 14    | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift)   |
+| TypeScript | 224   | [`tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)                 |
+| Go         | 18    | [`verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/go)         |
+| Rust       | 18    | [`verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/rust)     |
+| Python     | 3     | [`verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/python) |
+| Swift      | 3     | [`verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/verify/swift)   |
 
 ---
 
