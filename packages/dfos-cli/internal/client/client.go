@@ -28,6 +28,53 @@ type RelayInfo struct {
 	DID      string `json:"did"`
 	Protocol string `json:"protocol"`
 	Version  string `json:"version"`
+	Proof    bool   `json:"proof"`
+	Content  bool   `json:"content"`
+	Profile  string `json:"profile,omitempty"`
+}
+
+// IdentityResponse is the response from GET /identities/:did.
+type IdentityResponse struct {
+	DID     string        `json:"did"`
+	HeadCID string        `json:"headCID"`
+	State   IdentityState `json:"state"`
+}
+
+// IdentityState is the nested state within an identity response.
+type IdentityState struct {
+	DID            string        `json:"did"`
+	IsDeleted      bool          `json:"isDeleted"`
+	AuthKeys       []IdentityKey `json:"authKeys"`
+	ControllerKeys []IdentityKey `json:"controllerKeys"`
+	AssertKeys     []IdentityKey `json:"assertKeys"`
+}
+
+// IdentityKey is a key in an identity state response.
+type IdentityKey struct {
+	ID                 string `json:"id"`
+	Type               string `json:"type"`
+	PublicKeyMultibase string `json:"publicKeyMultibase"`
+}
+
+// GetIdentityState fetches a typed identity response from the relay.
+func (c *Client) GetIdentityState(did string) (*IdentityResponse, error) {
+	resp, err := c.HTTPClient.Get(c.BaseURL + "/identities/" + did)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil, fmt.Errorf("identity not found: %s", did)
+	}
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	var result IdentityResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // IngestionResult is a single result from POST /operations.

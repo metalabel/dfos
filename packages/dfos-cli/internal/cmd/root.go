@@ -207,14 +207,21 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			if ctx != nil && ctx.RelayURL != "" {
-				if !jsonFlag {
-					fmt.Printf("Relay:     %s (%s)\n", ctx.RelayURL, ctx.RelayName)
-				}
 				c := client.New(ctx.RelayURL)
 				info, err := c.GetRelayInfo()
-				if err == nil && !jsonFlag {
-					fmt.Printf("  DID:     %s\n", info.DID)
-					fmt.Printf("  Version: %s %s\n", info.Protocol, info.Version)
+				if !jsonFlag {
+					label := ctx.RelayURL
+					if r, ok := cfg.Relays[ctx.RelayName]; ok && r.ProfileName != "" {
+						label = r.ProfileName + " (" + ctx.RelayURL + ")"
+					}
+					fmt.Printf("Relay:     %s\n", label)
+					if err == nil {
+						fmt.Printf("  DID:     %s\n", info.DID)
+						fmt.Printf("  Version: %s %s\n", info.Protocol, info.Version)
+						fmt.Printf("  Content: %s  Proof: %s\n", boolYesNo(info.Content), boolYesNo(info.Proof))
+					} else {
+						fmt.Printf("  Error:   %s\n", err)
+					}
 				}
 			}
 			return nil
