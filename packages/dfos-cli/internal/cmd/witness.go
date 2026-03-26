@@ -39,17 +39,7 @@ func newWitnessCmd() *cobra.Command {
 				return err
 			}
 
-			opData, err := c.GetOperation(operationCID)
-			if err != nil {
-				return fmt.Errorf("fetch operation: %w", err)
-			}
-
-			jwsToken, ok := opData["jwsToken"].(string)
-			if !ok {
-				return fmt.Errorf("operation has no JWS token")
-			}
-
-			// sign countersignature
+			// sign countersignature — new model only needs the target CID
 			authKeyID := id.State.AuthKeys[0].ID
 			kid := id.DID + "#" + authKeyID
 			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
@@ -57,7 +47,7 @@ func newWitnessCmd() *cobra.Command {
 				return err
 			}
 
-			csToken, err := protocol.SignCountersignature(jwsToken, kid, privKey)
+			csToken, _, err := protocol.SignCountersign(id.DID, operationCID, kid, privKey)
 			if err != nil {
 				return err
 			}

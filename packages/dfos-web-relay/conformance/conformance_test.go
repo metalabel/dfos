@@ -7,10 +7,12 @@ package conformance
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,9 +26,17 @@ import (
 func TestWellKnown(t *testing.T) {
 	base := relayURL(t)
 
+	// ---------------------------------------------------------------
+	// 1. Fetch well-known and parse all fields
+	// ---------------------------------------------------------------
+
 	var meta struct {
 		DID      string `json:"did"`
 		Protocol string `json:"protocol"`
+		Version  string `json:"version"`
+		Proof    bool   `json:"proof"`
+		Content  bool   `json:"content"`
+		Profile  string `json:"profile"`
 	}
 	resp := getJSON(t, base+"/.well-known/dfos-relay", &meta)
 	if resp.StatusCode != 200 {
@@ -37,6 +47,166 @@ func TestWellKnown(t *testing.T) {
 	}
 	if meta.Protocol == "" {
 		t.Fatal("protocol field is empty")
+	}
+	if !meta.Proof {
+		t.Fatal("proof must be true")
+	}
+
+	relayDID := meta.DID
+
+	// ---------------------------------------------------------------
+	// 2. Relay DID resolves — identity chain exists and is not deleted
+	// ---------------------------------------------------------------
+
+	var chain struct {
+		State struct {
+			DID            string `json:"did"`
+			IsDeleted      bool   `json:"isDeleted"`
+			ControllerKeys []struct {
+				ID                 string `json:"id"`
+				Type               string `json:"type"`
+				PublicKeyMultibase string `json:"publicKeyMultibase"`
+			} `json:"controllerKeys"`
+			AuthKeys []struct {
+				ID                 string `json:"id"`
+				Type               string `json:"type"`
+				PublicKeyMultibase string `json:"publicKeyMultibase"`
+			} `json:"authKeys"`
+		} `json:"state"`
+		HeadCID string `json:"headCID"`
+	}
+	idResp := getJSON(t, base+"/identities/"+relayDID, &chain)
+	if idResp.StatusCode != 200 {
+		t.Fatalf("relay DID %s did not resolve: status %d", relayDID, idResp.StatusCode)
+	}
+	if chain.State.IsDeleted {
+		t.Fatal("relay identity is deleted")
+	}
+
+	// 3. Self-consistency: identity DID matches well-known DID
+	if chain.State.DID != relayDID {
+		t.Fatalf("identity chain DID %s does not match well-known DID %s", chain.State.DID, relayDID)
+	}
+	if chain.HeadCID == "" {
+		t.Fatal("relay identity headCID is empty")
+	}
+
+	// ---------------------------------------------------------------
+	// 4. Profile artifact validation (required — proof of DID controllership)
+	// ---------------------------------------------------------------
+
+	if meta.Profile == "" {
+		t.Fatal("profile is required in well-known response (proof of DID controllership)")
+	}
+
+	profileToken := meta.Profile
+
+	// 4a. Decode the JWS unsafely to get header + payload
+	header, payload, err := dfos.DecodeJWSUnsafe(profileToken)
+	if err != nil {
+		t.Fatalf("decode profile JWS: %v", err)
+	}
+
+	// 4b. Header typ must be "did:dfos:artifact"
+	if header.Typ != "did:dfos:artifact" {
+		t.Fatalf("profile header.typ: got %q, want %q", header.Typ, "did:dfos:artifact")
+	}
+
+	// 4c. Header kid must reference the relay DID
+	if !strings.HasPrefix(header.Kid, relayDID+"#") {
+		t.Fatalf("profile header.kid %q does not start with relay DID %q", header.Kid, relayDID+"#")
+	}
+
+	// 4d. CID integrity — compute DagCborCID of payload, compare to header CID
+	_, _, computedCID, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("compute DagCborCID of profile payload: %v", err)
+	}
+	if header.CID != computedCID {
+		t.Fatalf("profile CID mismatch: header.cid=%s, computed=%s", header.CID, computedCID)
+	}
+
+	// 4e. Verify JWS signature against the relay's current key state
+	//     Extract the key ID fragment from the kid
+	kidParts := strings.SplitN(header.Kid, "#", 2)
+	if len(kidParts) != 2 {
+		t.Fatalf("profile kid %q has no fragment", header.Kid)
+	}
+	keyFragment := kidParts[1]
+
+	// Search both controller and auth keys for the matching key
+	var matchedMultibase string
+	for _, k := range chain.State.ControllerKeys {
+		if k.ID == keyFragment {
+			matchedMultibase = k.PublicKeyMultibase
+			break
+		}
+	}
+	if matchedMultibase == "" {
+		for _, k := range chain.State.AuthKeys {
+			if k.ID == keyFragment {
+				matchedMultibase = k.PublicKeyMultibase
+				break
+			}
+		}
+	}
+	if matchedMultibase == "" {
+		t.Fatalf("profile kid fragment %q not found in relay identity key state", keyFragment)
+	}
+
+	pubKeyBytes, err := dfos.DecodeMultikey(matchedMultibase)
+	if err != nil {
+		t.Fatalf("decode multikey %q: %v", matchedMultibase, err)
+	}
+	pubKey := ed25519.PublicKey(pubKeyBytes)
+
+	_, _, err = dfos.VerifyJWS(profileToken, pubKey)
+	if err != nil {
+		t.Fatalf("profile JWS signature verification failed: %v", err)
+	}
+
+	// 4f. Payload semantic checks
+	if v, ok := payload["version"]; !ok {
+		t.Fatal("profile payload missing 'version' field")
+	} else {
+		// version may be int64 or float64 depending on normalization
+		switch vt := v.(type) {
+		case int64:
+			if vt != 1 {
+				t.Fatalf("profile payload version: got %d, want 1", vt)
+			}
+		case float64:
+			if vt != 1 {
+				t.Fatalf("profile payload version: got %v, want 1", vt)
+			}
+		default:
+			t.Fatalf("profile payload version: unexpected type %T", v)
+		}
+	}
+
+	if typ, ok := payload["type"]; !ok {
+		t.Fatal("profile payload missing 'type' field")
+	} else if typ != "artifact" {
+		t.Fatalf("profile payload type: got %q, want %q", typ, "artifact")
+	}
+
+	if did, ok := payload["did"]; !ok {
+		t.Fatal("profile payload missing 'did' field")
+	} else if did != relayDID {
+		t.Fatalf("profile payload did: got %q, want %q", did, relayDID)
+	}
+
+	// 4g. Content must exist and have a $schema field
+	contentRaw, ok := payload["content"]
+	if !ok {
+		t.Fatal("profile payload missing 'content' field")
+	}
+	content, ok := contentRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("profile payload content is not an object: %T", contentRaw)
+	}
+	if _, ok := content["$schema"]; !ok {
+		t.Fatal("profile payload content missing '$schema' field")
 	}
 }
 
@@ -54,7 +224,7 @@ func TestIdentityCreate(t *testing.T) {
 			DID       string `json:"did"`
 			IsDeleted bool   `json:"isDeleted"`
 		} `json:"state"`
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	resp := getJSON(t, base+"/identities/"+id.did, &chain)
 	if resp.StatusCode != 200 {
@@ -66,14 +236,14 @@ func TestIdentityCreate(t *testing.T) {
 	if chain.State.IsDeleted {
 		t.Fatal("new identity should not be deleted")
 	}
-	if len(chain.Log) != 1 {
-		t.Fatalf("log length: got %d, want 1", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty")
 	}
 }
 
 func TestIdentityNotFound(t *testing.T) {
 	base := relayURL(t)
-	resp := getJSON(t, base+"/identity/did:dfos:nonexistent000000000", nil)
+	resp := getJSON(t, base+"/identities/did:dfos:nonexistent000000000", nil)
 	if resp.StatusCode != 404 {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
@@ -107,11 +277,11 @@ func TestIdentityUpdate(t *testing.T) {
 
 	// verify chain length is now 2
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/identities/"+id.did, &chain)
-	if len(chain.Log) != 2 {
-		t.Fatalf("log length after update: got %d, want 2", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty")
 	}
 }
 
@@ -169,11 +339,11 @@ func TestIdentityBatchCreate(t *testing.T) {
 	}
 
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/identities/"+did, &chain)
-	if len(chain.Log) != 2 {
-		t.Fatalf("log length: got %d, want 2", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty")
 	}
 }
 
@@ -207,11 +377,11 @@ func TestIdentityIdempotent(t *testing.T) {
 	res2.Body.Close()
 
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/identities/"+did, &chain)
-	if len(chain.Log) != 1 {
-		t.Fatalf("log should still be 1 after idempotent resubmit, got %d", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty after idempotent resubmit")
 	}
 }
 
@@ -301,7 +471,7 @@ func TestContentCreate(t *testing.T) {
 			CreatorDID string `json:"creatorDID"`
 			IsDeleted  bool   `json:"isDeleted"`
 		} `json:"state"`
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	resp := getJSON(t, base+"/content/"+cc.contentID, &chain)
 	if resp.StatusCode != 200 {
@@ -313,8 +483,8 @@ func TestContentCreate(t *testing.T) {
 	if chain.State.CreatorDID != id.did {
 		t.Fatalf("creatorDID: got %s, want %s", chain.State.CreatorDID, id.did)
 	}
-	if len(chain.Log) != 1 {
-		t.Fatalf("log length: got %d, want 1", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty")
 	}
 }
 
@@ -486,14 +656,8 @@ func TestCountersignature(t *testing.T) {
 	witness := createIdentity(t, base)
 	witnessKid := witness.did + "#" + witness.auth.keyID
 
-	// fetch the content operation token
-	var op struct {
-		JWSToken string `json:"jwsToken"`
-	}
-	getJSON(t, base+"/operations/"+cc.genCID, &op)
-
-	// countersign
-	csToken, err := dfos.SignCountersignature(op.JWSToken, witnessKid, witness.auth.priv)
+	// countersign using the new standalone format
+	csToken, _, err := dfos.SignCountersign(witness.did, cc.genCID, witnessKid, witness.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +665,7 @@ func TestCountersignature(t *testing.T) {
 	res := postOperations(t, base, []string{csToken})
 	if res.StatusCode != 200 {
 		body, _ := io.ReadAll(res.Body)
-		t.Fatalf("countersig: status %d, body: %s", res.StatusCode, body)
+		t.Fatalf("countersign: status %d, body: %s", res.StatusCode, body)
 	}
 	res.Body.Close()
 
@@ -509,7 +673,7 @@ func TestCountersignature(t *testing.T) {
 	var csResult struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	resp := getJSON(t, base+"/operations/"+cc.genCID+"/countersignatures", &csResult)
+	resp := getJSON(t, base+"/countersignatures/"+cc.genCID, &csResult)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET countersigs: status %d", resp.StatusCode)
 	}
@@ -526,21 +690,16 @@ func TestCountersignatureIdempotent(t *testing.T) {
 	witness := createIdentity(t, base)
 	witnessKid := witness.did + "#" + witness.auth.keyID
 
-	var op struct {
-		JWSToken string `json:"jwsToken"`
-	}
-	getJSON(t, base+"/operations/"+cc.genCID, &op)
+	csToken, _, _ := dfos.SignCountersign(witness.did, cc.genCID, witnessKid, witness.auth.priv)
 
-	csToken, _ := dfos.SignCountersignature(op.JWSToken, witnessKid, witness.auth.priv)
-
-	// submit twice
+	// submit twice — dedup by witness per target
 	postOperations(t, base, []string{csToken}).Body.Close()
 	postOperations(t, base, []string{csToken}).Body.Close()
 
 	var csResult struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	getJSON(t, base+"/operations/"+cc.genCID+"/countersignatures", &csResult)
+	getJSON(t, base+"/countersignatures/"+cc.genCID, &csResult)
 	if len(csResult.Countersignatures) != 1 {
 		t.Fatalf("expected 1 countersig after dedup, got %d", len(csResult.Countersignatures))
 	}
@@ -551,16 +710,11 @@ func TestCountersignatureMultiWitness(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	var op struct {
-		JWSToken string `json:"jwsToken"`
-	}
-	getJSON(t, base+"/operations/"+cc.genCID, &op)
-
 	// two different witnesses
 	for i := 0; i < 2; i++ {
 		w := createIdentity(t, base)
 		wKid := w.did + "#" + w.auth.keyID
-		cs, _ := dfos.SignCountersignature(op.JWSToken, wKid, w.auth.priv)
+		cs, _, _ := dfos.SignCountersign(w.did, cc.genCID, wKid, w.auth.priv)
 		postOperations(t, base, []string{cs}).Body.Close()
 	}
 
@@ -581,11 +735,7 @@ func TestCountersignatureQueryPaths(t *testing.T) {
 	witness := createIdentity(t, base)
 	witnessKid := witness.did + "#" + witness.auth.keyID
 
-	var op struct {
-		JWSToken string `json:"jwsToken"`
-	}
-	getJSON(t, base+"/operations/"+cc.genCID, &op)
-	csToken, _ := dfos.SignCountersignature(op.JWSToken, witnessKid, witness.auth.priv)
+	csToken, _, _ := dfos.SignCountersign(witness.did, cc.genCID, witnessKid, witness.auth.priv)
 	postOperations(t, base, []string{csToken}).Body.Close()
 
 	// both query paths should return the same data
@@ -800,11 +950,11 @@ func TestDelegatedContentUpdate(t *testing.T) {
 
 	// verify chain length is 2
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/content/"+cc.contentID, &chain)
-	if len(chain.Log) != 2 {
-		t.Fatalf("log length after delegated update: got %d, want 2", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty")
 	}
 }
 

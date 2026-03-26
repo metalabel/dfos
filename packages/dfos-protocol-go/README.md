@@ -39,22 +39,23 @@ cred, err := dfos.CreateCredential(
 
 All protocol operations are covered:
 
-| Function               | Description                                  |
-| ---------------------- | -------------------------------------------- |
-| `SignIdentityCreate`   | Sign an identity genesis operation           |
-| `SignIdentityUpdate`   | Sign an identity key rotation                |
-| `SignIdentityDelete`   | Sign an identity deletion (terminal)         |
-| `SignContentCreate`    | Sign a content chain genesis                 |
-| `SignContentUpdate`    | Sign a content chain update                  |
-| `SignContentDelete`    | Sign a content chain deletion                |
-| `SignBeacon`           | Sign a merkle root beacon                    |
-| `SignCountersignature` | Countersign an existing operation            |
-| `CreateAuthToken`      | Create a relay-scoped JWT auth token         |
-| `CreateCredential`     | Issue a VC-JWT credential (read/write)       |
-| `VerifyJWS`            | Verify an Ed25519 JWS token                  |
-| `VerifyCredential`     | Verify a VC-JWT credential                   |
-| `DocumentCID`          | Canonical dag-cbor encode and CIDv1 hash     |
-| `BuildMerkleRoot`      | Compute SHA-256 merkle root over content IDs |
+| Function             | Description                                  |
+| -------------------- | -------------------------------------------- |
+| `SignIdentityCreate` | Sign an identity genesis operation           |
+| `SignIdentityUpdate` | Sign an identity key rotation                |
+| `SignIdentityDelete` | Sign an identity deletion (terminal)         |
+| `SignContentCreate`  | Sign a content chain genesis                 |
+| `SignContentUpdate`  | Sign a content chain update                  |
+| `SignContentDelete`  | Sign a content chain deletion                |
+| `SignBeacon`         | Sign a merkle root beacon                    |
+| `SignArtifact`       | Sign a standalone inline document            |
+| `SignCountersign`    | Countersign a target operation by CID        |
+| `CreateAuthToken`    | Create a relay-scoped JWT auth token         |
+| `CreateCredential`   | Issue a VC-JWT credential (read/write)       |
+| `VerifyJWS`          | Verify an Ed25519 JWS token                  |
+| `VerifyCredential`   | Verify a VC-JWT credential                   |
+| `DocumentCID`        | Canonical dag-cbor encode and CIDv1 hash     |
+| `BuildMerkleRoot`    | Compute SHA-256 merkle root over content IDs |
 
 ## Tests
 
@@ -62,7 +63,7 @@ All protocol operations are covered:
 go test -v -cover ./...
 ```
 
-42 tests, 88% statement coverage.
+41 tests, 85% statement coverage.
 
 ## Dependencies
 

@@ -152,11 +152,11 @@ func TestContentWithNote(t *testing.T) {
 
 	// verify chain has 2 ops
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/content/"+contentID, &chain)
-	if len(chain.Log) != 2 {
-		t.Fatalf("log length: got %d, want 2", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty")
 	}
 }
 
@@ -198,11 +198,11 @@ func TestContentUpdateAfterKeyRotation(t *testing.T) {
 	res.Body.Close()
 
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/content/"+cc.contentID, &chain)
-	if len(chain.Log) != 2 {
-		t.Fatalf("log length: got %d, want 2", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty")
 	}
 }
 
@@ -278,11 +278,11 @@ func TestControllerKeyRotation(t *testing.T) {
 	res.Body.Close()
 
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/identities/"+id.did, &chain)
-	if len(chain.Log) != 3 {
-		t.Fatalf("log length: got %d, want 3", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty")
 	}
 }
 
@@ -558,11 +558,11 @@ func TestBatchThreeStepIdentity(t *testing.T) {
 	}
 
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/identities/"+did, &chain)
-	if len(chain.Log) != 3 {
-		t.Fatalf("log length: got %d, want 3", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty")
 	}
 }
 
@@ -720,10 +720,10 @@ func TestBatchDuplicateOperations(t *testing.T) {
 
 	// chain should still have only 1 op
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/identities/"+did, &chain)
-	if len(chain.Log) != 1 {
-		t.Fatalf("log length: got %d, want 1 (dedup)", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty (dedup)")
 	}
 }

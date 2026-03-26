@@ -9,6 +9,7 @@
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
   BlobKey,
+  LogEntry,
   RelayStore,
   StoredBeacon,
   StoredContentChain,
@@ -31,6 +32,7 @@ export class MemoryRelayStore implements RelayStore {
   private beacons = new Map<string, StoredBeacon>();
   private blobs = new Map<string, Uint8Array>();
   private countersignatures = new Map<string, string[]>();
+  private operationLog: LogEntry[] = [];
 
   async getOperation(cid: string): Promise<StoredOperation | undefined> {
     return this.operations.get(cid);
@@ -95,5 +97,25 @@ export class MemoryRelayStore implements RelayStore {
 
     existing.push(jwsToken);
     this.countersignatures.set(operationCID, existing);
+  }
+
+  async appendToLog(entry: LogEntry): Promise<void> {
+    this.operationLog.push(entry);
+  }
+
+  async readLog(params: {
+    after?: string;
+    limit: number;
+  }): Promise<{ entries: LogEntry[]; cursor: string | null }> {
+    let startIdx = 0;
+    if (params.after) {
+      const idx = this.operationLog.findIndex((e) => e.cid === params.after);
+      if (idx >= 0) startIdx = idx + 1;
+      else startIdx = this.operationLog.length; // cursor not found → empty
+    }
+
+    const entries = this.operationLog.slice(startIdx, startIdx + params.limit);
+    const cursor = entries.length === params.limit ? entries[entries.length - 1]!.cid : null;
+    return { entries, cursor };
   }
 }

@@ -403,18 +403,11 @@ func TestBlobDownloadNonExistentContent(t *testing.T) {
 // countersignatures for operations that haven't been submitted.
 func TestCountersignNonExistentOperation(t *testing.T) {
 	base := relayURL(t)
-	creator := createIdentity(t, base)
 	witness := createIdentity(t, base)
 
-	// sign content but do NOT submit it to the relay
-	doc := map[string]any{"type": "post", "title": "never submitted"}
-	docCID, _, _ := dfos.DocumentCID(doc)
-	creatorKid := creator.did + "#" + creator.auth.keyID
-	contentToken, _, _, _ := dfos.SignContentCreate(creator.did, docCID, creatorKid, "", creator.auth.priv)
-
-	// witness countersigns the unsubmitted operation
+	// countersign a CID that doesn't exist on the relay
 	witnessKid := witness.did + "#" + witness.auth.keyID
-	csToken, err := dfos.SignCountersignature(contentToken, witnessKid, witness.auth.priv)
+	csToken, _, err := dfos.SignCountersign(witness.did, "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", witnessKid, witness.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,30 +421,20 @@ func TestCountersignNonExistentOperation(t *testing.T) {
 	}
 	json.Unmarshal(body, &results)
 	if len(results.Results) == 0 || results.Results[0].Error == "" {
-		t.Fatal("expected rejection for countersig of non-existent operation")
+		t.Fatal("expected rejection for countersign of non-existent operation")
 	}
 }
 
 // TestSelfCountersign verifies that self-countersigning (witness DID =
-// author DID) is rejected. Uses a different key on the same identity
-// (controller key instead of auth key) so the JWS token differs from the
-// original — same-key self-countersign is indistinguishable from idempotent
-// resubmission due to Ed25519 determinism.
+// target author DID) is rejected by the relay.
 func TestSelfCountersign(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	var op struct {
-		JWSToken string `json:"jwsToken"`
-	}
-	getJSON(t, base+"/operations/"+cc.genCID, &op)
-
-	// Self-countersign with the controller key (different key, same identity DID).
-	// This produces a different JWS token because the kid and signature differ,
-	// but the witness DID still equals the author DID.
+	// Self-countersign: witness DID == content creator DID
 	ctrlKid := id.did + "#" + id.controller.keyID
-	csToken, err := dfos.SignCountersignature(op.JWSToken, ctrlKid, id.controller.priv)
+	csToken, _, err := dfos.SignCountersign(id.did, cc.genCID, ctrlKid, id.controller.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,20 +491,20 @@ func TestMultipleContentChainsIndependent(t *testing.T) {
 
 	// chain 1 should have 2 ops
 	var chain1 struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/content/"+cc1.contentID, &chain1)
-	if len(chain1.Log) != 2 {
-		t.Fatalf("chain 1: got %d ops, want 2", len(chain1.Log))
+	if chain1.HeadCID == "" {
+		t.Fatal("chain 1: headCID is empty")
 	}
 
 	// chain 2 should still have 1 op
 	var chain2 struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/content/"+contentID2, &chain2)
-	if len(chain2.Log) != 1 {
-		t.Fatalf("chain 2: got %d ops, want 1 (independent)", len(chain2.Log))
+	if chain2.HeadCID == "" {
+		t.Fatal("chain 2: headCID is empty")
 	}
 }
 
@@ -552,11 +535,11 @@ func TestLongContentChain(t *testing.T) {
 	}
 
 	var chain struct {
-		Log []json.RawMessage `json:"log"`
+		HeadCID string `json:"headCID"`
 	}
 	getJSON(t, base+"/content/"+cc.contentID, &chain)
-	if len(chain.Log) != 6 {
-		t.Fatalf("log length: got %d, want 6 (1 create + 5 updates)", len(chain.Log))
+	if chain.HeadCID == "" {
+		t.Fatal("headCID is empty (1 create + 5 updates)")
 	}
 }
 

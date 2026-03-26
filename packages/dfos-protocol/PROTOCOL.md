@@ -1,7 +1,5 @@
 # DFOS Protocol
 
-> **Version 0.4.0** · _2026-03-24_
-
 Verifiable identity and content chains — Ed25519 signatures, content-addressed CIDs, W3C DIDs. Cross-language verification in TypeScript, Go, Python, Rust, and Swift.
 
 This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
@@ -32,7 +30,7 @@ The DFOS protocol has five components:
 | **Countersignatures** | Witness attestation — third-party signatures over existing chain operations  |
 | **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for beacon roots    |
 
-The crypto core is the trust boundary — everything below it is cryptographically verified. Documents are flat content objects, content-addressed directly: `documentCID = CID(dagCborCanonicalEncode(contentObject))`. What goes inside the content object is application-defined — see the [DFOS Content Model](./CONTENT-MODEL.md) for the standard schema library.
+The crypto core is the trust boundary — everything below it is cryptographically verified. Documents are flat content objects, content-addressed directly: `documentCID = CID(dagCborCanonicalEncode(contentObject))`. What goes inside the content object is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
 
 ### Crypto Core: Two Chain Types
 
@@ -1102,8 +1100,8 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 ### Related Specifications
 
-- [DID Method: `did:dfos`](./DID-METHOD.md) — W3C DID method specification for identity chains
-- [Content Model](./CONTENT-MODEL.md) — Standard content schemas (post, profile) for document content objects
+- [DID Method: `did:dfos`](https://protocol.dfos.com/did-method) — W3C DID method specification for identity chains
+- [Content Model](https://protocol.dfos.com/content-model) — Standard content schemas (post, profile) for document content objects
 
 ### Cross-Language Verification
 

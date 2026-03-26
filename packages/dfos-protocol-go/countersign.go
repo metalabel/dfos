@@ -4,51 +4,40 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
-// SignCountersignature countersigns an existing operation by re-signing the same payload.
-func SignCountersignature(operationToken string, witnessKid string, privateKey ed25519.PrivateKey) (string, error) {
-	// decode the original operation to get its payload
-	_, payload, err := DecodeJWSUnsafe(operationToken)
-	if err != nil {
-		return "", fmt.Errorf("decode operation: %w", err)
+// SignCountersign signs a standalone countersignature attesting to a target operation by CID.
+// Returns the JWS token and the countersign's own CID (distinct from the target).
+func SignCountersign(witnessDID, targetCID, kid string, privateKey ed25519.PrivateKey) (jwsToken string, countersignCID string, err error) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	payload := map[string]any{
+		"version":   1,
+		"type":      "countersign",
+		"did":       witnessDID,
+		"targetCID": targetCID,
+		"createdAt": now.Format("2006-01-02T15:04:05.000Z"),
 	}
 
-	// re-derive the CID from the payload
 	_, _, cidStr, err := DagCborCID(payload)
 	if err != nil {
-		return "", fmt.Errorf("derive CID: %w", err)
+		return "", "", err
 	}
-
-	// determine typ from the original
-	origHeader, _, _ := DecodeJWSUnsafe(operationToken)
-	typ := origHeader.Typ
 
 	header := JWSHeader{
 		Alg: "EdDSA",
-		Typ: typ,
-		Kid: witnessKid,
+		Typ: "did:dfos:countersign",
+		Kid: kid,
 		CID: cidStr,
 	}
 
-	return CreateJWS(header, payload, privateKey)
-}
-
-// SignBeaconCountersignature countersigns a beacon by re-signing its payload.
-func SignBeaconCountersignature(beaconPayload map[string]any, witnessKid string, privateKey ed25519.PrivateKey) (string, error) {
-	_, _, cidStr, err := DagCborCID(beaconPayload)
+	jwsToken, err = CreateJWS(header, payload, privateKey)
 	if err != nil {
-		return "", fmt.Errorf("derive CID: %w", err)
+		return "", "", err
 	}
 
-	header := JWSHeader{
-		Alg: "EdDSA",
-		Typ: "did:dfos:beacon",
-		Kid: witnessKid,
-		CID: cidStr,
-	}
-
-	return CreateJWS(header, beaconPayload, privateKey)
+	return jwsToken, cidStr, nil
 }
 
 // PayloadFromJWS extracts the raw payload map from a JWS token.
