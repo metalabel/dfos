@@ -139,3 +139,35 @@ export const BeaconPayload = z.strictObject({
   createdAt: Iso8601,
 });
 export type BeaconPayload = z.infer<typeof BeaconPayload>;
+
+// ---
+
+/** Max length for artifact $schema strings */
+const MAX_SCHEMA = 256;
+/** Max CBOR-encoded payload size for artifacts (bytes) — protocol constant */
+export const MAX_ARTIFACT_PAYLOAD_SIZE = 16384;
+
+/** Artifact content: structured inline document with required $schema discriminator */
+const ArtifactContent = z.object({ $schema: z.string().max(MAX_SCHEMA) }).catchall(z.unknown());
+
+/** Artifact: standalone signed inline document, immutable, CID-addressable */
+export const ArtifactPayload = z.strictObject({
+  version: z.literal(1),
+  type: z.literal('artifact'),
+  did: z.string().max(MAX_DID),
+  content: ArtifactContent,
+  createdAt: Iso8601,
+});
+export type ArtifactPayload = z.infer<typeof ArtifactPayload>;
+
+// ---
+
+/** Countersign: standalone witness attestation referencing a target operation by CID */
+export const CountersignPayload = z.strictObject({
+  version: z.literal(1),
+  type: z.literal('countersign'),
+  did: z.string().max(MAX_DID),
+  targetCID: CIDString,
+  createdAt: Iso8601,
+});
+export type CountersignPayload = z.infer<typeof CountersignPayload>;

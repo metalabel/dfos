@@ -2,198 +2,117 @@
 
   COUNTERSIGNATURE
 
-  Multiple valid JWS tokens for the same operation CID. The CID is derived
-  from the payload which includes `did` (the author). Different signers
-  produce different JWS tokens over the same payload.
+  Standalone witness attestation. A countersign is a signed statement
+  that references a target operation by CID — "I, witness W, attest to
+  operation X." It has its own CID, distinct from the target.
 
-  Author: kid DID matches payload did
-  Witness: kid DID does NOT match payload did
+  Countersigns are stateless-verifiable: signature + CID integrity is
+  sufficient. The relay adds semantic checks (target exists, witness !=
+  author, dedup) at the ingestion layer.
+
+  Composable with any CID-addressable operation: content ops, beacons,
+  artifacts, identity ops, even other countersigns.
 
 */
 
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
-import { BeaconPayload, ContentOperation } from './schemas';
+import { CountersignPayload } from './schemas';
 import type { Signer } from './schemas';
+
+// -----------------------------------------------------------------------------
+// types
+// -----------------------------------------------------------------------------
+
+export interface VerifiedCountersignature {
+  /** CID of this countersign operation (distinct from the target) */
+  countersignCID: string;
+  /** The witness DID (payload.did — the DID that signed this attestation) */
+  witnessDID: string;
+  /** The CID being attested to */
+  targetCID: string;
+}
 
 // -----------------------------------------------------------------------------
 // signing
 // -----------------------------------------------------------------------------
 
 /**
- * Sign an existing content operation as a countersignature (witness JWS)
- *
- * The witness signs the same payload as the author, producing a different
- * JWS token with their own kid. The CID is identical because the payload
- * is identical.
+ * Sign a countersignature attesting to a target operation by CID
  */
 export const signCountersignature = async (input: {
-  /** The original operation payload (must include did of the author) */
-  operationPayload: ContentOperation;
-  /** Witness signer */
+  payload: CountersignPayload;
   signer: Signer;
-  /** Witness kid — DID URL of the witness (must differ from payload.did) */
   kid: string;
-}): Promise<{ jwsToken: string; operationCID: string }> => {
-  const encoded = await dagCborCanonicalEncode(input.operationPayload);
-  const operationCID = encoded.cid.toString();
+}): Promise<{ jwsToken: string; countersignCID: string }> => {
+  const encoded = await dagCborCanonicalEncode(input.payload);
+  const countersignCID = encoded.cid.toString();
 
   const jwsToken = await createJws({
-    header: { alg: 'EdDSA', typ: 'did:dfos:content-op', kid: input.kid, cid: operationCID },
-    payload: input.operationPayload as unknown as Record<string, unknown>,
+    header: { alg: 'EdDSA', typ: 'did:dfos:countersign', kid: input.kid, cid: countersignCID },
+    payload: input.payload as unknown as Record<string, unknown>,
     sign: input.signer,
   });
 
-  return { jwsToken, operationCID };
+  return { jwsToken, countersignCID };
 };
 
 // -----------------------------------------------------------------------------
 // verification
 // -----------------------------------------------------------------------------
 
-export interface VerifiedCountersignature {
-  operationCID: string;
-  /** The DID that authored the operation (payload.did) */
-  authorDID: string;
-  /** The DID that witnessed the operation (kid DID) */
-  witnessDID: string;
-}
-
 /**
- * Verify a countersignature JWS against an expected operation CID
+ * Verify a countersignature JWS — stateless verification
  *
- * Checks: valid signature, CID matches, kid DID differs from payload did
+ * Checks: valid signature, CID integrity, payload schema. Does NOT check
+ * whether the target exists or whether the witness differs from the target
+ * author — those are relay-level semantic checks.
  */
 export const verifyCountersignature = async (input: {
   jwsToken: string;
-  expectedCID: string;
   resolveKey: (kid: string) => Promise<Uint8Array>;
 }): Promise<VerifiedCountersignature> => {
   const decoded = decodeJwsUnsafe(input.jwsToken);
   if (!decoded) throw new Error('failed to decode countersignature JWS');
 
   // verify typ
-  if (decoded.header.typ !== 'did:dfos:content-op') {
+  if (decoded.header.typ !== 'did:dfos:countersign') {
     throw new Error(`invalid countersignature typ: ${decoded.header.typ}`);
   }
 
-  // parse payload as content operation
-  const result = ContentOperation.safeParse(decoded.payload);
+  // parse payload
+  const result = CountersignPayload.safeParse(decoded.payload);
   if (!result.success) {
     const messages = result.error.issues.map((e) => e.message).join(', ');
-    throw new Error(`invalid operation payload: ${messages}`);
+    throw new Error(`invalid countersignature payload: ${messages}`);
   }
-  const op = result.data;
+  const payload = result.data;
 
-  // derive CID from payload and verify it matches expected
-  const encoded = await dagCborCanonicalEncode(op);
-  const operationCID = encoded.cid.toString();
-  if (operationCID !== input.expectedCID) {
-    throw new Error('countersignature CID does not match expected CID');
-  }
-
-  // verify CID in header matches
-  if (decoded.header.cid !== operationCID) {
-    throw new Error('countersignature header cid mismatch');
-  }
-
-  // verify signature
+  // verify kid DID matches payload did
   const kid = decoded.header.kid;
-  const publicKey = await input.resolveKey(kid);
-  try {
-    verifyJws({ token: input.jwsToken, publicKey });
-  } catch {
-    throw new Error('invalid countersignature');
-  }
-
-  // extract witness DID from kid
   const hashIdx = kid.indexOf('#');
   if (hashIdx < 0) throw new Error('countersignature kid must be a DID URL');
-  const witnessDID = kid.substring(0, hashIdx);
-
-  // witness DID must differ from author DID
-  if (witnessDID === op.did) {
-    throw new Error('countersignature kid DID must differ from operation did (not a witness)');
-  }
-
-  return {
-    operationCID,
-    authorDID: op.did,
-    witnessDID,
-  };
-};
-
-// -----------------------------------------------------------------------------
-// beacon countersignature — verification
-// -----------------------------------------------------------------------------
-
-export interface VerifiedBeaconCountersignature {
-  beaconCID: string;
-  /** The DID that controls the beacon (payload.did) */
-  controllerDID: string;
-  /** The DID that witnessed the beacon (kid DID) */
-  witnessDID: string;
-}
-
-/**
- * Verify a beacon countersignature JWS against an expected beacon CID
- *
- * Checks: valid signature, CID matches, kid DID differs from payload did
- */
-export const verifyBeaconCountersignature = async (input: {
-  jwsToken: string;
-  expectedCID: string;
-  resolveKey: (kid: string) => Promise<Uint8Array>;
-}): Promise<VerifiedBeaconCountersignature> => {
-  const decoded = decodeJwsUnsafe(input.jwsToken);
-  if (!decoded) throw new Error('failed to decode beacon countersignature JWS');
-
-  // verify typ
-  if (decoded.header.typ !== 'did:dfos:beacon') {
-    throw new Error(`invalid beacon countersignature typ: ${decoded.header.typ}`);
-  }
-
-  // parse payload as beacon
-  const result = BeaconPayload.safeParse(decoded.payload);
-  if (!result.success) {
-    const messages = result.error.issues.map((e) => e.message).join(', ');
-    throw new Error(`invalid beacon payload: ${messages}`);
-  }
-  const beacon = result.data;
-
-  // derive CID from payload and verify it matches expected
-  const encoded = await dagCborCanonicalEncode(beacon);
-  const beaconCID = encoded.cid.toString();
-  if (beaconCID !== input.expectedCID) {
-    throw new Error('beacon countersignature CID does not match expected CID');
-  }
-
-  // verify CID in header matches
-  if (decoded.header.cid !== beaconCID) {
-    throw new Error('beacon countersignature header cid mismatch');
+  const kidDid = kid.substring(0, hashIdx);
+  if (kidDid !== payload.did) {
+    throw new Error('countersignature kid DID does not match payload did');
   }
 
   // verify signature
-  const kid = decoded.header.kid;
   const publicKey = await input.resolveKey(kid);
   try {
     verifyJws({ token: input.jwsToken, publicKey });
   } catch {
-    throw new Error('invalid beacon countersignature');
+    throw new Error('invalid countersignature signature');
   }
 
-  // extract witness DID from kid
-  const hashIdx = kid.indexOf('#');
-  if (hashIdx < 0) throw new Error('beacon countersignature kid must be a DID URL');
-  const witnessDID = kid.substring(0, hashIdx);
-
-  // witness DID must differ from controller DID
-  if (witnessDID === beacon.did) {
-    throw new Error('beacon countersignature kid DID must differ from beacon did (not a witness)');
-  }
+  // verify CID — use raw decoded payload to match artifact pattern
+  const encoded = await dagCborCanonicalEncode(decoded.payload);
+  const countersignCID = encoded.cid.toString();
+  if (!decoded.header.cid) throw new Error('missing cid in countersignature header');
+  if (decoded.header.cid !== countersignCID) throw new Error('countersignature cid mismatch');
 
   return {
-    beaconCID,
-    controllerDID: beacon.did,
-    witnessDID,
+    countersignCID,
+    witnessDID: payload.did,
+    targetCID: payload.targetCID,
   };
 };

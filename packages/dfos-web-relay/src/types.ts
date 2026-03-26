@@ -16,11 +16,20 @@ import type {
 // relay options
 // -----------------------------------------------------------------------------
 
+export interface RelayIdentity {
+  /** The relay's DID */
+  did: string;
+  /** Profile artifact JWS token (signed by the relay DID) */
+  profileArtifactJws: string;
+}
+
 export interface RelayOptions {
-  /** The relay's DID — used as auth token audience and published in well-known */
-  relayDID: string;
   /** Storage backend */
   store: RelayStore;
+  /** Pre-created relay identity — if omitted, a JIT identity and profile are generated */
+  identity?: RelayIdentity;
+  /** Whether content plane routes are enabled (default: true) */
+  content?: boolean;
 }
 
 // -----------------------------------------------------------------------------
@@ -31,6 +40,10 @@ export interface StoredIdentityChain {
   did: string;
   /** Ordered JWS tokens from genesis to head */
   log: string[];
+  /** CID of the most recent operation */
+  headCID: string;
+  /** createdAt timestamp of the most recent operation */
+  lastCreatedAt: string;
   state: VerifiedIdentity;
 }
 
@@ -39,6 +52,8 @@ export interface StoredContentChain {
   genesisCID: string;
   /** Ordered JWS tokens from genesis to head */
   log: string[];
+  /** createdAt timestamp of the most recent operation */
+  lastCreatedAt: string;
   state: VerifiedContentChain;
 }
 
@@ -53,8 +68,8 @@ export interface StoredOperation {
   cid: string;
   jwsToken: string;
   /** Which chain type this operation belongs to */
-  chainType: 'identity' | 'content';
-  /** The chain identifier — DID for identity, contentId for content */
+  chainType: 'identity' | 'content' | 'artifact' | 'beacon' | 'countersign';
+  /** The chain identifier — DID for identity/beacon/artifact, contentId for content, targetCID for countersign */
   chainId: string;
 }
 
@@ -63,6 +78,21 @@ export interface BlobKey {
   creatorDID: string;
   documentCID: string;
 }
+
+// -----------------------------------------------------------------------------
+// operation log
+// -----------------------------------------------------------------------------
+
+/** A single entry in the global append-only operation log */
+export interface LogEntry {
+  cid: string;
+  jwsToken: string;
+  kind: OperationKind;
+  chainId: string;
+}
+
+/** All operation kinds in the protocol */
+export type OperationKind = 'identity-op' | 'content-op' | 'beacon' | 'artifact' | 'countersign';
 
 // -----------------------------------------------------------------------------
 // relay store interface
@@ -110,6 +140,15 @@ export interface RelayStore {
 
   getCountersignatures(operationCID: string): Promise<string[]>;
   addCountersignature(operationCID: string, jwsToken: string): Promise<void>;
+
+  // --- operation log ---
+  // Global append-only log of all accepted operations. CID-based cursor pagination.
+
+  appendToLog(entry: LogEntry): Promise<void>;
+  readLog(params: {
+    after?: string;
+    limit: number;
+  }): Promise<{ entries: LogEntry[]; cursor: string | null }>;
 }
 
 // -----------------------------------------------------------------------------
@@ -121,7 +160,7 @@ export interface IngestionResult {
   status: 'accepted' | 'rejected';
   error?: string;
   /** What was ingested */
-  kind?: 'identity-op' | 'content-op' | 'beacon' | 'countersig' | 'beacon-countersig';
+  kind?: OperationKind;
   /** Chain identifier if applicable */
   chainId?: string;
 }

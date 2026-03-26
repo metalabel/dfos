@@ -18,12 +18,15 @@
 
 import {
   decodeMultikey,
+  verifyArtifact,
   verifyBeacon,
-  verifyBeaconCountersignature,
   verifyContentChain,
+  verifyContentExtensionFromTrustedState,
   verifyCountersignature,
   verifyIdentityChain,
+  verifyIdentityExtensionFromTrustedState,
   type VerifiedBeacon,
+  type VerifiedCountersignature,
 } from '@metalabel/dfos-protocol/chain';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityChain } from './types';
@@ -32,17 +35,17 @@ import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityCha
 // classification
 // -----------------------------------------------------------------------------
 
-type OperationKind =
+type ClassificationKind =
   | 'identity-op'
   | 'content-op'
   | 'beacon'
-  | 'countersig'
-  | 'beacon-countersig'
+  | 'countersign'
+  | 'artifact'
   | 'unknown';
 
 interface ClassifiedOperation {
   jwsToken: string;
-  kind: OperationKind;
+  kind: ClassificationKind;
   /** DID referenced in the operation (from payload.did or kid) */
   referencedDID: string | null;
   /** For content ops — the DID from the payload that signs the operation */
@@ -91,37 +94,41 @@ const classify = (jwsToken: string): ClassifiedOperation => {
 
   if (typ === 'did:dfos:content-op') {
     const opDID = typeof payload['did'] === 'string' ? payload['did'] : null;
-    if (opDID && kidDID && kidDID !== opDID) {
-      return {
-        ...base,
-        kind: 'countersig',
-        referencedDID: opDID,
-        signerDID: kidDID,
-        priority: 3,
-        previousCID: null,
-      };
-    }
     return { ...base, kind: 'content-op', referencedDID: null, signerDID: opDID, priority: 2 };
   }
 
   if (typ === 'did:dfos:beacon') {
     const beaconDID = typeof payload['did'] === 'string' ? payload['did'] : null;
-    if (beaconDID && kidDID && kidDID !== beaconDID) {
-      return {
-        ...base,
-        kind: 'beacon-countersig',
-        referencedDID: beaconDID,
-        signerDID: kidDID,
-        priority: 3,
-        previousCID: null,
-      };
-    }
     return {
       ...base,
       kind: 'beacon',
       referencedDID: beaconDID,
       signerDID: null,
       priority: 1,
+      previousCID: null,
+    };
+  }
+
+  if (typ === 'did:dfos:countersign') {
+    const witnessDID = typeof payload['did'] === 'string' ? payload['did'] : null;
+    return {
+      ...base,
+      kind: 'countersign',
+      referencedDID: witnessDID,
+      signerDID: null,
+      priority: 3, // processed last — target must already be ingested
+      previousCID: null,
+    };
+  }
+
+  if (typ === 'did:dfos:artifact') {
+    const artifactDID = typeof payload['did'] === 'string' ? payload['did'] : null;
+    return {
+      ...base,
+      kind: 'artifact',
+      referencedDID: artifactDID,
+      signerDID: null,
+      priority: 1, // same as beacons — needs identity keys resolved first
       previousCID: null,
     };
   }
@@ -262,9 +269,17 @@ const ingestIdentityOp = async (jwsToken: string, store: RelayStore): Promise<In
   if (isGenesis) {
     // verify as a new single-operation chain
     const identity = await verifyIdentityChain({ didPrefix: 'did:dfos', log: [jwsToken] });
-    const chain: StoredIdentityChain = { did: identity.did, log: [jwsToken], state: identity };
+    const createdAt = (payload as Record<string, unknown>)['createdAt'] as string;
+    const chain: StoredIdentityChain = {
+      did: identity.did,
+      log: [jwsToken],
+      headCID: cid,
+      lastCreatedAt: createdAt,
+      state: identity,
+    };
     await store.putIdentityChain(chain);
     await store.putOperation({ cid, jwsToken, chainType: 'identity', chainId: identity.did });
+    await store.appendToLog({ cid, jwsToken, kind: 'identity-op', chainId: identity.did });
     return { cid, status: 'accepted', kind: 'identity-op', chainId: identity.did };
   }
 
@@ -277,12 +292,23 @@ const ingestIdentityOp = async (jwsToken: string, store: RelayStore): Promise<In
   const chain = await store.getIdentityChain(did);
   if (!chain) return { cid, status: 'rejected', error: `unknown identity: ${did}` };
 
-  // verify full chain including new operation
-  const newLog = [...chain.log, jwsToken];
-  const identity = await verifyIdentityChain({ didPrefix: 'did:dfos', log: newLog });
-  const updated: StoredIdentityChain = { did: identity.did, log: newLog, state: identity };
+  // O(1) extension verification from trusted state
+  const extResult = await verifyIdentityExtensionFromTrustedState({
+    currentState: chain.state,
+    headCID: chain.headCID,
+    lastCreatedAt: chain.lastCreatedAt,
+    newOp: jwsToken,
+  });
+  const updated: StoredIdentityChain = {
+    did: chain.did,
+    log: [...chain.log, jwsToken],
+    headCID: extResult.operationCID,
+    lastCreatedAt: extResult.createdAt,
+    state: extResult.state,
+  };
   await store.putIdentityChain(updated);
   await store.putOperation({ cid, jwsToken, chainType: 'identity', chainId: did });
+  await store.appendToLog({ cid, jwsToken, kind: 'identity-op', chainId: did });
   return { cid, status: 'accepted', kind: 'identity-op', chainId: did };
 };
 
@@ -329,14 +355,17 @@ const ingestContentOp = async (jwsToken: string, store: RelayStore): Promise<Ing
       resolveKey,
       enforceAuthorization: true,
     });
+    const createdAt = (payload as Record<string, unknown>)['createdAt'] as string;
     const chain: StoredContentChain = {
       contentId: content.contentId,
       genesisCID: content.genesisCID,
       log: [jwsToken],
+      lastCreatedAt: createdAt,
       state: content,
     };
     await store.putContentChain(chain);
     await store.putOperation({ cid, jwsToken, chainType: 'content', chainId: content.contentId });
+    await store.appendToLog({ cid, jwsToken, kind: 'content-op', chainId: content.contentId });
     return { cid, status: 'accepted', kind: 'content-op', chainId: content.contentId };
   }
 
@@ -369,21 +398,25 @@ const ingestContentOp = async (jwsToken: string, store: RelayStore): Promise<Ing
     return { cid, status: 'rejected', error: 'chain has diverged (first-seen-wins)' };
   }
 
-  const newLog = [...chain.log, jwsToken];
-  const content = await verifyContentChain({
-    log: newLog,
+  // O(1) extension verification from trusted state
+  const extResult = await verifyContentExtensionFromTrustedState({
+    currentState: chain.state,
+    lastCreatedAt: chain.lastCreatedAt,
+    newOp: jwsToken,
     resolveKey,
     enforceAuthorization: true,
   });
   const updated: StoredContentChain = {
-    contentId: content.contentId,
-    genesisCID: content.genesisCID,
-    log: newLog,
-    state: content,
+    contentId: chain.contentId,
+    genesisCID: chain.genesisCID,
+    log: [...chain.log, jwsToken],
+    lastCreatedAt: extResult.createdAt,
+    state: extResult.state,
   };
   await store.putContentChain(updated);
-  await store.putOperation({ cid, jwsToken, chainType: 'content', chainId: content.contentId });
-  return { cid, status: 'accepted', kind: 'content-op', chainId: content.contentId };
+  await store.putOperation({ cid, jwsToken, chainType: 'content', chainId: chain.contentId });
+  await store.appendToLog({ cid, jwsToken, kind: 'content-op', chainId: chain.contentId });
+  return { cid, status: 'accepted', kind: 'content-op', chainId: chain.contentId };
 };
 
 const ingestBeacon = async (jwsToken: string, store: RelayStore): Promise<IngestionResult> => {
@@ -418,93 +451,125 @@ const ingestBeacon = async (jwsToken: string, store: RelayStore): Promise<Ingest
   }
 
   await store.putBeacon({ did, jwsToken, beaconCID: cid, state: verified });
+  // also store as operation so countersigns can look up beacons by CID
+  await store.putOperation({ cid, jwsToken, chainType: 'beacon', chainId: did });
+  await store.appendToLog({ cid, jwsToken, kind: 'beacon', chainId: did });
   return { cid, status: 'accepted', kind: 'beacon', chainId: did };
 };
 
-const ingestCountersig = async (jwsToken: string, store: RelayStore): Promise<IngestionResult> => {
-  const decoded = decodeJwsUnsafe(jwsToken);
-  if (!decoded) return { cid: '', status: 'rejected', error: 'failed to decode JWS' };
-
-  const payload = decoded.payload;
-  const encoded = await dagCborCanonicalEncode(payload);
-  const operationCID = encoded.cid.toString();
-
-  // the operation must already exist in the store
-  const existingOp = await store.getOperation(operationCID);
-  if (!existingOp) {
-    return { cid: operationCID, status: 'rejected', error: `unknown operation: ${operationCID}` };
-  }
-
+const ingestCountersign = async (jwsToken: string, store: RelayStore): Promise<IngestionResult> => {
   const resolveKey = createKeyResolver(store);
+
+  // stateless protocol-level verification (signature + CID + schema)
+  let verified: VerifiedCountersignature;
   try {
-    await verifyCountersignature({ jwsToken, expectedCID: operationCID, resolveKey });
+    verified = await verifyCountersignature({ jwsToken, resolveKey });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'verification failed';
-    return { cid: operationCID, status: 'rejected', error: message };
+    return { cid: '', status: 'rejected', error: message };
   }
 
-  await store.addCountersignature(operationCID, jwsToken);
-  return {
-    cid: operationCID,
-    status: 'accepted',
-    kind: 'countersig',
-    chainId: existingOp.chainId,
-  };
+  const cid = verified.countersignCID;
+  const { witnessDID, targetCID } = verified;
+
+  // idempotent: already stored
+  const existing = await store.getOperation(cid);
+  if (existing) {
+    if (existing.jwsToken !== jwsToken) {
+      return {
+        cid,
+        status: 'rejected',
+        error: 'countersign already exists with a different signature',
+      };
+    }
+    return { cid, status: 'accepted', kind: 'countersign', chainId: targetCID };
+  }
+
+  // relay-level semantic check: target must exist
+  const targetOp = await store.getOperation(targetCID);
+  if (!targetOp) {
+    return { cid, status: 'rejected', error: `unknown target operation: ${targetCID}` };
+  }
+
+  // relay-level semantic check: witness must differ from target author
+  // determine author DID based on target type
+  let targetAuthorDID: string | null = null;
+  if (targetOp.chainType === 'identity') {
+    // for identity ops, chainId IS the identity DID
+    targetAuthorDID = targetOp.chainId;
+  } else {
+    // for content ops, beacons, artifacts — extract did from the stored JWS payload
+    const targetDecoded = decodeJwsUnsafe(targetOp.jwsToken);
+    if (targetDecoded) {
+      const targetPayload = targetDecoded.payload as Record<string, unknown>;
+      targetAuthorDID = typeof targetPayload['did'] === 'string' ? targetPayload['did'] : null;
+    }
+  }
+
+  if (targetAuthorDID && witnessDID === targetAuthorDID) {
+    return { cid, status: 'rejected', error: 'witness DID must differ from target author DID' };
+  }
+
+  // reject countersigns from deleted witnesses
+  const witnessIdentity = await store.getIdentityChain(witnessDID);
+  if (witnessIdentity?.state.isDeleted) {
+    return { cid, status: 'rejected', error: 'witness identity is deleted' };
+  }
+
+  // dedup: one countersign per witness per target
+  const existingCountersigns = await store.getCountersignatures(targetCID);
+  for (const csJws of existingCountersigns) {
+    const csDecoded = decodeJwsUnsafe(csJws);
+    if (!csDecoded) continue;
+    const csPayload = csDecoded.payload as Record<string, unknown>;
+    if (csPayload['did'] === witnessDID) {
+      // same witness already attested — accept idempotently
+      return { cid, status: 'accepted', kind: 'countersign', chainId: targetCID };
+    }
+  }
+
+  await store.putOperation({ cid, jwsToken, chainType: 'countersign', chainId: targetCID });
+  await store.addCountersignature(targetCID, jwsToken);
+  await store.appendToLog({ cid, jwsToken, kind: 'countersign', chainId: targetCID });
+  return { cid, status: 'accepted', kind: 'countersign', chainId: targetCID };
 };
 
-const ingestBeaconCountersig = async (
-  jwsToken: string,
-  store: RelayStore,
-): Promise<IngestionResult> => {
-  const decoded = decodeJwsUnsafe(jwsToken);
-  if (!decoded) return { cid: '', status: 'rejected', error: 'failed to decode JWS' };
-
-  const payload = decoded.payload;
-  const encoded = await dagCborCanonicalEncode(payload);
-  const beaconCID = encoded.cid.toString();
-
-  // the beacon must already exist in the store
-  const beaconDID =
-    typeof (payload as Record<string, unknown>)['did'] === 'string'
-      ? ((payload as Record<string, unknown>)['did'] as string)
-      : null;
-  if (!beaconDID) {
-    return { cid: beaconCID, status: 'rejected', error: 'missing beacon DID' };
-  }
-
-  const existingBeacon = await store.getBeacon(beaconDID);
-  if (!existingBeacon) {
-    return { cid: beaconCID, status: 'rejected', error: `unknown beacon for DID: ${beaconDID}` };
-  }
-
-  // verify the countersig is for the stored beacon's CID
-  if (existingBeacon.beaconCID !== beaconCID) {
-    return {
-      cid: beaconCID,
-      status: 'rejected',
-      error: 'beacon countersignature CID does not match current beacon',
-    };
-  }
-
+const ingestArtifact = async (jwsToken: string, store: RelayStore): Promise<IngestionResult> => {
   const resolveKey = createKeyResolver(store);
+
+  let verified;
   try {
-    await verifyBeaconCountersignature({
-      jwsToken,
-      expectedCID: beaconCID,
-      resolveKey,
-    });
+    verified = await verifyArtifact({ jwsToken, resolveKey });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'verification failed';
-    return { cid: beaconCID, status: 'rejected', error: message };
+    return { cid: '', status: 'rejected', error: message };
   }
 
-  await store.addCountersignature(beaconCID, jwsToken);
-  return {
-    cid: beaconCID,
-    status: 'accepted',
-    kind: 'beacon-countersig',
-    chainId: beaconDID,
-  };
+  const cid = verified.artifactCID;
+  const did = verified.payload.did;
+
+  // idempotent: already stored (exact same JWS token)
+  const existing = await store.getOperation(cid);
+  if (existing) {
+    if (existing.jwsToken !== jwsToken) {
+      return {
+        cid,
+        status: 'rejected',
+        error: 'artifact already exists with a different signature',
+      };
+    }
+    return { cid, status: 'accepted', kind: 'artifact', chainId: did };
+  }
+
+  // reject artifacts from deleted identities
+  const identity = await store.getIdentityChain(did);
+  if (identity?.state.isDeleted) {
+    return { cid, status: 'rejected', error: 'identity is deleted' };
+  }
+
+  await store.putOperation({ cid, jwsToken, chainType: 'artifact', chainId: did });
+  await store.appendToLog({ cid, jwsToken, kind: 'artifact', chainId: did });
+  return { cid, status: 'accepted', kind: 'artifact', chainId: did };
 };
 
 // -----------------------------------------------------------------------------
@@ -645,11 +710,11 @@ export const ingestOperations = async (
         case 'beacon':
           result = await ingestBeacon(op.jwsToken, store);
           break;
-        case 'countersig':
-          result = await ingestCountersig(op.jwsToken, store);
+        case 'countersign':
+          result = await ingestCountersign(op.jwsToken, store);
           break;
-        case 'beacon-countersig':
-          result = await ingestBeaconCountersig(op.jwsToken, store);
+        case 'artifact':
+          result = await ingestArtifact(op.jwsToken, store);
           break;
         default:
           result = { cid: '', status: 'rejected', error: 'unrecognized operation type' };

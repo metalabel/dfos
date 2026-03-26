@@ -274,3 +274,151 @@ export const verifyContentChain = async (input: {
     creatorDID: state.creatorDID!,
   };
 };
+
+// -----------------------------------------------------------------------------
+// extension verification (O(1))
+// -----------------------------------------------------------------------------
+
+/**
+ * Verify a single new content operation against already-verified chain state
+ *
+ * Same trust model as verifyIdentityExtensionFromTrustedState — the caller
+ * guarantees `currentState` was correctly verified. One signature verification,
+ * one key resolution, one state transition.
+ */
+export const verifyContentExtensionFromTrustedState = async (input: {
+  /** Previously verified content chain state */
+  currentState: VerifiedContentChain;
+  /** createdAt timestamp of the most recent operation */
+  lastCreatedAt: string;
+  /** The new JWS operation to verify */
+  newOp: string;
+  /** Resolve a kid (DID URL) to the raw Ed25519 public key bytes */
+  resolveKey: (kid: string) => Promise<Uint8Array>;
+  /** Enforce creator-sovereignty authorization (see verifyContentChain) */
+  enforceAuthorization?: boolean;
+}): Promise<{
+  state: VerifiedContentChain;
+  operationCID: string;
+  createdAt: string;
+}> => {
+  const { currentState, lastCreatedAt, newOp, resolveKey } = input;
+
+  if (currentState.isDeleted) {
+    throw new Error('cannot extend a deleted chain');
+  }
+
+  // decode JWS
+  const decoded = decodeJwsUnsafe(newOp);
+  if (!decoded) throw new Error('failed to decode JWS');
+
+  // parse payload
+  const result = ContentOperation.safeParse(decoded.payload);
+  if (!result.success) {
+    const messages = result.error.issues.map((e) => e.message).join(', ');
+    throw new Error(messages);
+  }
+  const op = result.data;
+
+  // verify typ
+  if (decoded.header.typ !== 'did:dfos:content-op') {
+    throw new Error(`invalid typ: ${decoded.header.typ}`);
+  }
+
+  // extensions must be update or delete
+  if (op.type === 'create') {
+    throw new Error('extension cannot be a create operation');
+  }
+
+  // chain integrity — headCID is in VerifiedContentChain
+  if (op.previousOperationCID !== currentState.headCID) {
+    throw new Error('previousOperationCID is incorrect');
+  }
+  if (op.createdAt <= lastCreatedAt) {
+    throw new Error('createdAt must be after last op');
+  }
+
+  // verify kid DID matches payload did
+  const kid = decoded.header.kid;
+  const hashIdx = kid.indexOf('#');
+  if (hashIdx < 0) throw new Error('kid must be a DID URL');
+  const kidDid = kid.substring(0, hashIdx);
+  if (kidDid !== op.did) {
+    throw new Error('kid DID does not match operation did');
+  }
+
+  // verify JWS signature via key resolver
+  const publicKey = await resolveKey(kid);
+  try {
+    verifyJws({ token: newOp, publicKey });
+  } catch {
+    throw new Error('invalid signature');
+  }
+
+  // authorization check — delegated writes need a VC
+  if (op.did !== currentState.creatorDID && input.enforceAuthorization) {
+    const authorization = (op as { authorization?: string }).authorization;
+    if (!authorization) {
+      throw new Error(`signer ${op.did} is not the chain creator — authorization VC required`);
+    }
+
+    const vcDecoded = decodeCredentialUnsafe(authorization);
+    if (!vcDecoded) throw new Error('failed to decode authorization VC');
+    const vcKid = vcDecoded.header.kid;
+    if (!vcKid || !vcKid.includes('#')) {
+      throw new Error('authorization VC kid must be a DID URL');
+    }
+
+    let creatorPublicKey: Uint8Array;
+    try {
+      creatorPublicKey = await resolveKey(vcKid);
+    } catch {
+      throw new Error('cannot resolve creator key for authorization verification');
+    }
+
+    const opCreatedAtUnix = Math.floor(new Date(op.createdAt).getTime() / 1000);
+    try {
+      const credential = verifyCredential({
+        token: authorization,
+        publicKey: creatorPublicKey,
+        subject: op.did,
+        expectedType: VC_TYPE_CONTENT_WRITE,
+        currentTime: opCreatedAtUnix,
+      });
+
+      if (credential.iss !== currentState.creatorDID) {
+        throw new Error('VC issuer is not the chain creator');
+      }
+
+      if (credential.contentId && credential.contentId !== currentState.contentId) {
+        throw new Error(
+          `VC contentId ${credential.contentId} does not match chain ${currentState.contentId}`,
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'unknown error';
+      throw new Error(`authorization verification failed: ${message}`);
+    }
+  }
+
+  // derive operation CID
+  const encoded = await dagCborCanonicalEncode(op);
+  const operationCID = encoded.cid.toString();
+
+  // verify cid header
+  if (!decoded.header.cid) throw new Error('missing cid in protected header');
+  if (decoded.header.cid !== operationCID) throw new Error('cid mismatch in protected header');
+
+  // compute new state
+  const newState: VerifiedContentChain = {
+    contentId: currentState.contentId,
+    genesisCID: currentState.genesisCID,
+    headCID: operationCID,
+    isDeleted: op.type === 'delete',
+    currentDocumentCID: op.type === 'update' ? op.documentCID : null,
+    length: currentState.length + 1,
+    creatorDID: currentState.creatorDID,
+  };
+
+  return { state: newState, operationCID, createdAt: op.createdAt };
+};

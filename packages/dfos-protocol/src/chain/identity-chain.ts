@@ -234,3 +234,135 @@ export const verifyIdentityChain = async (input: {
     controllerKeys: state.controllerKeys,
   };
 };
+
+// -----------------------------------------------------------------------------
+// extension verification (O(1))
+// -----------------------------------------------------------------------------
+
+/**
+ * Verify a single new operation against already-verified identity state
+ *
+ * The caller guarantees that `currentState` was produced by a correct prior
+ * verification (full chain replay or a chain of trusted extensions from a
+ * verified genesis). This function performs one signature verification and one
+ * state transition — constant time regardless of chain length.
+ *
+ * Note: key-ID consistency across the full chain history is NOT checked here.
+ * That invariant is established during genesis verification and maintained by
+ * the protocol's key consistency rules. Periodic full re-verification can
+ * audit this property.
+ */
+export const verifyIdentityExtensionFromTrustedState = async (input: {
+  /** Previously verified identity state */
+  currentState: VerifiedIdentity;
+  /** CID of the most recent operation in the chain */
+  headCID: string;
+  /** createdAt timestamp of the most recent operation */
+  lastCreatedAt: string;
+  /** The new JWS operation to verify */
+  newOp: string;
+}): Promise<{
+  state: VerifiedIdentity;
+  operationCID: string;
+  createdAt: string;
+}> => {
+  const { currentState, headCID, lastCreatedAt, newOp } = input;
+
+  if (currentState.isDeleted) {
+    throw new Error('cannot extend a deleted identity');
+  }
+
+  // decode JWS
+  const decoded = decodeJwsUnsafe(newOp);
+  if (!decoded) throw new Error('failed to decode JWS');
+
+  // parse payload
+  const result = IdentityOperation.safeParse(decoded.payload);
+  if (!result.success) {
+    const messages = result.error.issues.map((e) => e.message).join(', ');
+    throw new Error(messages);
+  }
+  const op = result.data;
+
+  // verify typ
+  if (decoded.header.typ !== 'did:dfos:identity-op') {
+    throw new Error(`invalid typ: ${decoded.header.typ}`);
+  }
+
+  // extensions must be update or delete
+  if (op.type === 'create') {
+    throw new Error('extension cannot be a create operation');
+  }
+
+  // chain integrity
+  if (op.previousOperationCID !== headCID) {
+    throw new Error('previousCID is incorrect');
+  }
+  if (op.createdAt <= lastCreatedAt) {
+    throw new Error('createdAt must be after last op');
+  }
+
+  // derive operation CID
+  const encoded = await dagCborCanonicalEncode(op);
+  const operationCID = encoded.cid.toString();
+
+  // verify cid header
+  if (!decoded.header.cid) throw new Error('missing cid in protected header');
+  if (decoded.header.cid !== operationCID) throw new Error('cid mismatch in protected header');
+
+  // resolve signing key from kid — must be a DID URL for non-genesis
+  const kid = decoded.header.kid;
+  if (!kid.includes('#')) {
+    throw new Error('non-genesis op kid must be DID URL, got bare key ID');
+  }
+  const hashIdx = kid.indexOf('#');
+  const signingKeyId = kid.substring(hashIdx + 1);
+  const kidDid = kid.substring(0, hashIdx);
+
+  if (kidDid !== currentState.did) {
+    throw new Error('kid DID does not match identity DID');
+  }
+
+  const signingKey = currentState.controllerKeys.find((k) => k.id === signingKeyId);
+  if (!signingKey) {
+    throw new Error(`kid references unknown key: ${signingKeyId}`);
+  }
+
+  // verify JWS signature
+  const { keyBytes } = decodeMultikey(signingKey.publicKeyMultibase);
+  try {
+    verifyJws({ token: newOp, publicKey: keyBytes });
+  } catch {
+    throw new Error('invalid signature');
+  }
+
+  // key consistency — check for duplicate key IDs within usage sections
+  if (op.type === 'update') {
+    [op.authKeys, op.assertKeys, op.controllerKeys].forEach((keys) => {
+      const set = new Set(keys.map((k) => k.id));
+      if (set.size !== keys.length) {
+        throw new Error('cannot repeat key ids in same usage');
+      }
+    });
+  }
+
+  // compute new state
+  const newState: VerifiedIdentity =
+    op.type === 'update'
+      ? {
+          did: currentState.did,
+          isDeleted: false,
+          authKeys: op.authKeys,
+          assertKeys: op.assertKeys,
+          controllerKeys: op.controllerKeys,
+        }
+      : {
+          did: currentState.did,
+          isDeleted: true,
+          authKeys: currentState.authKeys,
+          assertKeys: currentState.assertKeys,
+          controllerKeys: currentState.controllerKeys,
+        };
+
+  return { state: newState, operationCID, createdAt: op.createdAt };
+};

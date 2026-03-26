@@ -19,8 +19,11 @@ type Config struct {
 }
 
 type RelayConfig struct {
-	URL string `toml:"url"`
-	DID string `toml:"did,omitempty"` // cached from well-known, avoids re-fetch on every --auth
+	URL         string `toml:"url"`
+	DID         string `toml:"did,omitempty"`          // cached from well-known
+	ProfileName string `toml:"profile_name,omitempty"` // cached from profile artifact
+	Content     *bool  `toml:"content,omitempty"`      // cached capability
+	Proof       *bool  `toml:"proof,omitempty"`        // cached capability
 }
 
 type IdentityConfig struct {

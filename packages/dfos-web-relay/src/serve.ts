@@ -22,7 +22,7 @@ export interface ServeOptions {
  * import { createRelay, MemoryRelayStore } from '@metalabel/dfos-web-relay';
  * import { serve } from '@metalabel/dfos-web-relay/node';
  *
- * const relay = createRelay({ relayDID: 'did:dfos:myrelay', store: new MemoryRelayStore() });
+ * const relay = await createRelay({ store: new MemoryRelayStore() });
  * serve(relay, { port: 4444 });
  * ```
  */

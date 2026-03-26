@@ -1,12 +1,10 @@
 # DID Method: `did:dfos`
 
-> **Version 0.4.0** · _2026-03-24_
-
 W3C DID Method specification for DFOS identity chains. Self-certifying, transport-agnostic, Ed25519-based decentralized identifiers.
 
 This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
-[Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) · [Protocol Specification](./PROTOCOL.md) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol)
+[Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) · [Protocol Specification](https://protocol.dfos.com/spec) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol)
 
 ---
 
@@ -34,7 +32,7 @@ DFOS is a protocol for verifiable identity and content chains using Ed25519 sign
 
 This property makes `did:dfos` fundamentally transport-agnostic. There is no privileged registry, blockchain, or consensus layer. The chain can be obtained from any source — an HTTP API, a peer-to-peer exchange, a local file, a USB drive — and the verifier can independently confirm the chain belongs to the claimed DID.
 
-For full protocol details including cryptographic primitives, chain mechanics, and test vectors, see the [DFOS Protocol Specification](./PROTOCOL.md).
+For full protocol details including cryptographic primitives, chain mechanics, and test vectors, see the [DFOS Protocol Specification](https://protocol.dfos.com/spec).
 
 ### 1.1 Design Goals
 
@@ -92,7 +90,7 @@ First 22 bytes encoded:  e3vvtck42d4eacdnzvtrn6
 DID:                     did:dfos:e3vvtck42d4eacdnzvtrn6
 ```
 
-See the [DFOS Protocol Specification](./PROTOCOL.md) for the complete worked example with key material, CBOR encoding, and CID construction.
+See the [DFOS Protocol Specification](https://protocol.dfos.com/spec) for the complete worked example with key material, CBOR encoding, and CID construction.
 
 ---
 
@@ -177,7 +175,7 @@ Given a DID `did:dfos:<id>`:
    d. Verify that `SHA-256(genesis CID bytes)` encoded with the ID alphabet produces `<id>`. If it does not match, the chain does not belong to this DID — reject it.
    e. For each operation, verify the JWS EdDSA signature against the appropriate key (controller key from current chain state).
    f. Verify `previousOperationCID` linkage, `createdAt` ordering, and `header.cid` consistency.
-   g. See the [DFOS Protocol Specification](./PROTOCOL.md) for complete verification rules.
+   g. See the [DFOS Protocol Specification](https://protocol.dfos.com/spec) for complete verification rules.
 3. **Construct** the DID Document from the terminal chain state using the mapping in [Section 4.2](#42-verification-method-mapping).
 
 #### 5.2.2 Resolution Metadata
@@ -315,7 +313,7 @@ A complete reference implementation is available as the `@metalabel/dfos-protoco
 | RFC 2119 (Key Words)        | https://www.rfc-editor.org/rfc/rfc2119              |
 | RFC 7515 (JWS)              | https://www.rfc-editor.org/rfc/rfc7515              |
 | RFC 8032 (Ed25519)          | https://www.rfc-editor.org/rfc/rfc8032              |
-| DFOS Protocol Specification | [PROTOCOL.md](./PROTOCOL.md)                        |
+| DFOS Protocol Specification | https://protocol.dfos.com/spec                      |
 
 ### 9.2 Informative References
 

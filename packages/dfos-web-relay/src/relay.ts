@@ -16,6 +16,7 @@ import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protoco
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authenticateRequest } from './auth';
+import { bootstrapRelayIdentity } from './bootstrap';
 import { createCurrentKeyResolver, ingestOperations } from './ingest';
 import type { RelayOptions, RelayStore, StoredContentChain } from './types';
 
@@ -36,9 +37,19 @@ const IngestBody = z.object({
  *
  * The returned app is portable — mount it on any Hono-compatible runtime
  * (Node.js, Cloudflare Workers, Deno, Bun, etc.).
+ *
+ * When `identity` is provided, the relay uses the given DID and profile. When
+ * omitted, a JIT identity and profile artifact are generated at startup.
  */
-export const createRelay = (options: RelayOptions): Hono => {
-  const { relayDID, store } = options;
+export const createRelay = async (options: RelayOptions): Promise<Hono> => {
+  const { store } = options;
+  const contentEnabled = options.content !== false;
+
+  // resolve relay identity — use provided or JIT bootstrap
+  const identity = options.identity ?? (await bootstrapRelayIdentity(store));
+  const relayDID = identity.did;
+  const profileArtifactJws = identity.profileArtifactJws;
+
   const app = new Hono();
 
   // -------------------------------------------------------------------------
@@ -50,6 +61,9 @@ export const createRelay = (options: RelayOptions): Hono => {
       did: relayDID,
       protocol: 'dfos-web-relay',
       version: '0.1.0',
+      proof: true,
+      content: contentEnabled,
+      profile: profileArtifactJws,
     });
   });
 
@@ -90,6 +104,31 @@ export const createRelay = (options: RelayOptions): Hono => {
   });
 
   /** Get an identity chain by DID */
+  app.get('/identities/:did/log', async (c) => {
+    const did = c.req.param('did');
+    const chain = await store.getIdentityChain(did);
+    if (!chain) return c.json({ error: 'not found' }, 404);
+
+    const after = c.req.query('after');
+    const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
+
+    const entries = chain.log.map((jws) => {
+      const decoded = decodeJwsUnsafe(jws);
+      return { cid: decoded?.header.cid || '', jwsToken: jws };
+    });
+
+    let startIdx = 0;
+    if (after) {
+      const idx = entries.findIndex((e) => e.cid === after);
+      startIdx = idx >= 0 ? idx + 1 : entries.length;
+    }
+
+    const page = entries.slice(startIdx, startIdx + limit);
+    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
+
+    return c.json({ entries: page, cursor });
+  });
+
   app.get('/identities/:did{.+}', async (c) => {
     const did = c.req.param('did');
     const chain = await store.getIdentityChain(did);
@@ -97,9 +136,35 @@ export const createRelay = (options: RelayOptions): Hono => {
 
     return c.json({
       did: chain.did,
-      log: chain.log,
+      headCID: chain.headCID,
       state: chain.state,
     });
+  });
+
+  /** Get a content chain log */
+  app.get('/content/:contentId/log', async (c) => {
+    const contentId = c.req.param('contentId');
+    const chain = await store.getContentChain(contentId);
+    if (!chain) return c.json({ error: 'not found' }, 404);
+
+    const after = c.req.query('after');
+    const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
+
+    const entries = chain.log.map((jws) => {
+      const decoded = decodeJwsUnsafe(jws);
+      return { cid: decoded?.header.cid || '', jwsToken: jws };
+    });
+
+    let startIdx = 0;
+    if (after) {
+      const idx = entries.findIndex((e) => e.cid === after);
+      startIdx = idx >= 0 ? idx + 1 : entries.length;
+    }
+
+    const page = entries.slice(startIdx, startIdx + limit);
+    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
+
+    return c.json({ entries: page, cursor });
   });
 
   /** Get a content chain by content ID */
@@ -111,7 +176,7 @@ export const createRelay = (options: RelayOptions): Hono => {
     return c.json({
       contentId: chain.contentId,
       genesisCID: chain.genesisCID,
-      log: chain.log,
+      headCID: chain.state.headCID,
       state: chain.state,
     });
   });
@@ -158,11 +223,24 @@ export const createRelay = (options: RelayOptions): Hono => {
   });
 
   // -------------------------------------------------------------------------
+  // global operation log
+  // -------------------------------------------------------------------------
+
+  /** Read the global append-only operation log */
+  app.get('/log', async (c) => {
+    const afterParam = c.req.query('after');
+    const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
+    const result = await store.readLog(afterParam ? { after: afterParam, limit } : { limit });
+    return c.json(result);
+  });
+
+  // -------------------------------------------------------------------------
   // content plane — authenticated routes
   // -------------------------------------------------------------------------
 
   /** Upload a blob for a content chain, keyed by operation CID */
   app.put('/content/:contentId/blob/:operationCID', async (c) => {
+    if (!contentEnabled) return c.json({ error: 'content plane not available' }, 501);
     const contentId = c.req.param('contentId');
     const operationCID = c.req.param('operationCID');
 
@@ -215,6 +293,7 @@ export const createRelay = (options: RelayOptions): Hono => {
 
   /** Download a blob for a content chain */
   app.get('/content/:contentId/blob', async (c) => {
+    if (!contentEnabled) return c.json({ error: 'content plane not available' }, 501);
     return await readBlob({
       contentId: c.req.param('contentId'),
       ref: 'head',
@@ -226,6 +305,7 @@ export const createRelay = (options: RelayOptions): Hono => {
   });
 
   app.get('/content/:contentId/blob/:ref', async (c) => {
+    if (!contentEnabled) return c.json({ error: 'content plane not available' }, 501);
     return await readBlob({
       contentId: c.req.param('contentId'),
       ref: c.req.param('ref'),

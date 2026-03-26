@@ -1036,111 +1036,98 @@ func TestNumberEncodingCID(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 25. SignCountersignature — re-signs operation with witness key
+// 25. SignCountersign — standalone witness attestation
 // ---------------------------------------------------------------------------
 
-func TestSignCountersignature(t *testing.T) {
-	priv1, pub1 := refKey1()
+func TestSignCountersign(t *testing.T) {
+	_, _ = refKey1()
 	priv2, pub2 := refKey2()
 
-	kid1 := "key_r9ev34fvc23z999veaaft8"
-	mk1 := NewMultikeyPublicKey(kid1, pub1)
-
-	// create an identity
-	token, did, _, err := SignIdentityCreate(
-		[]MultikeyPublicKey{mk1}, []MultikeyPublicKey{mk1}, nil, kid1, priv1,
-	)
+	// countersign a target CID
+	witnessDID := "did:dfos:witness0000000000000"
+	targetCID := "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenera6h5y"
+	witnessKid := witnessDID + "#key_witness"
+	csToken, csCID, err := SignCountersign(witnessDID, targetCID, witnessKid, priv2)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("SignCountersign: %v", err)
 	}
 
-	// countersign with key2
-	witnessKid := "did:dfos:witness0000000000000#key_witness"
-	csToken, err := SignCountersignature(token, witnessKid, priv2)
-	if err != nil {
-		t.Fatalf("SignCountersignature: %v", err)
+	// countersign CID is distinct from target CID
+	if csCID == targetCID {
+		t.Fatal("countersign CID must differ from target CID")
 	}
 
-	// verify the countersignature with key2
+	// verify the countersignature with witness key
 	h, p, err := VerifyJWS(csToken, pub2)
 	if err != nil {
-		t.Fatalf("VerifyJWS countersig: %v", err)
+		t.Fatalf("VerifyJWS countersign: %v", err)
 	}
 	if h.Kid != witnessKid {
 		t.Fatalf("kid: got %s, want %s", h.Kid, witnessKid)
 	}
-	if h.Typ != "did:dfos:identity-op" {
-		t.Fatalf("typ: got %s", h.Typ)
+	if h.Typ != "did:dfos:countersign" {
+		t.Fatalf("typ: got %s, want did:dfos:countersign", h.Typ)
 	}
-	if p["type"] != "create" {
+	if p["type"] != "countersign" {
 		t.Fatalf("payload type: got %v", p["type"])
 	}
-
-	// original should still verify with key1
-	_, _, err = VerifyJWS(token, pub1)
-	if err != nil {
-		t.Fatalf("original should still verify: %v", err)
+	if p["did"] != witnessDID {
+		t.Fatalf("witness DID: got %v", p["did"])
+	}
+	if p["targetCID"] != targetCID {
+		t.Fatalf("targetCID: got %v", p["targetCID"])
 	}
 
-	// countersig should NOT verify with key1
+	// countersign should NOT verify with a different key
+	_, pub1 := refKey1()
 	_, _, err = VerifyJWS(csToken, pub1)
 	if err == nil {
-		t.Fatal("countersig should not verify with original key")
+		t.Fatal("countersign should not verify with wrong key")
 	}
-
-	_ = did
 }
 
 // ---------------------------------------------------------------------------
-// 26. SignBeaconCountersignature — re-signs beacon with witness key
+// 26. SignArtifact — standalone signed document
 // ---------------------------------------------------------------------------
 
-func TestSignBeaconCountersignature(t *testing.T) {
+func TestSignArtifact(t *testing.T) {
 	priv1, pub1 := refKey1()
-	priv2, pub2 := refKey2()
-
 	did := expectedDID
-	kid1 := did + "#key_r9ev34fvc23z999veaaft8"
-	merkle := BuildMerkleRoot([]string{"content1", "content2"})
+	kid := did + "#key_r9ev34fvc23z999veaaft8"
 
-	// create a beacon
-	beaconToken, _, err := SignBeacon(did, merkle, kid1, priv1)
-	if err != nil {
-		t.Fatal(err)
+	content := map[string]any{
+		"$schema":  "test/v1",
+		"title":    "Hello artifact",
+		"operator": "test",
 	}
-
-	// extract payload for countersigning
-	beaconPayload, err := PayloadFromJWS(beaconToken)
+	token, artifactCID, err := SignArtifact(did, content, kid, priv1)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("SignArtifact: %v", err)
 	}
 
-	// countersign
-	witnessKid := "did:dfos:witness0000000000000#key_w"
-	csToken, err := SignBeaconCountersignature(beaconPayload, witnessKid, priv2)
-	if err != nil {
-		t.Fatalf("SignBeaconCountersignature: %v", err)
+	if artifactCID == "" {
+		t.Fatal("artifact CID is empty")
 	}
 
-	// verify with witness key
-	h, p, err := VerifyJWS(csToken, pub2)
+	h, p, err := VerifyJWS(token, pub1)
 	if err != nil {
-		t.Fatalf("VerifyJWS beacon countersig: %v", err)
+		t.Fatalf("VerifyJWS artifact: %v", err)
 	}
-	if h.Kid != witnessKid {
-		t.Fatalf("kid: got %s", h.Kid)
+	if h.Typ != "did:dfos:artifact" {
+		t.Fatalf("typ: got %s, want did:dfos:artifact", h.Typ)
 	}
-	if h.Typ != "did:dfos:beacon" {
-		t.Fatalf("typ: got %s", h.Typ)
+	if h.CID != artifactCID {
+		t.Fatalf("header CID: got %s, want %s", h.CID, artifactCID)
 	}
-	if p["type"] != "beacon" {
+	if p["type"] != "artifact" {
 		t.Fatalf("payload type: got %v", p["type"])
 	}
-
-	// original should still verify with key1
-	_, _, err = VerifyJWS(beaconToken, pub1)
-	if err != nil {
-		t.Fatalf("original beacon should still verify: %v", err)
+	contentMap, ok := p["content"].(map[string]any)
+	if !ok {
+		t.Fatal("content field is not a map")
+	}
+	if contentMap["$schema"] != "test/v1" {
+		t.Fatalf("$schema: got %v", contentMap["$schema"])
 	}
 }
 

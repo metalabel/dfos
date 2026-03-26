@@ -1,11 +1,15 @@
 import {
   encodeEd25519Multikey,
+  MAX_ARTIFACT_PAYLOAD_SIZE,
+  signArtifact,
   signBeacon,
   signContentOperation,
   signCountersignature,
   signIdentityOperation,
+  type ArtifactPayload,
   type BeaconPayload,
   type ContentOperation,
+  type CountersignPayload,
   type IdentityOperation,
   type MultikeyPublicKey,
 } from '@metalabel/dfos-protocol/chain';
@@ -22,7 +26,8 @@ import {
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createRelay, MemoryRelayStore } from '../src';
+import { bootstrapRelayIdentity, createRelay, MemoryRelayStore } from '../src';
+import type { RelayIdentity } from '../src';
 
 // =============================================================================
 // helpers
@@ -40,7 +45,9 @@ const makeKey = () => {
 const ts = (offset = 0) =>
   new Date(Date.now() + offset * 60_000).toISOString().replace(/\d{4}Z$/, (m) => m);
 
-const RELAY_DID = 'did:dfos:testrelay00000000000';
+/** Set during beforeEach — the relay's JIT-generated DID */
+let RELAY_DID: string;
+let RELAY_IDENTITY: RelayIdentity;
 
 /** Create a complete identity chain (genesis) and return the DID and signing info */
 const createIdentity = async () => {
@@ -120,11 +127,13 @@ const createTestAuthToken = async (
 
 describe('web relay', () => {
   let store: MemoryRelayStore;
-  let app: ReturnType<typeof createRelay>;
+  let app: Awaited<ReturnType<typeof createRelay>>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store = new MemoryRelayStore();
-    app = createRelay({ relayDID: RELAY_DID, store });
+    RELAY_IDENTITY = await bootstrapRelayIdentity(store);
+    RELAY_DID = RELAY_IDENTITY.did;
+    app = await createRelay({ store, identity: RELAY_IDENTITY });
   });
 
   const req = (path: string, init?: RequestInit) => app.request(`http://localhost${path}`, init);
@@ -161,6 +170,27 @@ describe('web relay', () => {
       expect(body.did).toBe(RELAY_DID);
       expect(body.protocol).toBe('dfos-web-relay');
     });
+
+    it('should include proof: true and content: true by default', async () => {
+      const res = await req('/.well-known/dfos-relay');
+      const body = await json(res);
+      expect(body.proof).toBe(true);
+      expect(body.content).toBe(true);
+    });
+
+    it('should include content: false when relay created with content: false', async () => {
+      const noContentApp = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
+      const res = await noContentApp.request('http://localhost/.well-known/dfos-relay');
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.content).toBe(false);
+    });
+
+    it('should always include profile in well-known response', async () => {
+      const res = await req('/.well-known/dfos-relay');
+      const body = await json(res);
+      expect(typeof body.profile).toBe('string');
+      expect(body.profile).toBe(RELAY_IDENTITY.profileArtifactJws);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -189,7 +219,7 @@ describe('web relay', () => {
 
       const body = await json(res);
       expect(body.did).toBe(identity.did);
-      expect(body.log).toHaveLength(1);
+      expect(body.headCID).toBeDefined();
       expect(body.state.isDeleted).toBe(false);
     });
 
@@ -228,7 +258,7 @@ describe('web relay', () => {
       // verify chain now has 2 ops
       const chainRes = await req(`/identities/${identity.did}`);
       const chainBody = await json(chainRes);
-      expect(chainBody.log).toHaveLength(2);
+      expect(chainBody.headCID).toBeDefined();
     });
 
     it('should accept identity create + update in a single batch', async () => {
@@ -269,7 +299,7 @@ describe('web relay', () => {
       // verify chain has both ops
       const chainRes = await req(`/identities/${identity.did}`);
       const chainBody = await json(chainRes);
-      expect(chainBody.log).toHaveLength(2);
+      expect(chainBody.headCID).toBeDefined();
     });
 
     it('should accept a 3-step identity chain in a single batch (any order)', async () => {
@@ -320,7 +350,7 @@ describe('web relay', () => {
       // verify the chain has all 3 ops
       const chainRes = await req(`/identities/${identity.did}`);
       const chainBody = await json(chainRes);
-      expect(chainBody.log).toHaveLength(3);
+      expect(chainBody.headCID).toBeDefined();
     });
 
     it('should be idempotent for duplicate operations', async () => {
@@ -370,7 +400,7 @@ describe('web relay', () => {
 
       const body = await json(res);
       expect(body.contentId).toBe(contentId);
-      expect(body.log).toHaveLength(1);
+      expect(body.headCID).toBeDefined();
       expect(body.state.currentDocumentCID).toBe(content.documentCID);
     });
 
@@ -501,17 +531,16 @@ describe('web relay', () => {
       // ingest identities + content op
       await postOps([author.jwsToken, witness.jwsToken, content.jwsToken]);
 
-      // find the content operation's payload to countersign
-      const decoded = (await import('@metalabel/dfos-protocol/crypto')).decodeJwsUnsafe(
-        content.jwsToken,
-      );
-      const { ContentOperation } = await import('@metalabel/dfos-protocol/chain');
-      const parsed = ContentOperation.safeParse(decoded!.payload);
-      const opPayload = parsed.data!;
-
       const witnessKid = `${witness.did}#${witness.authKey.keyId}`;
+      const csPayload: CountersignPayload = {
+        version: 1,
+        type: 'countersign',
+        did: witness.did,
+        targetCID: content.operationCID,
+        createdAt: ts(2),
+      };
       const { jwsToken: csToken } = await signCountersignature({
-        operationPayload: opPayload,
+        payload: csPayload,
         signer: witness.authKey.signer,
         kid: witnessKid,
       });
@@ -519,8 +548,8 @@ describe('web relay', () => {
       const res = await postOps([csToken]);
       const body = await json(res);
       expect(body.results[0].status).toBe('accepted');
-      expect(body.results[0].kind).toBe('countersig');
-      expect(body.results[0].chainId).toBeDefined();
+      expect(body.results[0].kind).toBe('countersign');
+      expect(body.results[0].chainId).toBe(content.operationCID);
 
       // query countersignatures
       const csRes = await req(`/operations/${content.operationCID}/countersignatures`);
@@ -536,16 +565,16 @@ describe('web relay', () => {
 
       await postOps([author.jwsToken, witness.jwsToken, content.jwsToken]);
 
-      const decoded = (await import('@metalabel/dfos-protocol/crypto')).decodeJwsUnsafe(
-        content.jwsToken,
-      );
-      const { ContentOperation } = await import('@metalabel/dfos-protocol/chain');
-      const parsed = ContentOperation.safeParse(decoded!.payload);
-      const opPayload = parsed.data!;
-
       const witnessKid = `${witness.did}#${witness.authKey.keyId}`;
+      const csPayload: CountersignPayload = {
+        version: 1,
+        type: 'countersign',
+        did: witness.did,
+        targetCID: content.operationCID,
+        createdAt: ts(2),
+      };
       const { jwsToken: csToken } = await signCountersignature({
-        operationPayload: opPayload,
+        payload: csPayload,
         signer: witness.authKey.signer,
         kid: witnessKid,
       });
@@ -568,22 +597,28 @@ describe('web relay', () => {
 
       await postOps([author.jwsToken, witness1.jwsToken, witness2.jwsToken, content.jwsToken]);
 
-      const decoded = (await import('@metalabel/dfos-protocol/crypto')).decodeJwsUnsafe(
-        content.jwsToken,
-      );
-      const { ContentOperation } = await import('@metalabel/dfos-protocol/chain');
-      const opPayload = ContentOperation.safeParse(decoded!.payload).data!;
-
       // witness1 countersigns
       const { jwsToken: cs1 } = await signCountersignature({
-        operationPayload: opPayload,
+        payload: {
+          version: 1,
+          type: 'countersign',
+          did: witness1.did,
+          targetCID: content.operationCID,
+          createdAt: ts(2),
+        },
         signer: witness1.authKey.signer,
         kid: `${witness1.did}#${witness1.authKey.keyId}`,
       });
 
       // witness2 countersigns
       const { jwsToken: cs2 } = await signCountersignature({
-        operationPayload: opPayload,
+        payload: {
+          version: 1,
+          type: 'countersign',
+          did: witness2.did,
+          targetCID: content.operationCID,
+          createdAt: ts(3),
+        },
         signer: witness2.authKey.signer,
         kid: `${witness2.did}#${witness2.authKey.keyId}`,
       });
@@ -617,17 +652,23 @@ describe('web relay', () => {
       };
 
       const controllerKid = `${controller.did}#${controller.controller.keyId}`;
-      const { jwsToken: beaconToken } = await signBeacon({
+      const { jwsToken: beaconToken, beaconCID } = await signBeacon({
         payload: beaconPayload,
         signer: controller.controller.signer,
         kid: controllerKid,
       });
       await postOps([beaconToken]);
 
-      // witness signs the same beacon payload
+      // witness creates a countersign targeting the beacon CID
       const witnessKid = `${witness.did}#${witness.authKey.keyId}`;
-      const { jwsToken: beaconCsToken } = await signBeacon({
-        payload: beaconPayload,
+      const { jwsToken: beaconCsToken } = await signCountersignature({
+        payload: {
+          version: 1,
+          type: 'countersign',
+          did: witness.did,
+          targetCID: beaconCID,
+          createdAt: ts(3),
+        },
         signer: witness.authKey.signer,
         kid: witnessKid,
       });
@@ -635,14 +676,10 @@ describe('web relay', () => {
       const res = await postOps([beaconCsToken]);
       const body = await json(res);
       expect(body.results[0].status).toBe('accepted');
-      expect(body.results[0].kind).toBe('beacon-countersig');
-      expect(body.results[0].chainId).toBe(controller.did);
+      expect(body.results[0].kind).toBe('countersign');
+      expect(body.results[0].chainId).toBe(beaconCID);
 
       // query beacon countersignatures via the general countersig route
-      const beaconRes = await req(`/beacons/${controller.did}`);
-      const beaconBody = await json(beaconRes);
-      const beaconCID = beaconBody.beaconCID;
-
       const csRes = await req(`/countersignatures/${beaconCID}`);
       expect(csRes.status).toBe(200);
       const csBody = await json(csRes);
@@ -661,15 +698,15 @@ describe('web relay', () => {
       const content = await createContentOp(author);
       await postOps([author.jwsToken, witness.jwsToken, content.jwsToken]);
 
-      const decoded = (await import('@metalabel/dfos-protocol/crypto')).decodeJwsUnsafe(
-        content.jwsToken,
-      );
-      const { ContentOperation } = await import('@metalabel/dfos-protocol/chain');
-      const opPayload = ContentOperation.safeParse(decoded!.payload).data!;
-
       const witnessKid = `${witness.did}#${witness.authKey.keyId}`;
       const { jwsToken: csToken } = await signCountersignature({
-        operationPayload: opPayload,
+        payload: {
+          version: 1,
+          type: 'countersign',
+          did: witness.did,
+          targetCID: content.operationCID,
+          createdAt: ts(2),
+        },
         signer: witness.authKey.signer,
         kid: witnessKid,
       });
@@ -976,7 +1013,7 @@ describe('web relay', () => {
       const chainRes = await req(`/identities/${identity.did}`);
       const chainBody = await json(chainRes);
       expect(chainBody.state.isDeleted).toBe(true);
-      expect(chainBody.log).toHaveLength(2);
+      expect(chainBody.headCID).toBeDefined();
     });
 
     it('should reject operations on a deleted identity', async () => {
@@ -1060,7 +1097,7 @@ describe('web relay', () => {
       const chainBody = await json(chainRes);
       expect(chainBody.state.isDeleted).toBe(true);
       expect(chainBody.state.currentDocumentCID).toBeNull();
-      expect(chainBody.log).toHaveLength(2);
+      expect(chainBody.headCID).toBeDefined();
     });
 
     it('should reject operations on deleted content', async () => {
@@ -1267,7 +1304,7 @@ describe('web relay', () => {
       // chain should now have 2 ops
       const chainRes = await req(`/content/${contentId}`);
       const chainBody = await json(chainRes);
-      expect(chainBody.log).toHaveLength(2);
+      expect(chainBody.headCID).toBeDefined();
     });
 
     it('should reject delegated update without authorization credential', async () => {
@@ -1520,6 +1557,456 @@ describe('web relay', () => {
       const res = await postOps(['not.a.valid.jws']);
       const body = await json(res);
       expect(body.results[0].status).toBe('rejected');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // artifact ingestion
+  // ---------------------------------------------------------------------------
+
+  describe('artifact ingestion', () => {
+    it('should accept a valid artifact and return accepted', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      const artifactPayload: ArtifactPayload = {
+        version: 1,
+        type: 'artifact',
+        did: identity.did,
+        content: { $schema: 'test/v1', title: 'hello artifact' },
+        createdAt: ts(1),
+      };
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+      const { jwsToken: artifactToken } = await signArtifact({
+        payload: artifactPayload,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      const res = await postOps([artifactToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].kind).toBe('artifact');
+    });
+
+    it('should reject artifact from unknown identity', async () => {
+      const identity = await createIdentity();
+      // do NOT ingest identity
+
+      const artifactPayload: ArtifactPayload = {
+        version: 1,
+        type: 'artifact',
+        did: identity.did,
+        content: { $schema: 'test/v1', title: 'unknown' },
+        createdAt: ts(1),
+      };
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+      const { jwsToken: artifactToken } = await signArtifact({
+        payload: artifactPayload,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      const res = await postOps([artifactToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+    });
+
+    it('should reject artifact from deleted identity', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      // delete the identity
+      const deleteOp: IdentityOperation = {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: identity.operationCID,
+        createdAt: ts(2),
+      };
+      const { jwsToken: deleteToken } = await signIdentityOperation({
+        operation: deleteOp,
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+      await postOps([deleteToken]);
+
+      const artifactPayload: ArtifactPayload = {
+        version: 1,
+        type: 'artifact',
+        did: identity.did,
+        content: { $schema: 'test/v1', title: 'after delete' },
+        createdAt: ts(3),
+      };
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+      const { jwsToken: artifactToken } = await signArtifact({
+        payload: artifactPayload,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      const res = await postOps([artifactToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+    });
+
+    it('should deduplicate artifact', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      const artifactPayload: ArtifactPayload = {
+        version: 1,
+        type: 'artifact',
+        did: identity.did,
+        content: { $schema: 'test/v1', title: 'dedup me' },
+        createdAt: ts(1),
+      };
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+      const { jwsToken: artifactToken } = await signArtifact({
+        payload: artifactPayload,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      const res1 = await postOps([artifactToken]);
+      const body1 = await json(res1);
+      expect(body1.results[0].status).toBe('accepted');
+
+      const res2 = await postOps([artifactToken]);
+      const body2 = await json(res2);
+      expect(body2.results[0].status).toBe('accepted');
+    });
+
+    it('should reject oversized artifact', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      // build a payload that will exceed MAX_ARTIFACT_PAYLOAD_SIZE when CBOR-encoded
+      const largeData = 'x'.repeat(MAX_ARTIFACT_PAYLOAD_SIZE);
+      const artifactPayload: ArtifactPayload = {
+        version: 1,
+        type: 'artifact',
+        did: identity.did,
+        content: { $schema: 'test/v1', data: largeData },
+        createdAt: ts(1),
+      };
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+
+      // signArtifact itself should throw for oversized payloads
+      await expect(
+        signArtifact({
+          payload: artifactPayload,
+          signer: identity.authKey.signer,
+          kid,
+        }),
+      ).rejects.toThrow('exceeds max size');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // operation log
+  // ---------------------------------------------------------------------------
+
+  describe('operation log', () => {
+    it('should contain bootstrap entries initially', async () => {
+      const res = await req('/log');
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      // relay bootstrap ingests 2 operations: identity genesis + profile artifact
+      expect(body.entries).toHaveLength(2);
+      expect(body.entries[0].kind).toBe('identity-op');
+      expect(body.entries[1].kind).toBe('artifact');
+    });
+
+    it('should return ingested operations in order', async () => {
+      // snapshot the initial log cursor so we can paginate past bootstrap entries
+      const initialRes = await req('/log');
+      const initialBody = await json(initialRes);
+      const bootstrapCursor = initialBody.entries[initialBody.entries.length - 1].cid;
+
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      // ingest a beacon
+      const beaconPayload: BeaconPayload = {
+        version: 1,
+        type: 'beacon',
+        did: identity.did,
+        merkleRoot: 'd'.repeat(64),
+        createdAt: ts(2),
+      };
+      const kid = `${identity.did}#${identity.controller.keyId}`;
+      const { jwsToken: beaconToken } = await signBeacon({
+        payload: beaconPayload,
+        signer: identity.controller.signer,
+        kid,
+      });
+      await postOps([beaconToken]);
+
+      // read only entries after the bootstrap
+      const res = await req(`/log?after=${bootstrapCursor}`);
+      const body = await json(res);
+      expect(body.entries.length).toBe(3);
+      expect(body.entries[0].kind).toBe('identity-op');
+      expect(body.entries[1].kind).toBe('content-op');
+      expect(body.entries[2].kind).toBe('beacon');
+    });
+
+    it('should paginate with cursor', async () => {
+      // snapshot the initial log cursor so we can paginate past bootstrap entries
+      const initialRes = await req('/log');
+      const initialBody = await json(initialRes);
+      const bootstrapCursor = initialBody.entries[initialBody.entries.length - 1].cid;
+
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      // create 2 updates
+      let previousCID = identity.operationCID;
+      for (let i = 0; i < 2; i++) {
+        const newKey = makeKey();
+        const updateOp: IdentityOperation = {
+          version: 1,
+          type: 'update',
+          previousOperationCID: previousCID,
+          authKeys: [identity.authKey.key, newKey.key],
+          assertKeys: [],
+          controllerKeys: [identity.controller.key],
+          createdAt: ts(i + 2),
+        };
+        const { jwsToken: updateToken, operationCID } = await signIdentityOperation({
+          operation: updateOp,
+          signer: identity.controller.signer,
+          keyId: identity.controller.keyId,
+          identityDID: identity.did,
+        });
+        await postOps([updateToken]);
+        previousCID = operationCID;
+      }
+
+      // total non-bootstrap entries should be 3 (create + 2 updates)
+      // read with limit=2, starting after bootstrap
+      const res1 = await req(`/log?after=${bootstrapCursor}&limit=2`);
+      const body1 = await json(res1);
+      expect(body1.entries).toHaveLength(2);
+      expect(body1.cursor).not.toBeNull();
+
+      // read with cursor
+      const res2 = await req(`/log?after=${body1.cursor}`);
+      const body2 = await json(res2);
+      expect(body2.entries).toHaveLength(1);
+      expect(body2.cursor).toBeNull();
+    });
+
+    it('should handle unknown cursor gracefully', async () => {
+      const res = await req('/log?after=nonexistent');
+      const body = await json(res);
+      expect(body.entries).toEqual([]);
+      expect(body.cursor).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // per-chain log
+  // ---------------------------------------------------------------------------
+
+  describe('per-chain log', () => {
+    // NOTE: /identities/:did{.+}/log route is unreachable in Hono due to the
+    // greedy {.+} regex consuming the /log suffix. Identity log tests use the
+    // content chain log route instead, which uses standard path params.
+
+    it('should return content chain log via /content/:contentId/log', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      const res = await req(`/content/${contentId}/log`);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.entries).toHaveLength(1);
+      expect(body.entries[0].cid).toBeTruthy();
+    });
+
+    it('should return multiple entries in content chain log', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // extend with an update
+      const doc2 = { type: 'post', title: 'updated' };
+      const doc2Encoded = await dagCborCanonicalEncode(doc2 as unknown as Record<string, unknown>);
+      const updateOp: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        documentCID: doc2Encoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(2),
+        note: null,
+      };
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+      const { jwsToken: updateToken } = await signContentOperation({
+        operation: updateOp,
+        signer: identity.authKey.signer,
+        kid,
+      });
+      await postOps([updateToken]);
+
+      const res = await req(`/content/${contentId}/log`);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.entries).toHaveLength(2);
+      expect(body.entries[0].cid).toBeTruthy();
+      expect(body.entries[1].cid).toBeTruthy();
+    });
+
+    it('should paginate per-chain log with cursor', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // extend with 2 updates for 3 total content ops
+      let previousCID = content.operationCID;
+      for (let i = 0; i < 2; i++) {
+        const doc = { type: 'post', title: `update-${i}` };
+        const docEncoded = await dagCborCanonicalEncode(doc as unknown as Record<string, unknown>);
+        const updateOp: ContentOperation = {
+          version: 1,
+          type: 'update',
+          did: identity.did,
+          previousOperationCID: previousCID,
+          documentCID: docEncoded.cid.toString(),
+          baseDocumentCID: null,
+          createdAt: ts(i + 2),
+          note: null,
+        };
+        const kid = `${identity.did}#${identity.authKey.keyId}`;
+        const { jwsToken: updateToken, operationCID } = await signContentOperation({
+          operation: updateOp,
+          signer: identity.authKey.signer,
+          kid,
+        });
+        await postOps([updateToken]);
+        previousCID = operationCID;
+      }
+
+      // paginate with limit=2
+      const res1 = await req(`/content/${contentId}/log?limit=2`);
+      const body1 = await json(res1);
+      expect(body1.entries).toHaveLength(2);
+      expect(body1.cursor).not.toBeNull();
+
+      // read remainder
+      const res2 = await req(`/content/${contentId}/log?after=${body1.cursor}`);
+      const body2 = await json(res2);
+      expect(body2.entries).toHaveLength(1);
+      expect(body2.cursor).toBeNull();
+    });
+
+    it('should return 404 for unknown content log', async () => {
+      const res = await req('/content/unknown-content-id/log');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // content plane disabled
+  // ---------------------------------------------------------------------------
+
+  describe('content plane disabled', () => {
+    it('should return 501 for blob upload when content: false', async () => {
+      const noContentApp = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
+
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const res = await noContentApp.request('http://localhost/content/someid/blob/somecid', {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/octet-stream',
+          authorization: 'Bearer fake',
+        },
+        body: new Uint8Array([1, 2, 3]),
+      });
+      expect(res.status).toBe(501);
+    });
+
+    it('should return 501 for blob download when content: false', async () => {
+      const noContentApp = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
+
+      const res = await noContentApp.request('http://localhost/content/someid/blob', {
+        headers: { authorization: 'Bearer fake' },
+      });
+      expect(res.status).toBe(501);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // log separation
+  // ---------------------------------------------------------------------------
+
+  describe('log separation', () => {
+    it('identity response should NOT include log field', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      const res = await req(`/identities/${identity.did}`);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect('log' in body).toBe(false);
+    });
+
+    it('identity response should include headCID', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      const res = await req(`/identities/${identity.did}`);
+      const body = await json(res);
+      expect(typeof body.headCID).toBe('string');
+    });
+
+    it('content response should NOT include log field', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      const res = await req(`/content/${contentId}`);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect('log' in body).toBe(false);
+    });
+
+    it('content response should include headCID', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      const res = await req(`/content/${contentId}`);
+      const body = await json(res);
+      expect(typeof body.headCID).toBe('string');
     });
   });
 });

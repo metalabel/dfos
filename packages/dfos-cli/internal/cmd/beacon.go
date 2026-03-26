@@ -205,11 +205,11 @@ func newBeaconCountersignCmd() *cobra.Command {
 				return err
 			}
 
-			// get the beacon payload — from local store or relay
-			var beaconPayload map[string]any
+			// get the beacon CID — from local store or relay
+			var beaconCID string
 			b, _ := store.LoadBeacon(targetDID)
 			if b != nil {
-				beaconPayload = b.Payload
+				beaconCID = b.BeaconCID
 			} else {
 				ctx, _ := resolveCtx()
 				if ctx != nil && ctx.RelayURL != "" {
@@ -218,15 +218,11 @@ func newBeaconCountersignCmd() *cobra.Command {
 					if err != nil {
 						return fmt.Errorf("beacon not found for %s", targetDID)
 					}
-					// extract the raw payload from the JWS token
-					jwsToken, _ := data["jwsToken"].(string)
-					if jwsToken != "" {
-						_, p, _ := protocol.DecodeJWSUnsafe(jwsToken)
-						beaconPayload = p
-					}
+					cid, _ := data["beaconCID"].(string)
+					beaconCID = cid
 				}
 			}
-			if beaconPayload == nil {
+			if beaconCID == "" {
 				return fmt.Errorf("beacon not found for %s", targetDID)
 			}
 
@@ -238,7 +234,7 @@ func newBeaconCountersignCmd() *cobra.Command {
 				return err
 			}
 
-			csToken, err := protocol.SignBeaconCountersignature(beaconPayload, kid, privKey)
+			csToken, _, err := protocol.SignCountersign(id.DID, beaconCID, kid, privKey)
 			if err != nil {
 				return err
 			}

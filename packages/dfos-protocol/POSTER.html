@@ -717,16 +717,31 @@
           </div>
 
           <div class="layer" data-zone="public">
-            <div class="layer-id" style="color: var(--green)">L3 &middot; Witness</div>
+            <div class="layer-id" style="color: var(--green)">L2 &middot; Artifact</div>
             <div class="layer-desc">
-              <strong>Countersignatures &mdash; third-party attestation.</strong>
-              Same CID, different signer. Works for both content operations and beacons. The
-              <code>kid</code> DID in the JWS header tells you who signed. When it matches payload
-              <code>did</code> = author. When it differs = witness. No ambiguity from a single JWS
-              alone.
+              <strong>Standalone signed inline documents.</strong>
+              Immutable, CID-addressable proof plane primitives. Each artifact carries a
+              <code>$schema</code> discriminator and inline <code>content</code>. Max 16KB
+              CBOR-encoded. Used for relay profiles, metadata, and structured attestations.
+              <code>typ: did:dfos:artifact</code>
             </div>
             <div class="layer-artifacts">
-              <code>countersign</code> <code>kid !== did</code> <code>witness</code>
+              <code>artifact</code> <code>$schema</code> <code>content</code>
+              <code>16KB max</code>
+            </div>
+          </div>
+
+          <div class="layer" data-zone="public">
+            <div class="layer-id" style="color: var(--green)">L3 &middot; Witness</div>
+            <div class="layer-desc">
+              <strong>Countersignatures &mdash; standalone witness attestation.</strong>
+              Each countersign is its own operation with <code>typ: did:dfos:countersign</code>, its
+              own CID, and a <code>targetCID</code> referencing the operation being attested to.
+              Composable with any CID-addressable operation &mdash; content ops, beacons, artifacts,
+              even other countersigns.
+            </div>
+            <div class="layer-artifacts">
+              <code>countersign</code> <code>targetCID</code> <code>witness</code>
             </div>
           </div>
 
@@ -914,20 +929,18 @@
 
           <div class="artifact">
             <div class="artifact-label">Countersignature (Witness)</div>
-            <pre><span class="com">// content operation countersign</span>
-{ <span class="key">"typ"</span>: <span class="str">"did:dfos:content-op"</span>,
+            <pre><span class="com">// standalone attestation &mdash; own typ, own CID</span>
+{ <span class="key">"typ"</span>: <span class="str">"did:dfos:countersign"</span>,
   <span class="key">"kid"</span>: <span class="str">"did:dfos:<span style="color:var(--orange)">witness</span>...#key_..."</span>,
   <span class="key">"cid"</span>: <span class="str">"bafyrei..."</span> }
-<span class="com">// same payload &rarr; same CID, different signer</span>
 
-<span class="com">// beacon countersign</span>
-{ <span class="key">"typ"</span>: <span class="str">"did:dfos:beacon"</span>,
-  <span class="key">"kid"</span>: <span class="str">"did:dfos:<span style="color:var(--orange)">witness</span>...#key_..."</span>,
-  <span class="key">"cid"</span>: <span class="str">"bafyrei..."</span> }
-<span class="com">// same beacon payload &rarr; same CID</span></pre>
+<span class="com">// payload references target by CID</span>
+{ <span class="key">"type"</span>: <span class="str">"countersign"</span>,
+  <span class="key">"did"</span>: <span class="str">"did:dfos:witness..."</span>,
+  <span class="key">"targetCID"</span>: <span class="str">"bafyrei..."</span> }</pre>
             <p style="font-size: 11px; margin-top: 8px">
-              Works for both content operations and beacons. Same <code>typ</code> as the original.
-              Discrimination: <code>kid</code> DID vs payload <code>did</code>.
+              Composable with any CID-addressable op &mdash; content, beacons, artifacts, even other
+              countersigns. Each has its own CID, distinct from the target.
             </p>
           </div>
         </div>
@@ -997,13 +1010,14 @@
                 <strong style="color: var(--green)">Author / Controller</strong>
               </div>
               <div style="padding: 8px 12px; background: var(--yellow-dim); border-radius: 4px">
-                <code style="color: var(--yellow)">kid DID !== payload.did</code> &nbsp;&rarr;&nbsp;
-                <strong style="color: var(--yellow)">Countersignature (witness)</strong>
+                <code style="color: var(--yellow)">typ: did:dfos:countersign</code>
+                &nbsp;&rarr;&nbsp;
+                <strong style="color: var(--yellow)">Standalone witness attestation</strong>
               </div>
             </div>
             <p style="font-size: 11px; color: var(--text-muted)">
-              Decode, compare, done. No chain context needed. Works identically for content ops and
-              beacons.
+              Each operation type has its own <code>typ</code> header. Classification is
+              unambiguous.
             </p>
           </div>
           <div class="trust-box" style="border-left: 3px solid var(--cyan)">
@@ -1018,13 +1032,25 @@
               <div style="padding: 6px 0; border-bottom: 1px solid var(--border)">
                 <code style="color: var(--yellow)">did:dfos:content-op</code>
                 <span style="color: var(--text-muted); font-size: 11px">
-                  &mdash; content chain ops + countersigns</span
+                  &mdash; content chain operations</span
                 >
               </div>
               <div style="padding: 6px 0; border-bottom: 1px solid var(--border)">
                 <code style="color: var(--yellow)">did:dfos:beacon</code>
                 <span style="color: var(--text-muted); font-size: 11px">
-                  &mdash; beacon announcements + countersigns</span
+                  &mdash; beacon announcements</span
+                >
+              </div>
+              <div style="padding: 6px 0; border-bottom: 1px solid var(--border)">
+                <code style="color: var(--yellow)">did:dfos:artifact</code>
+                <span style="color: var(--text-muted); font-size: 11px">
+                  &mdash; standalone signed inline documents</span
+                >
+              </div>
+              <div style="padding: 6px 0; border-bottom: 1px solid var(--border)">
+                <code style="color: var(--yellow)">did:dfos:countersign</code>
+                <span style="color: var(--text-muted); font-size: 11px">
+                  &mdash; standalone witness attestations</span
                 >
               </div>
               <div style="padding: 6px 0; border-bottom: 1px solid var(--border)">
@@ -1184,7 +1210,7 @@
             </tr>
             <tr>
               <td>operationCID</td>
-              <td>JWS token(s) &mdash; original + countersignatures</td>
+              <td>JWS token &mdash; any operation by CID</td>
               <td><span class="tag tag-public">public</span></td>
             </tr>
             <tr>
@@ -1343,8 +1369,7 @@
           <div class="trust-box">
             <h4>Third-party (validators / witnesses)</h4>
             <ul>
-              <li>Operation countersignatures &mdash; "I verified this op"</li>
-              <li>Beacon countersignatures &mdash; "I saw this root"</li>
+              <li>Countersignatures &mdash; "I attest to this operation"</li>
               <li>Attestation chains &mdash; rich witnessing records</li>
               <li>Independent timestamps &mdash; validator's clock</li>
               <li>Equivocation detection &mdash; conflicting roots</li>
@@ -1367,17 +1392,14 @@
             <div class="tier-label">Tier 1</div>
             <h4>Countersignatures</h4>
             <p>
-              Same CID, different JWS signer. Works for both
-              <strong>content operations</strong> (<code>typ: content-op</code>) and
-              <strong>beacons</strong> (<code>typ: beacon</code>). The payload contains
-              <code>did</code> (the author/controller). When JWS <code>kid</code> DID matches
-              payload <code>did</code> = author. When they differ = witness. Ed25519 is
-              deterministic: same key + same payload = same signature, enabling dedup by JWS token
-              string.
+              Standalone witness attestation (<code>typ: did:dfos:countersign</code>). Each
+              countersign has its own CID and references the target operation via
+              <code>targetCID</code>. Composable with any CID-addressable operation &mdash; content
+              ops, beacons, artifacts, identity ops, even other countersigns.
             </p>
             <p style="margin-top: 8px">
-              <strong>Boolean:</strong> "Is this vouched for?" Cheap. No metadata. Collected
-              per-operation and per-beacon.
+              <strong>Boolean:</strong> "Is this vouched for?" Cheap. No metadata. One countersign
+              per witness per target, deduped by the relay.
             </p>
           </div>
 
@@ -1420,8 +1442,9 @@
 <span class="key">Identity ops</span>    &mdash; DID resolution, key state
 <span class="key">Content ops</span>     &mdash; chain verification
 <span class="key">Root beacons</span>    &mdash; merkle root announcements
+<span class="key">Artifacts</span>       &mdash; signed inline documents
+<span class="key">Countersigns</span>    &mdash; witness attestations by CID
 <span class="key">JWS lookups</span>     &mdash; operation CID &rarr; signatures
-<span class="key">Witnesses</span>       &mdash; countersignatures per CID
 
 <span class="com">// Optional (operator policy)</span>
 <span class="key">Merkle tree</span>      &mdash; full tree for enumeration
