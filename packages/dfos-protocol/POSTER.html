@@ -721,8 +721,8 @@
             <div class="layer-desc">
               <strong>Standalone signed inline documents.</strong>
               Immutable, CID-addressable proof plane primitives. Each artifact carries a
-              <code>$schema</code> discriminator and inline <code>content</code>. Max 16KB CBOR-encoded.
-              Used for relay profiles, metadata, and structured attestations.
+              <code>$schema</code> discriminator and inline <code>content</code>. Max 16KB
+              CBOR-encoded. Used for relay profiles, metadata, and structured attestations.
               <code>typ: did:dfos:artifact</code>
             </div>
             <div class="layer-artifacts">
@@ -735,8 +735,8 @@
             <div class="layer-id" style="color: var(--green)">L3 &middot; Witness</div>
             <div class="layer-desc">
               <strong>Countersignatures &mdash; standalone witness attestation.</strong>
-              Each countersign is its own operation with <code>typ: did:dfos:countersign</code>,
-              its own CID, and a <code>targetCID</code> referencing the operation being attested to.
+              Each countersign is its own operation with <code>typ: did:dfos:countersign</code>, its
+              own CID, and a <code>targetCID</code> referencing the operation being attested to.
               Composable with any CID-addressable operation &mdash; content ops, beacons, artifacts,
               even other countersigns.
             </div>
@@ -939,8 +939,8 @@
   <span class="key">"did"</span>: <span class="str">"did:dfos:witness..."</span>,
   <span class="key">"targetCID"</span>: <span class="str">"bafyrei..."</span> }</pre>
             <p style="font-size: 11px; margin-top: 8px">
-              Composable with any CID-addressable op &mdash; content, beacons, artifacts,
-              even other countersigns. Each has its own CID, distinct from the target.
+              Composable with any CID-addressable op &mdash; content, beacons, artifacts, even other
+              countersigns. Each has its own CID, distinct from the target.
             </p>
           </div>
         </div>
@@ -1010,12 +1010,14 @@
                 <strong style="color: var(--green)">Author / Controller</strong>
               </div>
               <div style="padding: 8px 12px; background: var(--yellow-dim); border-radius: 4px">
-                <code style="color: var(--yellow)">typ: did:dfos:countersign</code> &nbsp;&rarr;&nbsp;
+                <code style="color: var(--yellow)">typ: did:dfos:countersign</code>
+                &nbsp;&rarr;&nbsp;
                 <strong style="color: var(--yellow)">Standalone witness attestation</strong>
               </div>
             </div>
             <p style="font-size: 11px; color: var(--text-muted)">
-              Each operation type has its own <code>typ</code> header. Classification is unambiguous.
+              Each operation type has its own <code>typ</code> header. Classification is
+              unambiguous.
             </p>
           </div>
           <div class="trust-box" style="border-left: 3px solid var(--cyan)">
@@ -1392,12 +1394,12 @@
             <p>
               Standalone witness attestation (<code>typ: did:dfos:countersign</code>). Each
               countersign has its own CID and references the target operation via
-              <code>targetCID</code>. Composable with any CID-addressable operation &mdash;
-              content ops, beacons, artifacts, identity ops, even other countersigns.
+              <code>targetCID</code>. Composable with any CID-addressable operation &mdash; content
+              ops, beacons, artifacts, identity ops, even other countersigns.
             </p>
             <p style="margin-top: 8px">
-              <strong>Boolean:</strong> "Is this vouched for?" Cheap. No metadata. One
-              countersign per witness per target, deduped by the relay.
+              <strong>Boolean:</strong> "Is this vouched for?" Cheap. No metadata. One countersign
+              per witness per target, deduped by the relay.
             </p>
           </div>
 
