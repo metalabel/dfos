@@ -59,6 +59,16 @@ type VerifiedCountersignResult struct {
 // Payload extraction helpers
 // -----------------------------------------------------------------------------
 
+func validateCreatedAt(createdAt string) error {
+	if createdAt == "" {
+		return fmt.Errorf("missing createdAt")
+	}
+	if _, err := time.Parse(protocolTimeFormat, createdAt); err != nil {
+		return fmt.Errorf("invalid createdAt format")
+	}
+	return nil
+}
+
 func payloadString(m map[string]any, key string) string {
 	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {
@@ -144,8 +154,8 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		if opType != "create" && opType != "update" && opType != "delete" {
 			return nil, fmt.Errorf("log[%d]: invalid operation type", idx)
 		}
-		if createdAt == "" {
-			return nil, fmt.Errorf("log[%d]: missing createdAt", idx)
+		if err := validateCreatedAt(createdAt); err != nil {
+			return nil, fmt.Errorf("log[%d]: %w", idx, err)
 		}
 		if header.Typ != "did:dfos:identity-op" {
 			return nil, fmt.Errorf("log[%d]: invalid typ: %s", idx, header.Typ)
@@ -347,6 +357,9 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 	opType := payloadString(payload, "type")
 	createdAt := payloadString(payload, "createdAt")
 
+	if v, ok := payload["version"].(int64); !ok || v != 1 {
+		return nil, fmt.Errorf("invalid or missing version")
+	}
 	if header.Typ != "did:dfos:identity-op" {
 		return nil, fmt.Errorf("invalid typ: %s", header.Typ)
 	}
@@ -355,6 +368,9 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 	}
 	if opType != "update" && opType != "delete" {
 		return nil, fmt.Errorf("invalid operation type")
+	}
+	if err := validateCreatedAt(createdAt); err != nil {
+		return nil, err
 	}
 
 	// chain integrity
@@ -509,8 +525,8 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 		if opType != "create" && opType != "update" && opType != "delete" {
 			return nil, fmt.Errorf("log[%d]: invalid operation type", idx)
 		}
-		if createdAt == "" {
-			return nil, fmt.Errorf("log[%d]: missing createdAt", idx)
+		if err := validateCreatedAt(createdAt); err != nil {
+			return nil, fmt.Errorf("log[%d]: %w", idx, err)
 		}
 		if header.Typ != "did:dfos:content-op" {
 			return nil, fmt.Errorf("log[%d]: invalid typ: %s", idx, header.Typ)
@@ -634,6 +650,9 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 			}
 			currentDocCID = &docCIDStr
 		case "update":
+			if _, hasDocCID := payload["documentCID"]; !hasDocCID {
+				return nil, fmt.Errorf("log[%d]: update must include documentCID field", idx)
+			}
 			docCID := payloadStringPtr(payload, "documentCID")
 			currentDocCID = docCID
 		case "delete":
@@ -673,6 +692,9 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 	createdAt := payloadString(payload, "createdAt")
 	opDID := payloadString(payload, "did")
 
+	if v, ok := payload["version"].(int64); !ok || v != 1 {
+		return nil, fmt.Errorf("invalid or missing version")
+	}
 	if header.Typ != "did:dfos:content-op" {
 		return nil, fmt.Errorf("invalid typ: %s", header.Typ)
 	}
@@ -681,6 +703,9 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 	}
 	if opType != "update" && opType != "delete" {
 		return nil, fmt.Errorf("invalid operation type")
+	}
+	if err := validateCreatedAt(createdAt); err != nil {
+		return nil, err
 	}
 
 	// chain integrity
@@ -773,6 +798,9 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 		CreatorDID: currentState.CreatorDID,
 	}
 	if opType == "update" {
+		if _, hasDocCID := payload["documentCID"]; !hasDocCID {
+			return nil, fmt.Errorf("update must include documentCID field")
+		}
 		newState.CurrentDocumentCID = payloadStringPtr(payload, "documentCID")
 	}
 
@@ -817,8 +845,8 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 		return nil, fmt.Errorf("invalid beacon payload: merkleRoot must be 64 lowercase hex characters")
 	}
 	createdAt := payloadString(payload, "createdAt")
-	if createdAt == "" {
-		return nil, fmt.Errorf("invalid beacon payload: missing createdAt")
+	if err := validateCreatedAt(createdAt); err != nil {
+		return nil, fmt.Errorf("invalid beacon payload: %w", err)
 	}
 
 	// verify typ
@@ -901,8 +929,8 @@ func VerifyArtifact(jwsToken string, resolveKey KeyResolver) (*VerifiedArtifactR
 		return nil, fmt.Errorf("invalid artifact payload: missing did")
 	}
 	createdAt := payloadString(payload, "createdAt")
-	if createdAt == "" {
-		return nil, fmt.Errorf("invalid artifact payload: missing createdAt")
+	if err := validateCreatedAt(createdAt); err != nil {
+		return nil, fmt.Errorf("invalid artifact payload: %w", err)
 	}
 	contentRaw, ok := payload["content"]
 	if !ok {
