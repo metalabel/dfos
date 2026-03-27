@@ -17,13 +17,15 @@ npm install @metalabel/dfos-web-relay @metalabel/dfos-protocol
 ```typescript
 import { createRelay, MemoryRelayStore } from '@metalabel/dfos-web-relay';
 
-const relay = createRelay({
-  relayDID: 'did:dfos:myrelay00000000000000',
+const relay = await createRelay({
   store: new MemoryRelayStore(),
 });
 
-// Mount on any Hono-compatible runtime
-export default relay;
+// relay.app  — Hono application
+// relay.did  — the relay's auto-generated DID
+// relay.syncFromPeers() — pull operations from configured peers
+
+export default relay.app;
 ```
 
 ### Standalone (Node.js)
@@ -68,7 +70,7 @@ RELAY_URL=http://localhost:4444 go test -v -count=1 ./conformance/
 RELAY_URL=https://registry.imajin.ai/relay go test -v -count=1 ./conformance/
 ```
 
-71 tests covering:
+77 tests covering:
 
 - Well-known discovery
 - Identity lifecycle (create, update, delete, batch, idempotency, controller key rotation)
@@ -84,8 +86,29 @@ RELAY_URL=https://registry.imajin.ai/relay go test -v -count=1 ./conformance/
 - Auth edge cases (wrong audience, expired token, rotated-out key)
 - Batch processing (3-step dependency sort, content-identity sort, large batch, dedup, mixed valid/invalid, multi-chain)
 - Input validation (malformed JSON, empty operations, invalid JWS)
+- Future timestamp guard (reject identity/content ops >24h ahead)
 
 The conformance suite depends on [`dfos-protocol-go`](../dfos-protocol-go) for protocol operations.
+
+## Peering
+
+Relays can replicate operations via three composable behaviors configured per-peer:
+
+- **Gossip-out**: push new operations to peers (fire-and-forget)
+- **Read-through**: fetch from peers on local 404
+- **Sync-in**: cursor-based log polling from peers
+
+```typescript
+import { createHttpPeerClient, createRelay, MemoryRelayStore } from '@metalabel/dfos-web-relay';
+
+const relay = await createRelay({
+  store: new MemoryRelayStore(),
+  peerClient: createHttpPeerClient(),
+  peers: [{ url: 'https://other-relay.example.com' }],
+});
+```
+
+See [RELAY.md](./RELAY.md) for the full peering specification.
 
 ## Custom Store
 
