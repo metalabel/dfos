@@ -5,12 +5,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sort"
-	"time"
 )
 
 // SignBeacon signs a beacon announcement.
 func SignBeacon(did, merkleRoot, kid string, privateKey ed25519.PrivateKey) (jwsToken string, beaconCID string, err error) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := protocolTimestamp()
 
 	payload := map[string]any{
 		"version":    1,

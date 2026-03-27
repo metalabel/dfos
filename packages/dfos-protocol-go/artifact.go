@@ -3,13 +3,12 @@ package dfos
 import (
 	"crypto/ed25519"
 	"fmt"
-	"time"
 )
 
 // SignArtifact signs a standalone artifact — an inline structured document with a $schema discriminator.
 // Returns the JWS token and the artifact's CID.
 func SignArtifact(did string, content map[string]any, kid string, privateKey ed25519.PrivateKey) (jwsToken string, artifactCID string, err error) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := protocolTimestamp()
 
 	payload := map[string]any{
 		"version":   1,

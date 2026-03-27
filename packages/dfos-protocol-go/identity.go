@@ -1,9 +1,6 @@
 package dfos
 
-import (
-	"crypto/ed25519"
-	"time"
-)
+import "crypto/ed25519"
 
 // MultikeyPublicKey represents a public key in Multikey format.
 type MultikeyPublicKey struct {
@@ -33,7 +30,7 @@ func NewMultikeyPublicKey(keyID string, pubKey ed25519.PublicKey) MultikeyPublic
 // SignIdentityCreate signs an identity genesis (create) operation.
 // Returns the JWS token and derived DID.
 func SignIdentityCreate(controllerKeys, authKeys, assertKeys []MultikeyPublicKey, signerKeyID string, privateKey ed25519.PrivateKey) (jwsToken string, did string, operationCID string, err error) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := protocolTimestamp()
 
 	// ensure empty slices instead of nil (JSON null vs [])
 	if authKeys == nil {
@@ -80,7 +77,7 @@ func SignIdentityCreate(controllerKeys, authKeys, assertKeys []MultikeyPublicKey
 // The signer must use a current controller key. kid must be a DID URL
 // (e.g., "did:dfos:xxx#key_yyy").
 func SignIdentityUpdate(previousCID string, controllerKeys, authKeys, assertKeys []MultikeyPublicKey, kid string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := protocolTimestamp()
 
 	if authKeys == nil {
 		authKeys = []MultikeyPublicKey{}
@@ -125,7 +122,7 @@ func SignIdentityUpdate(previousCID string, controllerKeys, authKeys, assertKeys
 // SignIdentityDelete signs an identity delete operation (permanent destruction).
 // The signer must use a current controller key.
 func SignIdentityDelete(previousCID, kid string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := protocolTimestamp()
 
 	payload := map[string]any{
 		"version":              1,

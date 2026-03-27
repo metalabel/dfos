@@ -104,6 +104,24 @@ jobs:
         working-directory: packages/dfos-web-relay
         run: ./tests/run-conformance.sh
 
+  conformance-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-cli/go.sum
+
+      - name: Run Go conformance tests against Go relay
+        working-directory: packages/dfos-web-relay-go
+        run: ./tests/run-conformance.sh
+
   verify-go:
     runs-on: ubuntu-latest
     timeout-minutes: 5
