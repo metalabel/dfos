@@ -1318,3 +1318,171 @@ func TestRejectMalformedJWS(t *testing.T) {
 		t.Fatal("expected error for malformed JWS")
 	}
 }
+
+// ===================================================================
+// future timestamp guard
+// ===================================================================
+
+func TestRejectIdentityFutureTimestamp(t *testing.T) {
+	base := relayURL(t)
+	ctrl := newKeypair()
+	auth := newKeypair()
+
+	farFuture := time.Now().Add(25 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+
+	payload := map[string]any{
+		"version":        1,
+		"type":           "create",
+		"authKeys":       []dfos.MultikeyPublicKey{auth.mk},
+		"assertKeys":     []dfos.MultikeyPublicKey{},
+		"controllerKeys": []dfos.MultikeyPublicKey{ctrl.mk},
+		"createdAt":      farFuture,
+	}
+
+	_, _, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("DagCborCID: %v", err)
+	}
+
+	header := dfos.JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:identity-op",
+		Kid: ctrl.keyID,
+		CID: cidStr,
+	}
+
+	token, err := dfos.CreateJWS(header, payload, ctrl.priv)
+	if err != nil {
+		t.Fatalf("CreateJWS: %v", err)
+	}
+
+	res := postOperations(t, base, []string{token})
+	body := readBody(t, res)
+	var result struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	json.Unmarshal(body, &result)
+
+	if len(result.Results) == 0 {
+		t.Fatal("expected at least 1 result")
+	}
+	if result.Results[0].Status != "rejected" {
+		t.Fatalf("expected rejected, got %s", result.Results[0].Status)
+	}
+	if !strings.Contains(result.Results[0].Error, "future") {
+		t.Fatalf("expected future timestamp error, got: %s", result.Results[0].Error)
+	}
+}
+
+func TestAcceptIdentityNearFutureTimestamp(t *testing.T) {
+	base := relayURL(t)
+	ctrl := newKeypair()
+	auth := newKeypair()
+
+	nearFuture := time.Now().Add(23 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+
+	payload := map[string]any{
+		"version":        1,
+		"type":           "create",
+		"authKeys":       []dfos.MultikeyPublicKey{auth.mk},
+		"assertKeys":     []dfos.MultikeyPublicKey{},
+		"controllerKeys": []dfos.MultikeyPublicKey{ctrl.mk},
+		"createdAt":      nearFuture,
+	}
+
+	_, _, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("DagCborCID: %v", err)
+	}
+
+	header := dfos.JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:identity-op",
+		Kid: ctrl.keyID,
+		CID: cidStr,
+	}
+
+	token, err := dfos.CreateJWS(header, payload, ctrl.priv)
+	if err != nil {
+		t.Fatalf("CreateJWS: %v", err)
+	}
+
+	res := postOperations(t, base, []string{token})
+	body := readBody(t, res)
+	var result struct {
+		Results []struct {
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	json.Unmarshal(body, &result)
+
+	if len(result.Results) == 0 {
+		t.Fatal("expected at least 1 result")
+	}
+	if result.Results[0].Status != "new" {
+		t.Fatalf("expected new, got %s", result.Results[0].Status)
+	}
+}
+
+func TestRejectContentFutureTimestamp(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+
+	farFuture := time.Now().Add(25 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+	doc := map[string]any{"type": "post", "title": "future", "body": "test"}
+	docCID, _, err := dfos.DocumentCID(doc)
+	if err != nil {
+		t.Fatalf("DocumentCID: %v", err)
+	}
+
+	kid := id.did + "#" + id.auth.keyID
+	payload := map[string]any{
+		"version":         1,
+		"type":            "create",
+		"did":             id.did,
+		"documentCID":     docCID,
+		"baseDocumentCID": nil,
+		"createdAt":       farFuture,
+		"note":            nil,
+	}
+
+	_, _, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("DagCborCID: %v", err)
+	}
+
+	header := dfos.JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:content-op",
+		Kid: kid,
+		CID: cidStr,
+	}
+
+	token, err := dfos.CreateJWS(header, payload, id.auth.priv)
+	if err != nil {
+		t.Fatalf("CreateJWS: %v", err)
+	}
+
+	res := postOperations(t, base, []string{token})
+	body := readBody(t, res)
+	var result struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	json.Unmarshal(body, &result)
+
+	if len(result.Results) == 0 {
+		t.Fatal("expected at least 1 result")
+	}
+	if result.Results[0].Status != "rejected" {
+		t.Fatalf("expected rejected, got %s", result.Results[0].Status)
+	}
+	if !strings.Contains(result.Results[0].Error, "future") {
+		t.Fatalf("expected future timestamp error, got: %s", result.Results[0].Error)
+	}
+}

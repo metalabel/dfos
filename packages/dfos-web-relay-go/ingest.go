@@ -11,6 +11,22 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// temporal guard
+// ---------------------------------------------------------------------------
+
+// maxFutureTimestamp is the maximum allowed clock skew for operation timestamps (24 hours).
+const maxFutureTimestamp = 24 * time.Hour
+
+// isFutureTimestamp returns true if createdAt is more than 24 hours in the future.
+func isFutureTimestamp(createdAt string) bool {
+	t, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return false // invalid dates rejected by protocol verification
+	}
+	return t.After(time.Now().Add(maxFutureTimestamp))
+}
+
+// ---------------------------------------------------------------------------
 // classification
 // ---------------------------------------------------------------------------
 
@@ -224,6 +240,11 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 		return IngestionResult{Status: "rejected", Error: "failed to compute CID"}
 	}
 
+	// temporal guard: reject operations with timestamps too far in the future
+	if createdAt, ok := payload["createdAt"].(string); ok && isFutureTimestamp(createdAt) {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "createdAt is too far in the future"}
+	}
+
 	// idempotent: already stored
 	existing, _ := store.GetOperation(cid)
 	if existing != nil {
@@ -349,6 +370,11 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 	_, _, cid, err := dfos.DagCborCID(payload)
 	if err != nil {
 		return IngestionResult{Status: "rejected", Error: "failed to compute CID"}
+	}
+
+	// temporal guard: reject operations with timestamps too far in the future
+	if createdAt, ok := payload["createdAt"].(string); ok && isFutureTimestamp(createdAt) {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "createdAt is too far in the future"}
 	}
 
 	// idempotent

@@ -92,6 +92,8 @@ Forks are accepted. If an incoming operation's `previousOperationCID` references
 
 **Undeletion**: falls naturally from the fork model. An identity holder can fork from before a delete with a higher `createdAt`. The fork becomes the head. The delete remains visible in the log (auditable, gossiped) but is on a non-head branch.
 
+**Future timestamp guard**: Identity and content operations with a `createdAt` more than 24 hours in the future are rejected. Since head selection favors the highest timestamp, a far-future `createdAt` would permanently dominate head selection — a temporal denial-of-service. The 24-hour window accommodates clock drift while preventing abuse. Beacons enforce a stricter 5-minute bound at the protocol level.
+
 ### Ingestion Statuses
 
 Three distinct outcomes from ingestion:

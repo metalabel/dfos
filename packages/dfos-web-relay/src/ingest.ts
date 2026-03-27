@@ -33,6 +33,20 @@ import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protoco
 import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityChain } from './types';
 
 // -----------------------------------------------------------------------------
+// temporal guard
+// -----------------------------------------------------------------------------
+
+/** Maximum allowed clock skew for operation timestamps (24 hours in ms) */
+const MAX_FUTURE_TIMESTAMP_MS = 24 * 60 * 60 * 1000;
+
+/** Reject operations with createdAt more than 24 hours in the future */
+const isFutureTimestamp = (createdAt: string): boolean => {
+  const ts = new Date(createdAt).getTime();
+  if (isNaN(ts)) return false; // invalid dates rejected by protocol verification
+  return ts > Date.now() + MAX_FUTURE_TIMESTAMP_MS;
+};
+
+// -----------------------------------------------------------------------------
 // classification
 // -----------------------------------------------------------------------------
 
@@ -252,6 +266,12 @@ const ingestIdentityOp = async (
   const encoded = await dagCborCanonicalEncode(payload);
   const cid = encoded.cid.toString();
 
+  // temporal guard: reject operations with timestamps too far in the future
+  const createdAtVal = (payload as Record<string, unknown>)['createdAt'];
+  if (typeof createdAtVal === 'string' && isFutureTimestamp(createdAtVal)) {
+    return { cid, status: 'rejected', error: 'createdAt is too far in the future' };
+  }
+
   // idempotent: already stored (exact same JWS token)
   const existing = await store.getOperation(cid);
   if (existing) {
@@ -387,6 +407,12 @@ const ingestContentOp = async (
   const payload = decoded.payload;
   const encoded = await dagCborCanonicalEncode(payload);
   const cid = encoded.cid.toString();
+
+  // temporal guard: reject operations with timestamps too far in the future
+  const createdAtVal = (payload as Record<string, unknown>)['createdAt'];
+  if (typeof createdAtVal === 'string' && isFutureTimestamp(createdAtVal)) {
+    return { cid, status: 'rejected', error: 'createdAt is too far in the future' };
+  }
 
   // idempotent: already stored (exact same JWS token)
   const existing = await store.getOperation(cid);

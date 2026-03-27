@@ -78,7 +78,10 @@ const createIdentity = async () => {
 };
 
 /** Create a content chain genesis operation signed by a given identity */
-const createContentOp = async (identity: Awaited<ReturnType<typeof createIdentity>>) => {
+const createContentOp = async (
+  identity: Awaited<ReturnType<typeof createIdentity>>,
+  opts?: { createdAt?: string },
+) => {
   // create a document and derive its CID
   const document = { type: 'post', title: 'hello world', body: 'test content' };
   const docEncoded = await dagCborCanonicalEncode(document as unknown as Record<string, unknown>);
@@ -90,7 +93,7 @@ const createContentOp = async (identity: Awaited<ReturnType<typeof createIdentit
     did: identity.did,
     documentCID,
     baseDocumentCID: null,
-    createdAt: ts(1),
+    createdAt: opts?.createdAt ?? ts(1),
     note: null,
   };
 
@@ -1380,6 +1383,76 @@ describe('web relay', () => {
       const logRes = await req(`/content/${contentId}/log`);
       const logBody = await json(logRes);
       expect(logBody.entries).toHaveLength(4);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // future timestamp guard
+  // ---------------------------------------------------------------------------
+
+  describe('future timestamp guard', () => {
+    it('should reject identity operation with createdAt more than 24h in the future', async () => {
+      const controller = makeKey();
+      const authKey = makeKey();
+
+      const farFuture = new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString();
+      const createOp: IdentityOperation = {
+        version: 1,
+        type: 'create',
+        authKeys: [authKey.key],
+        assertKeys: [],
+        controllerKeys: [controller.key],
+        createdAt: farFuture,
+      };
+
+      const { jwsToken } = await signIdentityOperation({
+        operation: createOp,
+        signer: controller.signer,
+        keyId: controller.keyId,
+      });
+
+      const res = await postOps([jwsToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+      expect(body.results[0].error).toContain('too far in the future');
+    });
+
+    it('should accept identity operation with createdAt 23h in the future', async () => {
+      const controller = makeKey();
+      const authKey = makeKey();
+
+      const nearFuture = new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString();
+      const createOp: IdentityOperation = {
+        version: 1,
+        type: 'create',
+        authKeys: [authKey.key],
+        assertKeys: [],
+        controllerKeys: [controller.key],
+        createdAt: nearFuture,
+      };
+
+      const { jwsToken } = await signIdentityOperation({
+        operation: createOp,
+        signer: controller.signer,
+        keyId: controller.keyId,
+      });
+
+      const res = await postOps([jwsToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('new');
+    });
+
+    it('should reject content operation with createdAt more than 24h in the future', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      const farFuture = new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString();
+      const content = await createContentOp(identity, { createdAt: farFuture });
+
+      const res = await postOps([content.jwsToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+      expect(body.results[0].error).toContain('too far in the future');
     });
   });
 

@@ -90,6 +90,8 @@ This is deterministic: any implementation with the same operations computes the 
 
 **Timestamp ordering**: `createdAt` MUST be strictly greater than the `createdAt` of the parent operation (the operation referenced by `previousOperationCID`). This is enforced per-branch, not globally — a fork branch's timestamps are validated against its own parent, not the other branch's operations.
 
+**Future timestamp bound**: Implementations MUST reject identity and content operations with a `createdAt` more than 24 hours in the future relative to the verifier's clock. Since deterministic head selection favors the highest `createdAt`, a far-future timestamp would permanently dominate head selection — this guard prevents temporal denial-of-service.
+
 ### Identity Chain Signer Validity
 
 An identity chain operation is valid only if the signing key was a **controller key in the immediately prior state**. For genesis operations, the signing key MUST be one of the controller keys declared in that same operation — this is the bootstrap: the genesis operation introduces and simultaneously authorizes its own keys.
