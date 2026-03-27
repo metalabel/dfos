@@ -20,16 +20,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		return nil, fmt.Errorf("store is required")
 	}
 
-	contentEnabled := true
-	if !opts.Content && opts.Identity != nil {
-		// only respect Content=false when explicitly set (Identity being set
-		// indicates intentional configuration rather than zero-value)
-		contentEnabled = opts.Content
-	}
-	// If Content field is true (or default), enable content
-	if opts.Content {
-		contentEnabled = true
-	}
+	contentEnabled := opts.Content == nil || *opts.Content
 
 	identity := opts.Identity
 	if identity == nil {

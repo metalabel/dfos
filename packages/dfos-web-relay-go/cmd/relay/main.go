@@ -38,8 +38,7 @@ func main() {
 	}
 
 	r, err := relay.NewRelay(relay.RelayOptions{
-		Store:   store,
-		Content: true,
+		Store: store,
 	})
 	if err != nil {
 		log.Fatalf("failed to create relay: %v", err)

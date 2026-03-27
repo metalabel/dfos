@@ -49,6 +49,15 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// storeErr returns true if err is non-nil (writing a 500 response).
+func storeErr(w http.ResponseWriter, err error) bool {
+	if err != nil {
+		writeError(w, 500, "internal error")
+		return true
+	}
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // well-known
 // ---------------------------------------------------------------------------
@@ -90,7 +99,10 @@ func (r *Relay) handlePostOperations(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleGetOperation(w http.ResponseWriter, req *http.Request) {
 	cid := req.PathValue("cid")
-	op, _ := r.store.GetOperation(cid)
+	op, err := r.store.GetOperation(cid)
+	if storeErr(w, err) {
+		return
+	}
 	if op == nil {
 		writeError(w, 404, "not found")
 		return
@@ -104,7 +116,10 @@ func (r *Relay) handleGetOperation(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 	did := req.PathValue("did")
-	chain, _ := r.store.GetIdentityChain(did)
+	chain, err := r.store.GetIdentityChain(did)
+	if storeErr(w, err) {
+		return
+	}
 	if chain == nil {
 		writeError(w, 404, "not found")
 		return
@@ -118,7 +133,10 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleIdentityLog(w http.ResponseWriter, req *http.Request) {
 	did := req.PathValue("did")
-	chain, _ := r.store.GetIdentityChain(did)
+	chain, err := r.store.GetIdentityChain(did)
+	if storeErr(w, err) {
+		return
+	}
 	if chain == nil {
 		writeError(w, 404, "not found")
 		return
@@ -182,7 +200,10 @@ func (r *Relay) handleIdentityLog(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 	contentID := req.PathValue("contentId")
-	chain, _ := r.store.GetContentChain(contentID)
+	chain, err := r.store.GetContentChain(contentID)
+	if storeErr(w, err) {
+		return
+	}
 	if chain == nil {
 		writeError(w, 404, "not found")
 		return
@@ -197,7 +218,10 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleContentLog(w http.ResponseWriter, req *http.Request) {
 	contentID := req.PathValue("contentId")
-	chain, _ := r.store.GetContentChain(contentID)
+	chain, err := r.store.GetContentChain(contentID)
+	if storeErr(w, err) {
+		return
+	}
 	if chain == nil {
 		writeError(w, 404, "not found")
 		return
@@ -260,9 +284,15 @@ func (r *Relay) handleContentLog(w http.ResponseWriter, req *http.Request) {
 func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Request) {
 	cid := req.PathValue("cid")
 
-	op, _ := r.store.GetOperation(cid)
+	op, err := r.store.GetOperation(cid)
+	if storeErr(w, err) {
+		return
+	}
 	if op == nil {
-		cs, _ := r.store.GetCountersignatures(cid)
+		cs, csErr := r.store.GetCountersignatures(cid)
+		if storeErr(w, csErr) {
+			return
+		}
 		if len(cs) == 0 {
 			writeError(w, 404, "not found")
 			return
@@ -274,7 +304,10 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	cs, _ := r.store.GetCountersignatures(cid)
+	cs, csErr := r.store.GetCountersignatures(cid)
+	if storeErr(w, csErr) {
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"operationCID":     cid,
 		"countersignatures": cs,
@@ -284,13 +317,19 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 func (r *Relay) handleOperationCountersignatures(w http.ResponseWriter, req *http.Request) {
 	cid := req.PathValue("cid")
 
-	op, _ := r.store.GetOperation(cid)
+	op, err := r.store.GetOperation(cid)
+	if storeErr(w, err) {
+		return
+	}
 	if op == nil {
 		writeError(w, 404, "not found")
 		return
 	}
 
-	cs, _ := r.store.GetCountersignatures(cid)
+	cs, csErr := r.store.GetCountersignatures(cid)
+	if storeErr(w, csErr) {
+		return
+	}
 	writeJSON(w, 200, map[string]any{
 		"operationCID":     cid,
 		"countersignatures": cs,
@@ -303,7 +342,10 @@ func (r *Relay) handleOperationCountersignatures(w http.ResponseWriter, req *htt
 
 func (r *Relay) handleGetBeacon(w http.ResponseWriter, req *http.Request) {
 	did := req.PathValue("did")
-	beacon, _ := r.store.GetBeacon(did)
+	beacon, err := r.store.GetBeacon(did)
+	if storeErr(w, err) {
+		return
+	}
 	if beacon == nil {
 		writeError(w, 404, "not found")
 		return
@@ -324,7 +366,10 @@ func (r *Relay) handleGetLog(w http.ResponseWriter, req *http.Request) {
 	after := req.URL.Query().Get("after")
 	limit := parseLimit(req, 100, 1000)
 
-	entries, cursor, _ := r.store.ReadLog(after, limit)
+	entries, cursor, err := r.store.ReadLog(after, limit)
+	if storeErr(w, err) {
+		return
+	}
 	if entries == nil {
 		entries = []LogEntry{}
 	}
@@ -361,7 +406,10 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// verify chain exists
-	chain, _ := r.store.GetContentChain(contentID)
+	chain, err := r.store.GetContentChain(contentID)
+	if storeErr(w, err) {
+		return
+	}
 	if chain == nil {
 		writeError(w, 404, "content chain not found")
 		return
@@ -395,7 +443,9 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// read blob bytes and verify they match documentCID
+	// read blob bytes (capped at 16 MB) and verify they match documentCID
+	const maxBlobSize = 16 << 20 // 16 MB
+	req.Body = http.MaxBytesReader(w, req.Body, maxBlobSize)
 	bytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		writeError(w, 400, "failed to read body")
@@ -447,7 +497,10 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 		return
 	}
 
-	chain, _ := r.store.GetContentChain(contentID)
+	chain, err := r.store.GetContentChain(contentID)
+	if storeErr(w, err) {
+		return
+	}
 	if chain == nil {
 		writeError(w, 404, "content chain not found")
 		return

@@ -12,7 +12,7 @@ type RelayIdentity struct {
 type RelayOptions struct {
 	Store    Store
 	Identity *RelayIdentity
-	Content  bool // default true — set to false to disable content plane
+	Content  *bool // nil or true = enabled (default), false = disabled
 }
 
 // StoredIdentityChain is the relay's representation of an identity chain.
