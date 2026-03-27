@@ -12,9 +12,9 @@ This spec is under active review. Discuss it in the [clear.txt](https://clear.df
 
 The DFOS protocol defines signed chain primitives — identity and content chains, beacons, credentials — but says nothing about transport. A web relay is the HTTP layer that carries these primitives between participants.
 
-Relays are not authorities. They verify what they receive and serve what they've verified, but they don't issue identity, grant permissions, or define content semantics. Any relay implementing the same verification rules produces the same acceptance/rejection decisions for the same operations. Clients can replicate their data across multiple relays without coordination.
+Relays are not authorities. They verify what they receive and serve what they've verified, but they don't issue identity, grant permissions, or define content semantics. Any relay implementing the same verification rules and given the same operations produces the same deterministic head state. Clients can replicate their data across multiple relays without coordination.
 
-A relay is a library, not a service. `createRelay()` returns a portable Hono application that any runtime can host — Node.js, Cloudflare Workers, Deno, Bun, a Docker container, a Raspberry Pi. The consumer provides a storage backend and configuration. The relay handles verification and HTTP semantics.
+A relay is a library, not a service. `createRelay()` returns a portable Hono application that any runtime can host — Node.js, Cloudflare Workers, Deno, Bun, a Docker container, a Raspberry Pi. The consumer provides a storage backend, peer configuration, and optional capabilities. The relay handles verification, peering, and HTTP semantics.
 
 ---
 
@@ -82,13 +82,29 @@ Each operation is verified against the relay's stored state:
 - **Beacons**: Signature, CID integrity, and clock skew are verified. Replace-on-newer: only the most recent beacon per DID is retained
 - **Countersignatures**: Two-phase verification. Protocol-level (stateless): signature, CID integrity, payload schema. Relay-level (stateful): target CID must exist in the relay, witness DID must differ from the target's author DID, one countersign per witness per target
 
-### Fork Policy
+### Fork Acceptance
 
-First-seen-wins. If a chain head has already advanced past the `previousOperationCID` referenced by an incoming operation, the new operation is rejected. The relay does not attempt to resolve forks — the first valid extension wins.
+Forks are accepted. If an incoming operation's `previousOperationCID` references any operation in the chain (not just the current head), the relay verifies the extension against the chain state at that fork point and accepts it. The chain log accumulates all branches.
 
-Duplicate submissions (same operation CID, same JWS token) are silently accepted (idempotent). Submissions with the same CID but a different JWS token are rejected — since Ed25519 is deterministic, a different token for the same payload means a different signing key, which is either a self-countersign attempt or an unauthorized re-sign.
+**Deterministic head selection**: after accepting a fork, the relay recomputes the head — highest `createdAt` among tips, lexicographic highest CID as tiebreaker. This is deterministic across relays given the same set of operations, regardless of ingestion order. As forks propagate via peering, all relays converge to the same head.
 
-Duplicate countersignatures (same witness DID, same target CID) MUST be deduplicated — one countersign per witness per target. The relay MUST NOT store multiple attestations from the same witness for the same target. Resubmission SHOULD return `accepted` (idempotent).
+**State at fork point**: to verify a fork extension, the relay computes chain state at the parent CID. The Store interface abstracts this via `getIdentityStateAtCID` / `getContentStateAtCID` — implementations choose the strategy (full replay, snapshot-backed, etc.).
+
+**Undeletion**: falls naturally from the fork model. An identity holder can fork from before a delete with a higher `createdAt`. The fork becomes the head. The delete remains visible in the log (auditable, gossiped) but is on a non-head branch.
+
+### Ingestion Statuses
+
+Three distinct outcomes from ingestion:
+
+| Status      | Meaning                                            |
+| ----------- | -------------------------------------------------- |
+| `new`       | First time seen, verified, stored, state changed   |
+| `duplicate` | Already had it (same CID, same JWS token), no-op  |
+| `rejected`  | Verification failed                                |
+
+Submissions with the same CID but a different JWS token are rejected — since Ed25519 is deterministic, a different token for the same payload means a different signing key.
+
+Duplicate countersignatures (same witness DID, same target CID) MUST be deduplicated — one countersign per witness per target. The relay MUST NOT store multiple attestations from the same witness for the same target. Resubmission SHOULD return `duplicate` (idempotent).
 
 ### Deletion Semantics
 
@@ -220,6 +236,7 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
   "version": "0.1.0",
   "proof": true,
   "content": false,
+  "log": true,
   "profile": "eyJhbGciOiJFZERTQSIs..."
 }
 ```
@@ -231,9 +248,10 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 | `version`  | string  | Relay protocol version (semver)                                            |
 | `proof`    | boolean | MUST be `true`. A relay without proof plane capability is not a relay      |
 | `content`  | boolean | Whether the relay supports content plane (blob upload/download)            |
+| `log`      | boolean | Whether the global operation log is available (`GET /log`)                 |
 | `profile`  | string  | The relay's profile artifact as a compact JWS token — self-proving payload |
 
-`proof: false` is not a valid value. A compliant relay always serves the proof plane.
+`proof: false` is not a valid value. A compliant relay always serves the proof plane. When `log: false`, `GET /log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting.
 
 ---
 
@@ -399,10 +417,18 @@ interface RelayStore {
 
   appendToLog(entry: LogEntry): Promise<void>;
   readLog(params: { after?: string; limit: number }): Promise<LogPage>;
+
+  // chain state at arbitrary CID (fork verification)
+  getIdentityStateAtCID(did: string, cid: string): Promise<IdentityStateAtCID | null>;
+  getContentStateAtCID(contentId: string, cid: string): Promise<ContentStateAtCID | null>;
+
+  // peer sync cursors
+  getPeerCursor(peerUrl: string): Promise<string | undefined>;
+  setPeerCursor(peerUrl: string, cursor: string): Promise<void>;
 }
 ```
 
-The `appendToLog` / `readLog` pair supports both the global log and per-chain log queries. The store implementation determines how to scope queries (e.g., by filtering on `chainId`).
+The `getIdentityStateAtCID` / `getContentStateAtCID` methods compute materialized chain state at an arbitrary operation CID. Used by fork verification — the ingestion pipeline needs state at the fork point to verify signer authority and timestamp ordering. Implementations decide how: `MemoryStore` replays from genesis, `SQLiteStore` can use snapshot tables.
 
 The package includes `MemoryRelayStore` for development and testing. Production deployments would implement the interface over Postgres, SQLite, D1, or any durable store.
 
@@ -411,24 +437,28 @@ The package includes `MemoryRelayStore` for development and testing. Production 
 ## Quick Start
 
 ```typescript
-import { createRelay, MemoryRelayStore } from '@metalabel/dfos-web-relay';
+import { createRelay, MemoryRelayStore, createHttpPeerClient } from '@metalabel/dfos-web-relay';
 
 // JIT mode — generates relay identity + profile artifact at startup
 const relay = await createRelay({
   store: new MemoryRelayStore(),
 });
 
-// Or provide a pre-created identity (production)
+// With peering
 const relay = await createRelay({
   store: new MemoryRelayStore(),
-  identity: { did: 'did:dfos:myrelay...', profileArtifactJws: '...' },
+  peers: [{ url: 'https://peer.relay.example.com' }],
+  peerClient: createHttpPeerClient(),
 });
 
 // Mount on any Hono-compatible runtime
-export default relay;
+export default relay.app;
+
+// Schedule sync polling
+setInterval(() => relay.syncFromPeers(), 30_000);
 ```
 
-The returned Hono app exposes:
+The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFromPeers` (async function). The Hono app exposes:
 
 | Method | Path                                 | Plane   | Auth                    |
 | ------ | ------------------------------------ | ------- | ----------------------- |
@@ -448,9 +478,46 @@ The returned Hono app exposes:
 
 ---
 
+## Peering
+
+Relay-to-relay peering enables data replication across the network. The relay expresses peering intent through a `PeerClient` interface (injected like `Store`) and per-peer configuration flags.
+
+### Three Behaviors
+
+| Behavior       | Trigger                  | Mechanism                                 |
+| -------------- | ------------------------ | ----------------------------------------- |
+| **Gossip-out** | New op ingested          | Push to peers with `gossip: true`         |
+| **Read-through** | Local 404 on GET       | Fetch from peers with `readThrough: true` |
+| **Sync-in**    | Scheduled poll           | Pull from peers with `sync: true` via /log |
+
+Gossip fires on `new` status only — `duplicate` results are not re-gossiped, preventing gossip storms. Read-through fetches the full chain log from a peer and ingests locally (full verification, no trust). Sync-in uses cursor-based pagination against the peer's global log.
+
+### Peer Configuration
+
+```typescript
+interface PeerConfig {
+  url: string;
+  gossip?: boolean;       // default: true
+  readThrough?: boolean;  // default: true
+  sync?: boolean;         // default: true
+}
+```
+
+No relay roles or types. Topology is emergent from configuration. A relay with `gossip: true, readThrough: false, sync: false` is a write-only edge node. A relay with `gossip: false, readThrough: true, sync: false` is a read-only cache.
+
+### PeerClient Interface
+
+The `PeerClient` is injected like `Store` — semantic per-resource methods, not raw HTTP. The default implementation uses HTTP. Tests inject mocks that route directly to another relay's API in-process.
+
+---
+
 ## What's Deferred
 
-- **Peer gossip**: Proactive push of proof plane operations to other relays
+- **Peer discovery**: Static configuration only — no dynamic discovery
+- **SSE/realtime push**: Polling `GET /log` for now, SSE in the future
+- **Op mempool**: Deferred ingestion for ops with missing dependencies
+- **Fork visibility API**: Dedicated endpoint to list tips/branches
+- **Branch termination op**: Protocol-level operation to explicitly kill fork branches
 - **Rate limiting / anti-spam**: Operational concern, not protocol concern
 - **Docker/CF reference deployments**: Focus on the core library first
 - **Blob size limits**: No enforcement yet — production deployments should add limits at the middleware layer

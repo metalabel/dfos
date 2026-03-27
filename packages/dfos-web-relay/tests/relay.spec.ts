@@ -1188,10 +1188,10 @@ describe('web relay', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // fork rejection
+  // fork acceptance
   // ---------------------------------------------------------------------------
 
-  describe('fork rejection', () => {
+  describe('fork acceptance', () => {
     it('should accept content fork with same previousOperationCID (fork acceptance)', async () => {
       const identity = await createIdentity();
       const content = await createContentOp(identity);
@@ -1252,6 +1252,11 @@ describe('web relay', () => {
       const chainRes = await req(`/content/${contentId}`);
       const chain = await json(chainRes);
       expect(chain.state.currentDocumentCID).toBe(doc2Encoded.cid.toString());
+
+      // chain log should contain all 3 operations (genesis + both fork branches)
+      const logRes = await req(`/content/${contentId}/log`);
+      const logBody = await json(logRes);
+      expect(logBody.entries).toHaveLength(3);
     });
   });
 

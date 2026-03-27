@@ -78,11 +78,17 @@ CID uses [dag-cbor canonical encoding](https://ipld.io/specs/codecs/dag-cbor/spe
 
 ### Chain Validity
 
-A valid chain is a **linear sequence** of operations. Each operation (after genesis) links to its predecessor via `previousOperationCID`. The chain provides structural ordering independent of timestamps.
+A valid chain is a **directed acyclic graph (DAG)** of operations rooted at a genesis. Each operation (after genesis) links to a predecessor via `previousOperationCID`. The chain provides structural ordering independent of timestamps.
 
-**Forks are invalid at the protocol level.** Two operations referencing the same `previousOperationCID` constitute a fork. The protocol does not define fork resolution — this is application-defined (e.g., longest chain, first-seen, advisory locks).
+**Forks are valid.** Two operations referencing the same `previousOperationCID` constitute a fork — both branches are accepted. The chain log stores all branches. A **deterministic head selection** rule ensures convergence across implementations given the same set of operations:
 
-**Timestamp ordering**: `createdAt` SHOULD be strictly increasing within a chain. Implementations SHOULD reject operations with non-increasing timestamps as a sanity check against replayed or mis-ordered operations. However, the chain link (CID reference) is the authoritative ordering mechanism, not the timestamp. Implementations MAY relax timestamp ordering in constrained environments where clock synchronization is impractical.
+1. Find all **tips** — operations with no children
+2. Select the tip with the **highest `createdAt`** timestamp
+3. **Lexicographic highest CID** as tiebreaker
+
+This is deterministic: any implementation with the same operations computes the same head, regardless of ingestion order. Semantic interpretation of forks (concurrency glitch, intentional recovery, etc.) is application-defined — the protocol stores the DAG, clients interpret it.
+
+**Timestamp ordering**: `createdAt` MUST be strictly greater than the `createdAt` of the parent operation (the operation referenced by `previousOperationCID`). This is enforced per-branch, not globally — a fork branch's timestamps are validated against its own parent, not the other branch's operations.
 
 ### Identity Chain Signer Validity
 
