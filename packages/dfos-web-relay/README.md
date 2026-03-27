@@ -72,7 +72,7 @@ RELAY_URL=https://registry.imajin.ai/relay go test -v -count=1 ./conformance/
 
 - Well-known discovery
 - Identity lifecycle (create, update, delete, batch, idempotency, controller key rotation)
-- Content lifecycle (create, update, delete, fork rejection, post-delete rejection, notes, long chains)
+- Content lifecycle (create, update, delete, fork acceptance, DAG logs, deterministic head selection, post-delete rejection, notes, long chains)
 - Content update after auth key rotation, multiple independent chains
 - Operations by CID
 - Beacons (create, replacement, not-found, unknown/deleted identity)
