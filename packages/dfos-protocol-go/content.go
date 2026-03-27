@@ -1,9 +1,6 @@
 package dfos
 
-import (
-	"crypto/ed25519"
-	"time"
-)
+import "crypto/ed25519"
 
 // ContentState represents the verified state of a content chain.
 type ContentState struct {
@@ -18,7 +15,7 @@ type ContentState struct {
 
 // SignContentCreate signs a content chain genesis (create) operation.
 func SignContentCreate(did, documentCID, kid string, note string, privateKey ed25519.PrivateKey) (jwsToken string, contentID string, operationCID string, err error) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := protocolTimestamp()
 
 	payload := map[string]any{
 		"version":         1,
@@ -68,7 +65,7 @@ func SignContentUpdate(did, previousCID, documentCID, kid string, note string, p
 
 // SignContentUpdateWithOptions signs a content chain update operation with full options.
 func SignContentUpdateWithOptions(did, previousCID, documentCID, kid string, privateKey ed25519.PrivateKey, opts ContentUpdateOptions) (jwsToken string, operationCID string, err error) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := protocolTimestamp()
 
 	payload := map[string]any{
 		"version":              1,
@@ -112,7 +109,7 @@ func SignContentUpdateWithOptions(did, previousCID, documentCID, kid string, pri
 
 // SignContentDelete signs a content chain delete operation (permanent destruction).
 func SignContentDelete(did, previousCID, kid string, note string, authorization string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := protocolTimestamp()
 
 	payload := map[string]any{
 		"version":              1,

@@ -11,7 +11,7 @@ import (
 // KeyResolver resolves a kid (DID URL: "did:dfos:xxx#key_yyy") to an Ed25519 public key.
 type KeyResolver func(kid string) (ed25519.PublicKey, error)
 
-const protocolTimeFormat = "2006-01-02T15:04:05.000Z"
+// protocolTimeFormat is declared in timestamp.go
 
 var merkleRootPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 

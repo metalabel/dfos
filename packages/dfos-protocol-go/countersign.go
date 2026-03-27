@@ -4,13 +4,12 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
-	"time"
 )
 
 // SignCountersign signs a standalone countersignature attesting to a target operation by CID.
 // Returns the JWS token and the countersign's own CID (distinct from the target).
 func SignCountersign(witnessDID, targetCID, kid string, privateKey ed25519.PrivateKey) (jwsToken string, countersignCID string, err error) {
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := protocolTimestamp()
 
 	payload := map[string]any{
 		"version":   1,
