@@ -222,6 +222,111 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 	}, nil
 }
 
+// VerifiedAuthToken represents a successfully verified auth token JWT.
+type VerifiedAuthToken struct {
+	Iss string
+	Sub string
+	Kid string
+}
+
+// VerifyAuthToken verifies a DID auth token JWT for relay authentication.
+// Checks signature, typ=JWT, kid DID URL, audience, and temporal validity.
+func VerifyAuthToken(token string, publicKey ed25519.PublicKey, audience string) (*VerifiedAuthToken, error) {
+	return verifyAuthTokenCore(token, publicKey, audience, time.Now().Unix())
+}
+
+// VerifyAuthTokenAt is like VerifyAuthToken but accepts a custom current time
+// (unix seconds) for testing temporal checks.
+func VerifyAuthTokenAt(token string, publicKey ed25519.PublicKey, audience string, currentTime int64) (*VerifiedAuthToken, error) {
+	return verifyAuthTokenCore(token, publicKey, audience, currentTime)
+}
+
+func verifyAuthTokenCore(token string, publicKey ed25519.PublicKey, audience string, currentTime int64) (*VerifiedAuthToken, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid token format")
+	}
+
+	headerBytes, err := Base64urlDecode(parts[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode token")
+	}
+	payloadBytes, err := Base64urlDecode(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode token")
+	}
+
+	var header struct {
+		Alg string `json:"alg"`
+		Typ string `json:"typ"`
+		Kid string `json:"kid"`
+	}
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return nil, fmt.Errorf("failed to decode token")
+	}
+
+	if header.Alg != "EdDSA" {
+		return nil, fmt.Errorf("unsupported algorithm: %s", header.Alg)
+	}
+	if header.Typ != "JWT" {
+		return nil, fmt.Errorf("invalid typ: %s", header.Typ)
+	}
+
+	// verify signature
+	signingInput := parts[0] + "." + parts[1]
+	sigBytes, err := Base64urlDecode(parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode signature")
+	}
+	if !ed25519.Verify(publicKey, []byte(signingInput), sigBytes) {
+		return nil, fmt.Errorf("invalid signature")
+	}
+
+	var claims struct {
+		Iss string `json:"iss"`
+		Sub string `json:"sub"`
+		Aud string `json:"aud"`
+		Exp int64  `json:"exp"`
+		Iat int64  `json:"iat"`
+	}
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return nil, fmt.Errorf("invalid token claims")
+	}
+
+	if claims.Iss == "" || claims.Sub == "" || claims.Aud == "" || claims.Exp == 0 || claims.Iat == 0 {
+		return nil, fmt.Errorf("missing required claims")
+	}
+
+	// verify kid is DID URL matching iss
+	kid := header.Kid
+	if kid == "" || !strings.Contains(kid, "#") {
+		return nil, fmt.Errorf("kid must be a DID URL")
+	}
+	kidDID := kid[:strings.Index(kid, "#")]
+	if kidDID != claims.Iss {
+		return nil, fmt.Errorf("kid DID does not match iss")
+	}
+
+	// verify audience
+	if claims.Aud != audience {
+		return nil, fmt.Errorf("audience mismatch: expected %s, got %s", audience, claims.Aud)
+	}
+
+	// verify temporal validity
+	if claims.Iat > currentTime {
+		return nil, fmt.Errorf("token not yet valid")
+	}
+	if claims.Exp <= currentTime {
+		return nil, fmt.Errorf("token expired")
+	}
+
+	return &VerifiedAuthToken{
+		Iss: claims.Iss,
+		Sub: claims.Sub,
+		Kid: kid,
+	}, nil
+}
+
 // DecodeJWTUnsafe decodes a JWT without verifying.
 func DecodeJWTUnsafe(token string) (header map[string]string, payload map[string]any, err error) {
 	h, p, err := DecodeJWSUnsafe(token)
