@@ -118,9 +118,13 @@ jobs:
           go-version-file: packages/dfos-cli/go.mod
           cache-dependency-path: packages/dfos-cli/go.sum
 
-      - name: Run Go conformance tests against Go relay
+      - name: Run Go conformance tests against Go relay (memory)
         working-directory: packages/dfos-web-relay-go
         run: ./tests/run-conformance.sh
+
+      - name: Run Go conformance tests against Go relay (sqlite)
+        working-directory: packages/dfos-web-relay-go
+        run: STORE=sqlite ./tests/run-conformance.sh
 
   verify-go:
     runs-on: ubuntu-latest

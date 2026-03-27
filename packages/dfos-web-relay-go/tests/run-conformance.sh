@@ -5,6 +5,9 @@
 # Usage:
 #   cd packages/dfos-web-relay-go && ./tests/run-conformance.sh
 #
+# Environment:
+#   STORE=sqlite  — use SQLite store (default: memory)
+#
 # Builds and starts the Go relay on a random port, runs conformance tests, then
 # kills the relay.
 
@@ -13,6 +16,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELAY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$RELAY_DIR/../.." && pwd)"
+
+STORE_TYPE="${STORE:-memory}"
 
 # build the relay binary
 echo "Building Go relay..."
@@ -23,8 +28,15 @@ go build -o "$RELAY_DIR/relay-server" ./cmd/relay
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
 
 # start the relay in the background
-echo "Starting Go relay on port $PORT..."
-PORT="$PORT" "$RELAY_DIR/relay-server" &
+SQLITE_PATH=""
+if [ "$STORE_TYPE" = "sqlite" ]; then
+  SQLITE_PATH="$(mktemp -d)/relay.db"
+  echo "Starting Go relay on port $PORT (SQLite: $SQLITE_PATH)..."
+  STORE=sqlite SQLITE_PATH="$SQLITE_PATH" PORT="$PORT" "$RELAY_DIR/relay-server" &
+else
+  echo "Starting Go relay on port $PORT (memory)..."
+  PORT="$PORT" "$RELAY_DIR/relay-server" &
+fi
 RELAY_PID=$!
 
 # wait for the relay to be ready
@@ -58,5 +70,9 @@ EXIT_CODE=$?
 kill $RELAY_PID 2>/dev/null || true
 wait $RELAY_PID 2>/dev/null || true
 rm -f "$RELAY_DIR/relay-server"
+if [ -n "$SQLITE_PATH" ]; then
+  rm -f "$SQLITE_PATH" "${SQLITE_PATH}-wal" "${SQLITE_PATH}-shm"
+  rmdir "$(dirname "$SQLITE_PATH")" 2>/dev/null || true
+fi
 
 exit $EXIT_CODE

@@ -15,7 +15,28 @@ func main() {
 		port = "8080"
 	}
 
-	store := relay.NewMemoryStore()
+	// STORE env var selects the backend: "sqlite" or "memory" (default)
+	storeType := os.Getenv("STORE")
+	dbPath := os.Getenv("SQLITE_PATH")
+	if dbPath == "" {
+		dbPath = "relay.db"
+	}
+
+	var store relay.Store
+	switch storeType {
+	case "sqlite":
+		s, err := relay.NewSQLiteStore(dbPath)
+		if err != nil {
+			log.Fatalf("failed to open SQLite store at %s: %v", dbPath, err)
+		}
+		defer s.Close()
+		store = s
+		fmt.Printf("Using SQLite store at %s\n", dbPath)
+	default:
+		store = relay.NewMemoryStore()
+		fmt.Println("Using in-memory store")
+	}
+
 	r, err := relay.NewRelay(relay.RelayOptions{
 		Store:   store,
 		Content: true,
