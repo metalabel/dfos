@@ -3,6 +3,7 @@ package dfos
 import (
 	"crypto/ed25519"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -11,6 +12,8 @@ import (
 type KeyResolver func(kid string) (ed25519.PublicKey, error)
 
 const protocolTimeFormat = "2006-01-02T15:04:05.000Z"
+
+var merkleRootPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // -----------------------------------------------------------------------------
 // Result types
@@ -135,8 +138,14 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		createdAt := payloadString(payload, "createdAt")
 
 		// validate basics
+		if v, ok := payload["version"].(int64); !ok || v != 1 {
+			return nil, fmt.Errorf("log[%d]: invalid or missing version", idx)
+		}
 		if opType != "create" && opType != "update" && opType != "delete" {
 			return nil, fmt.Errorf("log[%d]: invalid operation type", idx)
+		}
+		if createdAt == "" {
+			return nil, fmt.Errorf("log[%d]: missing createdAt", idx)
 		}
 		if header.Typ != "did:dfos:identity-op" {
 			return nil, fmt.Errorf("log[%d]: invalid typ: %s", idx, header.Typ)
@@ -243,15 +252,15 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 
 		// resolve signing key from kid
 		kid := header.Kid
-		var signingKeyId string
+		var signingKeyID string
 		if strings.Contains(kid, "#") {
 			hashIdx := strings.Index(kid, "#")
-			signingKeyId = kid[hashIdx+1:]
+			signingKeyID = kid[hashIdx+1:]
 			if idx == 0 {
 				return nil, fmt.Errorf("log[%d]: genesis op kid must be bare key ID, got DID URL", idx)
 			}
 		} else {
-			signingKeyId = kid
+			signingKeyID = kid
 			if idx > 0 {
 				return nil, fmt.Errorf("log[%d]: non-genesis op kid must be DID URL, got bare key ID", idx)
 			}
@@ -260,13 +269,13 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		// find controller key
 		var signingKey *MultikeyPublicKey
 		for i := range controllerKeys {
-			if controllerKeys[i].ID == signingKeyId {
+			if controllerKeys[i].ID == signingKeyID {
 				signingKey = &controllerKeys[i]
 				break
 			}
 		}
 		if signingKey == nil {
-			return nil, fmt.Errorf("log[%d]: kid references unknown key: %s", idx, signingKeyId)
+			return nil, fmt.Errorf("log[%d]: kid references unknown key: %s", idx, signingKeyID)
 		}
 
 		// verify JWS signature
@@ -375,7 +384,7 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 		return nil, fmt.Errorf("non-genesis op kid must be DID URL, got bare key ID")
 	}
 	hashIdx := strings.Index(kid, "#")
-	signingKeyId := kid[hashIdx+1:]
+	signingKeyID := kid[hashIdx+1:]
 	kidDid := kid[:hashIdx]
 	if kidDid != currentState.DID {
 		return nil, fmt.Errorf("kid DID does not match identity DID")
@@ -384,13 +393,13 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 	// find controller key
 	var signingKey *MultikeyPublicKey
 	for i := range currentState.ControllerKeys {
-		if currentState.ControllerKeys[i].ID == signingKeyId {
+		if currentState.ControllerKeys[i].ID == signingKeyID {
 			signingKey = &currentState.ControllerKeys[i]
 			break
 		}
 	}
 	if signingKey == nil {
-		return nil, fmt.Errorf("kid references unknown key: %s", signingKeyId)
+		return nil, fmt.Errorf("kid references unknown key: %s", signingKeyID)
 	}
 
 	// verify signature
@@ -472,7 +481,7 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 	}
 
 	var (
-		contentId      string
+		contentID      string
 		genesisCID     string
 		headCID        string
 		isDeleted      bool
@@ -494,8 +503,14 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 		opDID := payloadString(payload, "did")
 
 		// validate basics
+		if v, ok := payload["version"].(int64); !ok || v != 1 {
+			return nil, fmt.Errorf("log[%d]: invalid or missing version", idx)
+		}
 		if opType != "create" && opType != "update" && opType != "delete" {
 			return nil, fmt.Errorf("log[%d]: invalid operation type", idx)
+		}
+		if createdAt == "" {
+			return nil, fmt.Errorf("log[%d]: missing createdAt", idx)
 		}
 		if header.Typ != "did:dfos:content-op" {
 			return nil, fmt.Errorf("log[%d]: invalid typ: %s", idx, header.Typ)
@@ -571,7 +586,10 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 				return nil, fmt.Errorf("log[%d]: cannot resolve creator key for authorization verification", idx)
 			}
 
-			opTime, _ := time.Parse(protocolTimeFormat, createdAt)
+			opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
+			if parseErr != nil {
+				return nil, fmt.Errorf("log[%d]: invalid createdAt format: %w", idx, parseErr)
+			}
 			opTimeUnix := opTime.Unix()
 
 			vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "DFOSContentWrite", opTimeUnix)
@@ -581,8 +599,8 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 			if vc.Iss != creatorDID {
 				return nil, fmt.Errorf("log[%d]: authorization verification failed: VC issuer is not the chain creator", idx)
 			}
-			if vc.ContentID != "" && vc.ContentID != contentId {
-				return nil, fmt.Errorf("log[%d]: authorization verification failed: VC contentId %s does not match chain %s", idx, vc.ContentID, contentId)
+			if vc.ContentID != "" && vc.ContentID != contentID {
+				return nil, fmt.Errorf("log[%d]: authorization verification failed: VC contentId %s does not match chain %s", idx, vc.ContentID, contentID)
 			}
 		}
 
@@ -601,7 +619,7 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 		// update state
 		if idx == 0 {
 			genesisCID = operationCID
-			contentId = DeriveContentID(cidBytes)
+			contentID = DeriveContentID(cidBytes)
 		}
 		headCID = operationCID
 		previousCID = operationCID
@@ -610,8 +628,11 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 
 		switch opType {
 		case "create":
-			docCID := payloadStringPtr(payload, "documentCID")
-			currentDocCID = docCID
+			docCIDStr := payloadString(payload, "documentCID")
+			if docCIDStr == "" {
+				return nil, fmt.Errorf("log[%d]: create must have a documentCID", idx)
+			}
+			currentDocCID = &docCIDStr
 		case "update":
 			docCID := payloadStringPtr(payload, "documentCID")
 			currentDocCID = docCID
@@ -623,7 +644,7 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 
 	return &VerifiedContentResult{
 		State: ContentState{
-			ContentID:          contentId,
+			ContentID:          contentID,
 			GenesisCID:         genesisCID,
 			HeadCID:            headCID,
 			IsDeleted:          isDeleted,
@@ -712,7 +733,10 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 			return nil, fmt.Errorf("cannot resolve creator key for authorization verification")
 		}
 
-		opTime, _ := time.Parse(protocolTimeFormat, createdAt)
+		opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid createdAt format: %w", parseErr)
+		}
 		opTimeUnix := opTime.Unix()
 
 		vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "DFOSContentWrite", opTimeUnix)
@@ -778,6 +802,9 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 	}
 
 	// validate payload
+	if v, ok := payload["version"].(int64); !ok || v != 1 {
+		return nil, fmt.Errorf("invalid beacon payload: invalid or missing version")
+	}
 	if payloadString(payload, "type") != "beacon" {
 		return nil, fmt.Errorf("invalid beacon payload: wrong type")
 	}
@@ -786,8 +813,8 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 		return nil, fmt.Errorf("invalid beacon payload: missing did")
 	}
 	merkleRoot := payloadString(payload, "merkleRoot")
-	if merkleRoot == "" {
-		return nil, fmt.Errorf("invalid beacon payload: missing merkleRoot")
+	if !merkleRootPattern.MatchString(merkleRoot) {
+		return nil, fmt.Errorf("invalid beacon payload: merkleRoot must be 64 lowercase hex characters")
 	}
 	createdAt := payloadString(payload, "createdAt")
 	if createdAt == "" {
@@ -863,6 +890,9 @@ func VerifyArtifact(jwsToken string, resolveKey KeyResolver) (*VerifiedArtifactR
 	}
 
 	// validate payload
+	if v, ok := payload["version"].(int64); !ok || v != 1 {
+		return nil, fmt.Errorf("invalid artifact payload: invalid or missing version")
+	}
 	if payloadString(payload, "type") != "artifact" {
 		return nil, fmt.Errorf("invalid artifact payload: wrong type")
 	}
@@ -956,6 +986,9 @@ func VerifyCountersignature(jwsToken string, resolveKey KeyResolver) (*VerifiedC
 	}
 
 	// validate payload
+	if v, ok := payload["version"].(int64); !ok || v != 1 {
+		return nil, fmt.Errorf("invalid countersignature payload: invalid or missing version")
+	}
 	if payloadString(payload, "type") != "countersign" {
 		return nil, fmt.Errorf("invalid countersignature payload: wrong type")
 	}

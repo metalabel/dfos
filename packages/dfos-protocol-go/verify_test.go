@@ -3,7 +3,6 @@ package dfos
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
 	"fmt"
 	"testing"
 	"time"
@@ -993,19 +992,9 @@ func TestVerifyAuthToken_WrongKey(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Deterministic keypair for cross-validation (shared with protocol_test.go)
-// ---------------------------------------------------------------------------
-
-func verifyRefKey1() (ed25519.PrivateKey, ed25519.PublicKey) {
-	seed := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
-	priv := ed25519.NewKeyFromSeed(seed[:])
-	return priv, priv.Public().(ed25519.PublicKey)
-}
-
 // Verify that a chain built with the reference key verifies correctly
 func TestVerifyIdentityChain_FullRoundTrip(t *testing.T) {
-	priv, pub := verifyRefKey1()
+	priv, pub := refKey1()
 	keyID := "key_r9ev34fvc23z999veaaft8"
 	mk := NewMultikeyPublicKey(keyID, pub)
 
