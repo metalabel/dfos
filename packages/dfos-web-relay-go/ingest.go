@@ -213,7 +213,7 @@ func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 // individual verifiers
 // ---------------------------------------------------------------------------
 
-func ingestIdentityOp(jwsToken string, store Store) IngestionResult {
+func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil {
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
@@ -251,7 +251,9 @@ func ingestIdentityOp(jwsToken string, store Store) IngestionResult {
 		}
 		store.PutIdentityChain(chain)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: result.State.DID})
+		if logEnabled {
 		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})
+	}
 		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: result.State.DID}
 	}
 
@@ -286,7 +288,9 @@ func ingestIdentityOp(jwsToken string, store Store) IngestionResult {
 		}
 		store.PutIdentityChain(updated)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})
+		if logEnabled {
 		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
+	}
 		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
 	}
 
@@ -330,11 +334,13 @@ func ingestIdentityOp(jwsToken string, store Store) IngestionResult {
 	}
 	store.PutIdentityChain(updated)
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
+	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
 }
 
-func ingestContentOp(jwsToken string, store Store) IngestionResult {
+func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil {
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
@@ -382,7 +388,9 @@ func ingestContentOp(jwsToken string, store Store) IngestionResult {
 		}
 		store.PutContentChain(chain)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: result.State.ContentID})
+		if logEnabled {
 		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})
+	}
 		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: result.State.ContentID}
 	}
 
@@ -426,7 +434,9 @@ func ingestContentOp(jwsToken string, store Store) IngestionResult {
 		}
 		store.PutContentChain(updated)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})
+		if logEnabled {
 		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
+	}
 		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
 	}
 
@@ -465,11 +475,13 @@ func ingestContentOp(jwsToken string, store Store) IngestionResult {
 	}
 	store.PutContentChain(updated)
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
+	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
 }
 
-func ingestBeacon(jwsToken string, store Store) IngestionResult {
+func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	resolveKey := CreateKeyResolver(store)
 
 	result, err := dfos.VerifyBeacon(jwsToken, resolveKey)
@@ -510,11 +522,13 @@ func ingestBeacon(jwsToken string, store Store) IngestionResult {
 	}
 	store.PutBeacon(beacon)
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "beacon", ChainID: did})
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "beacon", ChainID: did})
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "beacon", ChainID: did})
+	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "beacon", ChainID: did}
 }
 
-func ingestCountersign(jwsToken string, store Store) IngestionResult {
+func ingestCountersign(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	resolveKey := CreateKeyResolver(store)
 
 	result, err := dfos.VerifyCountersignature(jwsToken, resolveKey)
@@ -580,11 +594,13 @@ func ingestCountersign(jwsToken string, store Store) IngestionResult {
 
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "countersign", ChainID: targetCID})
 	store.AddCountersignature(targetCID, jwsToken)
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "countersign", ChainID: targetCID})
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "countersign", ChainID: targetCID})
+	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "countersign", ChainID: targetCID}
 }
 
-func ingestArtifact(jwsToken string, store Store) IngestionResult {
+func ingestArtifact(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	resolveKey := CreateKeyResolver(store)
 
 	result, err := dfos.VerifyArtifact(jwsToken, resolveKey)
@@ -611,7 +627,9 @@ func ingestArtifact(jwsToken string, store Store) IngestionResult {
 	}
 
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "artifact", ChainID: did})
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "artifact", ChainID: did})
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "artifact", ChainID: did})
+	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "artifact", ChainID: did}
 }
 
@@ -781,9 +799,26 @@ func topologicalSortBucket(ops []classifiedOp) []classifiedOp {
 // main pipeline
 // ---------------------------------------------------------------------------
 
+type ingestConfig struct {
+	logEnabled bool
+}
+
+// IngestOption configures ingestion behavior.
+type IngestOption func(*ingestConfig)
+
+// WithLogDisabled disables writing to the global operation log during ingestion.
+func WithLogDisabled() IngestOption {
+	return func(c *ingestConfig) { c.logEnabled = false }
+}
+
 // IngestOperations classifies, dependency-sorts, and processes a batch of JWS
 // tokens. Returns results in the original submission order.
-func IngestOperations(tokens []string, store Store) []IngestionResult {
+func IngestOperations(tokens []string, store Store, opts ...IngestOption) []IngestionResult {
+	cfg := ingestConfig{logEnabled: true}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	classified := make([]classifiedOp, len(tokens))
 	for i, token := range tokens {
 		classified[i] = classify(token)
@@ -808,15 +843,15 @@ func IngestOperations(tokens []string, store Store) []IngestionResult {
 			}()
 			switch op.kind {
 			case "identity-op":
-				result = ingestIdentityOp(op.jwsToken, store)
+				result = ingestIdentityOp(op.jwsToken, store, cfg.logEnabled)
 			case "content-op":
-				result = ingestContentOp(op.jwsToken, store)
+				result = ingestContentOp(op.jwsToken, store, cfg.logEnabled)
 			case "beacon":
-				result = ingestBeacon(op.jwsToken, store)
+				result = ingestBeacon(op.jwsToken, store, cfg.logEnabled)
 			case "countersign":
-				result = ingestCountersign(op.jwsToken, store)
+				result = ingestCountersign(op.jwsToken, store, cfg.logEnabled)
 			case "artifact":
-				result = ingestArtifact(op.jwsToken, store)
+				result = ingestArtifact(op.jwsToken, store, cfg.logEnabled)
 			default:
 				result = IngestionResult{Status: "rejected", Error: "unrecognized operation type"}
 			}

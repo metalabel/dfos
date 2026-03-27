@@ -40,7 +40,7 @@ func TestArtifactCreate(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(result.Results))
 	}
 	if result.Results[0].Status != "new" {
-		t.Fatalf("expected accepted, got %s", result.Results[0].Status)
+		t.Fatalf("expected new, got %s", result.Results[0].Status)
 	}
 	if result.Results[0].Kind != "artifact" {
 		t.Fatalf("expected kind artifact, got %s", result.Results[0].Kind)
@@ -538,6 +538,6 @@ func TestCountersignTargetingCountersign(t *testing.T) {
 	json.Unmarshal(body, &result)
 
 	if result.Results[0].Status != "new" {
-		t.Fatalf("expected accepted for countersign-on-countersign, got %s", result.Results[0].Status)
+		t.Fatalf("expected new for countersign-on-countersign, got %s", result.Results[0].Status)
 	}
 }

@@ -519,7 +519,7 @@ const ingestContentOp = async (
     genesisCID: chain.genesisCID,
     log: updatedLog,
     lastCreatedAt: headLastCreatedAt,
-    state: head.cid === cid ? extResult.state : chain.state,
+    state: headState,
   };
   await store.putContentChain(updated);
   await store.putOperation({ cid, jwsToken, chainType: 'content', chainId: chain.contentId });
@@ -792,10 +792,6 @@ const topologicalSortBucket = (ops: ClassifiedOperation[]): ClassifiedOperation[
 
   return sorted;
 };
-
-// -----------------------------------------------------------------------------
-// main pipeline
-// -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
 // fork helpers

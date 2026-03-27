@@ -54,7 +54,11 @@ func (r *Relay) ProfileArtifactJWS() string { return r.profileArtifactJWS }
 
 // Ingest processes a batch of JWS operation tokens, then gossips new ops to peers.
 func (r *Relay) Ingest(tokens []string) []IngestionResult {
-	results := IngestOperations(tokens, r.store)
+	var opts []IngestOption
+	if !r.logEnabled {
+		opts = append(opts, WithLogDisabled())
+	}
+	results := IngestOperations(tokens, r.store, opts...)
 
 	// gossip new ops to peers
 	if r.peerClient != nil {
