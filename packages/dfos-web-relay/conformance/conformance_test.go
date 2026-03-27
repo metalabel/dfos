@@ -579,6 +579,97 @@ func TestContentForkRejection(t *testing.T) {
 	}
 }
 
+func TestContentForkDAGLog(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	cc := createContent(t, base, id)
+
+	kid := id.did + "#" + id.auth.keyID
+
+	// create two fork branches off genesis
+	doc1 := map[string]any{"type": "post", "title": "branch-a"}
+	docCID1, _, _ := dfos.DocumentCID(doc1)
+	tok1, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID1, kid, "", id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc2 := map[string]any{"type": "post", "title": "branch-b"}
+	docCID2, _, _ := dfos.DocumentCID(doc2)
+	tok2, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, "", id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res1 := postOperations(t, base, []string{tok1})
+	res1.Body.Close()
+	res2 := postOperations(t, base, []string{tok2})
+	res2.Body.Close()
+
+	// chain log should contain all 3 ops (genesis + 2 fork branches)
+	var logResp struct {
+		Entries []struct {
+			CID      string `json:"cid"`
+			JWSToken string `json:"jwsToken"`
+		} `json:"entries"`
+	}
+	logRes := getJSON(t, base+"/content/"+cc.contentID+"/log", &logResp)
+	if logRes.StatusCode != 200 {
+		t.Fatalf("log: expected 200, got %d", logRes.StatusCode)
+	}
+	if len(logResp.Entries) != 3 {
+		t.Fatalf("expected 3 log entries (genesis + 2 forks), got %d", len(logResp.Entries))
+	}
+}
+
+func TestContentForkDeterministicHead(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	cc := createContent(t, base, id)
+
+	kid := id.did + "#" + id.auth.keyID
+
+	// branch A: signed first (earlier createdAt)
+	docA := map[string]any{"type": "post", "title": "earlier"}
+	docCIDA, _, _ := dfos.DocumentCID(docA)
+	tokA, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCIDA, kid, "", id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// branch B: signed second (later createdAt — should become head)
+	docB := map[string]any{"type": "post", "title": "later"}
+	docCIDB, _, _ := dfos.DocumentCID(docB)
+	tokB, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCIDB, kid, "", id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// submit A first, then B
+	res1 := postOperations(t, base, []string{tokA})
+	res1.Body.Close()
+	res2 := postOperations(t, base, []string{tokB})
+	res2.Body.Close()
+
+	// head should point to B's document (later createdAt wins)
+	var chain struct {
+		State struct {
+			CurrentDocumentCID *string `json:"currentDocumentCID"`
+		} `json:"state"`
+	}
+	chainRes := getJSON(t, base+"/content/"+cc.contentID, &chain)
+	if chainRes.StatusCode != 200 {
+		t.Fatalf("content: expected 200, got %d", chainRes.StatusCode)
+	}
+	if chain.State.CurrentDocumentCID == nil || *chain.State.CurrentDocumentCID != docCIDB {
+		got := "<nil>"
+		if chain.State.CurrentDocumentCID != nil {
+			got = *chain.State.CurrentDocumentCID
+		}
+		t.Fatalf("head should point to later fork's document\nexpected: %s\ngot:      %s", docCIDB, got)
+	}
+}
+
 // ===================================================================
 // operations by CID
 // ===================================================================

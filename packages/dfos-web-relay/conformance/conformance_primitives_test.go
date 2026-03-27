@@ -156,10 +156,10 @@ func TestArtifactIdempotent(t *testing.T) {
 	json.Unmarshal(body2, &r2)
 
 	if r1.Results[0].Status != "new" {
-		t.Fatalf("first submit: expected accepted, got %s", r1.Results[0].Status)
+		t.Fatalf("first submit: expected new, got %s", r1.Results[0].Status)
 	}
-	if r2.Results[0].Status != "new" {
-		t.Fatalf("second submit: expected accepted (idempotent), got %s", r2.Results[0].Status)
+	if r2.Results[0].Status != "duplicate" {
+		t.Fatalf("second submit: expected duplicate (idempotent), got %s", r2.Results[0].Status)
 	}
 }
 

@@ -1258,6 +1258,131 @@ describe('web relay', () => {
       const logBody = await json(logRes);
       expect(logBody.entries).toHaveLength(3);
     });
+
+    it('should select head by highest createdAt (deterministic head selection)', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      const ingestRes = await postOps([identity.jwsToken, content.jwsToken]);
+      const ingestBody = await json(ingestRes);
+      const contentId = ingestBody.results.find(
+        (r: { kind: string }) => r.kind === 'content-op',
+      ).chainId;
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+
+      // fork A: lower createdAt
+      const docA = { type: 'post', title: 'branch-a' };
+      const docAEncoded = await dagCborCanonicalEncode(docA as unknown as Record<string, unknown>);
+      const updateA: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        documentCID: docAEncoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(100),
+        note: null,
+      };
+      const { jwsToken: tokenA } = await signContentOperation({
+        operation: updateA,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      // fork B: higher createdAt — should become head
+      const docB = { type: 'post', title: 'branch-b' };
+      const docBEncoded = await dagCborCanonicalEncode(docB as unknown as Record<string, unknown>);
+      const updateB: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        documentCID: docBEncoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(200),
+        note: null,
+      };
+      const { jwsToken: tokenB } = await signContentOperation({
+        operation: updateB,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      // submit A first (higher createdAt arrives second)
+      await postOps([tokenA]);
+      await postOps([tokenB]);
+
+      // head should be B (higher createdAt wins)
+      const chainRes = await req(`/content/${contentId}`);
+      const chain = await json(chainRes);
+      expect(chain.state.currentDocumentCID).toBe(docBEncoded.cid.toString());
+
+      // now submit in reverse order on a fresh relay to prove order-independence
+      const store2 = new MemoryRelayStore();
+      const relay2 = await createRelay({ store: store2 });
+      const req2 = (path: string, init?: RequestInit) =>
+        relay2.app.request(`http://localhost${path}`, init);
+      const postOps2 = (ops: string[]) =>
+        req2('/operations', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ operations: ops }),
+        });
+
+      // submit identity + genesis + B first, then A
+      await postOps2([identity.jwsToken, content.jwsToken]);
+      await postOps2([tokenB]);
+      await postOps2([tokenA]);
+
+      // same head regardless of ingestion order
+      const chainRes2 = await req2(`/content/${contentId}`);
+      const chain2 = await json(chainRes2);
+      expect(chain2.state.currentDocumentCID).toBe(docBEncoded.cid.toString());
+    });
+
+    it('should include all fork branches in per-chain log', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      const ingestRes = await postOps([identity.jwsToken, content.jwsToken]);
+      const ingestBody = await json(ingestRes);
+      const contentId = ingestBody.results.find(
+        (r: { kind: string }) => r.kind === 'content-op',
+      ).chainId;
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+
+      // three fork branches off genesis
+      const forks: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const doc = { type: 'post', title: `fork-${i}` };
+        const docEncoded = await dagCborCanonicalEncode(
+          doc as unknown as Record<string, unknown>,
+        );
+        const update: ContentOperation = {
+          version: 1,
+          type: 'update',
+          did: identity.did,
+          previousOperationCID: content.operationCID,
+          documentCID: docEncoded.cid.toString(),
+          baseDocumentCID: null,
+          createdAt: ts(10 + i),
+          note: null,
+        };
+        const { jwsToken } = await signContentOperation({
+          operation: update,
+          signer: identity.authKey.signer,
+          kid,
+        });
+        forks.push(jwsToken);
+      }
+
+      for (const f of forks) await postOps([f]);
+
+      // chain log has genesis + 3 fork branches = 4 entries
+      const logRes = await req(`/content/${contentId}/log`);
+      const logBody = await json(logRes);
+      expect(logBody.entries).toHaveLength(4);
+    });
   });
 
   // ---------------------------------------------------------------------------

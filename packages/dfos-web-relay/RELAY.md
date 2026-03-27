@@ -96,11 +96,11 @@ Forks are accepted. If an incoming operation's `previousOperationCID` references
 
 Three distinct outcomes from ingestion:
 
-| Status      | Meaning                                            |
-| ----------- | -------------------------------------------------- |
-| `new`       | First time seen, verified, stored, state changed   |
-| `duplicate` | Already had it (same CID, same JWS token), no-op  |
-| `rejected`  | Verification failed                                |
+| Status      | Meaning                                          |
+| ----------- | ------------------------------------------------ |
+| `new`       | First time seen, verified, stored, state changed |
+| `duplicate` | Already had it (same CID, same JWS token), no-op |
+| `rejected`  | Verification failed                              |
 
 Submissions with the same CID but a different JWS token are rejected — since Ed25519 is deterministic, a different token for the same payload means a different signing key.
 
@@ -437,7 +437,7 @@ The package includes `MemoryRelayStore` for development and testing. Production 
 ## Quick Start
 
 ```typescript
-import { createRelay, MemoryRelayStore, createHttpPeerClient } from '@metalabel/dfos-web-relay';
+import { createHttpPeerClient, createRelay, MemoryRelayStore } from '@metalabel/dfos-web-relay';
 
 // JIT mode — generates relay identity + profile artifact at startup
 const relay = await createRelay({
@@ -484,11 +484,11 @@ Relay-to-relay peering enables data replication across the network. The relay ex
 
 ### Three Behaviors
 
-| Behavior       | Trigger                  | Mechanism                                 |
-| -------------- | ------------------------ | ----------------------------------------- |
-| **Gossip-out** | New op ingested          | Push to peers with `gossip: true`         |
-| **Read-through** | Local 404 on GET       | Fetch from peers with `readThrough: true` |
-| **Sync-in**    | Scheduled poll           | Pull from peers with `sync: true` via /log |
+| Behavior         | Trigger          | Mechanism                                  |
+| ---------------- | ---------------- | ------------------------------------------ |
+| **Gossip-out**   | New op ingested  | Push to peers with `gossip: true`          |
+| **Read-through** | Local 404 on GET | Fetch from peers with `readThrough: true`  |
+| **Sync-in**      | Scheduled poll   | Pull from peers with `sync: true` via /log |
 
 Gossip fires on `new` status only — `duplicate` results are not re-gossiped, preventing gossip storms. Read-through fetches the full chain log from a peer and ingests locally (full verification, no trust). Sync-in uses cursor-based pagination against the peer's global log.
 
@@ -497,9 +497,9 @@ Gossip fires on `new` status only — `duplicate` results are not re-gossiped, p
 ```typescript
 interface PeerConfig {
   url: string;
-  gossip?: boolean;       // default: true
-  readThrough?: boolean;  // default: true
-  sync?: boolean;         // default: true
+  gossip?: boolean; // default: true
+  readThrough?: boolean; // default: true
+  sync?: boolean; // default: true
 }
 ```
 
