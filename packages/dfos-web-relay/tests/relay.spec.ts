@@ -1355,9 +1355,7 @@ describe('web relay', () => {
       const forks: string[] = [];
       for (let i = 0; i < 3; i++) {
         const doc = { type: 'post', title: `fork-${i}` };
-        const docEncoded = await dagCborCanonicalEncode(
-          doc as unknown as Record<string, unknown>,
-        );
+        const docEncoded = await dagCborCanonicalEncode(doc as unknown as Record<string, unknown>);
         const update: ContentOperation = {
           version: 1,
           type: 'update',
