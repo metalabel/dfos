@@ -30,6 +30,58 @@ export interface RelayOptions {
   identity?: RelayIdentity;
   /** Whether content plane routes are enabled (default: true) */
   content?: boolean;
+  /** Whether the global operation log is enabled (default: true) */
+  log?: boolean;
+  /** Peer relay configurations */
+  peers?: PeerConfig[];
+  /** Injected peer client — if omitted, a default HTTP implementation is used */
+  peerClient?: PeerClient;
+}
+
+// -----------------------------------------------------------------------------
+// peering
+// -----------------------------------------------------------------------------
+
+export interface PeerConfig {
+  url: string;
+  /** Push new ops to this peer (default: true) */
+  gossip?: boolean;
+  /** Fetch from this peer on local 404 (default: true) */
+  readThrough?: boolean;
+  /** Poll this peer's /log for background sync (default: true) */
+  sync?: boolean;
+}
+
+/** A log entry returned by a peer — CID and JWS token */
+export interface PeerLogEntry {
+  cid: string;
+  jwsToken: string;
+}
+
+/** Injected peer transport — the relay expresses intent, the caller decides transport */
+export interface PeerClient {
+  /** Fetch identity chain log from a peer */
+  getIdentityLog(
+    peerUrl: string,
+    did: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+
+  /** Fetch content chain log from a peer */
+  getContentLog(
+    peerUrl: string,
+    contentId: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+
+  /** Fetch global operation log from a peer */
+  getOperationLog(
+    peerUrl: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+
+  /** Push operations to a peer (fire-and-forget) */
+  submitOperations(peerUrl: string, operations: string[]): Promise<void>;
 }
 
 // -----------------------------------------------------------------------------
@@ -149,6 +201,38 @@ export interface RelayStore {
     after?: string;
     limit: number;
   }): Promise<{ entries: LogEntry[]; cursor: string | null }>;
+
+  // --- chain state at arbitrary CID (snapshot-backed) ---
+
+  /**
+   * Get the materialized identity state at a specific operation CID.
+   *
+   * Used by fork verification — the ingestion pipeline needs state at the fork
+   * point to verify signer authority and createdAt ordering.
+   *
+   * Implementations decide how to compute this:
+   * - MemoryStore: replay from genesis (chains are short in tests)
+   * - SQLiteStore: check snapshot table, replay from nearest snapshot
+   *
+   * Returns null if the CID is not in this chain's log.
+   */
+  getIdentityStateAtCID(
+    did: string,
+    cid: string,
+  ): Promise<{ state: VerifiedIdentity; lastCreatedAt: string } | null>;
+
+  /** Same for content chains */
+  getContentStateAtCID(
+    contentId: string,
+    cid: string,
+  ): Promise<{ state: VerifiedContentChain; lastCreatedAt: string } | null>;
+
+  // --- peer sync state ---
+
+  /** Get last-synced log cursor for a peer relay */
+  getPeerCursor(peerUrl: string): Promise<string | undefined>;
+  /** Update last-synced log cursor for a peer relay */
+  setPeerCursor(peerUrl: string, cursor: string): Promise<void>;
 }
 
 // -----------------------------------------------------------------------------
@@ -157,7 +241,7 @@ export interface RelayStore {
 
 export interface IngestionResult {
   cid: string;
-  status: 'accepted' | 'rejected';
+  status: 'new' | 'duplicate' | 'rejected';
   error?: string;
   /** What was ingested */
   kind?: OperationKind;

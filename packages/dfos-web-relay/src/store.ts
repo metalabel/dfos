@@ -6,7 +6,10 @@
 
 */
 
+import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
+import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { createKeyResolver } from './ingest';
 import type {
   BlobKey,
   LogEntry,
@@ -33,6 +36,7 @@ export class MemoryRelayStore implements RelayStore {
   private blobs = new Map<string, Uint8Array>();
   private countersignatures = new Map<string, string[]>();
   private operationLog: LogEntry[] = [];
+  private peerCursors = new Map<string, string>();
 
   async getOperation(cid: string): Promise<StoredOperation | undefined> {
     return this.operations.get(cid);
@@ -117,5 +121,103 @@ export class MemoryRelayStore implements RelayStore {
     const entries = this.operationLog.slice(startIdx, startIdx + params.limit);
     const cursor = entries.length === params.limit ? entries[entries.length - 1]!.cid : null;
     return { entries, cursor };
+  }
+
+  async getIdentityStateAtCID(
+    did: string,
+    cid: string,
+  ): Promise<{ state: VerifiedIdentity; lastCreatedAt: string } | null> {
+    const chain = this.identityChains.get(did);
+    if (!chain) return null;
+
+    // build CID → { jws, previousCID } map
+    const opsByCID = new Map<string, { jws: string; previousCID: string | null }>();
+    for (const jws of chain.log) {
+      const decoded = decodeJwsUnsafe(jws);
+      if (!decoded) continue;
+      const payload = decoded.payload as Record<string, unknown>;
+      const opCID = typeof decoded.header.cid === 'string' ? decoded.header.cid : '';
+      const prevCID =
+        typeof payload['previousOperationCID'] === 'string'
+          ? payload['previousOperationCID']
+          : null;
+      opsByCID.set(opCID, { jws, previousCID: prevCID });
+    }
+
+    if (!opsByCID.has(cid)) return null;
+
+    // walk backward from target CID to genesis
+    const path: string[] = [];
+    let currentCID: string | null = cid;
+    while (currentCID) {
+      const op = opsByCID.get(currentCID);
+      if (!op) return null;
+      path.unshift(op.jws);
+      currentCID = op.previousCID;
+    }
+
+    const identity = await verifyIdentityChain({ didPrefix: 'did:dfos', log: path });
+
+    // extract createdAt of the target CID operation
+    const targetDecoded = decodeJwsUnsafe(opsByCID.get(cid)!.jws);
+    const lastCreatedAt =
+      typeof (targetDecoded?.payload as Record<string, unknown>)?.['createdAt'] === 'string'
+        ? ((targetDecoded?.payload as Record<string, unknown>)['createdAt'] as string)
+        : '';
+
+    return { state: identity, lastCreatedAt };
+  }
+
+  async getContentStateAtCID(
+    contentId: string,
+    cid: string,
+  ): Promise<{ state: VerifiedContentChain; lastCreatedAt: string } | null> {
+    const chain = this.contentChains.get(contentId);
+    if (!chain) return null;
+
+    // build CID → { jws, previousCID } map
+    const opsByCID = new Map<string, { jws: string; previousCID: string | null }>();
+    for (const jws of chain.log) {
+      const decoded = decodeJwsUnsafe(jws);
+      if (!decoded) continue;
+      const payload = decoded.payload as Record<string, unknown>;
+      const opCID = typeof decoded.header.cid === 'string' ? decoded.header.cid : '';
+      const prevCID =
+        typeof payload['previousOperationCID'] === 'string'
+          ? payload['previousOperationCID']
+          : null;
+      opsByCID.set(opCID, { jws, previousCID: prevCID });
+    }
+
+    if (!opsByCID.has(cid)) return null;
+
+    // walk backward from target CID to genesis
+    const path: string[] = [];
+    let currentCID: string | null = cid;
+    while (currentCID) {
+      const op = opsByCID.get(currentCID);
+      if (!op) return null;
+      path.unshift(op.jws);
+      currentCID = op.previousCID;
+    }
+
+    const resolveKey = createKeyResolver(this);
+    const content = await verifyContentChain({ log: path, resolveKey, enforceAuthorization: true });
+
+    const targetDecoded = decodeJwsUnsafe(opsByCID.get(cid)!.jws);
+    const lastCreatedAt =
+      typeof (targetDecoded?.payload as Record<string, unknown>)?.['createdAt'] === 'string'
+        ? ((targetDecoded?.payload as Record<string, unknown>)['createdAt'] as string)
+        : '';
+
+    return { state: content, lastCreatedAt };
+  }
+
+  async getPeerCursor(peerUrl: string): Promise<string | undefined> {
+    return this.peerCursors.get(peerUrl);
+  }
+
+  async setPeerCursor(peerUrl: string, cursor: string): Promise<void> {
+    this.peerCursors.set(peerUrl, cursor);
   }
 }

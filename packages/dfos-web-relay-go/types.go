@@ -10,9 +10,55 @@ type RelayIdentity struct {
 
 // RelayOptions configures a new Relay instance.
 type RelayOptions struct {
-	Store    Store
-	Identity *RelayIdentity
-	Content  *bool // nil or true = enabled (default), false = disabled
+	Store      Store
+	Identity   *RelayIdentity
+	Content    *bool // nil or true = enabled (default), false = disabled
+	Log        *bool // nil or true = enabled (default), false = disabled
+	Peers      []PeerConfig
+	PeerClient PeerClient // injected peer transport (nil = no peering)
+}
+
+// PeerConfig configures a single peer relay.
+type PeerConfig struct {
+	URL         string
+	Gossip      *bool // nil or true = push new ops (default), false = disabled
+	ReadThrough *bool // nil or true = fetch on local 404 (default), false = disabled
+	Sync        *bool // nil or true = poll /log (default), false = disabled
+}
+
+// PeerLogEntry is a single entry returned by a peer's log endpoint.
+type PeerLogEntry struct {
+	CID      string `json:"cid"`
+	JWSToken string `json:"jwsToken"`
+}
+
+// PeerClient is the injected peer transport — the relay expresses intent,
+// the caller decides transport.
+type PeerClient interface {
+	GetIdentityLog(peerURL, did string, after string, limit int) (*PeerLogPage, error)
+	GetContentLog(peerURL, contentID string, after string, limit int) (*PeerLogPage, error)
+	GetOperationLog(peerURL string, after string, limit int) (*PeerLogPage, error)
+	SubmitOperations(peerURL string, operations []string) error
+}
+
+// PeerLogPage is a paginated log response from a peer.
+type PeerLogPage struct {
+	Entries []PeerLogEntry `json:"entries"`
+	Cursor  *string        `json:"cursor"`
+}
+
+// IdentityStateAtCID holds the materialized identity state at a specific
+// operation CID. Used by fork verification.
+type IdentityStateAtCID struct {
+	State         dfos.IdentityState
+	LastCreatedAt string
+}
+
+// ContentStateAtCID holds the materialized content state at a specific
+// operation CID. Used by fork verification.
+type ContentStateAtCID struct {
+	State         dfos.ContentState
+	LastCreatedAt string
 }
 
 // StoredIdentityChain is the relay's representation of an identity chain.
@@ -110,4 +156,12 @@ type Store interface {
 	// operation log — global append-only, CID-based cursor pagination
 	AppendToLog(entry LogEntry) error
 	ReadLog(after string, limit int) (entries []LogEntry, cursor string, err error)
+
+	// chain state at arbitrary CID (snapshot-backed)
+	GetIdentityStateAtCID(did, cid string) (*IdentityStateAtCID, error)
+	GetContentStateAtCID(contentID, cid string) (*ContentStateAtCID, error)
+
+	// peer sync state
+	GetPeerCursor(peerURL string) (string, error)
+	SetPeerCursor(peerURL string, cursor string) error
 }

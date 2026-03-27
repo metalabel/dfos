@@ -333,7 +333,7 @@ func TestIdentityBatchCreate(t *testing.T) {
 	}
 	json.Unmarshal(body, &batchResp)
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}
@@ -559,7 +559,7 @@ func TestContentForkRejection(t *testing.T) {
 	res.Body.Close()
 	_ = opCID1
 
-	// second update with stale previousCID (fork — should fail)
+	// second update with same previousCID (fork — should be accepted)
 	doc3 := map[string]any{"type": "post", "title": "fork attempt"}
 	docCID3, _, _ := dfos.DocumentCID(doc3)
 	tok2, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID3, kid, "", id.auth.priv)
@@ -568,14 +568,14 @@ func TestContentForkRejection(t *testing.T) {
 	}
 	res = postOperations(t, base, []string{tok2})
 	body := readBody(t, res)
-	var results struct {
+	var forkResult struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
 		} `json:"results"`
 	}
-	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
-		t.Fatal("expected fork rejection error")
+	json.Unmarshal(body, &forkResult)
+	if len(forkResult.Results) == 0 || forkResult.Results[0].Status == "rejected" {
+		t.Fatal("expected fork to be accepted")
 	}
 }
 

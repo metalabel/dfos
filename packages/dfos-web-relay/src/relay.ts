@@ -18,7 +18,20 @@ import { z } from 'zod';
 import { authenticateRequest } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { createCurrentKeyResolver, ingestOperations } from './ingest';
-import type { RelayOptions, RelayStore, StoredContentChain } from './types';
+import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
+
+// -----------------------------------------------------------------------------
+// relay result type
+// -----------------------------------------------------------------------------
+
+export interface CreatedRelay {
+  /** Hono application implementing the DFOS web relay HTTP API */
+  app: Hono;
+  /** The relay's DID */
+  did: string;
+  /** Sync operations from all configured sync peers (call on a schedule) */
+  syncFromPeers: () => Promise<void>;
+}
 
 // -----------------------------------------------------------------------------
 // request schemas
@@ -41,14 +54,39 @@ const IngestBody = z.object({
  * When `identity` is provided, the relay uses the given DID and profile. When
  * omitted, a JIT identity and profile artifact are generated at startup.
  */
-export const createRelay = async (options: RelayOptions): Promise<Hono> => {
+export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> => {
   const { store } = options;
   const contentEnabled = options.content !== false;
+  const logEnabled = options.log !== false;
+
+  // peer configuration
+  const peers = options.peers ?? [];
+  const peerClient: PeerClient | undefined = options.peerClient;
+  const gossipPeers = peers.filter((p) => p.gossip !== false);
+  const readThroughPeers = peers.filter((p) => p.readThrough !== false);
+  const syncPeers = peers.filter((p) => p.sync !== false);
 
   // resolve relay identity — use provided or JIT bootstrap
   const identity = options.identity ?? (await bootstrapRelayIdentity(store));
   const relayDID = identity.did;
   const profileArtifactJws = identity.profileArtifactJws;
+
+  // ingest wrapper that gossips new ops to peers
+  const ingestWithGossip = async (tokens: string[]) => {
+    const results = await ingestOperations(tokens, store, { logEnabled });
+    if (gossipPeers.length > 0 && peerClient) {
+      const newOps: string[] = [];
+      for (let i = 0; i < results.length; i++) {
+        if (results[i]!.status === 'new') newOps.push(tokens[i]!);
+      }
+      if (newOps.length > 0) {
+        for (const peer of gossipPeers) {
+          peerClient.submitOperations(peer.url, newOps).catch(() => {});
+        }
+      }
+    }
+    return results;
+  };
 
   const app = new Hono();
 
@@ -63,6 +101,7 @@ export const createRelay = async (options: RelayOptions): Promise<Hono> => {
       version: '0.1.0',
       proof: true,
       content: contentEnabled,
+      log: logEnabled,
       profile: profileArtifactJws,
     });
   });
@@ -85,7 +124,7 @@ export const createRelay = async (options: RelayOptions): Promise<Hono> => {
       return c.json({ error: 'invalid request', details: parsed.error.issues }, 400);
     }
 
-    const results = await ingestOperations(parsed.data.operations, store);
+    const results = await ingestWithGossip(parsed.data.operations);
     return c.json({ results });
   });
 
@@ -131,7 +170,19 @@ export const createRelay = async (options: RelayOptions): Promise<Hono> => {
 
   app.get('/identities/:did{.+}', async (c) => {
     const did = c.req.param('did');
-    const chain = await store.getIdentityChain(did);
+    let chain = await store.getIdentityChain(did);
+
+    // read-through: try peers on local miss
+    if (!chain && readThroughPeers.length > 0 && peerClient) {
+      for (const peer of readThroughPeers) {
+        const logPage = await peerClient.getIdentityLog(peer.url, did);
+        if (!logPage || logPage.entries.length === 0) continue;
+        await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
+        chain = await store.getIdentityChain(did);
+        if (chain) break;
+      }
+    }
+
     if (!chain) return c.json({ error: 'not found' }, 404);
 
     return c.json({
@@ -170,7 +221,19 @@ export const createRelay = async (options: RelayOptions): Promise<Hono> => {
   /** Get a content chain by content ID */
   app.get('/content/:contentId', async (c) => {
     const contentId = c.req.param('contentId');
-    const chain = await store.getContentChain(contentId);
+    let chain = await store.getContentChain(contentId);
+
+    // read-through: try peers on local miss
+    if (!chain && readThroughPeers.length > 0 && peerClient) {
+      for (const peer of readThroughPeers) {
+        const logPage = await peerClient.getContentLog(peer.url, contentId);
+        if (!logPage || logPage.entries.length === 0) continue;
+        await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
+        chain = await store.getContentChain(contentId);
+        if (chain) break;
+      }
+    }
+
     if (!chain) return c.json({ error: 'not found' }, 404);
 
     return c.json({
@@ -228,6 +291,7 @@ export const createRelay = async (options: RelayOptions): Promise<Hono> => {
 
   /** Read the global append-only operation log */
   app.get('/log', async (c) => {
+    if (!logEnabled) return c.json({ error: 'global log not available' }, 501);
     const afterParam = c.req.query('after');
     const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
     const result = await store.readLog(afterParam ? { after: afterParam, limit } : { limit });
@@ -316,7 +380,32 @@ export const createRelay = async (options: RelayOptions): Promise<Hono> => {
     });
   });
 
-  return app;
+  // -------------------------------------------------------------------------
+  // sync-in: pull from peer logs
+  // -------------------------------------------------------------------------
+
+  const syncFromPeers = async (): Promise<void> => {
+    if (!peerClient) return;
+    for (const peer of syncPeers) {
+      let cursor = await store.getPeerCursor(peer.url);
+      while (true) {
+        const page = await peerClient.getOperationLog(peer.url, {
+          ...(cursor ? { after: cursor } : {}),
+          limit: 1000,
+        });
+        if (!page || page.entries.length === 0) break;
+        await ingestWithGossip(page.entries.map((e) => e.jwsToken));
+        if (page.cursor) {
+          cursor = page.cursor;
+          await store.setPeerCursor(peer.url, cursor);
+        } else {
+          break;
+        }
+      }
+    }
+  };
+
+  return { app, did: relayDID, syncFromPeers };
 };
 
 // -----------------------------------------------------------------------------

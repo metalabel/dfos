@@ -34,7 +34,7 @@ func BootstrapRelayIdentity(store Store) (*RelayIdentity, error) {
 
 	// ingest identity genesis to derive the DID
 	results := IngestOperations([]string{identityJWS}, store)
-	if len(results) == 0 || results[0].Status != "accepted" || results[0].ChainID == "" {
+	if len(results) == 0 || results[0].Status == "rejected" || results[0].ChainID == "" {
 		errMsg := "unknown"
 		if len(results) > 0 && results[0].Error != "" {
 			errMsg = results[0].Error
@@ -55,7 +55,7 @@ func BootstrapRelayIdentity(store Store) (*RelayIdentity, error) {
 
 	// ingest profile artifact
 	artResults := IngestOperations([]string{profileArtifactJWS}, store)
-	if len(artResults) == 0 || artResults[0].Status != "accepted" {
+	if len(artResults) == 0 || artResults[0].Status == "rejected" {
 		errMsg := "unknown"
 		if len(artResults) > 0 && artResults[0].Error != "" {
 			errMsg = artResults[0].Error

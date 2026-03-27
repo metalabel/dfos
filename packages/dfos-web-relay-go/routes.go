@@ -69,6 +69,7 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 		"version":  "0.1.0",
 		"proof":    true,
 		"content":  r.contentEnabled,
+		"log":      r.logEnabled,
 		"profile":  r.profileArtifactJWS,
 	})
 }
@@ -120,6 +121,29 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 	if storeErr(w, err) {
 		return
 	}
+
+	// read-through: try peers on local miss
+	if chain == nil && r.peerClient != nil {
+		for _, peer := range r.peers {
+			if peer.ReadThrough != nil && !*peer.ReadThrough {
+				continue
+			}
+			page, err := r.peerClient.GetIdentityLog(peer.URL, did, "", 1000)
+			if err != nil || page == nil || len(page.Entries) == 0 {
+				continue
+			}
+			tokens := make([]string, len(page.Entries))
+			for i, e := range page.Entries {
+				tokens[i] = e.JWSToken
+			}
+			r.Ingest(tokens)
+			chain, _ = r.store.GetIdentityChain(did)
+			if chain != nil {
+				break
+			}
+		}
+	}
+
 	if chain == nil {
 		writeError(w, 404, "not found")
 		return
@@ -204,6 +228,29 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 	if storeErr(w, err) {
 		return
 	}
+
+	// read-through: try peers on local miss
+	if chain == nil && r.peerClient != nil {
+		for _, peer := range r.peers {
+			if peer.ReadThrough != nil && !*peer.ReadThrough {
+				continue
+			}
+			page, err := r.peerClient.GetContentLog(peer.URL, contentID, "", 1000)
+			if err != nil || page == nil || len(page.Entries) == 0 {
+				continue
+			}
+			tokens := make([]string, len(page.Entries))
+			for i, e := range page.Entries {
+				tokens[i] = e.JWSToken
+			}
+			r.Ingest(tokens)
+			chain, _ = r.store.GetContentChain(contentID)
+			if chain != nil {
+				break
+			}
+		}
+	}
+
 	if chain == nil {
 		writeError(w, 404, "not found")
 		return
@@ -363,6 +410,10 @@ func (r *Relay) handleGetBeacon(w http.ResponseWriter, req *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (r *Relay) handleGetLog(w http.ResponseWriter, req *http.Request) {
+	if !r.logEnabled {
+		writeError(w, 501, "global log not available")
+		return
+	}
 	after := req.URL.Query().Get("after")
 	limit := parseLimit(req, 100, 1000)
 

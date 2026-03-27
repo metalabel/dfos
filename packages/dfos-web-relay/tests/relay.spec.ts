@@ -136,7 +136,8 @@ describe('web relay', () => {
     app = await createRelay({ store, identity: RELAY_IDENTITY });
   });
 
-  const req = (path: string, init?: RequestInit) => app.request(`http://localhost${path}`, init);
+  const req = (path: string, init?: RequestInit) =>
+    app.app.request(`http://localhost${path}`, init);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const json = async (res: Response): Promise<any> => res.json();
@@ -179,8 +180,8 @@ describe('web relay', () => {
     });
 
     it('should include content: false when relay created with content: false', async () => {
-      const noContentApp = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
-      const res = await noContentApp.request('http://localhost/.well-known/dfos-relay');
+      const noContentRelay = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
+      const res = await noContentRelay.app.request('http://localhost/.well-known/dfos-relay');
       const body = (await res.json()) as Record<string, unknown>;
       expect(body.content).toBe(false);
     });
@@ -205,7 +206,7 @@ describe('web relay', () => {
 
       const body = await json(res);
       expect(body.results).toHaveLength(1);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('identity-op');
       expect(body.results[0].chainId).toBe(identity.did);
     });
@@ -253,7 +254,7 @@ describe('web relay', () => {
 
       const res = await postOps([updateToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
 
       // verify chain now has 2 ops
       const chainRes = await req(`/identities/${identity.did}`);
@@ -288,8 +289,8 @@ describe('web relay', () => {
       // but results must come back in SUBMISSION order
       const res = await postOps([updateToken, identity.jwsToken]);
       const body = await json(res);
-      const accepted = body.results.filter((r: { status: string }) => r.status === 'accepted');
-      expect(accepted).toHaveLength(2);
+      const newResults = body.results.filter((r: { status: string }) => r.status === 'new');
+      expect(newResults).toHaveLength(2);
 
       // results[0] should be the update (submitted first), results[1] should be the genesis
       expect(body.results[0].cid).toBeTruthy();
@@ -344,8 +345,8 @@ describe('web relay', () => {
       // submit in REVERSE order: update2, update1, genesis
       const res = await postOps([update2Token, update1Token, identity.jwsToken]);
       const body = await json(res);
-      const accepted = body.results.filter((r: { status: string }) => r.status === 'accepted');
-      expect(accepted).toHaveLength(3);
+      const newResults = body.results.filter((r: { status: string }) => r.status === 'new');
+      expect(newResults).toHaveLength(3);
 
       // verify the chain has all 3 ops
       const chainRes = await req(`/identities/${identity.did}`);
@@ -358,7 +359,7 @@ describe('web relay', () => {
       await postOps([identity.jwsToken]);
       const res = await postOps([identity.jwsToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('duplicate');
     });
   });
 
@@ -376,9 +377,9 @@ describe('web relay', () => {
       const res = await postOps([content.jwsToken, identity.jwsToken]);
       const body = await json(res);
 
-      // both should be accepted (dependency sort ensures identity is processed first)
-      const accepted = body.results.filter((r: { status: string }) => r.status === 'accepted');
-      expect(accepted).toHaveLength(2);
+      // both should be new (dependency sort ensures identity is processed first)
+      const newResults = body.results.filter((r: { status: string }) => r.status === 'new');
+      expect(newResults).toHaveLength(2);
 
       // results must be in submission order: content-op first, identity-op second
       expect(body.results[0].kind).toBe('content-op');
@@ -467,7 +468,7 @@ describe('web relay', () => {
 
       const res = await postOps([beaconToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('beacon');
 
       // query the beacon
@@ -547,7 +548,7 @@ describe('web relay', () => {
 
       const res = await postOps([csToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('countersign');
       expect(body.results[0].chainId).toBe(content.operationCID);
 
@@ -675,7 +676,7 @@ describe('web relay', () => {
 
       const res = await postOps([beaconCsToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('countersign');
       expect(body.results[0].chainId).toBe(beaconCID);
 
@@ -1007,7 +1008,7 @@ describe('web relay', () => {
 
       const res = await postOps([deleteToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
 
       // verify state shows deleted
       const chainRes = await req(`/identities/${identity.did}`);
@@ -1090,7 +1091,7 @@ describe('web relay', () => {
 
       const res = await postOps([deleteToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
 
       // verify state shows deleted
       const chainRes = await req(`/content/${contentId}`);
@@ -1191,10 +1192,14 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('fork rejection', () => {
-    it('should reject content operation with stale previousOperationCID', async () => {
+    it('should accept content fork with same previousOperationCID (fork acceptance)', async () => {
       const identity = await createIdentity();
       const content = await createContentOp(identity);
-      await postOps([identity.jwsToken, content.jwsToken]);
+      const ingestRes = await postOps([identity.jwsToken, content.jwsToken]);
+      const ingestBody = await json(ingestRes);
+      const contentId = ingestBody.results.find(
+        (r: { kind: string }) => r.kind === 'content-op',
+      ).chainId;
 
       const kid = `${identity.did}#${identity.authKey.keyId}`;
 
@@ -1237,11 +1242,16 @@ describe('web relay', () => {
 
       // submit A first — should succeed
       const resA = await postOps([tokenA]);
-      expect((await json(resA)).results[0].status).toBe('accepted');
+      expect((await json(resA)).results[0].status).toBe('new');
 
-      // submit B — should be rejected (fork, stale previousOperationCID)
+      // submit B — also accepted (fork from same parent)
       const resB = await postOps([tokenB]);
-      expect((await json(resB)).results[0].status).toBe('rejected');
+      expect((await json(resB)).results[0].status).toBe('new');
+
+      // head should be B (higher createdAt)
+      const chainRes = await req(`/content/${contentId}`);
+      const chain = await json(chainRes);
+      expect(chain.state.currentDocumentCID).toBe(doc2Encoded.cid.toString());
     });
   });
 
@@ -1299,7 +1309,7 @@ describe('web relay', () => {
 
       const res = await postOps([updateToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
 
       // chain should now have 2 ops
       const chainRes = await req(`/content/${contentId}`);
@@ -1565,7 +1575,7 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('artifact ingestion', () => {
-    it('should accept a valid artifact and return accepted', async () => {
+    it('should accept a valid artifact and return newResults', async () => {
       const identity = await createIdentity();
       await postOps([identity.jwsToken]);
 
@@ -1586,7 +1596,7 @@ describe('web relay', () => {
 
       const res = await postOps([artifactToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('artifact');
     });
 
@@ -1674,11 +1684,11 @@ describe('web relay', () => {
 
       const res1 = await postOps([artifactToken]);
       const body1 = await json(res1);
-      expect(body1.results[0].status).toBe('accepted');
+      expect(body1.results[0].status).toBe('new');
 
       const res2 = await postOps([artifactToken]);
       const body2 = await json(res2);
-      expect(body2.results[0].status).toBe('accepted');
+      expect(body2.results[0].status).toBe('duplicate');
     });
 
     it('should reject oversized artifact', async () => {
@@ -1931,13 +1941,13 @@ describe('web relay', () => {
 
   describe('content plane disabled', () => {
     it('should return 501 for blob upload when content: false', async () => {
-      const noContentApp = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
+      const noContentRelay = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
 
       const identity = await createIdentity();
       const content = await createContentOp(identity);
       await postOps([identity.jwsToken, content.jwsToken]);
 
-      const res = await noContentApp.request('http://localhost/content/someid/blob/somecid', {
+      const res = await noContentRelay.app.request('http://localhost/content/someid/blob/somecid', {
         method: 'PUT',
         headers: {
           'content-type': 'application/octet-stream',
@@ -1949,9 +1959,9 @@ describe('web relay', () => {
     });
 
     it('should return 501 for blob download when content: false', async () => {
-      const noContentApp = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
+      const noContentRelay = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
 
-      const res = await noContentApp.request('http://localhost/content/someid/blob', {
+      const res = await noContentRelay.app.request('http://localhost/content/someid/blob', {
         headers: { authorization: 'Bearer fake' },
       });
       expect(res.status).toBe(501);

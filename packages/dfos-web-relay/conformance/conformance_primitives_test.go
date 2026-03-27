@@ -39,7 +39,7 @@ func TestArtifactCreate(t *testing.T) {
 	if len(result.Results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(result.Results))
 	}
-	if result.Results[0].Status != "accepted" {
+	if result.Results[0].Status != "new" {
 		t.Fatalf("expected accepted, got %s", result.Results[0].Status)
 	}
 	if result.Results[0].Kind != "artifact" {
@@ -155,10 +155,10 @@ func TestArtifactIdempotent(t *testing.T) {
 	json.Unmarshal(body1, &r1)
 	json.Unmarshal(body2, &r2)
 
-	if r1.Results[0].Status != "accepted" {
+	if r1.Results[0].Status != "new" {
 		t.Fatalf("first submit: expected accepted, got %s", r1.Results[0].Status)
 	}
-	if r2.Results[0].Status != "accepted" {
+	if r2.Results[0].Status != "new" {
 		t.Fatalf("second submit: expected accepted (idempotent), got %s", r2.Results[0].Status)
 	}
 }
@@ -229,7 +229,7 @@ func TestArtifactInBatchWithIdentity(t *testing.T) {
 	}
 	// results are in input order, both should be accepted
 	for i, r := range result.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("result[%d]: expected accepted, got %s", i, r.Status)
 		}
 	}
@@ -537,7 +537,7 @@ func TestCountersignTargetingCountersign(t *testing.T) {
 	}
 	json.Unmarshal(body, &result)
 
-	if result.Results[0].Status != "accepted" {
+	if result.Results[0].Status != "new" {
 		t.Fatalf("expected accepted for countersign-on-countersign, got %s", result.Results[0].Status)
 	}
 }

@@ -552,7 +552,7 @@ func TestBatchThreeStepIdentity(t *testing.T) {
 	}
 	json.Unmarshal(body, &batchResp)
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}
@@ -610,7 +610,7 @@ func TestBatchContentIdentitySort(t *testing.T) {
 
 	// both should be accepted
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}
@@ -664,7 +664,7 @@ func TestBatchLarge(t *testing.T) {
 		t.Fatalf("expected 10 results, got %d", len(batchResp.Results))
 	}
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}
@@ -713,7 +713,7 @@ func TestBatchDuplicateOperations(t *testing.T) {
 	}
 	// both should be accepted (idempotent dedup)
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}

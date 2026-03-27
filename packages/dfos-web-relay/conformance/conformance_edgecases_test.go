@@ -127,7 +127,7 @@ func TestBatchMixedValidInvalid(t *testing.T) {
 	if len(batchResp.Results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(batchResp.Results))
 	}
-	if batchResp.Results[0].Status != "accepted" {
+	if batchResp.Results[0].Status != "new" {
 		t.Fatalf("valid op should be accepted: %s", batchResp.Results[0].Error)
 	}
 	if batchResp.Results[1].Error == "" {
@@ -180,7 +180,7 @@ func TestBatchMultiChain(t *testing.T) {
 		t.Fatalf("expected 3 results, got %d", len(batchResp.Results))
 	}
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}
