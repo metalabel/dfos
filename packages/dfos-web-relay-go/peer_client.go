@@ -105,6 +105,6 @@ func (c *HttpPeerClient) SubmitOperations(peerURL string, operations []string) e
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	return nil
 }
