@@ -22,12 +22,13 @@ import {
 import {
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
+  decodeJwsUnsafe,
   generateId,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { bootstrapRelayIdentity, createRelay, MemoryRelayStore } from '../src';
-import type { RelayIdentity } from '../src';
+import { bootstrapRelayIdentity, createRelay, ingestOperations, MemoryRelayStore } from '../src';
+import type { PeerClient, PeerLogEntry, RelayIdentity } from '../src';
 
 // =============================================================================
 // helpers
@@ -123,6 +124,84 @@ const createTestAuthToken = async (
     sign: key.signer,
   });
 };
+
+// =============================================================================
+// relay-backed mock peer client
+// =============================================================================
+
+/**
+ * Mock PeerClient backed by a real MemoryRelayStore. Reads chain data and global
+ * log directly from the backing store using the same pagination logic as the
+ * real HTTP endpoints. Records submitOperations calls for gossip assertion.
+ */
+class RelayBackedPeerClient implements PeerClient {
+  readonly submitCalls: { peerUrl: string; operations: string[] }[] = [];
+
+  constructor(
+    private backingStore: MemoryRelayStore,
+    private pageSize?: number,
+  ) {}
+
+  async getIdentityLog(
+    _peerUrl: string,
+    did: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+    const chain = await this.backingStore.getIdentityChain(did);
+    if (!chain) return null;
+    return this.paginateChainLog(chain.log, params);
+  }
+
+  async getContentLog(
+    _peerUrl: string,
+    contentId: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+    const chain = await this.backingStore.getContentChain(contentId);
+    if (!chain) return null;
+    return this.paginateChainLog(chain.log, params);
+  }
+
+  async getOperationLog(
+    _peerUrl: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+    const limit = this.pageSize ?? params?.limit ?? 1000;
+    const result = await this.backingStore.readLog({
+      ...(params?.after ? { after: params.after } : {}),
+      limit,
+    });
+    return {
+      entries: result.entries.map((e) => ({ cid: e.cid, jwsToken: e.jwsToken })),
+      cursor: result.cursor,
+    };
+  }
+
+  async submitOperations(peerUrl: string, operations: string[]): Promise<void> {
+    this.submitCalls.push({ peerUrl, operations });
+  }
+
+  private paginateChainLog(
+    log: string[],
+    params?: { after?: string; limit?: number },
+  ): { entries: PeerLogEntry[]; cursor: string | null } {
+    const limit = this.pageSize ?? params?.limit ?? 1000;
+    const entries: PeerLogEntry[] = log.map((jws) => {
+      const decoded = decodeJwsUnsafe(jws);
+      return { cid: decoded?.header.cid || '', jwsToken: jws };
+    });
+
+    let startIdx = 0;
+    if (params?.after) {
+      const idx = entries.findIndex((e) => e.cid === params.after);
+      startIdx = idx >= 0 ? idx + 1 : entries.length;
+    }
+
+    const page = entries.slice(startIdx, startIdx + limit);
+    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
+    return { entries: page, cursor };
+  }
+}
 
 // =============================================================================
 // tests
@@ -2218,6 +2297,383 @@ describe('web relay', () => {
       const res = await req(`/content/${contentId}`);
       const body = await json(res);
       expect(typeof body.headCID).toBe('string');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // peering
+  // ---------------------------------------------------------------------------
+
+  describe('peering', () => {
+    /** Create a local relay with a mock peer client backed by a given store */
+    const createPeeredRelay = async (opts: {
+      peerStore: MemoryRelayStore;
+      peers: { url: string; gossip?: boolean; readThrough?: boolean; sync?: boolean }[];
+      pageSize?: number;
+    }) => {
+      const mockPeerClient = new RelayBackedPeerClient(opts.peerStore, opts.pageSize);
+      const localStore = new MemoryRelayStore();
+      const relay = await createRelay({
+        store: localStore,
+        peers: opts.peers,
+        peerClient: mockPeerClient,
+      });
+      const localReq = (path: string, init?: RequestInit) =>
+        relay.app.request(`http://localhost${path}`, init);
+      const localPostOps = (ops: string[]) =>
+        localReq('/operations', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ operations: ops }),
+        });
+      return { relay, localStore, mockPeerClient, req: localReq, postOps: localPostOps };
+    };
+
+    // -----------------------------------------------------------------------
+    // gossip
+    // -----------------------------------------------------------------------
+
+    describe('gossip', () => {
+      it('should gossip new ops to gossip-enabled peers', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { mockPeerClient, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        const identity = await createIdentity();
+        await localPostOps([identity.jwsToken]);
+
+        expect(mockPeerClient.submitCalls).toHaveLength(1);
+        expect(mockPeerClient.submitCalls[0]!.peerUrl).toBe('http://peer-a');
+        expect(mockPeerClient.submitCalls[0]!.operations).toContain(identity.jwsToken);
+      });
+
+      it('should not gossip duplicate ops', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { mockPeerClient, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        const identity = await createIdentity();
+        await localPostOps([identity.jwsToken]);
+        mockPeerClient.submitCalls.length = 0; // reset
+
+        // ingest same op again — should be duplicate, no gossip
+        await localPostOps([identity.jwsToken]);
+        expect(mockPeerClient.submitCalls).toHaveLength(0);
+      });
+
+      it('should skip peers with gossip: false', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { mockPeerClient, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [
+            { url: 'http://peer-a', gossip: true },
+            { url: 'http://peer-b', gossip: false },
+          ],
+        });
+
+        const identity = await createIdentity();
+        await localPostOps([identity.jwsToken]);
+
+        expect(mockPeerClient.submitCalls).toHaveLength(1);
+        expect(mockPeerClient.submitCalls[0]!.peerUrl).toBe('http://peer-a');
+      });
+
+      it('should gossip to all enabled peers', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { mockPeerClient, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }, { url: 'http://peer-b' }, { url: 'http://peer-c' }],
+        });
+
+        const identity = await createIdentity();
+        await localPostOps([identity.jwsToken]);
+
+        expect(mockPeerClient.submitCalls).toHaveLength(3);
+        const urls = mockPeerClient.submitCalls.map((c) => c.peerUrl).sort();
+        expect(urls).toEqual(['http://peer-a', 'http://peer-b', 'http://peer-c']);
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // read-through
+    // -----------------------------------------------------------------------
+
+    describe('read-through', () => {
+      it('should fetch identity from peer on local miss', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], peerStore);
+
+        const { req: localReq } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        const res = await localReq(`/identities/${identity.did}`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(body.did).toBe(identity.did);
+      });
+
+      it('should return 404 when peer also misses', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { req: localReq } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        const res = await localReq('/identities/did:dfos:nonexistent');
+        expect(res.status).toBe(404);
+      });
+
+      it('should paginate through full identity log from peer', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+
+        // create an identity update so the chain has 2 ops
+        const newAuthKey = makeKey();
+        const updateOp: IdentityOperation = {
+          version: 1,
+          type: 'update',
+          previousOperationCID: identity.operationCID,
+          authKeys: [newAuthKey.key],
+          assertKeys: [],
+          controllerKeys: [identity.controller.key],
+          createdAt: ts(1),
+        };
+        const { jwsToken: updateToken } = await signIdentityOperation({
+          operation: updateOp,
+          signer: identity.controller.signer,
+          keyId: identity.controller.keyId,
+          identityDID: identity.did,
+        });
+
+        await ingestOperations([identity.jwsToken, updateToken], peerStore);
+
+        // pageSize=1 forces 2 pages for a 2-op chain
+        const { req: localReq, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+          pageSize: 1,
+        });
+
+        const res = await localReq(`/identities/${identity.did}`);
+        expect(res.status).toBe(200);
+
+        // verify the full chain was ingested (both ops in local store)
+        const chain = await localStore.getIdentityChain(identity.did);
+        expect(chain).toBeDefined();
+        expect(chain!.log).toHaveLength(2);
+      });
+
+      it('should fetch content chain from peer on local miss', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        const content = await createContentOp(identity);
+
+        // seed peer with identity + content
+        const peerResults = await ingestOperations(
+          [identity.jwsToken, content.jwsToken],
+          peerStore,
+        );
+        const contentId = peerResults.find((r) => r.kind === 'content-op')!.chainId!;
+
+        // local relay needs the identity to verify content ops
+        const { req: localReq, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+        await localPostOps([identity.jwsToken]);
+
+        const res = await localReq(`/content/${contentId}`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(body.contentId).toBe(contentId);
+      });
+
+      it('should not consult peers with readThrough: false', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], peerStore);
+
+        const { req: localReq } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a', readThrough: false }],
+        });
+
+        const res = await localReq(`/identities/${identity.did}`);
+        expect(res.status).toBe(404);
+      });
+
+      it('should fall back to second peer when first misses', async () => {
+        const emptyPeerStore = new MemoryRelayStore();
+        const populatedPeerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], populatedPeerStore);
+
+        // mock peer client that routes to different stores by URL
+        const mockPeerClient: PeerClient = {
+          async getIdentityLog(peerUrl, did, params) {
+            const store = peerUrl === 'http://peer-a' ? emptyPeerStore : populatedPeerStore;
+            const mock = new RelayBackedPeerClient(store);
+            return mock.getIdentityLog(peerUrl, did, params);
+          },
+          async getContentLog(peerUrl, contentId, params) {
+            const store = peerUrl === 'http://peer-a' ? emptyPeerStore : populatedPeerStore;
+            const mock = new RelayBackedPeerClient(store);
+            return mock.getContentLog(peerUrl, contentId, params);
+          },
+          async getOperationLog() {
+            return null;
+          },
+          async submitOperations() {},
+        };
+
+        const localStore = new MemoryRelayStore();
+        const relay = await createRelay({
+          store: localStore,
+          peers: [{ url: 'http://peer-a' }, { url: 'http://peer-b' }],
+          peerClient: mockPeerClient,
+        });
+
+        const res = await relay.app.request(`http://localhost/identities/${identity.did}`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(body.did).toBe(identity.did);
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // sync-in
+    // -----------------------------------------------------------------------
+
+    describe('sync-in', () => {
+      it('should sync operations from peer', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], peerStore, { logEnabled: true });
+
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        await relay.syncFromPeers();
+
+        const chain = await localStore.getIdentityChain(identity.did);
+        expect(chain).toBeDefined();
+        expect(chain!.did).toBe(identity.did);
+      });
+
+      it('should persist cursor as last entry CID on final page', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        const results = await ingestOperations([identity.jwsToken], peerStore, {
+          logEnabled: true,
+        });
+        const opCID = results[0]!.cid;
+
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        await relay.syncFromPeers();
+
+        // single op < page size → final page → cursor = last entry CID
+        const cursor = await localStore.getPeerCursor('http://peer-a');
+        expect(cursor).toBe(opCID);
+      });
+
+      it('should handle multi-page sync', async () => {
+        const peerStore = new MemoryRelayStore();
+
+        // create 3 independent identities to populate the global log
+        const ids = [];
+        for (let i = 0; i < 3; i++) {
+          const id = await createIdentity();
+          await ingestOperations([id.jwsToken], peerStore, { logEnabled: true });
+          ids.push(id);
+        }
+
+        // pageSize=1 forces 3 pages
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+          pageSize: 1,
+        });
+
+        await relay.syncFromPeers();
+
+        // all 3 identities should be synced
+        for (const id of ids) {
+          const chain = await localStore.getIdentityChain(id.did);
+          expect(chain).toBeDefined();
+        }
+      });
+
+      it('should resume from stored cursor position', async () => {
+        const peerStore = new MemoryRelayStore();
+
+        const idA = await createIdentity();
+        const idB = await createIdentity();
+        const idC = await createIdentity();
+        const resultsA = await ingestOperations([idA.jwsToken], peerStore, { logEnabled: true });
+        const resultsB = await ingestOperations([idB.jwsToken], peerStore, { logEnabled: true });
+        await ingestOperations([idC.jwsToken], peerStore, { logEnabled: true });
+
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        // pre-set cursor to B → sync should only fetch C
+        await localStore.setPeerCursor('http://peer-a', resultsB[0]!.cid);
+
+        await relay.syncFromPeers();
+
+        // A and B should NOT be in local store (skipped by cursor)
+        expect(await localStore.getOperation(resultsA[0]!.cid)).toBeUndefined();
+        expect(await localStore.getOperation(resultsB[0]!.cid)).toBeUndefined();
+
+        // C should be synced
+        const chainC = await localStore.getIdentityChain(idC.did);
+        expect(chainC).toBeDefined();
+      });
+
+      it('should skip peers with sync: false', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], peerStore, { logEnabled: true });
+
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a', sync: false }],
+        });
+
+        await relay.syncFromPeers();
+
+        const chain = await localStore.getIdentityChain(identity.did);
+        expect(chain).toBeUndefined();
+      });
+
+      it('should no-op when peer has no operations', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        await relay.syncFromPeers();
+
+        // no cursor should be set (nothing to sync)
+        const cursor = await localStore.getPeerCursor('http://peer-a');
+        expect(cursor).toBeUndefined();
+      });
     });
   });
 });

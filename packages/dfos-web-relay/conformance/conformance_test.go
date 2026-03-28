@@ -1486,3 +1486,170 @@ func TestRejectContentFutureTimestamp(t *testing.T) {
 		t.Fatalf("expected future timestamp error, got: %s", result.Results[0].Error)
 	}
 }
+
+// ===================================================================
+// log pagination
+// ===================================================================
+
+func TestIdentityLogPagination(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+
+	// create 2 identity updates so chain has 3 ops total
+	prevCID := id.genCID
+	for i := 0; i < 2; i++ {
+		newAuth := newKeypair()
+		token, opCID, err := dfos.SignIdentityUpdate(
+			prevCID,
+			[]dfos.MultikeyPublicKey{id.controller.mk},
+			[]dfos.MultikeyPublicKey{newAuth.mk},
+			[]dfos.MultikeyPublicKey{},
+			id.did+"#"+id.controller.keyID,
+			id.controller.priv,
+		)
+		if err != nil {
+			t.Fatalf("SignIdentityUpdate: %v", err)
+		}
+		res := postOperations(t, base, []string{token})
+		if res.StatusCode != 200 {
+			t.Fatalf("update %d: status %d", i, res.StatusCode)
+		}
+		res.Body.Close()
+		prevCID = opCID
+	}
+
+	// 1. Full log (no params) — should have 3 entries, no cursor (< default limit)
+	var fullLog struct {
+		Entries []struct {
+			CID      string `json:"cid"`
+			JWSToken string `json:"jwsToken"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	resp := getJSON(t, base+"/identities/"+id.did+"/log", &fullLog)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET log: status %d", resp.StatusCode)
+	}
+	if len(fullLog.Entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(fullLog.Entries))
+	}
+	if fullLog.Cursor != nil {
+		t.Fatalf("expected nil cursor on last page, got %s", *fullLog.Cursor)
+	}
+
+	// 2. Paginate with limit=1 — first page has 1 entry + cursor
+	var page1 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/identities/%s/log?limit=1", base, id.did), &page1)
+	if len(page1.Entries) != 1 {
+		t.Fatalf("page1: expected 1 entry, got %d", len(page1.Entries))
+	}
+	if page1.Cursor == nil {
+		t.Fatal("page1: expected cursor")
+	}
+
+	// 3. Second page via cursor
+	var page2 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=%s&limit=1", base, id.did, *page1.Cursor), &page2)
+	if len(page2.Entries) != 1 {
+		t.Fatalf("page2: expected 1 entry, got %d", len(page2.Entries))
+	}
+	if page2.Cursor == nil {
+		t.Fatal("page2: expected cursor")
+	}
+
+	// 4. Third (final) page
+	var page3 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=%s&limit=1", base, id.did, *page2.Cursor), &page3)
+	if len(page3.Entries) != 1 {
+		t.Fatalf("page3: expected 1 entry, got %d", len(page3.Entries))
+	}
+	if page3.Cursor != nil {
+		t.Fatalf("page3: expected nil cursor on last page, got %s", *page3.Cursor)
+	}
+
+	// 5. After with unknown CID returns empty (not error)
+	var empty struct {
+		Entries []struct{} `json:"entries"`
+		Cursor  *string    `json:"cursor"`
+	}
+	emptyResp := getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=bafyunknown", base, id.did), &empty)
+	if emptyResp.StatusCode != 200 {
+		t.Fatalf("unknown cursor: expected 200, got %d", emptyResp.StatusCode)
+	}
+	if len(empty.Entries) != 0 {
+		t.Fatalf("unknown cursor: expected 0 entries, got %d", len(empty.Entries))
+	}
+
+	// 6. Exact page boundary — limit=3 should return all entries with nil cursor
+	var exactPage struct {
+		Entries []struct{} `json:"entries"`
+		Cursor  *string    `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/identities/%s/log?limit=3", base, id.did), &exactPage)
+	if len(exactPage.Entries) != 3 {
+		t.Fatalf("exact boundary: expected 3 entries, got %d", len(exactPage.Entries))
+	}
+	// when entry count equals limit, cursor may or may not be set depending
+	// on implementation — both are valid. The consumer checks the next page.
+}
+
+func TestGlobalLogPagination(t *testing.T) {
+	base := relayURL(t)
+
+	// create 3 identities to get 3 entries in the global log
+	var cids []string
+	for i := 0; i < 3; i++ {
+		id := createIdentity(t, base)
+		cids = append(cids, id.genCID)
+	}
+
+	// paginate with limit=1
+	var page1 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	resp := getJSON(t, base+"/log?limit=1", &page1)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /log: status %d", resp.StatusCode)
+	}
+	if len(page1.Entries) != 1 {
+		t.Fatalf("page1: expected 1 entry, got %d", len(page1.Entries))
+	}
+	if page1.Cursor == nil {
+		t.Fatal("page1: expected cursor")
+	}
+
+	// follow cursor to page 2
+	var page2 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/log?after=%s&limit=1", base, *page1.Cursor), &page2)
+	if len(page2.Entries) != 1 {
+		t.Fatalf("page2: expected 1 entry, got %d", len(page2.Entries))
+	}
+
+	// entries across pages should have distinct CIDs
+	if page1.Entries[0].CID == page2.Entries[0].CID {
+		t.Fatal("page1 and page2 should have different entries")
+	}
+}
