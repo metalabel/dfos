@@ -333,7 +333,7 @@ func TestIdentityBatchCreate(t *testing.T) {
 	}
 	json.Unmarshal(body, &batchResp)
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}
@@ -559,7 +559,7 @@ func TestContentForkRejection(t *testing.T) {
 	res.Body.Close()
 	_ = opCID1
 
-	// second update with stale previousCID (fork — should fail)
+	// second update with same previousCID (fork — should be accepted)
 	doc3 := map[string]any{"type": "post", "title": "fork attempt"}
 	docCID3, _, _ := dfos.DocumentCID(doc3)
 	tok2, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID3, kid, "", id.auth.priv)
@@ -568,14 +568,105 @@ func TestContentForkRejection(t *testing.T) {
 	}
 	res = postOperations(t, base, []string{tok2})
 	body := readBody(t, res)
-	var results struct {
+	var forkResult struct {
 		Results []struct {
-			Error string `json:"error"`
+			Status string `json:"status"`
 		} `json:"results"`
 	}
-	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
-		t.Fatal("expected fork rejection error")
+	json.Unmarshal(body, &forkResult)
+	if len(forkResult.Results) == 0 || forkResult.Results[0].Status == "rejected" {
+		t.Fatal("expected fork to be accepted")
+	}
+}
+
+func TestContentForkDAGLog(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	cc := createContent(t, base, id)
+
+	kid := id.did + "#" + id.auth.keyID
+
+	// create two fork branches off genesis
+	doc1 := map[string]any{"type": "post", "title": "branch-a"}
+	docCID1, _, _ := dfos.DocumentCID(doc1)
+	tok1, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID1, kid, "", id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	doc2 := map[string]any{"type": "post", "title": "branch-b"}
+	docCID2, _, _ := dfos.DocumentCID(doc2)
+	tok2, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, "", id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res1 := postOperations(t, base, []string{tok1})
+	res1.Body.Close()
+	res2 := postOperations(t, base, []string{tok2})
+	res2.Body.Close()
+
+	// chain log should contain all 3 ops (genesis + 2 fork branches)
+	var logResp struct {
+		Entries []struct {
+			CID      string `json:"cid"`
+			JWSToken string `json:"jwsToken"`
+		} `json:"entries"`
+	}
+	logRes := getJSON(t, base+"/content/"+cc.contentID+"/log", &logResp)
+	if logRes.StatusCode != 200 {
+		t.Fatalf("log: expected 200, got %d", logRes.StatusCode)
+	}
+	if len(logResp.Entries) != 3 {
+		t.Fatalf("expected 3 log entries (genesis + 2 forks), got %d", len(logResp.Entries))
+	}
+}
+
+func TestContentForkDeterministicHead(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	cc := createContent(t, base, id)
+
+	kid := id.did + "#" + id.auth.keyID
+
+	// branch A: signed first (earlier createdAt)
+	docA := map[string]any{"type": "post", "title": "earlier"}
+	docCIDA, _, _ := dfos.DocumentCID(docA)
+	tokA, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCIDA, kid, "", id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// branch B: signed second (later createdAt — should become head)
+	docB := map[string]any{"type": "post", "title": "later"}
+	docCIDB, _, _ := dfos.DocumentCID(docB)
+	tokB, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCIDB, kid, "", id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// submit A first, then B
+	res1 := postOperations(t, base, []string{tokA})
+	res1.Body.Close()
+	res2 := postOperations(t, base, []string{tokB})
+	res2.Body.Close()
+
+	// head should point to B's document (later createdAt wins)
+	var chain struct {
+		State struct {
+			CurrentDocumentCID *string `json:"currentDocumentCID"`
+		} `json:"state"`
+	}
+	chainRes := getJSON(t, base+"/content/"+cc.contentID, &chain)
+	if chainRes.StatusCode != 200 {
+		t.Fatalf("content: expected 200, got %d", chainRes.StatusCode)
+	}
+	if chain.State.CurrentDocumentCID == nil || *chain.State.CurrentDocumentCID != docCIDB {
+		got := "<nil>"
+		if chain.State.CurrentDocumentCID != nil {
+			got = *chain.State.CurrentDocumentCID
+		}
+		t.Fatalf("head should point to later fork's document\nexpected: %s\ngot:      %s", docCIDB, got)
 	}
 }
 
@@ -1225,5 +1316,388 @@ func TestRejectMalformedJWS(t *testing.T) {
 	json.Unmarshal(body, &results)
 	if len(results.Results) > 0 && results.Results[0].Error == "" {
 		t.Fatal("expected error for malformed JWS")
+	}
+}
+
+// ===================================================================
+// future timestamp guard
+// ===================================================================
+
+func TestRejectIdentityFutureTimestamp(t *testing.T) {
+	base := relayURL(t)
+	ctrl := newKeypair()
+	auth := newKeypair()
+
+	farFuture := time.Now().Add(25 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+
+	payload := map[string]any{
+		"version":        1,
+		"type":           "create",
+		"authKeys":       []dfos.MultikeyPublicKey{auth.mk},
+		"assertKeys":     []dfos.MultikeyPublicKey{},
+		"controllerKeys": []dfos.MultikeyPublicKey{ctrl.mk},
+		"createdAt":      farFuture,
+	}
+
+	_, _, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("DagCborCID: %v", err)
+	}
+
+	header := dfos.JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:identity-op",
+		Kid: ctrl.keyID,
+		CID: cidStr,
+	}
+
+	token, err := dfos.CreateJWS(header, payload, ctrl.priv)
+	if err != nil {
+		t.Fatalf("CreateJWS: %v", err)
+	}
+
+	res := postOperations(t, base, []string{token})
+	body := readBody(t, res)
+	var result struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	json.Unmarshal(body, &result)
+
+	if len(result.Results) == 0 {
+		t.Fatal("expected at least 1 result")
+	}
+	if result.Results[0].Status != "rejected" {
+		t.Fatalf("expected rejected, got %s", result.Results[0].Status)
+	}
+	if !strings.Contains(result.Results[0].Error, "future") {
+		t.Fatalf("expected future timestamp error, got: %s", result.Results[0].Error)
+	}
+}
+
+func TestAcceptIdentityNearFutureTimestamp(t *testing.T) {
+	base := relayURL(t)
+	ctrl := newKeypair()
+	auth := newKeypair()
+
+	nearFuture := time.Now().Add(23 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+
+	payload := map[string]any{
+		"version":        1,
+		"type":           "create",
+		"authKeys":       []dfos.MultikeyPublicKey{auth.mk},
+		"assertKeys":     []dfos.MultikeyPublicKey{},
+		"controllerKeys": []dfos.MultikeyPublicKey{ctrl.mk},
+		"createdAt":      nearFuture,
+	}
+
+	_, _, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("DagCborCID: %v", err)
+	}
+
+	header := dfos.JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:identity-op",
+		Kid: ctrl.keyID,
+		CID: cidStr,
+	}
+
+	token, err := dfos.CreateJWS(header, payload, ctrl.priv)
+	if err != nil {
+		t.Fatalf("CreateJWS: %v", err)
+	}
+
+	res := postOperations(t, base, []string{token})
+	body := readBody(t, res)
+	var result struct {
+		Results []struct {
+			Status string `json:"status"`
+		} `json:"results"`
+	}
+	json.Unmarshal(body, &result)
+
+	if len(result.Results) == 0 {
+		t.Fatal("expected at least 1 result")
+	}
+	if result.Results[0].Status != "new" {
+		t.Fatalf("expected new, got %s", result.Results[0].Status)
+	}
+}
+
+func TestRejectContentFutureTimestamp(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+
+	farFuture := time.Now().Add(25 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+	doc := map[string]any{"type": "post", "title": "future", "body": "test"}
+	docCID, _, err := dfos.DocumentCID(doc)
+	if err != nil {
+		t.Fatalf("DocumentCID: %v", err)
+	}
+
+	kid := id.did + "#" + id.auth.keyID
+	payload := map[string]any{
+		"version":         1,
+		"type":            "create",
+		"did":             id.did,
+		"documentCID":     docCID,
+		"baseDocumentCID": nil,
+		"createdAt":       farFuture,
+		"note":            nil,
+	}
+
+	_, _, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("DagCborCID: %v", err)
+	}
+
+	header := dfos.JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:content-op",
+		Kid: kid,
+		CID: cidStr,
+	}
+
+	token, err := dfos.CreateJWS(header, payload, id.auth.priv)
+	if err != nil {
+		t.Fatalf("CreateJWS: %v", err)
+	}
+
+	res := postOperations(t, base, []string{token})
+	body := readBody(t, res)
+	var result struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	json.Unmarshal(body, &result)
+
+	if len(result.Results) == 0 {
+		t.Fatal("expected at least 1 result")
+	}
+	if result.Results[0].Status != "rejected" {
+		t.Fatalf("expected rejected, got %s", result.Results[0].Status)
+	}
+	if !strings.Contains(result.Results[0].Error, "future") {
+		t.Fatalf("expected future timestamp error, got: %s", result.Results[0].Error)
+	}
+}
+
+// ===================================================================
+// log pagination
+// ===================================================================
+
+func TestIdentityLogPagination(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+
+	// create 2 identity updates so chain has 3 ops total
+	prevCID := id.genCID
+	for i := 0; i < 2; i++ {
+		newAuth := newKeypair()
+		token, opCID, err := dfos.SignIdentityUpdate(
+			prevCID,
+			[]dfos.MultikeyPublicKey{id.controller.mk},
+			[]dfos.MultikeyPublicKey{newAuth.mk},
+			[]dfos.MultikeyPublicKey{},
+			id.did+"#"+id.controller.keyID,
+			id.controller.priv,
+		)
+		if err != nil {
+			t.Fatalf("SignIdentityUpdate: %v", err)
+		}
+		res := postOperations(t, base, []string{token})
+		if res.StatusCode != 200 {
+			t.Fatalf("update %d: status %d", i, res.StatusCode)
+		}
+		res.Body.Close()
+		prevCID = opCID
+	}
+
+	// 1. Full log (no params) — should have 3 entries, no cursor (< default limit)
+	var fullLog struct {
+		Entries []struct {
+			CID      string `json:"cid"`
+			JWSToken string `json:"jwsToken"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	resp := getJSON(t, base+"/identities/"+id.did+"/log", &fullLog)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET log: status %d", resp.StatusCode)
+	}
+	if len(fullLog.Entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(fullLog.Entries))
+	}
+	if fullLog.Cursor != nil {
+		t.Fatalf("expected nil cursor on last page, got %s", *fullLog.Cursor)
+	}
+
+	// 2. Paginate with limit=1 — first page has 1 entry + cursor
+	var page1 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/identities/%s/log?limit=1", base, id.did), &page1)
+	if len(page1.Entries) != 1 {
+		t.Fatalf("page1: expected 1 entry, got %d", len(page1.Entries))
+	}
+	if page1.Cursor == nil {
+		t.Fatal("page1: expected cursor")
+	}
+
+	// 3. Second page via cursor
+	var page2 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=%s&limit=1", base, id.did, *page1.Cursor), &page2)
+	if len(page2.Entries) != 1 {
+		t.Fatalf("page2: expected 1 entry, got %d", len(page2.Entries))
+	}
+	if page2.Cursor == nil {
+		t.Fatal("page2: expected cursor")
+	}
+
+	// 4. Third (final) page
+	var page3 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=%s&limit=1", base, id.did, *page2.Cursor), &page3)
+	if len(page3.Entries) != 1 {
+		t.Fatalf("page3: expected 1 entry, got %d", len(page3.Entries))
+	}
+	// cursor may or may not be set on the final page when entry count == limit;
+	// if set, following it must yield an empty page
+	if page3.Cursor != nil {
+		var page4 struct {
+			Entries []struct{} `json:"entries"`
+		}
+		getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=%s&limit=1", base, id.did, *page3.Cursor), &page4)
+		if len(page4.Entries) != 0 {
+			t.Fatalf("page after final: expected 0 entries, got %d", len(page4.Entries))
+		}
+	}
+
+	// 5. After with unknown CID returns empty (not error)
+	var empty struct {
+		Entries []struct{} `json:"entries"`
+		Cursor  *string    `json:"cursor"`
+	}
+	emptyResp := getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=bafyunknown", base, id.did), &empty)
+	if emptyResp.StatusCode != 200 {
+		t.Fatalf("unknown cursor: expected 200, got %d", emptyResp.StatusCode)
+	}
+	if len(empty.Entries) != 0 {
+		t.Fatalf("unknown cursor: expected 0 entries, got %d", len(empty.Entries))
+	}
+
+	// 6. Exact page boundary — limit=3 should return all entries with nil cursor
+	var exactPage struct {
+		Entries []struct{} `json:"entries"`
+		Cursor  *string    `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/identities/%s/log?limit=3", base, id.did), &exactPage)
+	if len(exactPage.Entries) != 3 {
+		t.Fatalf("exact boundary: expected 3 entries, got %d", len(exactPage.Entries))
+	}
+	// when entry count equals limit, cursor may or may not be set depending
+	// on implementation — both are valid. The consumer checks the next page.
+}
+
+func TestGlobalLogPagination(t *testing.T) {
+	base := relayURL(t)
+
+	// create 3 identities to get 3 entries in the global log
+	var cids []string
+	for i := 0; i < 3; i++ {
+		id := createIdentity(t, base)
+		cids = append(cids, id.genCID)
+	}
+
+	// paginate with limit=1
+	var page1 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	resp := getJSON(t, base+"/log?limit=1", &page1)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /log: status %d", resp.StatusCode)
+	}
+	if len(page1.Entries) != 1 {
+		t.Fatalf("page1: expected 1 entry, got %d", len(page1.Entries))
+	}
+	if page1.Cursor == nil {
+		t.Fatal("page1: expected cursor")
+	}
+
+	// follow cursor to page 2
+	var page2 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/log?after=%s&limit=1", base, *page1.Cursor), &page2)
+	if len(page2.Entries) != 1 {
+		t.Fatalf("page2: expected 1 entry, got %d", len(page2.Entries))
+	}
+
+	// entries across pages should have distinct CIDs
+	if page1.Entries[0].CID == page2.Entries[0].CID {
+		t.Fatal("page1 and page2 should have different entries")
+	}
+
+	// 3. Drain all remaining pages — global log may have relay bootstrap entries
+	//    beyond our 3 identities. Verify pagination terminates correctly.
+	cursor := page2.Cursor
+	totalEntries := 2 // already consumed 2 entries from page1 + page2
+	for cursor != nil && totalEntries < 100 { // safety bound
+		var page struct {
+			Entries []struct {
+				CID string `json:"cid"`
+			} `json:"entries"`
+			Cursor *string `json:"cursor"`
+		}
+		getJSON(t, fmt.Sprintf("%s/log?after=%s&limit=1", base, *cursor), &page)
+		totalEntries += len(page.Entries)
+		if len(page.Entries) == 0 {
+			// empty page means we're past the end — cursor should be nil
+			if page.Cursor != nil {
+				t.Fatal("empty page should have nil cursor")
+			}
+			break
+		}
+		cursor = page.Cursor
+	}
+	// we created 3 identities; relay may have bootstrap entries too
+	if totalEntries < 3 {
+		t.Fatalf("expected at least 3 total entries, got %d", totalEntries)
+	}
+
+	// 4. Unknown after CID returns empty (not error)
+	var empty struct {
+		Entries []struct{} `json:"entries"`
+		Cursor  *string    `json:"cursor"`
+	}
+	emptyResp := getJSON(t, base+"/log?after=bafyunknown", &empty)
+	if emptyResp.StatusCode != 200 {
+		t.Fatalf("unknown cursor: expected 200, got %d", emptyResp.StatusCode)
+	}
+	if len(empty.Entries) != 0 {
+		t.Fatalf("unknown cursor: expected 0 entries, got %d", len(empty.Entries))
 	}
 }

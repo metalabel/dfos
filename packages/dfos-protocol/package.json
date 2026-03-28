@@ -59,9 +59,6 @@
     "dist",
     "schemas",
     "examples",
-    "PROTOCOL.md",
-    "DID-METHOD.md",
-    "CONTENT-MODEL.md",
     "LICENSE",
     "README.md"
   ],

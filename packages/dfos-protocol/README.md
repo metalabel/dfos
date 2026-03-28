@@ -32,11 +32,11 @@ import { buildMerkleTree, verifyMerkleProof } from '@metalabel/dfos-protocol/mer
 
 ## Specifications
 
-| Document                               | Description                                                    |
-| -------------------------------------- | -------------------------------------------------------------- |
-| [PROTOCOL.md](./PROTOCOL.md)           | Core protocol — chains, signatures, verification, test vectors |
-| [DID-METHOD.md](./DID-METHOD.md)       | W3C DID method specification for `did:dfos`                    |
-| [CONTENT-MODEL.md](./CONTENT-MODEL.md) | Standard content schemas (post, profile, manifest)             |
+| Document                                         | Description                                                    |
+| ------------------------------------------------ | -------------------------------------------------------------- |
+| [PROTOCOL.md](../../specs/PROTOCOL.md)           | Core protocol — chains, signatures, verification, test vectors |
+| [DID-METHOD.md](../../specs/DID-METHOD.md)       | W3C DID method specification for `did:dfos`                    |
+| [CONTENT-MODEL.md](../../specs/CONTENT-MODEL.md) | Standard content schemas (post, profile, manifest)             |
 
 ## Examples
 

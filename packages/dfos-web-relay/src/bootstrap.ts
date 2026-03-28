@@ -57,7 +57,7 @@ export const bootstrapRelayIdentity = async (store: RelayStore): Promise<RelayId
 
   // ingest identity genesis to derive the DID
   const [identityResult] = await ingestOperations([identityJws], store);
-  if (!identityResult || identityResult.status !== 'accepted' || !identityResult.chainId) {
+  if (!identityResult || identityResult.status === 'rejected' || !identityResult.chainId) {
     throw new Error(`failed to bootstrap relay identity: ${identityResult?.error ?? 'unknown'}`);
   }
   const did = identityResult.chainId;
@@ -84,7 +84,7 @@ export const bootstrapRelayIdentity = async (store: RelayStore): Promise<RelayId
 
   // ingest profile artifact into the store
   const [artifactResult] = await ingestOperations([profileArtifactJws], store);
-  if (!artifactResult || artifactResult.status !== 'accepted') {
+  if (!artifactResult || artifactResult.status === 'rejected') {
     throw new Error(
       `failed to ingest relay profile artifact: ${artifactResult?.error ?? 'unknown'}`,
     );

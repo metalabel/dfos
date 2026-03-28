@@ -9,25 +9,27 @@ import (
 
 // MemoryStore is an in-memory Store implementation for development and testing.
 type MemoryStore struct {
-	mu               sync.RWMutex
-	operations       map[string]StoredOperation
-	identityChains   map[string]StoredIdentityChain
-	contentChains    map[string]StoredContentChain
-	beacons          map[string]StoredBeacon
-	blobs            map[string][]byte
+	mu                sync.RWMutex
+	operations        map[string]StoredOperation
+	identityChains    map[string]StoredIdentityChain
+	contentChains     map[string]StoredContentChain
+	beacons           map[string]StoredBeacon
+	blobs             map[string][]byte
 	countersignatures map[string][]string
-	operationLog     []LogEntry
+	operationLog      []LogEntry
+	peerCursors       map[string]string
 }
 
 // NewMemoryStore creates a new empty MemoryStore.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		operations:       make(map[string]StoredOperation),
-		identityChains:   make(map[string]StoredIdentityChain),
-		contentChains:    make(map[string]StoredContentChain),
-		beacons:          make(map[string]StoredBeacon),
-		blobs:            make(map[string][]byte),
+		operations:        make(map[string]StoredOperation),
+		identityChains:    make(map[string]StoredIdentityChain),
+		contentChains:     make(map[string]StoredContentChain),
+		beacons:           make(map[string]StoredBeacon),
+		blobs:             make(map[string][]byte),
 		countersignatures: make(map[string][]string),
+		peerCursors:       make(map[string]string),
 	}
 }
 
@@ -203,4 +205,121 @@ func (s *MemoryStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	}
 
 	return result, cursor, nil
+}
+
+func (s *MemoryStore) GetIdentityStateAtCID(did, cid string) (*IdentityStateAtCID, error) {
+	s.mu.RLock()
+	chain, ok := s.identityChains[did]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, nil
+	}
+
+	// build CID → {jws, previousCID} map
+	type opInfo struct {
+		jws         string
+		previousCID string
+	}
+	opsByCID := make(map[string]opInfo)
+	for _, jws := range chain.Log {
+		header, payload, err := dfos.DecodeJWSUnsafe(jws)
+		if err != nil || header == nil {
+			continue
+		}
+		opCID := header.CID
+		prevCID, _ := payload["previousOperationCID"].(string)
+		opsByCID[opCID] = opInfo{jws: jws, previousCID: prevCID}
+	}
+
+	if _, ok := opsByCID[cid]; !ok {
+		return nil, nil
+	}
+
+	// walk backward from target CID to genesis
+	var path []string
+	currentCID := cid
+	for currentCID != "" {
+		op, ok := opsByCID[currentCID]
+		if !ok {
+			return nil, nil
+		}
+		path = append([]string{op.jws}, path...)
+		currentCID = op.previousCID
+	}
+
+	result, err := dfos.VerifyIdentityChain(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// extract createdAt of the target CID
+	targetOp := opsByCID[cid]
+	_, targetPayload, _ := dfos.DecodeJWSUnsafe(targetOp.jws)
+	lastCreatedAt, _ := targetPayload["createdAt"].(string)
+
+	return &IdentityStateAtCID{State: result.State, LastCreatedAt: lastCreatedAt}, nil
+}
+
+func (s *MemoryStore) GetContentStateAtCID(contentID, cid string) (*ContentStateAtCID, error) {
+	s.mu.RLock()
+	chain, ok := s.contentChains[contentID]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, nil
+	}
+
+	type opInfo struct {
+		jws         string
+		previousCID string
+	}
+	opsByCID := make(map[string]opInfo)
+	for _, jws := range chain.Log {
+		header, payload, err := dfos.DecodeJWSUnsafe(jws)
+		if err != nil || header == nil {
+			continue
+		}
+		opCID := header.CID
+		prevCID, _ := payload["previousOperationCID"].(string)
+		opsByCID[opCID] = opInfo{jws: jws, previousCID: prevCID}
+	}
+
+	if _, ok := opsByCID[cid]; !ok {
+		return nil, nil
+	}
+
+	var path []string
+	currentCID := cid
+	for currentCID != "" {
+		op, ok := opsByCID[currentCID]
+		if !ok {
+			return nil, nil
+		}
+		path = append([]string{op.jws}, path...)
+		currentCID = op.previousCID
+	}
+
+	resolveKey := CreateKeyResolver(s)
+	result, err := dfos.VerifyContentChain(path, resolveKey, true)
+	if err != nil {
+		return nil, err
+	}
+
+	targetOp := opsByCID[cid]
+	_, targetPayload, _ := dfos.DecodeJWSUnsafe(targetOp.jws)
+	lastCreatedAt, _ := targetPayload["createdAt"].(string)
+
+	return &ContentStateAtCID{State: result.State, LastCreatedAt: lastCreatedAt}, nil
+}
+
+func (s *MemoryStore) GetPeerCursor(peerURL string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.peerCursors[peerURL], nil
+}
+
+func (s *MemoryStore) SetPeerCursor(peerURL string, cursor string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.peerCursors[peerURL] = cursor
+	return nil
 }

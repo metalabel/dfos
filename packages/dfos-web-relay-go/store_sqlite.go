@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS blobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_operation_log_cid ON operation_log(cid);
+
+CREATE TABLE IF NOT EXISTS peer_cursors (
+	peer_url TEXT PRIMARY KEY,
+	cursor TEXT NOT NULL
+);
 `
 
 // SQLiteStore is a durable Store backed by SQLite.
@@ -366,3 +371,120 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	return entries, cursor, nil
 }
 
+// GetIdentityStateAtCID replays the identity chain from genesis to the target CID.
+// For SQLite, this could use snapshots in the future; for now it replays fully.
+func (s *SQLiteStore) GetIdentityStateAtCID(did, cid string) (*IdentityStateAtCID, error) {
+	chain, err := s.GetIdentityChain(did)
+	if err != nil || chain == nil {
+		return nil, err
+	}
+
+	type opInfo struct {
+		jws         string
+		previousCID string
+	}
+	opsByCID := make(map[string]opInfo)
+	for _, jws := range chain.Log {
+		header, payload, err := dfos.DecodeJWSUnsafe(jws)
+		if err != nil || header == nil {
+			continue
+		}
+		prevCID, _ := payload["previousOperationCID"].(string)
+		opsByCID[header.CID] = opInfo{jws: jws, previousCID: prevCID}
+	}
+
+	if _, ok := opsByCID[cid]; !ok {
+		return nil, nil
+	}
+
+	var path []string
+	currentCID := cid
+	for currentCID != "" {
+		op, ok := opsByCID[currentCID]
+		if !ok {
+			return nil, nil
+		}
+		path = append([]string{op.jws}, path...)
+		currentCID = op.previousCID
+	}
+
+	result, err := dfos.VerifyIdentityChain(path)
+	if err != nil {
+		return nil, err
+	}
+
+	targetOp := opsByCID[cid]
+	_, targetPayload, _ := dfos.DecodeJWSUnsafe(targetOp.jws)
+	lastCreatedAt, _ := targetPayload["createdAt"].(string)
+
+	return &IdentityStateAtCID{State: result.State, LastCreatedAt: lastCreatedAt}, nil
+}
+
+func (s *SQLiteStore) GetContentStateAtCID(contentID, cid string) (*ContentStateAtCID, error) {
+	chain, err := s.GetContentChain(contentID)
+	if err != nil || chain == nil {
+		return nil, err
+	}
+
+	type opInfo struct {
+		jws         string
+		previousCID string
+	}
+	opsByCID := make(map[string]opInfo)
+	for _, jws := range chain.Log {
+		header, payload, err := dfos.DecodeJWSUnsafe(jws)
+		if err != nil || header == nil {
+			continue
+		}
+		prevCID, _ := payload["previousOperationCID"].(string)
+		opsByCID[header.CID] = opInfo{jws: jws, previousCID: prevCID}
+	}
+
+	if _, ok := opsByCID[cid]; !ok {
+		return nil, nil
+	}
+
+	var path []string
+	currentCID := cid
+	for currentCID != "" {
+		op, ok := opsByCID[currentCID]
+		if !ok {
+			return nil, nil
+		}
+		path = append([]string{op.jws}, path...)
+		currentCID = op.previousCID
+	}
+
+	resolveKey := CreateKeyResolver(s)
+	result, err := dfos.VerifyContentChain(path, resolveKey, true)
+	if err != nil {
+		return nil, err
+	}
+
+	targetOp := opsByCID[cid]
+	_, targetPayload, _ := dfos.DecodeJWSUnsafe(targetOp.jws)
+	lastCreatedAt, _ := targetPayload["createdAt"].(string)
+
+	return &ContentStateAtCID{State: result.State, LastCreatedAt: lastCreatedAt}, nil
+}
+
+func (s *SQLiteStore) GetPeerCursor(peerURL string) (string, error) {
+	row := s.db.QueryRow("SELECT cursor FROM peer_cursors WHERE peer_url = ?", peerURL)
+	var cursor string
+	err := row.Scan(&cursor)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return cursor, nil
+}
+
+func (s *SQLiteStore) SetPeerCursor(peerURL string, cursor string) error {
+	_, err := s.db.Exec(
+		"INSERT OR REPLACE INTO peer_cursors (peer_url, cursor) VALUES (?, ?)",
+		peerURL, cursor,
+	)
+	return err
+}

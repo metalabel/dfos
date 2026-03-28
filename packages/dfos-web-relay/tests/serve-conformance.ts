@@ -13,4 +13,4 @@ const relay = await createRelay({
   store: new MemoryRelayStore(),
 });
 
-serve(relay, { port });
+serve(relay.app, { port });

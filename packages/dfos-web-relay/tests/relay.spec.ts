@@ -22,12 +22,13 @@ import {
 import {
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
+  decodeJwsUnsafe,
   generateId,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { bootstrapRelayIdentity, createRelay, MemoryRelayStore } from '../src';
-import type { RelayIdentity } from '../src';
+import { bootstrapRelayIdentity, createRelay, ingestOperations, MemoryRelayStore } from '../src';
+import type { PeerClient, PeerLogEntry, RelayIdentity } from '../src';
 
 // =============================================================================
 // helpers
@@ -78,7 +79,10 @@ const createIdentity = async () => {
 };
 
 /** Create a content chain genesis operation signed by a given identity */
-const createContentOp = async (identity: Awaited<ReturnType<typeof createIdentity>>) => {
+const createContentOp = async (
+  identity: Awaited<ReturnType<typeof createIdentity>>,
+  opts?: { createdAt?: string },
+) => {
   // create a document and derive its CID
   const document = { type: 'post', title: 'hello world', body: 'test content' };
   const docEncoded = await dagCborCanonicalEncode(document as unknown as Record<string, unknown>);
@@ -90,7 +94,7 @@ const createContentOp = async (identity: Awaited<ReturnType<typeof createIdentit
     did: identity.did,
     documentCID,
     baseDocumentCID: null,
-    createdAt: ts(1),
+    createdAt: opts?.createdAt ?? ts(1),
     note: null,
   };
 
@@ -122,6 +126,84 @@ const createTestAuthToken = async (
 };
 
 // =============================================================================
+// relay-backed mock peer client
+// =============================================================================
+
+/**
+ * Mock PeerClient backed by a real MemoryRelayStore. Reads chain data and global
+ * log directly from the backing store using the same pagination logic as the
+ * real HTTP endpoints. Records submitOperations calls for gossip assertion.
+ */
+class RelayBackedPeerClient implements PeerClient {
+  readonly submitCalls: { peerUrl: string; operations: string[] }[] = [];
+
+  constructor(
+    private backingStore: MemoryRelayStore,
+    private pageSize?: number,
+  ) {}
+
+  async getIdentityLog(
+    _peerUrl: string,
+    did: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+    const chain = await this.backingStore.getIdentityChain(did);
+    if (!chain) return null;
+    return this.paginateChainLog(chain.log, params);
+  }
+
+  async getContentLog(
+    _peerUrl: string,
+    contentId: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+    const chain = await this.backingStore.getContentChain(contentId);
+    if (!chain) return null;
+    return this.paginateChainLog(chain.log, params);
+  }
+
+  async getOperationLog(
+    _peerUrl: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+    const limit = this.pageSize ?? params?.limit ?? 1000;
+    const result = await this.backingStore.readLog({
+      ...(params?.after ? { after: params.after } : {}),
+      limit,
+    });
+    return {
+      entries: result.entries.map((e) => ({ cid: e.cid, jwsToken: e.jwsToken })),
+      cursor: result.cursor,
+    };
+  }
+
+  async submitOperations(peerUrl: string, operations: string[]): Promise<void> {
+    this.submitCalls.push({ peerUrl, operations });
+  }
+
+  private paginateChainLog(
+    log: string[],
+    params?: { after?: string; limit?: number },
+  ): { entries: PeerLogEntry[]; cursor: string | null } {
+    const limit = this.pageSize ?? params?.limit ?? 1000;
+    const entries: PeerLogEntry[] = log.map((jws) => {
+      const decoded = decodeJwsUnsafe(jws);
+      return { cid: decoded?.header.cid || '', jwsToken: jws };
+    });
+
+    let startIdx = 0;
+    if (params?.after) {
+      const idx = entries.findIndex((e) => e.cid === params.after);
+      startIdx = idx >= 0 ? idx + 1 : entries.length;
+    }
+
+    const page = entries.slice(startIdx, startIdx + limit);
+    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
+    return { entries: page, cursor };
+  }
+}
+
+// =============================================================================
 // tests
 // =============================================================================
 
@@ -136,7 +218,8 @@ describe('web relay', () => {
     app = await createRelay({ store, identity: RELAY_IDENTITY });
   });
 
-  const req = (path: string, init?: RequestInit) => app.request(`http://localhost${path}`, init);
+  const req = (path: string, init?: RequestInit) =>
+    app.app.request(`http://localhost${path}`, init);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const json = async (res: Response): Promise<any> => res.json();
@@ -179,8 +262,8 @@ describe('web relay', () => {
     });
 
     it('should include content: false when relay created with content: false', async () => {
-      const noContentApp = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
-      const res = await noContentApp.request('http://localhost/.well-known/dfos-relay');
+      const noContentRelay = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
+      const res = await noContentRelay.app.request('http://localhost/.well-known/dfos-relay');
       const body = (await res.json()) as Record<string, unknown>;
       expect(body.content).toBe(false);
     });
@@ -205,7 +288,7 @@ describe('web relay', () => {
 
       const body = await json(res);
       expect(body.results).toHaveLength(1);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('identity-op');
       expect(body.results[0].chainId).toBe(identity.did);
     });
@@ -253,7 +336,7 @@ describe('web relay', () => {
 
       const res = await postOps([updateToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
 
       // verify chain now has 2 ops
       const chainRes = await req(`/identities/${identity.did}`);
@@ -288,8 +371,8 @@ describe('web relay', () => {
       // but results must come back in SUBMISSION order
       const res = await postOps([updateToken, identity.jwsToken]);
       const body = await json(res);
-      const accepted = body.results.filter((r: { status: string }) => r.status === 'accepted');
-      expect(accepted).toHaveLength(2);
+      const newResults = body.results.filter((r: { status: string }) => r.status === 'new');
+      expect(newResults).toHaveLength(2);
 
       // results[0] should be the update (submitted first), results[1] should be the genesis
       expect(body.results[0].cid).toBeTruthy();
@@ -344,8 +427,8 @@ describe('web relay', () => {
       // submit in REVERSE order: update2, update1, genesis
       const res = await postOps([update2Token, update1Token, identity.jwsToken]);
       const body = await json(res);
-      const accepted = body.results.filter((r: { status: string }) => r.status === 'accepted');
-      expect(accepted).toHaveLength(3);
+      const newResults = body.results.filter((r: { status: string }) => r.status === 'new');
+      expect(newResults).toHaveLength(3);
 
       // verify the chain has all 3 ops
       const chainRes = await req(`/identities/${identity.did}`);
@@ -358,7 +441,7 @@ describe('web relay', () => {
       await postOps([identity.jwsToken]);
       const res = await postOps([identity.jwsToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('duplicate');
     });
   });
 
@@ -376,9 +459,9 @@ describe('web relay', () => {
       const res = await postOps([content.jwsToken, identity.jwsToken]);
       const body = await json(res);
 
-      // both should be accepted (dependency sort ensures identity is processed first)
-      const accepted = body.results.filter((r: { status: string }) => r.status === 'accepted');
-      expect(accepted).toHaveLength(2);
+      // both should be new (dependency sort ensures identity is processed first)
+      const newResults = body.results.filter((r: { status: string }) => r.status === 'new');
+      expect(newResults).toHaveLength(2);
 
       // results must be in submission order: content-op first, identity-op second
       expect(body.results[0].kind).toBe('content-op');
@@ -467,7 +550,7 @@ describe('web relay', () => {
 
       const res = await postOps([beaconToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('beacon');
 
       // query the beacon
@@ -547,7 +630,7 @@ describe('web relay', () => {
 
       const res = await postOps([csToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('countersign');
       expect(body.results[0].chainId).toBe(content.operationCID);
 
@@ -675,7 +758,7 @@ describe('web relay', () => {
 
       const res = await postOps([beaconCsToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('countersign');
       expect(body.results[0].chainId).toBe(beaconCID);
 
@@ -1007,7 +1090,7 @@ describe('web relay', () => {
 
       const res = await postOps([deleteToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
 
       // verify state shows deleted
       const chainRes = await req(`/identities/${identity.did}`);
@@ -1090,7 +1173,7 @@ describe('web relay', () => {
 
       const res = await postOps([deleteToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
 
       // verify state shows deleted
       const chainRes = await req(`/content/${contentId}`);
@@ -1187,14 +1270,18 @@ describe('web relay', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // fork rejection
+  // fork acceptance
   // ---------------------------------------------------------------------------
 
-  describe('fork rejection', () => {
-    it('should reject content operation with stale previousOperationCID', async () => {
+  describe('fork acceptance', () => {
+    it('should accept content fork with same previousOperationCID (fork acceptance)', async () => {
       const identity = await createIdentity();
       const content = await createContentOp(identity);
-      await postOps([identity.jwsToken, content.jwsToken]);
+      const ingestRes = await postOps([identity.jwsToken, content.jwsToken]);
+      const ingestBody = await json(ingestRes);
+      const contentId = ingestBody.results.find(
+        (r: { kind: string }) => r.kind === 'content-op',
+      ).chainId;
 
       const kid = `${identity.did}#${identity.authKey.keyId}`;
 
@@ -1237,11 +1324,214 @@ describe('web relay', () => {
 
       // submit A first — should succeed
       const resA = await postOps([tokenA]);
-      expect((await json(resA)).results[0].status).toBe('accepted');
+      expect((await json(resA)).results[0].status).toBe('new');
 
-      // submit B — should be rejected (fork, stale previousOperationCID)
+      // submit B — also accepted (fork from same parent)
       const resB = await postOps([tokenB]);
-      expect((await json(resB)).results[0].status).toBe('rejected');
+      expect((await json(resB)).results[0].status).toBe('new');
+
+      // head should be B (higher createdAt)
+      const chainRes = await req(`/content/${contentId}`);
+      const chain = await json(chainRes);
+      expect(chain.state.currentDocumentCID).toBe(doc2Encoded.cid.toString());
+
+      // chain log should contain all 3 operations (genesis + both fork branches)
+      const logRes = await req(`/content/${contentId}/log`);
+      const logBody = await json(logRes);
+      expect(logBody.entries).toHaveLength(3);
+    });
+
+    it('should select head by highest createdAt (deterministic head selection)', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      const ingestRes = await postOps([identity.jwsToken, content.jwsToken]);
+      const ingestBody = await json(ingestRes);
+      const contentId = ingestBody.results.find(
+        (r: { kind: string }) => r.kind === 'content-op',
+      ).chainId;
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+
+      // fork A: lower createdAt
+      const docA = { type: 'post', title: 'branch-a' };
+      const docAEncoded = await dagCborCanonicalEncode(docA as unknown as Record<string, unknown>);
+      const updateA: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        documentCID: docAEncoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(100),
+        note: null,
+      };
+      const { jwsToken: tokenA } = await signContentOperation({
+        operation: updateA,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      // fork B: higher createdAt — should become head
+      const docB = { type: 'post', title: 'branch-b' };
+      const docBEncoded = await dagCborCanonicalEncode(docB as unknown as Record<string, unknown>);
+      const updateB: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: identity.did,
+        previousOperationCID: content.operationCID,
+        documentCID: docBEncoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(200),
+        note: null,
+      };
+      const { jwsToken: tokenB } = await signContentOperation({
+        operation: updateB,
+        signer: identity.authKey.signer,
+        kid,
+      });
+
+      // submit A first (higher createdAt arrives second)
+      await postOps([tokenA]);
+      await postOps([tokenB]);
+
+      // head should be B (higher createdAt wins)
+      const chainRes = await req(`/content/${contentId}`);
+      const chain = await json(chainRes);
+      expect(chain.state.currentDocumentCID).toBe(docBEncoded.cid.toString());
+
+      // now submit in reverse order on a fresh relay to prove order-independence
+      const store2 = new MemoryRelayStore();
+      const relay2 = await createRelay({ store: store2 });
+      const req2 = (path: string, init?: RequestInit) =>
+        relay2.app.request(`http://localhost${path}`, init);
+      const postOps2 = (ops: string[]) =>
+        req2('/operations', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ operations: ops }),
+        });
+
+      // submit identity + genesis + B first, then A
+      await postOps2([identity.jwsToken, content.jwsToken]);
+      await postOps2([tokenB]);
+      await postOps2([tokenA]);
+
+      // same head regardless of ingestion order
+      const chainRes2 = await req2(`/content/${contentId}`);
+      const chain2 = await json(chainRes2);
+      expect(chain2.state.currentDocumentCID).toBe(docBEncoded.cid.toString());
+    });
+
+    it('should include all fork branches in per-chain log', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      const ingestRes = await postOps([identity.jwsToken, content.jwsToken]);
+      const ingestBody = await json(ingestRes);
+      const contentId = ingestBody.results.find(
+        (r: { kind: string }) => r.kind === 'content-op',
+      ).chainId;
+
+      const kid = `${identity.did}#${identity.authKey.keyId}`;
+
+      // three fork branches off genesis
+      const forks: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        const doc = { type: 'post', title: `fork-${i}` };
+        const docEncoded = await dagCborCanonicalEncode(doc as unknown as Record<string, unknown>);
+        const update: ContentOperation = {
+          version: 1,
+          type: 'update',
+          did: identity.did,
+          previousOperationCID: content.operationCID,
+          documentCID: docEncoded.cid.toString(),
+          baseDocumentCID: null,
+          createdAt: ts(10 + i),
+          note: null,
+        };
+        const { jwsToken } = await signContentOperation({
+          operation: update,
+          signer: identity.authKey.signer,
+          kid,
+        });
+        forks.push(jwsToken);
+      }
+
+      for (const f of forks) await postOps([f]);
+
+      // chain log has genesis + 3 fork branches = 4 entries
+      const logRes = await req(`/content/${contentId}/log`);
+      const logBody = await json(logRes);
+      expect(logBody.entries).toHaveLength(4);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // future timestamp guard
+  // ---------------------------------------------------------------------------
+
+  describe('future timestamp guard', () => {
+    it('should reject identity operation with createdAt more than 24h in the future', async () => {
+      const controller = makeKey();
+      const authKey = makeKey();
+
+      const farFuture = new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString();
+      const createOp: IdentityOperation = {
+        version: 1,
+        type: 'create',
+        authKeys: [authKey.key],
+        assertKeys: [],
+        controllerKeys: [controller.key],
+        createdAt: farFuture,
+      };
+
+      const { jwsToken } = await signIdentityOperation({
+        operation: createOp,
+        signer: controller.signer,
+        keyId: controller.keyId,
+      });
+
+      const res = await postOps([jwsToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+      expect(body.results[0].error).toContain('too far in the future');
+    });
+
+    it('should accept identity operation with createdAt 23h in the future', async () => {
+      const controller = makeKey();
+      const authKey = makeKey();
+
+      const nearFuture = new Date(Date.now() + 23 * 60 * 60 * 1000).toISOString();
+      const createOp: IdentityOperation = {
+        version: 1,
+        type: 'create',
+        authKeys: [authKey.key],
+        assertKeys: [],
+        controllerKeys: [controller.key],
+        createdAt: nearFuture,
+      };
+
+      const { jwsToken } = await signIdentityOperation({
+        operation: createOp,
+        signer: controller.signer,
+        keyId: controller.keyId,
+      });
+
+      const res = await postOps([jwsToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('new');
+    });
+
+    it('should reject content operation with createdAt more than 24h in the future', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      const farFuture = new Date(Date.now() + 25 * 60 * 60 * 1000).toISOString();
+      const content = await createContentOp(identity, { createdAt: farFuture });
+
+      const res = await postOps([content.jwsToken]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+      expect(body.results[0].error).toContain('too far in the future');
     });
   });
 
@@ -1299,7 +1589,7 @@ describe('web relay', () => {
 
       const res = await postOps([updateToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
 
       // chain should now have 2 ops
       const chainRes = await req(`/content/${contentId}`);
@@ -1565,7 +1855,7 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('artifact ingestion', () => {
-    it('should accept a valid artifact and return accepted', async () => {
+    it('should accept a valid artifact and return newResults', async () => {
       const identity = await createIdentity();
       await postOps([identity.jwsToken]);
 
@@ -1586,7 +1876,7 @@ describe('web relay', () => {
 
       const res = await postOps([artifactToken]);
       const body = await json(res);
-      expect(body.results[0].status).toBe('accepted');
+      expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('artifact');
     });
 
@@ -1674,11 +1964,11 @@ describe('web relay', () => {
 
       const res1 = await postOps([artifactToken]);
       const body1 = await json(res1);
-      expect(body1.results[0].status).toBe('accepted');
+      expect(body1.results[0].status).toBe('new');
 
       const res2 = await postOps([artifactToken]);
       const body2 = await json(res2);
-      expect(body2.results[0].status).toBe('accepted');
+      expect(body2.results[0].status).toBe('duplicate');
     });
 
     it('should reject oversized artifact', async () => {
@@ -1931,13 +2221,13 @@ describe('web relay', () => {
 
   describe('content plane disabled', () => {
     it('should return 501 for blob upload when content: false', async () => {
-      const noContentApp = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
+      const noContentRelay = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
 
       const identity = await createIdentity();
       const content = await createContentOp(identity);
       await postOps([identity.jwsToken, content.jwsToken]);
 
-      const res = await noContentApp.request('http://localhost/content/someid/blob/somecid', {
+      const res = await noContentRelay.app.request('http://localhost/content/someid/blob/somecid', {
         method: 'PUT',
         headers: {
           'content-type': 'application/octet-stream',
@@ -1949,9 +2239,9 @@ describe('web relay', () => {
     });
 
     it('should return 501 for blob download when content: false', async () => {
-      const noContentApp = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
+      const noContentRelay = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
 
-      const res = await noContentApp.request('http://localhost/content/someid/blob', {
+      const res = await noContentRelay.app.request('http://localhost/content/someid/blob', {
         headers: { authorization: 'Bearer fake' },
       });
       expect(res.status).toBe(501);
@@ -2007,6 +2297,440 @@ describe('web relay', () => {
       const res = await req(`/content/${contentId}`);
       const body = await json(res);
       expect(typeof body.headCID).toBe('string');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // peering
+  // ---------------------------------------------------------------------------
+
+  describe('peering', () => {
+    /** Create a local relay with a mock peer client backed by a given store */
+    const createPeeredRelay = async (opts: {
+      peerStore: MemoryRelayStore;
+      peers: { url: string; gossip?: boolean; readThrough?: boolean; sync?: boolean }[];
+      pageSize?: number;
+    }) => {
+      const mockPeerClient = new RelayBackedPeerClient(opts.peerStore, opts.pageSize);
+      const localStore = new MemoryRelayStore();
+      const relay = await createRelay({
+        store: localStore,
+        peers: opts.peers,
+        peerClient: mockPeerClient,
+      });
+      const localReq = (path: string, init?: RequestInit) =>
+        relay.app.request(`http://localhost${path}`, init);
+      const localPostOps = (ops: string[]) =>
+        localReq('/operations', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ operations: ops }),
+        });
+      return { relay, localStore, mockPeerClient, req: localReq, postOps: localPostOps };
+    };
+
+    // -----------------------------------------------------------------------
+    // gossip
+    // -----------------------------------------------------------------------
+
+    describe('gossip', () => {
+      it('should gossip new ops to gossip-enabled peers', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { mockPeerClient, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        const identity = await createIdentity();
+        await localPostOps([identity.jwsToken]);
+
+        expect(mockPeerClient.submitCalls).toHaveLength(1);
+        expect(mockPeerClient.submitCalls[0]!.peerUrl).toBe('http://peer-a');
+        expect(mockPeerClient.submitCalls[0]!.operations).toContain(identity.jwsToken);
+      });
+
+      it('should not gossip duplicate ops', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { mockPeerClient, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        const identity = await createIdentity();
+        await localPostOps([identity.jwsToken]);
+        mockPeerClient.submitCalls.length = 0; // reset
+
+        // ingest same op again — should be duplicate, no gossip
+        await localPostOps([identity.jwsToken]);
+        expect(mockPeerClient.submitCalls).toHaveLength(0);
+      });
+
+      it('should skip peers with gossip: false', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { mockPeerClient, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [
+            { url: 'http://peer-a', gossip: true },
+            { url: 'http://peer-b', gossip: false },
+          ],
+        });
+
+        const identity = await createIdentity();
+        await localPostOps([identity.jwsToken]);
+
+        expect(mockPeerClient.submitCalls).toHaveLength(1);
+        expect(mockPeerClient.submitCalls[0]!.peerUrl).toBe('http://peer-a');
+      });
+
+      it('should gossip to all enabled peers', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { mockPeerClient, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }, { url: 'http://peer-b' }, { url: 'http://peer-c' }],
+        });
+
+        const identity = await createIdentity();
+        await localPostOps([identity.jwsToken]);
+
+        expect(mockPeerClient.submitCalls).toHaveLength(3);
+        const urls = mockPeerClient.submitCalls.map((c) => c.peerUrl).sort();
+        expect(urls).toEqual(['http://peer-a', 'http://peer-b', 'http://peer-c']);
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // read-through
+    // -----------------------------------------------------------------------
+
+    describe('read-through', () => {
+      it('should fetch identity from peer on local miss', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], peerStore);
+
+        const { req: localReq } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        const res = await localReq(`/identities/${identity.did}`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(body.did).toBe(identity.did);
+      });
+
+      it('should return 404 when peer also misses', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { req: localReq } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        const res = await localReq('/identities/did:dfos:nonexistent');
+        expect(res.status).toBe(404);
+      });
+
+      it('should paginate through full identity log from peer', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+
+        // create an identity update so the chain has 2 ops
+        const newAuthKey = makeKey();
+        const updateOp: IdentityOperation = {
+          version: 1,
+          type: 'update',
+          previousOperationCID: identity.operationCID,
+          authKeys: [newAuthKey.key],
+          assertKeys: [],
+          controllerKeys: [identity.controller.key],
+          createdAt: ts(1),
+        };
+        const { jwsToken: updateToken } = await signIdentityOperation({
+          operation: updateOp,
+          signer: identity.controller.signer,
+          keyId: identity.controller.keyId,
+          identityDID: identity.did,
+        });
+
+        await ingestOperations([identity.jwsToken, updateToken], peerStore);
+
+        // pageSize=1 forces 2 pages for a 2-op chain
+        const { req: localReq, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+          pageSize: 1,
+        });
+
+        const res = await localReq(`/identities/${identity.did}`);
+        expect(res.status).toBe(200);
+
+        // verify the full chain was ingested (both ops in local store)
+        const chain = await localStore.getIdentityChain(identity.did);
+        expect(chain).toBeDefined();
+        expect(chain!.log).toHaveLength(2);
+      });
+
+      it('should fetch content chain from peer on local miss', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        const content = await createContentOp(identity);
+
+        // seed peer with identity + content
+        const peerResults = await ingestOperations(
+          [identity.jwsToken, content.jwsToken],
+          peerStore,
+        );
+        const contentId = peerResults.find((r) => r.kind === 'content-op')!.chainId!;
+
+        // local relay needs the identity to verify content ops
+        const { req: localReq, postOps: localPostOps } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+        await localPostOps([identity.jwsToken]);
+
+        const res = await localReq(`/content/${contentId}`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(body.contentId).toBe(contentId);
+      });
+
+      it('should paginate through full content log from peer', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        const content = await createContentOp(identity);
+
+        // create a content update so the chain has 2 ops
+        const newDoc = { type: 'post', title: 'updated' };
+        const newDocEncoded = await dagCborCanonicalEncode(
+          newDoc as unknown as Record<string, unknown>,
+        );
+        const updateOp: ContentOperation = {
+          version: 1,
+          type: 'update',
+          did: identity.did,
+          previousOperationCID: content.operationCID,
+          documentCID: newDocEncoded.cid.toString(),
+          baseDocumentCID: null,
+          createdAt: ts(2),
+          note: null,
+        };
+        const kid = `${identity.did}#${identity.authKey.keyId}`;
+        const { jwsToken: updateToken } = await signContentOperation({
+          operation: updateOp,
+          signer: identity.authKey.signer,
+          kid,
+        });
+
+        await ingestOperations([identity.jwsToken, content.jwsToken, updateToken], peerStore);
+
+        // pageSize=1 forces 2 pages for a 2-op content chain
+        const {
+          req: localReq,
+          localStore,
+          postOps: localPostOps,
+        } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+          pageSize: 1,
+        });
+
+        // local relay needs the identity to verify content ops
+        await localPostOps([identity.jwsToken]);
+
+        const peerChain = await peerStore.getContentChain(
+          (await peerStore.getOperation(content.operationCID))!.chainId!,
+        );
+        const contentId = peerChain!.contentId;
+
+        const res = await localReq(`/content/${contentId}`);
+        expect(res.status).toBe(200);
+
+        // verify the full chain was ingested (both ops in local store)
+        const chain = await localStore.getContentChain(contentId);
+        expect(chain).toBeDefined();
+        expect(chain!.log).toHaveLength(2);
+      });
+
+      it('should not consult peers with readThrough: false', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], peerStore);
+
+        const { req: localReq } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a', readThrough: false }],
+        });
+
+        const res = await localReq(`/identities/${identity.did}`);
+        expect(res.status).toBe(404);
+      });
+
+      it('should fall back to second peer when first misses', async () => {
+        const emptyPeerStore = new MemoryRelayStore();
+        const populatedPeerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], populatedPeerStore);
+
+        // mock peer client that routes to different stores by URL
+        const mockPeerClient: PeerClient = {
+          async getIdentityLog(peerUrl, did, params) {
+            const store = peerUrl === 'http://peer-a' ? emptyPeerStore : populatedPeerStore;
+            const mock = new RelayBackedPeerClient(store);
+            return mock.getIdentityLog(peerUrl, did, params);
+          },
+          async getContentLog(peerUrl, contentId, params) {
+            const store = peerUrl === 'http://peer-a' ? emptyPeerStore : populatedPeerStore;
+            const mock = new RelayBackedPeerClient(store);
+            return mock.getContentLog(peerUrl, contentId, params);
+          },
+          async getOperationLog() {
+            return null;
+          },
+          async submitOperations() {},
+        };
+
+        const localStore = new MemoryRelayStore();
+        const relay = await createRelay({
+          store: localStore,
+          peers: [{ url: 'http://peer-a' }, { url: 'http://peer-b' }],
+          peerClient: mockPeerClient,
+        });
+
+        const res = await relay.app.request(`http://localhost/identities/${identity.did}`);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(body.did).toBe(identity.did);
+      });
+    });
+
+    // -----------------------------------------------------------------------
+    // sync-in
+    // -----------------------------------------------------------------------
+
+    describe('sync-in', () => {
+      it('should sync operations from peer', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], peerStore, { logEnabled: true });
+
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        await relay.syncFromPeers();
+
+        const chain = await localStore.getIdentityChain(identity.did);
+        expect(chain).toBeDefined();
+        expect(chain!.did).toBe(identity.did);
+      });
+
+      it('should persist cursor as last entry CID on final page', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        const results = await ingestOperations([identity.jwsToken], peerStore, {
+          logEnabled: true,
+        });
+        const opCID = results[0]!.cid;
+
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        await relay.syncFromPeers();
+
+        // single op < page size → final page → cursor = last entry CID
+        const cursor = await localStore.getPeerCursor('http://peer-a');
+        expect(cursor).toBe(opCID);
+      });
+
+      it('should handle multi-page sync', async () => {
+        const peerStore = new MemoryRelayStore();
+
+        // create 3 independent identities to populate the global log
+        const ids = [];
+        for (let i = 0; i < 3; i++) {
+          const id = await createIdentity();
+          await ingestOperations([id.jwsToken], peerStore, { logEnabled: true });
+          ids.push(id);
+        }
+
+        // pageSize=1 forces 3 pages
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+          pageSize: 1,
+        });
+
+        await relay.syncFromPeers();
+
+        // all 3 identities should be synced
+        for (const id of ids) {
+          const chain = await localStore.getIdentityChain(id.did);
+          expect(chain).toBeDefined();
+        }
+      });
+
+      it('should resume from stored cursor position', async () => {
+        const peerStore = new MemoryRelayStore();
+
+        const idA = await createIdentity();
+        const idB = await createIdentity();
+        const idC = await createIdentity();
+        const resultsA = await ingestOperations([idA.jwsToken], peerStore, { logEnabled: true });
+        const resultsB = await ingestOperations([idB.jwsToken], peerStore, { logEnabled: true });
+        await ingestOperations([idC.jwsToken], peerStore, { logEnabled: true });
+
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        // pre-set cursor to B → sync should only fetch C
+        await localStore.setPeerCursor('http://peer-a', resultsB[0]!.cid);
+
+        await relay.syncFromPeers();
+
+        // A and B should NOT be in local store (skipped by cursor)
+        expect(await localStore.getOperation(resultsA[0]!.cid)).toBeUndefined();
+        expect(await localStore.getOperation(resultsB[0]!.cid)).toBeUndefined();
+
+        // C should be synced
+        const chainC = await localStore.getIdentityChain(idC.did);
+        expect(chainC).toBeDefined();
+      });
+
+      it('should skip peers with sync: false', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        await ingestOperations([identity.jwsToken], peerStore, { logEnabled: true });
+
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a', sync: false }],
+        });
+
+        await relay.syncFromPeers();
+
+        const chain = await localStore.getIdentityChain(identity.did);
+        expect(chain).toBeUndefined();
+      });
+
+      it('should no-op when peer has no operations', async () => {
+        const peerStore = new MemoryRelayStore();
+        const { relay, localStore } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+        });
+
+        await relay.syncFromPeers();
+
+        // no cursor should be set (nothing to sync)
+        const cursor = await localStore.getPeerCursor('http://peer-a');
+        expect(cursor).toBeUndefined();
+      });
     });
   });
 });

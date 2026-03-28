@@ -552,7 +552,7 @@ func TestBatchThreeStepIdentity(t *testing.T) {
 	}
 	json.Unmarshal(body, &batchResp)
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}
@@ -610,7 +610,7 @@ func TestBatchContentIdentitySort(t *testing.T) {
 
 	// both should be accepted
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}
@@ -664,7 +664,7 @@ func TestBatchLarge(t *testing.T) {
 		t.Fatalf("expected 10 results, got %d", len(batchResp.Results))
 	}
 	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
+		if r.Status != "new" {
 			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
 		}
 	}
@@ -711,11 +711,12 @@ func TestBatchDuplicateOperations(t *testing.T) {
 	if len(batchResp.Results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(batchResp.Results))
 	}
-	// both should be accepted (idempotent dedup)
-	for i, r := range batchResp.Results {
-		if r.Status != "accepted" {
-			t.Fatalf("batch result[%d]: status=%s error=%s", i, r.Status, r.Error)
-		}
+	// first should be new, second should be duplicate (idempotent dedup)
+	if batchResp.Results[0].Status != "new" {
+		t.Fatalf("batch result[0]: expected new, got status=%s error=%s", batchResp.Results[0].Status, batchResp.Results[0].Error)
+	}
+	if batchResp.Results[1].Status != "duplicate" {
+		t.Fatalf("batch result[1]: expected duplicate, got status=%s error=%s", batchResp.Results[1].Status, batchResp.Results[1].Error)
 	}
 
 	// chain should still have only 1 op

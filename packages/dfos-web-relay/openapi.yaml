@@ -28,7 +28,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [did, protocol, version]
+                required: [did, protocol, version, proof, content, log, profile]
                 properties:
                   did:
                     type: string
@@ -40,6 +40,18 @@ paths:
                   version:
                     type: string
                     example: '0.1.0'
+                  proof:
+                    type: boolean
+                    description: Always true — a relay without proof plane is not a relay
+                  content:
+                    type: boolean
+                    description: Whether the relay supports content plane (blob upload/download)
+                  log:
+                    type: boolean
+                    description: Whether the global operation log is available (GET /log)
+                  profile:
+                    type: string
+                    description: The relay's profile artifact as a compact JWS token
 
   /operations:
     post:
@@ -388,7 +400,7 @@ components:
           description: CID of the operation
         status:
           type: string
-          enum: [accepted, rejected]
+          enum: [new, duplicate, rejected]
         error:
           type: string
           description: Error message if rejected

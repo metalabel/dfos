@@ -11,6 +11,22 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// temporal guard
+// ---------------------------------------------------------------------------
+
+// maxFutureTimestamp is the maximum allowed clock skew for operation timestamps (24 hours).
+const maxFutureTimestamp = 24 * time.Hour
+
+// isFutureTimestamp returns true if createdAt is more than 24 hours in the future.
+func isFutureTimestamp(createdAt string) bool {
+	t, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return false // invalid dates rejected by protocol verification
+	}
+	return t.After(time.Now().Add(maxFutureTimestamp))
+}
+
+// ---------------------------------------------------------------------------
 // classification
 // ---------------------------------------------------------------------------
 
@@ -93,7 +109,7 @@ func classify(jwsToken string) classifiedOp {
 
 	case "did:dfos:artifact":
 		base.kind = "artifact"
-		base.priority = 1 // same as beacons
+		base.priority = 1     // same as beacons
 		base.previousCID = "" // artifacts have no chaining
 		if did, ok := payload["did"].(string); ok {
 			base.referencedDID = did
@@ -213,7 +229,7 @@ func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 // individual verifiers
 // ---------------------------------------------------------------------------
 
-func ingestIdentityOp(jwsToken string, store Store) IngestionResult {
+func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil {
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
@@ -224,13 +240,18 @@ func ingestIdentityOp(jwsToken string, store Store) IngestionResult {
 		return IngestionResult{Status: "rejected", Error: "failed to compute CID"}
 	}
 
+	// temporal guard: reject operations with timestamps too far in the future
+	if createdAt, ok := payload["createdAt"].(string); ok && isFutureTimestamp(createdAt) {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "createdAt is too far in the future"}
+	}
+
 	// idempotent: already stored
 	existing, _ := store.GetOperation(cid)
 	if existing != nil {
 		if existing.JWSToken != jwsToken {
 			return IngestionResult{CID: cid, Status: "rejected", Error: "operation already exists with a different signature"}
 		}
-		return IngestionResult{CID: cid, Status: "accepted", Kind: "identity-op", ChainID: existing.ChainID}
+		return IngestionResult{CID: cid, Status: "duplicate", Kind: "identity-op", ChainID: existing.ChainID}
 	}
 
 	opType, _ := payload["type"].(string)
@@ -251,8 +272,10 @@ func ingestIdentityOp(jwsToken string, store Store) IngestionResult {
 		}
 		store.PutIdentityChain(chain)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: result.State.DID})
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})
-		return IngestionResult{CID: cid, Status: "accepted", Kind: "identity-op", ChainID: result.State.DID}
+		if logEnabled {
+			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})
+		}
+		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: result.State.DID}
 	}
 
 	// extension — find existing chain via kid DID
@@ -268,25 +291,77 @@ func ingestIdentityOp(jwsToken string, store Store) IngestionResult {
 		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown identity: %s", did)}
 	}
 
-	extResult, err := dfos.VerifyIdentityExtension(chain.State, chain.HeadCID, chain.LastCreatedAt, jwsToken)
+	// extract previousOperationCID from payload
+	previousCID, _ := payload["previousOperationCID"].(string)
+
+	if previousCID == chain.HeadCID {
+		// linear extension (fast path)
+		extResult, err := dfos.VerifyIdentityExtension(chain.State, chain.HeadCID, chain.LastCreatedAt, jwsToken)
+		if err != nil {
+			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
+		}
+		updated := StoredIdentityChain{
+			DID:           chain.DID,
+			Log:           append(append([]string{}, chain.Log...), jwsToken),
+			HeadCID:       extResult.HeadCID,
+			LastCreatedAt: extResult.LastCreatedAt,
+			State:         extResult.State,
+		}
+		store.PutIdentityChain(updated)
+		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})
+		if logEnabled {
+			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
+		}
+		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
+	}
+
+	// fork path — check if previousCID exists in chain ops
+	if previousCID == "" || !chainLogContainsCID(chain.Log, previousCID) {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in identity chain"}
+	}
+
+	forkState, err := store.GetIdentityStateAtCID(did, previousCID)
+	if err != nil || forkState == nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "failed to compute state at fork point"}
+	}
+
+	extResult, err := dfos.VerifyIdentityExtension(forkState.State, previousCID, forkState.LastCreatedAt, jwsToken)
 	if err != nil {
 		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
 	}
 
+	updatedLog := append(append([]string{}, chain.Log...), jwsToken)
+	head := selectDeterministicHead(updatedLog)
+
+	headState := chain.State
+	headLastCreatedAt := chain.LastCreatedAt
+	headCID := chain.HeadCID
+
+	if head.cid == cid {
+		headState = extResult.State
+		headLastCreatedAt = extResult.LastCreatedAt
+		headCID = cid
+	} else {
+		headCID = head.cid
+		headLastCreatedAt = head.createdAt
+	}
+
 	updated := StoredIdentityChain{
 		DID:           chain.DID,
-		Log:           append(append([]string{}, chain.Log...), jwsToken),
-		HeadCID:       extResult.HeadCID,
-		LastCreatedAt: extResult.LastCreatedAt,
-		State:         extResult.State,
+		Log:           updatedLog,
+		HeadCID:       headCID,
+		LastCreatedAt: headLastCreatedAt,
+		State:         headState,
 	}
 	store.PutIdentityChain(updated)
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
-	return IngestionResult{CID: cid, Status: "accepted", Kind: "identity-op", ChainID: did}
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
+	}
+	return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
 }
 
-func ingestContentOp(jwsToken string, store Store) IngestionResult {
+func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil {
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
@@ -297,13 +372,18 @@ func ingestContentOp(jwsToken string, store Store) IngestionResult {
 		return IngestionResult{Status: "rejected", Error: "failed to compute CID"}
 	}
 
+	// temporal guard: reject operations with timestamps too far in the future
+	if createdAt, ok := payload["createdAt"].(string); ok && isFutureTimestamp(createdAt) {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "createdAt is too far in the future"}
+	}
+
 	// idempotent
 	existing, _ := store.GetOperation(cid)
 	if existing != nil {
 		if existing.JWSToken != jwsToken {
 			return IngestionResult{CID: cid, Status: "rejected", Error: "operation already exists with a different signature"}
 		}
-		return IngestionResult{CID: cid, Status: "accepted", Kind: "content-op", ChainID: existing.ChainID}
+		return IngestionResult{CID: cid, Status: "duplicate", Kind: "content-op", ChainID: existing.ChainID}
 	}
 
 	// reject content ops from deleted identities
@@ -334,8 +414,10 @@ func ingestContentOp(jwsToken string, store Store) IngestionResult {
 		}
 		store.PutContentChain(chain)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: result.State.ContentID})
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})
-		return IngestionResult{CID: cid, Status: "accepted", Kind: "content-op", ChainID: result.State.ContentID}
+		if logEnabled {
+			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})
+		}
+		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: result.State.ContentID}
 	}
 
 	// extension — find chain via previousOperationCID
@@ -363,30 +445,69 @@ func ingestContentOp(jwsToken string, store Store) IngestionResult {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "content creator identity is deleted"}
 	}
 
-	// first-seen-wins: reject if chain head has diverged
-	if chain.State.HeadCID != previousCID {
-		return IngestionResult{CID: cid, Status: "rejected", Error: "chain has diverged (first-seen-wins)"}
+	if chain.State.HeadCID == previousCID {
+		// linear extension (fast path)
+		extResult, err := dfos.VerifyContentExtension(chain.State, chain.LastCreatedAt, jwsToken, resolveKey, true)
+		if err != nil {
+			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
+		}
+		updated := StoredContentChain{
+			ContentID:     chain.ContentID,
+			GenesisCID:    chain.GenesisCID,
+			Log:           append(append([]string{}, chain.Log...), jwsToken),
+			LastCreatedAt: extResult.LastCreatedAt,
+			State:         extResult.State,
+		}
+		store.PutContentChain(updated)
+		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})
+		if logEnabled {
+			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
+		}
+		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
 	}
 
-	extResult, err := dfos.VerifyContentExtension(chain.State, chain.LastCreatedAt, jwsToken, resolveKey, true)
+	// fork path — check if previousCID exists in chain ops
+	if !chainLogContainsCID(chain.Log, previousCID) {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in content chain"}
+	}
+
+	forkState, err := store.GetContentStateAtCID(chain.ContentID, previousCID)
+	if err != nil || forkState == nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "failed to compute state at fork point"}
+	}
+
+	extResult, err := dfos.VerifyContentExtension(forkState.State, forkState.LastCreatedAt, jwsToken, resolveKey, true)
 	if err != nil {
 		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
+	}
+
+	updatedLog := append(append([]string{}, chain.Log...), jwsToken)
+	head := selectDeterministicHead(updatedLog)
+
+	headState := chain.State
+	headLastCreatedAt := chain.LastCreatedAt
+
+	if head.cid == cid {
+		headState = extResult.State
+		headLastCreatedAt = extResult.LastCreatedAt
 	}
 
 	updated := StoredContentChain{
 		ContentID:     chain.ContentID,
 		GenesisCID:    chain.GenesisCID,
-		Log:           append(append([]string{}, chain.Log...), jwsToken),
-		LastCreatedAt: extResult.LastCreatedAt,
-		State:         extResult.State,
+		Log:           updatedLog,
+		LastCreatedAt: headLastCreatedAt,
+		State:         headState,
 	}
 	store.PutContentChain(updated)
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
-	return IngestionResult{CID: cid, Status: "accepted", Kind: "content-op", ChainID: chain.ContentID}
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
+	}
+	return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
 }
 
-func ingestBeacon(jwsToken string, store Store) IngestionResult {
+func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	resolveKey := CreateKeyResolver(store)
 
 	result, err := dfos.VerifyBeacon(jwsToken, resolveKey)
@@ -409,7 +530,7 @@ func ingestBeacon(jwsToken string, store Store) IngestionResult {
 		existingTime, _ := time.Parse(time.RFC3339Nano, existing.Payload.CreatedAt)
 		newTime, _ := time.Parse(time.RFC3339Nano, result.CreatedAt)
 		if !newTime.After(existingTime) {
-			return IngestionResult{CID: cid, Status: "accepted", Kind: "beacon", ChainID: did}
+			return IngestionResult{CID: cid, Status: "duplicate", Kind: "beacon", ChainID: did}
 		}
 	}
 
@@ -427,11 +548,13 @@ func ingestBeacon(jwsToken string, store Store) IngestionResult {
 	}
 	store.PutBeacon(beacon)
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "beacon", ChainID: did})
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "beacon", ChainID: did})
-	return IngestionResult{CID: cid, Status: "accepted", Kind: "beacon", ChainID: did}
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "beacon", ChainID: did})
+	}
+	return IngestionResult{CID: cid, Status: "new", Kind: "beacon", ChainID: did}
 }
 
-func ingestCountersign(jwsToken string, store Store) IngestionResult {
+func ingestCountersign(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	resolveKey := CreateKeyResolver(store)
 
 	result, err := dfos.VerifyCountersignature(jwsToken, resolveKey)
@@ -449,7 +572,7 @@ func ingestCountersign(jwsToken string, store Store) IngestionResult {
 		if existing.JWSToken != jwsToken {
 			return IngestionResult{CID: cid, Status: "rejected", Error: "countersign already exists with a different signature"}
 		}
-		return IngestionResult{CID: cid, Status: "accepted", Kind: "countersign", ChainID: targetCID}
+		return IngestionResult{CID: cid, Status: "duplicate", Kind: "countersign", ChainID: targetCID}
 	}
 
 	// target must exist
@@ -463,10 +586,8 @@ func ingestCountersign(jwsToken string, store Store) IngestionResult {
 	if targetOp.ChainType == "identity" {
 		targetAuthorDID = targetOp.ChainID
 	} else {
-		targetDecoded, _, err := dfos.DecodeJWSUnsafe(targetOp.JWSToken)
-		if err == nil && targetDecoded != nil {
-			// extract did from payload
-			_, targetPayload, _ := dfos.DecodeJWSUnsafe(targetOp.JWSToken)
+		_, targetPayload, err := dfos.DecodeJWSUnsafe(targetOp.JWSToken)
+		if err == nil && targetPayload != nil {
 			if d, ok := targetPayload["did"].(string); ok {
 				targetAuthorDID = d
 			}
@@ -491,17 +612,19 @@ func ingestCountersign(jwsToken string, store Store) IngestionResult {
 			continue
 		}
 		if d, ok := csPayload["did"].(string); ok && d == witnessDID {
-			return IngestionResult{CID: cid, Status: "accepted", Kind: "countersign", ChainID: targetCID}
+			return IngestionResult{CID: cid, Status: "duplicate", Kind: "countersign", ChainID: targetCID}
 		}
 	}
 
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "countersign", ChainID: targetCID})
 	store.AddCountersignature(targetCID, jwsToken)
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "countersign", ChainID: targetCID})
-	return IngestionResult{CID: cid, Status: "accepted", Kind: "countersign", ChainID: targetCID}
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "countersign", ChainID: targetCID})
+	}
+	return IngestionResult{CID: cid, Status: "new", Kind: "countersign", ChainID: targetCID}
 }
 
-func ingestArtifact(jwsToken string, store Store) IngestionResult {
+func ingestArtifact(jwsToken string, store Store, logEnabled bool) IngestionResult {
 	resolveKey := CreateKeyResolver(store)
 
 	result, err := dfos.VerifyArtifact(jwsToken, resolveKey)
@@ -518,7 +641,7 @@ func ingestArtifact(jwsToken string, store Store) IngestionResult {
 		if existing.JWSToken != jwsToken {
 			return IngestionResult{CID: cid, Status: "rejected", Error: "artifact already exists with a different signature"}
 		}
-		return IngestionResult{CID: cid, Status: "accepted", Kind: "artifact", ChainID: did}
+		return IngestionResult{CID: cid, Status: "duplicate", Kind: "artifact", ChainID: did}
 	}
 
 	// reject artifacts from deleted identities
@@ -528,8 +651,80 @@ func ingestArtifact(jwsToken string, store Store) IngestionResult {
 	}
 
 	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "artifact", ChainID: did})
-	store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "artifact", ChainID: did})
-	return IngestionResult{CID: cid, Status: "accepted", Kind: "artifact", ChainID: did}
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "artifact", ChainID: did})
+	}
+	return IngestionResult{CID: cid, Status: "new", Kind: "artifact", ChainID: did}
+}
+
+// ---------------------------------------------------------------------------
+// fork helpers
+// ---------------------------------------------------------------------------
+
+// chainLogContainsCID checks if a chain log contains an operation with the given CID.
+func chainLogContainsCID(log []string, targetCID string) bool {
+	for _, jws := range log {
+		header, _, err := dfos.DecodeJWSUnsafe(jws)
+		if err != nil || header == nil {
+			continue
+		}
+		if header.CID == targetCID {
+			return true
+		}
+	}
+	return false
+}
+
+type tipInfo struct {
+	cid       string
+	createdAt string
+}
+
+// selectDeterministicHead finds all tips (ops with no children) and selects the
+// deterministic head: highest createdAt, lexicographic highest CID tiebreak.
+func selectDeterministicHead(log []string) tipInfo {
+	type opInfo struct {
+		cid         string
+		previousCID string
+		createdAt   string
+	}
+	var ops []opInfo
+	hasChild := make(map[string]bool)
+
+	for _, jws := range log {
+		header, payload, err := dfos.DecodeJWSUnsafe(jws)
+		if err != nil || header == nil {
+			continue
+		}
+		opCID := header.CID
+		prevCID, _ := payload["previousOperationCID"].(string)
+		createdAt, _ := payload["createdAt"].(string)
+		ops = append(ops, opInfo{cid: opCID, previousCID: prevCID, createdAt: createdAt})
+		if prevCID != "" {
+			hasChild[prevCID] = true
+		}
+	}
+
+	var tips []tipInfo
+	for _, op := range ops {
+		if !hasChild[op.cid] {
+			tips = append(tips, tipInfo{cid: op.cid, createdAt: op.createdAt})
+		}
+	}
+
+	if len(tips) == 0 {
+		return tipInfo{}
+	}
+
+	// sort: highest createdAt first, then lexicographic highest CID
+	sort.Slice(tips, func(i, j int) bool {
+		if tips[i].createdAt != tips[j].createdAt {
+			return tips[i].createdAt > tips[j].createdAt
+		}
+		return tips[i].cid > tips[j].cid
+	})
+
+	return tips[0]
 }
 
 // ---------------------------------------------------------------------------
@@ -628,9 +823,26 @@ func topologicalSortBucket(ops []classifiedOp) []classifiedOp {
 // main pipeline
 // ---------------------------------------------------------------------------
 
+type ingestConfig struct {
+	logEnabled bool
+}
+
+// IngestOption configures ingestion behavior.
+type IngestOption func(*ingestConfig)
+
+// WithLogDisabled disables writing to the global operation log during ingestion.
+func WithLogDisabled() IngestOption {
+	return func(c *ingestConfig) { c.logEnabled = false }
+}
+
 // IngestOperations classifies, dependency-sorts, and processes a batch of JWS
 // tokens. Returns results in the original submission order.
-func IngestOperations(tokens []string, store Store) []IngestionResult {
+func IngestOperations(tokens []string, store Store, opts ...IngestOption) []IngestionResult {
+	cfg := ingestConfig{logEnabled: true}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	classified := make([]classifiedOp, len(tokens))
 	for i, token := range tokens {
 		classified[i] = classify(token)
@@ -655,15 +867,15 @@ func IngestOperations(tokens []string, store Store) []IngestionResult {
 			}()
 			switch op.kind {
 			case "identity-op":
-				result = ingestIdentityOp(op.jwsToken, store)
+				result = ingestIdentityOp(op.jwsToken, store, cfg.logEnabled)
 			case "content-op":
-				result = ingestContentOp(op.jwsToken, store)
+				result = ingestContentOp(op.jwsToken, store, cfg.logEnabled)
 			case "beacon":
-				result = ingestBeacon(op.jwsToken, store)
+				result = ingestBeacon(op.jwsToken, store, cfg.logEnabled)
 			case "countersign":
-				result = ingestCountersign(op.jwsToken, store)
+				result = ingestCountersign(op.jwsToken, store, cfg.logEnabled)
 			case "artifact":
-				result = ingestArtifact(op.jwsToken, store)
+				result = ingestArtifact(op.jwsToken, store, cfg.logEnabled)
 			default:
 				result = IngestionResult{Status: "rejected", Error: "unrecognized operation type"}
 			}
