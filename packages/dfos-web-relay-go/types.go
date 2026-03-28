@@ -1,11 +1,17 @@
 package relay
 
-import dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
+import (
+	"crypto/ed25519"
 
-// RelayIdentity holds the relay's DID and profile artifact.
+	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
+)
+
+// RelayIdentity holds the relay's DID, profile artifact, and key material.
 type RelayIdentity struct {
 	DID                string
 	ProfileArtifactJWS string
+	PrivateKey         ed25519.PrivateKey // only set during bootstrap, not stored on Relay
+	KeyID              string             // only set during bootstrap
 }
 
 // RelayOptions configures a new Relay instance.
