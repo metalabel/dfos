@@ -82,6 +82,18 @@ Each operation is verified against the relay's stored state:
 - **Beacons**: Signature, CID integrity, and clock skew are verified. Replace-on-newer: only the most recent beacon per DID is retained
 - **Countersignatures**: Two-phase verification. Protocol-level (stateless): signature, CID integrity, payload schema. Relay-level (stateful): target CID must exist in the relay, witness DID must differ from the target's author DID, one countersign per witness per target
 
+### Chain Resolution
+
+The relay must route each incoming operation to its chain. Resolution differs by type:
+
+- **Identity genesis**: No prior chain — the relay verifies the single-operation chain and creates a new `StoredIdentityChain` keyed by the new DID
+- **Identity extension**: The `kid` in the JWS header is a DID URL (`did:dfos:<id>#<keyId>`). The relay extracts the DID prefix (before `#`) and looks up the existing chain. A `kid` without `#` on a non-genesis operation is rejected — it cannot be routed
+- **Content genesis**: No prior chain — creates a new `StoredContentChain` keyed by the content ID derived from verification
+- **Content extension**: The `previousOperationCID` payload field is used to look up a `StoredOperation`, which carries the `chainId`. The relay then fetches the content chain by that `chainId`. If the previous operation doesn't exist or isn't a content operation, the extension is rejected
+- **Countersignatures**: The `targetCID` payload field is used to look up the target operation. The target's author DID is resolved from the stored operation to enforce the witness ≠ author rule
+
+This is relay-level machinery — the protocol library verifies chain integrity, but the relay decides how to locate the chain a given operation belongs to.
+
 ### Fork Acceptance
 
 Forks are accepted. If an incoming operation's `previousOperationCID` references any operation in the chain (not just the current head), the relay verifies the extension against the chain state at that fork point and accepts it. The chain log accumulates all branches.
@@ -101,10 +113,12 @@ Three distinct outcomes from ingestion:
 | Status      | Meaning                                          |
 | ----------- | ------------------------------------------------ |
 | `new`       | First time seen, verified, stored, state changed |
-| `duplicate` | Already had it (same CID, same JWS token), no-op |
+| `duplicate` | Already had it, no state change (see note below) |
 | `rejected`  | Verification failed                              |
 
-Submissions with the same CID but a different JWS token are rejected — since Ed25519 is deterministic, a different token for the same payload means a different signing key.
+For chain operations, `duplicate` means the exact same CID and JWS token was already stored — a true idempotent resubmission. Submissions with the same CID but a different JWS token are rejected — since Ed25519 is deterministic, a different token for the same payload means a different signing key.
+
+For beacons, `duplicate` means "no state change resulted" — a beacon with `createdAt` less than or equal to the stored beacon's `createdAt` returns `duplicate` even if the CID differs. This is replace-on-newer semantics: only a strictly newer beacon updates the stored state.
 
 Duplicate countersignatures (same witness DID, same target CID) MUST be deduplicated — one countersign per witness per target. The relay MUST NOT store multiple attestations from the same witness for the same target. Resubmission SHOULD return `duplicate` (idempotent).
 
@@ -115,7 +129,7 @@ Deletion means the identity stops being an active participant. Historical operat
 Specifically:
 
 - **Identity operations after deletion**: Rejected. A deleted identity chain is sealed.
-- **Content operations after deletion**: Rejected. A deleted content chain is sealed.
+- **Content operations after deletion**: Rejected. Both paths are checked: (a) the signer's identity is deleted — no operations from that DID are accepted, and (b) the content chain's creator identity is deleted — the chain is sealed regardless of who signs.
 - **Beacons from deleted identities**: Rejected. A deleted identity MUST NOT publish new beacons.
 - **Artifacts from deleted identities**: Rejected. A deleted identity MUST NOT publish new artifacts.
 - **Credentials from deleted issuers**: Rejected. Identity deletion revokes all authority, including outstanding `DFOSContentRead` and `DFOSContentWrite` credentials issued by the deleted identity. Credentials that were valid at time of issuance cease to be honored once the issuer is deleted.
@@ -199,6 +213,13 @@ The relay enforces semantic rules beyond cryptographic validity:
 2. **Witness ≠ author**: The countersign's `did` (witness) must differ from the target operation's author DID
 3. **Deduplication**: One countersign per witness per target. If the same witness submits a second countersign for the same target, the relay accepts idempotently
 4. **Deleted witness rejection**: Countersigns from deleted identities are rejected
+
+### Endpoints
+
+Two routes serve countersignature data:
+
+- **`GET /countersignatures/:cid`** — Primary lookup. Returns all countersignatures for the given CID. Works for any CID-addressable target (operations, beacons, artifacts). Returns `{ cid, countersignatures: string[] }` where each entry is a compact JWS token. Returns 404 if no countersignatures exist for the CID.
+- **`GET /operations/:cid/countersignatures`** — Operation-scoped lookup. Returns countersignatures only if `:cid` is a known operation. Returns `{ operationCID, countersignatures: string[] }`. Returns 404 if the operation doesn't exist.
 
 ---
 
@@ -418,11 +439,20 @@ interface RelayStore {
   addCountersignature(operationCID: string, jwsToken: string): Promise<void>;
 
   appendToLog(entry: LogEntry): Promise<void>;
-  readLog(params: { after?: string; limit: number }): Promise<LogPage>;
+  readLog(params: {
+    after?: string;
+    limit: number;
+  }): Promise<{ entries: LogEntry[]; cursor: string | null }>;
 
   // chain state at arbitrary CID (fork verification)
-  getIdentityStateAtCID(did: string, cid: string): Promise<IdentityStateAtCID | null>;
-  getContentStateAtCID(contentId: string, cid: string): Promise<ContentStateAtCID | null>;
+  getIdentityStateAtCID(
+    did: string,
+    cid: string,
+  ): Promise<{ state: VerifiedIdentity; lastCreatedAt: string } | null>;
+  getContentStateAtCID(
+    contentId: string,
+    cid: string,
+  ): Promise<{ state: VerifiedContentChain; lastCreatedAt: string } | null>;
 
   // peer sync cursors
   getPeerCursor(peerUrl: string): Promise<string | undefined>;
@@ -510,6 +540,31 @@ No relay roles or types. Topology is emergent from configuration. A relay with `
 ### PeerClient Interface
 
 The `PeerClient` is injected like `Store` — semantic per-resource methods, not raw HTTP. The default implementation uses HTTP. Tests inject mocks that route directly to another relay's API in-process.
+
+```typescript
+interface PeerClient {
+  getIdentityLog(
+    peerUrl: string,
+    did: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+
+  getContentLog(
+    peerUrl: string,
+    contentId: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+
+  getOperationLog(
+    peerUrl: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+
+  submitOperations(peerUrl: string, operations: string[]): Promise<void>;
+}
+```
+
+Each method corresponds to a peering behavior: `getIdentityLog` / `getContentLog` support read-through, `getOperationLog` supports sync-in, and `submitOperations` supports gossip-out. A `PeerLogEntry` is `{ cid: string; jwsToken: string }`.
 
 ---
 
