@@ -5,138 +5,232 @@ import Base from '../layouts/Base.astro';
 <Base
   title="DFOS Protocol"
   description="Ed25519 signed chains, content-addressed proofs, W3C DIDs. Verifiable identity and content without trusting the platform."
+  landing={true}
 >
-  <main>
-    <header>
-      <h1>DFOS Protocol</h1>
+  <!-- ═══ Hero ═══ -->
+  <section class="hero hero--forest">
+    <header class="site-header">
+      <a href="/" class="logo">
+        <img src="/dfos-logo-green.svg" alt="DFOS" />
+      </a>
+      <nav>
+        <a href="/overview">Overview</a>
+        <a href="/spec">Spec</a>
+        <a href="/did-method">DID</a>
+        <a href="/content-model">Content</a>
+        <a href="/web-relay">Relay</a>
+        <a href="/cli">CLI</a>
+        <a href="/faq">FAQ</a>
+        <a href="https://github.com/metalabel/dfos">GitHub</a>
+      </nav>
     </header>
 
-    <section class="framing">
+    <div class="hero-inner">
+      <img src="/key-icon-green.svg" alt="" class="hero-key" />
+      <h1 class="hero-headline">
+        The proof is public<span class="period">.</span><br />
+        The content is private<span class="period">.</span>
+      </h1>
+      <p class="hero-tagline">
+        Ed25519 signed DAGs &middot; content-addressed CIDs &middot; W3C DIDs &middot; MIT License
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══ Two Surfaces ═══ -->
+  <section class="split-section">
+    <div class="split-image">
+      <img src="/painting-hand.jpg" alt="" />
+    </div>
+    <div class="split-text">
+      <span class="section-label">T O P O L O G Y</span>
+      <h2>Two surfaces<span class="period">.</span></h2>
       <p>
-        The DFOS Protocol is a system for cryptographic identity and content proof. It specifies
-        how <a href="/spec">identity chains, content chains, beacons, merkle trees</a>, and
-        verification work — independent of any particular platform, implementation, or
-        infrastructure.
+        The proof surface is public. Signed chains of cryptographic commitments —
+        verifiable by anyone with a public key and any standard Ed25519 library.
+        Verification is a pure function: given the chain data and a public key,
+        the answer is valid or invalid. No network call required.
       </p>
       <p>
-        Identity derives from signed operations, not platform accounts. Proofs are self-contained
-        — they <a href="/overview">verify offline</a>, in any language, with no network dependency.
-        A chain exported today is verifiable by code that may not even exist yet.
+        The content surface is private. Documents live in member-governed spaces,
+        visible only to participants. The protocol defines the proof surface and
+        sees only hashes, never documents. Proofs, not posts.
       </p>
-      <p class="tagline">
-        In the dark forest, identity and content authority derive from math alone.
-      </p>
-      <p class="dim">
-        The proof is public. The content is private.
-      </p>
-    </section>
+    </div>
+  </section>
 
-    <hr />
+  <!-- ═══ Chain Topology ═══ -->
+  <section class="dark-section">
+    <div class="dark-section-inner">
+      <span class="section-label">S T R U C T U R E</span>
+      <h2>Identity is a signed DAG<span class="period">.</span></h2>
+      <div class="two-col">
+        <div>
+          <p>
+            An identity chain is a directed acyclic graph of Ed25519-signed operations
+            rooted at a genesis. Each operation — key rotation, content commitment,
+            recovery — links to its predecessor via content-addressed CID. Forks are
+            valid. Convergence is deterministic: highest timestamp among tips, lexicographic
+            CID as tiebreaker. Any implementation with the same operations computes
+            the same head.
+          </p>
+          <p>
+            The DID derives from the hash of the genesis operation, making identity
+            self-certifying. Given the chain data, anyone can verify it belongs to
+            the claimed <a href="/did-method"><code>did:dfos</code></a> identifier.
+            The chain carries everything needed to verify itself.
+          </p>
+        </div>
+        <div>
+          <p>
+            Content chains use the same mechanics — a signed sequence of commitments
+            to content-addressed documents. The protocol doesn't know what a "post"
+            is. Application semantics live in a
+            <a href="/content-model">separate content layer</a>, free to evolve
+            without protocol changes.
+          </p>
+          <p>
+            Verification works across five languages — TypeScript, Go, Python, Rust,
+            Swift — all running against the same
+            <a href="/spec#deterministic-reference-artifacts">deterministic test vectors</a>.
+            A chain exported today is verifiable by code that doesn't exist yet.
+          </p>
+        </div>
+      </div>
 
-    <h2>Specifications</h2>
-    <nav class="landing-nav">
-      <ul>
-        <li>
-          <a href="/spec">Protocol Specification</a>
-          <span class="dim">
-            — the core protocol: Ed25519 identity chains, content chains, beacons, merkle trees,
-            countersignatures, CID derivation, verification rules, and deterministic test vectors
-          </span>
-        </li>
-        <li>
-          <a href="/did-method">DID Method</a>
-          <span class="dim">
-            — W3C DID method specification for <code>did:dfos</code>: self-certifying,
-            transport-agnostic decentralized identifiers
-          </span>
-        </li>
-        <li>
-          <a href="/content-model">Content Model</a>
-          <span class="dim">
-            — standard JSON Schema content types (post, profile, manifest) committed via
-            content-addressed CIDs
-          </span>
-        </li>
-      </ul>
-    </nav>
+      <div class="chain-diagram">
+        <div class="chain-node genesis">genesis</div>
+        <div class="chain-edge"></div>
+        <div class="chain-node">rotate</div>
+        <div class="chain-edge"></div>
+        <div class="chain-node">commit</div>
+        <div class="chain-edge"></div>
+        <div class="chain-node">commit</div>
+        <div class="chain-edge"></div>
+        <div class="chain-node head">head</div>
+      </div>
+    </div>
+  </section>
 
-    <h2>Implementation</h2>
-    <nav class="landing-nav">
-      <ul>
-        <li>
-          <a href="/web-relay">Web Relay</a>
-          <span class="dim">
-            — verifying HTTP relay for identity chains, content chains, beacons,
-            countersignatures, and content blobs
-          </span>
-        </li>
-        <li>
-          <a href="/cli">CLI</a>
-          <span class="dim">
-            — Go command-line interface for managing identities, signing operations,
-            and interacting with relays
-          </span>
-        </li>
-      </ul>
-    </nav>
+  <!-- ═══ Image Break ═══ -->
+  <section class="image-break">
+    <img src="/painting-deer.jpg" alt="" class="image-break-bg" />
+    <div class="image-break-overlay">
+      <img src="/key-icon-green.svg" alt="" class="image-break-key" />
+    </div>
+  </section>
 
-    <h2>About</h2>
-    <nav class="landing-nav">
-      <ul>
-        <li>
-          <a href="/overview">Overview</a>
-          <span class="dim">
-            — why the protocol exists, what it does, how verification works
-          </span>
-        </li>
-        <li>
-          <a href="/faq">FAQ</a>
-          <span class="dim">
-            — common questions about the protocol, its design, and how it compares to alternatives
-          </span>
-        </li>
-      </ul>
-    </nav>
+  <!-- ═══ Specifications ═══ -->
+  <section class="landing-section">
+    <span class="section-label">S P E C I F I C A T I O N S</span>
+    <h2>Read the protocol<span class="period">.</span></h2>
 
-    <h2>Resources</h2>
-    <nav class="landing-nav">
-      <ul>
-        <li>
-          <a href="/poster">Architecture Poster</a>
-          <span class="dim"> — visual protocol architecture reference</span>
-        </li>
-        <li>
-          <a href="https://schemas.dfos.com">schemas.dfos.com</a>
-          <span class="dim"> — hosted JSON Schema definitions</span>
-        </li>
-        <li>
-          <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">npm</a>
-          <span class="dim"> — @metalabel/dfos-protocol, <a href="https://www.npmjs.com/package/@metalabel/dfos-web-relay">@metalabel/dfos-web-relay</a></span>
-        </li>
-        <li>
-          <a href="https://github.com/metalabel/dfos">GitHub</a>
-          <span class="dim"> — metalabel/dfos</span>
-        </li>
-        <li>
-          <a href="https://verify.dfos.com">Chain Verifier</a>
-          <span class="dim"> — browser-based chain verification</span>
-        </li>
-        <li>
-          <a href="/llms-full.txt">llms-full.txt</a>
-          <span class="dim"> — complete protocol content as plain text for LLMs</span>
-        </li>
-        <li>
-          <a href="https://dfos.com">DFOS</a>
-          <span class="dim"> — the platform</span>
-        </li>
-      </ul>
-    </nav>
+    <div class="card-grid">
+      <a href="/spec" class="card">
+        <div class="card-title">Protocol Specification</div>
+        <div class="card-desc">
+          Identity chains, content chains, beacons, merkle trees,
+          countersignatures, CID derivation, verification rules, test vectors.
+        </div>
+      </a>
+      <a href="/did-method" class="card">
+        <div class="card-title">DID Method</div>
+        <div class="card-desc">
+          W3C DID method for <code>did:dfos</code> — self-certifying,
+          transport-agnostic decentralized identifiers.
+        </div>
+      </a>
+      <a href="/content-model" class="card">
+        <div class="card-title">Content Model</div>
+        <div class="card-desc">
+          JSON Schema content types — post, profile, manifest —
+          committed via content-addressed CIDs.
+        </div>
+      </a>
+      <a href="/web-relay" class="card">
+        <div class="card-title">Web Relay</div>
+        <div class="card-desc">
+          Verifying HTTP relay with gossip, read-through, and sync peering.
+          Emergent network topology from per-peer configuration.
+        </div>
+      </a>
+      <a href="/cli" class="card">
+        <div class="card-title">CLI</div>
+        <div class="card-desc">
+          Go command-line tool for managing identities, signing operations,
+          and interacting with relays.
+        </div>
+      </a>
+      <a href="/overview" class="card">
+        <div class="card-title">Overview</div>
+        <div class="card-desc">
+          Why the protocol exists, chain topology, the relay network,
+          verification model, design principles.
+        </div>
+      </a>
+    </div>
+  </section>
 
-    <hr />
+  <hr class="section-divider" />
 
-    <footer>
-      <p class="dim">Yancey · Ilya · Brandon · Lena</p>
-      <p class="dim"><a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT License</a> · 2026</p>
-    </footer>
-  </main>
+  <!-- ═══ Resources ═══ -->
+  <section class="landing-section">
+    <span class="section-label">R E S O U R C E S</span>
+    <h2>Go deeper<span class="period">.</span></h2>
+
+    <ul class="resource-list">
+      <li>
+        <a href="/faq">FAQ</a>
+        <span class="desc">— design decisions, comparison to AT Protocol, blockchain identity</span>
+      </li>
+      <li>
+        <a href="/poster">Architecture Poster</a>
+        <span class="desc">— visual protocol reference</span>
+      </li>
+      <li>
+        <a href="https://schemas.dfos.com">schemas.dfos.com</a>
+        <span class="desc">— hosted JSON Schema definitions</span>
+      </li>
+      <li>
+        <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">npm</a>
+        <span class="desc">— @metalabel/dfos-protocol, <a href="https://www.npmjs.com/package/@metalabel/dfos-web-relay">@metalabel/dfos-web-relay</a></span>
+      </li>
+      <li>
+        <a href="https://github.com/metalabel/dfos">GitHub</a>
+        <span class="desc">— metalabel/dfos — MIT License</span>
+      </li>
+      <li>
+        <a href="https://verify.dfos.com">Chain Verifier</a>
+        <span class="desc">— verify chains in the browser</span>
+      </li>
+      <li>
+        <a href="/llms-full.txt">llms-full.txt</a>
+        <span class="desc">— complete protocol content as plain text</span>
+      </li>
+    </ul>
+  </section>
+
+  <!-- ═══ Closing ═══ -->
+  <footer class="closing">
+    <div class="closing-image">
+      <img src="/painting-angel.jpg" alt="" />
+    </div>
+    <div class="closing-content">
+      <img src="/key-icon-green.svg" alt="" class="closing-key" />
+      <div class="closing-mark">DFOS Protocol</div>
+      <nav class="closing-nav">
+        <a href="/overview">Overview</a>
+        <a href="/spec">Spec</a>
+        <a href="/did-method">DID</a>
+        <a href="/content-model">Content</a>
+        <a href="/web-relay">Relay</a>
+        <a href="/cli">CLI</a>
+        <a href="/faq">FAQ</a>
+        <a href="https://github.com/metalabel/dfos">GitHub</a>
+        <a href="https://dfos.com">dfos.com</a>
+      </nav>
+      <p class="closing-credits">Yancey &middot; Ilya &middot; Brandon &middot; Lena</p>
+      <p class="closing-credits"><a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT License</a> &middot; 2026</p>
+    </div>
+  </footer>
 </Base>
