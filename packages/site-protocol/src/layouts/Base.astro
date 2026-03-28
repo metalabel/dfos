@@ -7,9 +7,11 @@ interface Props {
   path?: string;
   /** Override the default JSON-LD structured data. */
   schema?: object | object[];
+  /** Render the full-width landing layout (no page-content wrapper). */
+  landing?: boolean;
 }
 
-const { title, description, path = '', schema } = Astro.props;
+const { title, description, path = '', schema, landing = false } = Astro.props;
 const canonicalUrl = `https://protocol.dfos.com${path}`;
 const fullTitle = path
   ? `${title} — DFOS Protocol`
@@ -89,22 +91,23 @@ const jsonLd = schema ?? defaultSchema;
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content="https://protocol.dfos.com/og.png" />
 
+    <!-- JetBrains Mono for code blocks only -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="preload"
       as="style"
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
     />
     <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
       media="print"
       onload="this.media='all'"
     />
     <noscript>
       <link
-        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
         rel="stylesheet"
       />
     </noscript>
@@ -112,6 +115,24 @@ const jsonLd = schema ?? defaultSchema;
     <script is:inline type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
   </head>
   <body>
+    {!landing && (
+      <header class="site-header">
+        <a href="/" class="logo">
+          <img src="/dfos-logo-green.svg" alt="DFOS" />
+        </a>
+        <nav>
+          <a href="/overview">Overview</a>
+          <a href="/spec">Spec</a>
+          <a href="/did-method">DID</a>
+          <a href="/content-model">Content</a>
+          <a href="/web-relay">Relay</a>
+          <a href="/cli">CLI</a>
+          <a href="/faq">FAQ</a>
+          <a href="https://github.com/metalabel/dfos">GitHub</a>
+        </nav>
+        <img src="/key-icon-green.svg" alt="" class="key-icon" />
+      </header>
+    )}
     <slot />
   </body>
 </html>

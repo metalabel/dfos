@@ -15,30 +15,26 @@ html = html.replace(/^<h1>.*?<\/h1>\n?/, '');
   description="Why the DFOS Protocol exists — cryptographic identity without platform trust, offline verification, and verifiable content in private spaces."
   path="/overview"
 >
-  <main>
-    <nav class="site-nav">
-      <a href="/">DFOS Protocol</a>
-    </nav>
-
+  <div class="page-content">
     <article>
       <h1>Overview</h1>
       <Fragment set:html={html} />
     </article>
+  </div>
 
-    <hr />
-
-    <footer>
-      <nav class="dim" aria-label="Site">
-        <a href="/">DFOS Protocol</a> ·
-        <a href="/spec">Specification</a> ·
-        <a href="/did-method">DID Method</a> ·
-        <a href="/content-model">Content Model</a> ·
-        <a href="/web-relay">Web Relay</a> ·
-        <a href="/cli">CLI</a> ·
-        <a href="/faq">FAQ</a> ·
-        <a href="https://github.com/metalabel/dfos">GitHub</a> ·
-        <a href="https://dfos.com">dfos.com</a>
-      </nav>
-    </footer>
-  </main>
+  <footer class="site-footer">
+    <img src="/key-icon-green.svg" alt="" class="footer-key" />
+    <nav>
+      <a href="/">Home</a>
+      <a href="/spec">Specification</a>
+      <a href="/did-method">DID Method</a>
+      <a href="/content-model">Content Model</a>
+      <a href="/web-relay">Web Relay</a>
+      <a href="/cli">CLI</a>
+      <a href="/faq">FAQ</a>
+      <a href="https://github.com/metalabel/dfos">GitHub</a>
+      <a href="https://dfos.com">dfos.com</a>
+    </nav>
+    <p class="credits"><a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT License</a> &middot; 2026</p>
+  </footer>
 </Base>
