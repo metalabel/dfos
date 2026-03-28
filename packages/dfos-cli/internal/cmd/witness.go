@@ -57,7 +57,7 @@ func newWitnessCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if len(results) > 0 && results[0].Status != "accepted" {
+			if len(results) > 0 && results[0].Status == "rejected" {
 				return fmt.Errorf("relay rejected: %s", results[0].Error)
 			}
 
