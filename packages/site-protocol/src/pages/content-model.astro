@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import { Marked } from 'marked';
 import Base from '../layouts/Base.astro';
 
-// Read CONTENT-MODEL.md at build time from the protocol package
-const contentModelMd = fs.readFileSync('../dfos-protocol/CONTENT-MODEL.md', 'utf-8');
+// Read CONTENT-MODEL.md at build time from the specs directory
+const contentModelMd = fs.readFileSync('../../specs/CONTENT-MODEL.md', 'utf-8');
 
 function slugify(text: string): string {
   return text
@@ -32,6 +32,8 @@ html = html.replace(/<\/table>/g, '</table></div>');
 html = html.replace(/href="\.\/PROTOCOL\.md"/g, 'href="/spec"');
 html = html.replace(/href="\.\/DID-METHOD\.md"/g, 'href="/did-method"');
 html = html.replace(/href="\.\/CONTENT-MODEL\.md"/g, 'href="/content-model"');
+html = html.replace(/href="\.\/WEB-RELAY\.md"/g, 'href="/web-relay"');
+// Legacy paths from before specs/ migration
 html = html.replace(/href="\.\/RELAY\.md"/g, 'href="/web-relay"');
 html = html.replace(/href="\.\.\/dfos-web-relay\/RELAY\.md"/g, 'href="/web-relay"');
 

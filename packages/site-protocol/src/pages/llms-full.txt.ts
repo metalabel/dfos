@@ -4,13 +4,13 @@ import { faqs, faqsToMarkdown } from '../content/faq';
 import { overviewMarkdown } from '../content/overview';
 
 export const GET: APIRoute = () => {
-  // Spec markdown files — read at build time from the protocol package
-  const protocol = fs.readFileSync('../dfos-protocol/PROTOCOL.md', 'utf-8');
-  const didMethod = fs.readFileSync('../dfos-protocol/DID-METHOD.md', 'utf-8');
-  const contentModel = fs.readFileSync('../dfos-protocol/CONTENT-MODEL.md', 'utf-8');
+  // Spec markdown files — read at build time from the specs directory
+  const protocol = fs.readFileSync('../../specs/PROTOCOL.md', 'utf-8');
+  const didMethod = fs.readFileSync('../../specs/DID-METHOD.md', 'utf-8');
+  const contentModel = fs.readFileSync('../../specs/CONTENT-MODEL.md', 'utf-8');
 
-  // Implementation docs — read from sibling packages
-  const webRelay = fs.readFileSync('../dfos-web-relay/RELAY.md', 'utf-8');
+  // Specs — web relay
+  const webRelay = fs.readFileSync('../../specs/WEB-RELAY.md', 'utf-8');
   const cli = fs.readFileSync('../dfos-cli/CLI.md', 'utf-8');
 
   // Site content — sourced from shared modules (same data renders the pages)

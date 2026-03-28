@@ -2,7 +2,7 @@
 
 Portable HTTP relay for the [DFOS protocol](https://protocol.dfos.com). Receives, verifies, stores, and serves identity chains, content chains, beacons, countersignatures, and content blobs.
 
-See [RELAY.md](./RELAY.md) for the full relay specification.
+See [WEB-RELAY.md](../../specs/WEB-RELAY.md) for the full relay specification.
 
 ## Install
 
@@ -108,7 +108,7 @@ const relay = await createRelay({
 });
 ```
 
-See [RELAY.md](./RELAY.md) for the full peering specification.
+See [WEB-RELAY.md](../../specs/WEB-RELAY.md) for the full peering specification.
 
 ## Custom Store
 
