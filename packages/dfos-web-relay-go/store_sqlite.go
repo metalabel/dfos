@@ -69,6 +69,11 @@ CREATE TABLE IF NOT EXISTS peer_cursors (
 	peer_url TEXT PRIMARY KEY,
 	cursor TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS relay_meta (
+	key TEXT PRIMARY KEY,
+	value BLOB NOT NULL
+);
 `
 
 // SQLiteStore is a durable Store backed by SQLite.
@@ -485,6 +490,33 @@ func (s *SQLiteStore) SetPeerCursor(peerURL string, cursor string) error {
 	_, err := s.db.Exec(
 		"INSERT OR REPLACE INTO peer_cursors (peer_url, cursor) VALUES (?, ?)",
 		peerURL, cursor,
+	)
+	return err
+}
+
+// ---------------------------------------------------------------------------
+// relay metadata (key persistence, etc.)
+// ---------------------------------------------------------------------------
+
+// GetMeta returns the value for a metadata key, or nil if not found.
+func (s *SQLiteStore) GetMeta(key string) ([]byte, error) {
+	row := s.db.QueryRow("SELECT value FROM relay_meta WHERE key = ?", key)
+	var value []byte
+	err := row.Scan(&value)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// SetMeta stores a metadata key-value pair (upsert).
+func (s *SQLiteStore) SetMeta(key string, value []byte) error {
+	_, err := s.db.Exec(
+		"INSERT OR REPLACE INTO relay_meta (key, value) VALUES (?, ?)",
+		key, value,
 	)
 	return err
 }

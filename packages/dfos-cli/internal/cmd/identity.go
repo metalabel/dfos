@@ -114,7 +114,7 @@ func newIdentityCreateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("submit to relay: %w", err)
 				}
-				if len(results) > 0 && results[0].Status != "accepted" {
+				if len(results) > 0 && results[0].Status == "rejected" {
 					return fmt.Errorf("relay rejected: %s", results[0].Error)
 				}
 				storedID.Local.PublishedTo = []string{rn}
@@ -259,7 +259,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("submit: %w", err)
 				}
-				if len(results) > 0 && results[0].Status != "accepted" {
+				if len(results) > 0 && results[0].Status == "rejected" {
 					return fmt.Errorf("relay rejected: %s", results[0].Error)
 				}
 			}
@@ -350,7 +350,7 @@ func newIdentityDeleteCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("submit: %w", err)
 				}
-				if len(results) > 0 && results[0].Status != "accepted" {
+				if len(results) > 0 && results[0].Status == "rejected" {
 					return fmt.Errorf("relay rejected: %s", results[0].Error)
 				}
 			}
@@ -569,7 +569,7 @@ func newIdentityPublishCmd() *cobra.Command {
 
 			allAccepted := true
 			for _, r := range results {
-				if r.Status != "accepted" {
+				if r.Status == "rejected" {
 					allAccepted = false
 					fmt.Printf("  Operation %s: %s (%s)\n", r.CID, r.Status, r.Error)
 				}
@@ -816,7 +816,7 @@ func publishIdentityIfNeeded(id *store.StoredIdentity, relayName string, c *clie
 		return fmt.Errorf("submit: %w", err)
 	}
 	for _, r := range results {
-		if r.Status != "accepted" {
+		if r.Status == "rejected" {
 			return fmt.Errorf("relay rejected: %s", r.Error)
 		}
 	}

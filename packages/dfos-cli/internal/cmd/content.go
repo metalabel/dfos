@@ -152,7 +152,7 @@ func newContentCreateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("submit: %w", err)
 				}
-				if len(results) > 0 && results[0].Status != "accepted" {
+				if len(results) > 0 && results[0].Status == "rejected" {
 					return fmt.Errorf("relay rejected: %s", results[0].Error)
 				}
 
@@ -424,7 +424,7 @@ func newContentPublishCmd() *cobra.Command {
 				return fmt.Errorf("submit: %w", err)
 			}
 			for _, r := range results {
-				if r.Status != "accepted" {
+				if r.Status == "rejected" {
 					return fmt.Errorf("relay rejected: %s", r.Error)
 				}
 			}
@@ -741,7 +741,7 @@ func newContentUpdateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if len(results) > 0 && results[0].Status != "accepted" {
+				if len(results) > 0 && results[0].Status == "rejected" {
 					return fmt.Errorf("relay rejected: %s", results[0].Error)
 				}
 
@@ -828,7 +828,7 @@ func newContentDeleteCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("submit: %w", err)
 				}
-				if len(results) > 0 && results[0].Status != "accepted" {
+				if len(results) > 0 && results[0].Status == "rejected" {
 					return fmt.Errorf("relay rejected: %s", results[0].Error)
 				}
 			}
