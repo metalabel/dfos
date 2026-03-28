@@ -2495,6 +2495,63 @@ describe('web relay', () => {
         expect(body.contentId).toBe(contentId);
       });
 
+      it('should paginate through full content log from peer', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        const content = await createContentOp(identity);
+
+        // create a content update so the chain has 2 ops
+        const newDoc = { type: 'post', title: 'updated' };
+        const newDocEncoded = await dagCborCanonicalEncode(
+          newDoc as unknown as Record<string, unknown>,
+        );
+        const updateOp: ContentOperation = {
+          version: 1,
+          type: 'update',
+          did: identity.did,
+          previousOperationCID: content.operationCID,
+          documentCID: newDocEncoded.cid.toString(),
+          baseDocumentCID: null,
+          createdAt: ts(2),
+          note: null,
+        };
+        const kid = `${identity.did}#${identity.authKey.keyId}`;
+        const { jwsToken: updateToken } = await signContentOperation({
+          operation: updateOp,
+          signer: identity.authKey.signer,
+          kid,
+        });
+
+        await ingestOperations([identity.jwsToken, content.jwsToken, updateToken], peerStore);
+
+        // pageSize=1 forces 2 pages for a 2-op content chain
+        const {
+          req: localReq,
+          localStore,
+          postOps: localPostOps,
+        } = await createPeeredRelay({
+          peerStore,
+          peers: [{ url: 'http://peer-a' }],
+          pageSize: 1,
+        });
+
+        // local relay needs the identity to verify content ops
+        await localPostOps([identity.jwsToken]);
+
+        const peerChain = await peerStore.getContentChain(
+          (await peerStore.getOperation(content.operationCID))!.chainId!,
+        );
+        const contentId = peerChain!.contentId;
+
+        const res = await localReq(`/content/${contentId}`);
+        expect(res.status).toBe(200);
+
+        // verify the full chain was ingested (both ops in local store)
+        const chain = await localStore.getContentChain(contentId);
+        expect(chain).toBeDefined();
+        expect(chain!.log).toHaveLength(2);
+      });
+
       it('should not consult peers with readThrough: false', async () => {
         const peerStore = new MemoryRelayStore();
         const identity = await createIdentity();

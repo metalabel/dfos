@@ -492,7 +492,7 @@ Relay-to-relay peering enables data replication across the network. The relay ex
 | **Read-through** | Local 404 on GET | Fetch from peers with `readThrough: true`  |
 | **Sync-in**      | Scheduled poll   | Pull from peers with `sync: true` via /log |
 
-Gossip fires on `new` status only — `duplicate` results are not re-gossiped, preventing gossip storms. Read-through fetches the full chain log from a peer and ingests locally (full verification, no trust). Sync-in uses cursor-based pagination against the peer's global log.
+Gossip fires on `new` status only — `duplicate` results are not re-gossiped, preventing gossip storms. Read-through applies to **identity chains** and **content chains** only — beacons, operations, and countersignatures are not read-through targets. When triggered, the relay fetches the full chain log from a peer and ingests locally (full verification, no trust). Sync-in uses cursor-based pagination against the peer's global log.
 
 ### Peer Configuration
 

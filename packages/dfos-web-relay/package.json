@@ -42,7 +42,6 @@
   },
   "files": [
     "dist",
-    "RELAY.md",
     "openapi.yaml",
     "LICENSE",
     "README.md"

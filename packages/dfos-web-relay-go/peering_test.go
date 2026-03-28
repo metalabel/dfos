@@ -100,11 +100,16 @@ func (m *mockPeerClient) paginateChainLog(log []string, after string, limit int)
 
 	startIdx := 0
 	if after != "" {
+		found := false
 		for i, e := range entries {
 			if e.CID == after {
 				startIdx = i + 1
+				found = true
 				break
 			}
+		}
+		if !found {
+			startIdx = len(entries)
 		}
 	}
 
@@ -495,6 +500,77 @@ func TestReadThroughDisabled(t *testing.T) {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+func TestReadThroughFallbackToSecondPeer(t *testing.T) {
+	emptyStore := NewMemoryStore()
+	populatedStore := NewMemoryStore()
+	id := createTestIdentity(t)
+	IngestOperations([]string{id.token}, populatedStore)
+
+	// mock that routes by peer URL: peer-a has nothing, peer-b has the identity
+	mock := &routingMockPeerClient{
+		stores: map[string]*MemoryStore{
+			"http://peer-a": emptyStore,
+			"http://peer-b": populatedStore,
+		},
+	}
+
+	store := NewMemoryStore()
+	relay, err := NewRelay(RelayOptions{
+		Store:      store,
+		PeerClient: mock,
+		Peers: []PeerConfig{
+			{URL: "http://peer-a"},
+			{URL: "http://peer-b"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(relay.Handler())
+	defer srv.Close()
+
+	var body map[string]any
+	resp := getJSON(t, srv.URL+"/identities/"+id.did, &body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if body["did"] != id.did {
+		t.Fatalf("expected DID %s, got %v", id.did, body["did"])
+	}
+}
+
+// routingMockPeerClient routes requests to different stores by peer URL.
+type routingMockPeerClient struct {
+	stores map[string]*MemoryStore
+}
+
+func (r *routingMockPeerClient) GetIdentityLog(peerURL string, did string, after string, limit int) (*PeerLogPage, error) {
+	store, ok := r.stores[peerURL]
+	if !ok {
+		return nil, nil
+	}
+	mock := newMockPeerClient(store, 0)
+	return mock.GetIdentityLog(peerURL, did, after, limit)
+}
+
+func (r *routingMockPeerClient) GetContentLog(peerURL string, contentID string, after string, limit int) (*PeerLogPage, error) {
+	store, ok := r.stores[peerURL]
+	if !ok {
+		return nil, nil
+	}
+	mock := newMockPeerClient(store, 0)
+	return mock.GetContentLog(peerURL, contentID, after, limit)
+}
+
+func (r *routingMockPeerClient) GetOperationLog(peerURL string, after string, limit int) (*PeerLogPage, error) {
+	return nil, nil
+}
+
+func (r *routingMockPeerClient) SubmitOperations(peerURL string, operations []string) error {
+	return nil
 }
 
 // ===================================================================

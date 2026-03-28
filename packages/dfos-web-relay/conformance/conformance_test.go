@@ -1652,4 +1652,32 @@ func TestGlobalLogPagination(t *testing.T) {
 	if page1.Entries[0].CID == page2.Entries[0].CID {
 		t.Fatal("page1 and page2 should have different entries")
 	}
+
+	// 3. Drain to last page — cursor should be nil
+	var page3 struct {
+		Entries []struct {
+			CID string `json:"cid"`
+		} `json:"entries"`
+		Cursor *string `json:"cursor"`
+	}
+	getJSON(t, fmt.Sprintf("%s/log?after=%s&limit=1", base, *page2.Cursor), &page3)
+	if len(page3.Entries) != 1 {
+		t.Fatalf("page3: expected 1 entry, got %d", len(page3.Entries))
+	}
+	if page3.Cursor != nil {
+		t.Fatalf("page3: expected nil cursor on last page, got %s", *page3.Cursor)
+	}
+
+	// 4. Unknown after CID returns empty (not error)
+	var empty struct {
+		Entries []struct{} `json:"entries"`
+		Cursor  *string    `json:"cursor"`
+	}
+	emptyResp := getJSON(t, base+"/log?after=bafyunknown", &empty)
+	if emptyResp.StatusCode != 200 {
+		t.Fatalf("unknown cursor: expected 200, got %d", emptyResp.StatusCode)
+	}
+	if len(empty.Entries) != 0 {
+		t.Fatalf("unknown cursor: expected 0 entries, got %d", len(empty.Entries))
+	}
 }
