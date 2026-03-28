@@ -1,21 +1,21 @@
 package relay
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
-// =========================================================================
+// ===================================================================
 // mock peer client
-// =========================================================================
+// ===================================================================
 
 // submitCall records a single SubmitOperations invocation.
 type submitCall struct {
@@ -138,16 +138,16 @@ func (m *mockPeerClient) drainSubmits(timeout time.Duration) []submitCall {
 	}
 }
 
-// =========================================================================
+// ===================================================================
 // test helpers
-// =========================================================================
+// ===================================================================
 
 type testIdentity struct {
-	token string
-	did   string
-	opCID string
-	ctrl  testKeypair
-	auth  testKeypair
+	token      string
+	did        string
+	opCID      string
+	controller testKeypair
+	auth       testKeypair
 }
 
 type testKeypair struct {
@@ -165,19 +165,19 @@ func newTestKeypair() testKeypair {
 
 func createTestIdentity(t *testing.T) testIdentity {
 	t.Helper()
-	ctrl := newTestKeypair()
+	controller := newTestKeypair()
 	auth := newTestKeypair()
 	token, did, opCID, err := dfos.SignIdentityCreate(
-		[]dfos.MultikeyPublicKey{ctrl.mk},
+		[]dfos.MultikeyPublicKey{controller.mk},
 		[]dfos.MultikeyPublicKey{auth.mk},
 		[]dfos.MultikeyPublicKey{},
-		ctrl.keyID,
-		ctrl.priv,
+		controller.keyID,
+		controller.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return testIdentity{token: token, did: did, opCID: opCID, ctrl: ctrl, auth: auth}
+	return testIdentity{token: token, did: did, opCID: opCID, controller: controller, auth: auth}
 }
 
 func createTestContent(t *testing.T, id testIdentity) (token, contentID, opCID string) {
@@ -197,9 +197,9 @@ func createTestContent(t *testing.T, id testIdentity) (token, contentID, opCID s
 
 func boolPtr(b bool) *bool { return &b }
 
-// =========================================================================
+// ===================================================================
 // gossip tests
-// =========================================================================
+// ===================================================================
 
 func TestGossipNewOps(t *testing.T) {
 	peerStore := NewMemoryStore()
@@ -325,9 +325,9 @@ func TestGossipAllPeers(t *testing.T) {
 	}
 }
 
-// =========================================================================
+// ===================================================================
 // read-through tests (via HTTP handlers)
-// =========================================================================
+// ===================================================================
 
 func TestReadThroughIdentity(t *testing.T) {
 	peerStore := NewMemoryStore()
@@ -349,7 +349,7 @@ func TestReadThroughIdentity(t *testing.T) {
 	defer srv.Close()
 
 	var body map[string]any
-	resp := getJSONTest(t, srv.URL+"/identities/"+id.did, &body)
+	resp := getJSON(t, srv.URL+"/identities/"+id.did, &body)
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -388,11 +388,11 @@ func TestReadThroughIdentityMultiPage(t *testing.T) {
 	// create identity update so chain has 2 ops
 	updateToken, _, err := dfos.SignIdentityUpdate(
 		id.opCID,
-		[]dfos.MultikeyPublicKey{id.ctrl.mk},
+		[]dfos.MultikeyPublicKey{id.controller.mk},
 		[]dfos.MultikeyPublicKey{id.auth.mk},
 		[]dfos.MultikeyPublicKey{},
-		id.did+"#"+id.ctrl.keyID,
-		id.ctrl.priv,
+		id.did+"#"+id.controller.keyID,
+		id.controller.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -421,7 +421,7 @@ func TestReadThroughIdentityMultiPage(t *testing.T) {
 	defer srv.Close()
 
 	var body map[string]any
-	resp := getJSONTest(t, srv.URL+"/identities/"+id.did, &body)
+	resp := getJSON(t, srv.URL+"/identities/"+id.did, &body)
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -462,7 +462,7 @@ func TestReadThroughContent(t *testing.T) {
 	defer srv.Close()
 
 	var body map[string]any
-	resp := getJSONTest(t, srv.URL+"/content/"+contentID, &body)
+	resp := getJSON(t, srv.URL+"/content/"+contentID, &body)
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -497,9 +497,9 @@ func TestReadThroughDisabled(t *testing.T) {
 	resp.Body.Close()
 }
 
-// =========================================================================
+// ===================================================================
 // sync tests
-// =========================================================================
+// ===================================================================
 
 func TestSyncFromPeers(t *testing.T) {
 	peerStore := NewMemoryStore()
@@ -674,11 +674,11 @@ func TestSyncEmptyPeer(t *testing.T) {
 	}
 }
 
-// =========================================================================
+// ===================================================================
 // test HTTP helper
-// =========================================================================
+// ===================================================================
 
-func getJSONTest(t *testing.T, url string, v any) *http.Response {
+func getJSON(t *testing.T, url string, v any) *http.Response {
 	t.Helper()
 	resp, err := http.Get(url)
 	if err != nil {
@@ -690,7 +690,7 @@ func getJSONTest(t *testing.T, url string, v any) *http.Response {
 		if err := json.Unmarshal(body, v); err != nil {
 			t.Fatalf("decode %s: %v (body: %s)", url, err, string(body))
 		}
-		resp.Body = io.NopCloser(strings.NewReader(string(body)))
+		resp.Body = io.NopCloser(bytes.NewReader(body))
 	}
 	return resp
 }
