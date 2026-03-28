@@ -172,12 +172,20 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const did = c.req.param('did');
     let chain = await store.getIdentityChain(did);
 
-    // read-through: try peers on local miss
+    // read-through: try peers on local miss (paginate through full log)
     if (!chain && readThroughPeers.length > 0 && peerClient) {
       for (const peer of readThroughPeers) {
-        const logPage = await peerClient.getIdentityLog(peer.url, did);
-        if (!logPage || logPage.entries.length === 0) continue;
-        await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
+        let after: string | undefined;
+        while (true) {
+          const logPage = await peerClient.getIdentityLog(peer.url, did, {
+            ...(after ? { after } : {}),
+            limit: 1000,
+          });
+          if (!logPage || logPage.entries.length === 0) break;
+          await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
+          if (!logPage.cursor) break;
+          after = logPage.cursor;
+        }
         chain = await store.getIdentityChain(did);
         if (chain) break;
       }
@@ -223,12 +231,20 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const contentId = c.req.param('contentId');
     let chain = await store.getContentChain(contentId);
 
-    // read-through: try peers on local miss
+    // read-through: try peers on local miss (paginate through full log)
     if (!chain && readThroughPeers.length > 0 && peerClient) {
       for (const peer of readThroughPeers) {
-        const logPage = await peerClient.getContentLog(peer.url, contentId);
-        if (!logPage || logPage.entries.length === 0) continue;
-        await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
+        let after: string | undefined;
+        while (true) {
+          const logPage = await peerClient.getContentLog(peer.url, contentId, {
+            ...(after ? { after } : {}),
+            limit: 1000,
+          });
+          if (!logPage || logPage.entries.length === 0) break;
+          await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
+          if (!logPage.cursor) break;
+          after = logPage.cursor;
+        }
         chain = await store.getContentChain(contentId);
         if (chain) break;
       }
@@ -395,12 +411,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         });
         if (!page || page.entries.length === 0) break;
         await ingestWithGossip(page.entries.map((e) => e.jwsToken));
-        if (page.cursor) {
-          cursor = page.cursor;
-          await store.setPeerCursor(peer.url, cursor);
-        } else {
-          break;
-        }
+        cursor = page.cursor ?? page.entries[page.entries.length - 1]!.cid;
+        await store.setPeerCursor(peer.url, cursor);
+        if (!page.cursor) break;
       }
     }
   };

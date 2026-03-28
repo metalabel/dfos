@@ -122,21 +122,28 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// read-through: try peers on local miss
+	// read-through: try peers on local miss (paginate through full log)
 	if chain == nil && r.peerClient != nil {
 		for _, peer := range r.peers {
 			if peer.ReadThrough != nil && !*peer.ReadThrough {
 				continue
 			}
-			page, err := r.peerClient.GetIdentityLog(peer.URL, did, "", 1000)
-			if err != nil || page == nil || len(page.Entries) == 0 {
-				continue
+			after := ""
+			for {
+				page, err := r.peerClient.GetIdentityLog(peer.URL, did, after, 1000)
+				if err != nil || page == nil || len(page.Entries) == 0 {
+					break
+				}
+				tokens := make([]string, len(page.Entries))
+				for i, e := range page.Entries {
+					tokens[i] = e.JWSToken
+				}
+				r.Ingest(tokens)
+				if page.Cursor == nil {
+					break
+				}
+				after = *page.Cursor
 			}
-			tokens := make([]string, len(page.Entries))
-			for i, e := range page.Entries {
-				tokens[i] = e.JWSToken
-			}
-			r.Ingest(tokens)
 			chain, _ = r.store.GetIdentityChain(did)
 			if chain != nil {
 				break
@@ -229,21 +236,28 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// read-through: try peers on local miss
+	// read-through: try peers on local miss (paginate through full log)
 	if chain == nil && r.peerClient != nil {
 		for _, peer := range r.peers {
 			if peer.ReadThrough != nil && !*peer.ReadThrough {
 				continue
 			}
-			page, err := r.peerClient.GetContentLog(peer.URL, contentID, "", 1000)
-			if err != nil || page == nil || len(page.Entries) == 0 {
-				continue
+			after := ""
+			for {
+				page, err := r.peerClient.GetContentLog(peer.URL, contentID, after, 1000)
+				if err != nil || page == nil || len(page.Entries) == 0 {
+					break
+				}
+				tokens := make([]string, len(page.Entries))
+				for i, e := range page.Entries {
+					tokens[i] = e.JWSToken
+				}
+				r.Ingest(tokens)
+				if page.Cursor == nil {
+					break
+				}
+				after = *page.Cursor
 			}
-			tokens := make([]string, len(page.Entries))
-			for i, e := range page.Entries {
-				tokens[i] = e.JWSToken
-			}
-			r.Ingest(tokens)
 			chain, _ = r.store.GetContentChain(contentID)
 			if chain != nil {
 				break
@@ -345,7 +359,7 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 			return
 		}
 		writeJSON(w, 200, map[string]any{
-			"cid":              cid,
+			"cid":               cid,
 			"countersignatures": cs,
 		})
 		return
@@ -356,7 +370,7 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"operationCID":     cid,
+		"operationCID":      cid,
 		"countersignatures": cs,
 	})
 }
@@ -378,7 +392,7 @@ func (r *Relay) handleOperationCountersignatures(w http.ResponseWriter, req *htt
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"operationCID":     cid,
+		"operationCID":      cid,
 		"countersignatures": cs,
 	})
 }

@@ -9,27 +9,27 @@ import (
 
 // MemoryStore is an in-memory Store implementation for development and testing.
 type MemoryStore struct {
-	mu               sync.RWMutex
-	operations       map[string]StoredOperation
-	identityChains   map[string]StoredIdentityChain
-	contentChains    map[string]StoredContentChain
-	beacons          map[string]StoredBeacon
-	blobs            map[string][]byte
+	mu                sync.RWMutex
+	operations        map[string]StoredOperation
+	identityChains    map[string]StoredIdentityChain
+	contentChains     map[string]StoredContentChain
+	beacons           map[string]StoredBeacon
+	blobs             map[string][]byte
 	countersignatures map[string][]string
-	operationLog     []LogEntry
-	peerCursors      map[string]string
+	operationLog      []LogEntry
+	peerCursors       map[string]string
 }
 
 // NewMemoryStore creates a new empty MemoryStore.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		operations:       make(map[string]StoredOperation),
-		identityChains:   make(map[string]StoredIdentityChain),
-		contentChains:    make(map[string]StoredContentChain),
-		beacons:          make(map[string]StoredBeacon),
-		blobs:            make(map[string][]byte),
+		operations:        make(map[string]StoredOperation),
+		identityChains:    make(map[string]StoredIdentityChain),
+		contentChains:     make(map[string]StoredContentChain),
+		beacons:           make(map[string]StoredBeacon),
+		blobs:             make(map[string][]byte),
 		countersignatures: make(map[string][]string),
-		peerCursors:      make(map[string]string),
+		peerCursors:       make(map[string]string),
 	}
 }
 

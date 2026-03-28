@@ -109,7 +109,7 @@ func classify(jwsToken string) classifiedOp {
 
 	case "did:dfos:artifact":
 		base.kind = "artifact"
-		base.priority = 1 // same as beacons
+		base.priority = 1     // same as beacons
 		base.previousCID = "" // artifacts have no chaining
 		if did, ok := payload["did"].(string); ok {
 			base.referencedDID = did
@@ -273,8 +273,8 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 		store.PutIdentityChain(chain)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: result.State.DID})
 		if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})
-	}
+			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})
+		}
 		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: result.State.DID}
 	}
 
@@ -310,8 +310,8 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 		store.PutIdentityChain(updated)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})
 		if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
-	}
+			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
+		}
 		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
 	}
 
@@ -415,8 +415,8 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 		store.PutContentChain(chain)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: result.State.ContentID})
 		if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})
-	}
+			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})
+		}
 		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: result.State.ContentID}
 	}
 
@@ -461,8 +461,8 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 		store.PutContentChain(updated)
 		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})
 		if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
-	}
+			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
+		}
 		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
 	}
 
@@ -586,10 +586,8 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool) IngestionR
 	if targetOp.ChainType == "identity" {
 		targetAuthorDID = targetOp.ChainID
 	} else {
-		targetDecoded, _, err := dfos.DecodeJWSUnsafe(targetOp.JWSToken)
-		if err == nil && targetDecoded != nil {
-			// extract did from payload
-			_, targetPayload, _ := dfos.DecodeJWSUnsafe(targetOp.JWSToken)
+		_, targetPayload, err := dfos.DecodeJWSUnsafe(targetOp.JWSToken)
+		if err == nil && targetPayload != nil {
 			if d, ok := targetPayload["did"].(string); ok {
 				targetAuthorDID = d
 			}

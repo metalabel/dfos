@@ -63,19 +63,19 @@ type ContentStateAtCID struct {
 
 // StoredIdentityChain is the relay's representation of an identity chain.
 type StoredIdentityChain struct {
-	DID           string          `json:"did"`
-	Log           []string        `json:"log"`
-	HeadCID       string          `json:"headCID"`
-	LastCreatedAt string          `json:"lastCreatedAt"`
+	DID           string             `json:"did"`
+	Log           []string           `json:"log"`
+	HeadCID       string             `json:"headCID"`
+	LastCreatedAt string             `json:"lastCreatedAt"`
 	State         dfos.IdentityState `json:"state"`
 }
 
 // StoredContentChain is the relay's representation of a content chain.
 type StoredContentChain struct {
-	ContentID     string          `json:"contentId"`
-	GenesisCID    string          `json:"genesisCID"`
-	Log           []string        `json:"log"`
-	LastCreatedAt string          `json:"lastCreatedAt"`
+	ContentID     string            `json:"contentId"`
+	GenesisCID    string            `json:"genesisCID"`
+	Log           []string          `json:"log"`
+	LastCreatedAt string            `json:"lastCreatedAt"`
 	State         dfos.ContentState `json:"state"`
 }
 

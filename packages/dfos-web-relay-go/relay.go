@@ -103,8 +103,11 @@ func (r *Relay) SyncFromPeers() error {
 			r.Ingest(tokens)
 			if page.Cursor != nil {
 				cursor = *page.Cursor
-				r.store.SetPeerCursor(peer.URL, cursor)
 			} else {
+				cursor = page.Entries[len(page.Entries)-1].CID
+			}
+			r.store.SetPeerCursor(peer.URL, cursor)
+			if page.Cursor == nil {
 				break
 			}
 		}
