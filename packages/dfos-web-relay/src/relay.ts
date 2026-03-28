@@ -98,7 +98,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return c.json({
       did: relayDID,
       protocol: 'dfos-web-relay',
-      version: '0.1.0',
+      version: '0.6.0',
       proof: true,
       content: contentEnabled,
       log: logEnabled,
