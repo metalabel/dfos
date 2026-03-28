@@ -637,3 +637,81 @@ func TestDelegatedWriteFromDeletedCreator(t *testing.T) {
 		t.Fatal("expected rejection for delegated write from deleted creator")
 	}
 }
+
+// ===================================================================
+// identity undeletion via fork
+// ===================================================================
+
+// TestIdentityUndeletionViaFork verifies that a fork from before a delete
+// operation can "undelete" an identity when the fork has a later createdAt.
+// Both the delete and the fork extend from genesis, creating two DAG tips.
+// The deterministic head selector picks the tip with the highest createdAt.
+func TestIdentityUndeletionViaFork(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+
+	// delete the identity (extends from genesis)
+	ctrlKid := id.did + "#" + id.controller.keyID
+	delToken, _, err := dfos.SignIdentityDelete(id.genCID, ctrlKid, id.controller.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postOperations(t, base, []string{delToken}).Body.Close()
+
+	// confirm it's deleted
+	var chainDel struct {
+		State struct {
+			IsDeleted bool `json:"isDeleted"`
+		} `json:"state"`
+	}
+	getJSON(t, base+"/identities/"+id.did, &chainDel)
+	if !chainDel.State.IsDeleted {
+		t.Fatal("identity should be deleted before fork")
+	}
+
+	// small delay so the fork update gets a later createdAt
+	time.Sleep(50 * time.Millisecond)
+
+	// fork: submit an update that also extends from genesis (same previousCID)
+	// with a later createdAt, this should win deterministic head selection
+	newAuth := newKeypair()
+	forkToken, _, err := dfos.SignIdentityUpdate(
+		id.genCID, // fork from genesis, not from delete
+		[]dfos.MultikeyPublicKey{id.controller.mk},
+		[]dfos.MultikeyPublicKey{newAuth.mk},
+		[]dfos.MultikeyPublicKey{},
+		ctrlKid,
+		id.controller.priv,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := postOperations(t, base, []string{forkToken})
+	body := readBody(t, res)
+	var forkResult struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	json.Unmarshal(body, &forkResult)
+	if len(forkResult.Results) == 0 || forkResult.Results[0].Status == "rejected" {
+		errMsg := ""
+		if len(forkResult.Results) > 0 {
+			errMsg = forkResult.Results[0].Error
+		}
+		t.Fatalf("expected fork to be accepted: %s", errMsg)
+	}
+
+	// the identity should now be NOT deleted — the fork branch won
+	var chainPost struct {
+		State struct {
+			IsDeleted bool `json:"isDeleted"`
+		} `json:"state"`
+	}
+	getJSON(t, base+"/identities/"+id.did, &chainPost)
+	if chainPost.State.IsDeleted {
+		t.Fatal("identity should be undeleted after fork with later createdAt")
+	}
+}
