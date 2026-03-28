@@ -18,6 +18,7 @@ import (
 
 func main() {
 	port := envOr("PORT", "8080")
+	storeType := envOr("STORE", "sqlite")
 	dbPath := envOr("SQLITE_PATH", "/data/relay.db")
 	relayName := envOr("RELAY_NAME", "DFOS Relay")
 	relayDescription := os.Getenv("RELAY_DESCRIPTION")
@@ -29,19 +30,37 @@ func main() {
 		log.Fatalf("invalid SYNC_INTERVAL %q: %v", syncIntervalStr, err)
 	}
 
-	// open SQLite store
-	store, err := relay.NewSQLiteStore(dbPath)
-	if err != nil {
-		log.Fatalf("failed to open SQLite store at %s: %v", dbPath, err)
-	}
-	defer store.Close()
-
-	// bootstrap relay identity (load existing or create new)
+	// open store
+	var store relay.Store
+	var sqliteStore *relay.SQLiteStore
 	profile := relay.ProfileConfig{
 		Name:        relayName,
 		Description: relayDescription,
 	}
-	identity, err := bootstrapPersistent(store, profile)
+
+	switch storeType {
+	case "memory":
+		memStore := relay.NewMemoryStore()
+		store = memStore
+		fmt.Println("Using in-memory store")
+	default:
+		s, err := relay.NewSQLiteStore(dbPath)
+		if err != nil {
+			log.Fatalf("failed to open SQLite store at %s: %v", dbPath, err)
+		}
+		defer s.Close()
+		sqliteStore = s
+		store = s
+		fmt.Printf("Using SQLite store at %s\n", dbPath)
+	}
+
+	// bootstrap relay identity
+	var identity *relay.RelayIdentity
+	if sqliteStore != nil {
+		identity, err = bootstrapPersistent(sqliteStore, profile)
+	} else {
+		identity, err = relay.BootstrapRelayIdentityWithProfile(store, profile)
+	}
 	if err != nil {
 		log.Fatalf("bootstrap failed: %v", err)
 	}
@@ -70,7 +89,11 @@ func main() {
 	fmt.Printf("DFOS relay started\n")
 	fmt.Printf("  DID:    %s\n", r.DID())
 	fmt.Printf("  Port:   %s\n", port)
-	fmt.Printf("  Store:  %s\n", dbPath)
+	if sqliteStore != nil {
+		fmt.Printf("  Store:  %s\n", dbPath)
+	} else {
+		fmt.Printf("  Store:  memory\n")
+	}
 	fmt.Printf("  Name:   %s\n", relayName)
 	if len(peers) > 0 {
 		fmt.Printf("  Peers:  %d configured\n", len(peers))

@@ -11,12 +11,12 @@ services:
       context: ../..
       dockerfile: packages/dfos-web-relay-go/Dockerfile
     environment:
-      PORT: "8080"
-      RELAY_NAME: "relay-a"
-      PEERS: "http://relay-b:8080"
-      SYNC_INTERVAL: "5s"
+      PORT: '8080'
+      RELAY_NAME: 'relay-a'
+      PEERS: 'http://relay-b:8080'
+      SYNC_INTERVAL: '5s'
     ports:
-      - "9801:8080"
+      - '9801:8080'
     volumes:
       - data-a:/data
 
@@ -25,12 +25,12 @@ services:
       context: ../..
       dockerfile: packages/dfos-web-relay-go/Dockerfile
     environment:
-      PORT: "8080"
-      RELAY_NAME: "relay-b"
-      PEERS: "http://relay-c:8080"
-      SYNC_INTERVAL: "5s"
+      PORT: '8080'
+      RELAY_NAME: 'relay-b'
+      PEERS: 'http://relay-c:8080'
+      SYNC_INTERVAL: '5s'
     ports:
-      - "9802:8080"
+      - '9802:8080'
     volumes:
       - data-b:/data
 
@@ -39,12 +39,12 @@ services:
       context: ../..
       dockerfile: packages/dfos-web-relay-go/Dockerfile
     environment:
-      PORT: "8080"
-      RELAY_NAME: "relay-c"
-      PEERS: "http://relay-a:8080"
-      SYNC_INTERVAL: "5s"
+      PORT: '8080'
+      RELAY_NAME: 'relay-c'
+      PEERS: 'http://relay-a:8080'
+      SYNC_INTERVAL: '5s'
     ports:
-      - "9803:8080"
+      - '9803:8080'
     volumes:
       - data-c:/data
 
