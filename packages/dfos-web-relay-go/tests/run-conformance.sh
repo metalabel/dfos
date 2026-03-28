@@ -35,7 +35,7 @@ if [ "$STORE_TYPE" = "sqlite" ]; then
   STORE=sqlite SQLITE_PATH="$SQLITE_PATH" PORT="$PORT" "$RELAY_DIR/relay-server" &
 else
   echo "Starting Go relay on port $PORT (memory)..."
-  PORT="$PORT" "$RELAY_DIR/relay-server" &
+  STORE=memory PORT="$PORT" "$RELAY_DIR/relay-server" &
 fi
 RELAY_PID=$!
 
