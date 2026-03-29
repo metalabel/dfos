@@ -32,9 +32,6 @@ func newRouter(r *Relay) http.Handler {
 	mux.HandleFunc("GET /beacons/{did...}", r.handleGetBeacon)
 	mux.HandleFunc("GET /log", r.handleGetLog)
 
-	// admin
-	mux.HandleFunc("POST /admin/resync", r.handleAdminResync)
-
 	return mux
 }
 
@@ -693,18 +690,3 @@ func parseLimit(req *http.Request, defaultLimit, maxLimit int) int {
 	return limit
 }
 
-// ---------------------------------------------------------------------------
-// admin
-// ---------------------------------------------------------------------------
-
-func (r *Relay) handleAdminResync(w http.ResponseWriter, req *http.Request) {
-	if !r.adminEnabled {
-		writeError(w, 404, "not found")
-		return
-	}
-	if err := r.ResetPeerCursors(); err != nil {
-		writeError(w, 500, "failed to reset cursors")
-		return
-	}
-	writeJSON(w, 200, map[string]any{"status": "ok", "message": "peer cursors reset, full re-sync will begin on next cycle"})
-}

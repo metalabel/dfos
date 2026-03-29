@@ -24,8 +24,8 @@ type RelayOptions struct {
 	Content    *bool  // nil or true = enabled (default), false = disabled
 	Log        *bool  // nil or true = enabled (default), false = disabled
 	Peers      []PeerConfig
-	PeerClient PeerClient // injected peer transport (nil = no peering)
-	AdminEnabled bool     // if true, enables admin endpoints
+	PeerClient   PeerClient // injected peer transport (nil = no peering)
+	ResyncOnBoot bool       // if true, reset peer cursors + sequencer on startup
 }
 
 // PeerConfig configures a single peer relay.
@@ -175,11 +175,14 @@ type Store interface {
 	GetPeerCursor(peerURL string) (string, error)
 	SetPeerCursor(peerURL string, cursor string) error
 
-	// pending ops — retry buffer for dependency-failed ops
-	AddPendingOp(jwsToken string) error
-	GetPendingOps(limit int) ([]string, error)
-	RemovePendingOps(tokens []string) error
+	// raw ops — content-addressed store for all received operations
+	PutRawOp(cid string, jwsToken string) error
+	GetUnsequencedOps(limit int) ([]string, error) // returns JWS tokens where status = 'pending'
+	MarkOpsSequenced(cids []string) error
+	MarkOpRejected(cid string, reason string) error
+	CountUnsequenced() (int, error)
 
 	// admin
 	ResetPeerCursors() error
+	ResetSequencer() error
 }

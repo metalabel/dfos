@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { authenticateRequest } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { createCurrentKeyResolver, ingestOperations } from './ingest';
+import { computeOpCID, sequenceOps } from './sequencer';
 import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
 
 // -----------------------------------------------------------------------------
@@ -71,20 +72,45 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const relayDID = identity.did;
   const profileArtifactJws = identity.profileArtifactJws;
 
-  // ingest wrapper that gossips new ops to peers
+  // gossip helper
+  const gossip = (ops: string[]) => {
+    if (ops.length === 0 || gossipPeers.length === 0 || !peerClient) return;
+    for (const peer of gossipPeers) {
+      peerClient.submitOperations(peer.url, ops).catch(() => {});
+    }
+  };
+
+  // ingest wrapper: store raw → process → mark results → sequence pending → gossip
   const ingestWithGossip = async (tokens: string[]) => {
+    // store raw ops first — they can never be lost
+    for (const token of tokens) {
+      const cid = await computeOpCID(token);
+      if (cid) await store.putRawOp(cid, token);
+    }
+
+    // process batch
     const results = await ingestOperations(tokens, store, { logEnabled });
-    if (gossipPeers.length > 0 && peerClient) {
-      const newOps: string[] = [];
-      for (let i = 0; i < results.length; i++) {
-        if (results[i]!.status === 'new') newOps.push(tokens[i]!);
-      }
-      if (newOps.length > 0) {
-        for (const peer of gossipPeers) {
-          peerClient.submitOperations(peer.url, newOps).catch(() => {});
-        }
+
+    // mark results in raw store
+    const newOps: string[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const res = results[i]!;
+      if (!res.cid) continue;
+      if (res.status === 'new') {
+        await store.markOpsSequenced([res.cid]);
+        newOps.push(tokens[i]!);
+      } else if (res.status === 'duplicate') {
+        await store.markOpsSequenced([res.cid]);
       }
     }
+
+    // run sequencer — resolves pending ops whose deps just arrived
+    const { newOps: seqNewOps } = await sequenceOps(store);
+
+    // gossip outside the critical path
+    gossip(newOps);
+    gossip(seqNewOps);
+
     return results;
   };
 

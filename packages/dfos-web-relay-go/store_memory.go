@@ -18,7 +18,12 @@ type MemoryStore struct {
 	countersignatures map[string][]string
 	operationLog      []LogEntry
 	peerCursors       map[string]string
-	pendingOps        map[string]bool
+	rawOps            map[string]rawOpEntry // cid → entry
+}
+
+type rawOpEntry struct {
+	jwsToken string
+	status   string // "pending", "sequenced", "rejected"
 }
 
 // NewMemoryStore creates a new empty MemoryStore.
@@ -31,7 +36,7 @@ func NewMemoryStore() *MemoryStore {
 		blobs:             make(map[string][]byte),
 		countersignatures: make(map[string][]string),
 		peerCursors:       make(map[string]string),
-		pendingOps:        make(map[string]bool),
+		rawOps:            make(map[string]rawOpEntry),
 	}
 }
 
@@ -326,38 +331,79 @@ func (s *MemoryStore) SetPeerCursor(peerURL string, cursor string) error {
 	return nil
 }
 
-func (s *MemoryStore) AddPendingOp(jwsToken string) error {
+func (s *MemoryStore) PutRawOp(cid string, jwsToken string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pendingOps[jwsToken] = true
+	if _, exists := s.rawOps[cid]; !exists {
+		s.rawOps[cid] = rawOpEntry{jwsToken: jwsToken, status: "pending"}
+	}
 	return nil
 }
 
-func (s *MemoryStore) GetPendingOps(limit int) ([]string, error) {
+func (s *MemoryStore) GetUnsequencedOps(limit int) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []string
-	for t := range s.pendingOps {
-		out = append(out, t)
-		if len(out) >= limit {
-			break
+	for _, entry := range s.rawOps {
+		if entry.status == "pending" {
+			out = append(out, entry.jwsToken)
+			if len(out) >= limit {
+				break
+			}
 		}
 	}
 	return out, nil
 }
 
-func (s *MemoryStore) RemovePendingOps(tokens []string) error {
+func (s *MemoryStore) MarkOpsSequenced(cids []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, t := range tokens {
-		delete(s.pendingOps, t)
+	for _, cid := range cids {
+		if entry, ok := s.rawOps[cid]; ok {
+			entry.status = "sequenced"
+			s.rawOps[cid] = entry
+		}
 	}
 	return nil
+}
+
+func (s *MemoryStore) MarkOpRejected(cid string, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if entry, ok := s.rawOps[cid]; ok {
+		entry.status = "rejected"
+		s.rawOps[cid] = entry
+	}
+	return nil
+}
+
+func (s *MemoryStore) CountUnsequenced() (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := 0
+	for _, entry := range s.rawOps {
+		if entry.status == "pending" {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func (s *MemoryStore) ResetPeerCursors() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.peerCursors = make(map[string]string)
+	return nil
+}
+
+func (s *MemoryStore) ResetSequencer() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for cid, entry := range s.rawOps {
+		if entry.status != "rejected" {
+			entry.status = "pending"
+			s.rawOps[cid] = entry
+		}
+	}
 	return nil
 }

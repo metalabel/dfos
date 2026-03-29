@@ -220,4 +220,54 @@ export class MemoryRelayStore implements RelayStore {
   async setPeerCursor(peerUrl: string, cursor: string): Promise<void> {
     this.peerCursors.set(peerUrl, cursor);
   }
+
+  // --- raw ops ---
+
+  private rawOps = new Map<
+    string,
+    { jwsToken: string; status: 'pending' | 'sequenced' | 'rejected' }
+  >();
+
+  async putRawOp(cid: string, jwsToken: string): Promise<void> {
+    if (!this.rawOps.has(cid)) {
+      this.rawOps.set(cid, { jwsToken, status: 'pending' });
+    }
+  }
+
+  async getUnsequencedOps(limit: number): Promise<string[]> {
+    const out: string[] = [];
+    for (const entry of this.rawOps.values()) {
+      if (entry.status === 'pending') {
+        out.push(entry.jwsToken);
+        if (out.length >= limit) break;
+      }
+    }
+    return out;
+  }
+
+  async markOpsSequenced(cids: string[]): Promise<void> {
+    for (const cid of cids) {
+      const entry = this.rawOps.get(cid);
+      if (entry) entry.status = 'sequenced';
+    }
+  }
+
+  async markOpRejected(cid: string, _reason: string): Promise<void> {
+    const entry = this.rawOps.get(cid);
+    if (entry) entry.status = 'rejected';
+  }
+
+  async countUnsequenced(): Promise<number> {
+    let count = 0;
+    for (const entry of this.rawOps.values()) {
+      if (entry.status === 'pending') count++;
+    }
+    return count;
+  }
+
+  async resetSequencer(): Promise<void> {
+    for (const entry of this.rawOps.values()) {
+      if (entry.status !== 'rejected') entry.status = 'pending';
+    }
+  }
 }
