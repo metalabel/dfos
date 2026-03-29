@@ -568,11 +568,84 @@ Each method corresponds to a peering behavior: `getIdentityLog` / `getContentLog
 
 ---
 
+## Convergence
+
+The protocol guarantees: given the same set of operations, any relay computes the same deterministic head state. Peering (gossip, read-through, sync) replicates operations across relays. But operations may arrive before their causal dependencies — a content extension before its identity chain, a fork before the branch it forks from. A relay MUST eventually process any structurally valid operation whose causal dependencies have been processed. This is the convergence contract.
+
+### Causal Dependencies
+
+An operation's causal dependencies are the minimum state required for verification:
+
+| Operation type    | Dependencies                                             |
+| ----------------- | -------------------------------------------------------- |
+| Identity genesis  | None                                                     |
+| Identity extension| Previous identity operation (by `previousOperationCID`)  |
+| Content genesis   | Creator's identity chain (for key resolution)            |
+| Content extension | Previous content operation + creator's identity chain    |
+| Beacon            | Signer's identity chain                                  |
+| Artifact          | Signer's identity chain                                  |
+| Countersignature  | Signer's identity chain + target operation               |
+
+If all causal dependencies are present, the operation MUST be verifiable. If any dependency is missing, the operation cannot be verified yet — but it is not invalid. The relay MUST retain it and re-attempt verification when the missing dependency arrives.
+
+### Store-Then-Verify
+
+A relay MUST NOT discard a structurally well-formed operation because its dependencies are temporarily unavailable. The implementation strategy is store-then-verify:
+
+1. **Store**: on receipt (via `POST /operations`, gossip, sync, or read-through), store the raw JWS token in a content-addressed buffer keyed by operation CID. This is idempotent — duplicate CIDs are ignored.
+
+2. **Verify**: attempt full verification against current state. Three outcomes:
+   - **Sequenced** — verification succeeded, operation committed to chain state and global log
+   - **Dependency failure** — a causal dependency is missing, operation remains in the buffer
+   - **Permanent rejection** — structurally invalid, bad signature, deleted identity, etc. — will never succeed regardless of what state arrives
+
+3. **Sequence loop**: after each ingestion batch, re-attempt all buffered operations in dependency order until no further progress is made (fixed-point). This ensures cross-batch dependencies resolve immediately — when batch B provides the identity that batch A's content operation was waiting for, the sequencer resolves it within B's response cycle.
+
+### Dependency Failures
+
+A rejection is a dependency failure if and only if it is caused by missing state that may arrive later via peering. The set is small and stable:
+
+- Previous operation not yet in store (`previousOperationCID` unknown)
+- Identity chain not yet available (key resolution fails)
+- Content chain not yet created (genesis not arrived)
+- Fork state cannot be computed (ancestor in branch path not yet available)
+
+All other rejections are permanent. Permanent rejections MUST NOT be retried.
+
+### Serialization
+
+All chain-state mutations (ingestion + sequencing) MUST be serialized. Concurrent ingestion of operations for the same chain produces a read-modify-write race: two goroutines read the chain log, both append their operation, and the second write clobbers the first. Raw operation storage (`putRawOp`) does not require serialization — it is idempotent and append-only.
+
+### Convergence Bound
+
+Given a fully connected peer mesh where every relay syncs from every other relay:
+
+- After one sync cycle, every relay has every operation that any peer accepted (stored as raw)
+- After one sequencer pass, every operation whose full dependency chain exists locally is sequenced
+- Deterministic head selection ensures all relays agree on the canonical head
+
+In practice, the dependency depth for fork operations is 1 (each op depends on its immediate predecessor). Convergence is typically achieved in a single sync + sequence cycle.
+
+### Storage Interface (Convergence)
+
+The `RelayStore` interface extends with methods for raw operation buffering:
+
+```typescript
+// raw ops — content-addressed store for all received operations
+putRawOp(cid: string, jwsToken: string): Promise<void>;
+getUnsequencedOps(limit: number): Promise<string[]>;
+markOpsSequenced(cids: string[]): Promise<void>;
+markOpRejected(cid: string, reason: string): Promise<void>;
+countUnsequenced(): Promise<number>;
+resetSequencer(): Promise<void>;
+```
+
+---
+
 ## What's Deferred
 
 - **Peer discovery**: Static configuration only — no dynamic discovery
 - **SSE/realtime push**: Polling `GET /log` for now, SSE in the future
-- **Op mempool**: Deferred ingestion for ops with missing dependencies
 - **Fork visibility API**: Dedicated endpoint to list tips/branches
 - **Branch termination op**: Protocol-level operation to explicitly kill fork branches
 - **Rate limiting / anti-spam**: Operational concern, not protocol concern
