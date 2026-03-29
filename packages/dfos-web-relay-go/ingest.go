@@ -883,6 +883,46 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 		results = append(results, indexedResult{index: op.originalIndex, result: result})
 	}
 
+	// retry ops that failed due to missing dependencies — their dependencies
+	// may have been satisfied by earlier ops in the same batch
+	for retry := 0; retry < 3; retry++ {
+		var pending []indexedResult
+		for i, ir := range results {
+			if ir.result.Status == "rejected" && isRetryableRejection(ir.result.Error) {
+				pending = append(pending, results[i])
+			}
+		}
+		if len(pending) == 0 {
+			break
+		}
+
+		progressed := false
+		for _, p := range pending {
+			var result IngestionResult
+			switch classified[p.index].kind {
+			case "identity-op":
+				result = ingestIdentityOp(tokens[p.index], store, cfg.logEnabled)
+			case "content-op":
+				result = ingestContentOp(tokens[p.index], store, cfg.logEnabled)
+			default:
+				continue
+			}
+			if result.Status != "rejected" || !isRetryableRejection(result.Error) {
+				// find and update the result
+				for i, ir := range results {
+					if ir.index == p.index {
+						results[i].result = result
+						break
+					}
+				}
+				progressed = true
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+
 	// return in original submission order
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].index < results[j].index
@@ -893,4 +933,12 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 		out[i] = r.result
 	}
 	return out
+}
+
+// isRetryableRejection returns true if the rejection is due to a missing
+// dependency that might be resolved by other ops in the same batch.
+func isRetryableRejection(errMsg string) bool {
+	return strings.Contains(errMsg, "unknown previous operation") ||
+		strings.Contains(errMsg, "unknown identity:") ||
+		strings.Contains(errMsg, "content chain not found:")
 }
