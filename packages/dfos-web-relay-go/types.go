@@ -21,10 +21,11 @@ type RelayIdentity struct {
 type RelayOptions struct {
 	Store      Store
 	Identity   *RelayIdentity
-	Content    *bool // nil or true = enabled (default), false = disabled
-	Log        *bool // nil or true = enabled (default), false = disabled
+	Content    *bool  // nil or true = enabled (default), false = disabled
+	Log        *bool  // nil or true = enabled (default), false = disabled
 	Peers      []PeerConfig
 	PeerClient PeerClient // injected peer transport (nil = no peering)
+	AdminEnabled bool     // if true, enables admin endpoints
 }
 
 // PeerConfig configures a single peer relay.
