@@ -419,17 +419,29 @@ func TestLogContainsAllKinds(t *testing.T) {
 	}
 	postOperations(t, base, []string{csToken})
 
-	// fetch the global log
-	var logResp struct {
-		Entries []struct {
-			Kind string `json:"kind"`
-		} `json:"entries"`
-	}
-	getJSON(t, base+"/log?limit=1000", &logResp)
-
+	// fetch the global log — paginate to find all kinds (relay may have
+	// pre-existing data from prior tests or load testing)
 	kinds := map[string]bool{}
-	for _, e := range logResp.Entries {
-		kinds[e.Kind] = true
+	cursor := ""
+	for {
+		url := base + "/log?limit=100"
+		if cursor != "" {
+			url += "&after=" + cursor
+		}
+		var logResp struct {
+			Entries []struct {
+				CID  string `json:"cid"`
+				Kind string `json:"kind"`
+			} `json:"entries"`
+		}
+		getJSON(t, url, &logResp)
+		for _, e := range logResp.Entries {
+			kinds[e.Kind] = true
+			cursor = e.CID
+		}
+		if len(logResp.Entries) < 100 {
+			break
+		}
 	}
 
 	for _, expected := range []string{"identity-op", "content-op", "beacon", "artifact", "countersign"} {
