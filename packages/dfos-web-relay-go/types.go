@@ -7,7 +7,7 @@ import (
 )
 
 // Version is the release version of the dfos-web-relay-go package.
-const Version = "0.6.0"
+const Version = "0.6.1"
 
 // RelayIdentity holds the relay's DID, profile artifact, and key material.
 type RelayIdentity struct {
