@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { authenticateRequest } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { createCurrentKeyResolver, ingestOperations } from './ingest';
-import { sequenceOps, computeOpCID } from './sequencer';
+import { computeOpCID, sequenceOps } from './sequencer';
 import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
 
 // -----------------------------------------------------------------------------

@@ -576,15 +576,15 @@ The protocol guarantees: given the same set of operations, any relay computes th
 
 An operation's causal dependencies are the minimum state required for verification:
 
-| Operation type    | Dependencies                                             |
-| ----------------- | -------------------------------------------------------- |
-| Identity genesis  | None                                                     |
-| Identity extension| Previous identity operation (by `previousOperationCID`)  |
-| Content genesis   | Creator's identity chain (for key resolution)            |
-| Content extension | Previous content operation + creator's identity chain    |
-| Beacon            | Signer's identity chain                                  |
-| Artifact          | Signer's identity chain                                  |
-| Countersignature  | Signer's identity chain + target operation               |
+| Operation type     | Dependencies                                            |
+| ------------------ | ------------------------------------------------------- |
+| Identity genesis   | None                                                    |
+| Identity extension | Previous identity operation (by `previousOperationCID`) |
+| Content genesis    | Creator's identity chain (for key resolution)           |
+| Content extension  | Previous content operation + creator's identity chain   |
+| Beacon             | Signer's identity chain                                 |
+| Artifact           | Signer's identity chain                                 |
+| Countersignature   | Signer's identity chain + target operation              |
 
 If all causal dependencies are present, the operation MUST be verifiable. If any dependency is missing, the operation cannot be verified yet — but it is not invalid. The relay MUST retain it and re-attempt verification when the missing dependency arrives.
 

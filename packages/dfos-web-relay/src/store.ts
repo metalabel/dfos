@@ -223,7 +223,10 @@ export class MemoryRelayStore implements RelayStore {
 
   // --- raw ops ---
 
-  private rawOps = new Map<string, { jwsToken: string; status: 'pending' | 'sequenced' | 'rejected' }>();
+  private rawOps = new Map<
+    string,
+    { jwsToken: string; status: 'pending' | 'sequenced' | 'rejected' }
+  >();
 
   async putRawOp(cid: string, jwsToken: string): Promise<void> {
     if (!this.rawOps.has(cid)) {
