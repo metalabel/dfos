@@ -53,6 +53,7 @@ func (r *Relay) DID() string { return r.did }
 func (r *Relay) ProfileArtifactJWS() string { return r.profileArtifactJWS }
 
 // Ingest processes a batch of JWS operation tokens, then gossips new ops to peers.
+// Ops that fail with retryable dependency errors are stored for later retry.
 func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	var opts []IngestOption
 	if !r.logEnabled {
@@ -78,10 +79,18 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 		}
 	}
 
+	// store retryable failures for later
+	for i, result := range results {
+		if result.Status == "rejected" && isRetryableRejection(result.Error) {
+			r.store.AddPendingOp(tokens[i])
+		}
+	}
+
 	return results
 }
 
-// SyncFromPeers pulls operations from all configured sync peers.
+// SyncFromPeers pulls operations from all configured sync peers, then retries
+// any pending ops whose dependencies may have been resolved.
 func (r *Relay) SyncFromPeers() error {
 	if r.peerClient == nil {
 		return nil
@@ -112,7 +121,59 @@ func (r *Relay) SyncFromPeers() error {
 			}
 		}
 	}
+
+	// retry pending ops — dependencies may have arrived from any peer
+	r.RetryPendingOps()
 	return nil
+}
+
+// RetryPendingOps re-ingests ops that previously failed due to missing
+// dependencies. Removes ops that succeed or permanently fail.
+func (r *Relay) RetryPendingOps() {
+	pending, err := r.store.GetPendingOps(10000)
+	if err != nil || len(pending) == 0 {
+		return
+	}
+
+	var opts []IngestOption
+	if !r.logEnabled {
+		opts = append(opts, WithLogDisabled())
+	}
+	results := IngestOperations(pending, r.store, opts...)
+
+	// remove ops that resolved (success or permanent failure)
+	var resolved []string
+	for i, result := range results {
+		if result.Status != "rejected" || !isRetryableRejection(result.Error) {
+			resolved = append(resolved, pending[i])
+		}
+	}
+	if len(resolved) > 0 {
+		r.store.RemovePendingOps(resolved)
+	}
+
+	// gossip any newly accepted ops
+	if r.peerClient != nil {
+		var newOps []string
+		for i, result := range results {
+			if result.Status == "new" {
+				newOps = append(newOps, pending[i])
+			}
+		}
+		if len(newOps) > 0 {
+			for _, peer := range r.peers {
+				if peer.Gossip != nil && !*peer.Gossip {
+					continue
+				}
+				go r.peerClient.SubmitOperations(peer.URL, newOps) //nolint:errcheck
+			}
+		}
+	}
+}
+
+// ResetPeerCursors clears all sync cursors, forcing a full re-sync on next cycle.
+func (r *Relay) ResetPeerCursors() error {
+	return r.store.ResetPeerCursors()
 }
 
 // GetIdentity returns a stored identity chain by DID, or nil.

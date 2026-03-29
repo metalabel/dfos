@@ -74,6 +74,10 @@ CREATE TABLE IF NOT EXISTS relay_meta (
 	key TEXT PRIMARY KEY,
 	value BLOB NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pending_ops (
+	jws_token TEXT PRIMARY KEY
+);
 `
 
 // SQLiteStore is a durable Store backed by SQLite.
@@ -549,5 +553,66 @@ func (s *SQLiteStore) SetMeta(key string, value []byte) error {
 		"INSERT OR REPLACE INTO relay_meta (key, value) VALUES (?, ?)",
 		key, value,
 	)
+	return err
+}
+
+// ---------------------------------------------------------------------------
+// pending ops
+// ---------------------------------------------------------------------------
+
+// AddPendingOp stores a JWS token for later retry.
+func (s *SQLiteStore) AddPendingOp(jwsToken string) error {
+	_, err := s.db.Exec("INSERT OR IGNORE INTO pending_ops (jws_token) VALUES (?)", jwsToken)
+	return err
+}
+
+// GetPendingOps returns up to limit pending ops for retry.
+func (s *SQLiteStore) GetPendingOps(limit int) ([]string, error) {
+	rows, err := s.readDB.Query("SELECT jws_token FROM pending_ops LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tokens []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
+}
+
+// RemovePendingOps removes the given JWS tokens from the pending table.
+func (s *SQLiteStore) RemovePendingOps(tokens []string) error {
+	if len(tokens) == 0 {
+		return nil
+	}
+	for _, t := range tokens {
+		s.db.Exec("DELETE FROM pending_ops WHERE jws_token = ?", t)
+	}
+	return nil
+}
+
+// PendingOpsCount returns the number of pending ops.
+func (s *SQLiteStore) PendingOpsCount() int {
+	var count int
+	s.readDB.QueryRow("SELECT COUNT(*) FROM pending_ops").Scan(&count)
+	return count
+}
+
+// TrimPendingOps keeps only the most recent limit rows.
+func (s *SQLiteStore) TrimPendingOps(limit int) error {
+	_, err := s.db.Exec(
+		"DELETE FROM pending_ops WHERE rowid NOT IN (SELECT rowid FROM pending_ops ORDER BY rowid DESC LIMIT ?)",
+		limit,
+	)
+	return err
+}
+
+// ResetPeerCursors clears all peer cursors, forcing a full re-sync.
+func (s *SQLiteStore) ResetPeerCursors() error {
+	_, err := s.db.Exec("DELETE FROM peer_cursors")
 	return err
 }

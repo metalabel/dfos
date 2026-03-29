@@ -173,4 +173,12 @@ type Store interface {
 	// peer sync state
 	GetPeerCursor(peerURL string) (string, error)
 	SetPeerCursor(peerURL string, cursor string) error
+
+	// pending ops — retry buffer for dependency-failed ops
+	AddPendingOp(jwsToken string) error
+	GetPendingOps(limit int) ([]string, error)
+	RemovePendingOps(tokens []string) error
+
+	// admin
+	ResetPeerCursors() error
 }
