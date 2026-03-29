@@ -13,10 +13,16 @@ type SequenceResult struct {
 	Pending   int `json:"pending"`
 }
 
-// RunSequencer processes unsequenced raw ops in a fixed-point loop until no
-// more progress is made. Returns the JWS tokens of newly sequenced ops (for
-// gossip) and aggregate stats.
+// RunSequencer acquires the ingest mutex and runs the sequencer loop.
+// Called by the background ticker and SyncFromPeers.
 func (r *Relay) RunSequencer() ([]string, SequenceResult) {
+	r.ingestMu.Lock()
+	defer r.ingestMu.Unlock()
+	return r.runSequencerLocked()
+}
+
+// runSequencerLocked is the sequencer inner loop. Caller must hold ingestMu.
+func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 	var newOps []string
 	var result SequenceResult
 
@@ -31,9 +37,7 @@ func (r *Relay) RunSequencer() ([]string, SequenceResult) {
 			break
 		}
 
-		r.ingestMu.Lock()
 		results := IngestOperations(tokens, r.store, opts...)
-		r.ingestMu.Unlock()
 
 		progress := false
 		var sequencedCIDs []string

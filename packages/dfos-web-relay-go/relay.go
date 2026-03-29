@@ -64,14 +64,13 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 		}
 	}
 
-	// process immediately for synchronous response — mutex serializes with sequencer
+	// process immediately — mutex serializes all chain-state mutations
 	r.ingestMu.Lock()
 	var opts []IngestOption
 	if !r.logEnabled {
 		opts = append(opts, WithLogDisabled())
 	}
 	results := IngestOperations(tokens, r.store, opts...)
-	r.ingestMu.Unlock()
 
 	// mark results in raw store
 	var newOps []string
@@ -88,11 +87,15 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 		case res.Status == "rejected" && isPermanentRejection(res.Error):
 			r.store.MarkOpRejected(res.CID, res.Error)
 		}
-		// transient failures stay as 'pending' in raw_ops
 	}
 
-	// gossip new ops to peers
+	// run sequencer while still holding mutex — resolves pending ops whose deps just arrived
+	seqNewOps, _ := r.runSequencerLocked()
+	r.ingestMu.Unlock()
+
+	// gossip outside the lock
 	r.gossipOps(newOps)
+	r.gossipOps(seqNewOps)
 
 	return results
 }
