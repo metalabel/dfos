@@ -31,7 +31,9 @@ func (r *Relay) RunSequencer() ([]string, SequenceResult) {
 			break
 		}
 
+		r.ingestMu.Lock()
 		results := IngestOperations(tokens, r.store, opts...)
+		r.ingestMu.Unlock()
 
 		progress := false
 		var sequencedCIDs []string

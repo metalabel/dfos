@@ -3,6 +3,7 @@ package relay
 import (
 	"fmt"
 	"net/http"
+	"sync"
 )
 
 // Relay is a DFOS web relay — the core verification and storage engine.
@@ -14,6 +15,7 @@ type Relay struct {
 	logEnabled         bool
 	peers      []PeerConfig
 	peerClient PeerClient
+	ingestMu   sync.Mutex // serializes all chain-state mutations (ingest + sequencer)
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT
@@ -62,12 +64,14 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 		}
 	}
 
-	// process immediately for synchronous response
+	// process immediately for synchronous response — mutex serializes with sequencer
+	r.ingestMu.Lock()
 	var opts []IngestOption
 	if !r.logEnabled {
 		opts = append(opts, WithLogDisabled())
 	}
 	results := IngestOperations(tokens, r.store, opts...)
+	r.ingestMu.Unlock()
 
 	// mark results in raw store
 	var newOps []string
