@@ -12,9 +12,8 @@ type Relay struct {
 	profileArtifactJWS string
 	contentEnabled     bool
 	logEnabled         bool
-	peers              []PeerConfig
-	peerClient         PeerClient
-	adminEnabled       bool
+	peers      []PeerConfig
+	peerClient PeerClient
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT
@@ -42,9 +41,8 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		profileArtifactJWS: identity.ProfileArtifactJWS,
 		contentEnabled:     contentEnabled,
 		logEnabled:         logEnabled,
-		peers:              opts.Peers,
-		peerClient:         opts.PeerClient,
-		adminEnabled:       opts.AdminEnabled,
+		peers:      opts.Peers,
+		peerClient: opts.PeerClient,
 	}, nil
 }
 

@@ -23,7 +23,7 @@ func main() {
 	relayName := envOr("RELAY_NAME", "DFOS Relay")
 	relayDescription := os.Getenv("RELAY_DESCRIPTION")
 	peersEnv := os.Getenv("PEERS")
-	adminEnabled := os.Getenv("ADMIN") == "true"
+	resyncOnBoot := os.Getenv("RESYNC") == "true"
 	syncIntervalStr := envOr("SYNC_INTERVAL", "30s")
 
 	syncInterval, err := time.ParseDuration(syncIntervalStr)
@@ -81,10 +81,17 @@ func main() {
 		Identity:     identity,
 		Peers:        peers,
 		PeerClient:   peerClient,
-		AdminEnabled: adminEnabled,
+		ResyncOnBoot: resyncOnBoot,
 	})
 	if err != nil {
 		log.Fatalf("failed to create relay: %v", err)
+	}
+
+	// resync on boot: reset peer cursors + sequencer so first sync is a full pull
+	if resyncOnBoot {
+		fmt.Println("RESYNC=true — resetting peer cursors and sequencer for full re-sync")
+		store.ResetPeerCursors()
+		store.ResetSequencer()
 	}
 
 	// log startup

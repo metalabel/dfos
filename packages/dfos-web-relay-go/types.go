@@ -24,8 +24,8 @@ type RelayOptions struct {
 	Content    *bool  // nil or true = enabled (default), false = disabled
 	Log        *bool  // nil or true = enabled (default), false = disabled
 	Peers      []PeerConfig
-	PeerClient PeerClient // injected peer transport (nil = no peering)
-	AdminEnabled bool     // if true, enables admin endpoints
+	PeerClient   PeerClient // injected peer transport (nil = no peering)
+	ResyncOnBoot bool       // if true, reset peer cursors + sequencer on startup
 }
 
 // PeerConfig configures a single peer relay.
