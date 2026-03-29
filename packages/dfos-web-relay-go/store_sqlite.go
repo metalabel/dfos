@@ -75,9 +75,17 @@ CREATE TABLE IF NOT EXISTS relay_meta (
 	value BLOB NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS pending_ops (
-	jws_token TEXT PRIMARY KEY
+CREATE TABLE IF NOT EXISTS raw_ops (
+	cid TEXT PRIMARY KEY,
+	jws_token TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'pending',
+	error TEXT,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_raw_ops_status ON raw_ops(status);
+
+DROP TABLE IF EXISTS pending_ops;
 `
 
 // SQLiteStore is a durable Store backed by SQLite.
@@ -557,18 +565,25 @@ func (s *SQLiteStore) SetMeta(key string, value []byte) error {
 }
 
 // ---------------------------------------------------------------------------
-// pending ops
+// raw ops
 // ---------------------------------------------------------------------------
 
-// AddPendingOp stores a JWS token for later retry.
-func (s *SQLiteStore) AddPendingOp(jwsToken string) error {
-	_, err := s.db.Exec("INSERT OR IGNORE INTO pending_ops (jws_token) VALUES (?)", jwsToken)
+// PutRawOp stores a JWS token in the content-addressed raw op store.
+// Idempotent — ignores duplicates.
+func (s *SQLiteStore) PutRawOp(cid string, jwsToken string) error {
+	_, err := s.db.Exec(
+		"INSERT OR IGNORE INTO raw_ops (cid, jws_token) VALUES (?, ?)",
+		cid, jwsToken,
+	)
 	return err
 }
 
-// GetPendingOps returns up to limit pending ops for retry.
-func (s *SQLiteStore) GetPendingOps(limit int) ([]string, error) {
-	rows, err := s.readDB.Query("SELECT jws_token FROM pending_ops LIMIT ?", limit)
+// GetUnsequencedOps returns JWS tokens for ops that haven't been sequenced yet.
+func (s *SQLiteStore) GetUnsequencedOps(limit int) ([]string, error) {
+	rows, err := s.readDB.Query(
+		"SELECT jws_token FROM raw_ops WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
+		limit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -584,35 +599,42 @@ func (s *SQLiteStore) GetPendingOps(limit int) ([]string, error) {
 	return tokens, rows.Err()
 }
 
-// RemovePendingOps removes the given JWS tokens from the pending table.
-func (s *SQLiteStore) RemovePendingOps(tokens []string) error {
-	if len(tokens) == 0 {
-		return nil
-	}
-	for _, t := range tokens {
-		s.db.Exec("DELETE FROM pending_ops WHERE jws_token = ?", t)
+// MarkOpsSequenced marks the given CIDs as successfully sequenced.
+func (s *SQLiteStore) MarkOpsSequenced(cids []string) error {
+	for _, cid := range cids {
+		s.db.Exec("UPDATE raw_ops SET status = 'sequenced' WHERE cid = ?", cid)
 	}
 	return nil
 }
 
-// PendingOpsCount returns the number of pending ops.
-func (s *SQLiteStore) PendingOpsCount() int {
-	var count int
-	s.readDB.QueryRow("SELECT COUNT(*) FROM pending_ops").Scan(&count)
-	return count
-}
-
-// TrimPendingOps keeps only the most recent limit rows.
-func (s *SQLiteStore) TrimPendingOps(limit int) error {
+// MarkOpRejected marks a CID as permanently rejected with a reason.
+func (s *SQLiteStore) MarkOpRejected(cid string, reason string) error {
 	_, err := s.db.Exec(
-		"DELETE FROM pending_ops WHERE rowid NOT IN (SELECT rowid FROM pending_ops ORDER BY rowid DESC LIMIT ?)",
-		limit,
+		"UPDATE raw_ops SET status = 'rejected', error = ? WHERE cid = ?",
+		reason, cid,
 	)
 	return err
 }
 
+// CountUnsequenced returns the number of pending (unsequenced) raw ops.
+func (s *SQLiteStore) CountUnsequenced() (int, error) {
+	var count int
+	err := s.readDB.QueryRow("SELECT COUNT(*) FROM raw_ops WHERE status = 'pending'").Scan(&count)
+	return count, err
+}
+
+// ---------------------------------------------------------------------------
+// admin
+// ---------------------------------------------------------------------------
+
 // ResetPeerCursors clears all peer cursors, forcing a full re-sync.
 func (s *SQLiteStore) ResetPeerCursors() error {
 	_, err := s.db.Exec("DELETE FROM peer_cursors")
+	return err
+}
+
+// ResetSequencer marks all non-rejected raw ops as pending for re-sequencing.
+func (s *SQLiteStore) ResetSequencer() error {
+	_, err := s.db.Exec("UPDATE raw_ops SET status = 'pending' WHERE status != 'rejected'")
 	return err
 }

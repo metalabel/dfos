@@ -706,5 +706,9 @@ func (r *Relay) handleAdminResync(w http.ResponseWriter, req *http.Request) {
 		writeError(w, 500, "failed to reset cursors")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"status": "ok", "message": "peer cursors reset, full re-sync will begin on next cycle"})
+	if err := r.store.ResetSequencer(); err != nil {
+		writeError(w, 500, "failed to reset sequencer")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"status": "ok", "message": "peer cursors and sequencer reset, full re-sync will begin on next cycle"})
 }

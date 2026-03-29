@@ -105,13 +105,16 @@ func main() {
 		fmt.Printf("  Sync:   every %s\n", syncInterval)
 	}
 
-	// start sync ticker
+	// start sync + sequencer tickers
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	if len(peers) > 0 && peerClient != nil {
 		go syncLoop(ctx, r, syncInterval)
 	}
+
+	// background sequencer — processes unsequenced raw ops on a timer
+	go sequencerLoop(ctx, r, syncInterval)
 
 	// start HTTP server with graceful shutdown
 	srv := &http.Server{
@@ -227,6 +230,20 @@ func syncLoop(ctx context.Context, r *relay.Relay, interval time.Duration) {
 			if err := r.SyncFromPeers(); err != nil {
 				fmt.Printf("sync error: %v\n", err)
 			}
+		}
+	}
+}
+
+// sequencerLoop runs the sequencer on a ticker to process unsequenced raw ops.
+func sequencerLoop(ctx context.Context, r *relay.Relay, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.RunSequencerAndGossip()
 		}
 	}
 }

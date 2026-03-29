@@ -54,45 +54,49 @@ func (r *Relay) DID() string { return r.did }
 // ProfileArtifactJWS returns the relay's profile artifact JWS token.
 func (r *Relay) ProfileArtifactJWS() string { return r.profileArtifactJWS }
 
-// Ingest processes a batch of JWS operation tokens, then gossips new ops to peers.
-// Ops that fail with retryable dependency errors are stored for later retry.
+// Ingest stores raw ops, processes a batch for immediate results, and gossips.
 func (r *Relay) Ingest(tokens []string) []IngestionResult {
+	// store all raw ops first — they can never be lost
+	for _, token := range tokens {
+		cid := computeOpCID(token)
+		if cid != "" {
+			r.store.PutRawOp(cid, token)
+		}
+	}
+
+	// process immediately for synchronous response
 	var opts []IngestOption
 	if !r.logEnabled {
 		opts = append(opts, WithLogDisabled())
 	}
 	results := IngestOperations(tokens, r.store, opts...)
 
-	// gossip new ops to peers
-	if r.peerClient != nil {
-		var newOps []string
-		for i, result := range results {
-			if result.Status == "new" {
-				newOps = append(newOps, tokens[i])
-			}
+	// mark results in raw store
+	var newOps []string
+	for i, res := range results {
+		if res.CID == "" {
+			continue
 		}
-		if len(newOps) > 0 {
-			for _, peer := range r.peers {
-				if peer.Gossip != nil && !*peer.Gossip {
-					continue
-				}
-				go r.peerClient.SubmitOperations(peer.URL, newOps) //nolint:errcheck
-			}
+		switch {
+		case res.Status == "new":
+			r.store.MarkOpsSequenced([]string{res.CID})
+			newOps = append(newOps, tokens[i])
+		case res.Status == "duplicate":
+			r.store.MarkOpsSequenced([]string{res.CID})
+		case res.Status == "rejected" && isPermanentRejection(res.Error):
+			r.store.MarkOpRejected(res.CID, res.Error)
 		}
+		// transient failures stay as 'pending' in raw_ops
 	}
 
-	// store retryable failures for later
-	for i, result := range results {
-		if result.Status == "rejected" && isRetryableRejection(result.Error) {
-			r.store.AddPendingOp(tokens[i])
-		}
-	}
+	// gossip new ops to peers
+	r.gossipOps(newOps)
 
 	return results
 }
 
-// SyncFromPeers pulls operations from all configured sync peers, then retries
-// any pending ops whose dependencies may have been resolved.
+// SyncFromPeers pulls raw ops from all configured sync peers into the raw
+// store, then runs the sequencer to process everything.
 func (r *Relay) SyncFromPeers() error {
 	if r.peerClient == nil {
 		return nil
@@ -107,11 +111,10 @@ func (r *Relay) SyncFromPeers() error {
 			if err != nil || page == nil || len(page.Entries) == 0 {
 				break
 			}
-			tokens := make([]string, len(page.Entries))
-			for i, e := range page.Entries {
-				tokens[i] = e.JWSToken
+			// store raw — no verification during sync
+			for _, e := range page.Entries {
+				r.store.PutRawOp(e.CID, e.JWSToken)
 			}
-			r.Ingest(tokens)
 			if page.Cursor != nil {
 				cursor = *page.Cursor
 			} else {
@@ -124,53 +127,9 @@ func (r *Relay) SyncFromPeers() error {
 		}
 	}
 
-	// retry pending ops — dependencies may have arrived from any peer
-	r.RetryPendingOps()
+	// sequence all stored ops — fixed-point loop until no more progress
+	r.RunSequencerAndGossip()
 	return nil
-}
-
-// RetryPendingOps re-ingests ops that previously failed due to missing
-// dependencies. Removes ops that succeed or permanently fail.
-func (r *Relay) RetryPendingOps() {
-	pending, err := r.store.GetPendingOps(10000)
-	if err != nil || len(pending) == 0 {
-		return
-	}
-
-	var opts []IngestOption
-	if !r.logEnabled {
-		opts = append(opts, WithLogDisabled())
-	}
-	results := IngestOperations(pending, r.store, opts...)
-
-	// remove ops that resolved (success or permanent failure)
-	var resolved []string
-	for i, result := range results {
-		if result.Status != "rejected" || !isRetryableRejection(result.Error) {
-			resolved = append(resolved, pending[i])
-		}
-	}
-	if len(resolved) > 0 {
-		r.store.RemovePendingOps(resolved)
-	}
-
-	// gossip any newly accepted ops
-	if r.peerClient != nil {
-		var newOps []string
-		for i, result := range results {
-			if result.Status == "new" {
-				newOps = append(newOps, pending[i])
-			}
-		}
-		if len(newOps) > 0 {
-			for _, peer := range r.peers {
-				if peer.Gossip != nil && !*peer.Gossip {
-					continue
-				}
-				go r.peerClient.SubmitOperations(peer.URL, newOps) //nolint:errcheck
-			}
-		}
-	}
 }
 
 // ResetPeerCursors clears all sync cursors, forcing a full re-sync on next cycle.

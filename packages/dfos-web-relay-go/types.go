@@ -175,11 +175,14 @@ type Store interface {
 	GetPeerCursor(peerURL string) (string, error)
 	SetPeerCursor(peerURL string, cursor string) error
 
-	// pending ops — retry buffer for dependency-failed ops
-	AddPendingOp(jwsToken string) error
-	GetPendingOps(limit int) ([]string, error)
-	RemovePendingOps(tokens []string) error
+	// raw ops — content-addressed store for all received operations
+	PutRawOp(cid string, jwsToken string) error
+	GetUnsequencedOps(limit int) ([]string, error) // returns JWS tokens where status = 'pending'
+	MarkOpsSequenced(cids []string) error
+	MarkOpRejected(cid string, reason string) error
+	CountUnsequenced() (int, error)
 
 	// admin
 	ResetPeerCursors() error
+	ResetSequencer() error
 }

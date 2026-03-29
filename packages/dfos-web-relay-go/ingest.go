@@ -321,8 +321,11 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 	}
 
 	forkState, err := store.GetIdentityStateAtCID(did, previousCID)
-	if err != nil || forkState == nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: "failed to compute state at fork point"}
+	if err != nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to compute state at fork point: %v", err)}
+	}
+	if forkState == nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in identity chain"}
 	}
 
 	extResult, err := dfos.VerifyIdentityExtension(forkState.State, previousCID, forkState.LastCreatedAt, jwsToken)
@@ -472,8 +475,11 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 	}
 
 	forkState, err := store.GetContentStateAtCID(chain.ContentID, previousCID)
-	if err != nil || forkState == nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: "failed to compute state at fork point"}
+	if err != nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to compute state at fork point: %v", err)}
+	}
+	if forkState == nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in content chain"}
 	}
 
 	extResult, err := dfos.VerifyContentExtension(forkState.State, forkState.LastCreatedAt, jwsToken, resolveKey, true)
@@ -888,7 +894,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 	for retry := 0; retry < 3; retry++ {
 		var pending []indexedResult
 		for i, ir := range results {
-			if ir.result.Status == "rejected" && isRetryableRejection(ir.result.Error) {
+			if ir.result.Status == "rejected" && !isPermanentRejection(ir.result.Error) {
 				pending = append(pending, results[i])
 			}
 		}
@@ -907,7 +913,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 			default:
 				continue
 			}
-			if result.Status != "rejected" || !isRetryableRejection(result.Error) {
+			if result.Status != "rejected" || isPermanentRejection(result.Error) {
 				// find and update the result
 				for i, ir := range results {
 					if ir.index == p.index {
@@ -935,10 +941,3 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 	return out
 }
 
-// isRetryableRejection returns true if the rejection is due to a missing
-// dependency that might be resolved by other ops in the same batch.
-func isRetryableRejection(errMsg string) bool {
-	return strings.Contains(errMsg, "unknown previous operation") ||
-		strings.Contains(errMsg, "unknown identity:") ||
-		strings.Contains(errMsg, "content chain not found:")
-}
