@@ -233,11 +233,33 @@ export interface RelayStore {
   getPeerCursor(peerUrl: string): Promise<string | undefined>;
   /** Update last-synced log cursor for a peer relay */
   setPeerCursor(peerUrl: string, cursor: string): Promise<void>;
+
+  // --- raw ops (content-addressed store for all received operations) ---
+
+  /** Store a raw JWS token by CID — idempotent, ignores duplicates */
+  putRawOp(cid: string, jwsToken: string): Promise<void>;
+  /** Return JWS tokens for unsequenced (pending) ops */
+  getUnsequencedOps(limit: number): Promise<string[]>;
+  /** Mark ops as successfully sequenced */
+  markOpsSequenced(cids: string[]): Promise<void>;
+  /** Mark an op as permanently rejected */
+  markOpRejected(cid: string, reason: string): Promise<void>;
+  /** Count of pending (unsequenced) raw ops */
+  countUnsequenced(): Promise<number>;
+  /** Reset all non-rejected raw ops to pending (re-sequence) */
+  resetSequencer(): Promise<void>;
 }
 
 // -----------------------------------------------------------------------------
 // ingestion result
 // -----------------------------------------------------------------------------
+
+/** Result of a sequencer run */
+export interface SequenceResult {
+  sequenced: number;
+  rejected: number;
+  pending: number;
+}
 
 export interface IngestionResult {
   cid: string;
