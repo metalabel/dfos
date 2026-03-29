@@ -14,6 +14,7 @@ type Relay struct {
 	logEnabled         bool
 	peers              []PeerConfig
 	peerClient         PeerClient
+	adminEnabled       bool
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT
@@ -43,6 +44,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		logEnabled:         logEnabled,
 		peers:              opts.Peers,
 		peerClient:         opts.PeerClient,
+		adminEnabled:       opts.AdminEnabled,
 	}, nil
 }
 

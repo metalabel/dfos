@@ -23,6 +23,7 @@ func main() {
 	relayName := envOr("RELAY_NAME", "DFOS Relay")
 	relayDescription := os.Getenv("RELAY_DESCRIPTION")
 	peersEnv := os.Getenv("PEERS")
+	adminEnabled := os.Getenv("ADMIN") == "true"
 	syncIntervalStr := envOr("SYNC_INTERVAL", "30s")
 
 	syncInterval, err := time.ParseDuration(syncIntervalStr)
@@ -76,10 +77,11 @@ func main() {
 
 	// create relay
 	r, err := relay.NewRelay(relay.RelayOptions{
-		Store:      store,
-		Identity:   identity,
-		Peers:      peers,
-		PeerClient: peerClient,
+		Store:        store,
+		Identity:     identity,
+		Peers:        peers,
+		PeerClient:   peerClient,
+		AdminEnabled: adminEnabled,
 	})
 	if err != nil {
 		log.Fatalf("failed to create relay: %v", err)

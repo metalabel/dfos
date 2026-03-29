@@ -698,6 +698,10 @@ func parseLimit(req *http.Request, defaultLimit, maxLimit int) int {
 // ---------------------------------------------------------------------------
 
 func (r *Relay) handleAdminResync(w http.ResponseWriter, req *http.Request) {
+	if !r.adminEnabled {
+		writeError(w, 404, "not found")
+		return
+	}
 	if err := r.ResetPeerCursors(); err != nil {
 		writeError(w, 500, "failed to reset cursors")
 		return
