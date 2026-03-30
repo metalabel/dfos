@@ -291,6 +291,88 @@ func (s *SQLiteStore) PutBeacon(beacon StoredBeacon) error {
 }
 
 // ---------------------------------------------------------------------------
+// listing
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteStore) ListIdentityChains() ([]StoredIdentityChain, error) {
+	rows, err := s.readDB.Query("SELECT did, log, head_cid, last_created_at, state FROM identity_chains")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chains []StoredIdentityChain
+	for rows.Next() {
+		var chain StoredIdentityChain
+		var logJSON, stateJSON []byte
+		if err := rows.Scan(&chain.DID, &logJSON, &chain.HeadCID, &chain.LastCreatedAt, &stateJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(logJSON, &chain.Log); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(stateJSON, &chain.State); err != nil {
+			return nil, err
+		}
+		chains = append(chains, chain)
+	}
+	if chains == nil {
+		chains = []StoredIdentityChain{}
+	}
+	return chains, rows.Err()
+}
+
+func (s *SQLiteStore) ListContentChains() ([]StoredContentChain, error) {
+	rows, err := s.readDB.Query("SELECT content_id, genesis_cid, log, last_created_at, state FROM content_chains")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chains []StoredContentChain
+	for rows.Next() {
+		var chain StoredContentChain
+		var logJSON, stateJSON []byte
+		if err := rows.Scan(&chain.ContentID, &chain.GenesisCID, &logJSON, &chain.LastCreatedAt, &stateJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(logJSON, &chain.Log); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(stateJSON, &chain.State); err != nil {
+			return nil, err
+		}
+		chains = append(chains, chain)
+	}
+	if chains == nil {
+		chains = []StoredContentChain{}
+	}
+	return chains, rows.Err()
+}
+
+func (s *SQLiteStore) ListBeacons() ([]StoredBeacon, error) {
+	rows, err := s.readDB.Query("SELECT did, jws_token, beacon_cid, payload FROM beacons")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var beacons []StoredBeacon
+	for rows.Next() {
+		var beacon StoredBeacon
+		var payloadJSON []byte
+		if err := rows.Scan(&beacon.DID, &beacon.JWSToken, &beacon.BeaconCID, &payloadJSON); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(payloadJSON, &beacon.Payload); err != nil {
+			return nil, err
+		}
+		beacons = append(beacons, beacon)
+	}
+	if beacons == nil {
+		beacons = []StoredBeacon{}
+	}
+	return beacons, rows.Err()
+}
+
+// ---------------------------------------------------------------------------
 // blobs
 // ---------------------------------------------------------------------------
 

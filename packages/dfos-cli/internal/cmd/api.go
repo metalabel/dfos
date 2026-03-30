@@ -11,7 +11,7 @@ import (
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/store"
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
 
@@ -24,8 +24,8 @@ func newAPICmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "api <METHOD> <path>",
-		Short: "Raw HTTP request to relay",
-		Long:  "Make raw HTTP requests to the active relay. Use --auth to auto-inject auth tokens.",
+		Short: "Raw HTTP request to peer",
+		Long:  "Make raw HTTP requests to the active peer. Use --auth to auto-inject auth tokens.",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			method := strings.ToUpper(args[0])
@@ -33,13 +33,12 @@ func newAPICmd() *cobra.Command {
 
 			ctx, _ := resolveCtx()
 			if ctx == nil || ctx.RelayURL == "" {
-				return fmt.Errorf("no relay configured")
+				return fmt.Errorf("no peer configured")
 			}
 
 			c := client.New(ctx.RelayURL)
 			headers := map[string]string{}
 
-			// parse -H flags
 			for _, h := range headerFlags {
 				parts := strings.SplitN(h, ":", 2)
 				if len(parts) == 2 {
@@ -47,16 +46,15 @@ func newAPICmd() *cobra.Command {
 				}
 			}
 
-			// auto-auth
 			if auth {
-				id, err := resolveIdentityForAPI(ctx)
+				chain, err := resolveIdentityForAPI(ctx)
 				if err != nil {
 					return err
 				}
 
-				authKeyID := id.State.AuthKeys[0].ID
-				kid := id.DID + "#" + authKeyID
-				privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+				authKeyID := chain.State.AuthKeys[0].ID
+				kid := chain.DID + "#" + authKeyID
+				privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
 				if err != nil {
 					return err
 				}
@@ -66,14 +64,13 @@ func newAPICmd() *cobra.Command {
 					return err
 				}
 
-				token, err := protocol.CreateAuthToken(id.DID, info.DID, kid, 5*time.Minute, privKey)
+				token, err := protocol.CreateAuthToken(chain.DID, info.DID, kid, 5*time.Minute, privKey)
 				if err != nil {
 					return err
 				}
 				headers["Authorization"] = "Bearer " + token
 			}
 
-			// resolve body
 			var bodyBytes []byte
 			if body != "" {
 				bodyBytes = []byte(body)
@@ -110,7 +107,6 @@ func newAPICmd() *cobra.Command {
 				fmt.Println()
 			}
 
-			// try to pretty-print JSON
 			ct := respHeaders.Get("Content-Type")
 			if strings.Contains(ct, "json") {
 				var parsed any
@@ -138,19 +134,24 @@ func newAPICmd() *cobra.Command {
 	return cmd
 }
 
-func resolveIdentityForAPI(ctx *config.ResolvedContext) (*store.StoredIdentity, error) {
+func resolveIdentityForAPI(ctx *config.ResolvedContext) (*relay.StoredIdentityChain, error) {
 	if ctx.IdentityName == "" {
 		return nil, fmt.Errorf("--auth requires an identity. Use --identity or set a context")
 	}
-	id, _ := store.FindIdentityByName(ctx.IdentityName)
-	if id == nil && ctx.IdentityDID != "" {
-		id, _ = store.LoadIdentity(ctx.IdentityDID)
+	lr, err := getRelay()
+	if err != nil {
+		return nil, err
 	}
-	if id == nil {
-		return nil, fmt.Errorf("identity '%s' not found", ctx.IdentityName)
+	did := ctx.IdentityDID
+	if did == "" {
+		return nil, fmt.Errorf("identity '%s' not found in config", ctx.IdentityName)
 	}
-	if len(id.State.AuthKeys) == 0 {
+	chain, err := lr.Relay.GetIdentity(did)
+	if err != nil || chain == nil {
+		return nil, fmt.Errorf("identity '%s' not found in local relay", ctx.IdentityName)
+	}
+	if len(chain.State.AuthKeys) == 0 {
 		return nil, fmt.Errorf("identity has no auth keys")
 	}
-	return id, nil
+	return chain, nil
 }

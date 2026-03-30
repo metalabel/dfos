@@ -1,12 +1,11 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/store"
 	"github.com/spf13/cobra"
 )
 
@@ -23,79 +22,74 @@ func newBeaconCmd() *cobra.Command {
 }
 
 func newBeaconAnnounceCmd() *cobra.Command {
-	var relayName string
+	var peerName string
 
 	cmd := &cobra.Command{
 		Use:   "announce <contentId...>",
 		Short: "Build merkle root over content IDs, sign, and optionally submit",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, id, err := requireIdentity()
+			_, chain, err := requireIdentity()
+			if err != nil {
+				return err
+			}
+
+			lr, err := getRelay()
 			if err != nil {
 				return err
 			}
 
 			merkleRoot := protocol.BuildMerkleRoot(args)
 
-			// use controller key for beacons
-			if len(id.State.ControllerKeys) == 0 {
+			if len(chain.State.ControllerKeys) == 0 {
 				return fmt.Errorf("identity has no controller keys")
 			}
-			controllerKeyID := id.State.ControllerKeys[0].ID
-			kid := id.DID + "#" + controllerKeyID
-			privKey, err := keys.GetPrivateKey(id.DID + "#" + controllerKeyID)
+			controllerKeyID := chain.State.ControllerKeys[0].ID
+			kid := chain.DID + "#" + controllerKeyID
+			privKey, err := keys.GetPrivateKey(chain.DID + "#" + controllerKeyID)
 			if err != nil {
 				return err
 			}
 
-			jwsToken, beaconCID, err := protocol.SignBeacon(id.DID, merkleRoot, kid, privKey)
+			jwsToken, beaconCID, err := protocol.SignBeacon(chain.DID, merkleRoot, kid, privKey)
 			if err != nil {
 				return err
 			}
 
-			// decode the payload for storage
-			_, payload, _ := protocol.DecodeJWSUnsafe(jwsToken)
-
-			sb := &store.StoredBeacon{
-				DID:       id.DID,
-				JWSToken:  jwsToken,
-				BeaconCID: beaconCID,
-				Payload:   payload,
-				Local: store.LocalMeta{
-					Origin: "created",
-				},
+			// ingest into local relay
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
 			}
 
-			rn := relayName
+			// push to peer
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn != "" {
-				c, _, err := getRelayClient(rn)
+				c, _, err := getPeerClient(rn)
 				if err != nil {
 					return err
 				}
-				if err := publishIdentityIfNeeded(id, rn, c); err != nil {
+				if err := publishIdentityIfNeeded(chain, rn, c); err != nil {
 					return err
 				}
-				results, err := c.SubmitOperations([]string{jwsToken})
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
 					return err
 				}
-				if len(results) > 0 && results[0].Status == "rejected" {
-					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
-				sb.Local.PublishedTo = []string{rn}
 			}
-
-			store.SaveBeacon(sb)
 
 			if jsonFlag {
 				outputJSON(map[string]any{
 					"beaconCID":  beaconCID,
 					"merkleRoot": merkleRoot,
 					"contentIds": args,
-					"did":        id.DID,
+					"did":        chain.DID,
 				})
 			} else {
 				fmt.Printf("Beacon announced:\n")
@@ -106,7 +100,7 @@ func newBeaconAnnounceCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relayName, "relay", "", "Submit to relay")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to peer")
 	return cmd
 }
 
@@ -116,52 +110,49 @@ func newBeaconShowCmd() *cobra.Command {
 		Short: "Show latest beacon for an identity",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
 			var did string
 			if len(args) > 0 {
-				target := args[0]
-				if idByName, _ := store.FindIdentityByName(target); idByName != nil {
-					did = idByName.DID
-				} else {
-					did = target
-					if !strings.HasPrefix(did, "did:") {
-						did = "did:dfos:" + did
-					}
-				}
+				did = resolveIdentityDID(args[0])
 			} else {
-				_, id, err := requireIdentity()
+				_, chain, err := requireIdentity()
 				if err != nil {
 					return err
 				}
-				did = id.DID
+				did = chain.DID
 			}
 
-			// try local first
-			b, _ := store.LoadBeacon(did)
-			if b != nil {
+			// try local relay
+			beacon, _ := lr.Relay.GetBeacon(did)
+			if beacon != nil {
 				if jsonFlag {
-					outputJSON(b)
+					outputJSON(beacon)
 				} else {
-					fmt.Printf("DID:         %s\n", b.DID)
-					fmt.Printf("Beacon CID:  %s\n", b.BeaconCID)
-					if mr, ok := b.Payload["merkleRoot"].(string); ok {
-						fmt.Printf("Merkle Root: %s\n", mr)
+					name := config.FindIdentityName(cfg, did)
+					label := did
+					if name != "" {
+						label = did + " (" + name + ")"
 					}
-					if ca, ok := b.Payload["createdAt"].(string); ok {
-						fmt.Printf("Created:     %s\n", ca)
-					}
+					fmt.Printf("DID:         %s\n", label)
+					fmt.Printf("Beacon CID:  %s\n", beacon.BeaconCID)
+					fmt.Printf("Merkle Root: %s\n", beacon.Payload.MerkleRoot)
+					fmt.Printf("Created:     %s\n", beacon.Payload.CreatedAt)
 				}
 				return nil
 			}
 
-			// try relay
+			// try peer
 			ctx, _ := resolveCtx()
 			if ctx != nil && ctx.RelayURL != "" {
-				c, _, _ := getRelayClient(ctx.RelayName)
+				c, _, _ := getPeerClient(ctx.RelayName)
 				data, err := c.GetBeacon(did)
 				if err == nil {
 					if jsonFlag {
-						d, _ := json.MarshalIndent(data, "", "  ")
-						fmt.Println(string(d))
+						outputJSON(data)
 					} else {
 						fmt.Printf("DID:         %s\n", did)
 						if cid, ok := data["beaconCID"].(string); ok {
@@ -183,37 +174,33 @@ func newBeaconShowCmd() *cobra.Command {
 }
 
 func newBeaconCountersignCmd() *cobra.Command {
-	var relayName string
+	var peerName string
 	cmd := &cobra.Command{
 		Use:   "countersign <did|name>",
 		Short: "Countersign someone's beacon",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target := args[0]
-			var targetDID string
-			if idByName, _ := store.FindIdentityByName(target); idByName != nil {
-				targetDID = idByName.DID
-			} else {
-				targetDID = target
-				if !strings.HasPrefix(targetDID, "did:") {
-					targetDID = "did:dfos:" + targetDID
-				}
-			}
+			targetDID := resolveIdentityDID(args[0])
 
-			_, id, err := requireIdentity()
+			_, chain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
-			// get the beacon CID — from local store or relay
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			// get the beacon CID — from local relay or peer
 			var beaconCID string
-			b, _ := store.LoadBeacon(targetDID)
-			if b != nil {
-				beaconCID = b.BeaconCID
+			beacon, _ := lr.Relay.GetBeacon(targetDID)
+			if beacon != nil {
+				beaconCID = beacon.BeaconCID
 			} else {
 				ctx, _ := resolveCtx()
 				if ctx != nil && ctx.RelayURL != "" {
-					c, _, _ := getRelayClient(ctx.RelayName)
+					c, _, _ := getPeerClient(ctx.RelayName)
 					data, err := c.GetBeacon(targetDID)
 					if err != nil {
 						return fmt.Errorf("beacon not found for %s", targetDID)
@@ -226,23 +213,28 @@ func newBeaconCountersignCmd() *cobra.Command {
 				return fmt.Errorf("beacon not found for %s", targetDID)
 			}
 
-			// sign countersignature with our auth key
-			authKeyID := id.State.AuthKeys[0].ID
-			kid := id.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+			authKeyID := chain.State.AuthKeys[0].ID
+			kid := chain.DID + "#" + authKeyID
+			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
 			if err != nil {
 				return err
 			}
 
-			csToken, _, err := protocol.SignCountersign(id.DID, beaconCID, kid, privKey)
+			csToken, _, err := protocol.SignCountersign(chain.DID, beaconCID, kid, privKey)
 			if err != nil {
 				return err
 			}
 
-			// submit to relay
-			rn := relayName
+			// ingest locally
+			results := lr.Relay.Ingest([]string{csToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
+			}
+
+			// push to peer
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn == "" {
 				ctx, _ := resolveCtx()
@@ -251,24 +243,24 @@ func newBeaconCountersignCmd() *cobra.Command {
 				}
 			}
 			if rn != "" {
-				c, _, _ := getRelayClient(rn)
-				results, err := c.SubmitOperations([]string{csToken})
+				c, _, _ := getPeerClient(rn)
+				peerResults, err := c.SubmitOperations([]string{csToken})
 				if err != nil {
 					return err
 				}
-				if len(results) > 0 && results[0].Status == "rejected" {
-					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
 			}
 
 			if jsonFlag {
-				outputJSON(map[string]any{"status": "countersigned", "beaconDID": targetDID, "witnessDID": id.DID})
+				outputJSON(map[string]any{"status": "countersigned", "beaconDID": targetDID, "witnessDID": chain.DID})
 			} else {
 				fmt.Printf("Beacon countersigned for %s\n", targetDID)
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relayName, "relay", "", "Submit countersignature to relay")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push countersignature to peer")
 	return cmd
 }

@@ -13,38 +13,33 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newRelayCmd() *cobra.Command {
+func newPeerCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "relay",
-		Short:   "Manage named relays",
-		GroupID: "relay",
+		Use:     "peer",
+		Short:   "Manage named peers (remote relays)",
+		Aliases: []string{"relay"},
+		GroupID: "peer",
 	}
-	cmd.AddCommand(newRelayAddCmd())
-	cmd.AddCommand(newRelayRemoveCmd())
-	cmd.AddCommand(newRelayListCmd())
-	cmd.AddCommand(newRelayInfoCmd())
+	cmd.AddCommand(newPeerAddCmd())
+	cmd.AddCommand(newPeerRemoveCmd())
+	cmd.AddCommand(newPeerListCmd())
+	cmd.AddCommand(newPeerInfoCmd())
 	return cmd
 }
 
-// -----------------------------------------------------------------------------
-// relay add — register + verify-on-add
-// -----------------------------------------------------------------------------
-
-func newRelayAddCmd() *cobra.Command {
+func newPeerAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add <name> <url>",
-		Short: "Register a named relay (fetches and verifies metadata)",
+		Short: "Register a named peer (fetches and verifies metadata)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, url := args[0], args[1]
 
 			rc := config.RelayConfig{URL: url}
 
-			// attempt to fetch and verify on add
 			c := client.New(url)
 			info, err := c.GetRelayInfo()
 			if err != nil {
-				// relay unreachable — still add, but warn
 				cfg.Relays[name] = rc
 				if err := config.Save(cfg); err != nil {
 					return err
@@ -52,19 +47,17 @@ func newRelayAddCmd() *cobra.Command {
 				if jsonFlag {
 					outputJSON(map[string]any{"name": name, "url": url, "verified": false, "warning": err.Error()})
 				} else {
-					fmt.Printf("Relay '%s' added: %s\n", name, url)
-					fmt.Printf("  Warning: could not verify relay: %s\n", err)
+					fmt.Printf("Peer '%s' added: %s\n", name, url)
+					fmt.Printf("  Warning: could not verify peer: %s\n", err)
 				}
 				return nil
 			}
 
-			// cache metadata
 			rc.DID = info.DID
 			rc.Content = &info.Content
 			rc.Proof = &info.Proof
 
-			// verify profile if present
-			profileName, profileValid := verifyRelayProfile(c, info)
+			profileName, profileValid := verifyPeerProfile(c, info)
 			if profileName != "" {
 				rc.ProfileName = profileName
 			}
@@ -76,13 +69,13 @@ func newRelayAddCmd() *cobra.Command {
 
 			if jsonFlag {
 				outputJSON(map[string]any{
-					"name":        name,
-					"url":         url,
-					"did":         info.DID,
-					"profileName": profileName,
-					"content":     info.Content,
-					"proof":       info.Proof,
-					"verified":    true,
+					"name":         name,
+					"url":          url,
+					"did":          info.DID,
+					"profileName":  profileName,
+					"content":      info.Content,
+					"proof":        info.Proof,
+					"verified":     true,
 					"profileValid": profileValid,
 				})
 			} else {
@@ -90,7 +83,7 @@ func newRelayAddCmd() *cobra.Command {
 				if profileName != "" {
 					label = profileName
 				}
-				fmt.Printf("Relay '%s' added: %s\n", name, url)
+				fmt.Printf("Peer '%s' added: %s\n", name, url)
 				fmt.Printf("  DID:     %s\n", info.DID)
 				if profileName != "" {
 					fmt.Printf("  Profile: %s\n", profileName)
@@ -108,56 +101,46 @@ func newRelayAddCmd() *cobra.Command {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// relay remove
-// -----------------------------------------------------------------------------
-
-func newRelayRemoveCmd() *cobra.Command {
+func newPeerRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <name>",
-		Short: "Unregister a relay",
+		Short: "Unregister a peer",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			if _, ok := cfg.Relays[name]; !ok {
-				return fmt.Errorf("unknown relay: %s", name)
+				return fmt.Errorf("unknown peer: %s", name)
 			}
 			delete(cfg.Relays, name)
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
-			fmt.Printf("Relay '%s' removed\n", name)
+			fmt.Printf("Peer '%s' removed\n", name)
 			return nil
 		},
 	}
 }
 
-// -----------------------------------------------------------------------------
-// relay list — rich display with cached metadata
-// -----------------------------------------------------------------------------
-
-func newRelayListCmd() *cobra.Command {
+func newPeerListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "list",
-		Short:   "List configured relays",
+		Short:   "List configured peers",
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(cfg.Relays) == 0 {
 				if jsonFlag {
 					fmt.Println("[]")
 				} else {
-					fmt.Println("No relays configured. Use 'dfos relay add <name> <url>'")
+					fmt.Println("No peers configured. Use 'dfos peer add <name> <url>'")
 				}
 				return nil
 			}
 
-			// determine active relay
-			activeRelay := ""
+			activePeer := ""
 			if ctx, err := resolveCtx(); err == nil && ctx != nil {
-				activeRelay = ctx.RelayName
+				activePeer = ctx.RelayName
 			}
 
-			// sort by name for stable output
 			names := make([]string, 0, len(cfg.Relays))
 			for name := range cfg.Relays {
 				names = append(names, name)
@@ -169,9 +152,9 @@ func newRelayListCmd() *cobra.Command {
 				for _, name := range names {
 					r := cfg.Relays[name]
 					item := map[string]any{
-						"name":    name,
-						"url":     r.URL,
-						"active":  name == activeRelay,
+						"name":   name,
+						"url":    r.URL,
+						"active": name == activePeer,
 					}
 					if r.DID != "" {
 						item["did"] = r.DID
@@ -191,11 +174,10 @@ func newRelayListCmd() *cobra.Command {
 				return nil
 			}
 
-			// compute column widths
-			nameW := 4 // "NAME"
-			profileW := 7 // "PROFILE"
+			nameW := 4
+			profileW := 7
 			for _, name := range names {
-				if len(name)+2 > nameW { // +2 for "* " prefix
+				if len(name)+2 > nameW {
 					nameW = len(name) + 2
 				}
 				r := cfg.Relays[name]
@@ -208,7 +190,7 @@ func newRelayListCmd() *cobra.Command {
 			for _, name := range names {
 				r := cfg.Relays[name]
 				prefix := "  "
-				if name == activeRelay {
+				if name == activePeer {
 					prefix = "* "
 				}
 				profile := "-"
@@ -230,26 +212,22 @@ func newRelayListCmd() *cobra.Command {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// relay info — full inspection with profile verification
-// -----------------------------------------------------------------------------
-
-func newRelayInfoCmd() *cobra.Command {
+func newPeerInfoCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "info [name]",
-		Short: "Inspect and verify a relay",
+		Short: "Inspect and verify a peer",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			relayName := ""
+			peerName := ""
 			if len(args) > 0 {
-				relayName = args[0]
+				peerName = args[0]
 			}
-			_, c, err := requireRelay(relayName)
+			_, c, err := requirePeer(peerName)
 			if err != nil {
 				return err
 			}
 
-			rn := relayName
+			rn := peerName
 			if rn == "" {
 				ctx, _ := resolveCtx()
 				if ctx != nil {
@@ -262,11 +240,8 @@ func newRelayInfoCmd() *cobra.Command {
 				return err
 			}
 
-			// resolve identity
 			identityResp, identityErr := c.GetIdentityState(info.DID)
-
-			// verify profile
-			profileName, profileValid := verifyRelayProfile(c, info)
+			profileName, profileValid := verifyPeerProfile(c, info)
 
 			// cache metadata
 			if rn != "" {
@@ -314,12 +289,11 @@ func newRelayInfoCmd() *cobra.Command {
 				return nil
 			}
 
-			// human-readable output
 			label := info.DID
 			if profileName != "" {
 				label = profileName
 			}
-			fmt.Printf("Relay:     %s\n", label)
+			fmt.Printf("Peer:      %s\n", label)
 			fmt.Printf("DID:       %s\n", info.DID)
 			if rn != "" {
 				r := cfg.Relays[rn]
@@ -363,24 +337,16 @@ func newRelayInfoCmd() *cobra.Command {
 	}
 }
 
-// -----------------------------------------------------------------------------
 // helpers
-// -----------------------------------------------------------------------------
 
-// verifyRelayProfile decodes and verifies the profile JWS from the well-known
-// response. Returns the profile name and whether the signature is valid.
-func verifyRelayProfile(c *client.Client, info *client.RelayInfo) (name string, valid bool) {
+func verifyPeerProfile(c *client.Client, info *client.RelayInfo) (name string, valid bool) {
 	if info.Profile == "" {
 		return "", false
 	}
-
-	// decode JWS parts (header.payload.signature)
 	parts := strings.SplitN(info.Profile, ".", 3)
 	if len(parts) != 3 {
 		return "", false
 	}
-
-	// decode payload
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return "", false
@@ -389,12 +355,8 @@ func verifyRelayProfile(c *client.Client, info *client.RelayInfo) (name string, 
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		return "", false
 	}
-
-	// extract name from content
 	content, _ := payload["content"].(map[string]any)
 	profileName, _ := content["name"].(string)
-
-	// decode header for kid
 	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
 		return profileName, false
@@ -403,8 +365,6 @@ func verifyRelayProfile(c *client.Client, info *client.RelayInfo) (name string, 
 	if err := json.Unmarshal(headerBytes, &header); err != nil {
 		return profileName, false
 	}
-
-	// extract kid and find the key
 	kid, _ := header["kid"].(string)
 	if kid == "" {
 		return profileName, false
@@ -414,14 +374,10 @@ func verifyRelayProfile(c *client.Client, info *client.RelayInfo) (name string, 
 		return profileName, false
 	}
 	keyFragment := kid[hashIdx+1:]
-
-	// fetch identity state to find the public key
 	resp, err := c.GetIdentityState(info.DID)
 	if err != nil {
 		return profileName, false
 	}
-
-	// find the key in controller or auth keys
 	var multibase string
 	for _, k := range append(resp.State.ControllerKeys, resp.State.AuthKeys...) {
 		if k.ID == keyFragment {
@@ -432,18 +388,14 @@ func verifyRelayProfile(c *client.Client, info *client.RelayInfo) (name string, 
 	if multibase == "" {
 		return profileName, false
 	}
-
-	// decode multikey and verify signature
 	publicKey, err := dfos.DecodeMultikey(multibase)
 	if err != nil {
 		return profileName, false
 	}
-
 	_, _, err = dfos.VerifyJWS(info.Profile, publicKey)
 	if err != nil {
 		return profileName, false
 	}
-
 	return profileName, true
 }
 
@@ -461,27 +413,27 @@ func boolCheck(v bool) string {
 	return "no"
 }
 
-// getRelayClient gets a client for a named relay.
-func getRelayClient(name string) (*client.Client, string, error) {
+// getPeerClient gets a client for a named peer.
+func getPeerClient(name string) (*client.Client, string, error) {
 	r, ok := cfg.Relays[name]
 	if !ok {
-		return nil, "", fmt.Errorf("unknown relay: %s", name)
+		return nil, "", fmt.Errorf("unknown peer: %s", name)
 	}
 	return client.New(r.URL), name, nil
 }
 
-// getRelayDID returns the cached relay DID, or fetches and caches it.
-func getRelayDID(relayName string, c *client.Client) (string, error) {
-	if r, ok := cfg.Relays[relayName]; ok && r.DID != "" {
+// getPeerDID returns the cached peer DID, or fetches and caches it.
+func getPeerDID(peerName string, c *client.Client) (string, error) {
+	if r, ok := cfg.Relays[peerName]; ok && r.DID != "" {
 		return r.DID, nil
 	}
 	info, err := c.GetRelayInfo()
 	if err != nil {
-		return "", fmt.Errorf("get relay info: %w", err)
+		return "", fmt.Errorf("get peer info: %w", err)
 	}
-	if r, ok := cfg.Relays[relayName]; ok {
+	if r, ok := cfg.Relays[peerName]; ok {
 		r.DID = info.DID
-		cfg.Relays[relayName] = r
+		cfg.Relays[peerName] = r
 		config.Save(cfg)
 	}
 	return info.DID, nil
