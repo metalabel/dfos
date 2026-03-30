@@ -370,9 +370,16 @@ func newIdentityListCmd() *cobra.Command {
 				return err
 			}
 
-			chains, err := lr.Store.ListIdentityChains()
+			allChains, err := lr.Store.ListIdentityChains()
 			if err != nil {
 				return err
+			}
+			// filter out the invisible relay identity
+			var chains []relay.StoredIdentityChain
+			for _, c := range allChains {
+				if c.DID != lr.RelayDID {
+					chains = append(chains, c)
+				}
 			}
 			if len(chains) == 0 {
 				if jsonFlag {
@@ -567,10 +574,15 @@ func newIdentityPublishCmd() *cobra.Command {
 				return fmt.Errorf("submit: %w", err)
 			}
 
+			hasRejection := false
 			for _, r := range peerResults {
 				if r.Status == "rejected" {
+					hasRejection = true
 					fmt.Printf("  Operation %s: %s (%s)\n", r.CID, r.Status, r.Error)
 				}
+			}
+			if hasRejection {
+				return fmt.Errorf("peer rejected one or more operations")
 			}
 
 			if jsonFlag {

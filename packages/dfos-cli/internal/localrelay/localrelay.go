@@ -13,8 +13,9 @@ import (
 // LocalRelay wraps a relay instance backed by a local SQLite database.
 // This is the single integration point between the CLI and the relay library.
 type LocalRelay struct {
-	Relay *relay.Relay
-	Store *relay.SQLiteStore
+	Relay    *relay.Relay
+	Store    *relay.SQLiteStore
+	RelayDID string // the auto-bootstrapped relay identity DID (invisible to user)
 }
 
 // Open opens (or creates) the local relay database and bootstraps the relay
@@ -63,7 +64,7 @@ func Open(cfg *config.Config) (*LocalRelay, error) {
 		return nil, fmt.Errorf("create relay: %w", err)
 	}
 
-	return &LocalRelay{Relay: r, Store: store}, nil
+	return &LocalRelay{Relay: r, Store: store, RelayDID: r.DID()}, nil
 }
 
 // Close closes the local relay database.
@@ -93,10 +94,13 @@ func bootstrapPersistent(store *relay.SQLiteStore) (*relay.RelayIdentity, error)
 		if len(privBytes) != ed25519.PrivateKeySize {
 			return nil, fmt.Errorf("corrupted relay key material: expected %d bytes, got %d", ed25519.PrivateKeySize, len(privBytes))
 		}
-		priv := ed25519.PrivateKey(privBytes)
-		keyID := string(keyIDBytes)
-		did := string(didBytes)
-		return relay.RebootstrapProfile(store, priv, keyID, did, profile)
+		// reuse existing identity without re-signing a profile artifact —
+		// avoids unbounded log growth from a new artifact on every CLI invocation.
+		// The DID and profile artifact are already in the store from first boot.
+		return &relay.RelayIdentity{
+			DID:   string(didBytes),
+			KeyID: string(keyIDBytes),
+		}, nil
 	}
 
 	// first boot — generate new relay identity
