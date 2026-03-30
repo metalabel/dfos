@@ -94,10 +94,8 @@ func newIdentityCreateCmd() *cobra.Command {
 				return fmt.Errorf("local relay rejected: %s", results[0].Error)
 			}
 
-			// register in config
-			cfg.Identities[name] = config.IdentityConfig{DID: did}
-
-			// push to peer if specified
+			// push to peer if specified — do this before saving config so a
+			// peer rejection doesn't leave an orphaned name mapping
 			var publishedTo []string
 			rn := peerName
 			if rn == "" {
@@ -116,13 +114,13 @@ func newIdentityCreateCmd() *cobra.Command {
 					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
 				publishedTo = append(publishedTo, rn)
-
-				// set active context if none set
-				if cfg.ActiveContext == "" {
-					cfg.ActiveContext = name + "@" + rn
-				}
 			}
 
+			// register name in config only after all operations succeed
+			cfg.Identities[name] = config.IdentityConfig{DID: did}
+			if rn != "" && cfg.ActiveContext == "" {
+				cfg.ActiveContext = name + "@" + rn
+			}
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
