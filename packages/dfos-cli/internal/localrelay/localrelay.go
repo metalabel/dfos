@@ -90,6 +90,9 @@ func bootstrapPersistent(store *relay.SQLiteStore) (*relay.RelayIdentity, error)
 	profile := relay.ProfileConfig{Name: "DFOS CLI"}
 
 	if privBytes != nil && keyIDBytes != nil && didBytes != nil {
+		if len(privBytes) != ed25519.PrivateKeySize {
+			return nil, fmt.Errorf("corrupted relay key material: expected %d bytes, got %d", ed25519.PrivateKeySize, len(privBytes))
+		}
 		priv := ed25519.PrivateKey(privBytes)
 		keyID := string(keyIDBytes)
 		did := string(didBytes)

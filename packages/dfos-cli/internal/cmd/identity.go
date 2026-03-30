@@ -717,25 +717,17 @@ func toStringSlice(v any) ([]string, bool) {
 }
 
 // publishIdentityIfNeeded ensures the identity's chain is on the peer before
-// publishing content or beacons. For the local-relay model, this pushes the
-// full identity log to the peer.
+// publishing content or beacons. Submits the full identity log — duplicates
+// are idempotent on the peer side.
 func publishIdentityIfNeeded(chain *relay.StoredIdentityChain, peerName string, c *client.Client) error {
-	if !yesFlag {
-		fmt.Printf("Identity '%s' needs to be published to peer '%s'.\n", chain.DID, peerName)
-		fmt.Printf("Publish now? Use --yes to auto-confirm.\n")
-		return fmt.Errorf("identity not published to peer '%s'. Re-run with --yes to auto-publish", peerName)
-	}
-
-	fmt.Printf("Publishing identity to '%s'... ", peerName)
 	results, err := c.SubmitOperations(chain.Log)
 	if err != nil {
-		return fmt.Errorf("submit: %w", err)
+		return fmt.Errorf("publish identity to '%s': %w", peerName, err)
 	}
 	for _, r := range results {
 		if r.Status == "rejected" {
-			return fmt.Errorf("peer rejected: %s", r.Error)
+			return fmt.Errorf("peer rejected identity op: %s", r.Error)
 		}
 	}
-	fmt.Println("accepted")
 	return nil
 }

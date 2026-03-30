@@ -39,13 +39,7 @@ func newWitnessCmd() *cobra.Command {
 				return err
 			}
 
-			// ingest locally
-			results := lr.Relay.Ingest([]string{csToken})
-			if len(results) > 0 && results[0].Status == "rejected" {
-				return fmt.Errorf("local relay rejected: %s", results[0].Error)
-			}
-
-			// push to peer
+			// push to peer first — the target may only exist remotely
 			rn := peerName
 			if rn == "" {
 				rn = peerFlag
@@ -56,19 +50,23 @@ func newWitnessCmd() *cobra.Command {
 					rn = ctx.RelayName
 				}
 			}
-			if rn != "" {
-				c, _, err := getPeerClient(rn)
-				if err != nil {
-					return err
-				}
-				peerResults, err := c.SubmitOperations([]string{csToken})
-				if err != nil {
-					return err
-				}
-				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
-					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
-				}
+			if rn == "" {
+				return fmt.Errorf("--peer is required to submit the countersignature")
 			}
+			c, _, err := getPeerClient(rn)
+			if err != nil {
+				return err
+			}
+			peerResults, err := c.SubmitOperations([]string{csToken})
+			if err != nil {
+				return err
+			}
+			if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+				return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
+			}
+
+			// best-effort local ingest — may fail if target isn't local, that's ok
+			lr.Relay.Ingest([]string{csToken})
 
 			if jsonFlag {
 				outputJSON(map[string]any{"status": "countersigned", "operationCID": operationCID, "witnessDID": chain.DID})

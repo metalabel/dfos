@@ -225,13 +225,7 @@ func newBeaconCountersignCmd() *cobra.Command {
 				return err
 			}
 
-			// ingest locally
-			results := lr.Relay.Ingest([]string{csToken})
-			if len(results) > 0 && results[0].Status == "rejected" {
-				return fmt.Errorf("local relay rejected: %s", results[0].Error)
-			}
-
-			// push to peer
+			// push to peer first — the beacon may only exist remotely
 			rn := peerName
 			if rn == "" {
 				rn = peerFlag
@@ -252,6 +246,9 @@ func newBeaconCountersignCmd() *cobra.Command {
 					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
 			}
+
+			// best-effort local ingest — may fail if beacon target isn't local
+			lr.Relay.Ingest([]string{csToken})
 
 			if jsonFlag {
 				outputJSON(map[string]any{"status": "countersigned", "beaconDID": targetDID, "witnessDID": chain.DID})

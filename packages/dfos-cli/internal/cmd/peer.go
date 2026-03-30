@@ -199,11 +199,11 @@ func newPeerListCmd() *cobra.Command {
 				}
 				content := "-"
 				if r.Content != nil {
-					content = boolCheck(*r.Content)
+					content = boolYesNo(*r.Content)
 				}
 				proof := "-"
 				if r.Proof != nil {
-					proof = boolCheck(*r.Proof)
+					proof = boolYesNo(*r.Proof)
 				}
 				fmt.Printf("%s%-*s  %-*s  %-7s  %-5s  %s\n", prefix, nameW, name, profileW, profile, content, proof, r.URL)
 			}
@@ -400,13 +400,6 @@ func verifyPeerProfile(c *client.Client, info *client.RelayInfo) (name string, v
 }
 
 func boolYesNo(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
-}
-
-func boolCheck(v bool) string {
 	if v {
 		return "yes"
 	}

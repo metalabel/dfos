@@ -101,6 +101,13 @@ type legacyLocalMeta struct {
 	BlobPath    string   `json:"blobPath,omitempty"`
 }
 
+// migrateIdentities, migrateContent, and migrateBeacons call IngestOperations
+// directly (not Relay.Ingest) because the Relay instance isn't created yet
+// during migration. This means migrated ops land in chain state tables but
+// not in the global operation log. This is fine — the operation log is used
+// for peer sync cursors, and migrated local data doesn't need log entries.
+// A subsequent `dfos sync` will populate the log from peers if needed.
+
 func migrateIdentities(store *relay.SQLiteStore, storeDir string) (int, error) {
 	dir := filepath.Join(storeDir, "identities")
 	entries, err := os.ReadDir(dir)
@@ -177,23 +184,23 @@ func migrateContent(store *relay.SQLiteStore, storeDir string) (int, error) {
 		}
 
 		// migrate blob if present
-		if legacy.Local.BlobPath != "" {
-			blobData, err := os.ReadFile(legacy.Local.BlobPath)
-			if err == nil && legacy.State.CurrentDocumentCID != nil {
-				store.PutBlob(relay.BlobKey{
-					CreatorDID:  legacy.State.CreatorDID,
-					DocumentCID: *legacy.State.CurrentDocumentCID,
-				}, blobData)
+		if legacy.State.CurrentDocumentCID != nil {
+			blobKey := relay.BlobKey{
+				CreatorDID:  legacy.State.CreatorDID,
+				DocumentCID: *legacy.State.CurrentDocumentCID,
 			}
-		} else {
-			// try legacy blob path convention: blobs/<contentId>.bin
-			blobPath := filepath.Join(storeDir, "blobs", legacy.ContentID+".bin")
-			blobData, err := os.ReadFile(blobPath)
-			if err == nil && legacy.State.CurrentDocumentCID != nil {
-				store.PutBlob(relay.BlobKey{
-					CreatorDID:  legacy.State.CreatorDID,
-					DocumentCID: *legacy.State.CurrentDocumentCID,
-				}, blobData)
+			var blobData []byte
+			if legacy.Local.BlobPath != "" {
+				blobData, _ = os.ReadFile(legacy.Local.BlobPath)
+			}
+			if blobData == nil {
+				// try legacy blob path convention: blobs/<contentId>.bin
+				blobData, _ = os.ReadFile(filepath.Join(storeDir, "blobs", legacy.ContentID+".bin"))
+			}
+			if blobData != nil {
+				if err := store.PutBlob(blobKey, blobData); err != nil {
+					fmt.Printf("  Warning: failed to migrate blob for %s: %v\n", legacy.ContentID, err)
+				}
 			}
 		}
 

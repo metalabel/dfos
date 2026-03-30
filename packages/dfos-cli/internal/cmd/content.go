@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
@@ -281,13 +283,24 @@ func newContentDownloadCmd() *cobra.Command {
 			contentChain, _ := lr.Relay.GetContent(contentID)
 			if contentChain != nil && ref == "" && !contentChain.State.IsDeleted && contentChain.State.CurrentDocumentCID != nil {
 				isCreator := chain.DID == contentChain.State.CreatorDID
+				blobKey := relay.BlobKey{
+					CreatorDID:  contentChain.State.CreatorDID,
+					DocumentCID: *contentChain.State.CurrentDocumentCID,
+				}
 				if isCreator {
-					blob, _ := lr.Store.GetBlob(relay.BlobKey{
-						CreatorDID:  contentChain.State.CreatorDID,
-						DocumentCID: *contentChain.State.CurrentDocumentCID,
-					})
+					blob, _ := lr.Store.GetBlob(blobKey)
 					if blob != nil {
 						return writeBlob(blob, outputFile)
+					}
+				}
+				// non-creator with credential — try local verification
+				if !isCreator && credential != "" {
+					blob, _ := lr.Store.GetBlob(blobKey)
+					if blob != nil {
+						if verifyCredentialLocally(lr, credential, contentChain.State.CreatorDID, chain.DID, contentID) == nil {
+							return writeBlob(blob, outputFile)
+						}
+						// verification failed — fall through to peer
 					}
 				}
 				if !isCreator && credential == "" {
@@ -460,6 +473,24 @@ func newContentFetchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+
+			// fetch creator identity first — ingestion needs it for key resolution
+			if len(log) > 0 {
+				_, p, _ := protocol.DecodeJWSUnsafe(log[0])
+				if p != nil {
+					if kid, ok := p["kid"].(string); ok {
+						if idx := strings.Index(kid, "#"); idx > 0 {
+							creatorDID := kid[:idx]
+							fetchAndIngestIdentity(lr, c, creatorDID)
+						}
+					}
+					// also try the did field in the payload (content create has it)
+					if creatorDID, ok := p["did"].(string); ok && strings.HasPrefix(creatorDID, "did:dfos:") {
+						fetchAndIngestIdentity(lr, c, creatorDID)
+					}
+				}
+			}
+
 			results := lr.Relay.Ingest(log)
 			for _, r := range results {
 				if r.Status == "rejected" {
@@ -913,17 +944,86 @@ func newContentVerifyCmd() *cobra.Command {
 func newContentRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <contentId>",
-		Short: "Note: data in the relay cannot be un-ingested. This is a no-op.",
+		Short: "Sign a protocol-level content deletion",
+		Long:  "Content data in the local relay cannot be selectively un-ingested. Use 'dfos content delete' to sign a protocol-level deletion operation.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Printf("Content data lives in the local relay and cannot be selectively removed.\n")
-			fmt.Printf("Use 'dfos content delete' to sign a protocol-level deletion.\n")
+			fmt.Printf("Use 'dfos content delete %s' to sign a protocol-level deletion.\n", args[0])
 			return nil
 		},
 	}
 }
 
 // helpers
+
+// fetchAndIngestIdentity fetches an identity chain from a peer and ingests it
+// into the local relay. Used to ensure creator identities are available before
+// ingesting content that references them.
+func fetchAndIngestIdentity(lr *localrelay.LocalRelay, c *client.Client, did string) {
+	// skip if already local
+	existing, _ := lr.Relay.GetIdentity(did)
+	if existing != nil {
+		return
+	}
+	data, err := c.GetIdentity(did)
+	if err != nil {
+		return
+	}
+	log, ok := toStringSlice(data["log"])
+	if !ok || len(log) == 0 {
+		return
+	}
+	lr.Relay.Ingest(log)
+}
+
+// verifyCredentialLocally verifies a VC-JWT credential using the creator's
+// identity from the local relay.
+func verifyCredentialLocally(lr *localrelay.LocalRelay, credential, creatorDID, subjectDID, contentID string) error {
+	header, _, err := protocol.DecodeJWTUnsafe(credential)
+	if err != nil {
+		return err
+	}
+	kid, ok := header["kid"]
+	if !ok || kid == "" {
+		return fmt.Errorf("credential has no kid")
+	}
+	hashIdx := strings.Index(kid, "#")
+	if hashIdx < 0 {
+		return fmt.Errorf("credential kid is not a DID URL")
+	}
+	kidDID := kid[:hashIdx]
+	keyID := kid[hashIdx+1:]
+	if kidDID != creatorDID {
+		return fmt.Errorf("credential issuer does not match content creator")
+	}
+	creatorChain, err := lr.Relay.GetIdentity(creatorDID)
+	if err != nil || creatorChain == nil {
+		return fmt.Errorf("creator identity not in local relay")
+	}
+	allKeys := append(append(creatorChain.State.AuthKeys, creatorChain.State.ControllerKeys...), creatorChain.State.AssertKeys...)
+	var pubBytes []byte
+	for _, k := range allKeys {
+		if k.ID == keyID {
+			pubBytes, err = protocol.DecodeMultikey(k.PublicKeyMultibase)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+	if pubBytes == nil {
+		return fmt.Errorf("issuer key not found in creator identity")
+	}
+	vc, err := protocol.VerifyCredential(credential, pubBytes, subjectDID, "DFOSContentRead")
+	if err != nil {
+		return err
+	}
+	if vc.ContentID != "" && vc.ContentID != contentID {
+		return fmt.Errorf("credential scoped to different content")
+	}
+	return nil
+}
 
 func writeBlob(data []byte, outputFile string) error {
 	if outputFile != "" {
