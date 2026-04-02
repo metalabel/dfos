@@ -27,6 +27,6 @@ func main() {
 	// wait briefly for the update notice to print, but don't block exit
 	select {
 	case <-updateDone:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond):
 	}
 }

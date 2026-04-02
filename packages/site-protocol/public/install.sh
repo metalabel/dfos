@@ -27,7 +27,7 @@ done
 # --- helpers ---
 
 info() { echo "  $1"; }
-error() { echo "ERROR: $1" >&2; exit 1; }
+error() { printf "ERROR: %s\n" "$1" >&2; exit 1; }
 
 check_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -102,17 +102,17 @@ CHECKSUMS_URL="https://github.com/${REPO}/releases/download/v${VERSION}/checksum
 
 # --- download ---
 
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 info "Downloading ${ARCHIVE}..."
 
 if check_cmd curl; then
-  curl -sSL -o "${TMPDIR}/${ARCHIVE}" "$DOWNLOAD_URL"
-  curl -sSL -o "${TMPDIR}/checksums.txt" "$CHECKSUMS_URL"
+  curl -fsSL -o "${WORK_DIR}/${ARCHIVE}" "$DOWNLOAD_URL"
+  curl -fsSL -o "${WORK_DIR}/checksums.txt" "$CHECKSUMS_URL"
 elif check_cmd wget; then
-  wget -q -O "${TMPDIR}/${ARCHIVE}" "$DOWNLOAD_URL"
-  wget -q -O "${TMPDIR}/checksums.txt" "$CHECKSUMS_URL"
+  wget -q -O "${WORK_DIR}/${ARCHIVE}" "$DOWNLOAD_URL"
+  wget -q -O "${WORK_DIR}/checksums.txt" "$CHECKSUMS_URL"
 else
   error "curl or wget is required"
 fi
@@ -121,21 +121,21 @@ fi
 
 info "Verifying checksum..."
 
-EXPECTED="$(grep -F "${ARCHIVE}" "${TMPDIR}/checksums.txt" | awk '{print $1}')"
+EXPECTED="$(grep -F "${ARCHIVE}" "${WORK_DIR}/checksums.txt" | awk '{print $1}')"
 if [ -z "$EXPECTED" ]; then
   error "Checksum not found for ${ARCHIVE}"
 fi
 
 if check_cmd sha256sum; then
-  ACTUAL="$(sha256sum "${TMPDIR}/${ARCHIVE}" | awk '{print $1}')"
+  ACTUAL="$(sha256sum "${WORK_DIR}/${ARCHIVE}" | awk '{print $1}')"
 elif check_cmd shasum; then
-  ACTUAL="$(shasum -a 256 "${TMPDIR}/${ARCHIVE}" | awk '{print $1}')"
+  ACTUAL="$(shasum -a 256 "${WORK_DIR}/${ARCHIVE}" | awk '{print $1}')"
 else
   error "No sha256sum or shasum found — cannot verify download integrity"
 fi
 
 if [ "$EXPECTED" != "$ACTUAL" ]; then
-  error "Checksum mismatch!\n  Expected: ${EXPECTED}\n  Actual:   ${ACTUAL}"
+  error "Checksum mismatch! Expected: ${EXPECTED}, Actual: ${ACTUAL}"
 fi
 
 info "Checksum verified"
@@ -145,18 +145,23 @@ info "Checksum verified"
 info "Installing to ${INSTALL_DIR}..."
 
 if [ "$EXT" = "zip" ]; then
-  unzip -o -q "${TMPDIR}/${ARCHIVE}" -d "$TMPDIR"
+  unzip -o -q "${WORK_DIR}/${ARCHIVE}" -d "$WORK_DIR"
 else
-  tar -xzf "${TMPDIR}/${ARCHIVE}" -C "$TMPDIR"
+  tar -xzf "${WORK_DIR}/${ARCHIVE}" -C "$WORK_DIR"
+fi
+
+# resolve binary name (Windows archives contain dfos.exe)
+if [ "$OS" = "windows" ]; then
+  BINARY="dfos.exe"
 fi
 
 # install binary
 if [ -w "$INSTALL_DIR" ]; then
-  mv "${TMPDIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+  mv "${WORK_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
   chmod +x "${INSTALL_DIR}/${BINARY}"
 else
   info "Requires sudo to install to ${INSTALL_DIR}"
-  sudo mv "${TMPDIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+  sudo mv "${WORK_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
   sudo chmod +x "${INSTALL_DIR}/${BINARY}"
 fi
 
@@ -177,7 +182,7 @@ fi
 
 echo "  Get started:"
 echo "    dfos identity create --name myname"
-echo "    dfos post create --title \"hello world\" --body \"gm\""
+echo "    dfos content list"
 echo ""
 echo "  Docs: https://protocol.dfos.com/cli"
 echo ""

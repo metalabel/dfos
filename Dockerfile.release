@@ -7,7 +7,7 @@ COPY dfos /usr/local/bin/dfos
 VOLUME /data
 ENV SQLITE_PATH=/data/relay.db
 
+ENV PORT=8080
 EXPOSE 8080
 
 ENTRYPOINT ["dfos", "serve"]
-CMD ["--port", "8080"]
