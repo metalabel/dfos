@@ -330,14 +330,15 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 
 ## Environment Variables
 
-| Variable           | Purpose                                           |
-| ------------------ | ------------------------------------------------- |
-| `DFOS_CONTEXT`     | Override active context (`identity@relay`)        |
-| `DFOS_IDENTITY`    | Override active identity name                     |
-| `DFOS_RELAY`       | Override active relay name                        |
-| `DFOS_CONFIG`      | Config file path (default: `~/.dfos/config.toml`) |
-| `DFOS_NO_KEYCHAIN` | In-memory keys only (CI/testing)                  |
-| `DFOS_DEBUG`       | Debug logging (HTTP traffic, key resolution)      |
+| Variable               | Purpose                                           |
+| ---------------------- | ------------------------------------------------- |
+| `DFOS_CONTEXT`         | Override active context (`identity@relay`)        |
+| `DFOS_IDENTITY`        | Override active identity name                     |
+| `DFOS_RELAY`           | Override active relay name                        |
+| `DFOS_CONFIG`          | Config file path (default: `~/.dfos/config.toml`) |
+| `DFOS_NO_KEYCHAIN`     | In-memory keys only (CI/testing)                  |
+| `DFOS_NO_UPDATE_CHECK` | Disable automatic version update checks           |
+| `DFOS_DEBUG`           | Debug logging (HTTP traffic, key resolution)      |
 
 ---
 

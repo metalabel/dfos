@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -139,7 +140,7 @@ func configDir() string {
 }
 
 // isNewer returns true if latest is a higher version than current.
-// Simple lexicographic comparison of dot-separated numeric segments.
+// Compares dot-separated numeric segments (e.g., "0.10.0" > "0.9.0").
 func isNewer(latest, current string) bool {
 	if latest == "" || current == "" {
 		return false
@@ -148,10 +149,22 @@ func isNewer(latest, current string) bool {
 	cParts := strings.Split(current, ".")
 
 	for i := 0; i < len(lParts) && i < len(cParts); i++ {
-		if lParts[i] > cParts[i] {
+		l, lErr := strconv.Atoi(lParts[i])
+		c, cErr := strconv.Atoi(cParts[i])
+		if lErr != nil || cErr != nil {
+			// fall back to string comparison for non-numeric segments
+			if lParts[i] > cParts[i] {
+				return true
+			}
+			if lParts[i] < cParts[i] {
+				return false
+			}
+			continue
+		}
+		if l > c {
 			return true
 		}
-		if lParts[i] < cParts[i] {
+		if l < c {
 			return false
 		}
 	}

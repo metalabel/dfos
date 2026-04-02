@@ -84,9 +84,10 @@ if [ -z "$INSTALL_DIR" ]; then
     INSTALL_DIR="/usr/local/bin"
   else
     INSTALL_DIR="$HOME/.local/bin"
-    mkdir -p "$INSTALL_DIR"
   fi
 fi
+
+mkdir -p "$INSTALL_DIR"
 
 # --- build download URLs ---
 
@@ -112,13 +113,15 @@ if check_cmd curl; then
 elif check_cmd wget; then
   wget -q -O "${TMPDIR}/${ARCHIVE}" "$DOWNLOAD_URL"
   wget -q -O "${TMPDIR}/checksums.txt" "$CHECKSUMS_URL"
+else
+  error "curl or wget is required"
 fi
 
 # --- verify checksum ---
 
 info "Verifying checksum..."
 
-EXPECTED="$(grep "${ARCHIVE}" "${TMPDIR}/checksums.txt" | awk '{print $1}')"
+EXPECTED="$(grep -F "${ARCHIVE}" "${TMPDIR}/checksums.txt" | awk '{print $1}')"
 if [ -z "$EXPECTED" ]; then
   error "Checksum not found for ${ARCHIVE}"
 fi
@@ -128,8 +131,7 @@ if check_cmd sha256sum; then
 elif check_cmd shasum; then
   ACTUAL="$(shasum -a 256 "${TMPDIR}/${ARCHIVE}" | awk '{print $1}')"
 else
-  info "Warning: no sha256sum or shasum found, skipping checksum verification"
-  ACTUAL="$EXPECTED"
+  error "No sha256sum or shasum found — cannot verify download integrity"
 fi
 
 if [ "$EXPECTED" != "$ACTUAL" ]; then
