@@ -118,12 +118,28 @@ func bootstrapPersistent(store *relay.SQLiteStore, profileName string) (*relay.R
 		if len(privBytes) != ed25519.PrivateKeySize {
 			return nil, fmt.Errorf("corrupted relay key material: expected %d bytes, got %d", ed25519.PrivateKeySize, len(privBytes))
 		}
-		// reuse existing identity without re-signing a profile artifact —
-		// avoids unbounded log growth from a new artifact on every CLI invocation.
-		// The DID and profile artifact are already in the store from first boot.
+		// reuse existing identity — load cached profile artifact from meta.
+		// If no cached profile (upgrade from older version), sign once and cache.
+		profileJWS := ""
+		if profileBytes, err := store.GetMeta("relay_profile_jws"); err == nil && profileBytes != nil {
+			profileJWS = string(profileBytes)
+		}
+		if profileJWS == "" {
+			// one-time re-sign for upgrade path
+			priv := ed25519.PrivateKey(privBytes)
+			keyID := string(keyIDBytes)
+			did := string(didBytes)
+			identity, err := relay.RebootstrapProfile(store, priv, keyID, did, relay.ProfileConfig{Name: profileName})
+			if err != nil {
+				return nil, fmt.Errorf("rebootstrap profile: %w", err)
+			}
+			store.SetMeta("relay_profile_jws", []byte(identity.ProfileArtifactJWS))
+			return identity, nil
+		}
 		return &relay.RelayIdentity{
-			DID:   string(didBytes),
-			KeyID: string(keyIDBytes),
+			DID:                string(didBytes),
+			KeyID:              string(keyIDBytes),
+			ProfileArtifactJWS: profileJWS,
 		}, nil
 	}
 
@@ -143,6 +159,9 @@ func bootstrapPersistent(store *relay.SQLiteStore, profileName string) (*relay.R
 	}
 	if err := store.SetMeta("relay_did", []byte(identity.DID)); err != nil {
 		return nil, fmt.Errorf("persist relay_did: %w", err)
+	}
+	if err := store.SetMeta("relay_profile_jws", []byte(identity.ProfileArtifactJWS)); err != nil {
+		return nil, fmt.Errorf("persist relay_profile_jws: %w", err)
 	}
 
 	return identity, nil
