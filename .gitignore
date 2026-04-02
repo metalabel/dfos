@@ -17,3 +17,4 @@ target
 .astro
 .wrangler
 *.local.md
+dist/goreleaser

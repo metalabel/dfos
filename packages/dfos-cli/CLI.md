@@ -8,6 +8,56 @@ This spec is under active review. Discuss it in the [clear.txt](https://clear.df
 
 ---
 
+## Install
+
+### One-liner (Linux / macOS)
+
+```bash
+curl -sSL https://protocol.dfos.com/install.sh | sh
+```
+
+### Homebrew (macOS)
+
+```bash
+brew install metalabel/tap/dfos
+```
+
+### Container
+
+```bash
+docker pull ghcr.io/metalabel/dfos:latest
+```
+
+### Windows
+
+Download the latest release from [GitHub Releases](https://github.com/metalabel/dfos/releases/latest). Extract the zip and add `dfos.exe` to your PATH.
+
+### From source
+
+```bash
+cd packages/dfos-cli && make build
+```
+
+---
+
+## Quickstart
+
+```bash
+# create your identity
+dfos identity create --name myname
+
+# publish your first post
+dfos post create --title "hello world" --body "gm"
+
+# see it
+dfos post list
+
+# run a relay
+dfos serve
+```
+
+---
+
 ## Philosophy
 
 The DFOS protocol defines signed chain primitives — identity and content chains, beacons, credentials — but says nothing about how a user manages keys or communicates with relays. The CLI is the user-side agent that bridges this gap.

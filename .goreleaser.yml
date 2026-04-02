@@ -1,0 +1,77 @@
+project_name: dfos
+dist: dist/goreleaser
+
+builds:
+  - id: dfos
+    dir: packages/dfos-cli
+    main: ./cmd/dfos
+    binary: dfos
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: dfos
+    builds:
+      - dfos
+    name_template: 'dfos_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: checksums.txt
+
+brews:
+  - name: dfos
+    repository:
+      owner: metalabel
+      name: homebrew-tap
+      token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
+    homepage: https://protocol.dfos.com
+    description: CLI for the DFOS protocol — create identities, publish content, run relays
+    license: MIT
+    install: |
+      bin.install "dfos"
+    test: |
+      system "#{bin}/dfos", "version"
+
+dockers:
+  - image_templates:
+      - 'ghcr.io/metalabel/dfos:{{ .Version }}-amd64'
+    dockerfile: Dockerfile.release
+    build_flag_templates:
+      - '--platform=linux/amd64'
+    use: buildx
+  - image_templates:
+      - 'ghcr.io/metalabel/dfos:{{ .Version }}-arm64'
+    dockerfile: Dockerfile.release
+    build_flag_templates:
+      - '--platform=linux/arm64'
+    goarch: arm64
+    use: buildx
+
+docker_manifests:
+  - name_template: 'ghcr.io/metalabel/dfos:{{ .Version }}'
+    image_templates:
+      - 'ghcr.io/metalabel/dfos:{{ .Version }}-amd64'
+      - 'ghcr.io/metalabel/dfos:{{ .Version }}-arm64'
+  - name_template: 'ghcr.io/metalabel/dfos:latest'
+    image_templates:
+      - 'ghcr.io/metalabel/dfos:{{ .Version }}-amd64'
+      - 'ghcr.io/metalabel/dfos:{{ .Version }}-arm64'
+
+release:
+  github:
+    owner: metalabel
+    name: dfos
+  extra_files:
+    - glob: ./scripts/install.sh
