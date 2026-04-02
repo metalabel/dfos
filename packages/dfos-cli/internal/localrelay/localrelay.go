@@ -47,12 +47,6 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 		return nil, fmt.Errorf("open relay store: %w", err)
 	}
 
-	// auto-migrate legacy flat-file store if present
-	if err := MigrateIfNeeded(store); err != nil {
-		store.Close()
-		return nil, fmt.Errorf("migration: %w", err)
-	}
-
 	profileName := opts.ProfileName
 	if profileName == "" {
 		profileName = "DFOS CLI"
