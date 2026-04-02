@@ -112,6 +112,36 @@ func (s *MemoryStore) PutBeacon(beacon StoredBeacon) error {
 	return nil
 }
 
+func (s *MemoryStore) ListIdentityChains() ([]StoredIdentityChain, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	chains := make([]StoredIdentityChain, 0, len(s.identityChains))
+	for _, chain := range s.identityChains {
+		chains = append(chains, chain)
+	}
+	return chains, nil
+}
+
+func (s *MemoryStore) ListContentChains() ([]StoredContentChain, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	chains := make([]StoredContentChain, 0, len(s.contentChains))
+	for _, chain := range s.contentChains {
+		chains = append(chains, chain)
+	}
+	return chains, nil
+}
+
+func (s *MemoryStore) ListBeacons() ([]StoredBeacon, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	beacons := make([]StoredBeacon, 0, len(s.beacons))
+	for _, beacon := range s.beacons {
+		beacons = append(beacons, beacon)
+	}
+	return beacons, nil
+}
+
 func (s *MemoryStore) GetBlob(key BlobKey) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

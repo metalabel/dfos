@@ -9,7 +9,7 @@ import (
 )
 
 func newWitnessCmd() *cobra.Command {
-	var relayName string
+	var peerName string
 	cmd := &cobra.Command{
 		Use:   "witness <operationCID>",
 		Short: "Countersign an operation",
@@ -17,64 +17,71 @@ func newWitnessCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			operationCID := args[0]
 
-			ctx, id, err := requireIdentity()
+			_, chain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
-			// fetch the operation from relay
-			rn := relayName
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			authKeyID := chain.State.AuthKeys[0].ID
+			kid := chain.DID + "#" + authKeyID
+			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
+			if err != nil {
+				return err
+			}
+
+			csToken, _, err := protocol.SignCountersign(chain.DID, operationCID, kid, privKey)
+			if err != nil {
+				return err
+			}
+
+			// push to peer first — the target may only exist remotely
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn == "" {
-				rn = ctx.RelayName
+				ctx, _ := resolveCtx()
+				if ctx != nil {
+					rn = ctx.RelayName
+				}
 			}
 			if rn == "" {
-				return fmt.Errorf("--relay is required to fetch the operation")
+				return fmt.Errorf("--peer is required to submit the countersignature")
 			}
-
-			c, _, err := getRelayClient(rn)
+			c, _, err := getPeerClient(rn)
 			if err != nil {
 				return err
 			}
-
-			// sign countersignature — new model only needs the target CID
-			authKeyID := id.State.AuthKeys[0].ID
-			kid := id.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+			peerResults, err := c.SubmitOperations([]string{csToken})
 			if err != nil {
 				return err
 			}
-
-			csToken, _, err := protocol.SignCountersign(id.DID, operationCID, kid, privKey)
-			if err != nil {
-				return err
+			if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+				return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 			}
 
-			// submit
-			results, err := c.SubmitOperations([]string{csToken})
-			if err != nil {
-				return err
-			}
-			if len(results) > 0 && results[0].Status == "rejected" {
-				return fmt.Errorf("relay rejected: %s", results[0].Error)
-			}
+			// best-effort local ingest — may fail if target isn't local, that's ok
+			lr.Relay.Ingest([]string{csToken})
 
 			if jsonFlag {
-				outputJSON(map[string]any{"status": "countersigned", "operationCID": operationCID, "witnessDID": id.DID})
+				outputJSON(map[string]any{"status": "countersigned", "operationCID": operationCID, "witnessDID": chain.DID})
 			} else {
-				fmt.Printf("Operation %s countersigned by %s\n", operationCID, id.DID)
+				fmt.Printf("Operation %s countersigned by %s\n", operationCID, chain.DID)
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relayName, "relay", "", "Relay to fetch operation from and submit to")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push countersignature to peer")
 	return cmd
 }
 
 func newCountersigsCmd() *cobra.Command {
-	var relayName string
+	var peerName string
 	cmd := &cobra.Command{
 		Use:   "countersigs <cid>",
 		Short: "Show countersignatures for an operation or beacon CID",
@@ -82,19 +89,46 @@ func newCountersigsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cid := args[0]
 
+			// try local relay first
+			lr, lrErr := getRelay()
+			if lrErr == nil {
+				tokens, err := lr.Store.GetCountersignatures(cid)
+				if err == nil && len(tokens) > 0 {
+					if jsonFlag {
+						outputJSON(map[string]any{"countersignatures": tokens})
+						return nil
+					}
+					fmt.Printf("Countersignatures for %s (%d):\n\n", cid, len(tokens))
+					for i, csStr := range tokens {
+						h, _, _ := protocol.DecodeJWSUnsafe(csStr)
+						witness := "?"
+						if h != nil && h.Kid != "" {
+							if idx := strings.Index(h.Kid, "#"); idx > 0 {
+								witness = h.Kid[:idx]
+							} else {
+								witness = h.Kid
+							}
+						}
+						fmt.Printf("  [%d] witness: %s\n", i, witness)
+					}
+					return nil
+				}
+			}
+
+			// fall through to peer
 			ctx, _ := resolveCtx()
-			rn := relayName
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn == "" && ctx != nil {
 				rn = ctx.RelayName
 			}
 			if rn == "" {
-				return fmt.Errorf("--relay is required")
+				return fmt.Errorf("--peer is required")
 			}
 
-			c, _, err := getRelayClient(rn)
+			c, _, err := getPeerClient(rn)
 			if err != nil {
 				return err
 			}
@@ -125,7 +159,6 @@ func newCountersigsCmd() *cobra.Command {
 				h, _, _ := protocol.DecodeJWSUnsafe(csStr)
 				witness := "?"
 				if h != nil && h.Kid != "" {
-					// extract DID from kid (did:dfos:xxx#key_yyy → did:dfos:xxx)
 					if idx := strings.Index(h.Kid, "#"); idx > 0 {
 						witness = h.Kid[:idx]
 					} else {
@@ -137,6 +170,6 @@ func newCountersigsCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relayName, "relay", "", "Relay to query")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to query")
 	return cmd
 }

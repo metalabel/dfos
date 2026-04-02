@@ -27,21 +27,21 @@ func newAuthTokenCmd() *cobra.Command {
 		Use:   "token",
 		Short: "Mint a short-lived auth token (stdout)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, id, err := requireIdentity()
+			ctx, chain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
 			if ctx.RelayURL == "" {
-				return fmt.Errorf("no relay configured for auth token audience")
+				return fmt.Errorf("no peer configured for auth token audience")
 			}
 
-			if len(id.State.AuthKeys) == 0 {
+			if len(chain.State.AuthKeys) == 0 {
 				return fmt.Errorf("identity has no auth keys")
 			}
-			authKeyID := id.State.AuthKeys[0].ID
-			kid := id.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+			authKeyID := chain.State.AuthKeys[0].ID
+			kid := chain.DID + "#" + authKeyID
+			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
 			if err != nil {
 				return err
 			}
@@ -51,14 +51,13 @@ func newAuthTokenCmd() *cobra.Command {
 				dur = 5 * time.Minute
 			}
 
-			// get relay DID
 			c := client.New(ctx.RelayURL)
 			info, err := c.GetRelayInfo()
 			if err != nil {
-				return fmt.Errorf("get relay info: %w", err)
+				return fmt.Errorf("get peer info: %w", err)
 			}
 
-			token, err := protocol.CreateAuthToken(id.DID, info.DID, kid, dur, privKey)
+			token, err := protocol.CreateAuthToken(chain.DID, info.DID, kid, dur, privKey)
 			if err != nil {
 				return err
 			}
@@ -90,14 +89,14 @@ func newAuthStatusCmd() *cobra.Command {
 				outputJSON(map[string]any{
 					"identity": ctx.IdentityDID,
 					"name":     ctx.IdentityName,
-					"relay":    ctx.RelayURL,
+					"peer":     ctx.RelayURL,
 				})
 				return nil
 			}
 
 			fmt.Printf("Identity: %s (%s)\n", ctx.IdentityDID, ctx.IdentityName)
 			if ctx.RelayURL != "" {
-				fmt.Printf("Relay:    %s (%s)\n", ctx.RelayURL, ctx.RelayName)
+				fmt.Printf("Peer:     %s (%s)\n", ctx.RelayURL, ctx.RelayName)
 			}
 			return nil
 		},

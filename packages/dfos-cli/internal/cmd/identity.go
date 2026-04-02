@@ -7,7 +7,7 @@ import (
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/store"
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
 
@@ -32,7 +32,7 @@ func newIdentityCmd() *cobra.Command {
 
 func newIdentityCreateCmd() *cobra.Command {
 	var name string
-	var relayName string
+	var peerName string
 
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -42,10 +42,14 @@ func newIdentityCreateCmd() *cobra.Command {
 				return fmt.Errorf("--name is required")
 			}
 
-			// check name isn't taken
-			existing, _ := store.FindIdentityByName(name)
-			if existing != nil {
+			// check name isn't taken in config
+			if _, ok := cfg.Identities[name]; ok {
 				return fmt.Errorf("identity name '%s' already exists", name)
+			}
+
+			lr, err := getRelay()
+			if err != nil {
+				return err
 			}
 
 			// generate controller key
@@ -68,7 +72,7 @@ func newIdentityCreateCmd() *cobra.Command {
 			jwsToken, did, opCID, err := protocol.SignIdentityCreate(
 				[]protocol.MultikeyPublicKey{controllerMK},
 				[]protocol.MultikeyPublicKey{authMK},
-				nil, // no assert keys
+				nil,
 				controllerKeyID,
 				controllerPriv,
 			)
@@ -84,49 +88,38 @@ func newIdentityCreateCmd() *cobra.Command {
 				return fmt.Errorf("rename auth key: %w", err)
 			}
 
-			// store locally
-			storedID := &store.StoredIdentity{
-				DID: did,
-				Log: []string{jwsToken},
-				State: protocol.IdentityState{
-					DID:            did,
-					IsDeleted:      false,
-					AuthKeys:       []protocol.MultikeyPublicKey{authMK},
-					AssertKeys:     nil,
-					ControllerKeys: []protocol.MultikeyPublicKey{controllerMK},
-				},
-				Local: store.LocalMeta{
-					Name:   name,
-					Origin: "created",
-				},
+			// ingest into local relay
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
 			}
 
-			// register in config
-			cfg.Identities[name] = config.IdentityConfig{DID: did}
-
-			// publish to relay if --relay specified
-			if relayName != "" {
-				c, rn, err := getRelayClient(relayName)
+			// push to peer if specified — do this before saving config so a
+			// peer rejection doesn't leave an orphaned name mapping
+			var publishedTo []string
+			rn := peerName
+			if rn == "" {
+				rn = peerFlag
+			}
+			if rn != "" {
+				c, _, err := getPeerClient(rn)
 				if err != nil {
 					return err
 				}
-				results, err := c.SubmitOperations([]string{jwsToken})
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
-					return fmt.Errorf("submit to relay: %w", err)
+					return fmt.Errorf("submit to peer: %w", err)
 				}
-				if len(results) > 0 && results[0].Status == "rejected" {
-					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
-				storedID.Local.PublishedTo = []string{rn}
-
-				// set active context if none set
-				if cfg.ActiveContext == "" {
-					cfg.ActiveContext = name + "@" + relayName
-				}
+				publishedTo = append(publishedTo, rn)
 			}
 
-			if err := store.SaveIdentity(storedID); err != nil {
-				return err
+			// register name in config only after all operations succeed
+			cfg.Identities[name] = config.IdentityConfig{DID: did}
+			if rn != "" && cfg.ActiveContext == "" {
+				cfg.ActiveContext = name + "@" + rn
 			}
 			if err := config.Save(cfg); err != nil {
 				return err
@@ -139,7 +132,7 @@ func newIdentityCreateCmd() *cobra.Command {
 					"operationCID":  opCID,
 					"controllerKey": controllerKeyID,
 					"authKey":       authKeyID,
-					"publishedTo":   storedID.Local.PublishedTo,
+					"publishedTo":   publishedTo,
 				})
 			} else {
 				fmt.Printf("Identity created:\n")
@@ -147,22 +140,22 @@ func newIdentityCreateCmd() *cobra.Command {
 				fmt.Printf("  DID:            %s\n", did)
 				fmt.Printf("  Controller key: %s  (%s)\n", controllerKeyID, keys.Backend())
 				fmt.Printf("  Auth key:       %s  (%s)\n", authKeyID, keys.Backend())
-				if len(storedID.Local.PublishedTo) > 0 {
-					fmt.Printf("  Published to:   %s\n", joinComma(storedID.Local.PublishedTo))
+				if len(publishedTo) > 0 {
+					fmt.Printf("  Published to:   %s\n", joinComma(publishedTo))
 				} else {
-					fmt.Printf("  Status:         local only. Use 'dfos identity publish' to submit to a relay.\n")
+					fmt.Printf("  Status:         local only. Use 'dfos identity publish' to push to a peer.\n")
 				}
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Human-readable name for this identity (required)")
-	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	return cmd
 }
 
 func newIdentityUpdateCmd() *cobra.Command {
-	var relayName string
+	var peerName string
 	var rotateAuth bool
 	var rotateController bool
 
@@ -175,43 +168,41 @@ func newIdentityUpdateCmd() *cobra.Command {
 				return fmt.Errorf("specify --rotate-auth and/or --rotate-controller")
 			}
 
-			_, id, err := requireIdentity()
+			_, chain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
-			if id.State.IsDeleted {
-				return fmt.Errorf("identity is deleted — cannot update")
+			lr, err := getRelay()
+			if err != nil {
+				return err
 			}
 
-			// we need the current controller key to sign the update
-			if len(id.State.ControllerKeys) == 0 {
+			if len(chain.State.ControllerKeys) == 0 {
 				return fmt.Errorf("identity has no controller keys")
 			}
-			controllerKeyID := id.State.ControllerKeys[0].ID
-			controllerPriv, err := keys.GetPrivateKey(id.DID + "#" + controllerKeyID)
+			controllerKeyID := chain.State.ControllerKeys[0].ID
+			controllerPriv, err := keys.GetPrivateKey(chain.DID + "#" + controllerKeyID)
 			if err != nil {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
 
-			// determine the head operation CID
-			lastToken := id.Log[len(id.Log)-1]
+			// determine head CID
+			lastToken := chain.Log[len(chain.Log)-1]
 			h, _, err := protocol.DecodeJWSUnsafe(lastToken)
 			if err != nil {
 				return fmt.Errorf("decode last operation: %w", err)
 			}
 			previousCID := h.CID
 
-			// build new key sets
-			newAuthKeys := id.State.AuthKeys
-			newControllerKeys := id.State.ControllerKeys
-			newAssertKeys := id.State.AssertKeys
-
+			newAuthKeys := chain.State.AuthKeys
+			newControllerKeys := chain.State.ControllerKeys
+			newAssertKeys := chain.State.AssertKeys
 			var rotatedKeys []string
 
 			if rotateAuth {
 				newAuthKeyID := protocol.GenerateKeyID()
-				_, newAuthPub, err := keys.GenerateKey(id.DID + "#" + newAuthKeyID)
+				_, newAuthPub, err := keys.GenerateKey(chain.DID + "#" + newAuthKeyID)
 				if err != nil {
 					return fmt.Errorf("generate new auth key: %w", err)
 				}
@@ -221,7 +212,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 
 			if rotateController {
 				newControllerKeyID := protocol.GenerateKeyID()
-				_, newControllerPub, err := keys.GenerateKey(id.DID + "#" + newControllerKeyID)
+				_, newControllerPub, err := keys.GenerateKey(chain.DID + "#" + newControllerKeyID)
 				if err != nil {
 					return fmt.Errorf("generate new controller key: %w", err)
 				}
@@ -229,7 +220,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 				rotatedKeys = append(rotatedKeys, "controller:"+newControllerKeyID)
 			}
 
-			kid := id.DID + "#" + controllerKeyID
+			kid := chain.DID + "#" + controllerKeyID
 			jwsToken, opCID, err := protocol.SignIdentityUpdate(
 				previousCID,
 				newControllerKeys, newAuthKeys, newAssertKeys,
@@ -239,46 +230,42 @@ func newIdentityUpdateCmd() *cobra.Command {
 				return fmt.Errorf("sign update: %w", err)
 			}
 
-			// update local state
-			id.Log = append(id.Log, jwsToken)
-			id.State.AuthKeys = newAuthKeys
-			id.State.ControllerKeys = newControllerKeys
-			id.State.AssertKeys = newAssertKeys
+			// ingest into local relay
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
+			}
 
-			// publish if relay specified
-			rn := relayName
+			// push to peer if specified
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn != "" {
-				c, _, err := getRelayClient(rn)
+				c, _, err := getPeerClient(rn)
 				if err != nil {
 					return err
 				}
-				results, err := c.SubmitOperations([]string{jwsToken})
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
 					return fmt.Errorf("submit: %w", err)
 				}
-				if len(results) > 0 && results[0].Status == "rejected" {
-					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
-			}
-
-			if err := store.SaveIdentity(id); err != nil {
-				return err
 			}
 
 			if jsonFlag {
 				outputJSON(map[string]any{
-					"did":          id.DID,
+					"did":          chain.DID,
 					"operationCID": opCID,
 					"rotatedKeys":  rotatedKeys,
 				})
 			} else {
 				fmt.Printf("Identity updated:\n")
-				fmt.Printf("  DID:            %s\n", id.DID)
+				fmt.Printf("  DID:            %s\n", chain.DID)
 				fmt.Printf("  Operation CID:  %s\n", opCID)
-				fmt.Printf("  Operations:     %d\n", len(id.Log))
+				fmt.Printf("  Operations:     %d\n", len(chain.Log)+1)
 				for _, rk := range rotatedKeys {
 					fmt.Printf("  New key:        %s\n", rk)
 				}
@@ -287,90 +274,86 @@ func newIdentityUpdateCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().BoolVar(&rotateAuth, "rotate-auth", false, "Generate new auth key and rotate out old one(s)")
 	cmd.Flags().BoolVar(&rotateController, "rotate-controller", false, "Generate new controller key and rotate out old one(s)")
 	return cmd
 }
 
 func newIdentityDeleteCmd() *cobra.Command {
-	var relayName string
+	var peerName string
 
 	cmd := &cobra.Command{
 		Use:   "delete",
 		Short: "Permanently delete an identity (sign delete operation)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, id, err := requireIdentity()
+			_, chain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
-			if id.State.IsDeleted {
-				return fmt.Errorf("identity is already deleted")
+			lr, err := getRelay()
+			if err != nil {
+				return err
 			}
 
-			// require controller key
-			if len(id.State.ControllerKeys) == 0 {
+			if len(chain.State.ControllerKeys) == 0 {
 				return fmt.Errorf("identity has no controller keys")
 			}
-			controllerKeyID := id.State.ControllerKeys[0].ID
-			controllerPriv, err := keys.GetPrivateKey(id.DID + "#" + controllerKeyID)
+			controllerKeyID := chain.State.ControllerKeys[0].ID
+			controllerPriv, err := keys.GetPrivateKey(chain.DID + "#" + controllerKeyID)
 			if err != nil {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
 
-			// determine head CID
-			lastToken := id.Log[len(id.Log)-1]
+			lastToken := chain.Log[len(chain.Log)-1]
 			h, _, err := protocol.DecodeJWSUnsafe(lastToken)
 			if err != nil {
 				return fmt.Errorf("decode last operation: %w", err)
 			}
 
-			kid := id.DID + "#" + controllerKeyID
+			kid := chain.DID + "#" + controllerKeyID
 			jwsToken, opCID, err := protocol.SignIdentityDelete(h.CID, kid, controllerPriv)
 			if err != nil {
 				return fmt.Errorf("sign delete: %w", err)
 			}
 
-			// update local state
-			id.Log = append(id.Log, jwsToken)
-			id.State.IsDeleted = true
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
+			}
 
-			// publish if relay specified
-			rn := relayName
+			// push to peer
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn != "" {
-				c, _, err := getRelayClient(rn)
+				c, _, err := getPeerClient(rn)
 				if err != nil {
 					return err
 				}
-				results, err := c.SubmitOperations([]string{jwsToken})
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
 					return fmt.Errorf("submit: %w", err)
 				}
-				if len(results) > 0 && results[0].Status == "rejected" {
-					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
 			}
 
-			if err := store.SaveIdentity(id); err != nil {
-				return err
-			}
-
 			if jsonFlag {
-				outputJSON(map[string]any{"did": id.DID, "operationCID": opCID, "deleted": true})
+				outputJSON(map[string]any{"did": chain.DID, "operationCID": opCID, "deleted": true})
 			} else {
 				fmt.Printf("Identity deleted:\n")
-				fmt.Printf("  DID:            %s\n", id.DID)
+				fmt.Printf("  DID:            %s\n", chain.DID)
 				fmt.Printf("  Operation CID:  %s\n", opCID)
 				fmt.Printf("  This identity can no longer sign operations.\n")
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	return cmd
 }
 
@@ -380,11 +363,23 @@ func newIdentityListCmd() *cobra.Command {
 		Short:   "List all known identities",
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ids, err := store.ListIdentities()
+			lr, err := getRelay()
 			if err != nil {
 				return err
 			}
-			if len(ids) == 0 {
+
+			allChains, err := lr.Store.ListIdentityChains()
+			if err != nil {
+				return err
+			}
+			// filter out the invisible relay identity
+			var chains []relay.StoredIdentityChain
+			for _, c := range allChains {
+				if c.DID != lr.RelayDID {
+					chains = append(chains, c)
+				}
+			}
+			if len(chains) == 0 {
 				if jsonFlag {
 					fmt.Println("[]")
 				} else {
@@ -394,23 +389,20 @@ func newIdentityListCmd() *cobra.Command {
 			}
 
 			if jsonFlag {
-				outputJSON(ids)
+				outputJSON(chains)
 				return nil
 			}
 
-			fmt.Printf("%-10s %-36s %-6s %-10s %s\n", "NAME", "DID", "KEYS", "ORIGIN", "PUBLISHED")
-			for _, id := range ids {
-				totalKeys := len(id.State.AuthKeys) + len(id.State.ControllerKeys) + len(id.State.AssertKeys)
-				haveKeys := countKeysInKeychain(id)
-				published := "—"
-				if len(id.Local.PublishedTo) > 0 {
-					published = joinComma(id.Local.PublishedTo)
+			fmt.Printf("%-10s %-36s %-6s %s\n", "NAME", "DID", "KEYS", "OPS")
+			for _, chain := range chains {
+				name := config.FindIdentityName(cfg, chain.DID)
+				if name == "" {
+					name = "-"
 				}
-				if id.Local.Origin == "created" && len(id.Local.PublishedTo) == 0 {
-					published = "(unpublished)"
-				}
-				fmt.Printf("%-10s %-36s %d/%-3d %-10s %s\n",
-					id.Local.Name, id.DID, haveKeys, totalKeys, id.Local.Origin, published)
+				totalKeys := len(chain.State.AuthKeys) + len(chain.State.ControllerKeys) + len(chain.State.AssertKeys)
+				haveKeys := countKeysInChain(&chain)
+				fmt.Printf("%-10s %-36s %d/%-3d %d\n",
+					name, chain.DID, haveKeys, totalKeys, len(chain.Log))
 			}
 			return nil
 		},
@@ -423,47 +415,43 @@ func newIdentityShowCmd() *cobra.Command {
 		Short: "Show identity state",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var id *store.StoredIdentity
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			var chain *relay.StoredIdentityChain
 
 			if len(args) > 0 {
-				id, _ = store.FindIdentityByName(args[0])
-				if id == nil {
-					did := args[0]
-					if len(did) > 4 && did[:4] != "did:" {
-						did = "did:dfos:" + did
-					}
-					id, _ = store.LoadIdentity(did)
-				}
+				did := resolveIdentityDID(args[0])
+				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
-				_, id2, err := requireIdentity()
+				_, chain2, err := requireIdentity()
 				if err != nil {
 					return err
 				}
-				id = id2
+				chain = chain2
 			}
 
-			if id == nil {
+			if chain == nil {
 				return fmt.Errorf("identity not found")
 			}
 
 			if jsonFlag {
-				outputJSON(id)
+				outputJSON(chain)
 				return nil
 			}
 
-			fmt.Printf("DID:         %s\n", id.DID)
-			fmt.Printf("Name:        %s\n", id.Local.Name)
-			fmt.Printf("Origin:      %s\n", id.Local.Origin)
-			totalKeys := len(id.State.AuthKeys) + len(id.State.ControllerKeys) + len(id.State.AssertKeys)
-			haveKeys := countKeysInKeychain(id)
-			fmt.Printf("Keys:        %d/%d (%s)\n", haveKeys, totalKeys, keys.Backend())
-			fmt.Printf("Operations:  %d\n", len(id.Log))
-			fmt.Printf("Deleted:     %v\n", id.State.IsDeleted)
-			if len(id.Local.PublishedTo) > 0 {
-				fmt.Printf("Published:   %s\n", joinComma(id.Local.PublishedTo))
-			} else {
-				fmt.Printf("Published:   (unpublished)\n")
+			name := config.FindIdentityName(cfg, chain.DID)
+			fmt.Printf("DID:         %s\n", chain.DID)
+			if name != "" {
+				fmt.Printf("Name:        %s\n", name)
 			}
+			totalKeys := len(chain.State.AuthKeys) + len(chain.State.ControllerKeys) + len(chain.State.AssertKeys)
+			haveKeys := countKeysInChain(chain)
+			fmt.Printf("Keys:        %d/%d (%s)\n", haveKeys, totalKeys, keys.Backend())
+			fmt.Printf("Operations:  %d\n", len(chain.Log))
+			fmt.Printf("Deleted:     %v\n", chain.State.IsDeleted)
 			return nil
 		},
 	}
@@ -475,14 +463,20 @@ func newIdentityKeysCmd() *cobra.Command {
 		Short: "Show key state and keychain availability",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var id *store.StoredIdentity
-			if len(args) > 0 {
-				id, _ = store.FindIdentityByName(args[0])
-			} else {
-				_, id2, _ := requireIdentity()
-				id = id2
+			lr, err := getRelay()
+			if err != nil {
+				return err
 			}
-			if id == nil {
+
+			var chain *relay.StoredIdentityChain
+			if len(args) > 0 {
+				did := resolveIdentityDID(args[0])
+				chain, _ = lr.Relay.GetIdentity(did)
+			} else {
+				_, chain2, _ := requireIdentity()
+				chain = chain2
+			}
+			if chain == nil {
 				return fmt.Errorf("identity not found")
 			}
 
@@ -493,59 +487,70 @@ func newIdentityKeysCmd() *cobra.Command {
 					Keychain bool   `json:"keychain"`
 				}
 				var items []keyInfo
-				for _, k := range id.State.ControllerKeys {
-					items = append(items, keyInfo{k.ID, "controller", keys.HasKey(id.DID + "#" + k.ID)})
+				for _, k := range chain.State.ControllerKeys {
+					items = append(items, keyInfo{k.ID, "controller", keys.HasKey(chain.DID + "#" + k.ID)})
 				}
-				for _, k := range id.State.AuthKeys {
-					items = append(items, keyInfo{k.ID, "auth", keys.HasKey(id.DID + "#" + k.ID)})
+				for _, k := range chain.State.AuthKeys {
+					items = append(items, keyInfo{k.ID, "auth", keys.HasKey(chain.DID + "#" + k.ID)})
 				}
-				for _, k := range id.State.AssertKeys {
-					items = append(items, keyInfo{k.ID, "assert", keys.HasKey(id.DID + "#" + k.ID)})
+				for _, k := range chain.State.AssertKeys {
+					items = append(items, keyInfo{k.ID, "assert", keys.HasKey(chain.DID + "#" + k.ID)})
 				}
 				outputJSON(items)
 				return nil
 			}
 
-			fmt.Printf("Identity: %s (%s)\n\n", id.DID, id.Local.Name)
+			name := config.FindIdentityName(cfg, chain.DID)
+			label := chain.DID
+			if name != "" {
+				label = chain.DID + " (" + name + ")"
+			}
+			fmt.Printf("Identity: %s\n\n", label)
 			fmt.Printf("%-30s %-12s %s\n", "KEY ID", "ROLE", "KEYCHAIN")
 			printKeys := func(mkKeys []protocol.MultikeyPublicKey, role string) {
 				for _, k := range mkKeys {
-					has := "—"
-					if keys.HasKey(id.DID + "#" + k.ID) {
+					has := "-"
+					if keys.HasKey(chain.DID + "#" + k.ID) {
 						has = "present"
 					}
 					fmt.Printf("%-30s %-12s %s\n", k.ID, role, has)
 				}
 			}
-			printKeys(id.State.ControllerKeys, "controller")
-			printKeys(id.State.AuthKeys, "auth")
-			printKeys(id.State.AssertKeys, "assert")
+			printKeys(chain.State.ControllerKeys, "controller")
+			printKeys(chain.State.AuthKeys, "auth")
+			printKeys(chain.State.AssertKeys, "assert")
 			return nil
 		},
 	}
 }
 
 func newIdentityPublishCmd() *cobra.Command {
-	var relayName string
+	var peerName string
 	return &cobra.Command{
-		Use:   "publish [name]",
-		Short: "Submit identity chain to a relay",
+		Use:   "publish [name|did]",
+		Short: "Push identity chain to a peer",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var id *store.StoredIdentity
-			if len(args) > 0 {
-				id, _ = store.FindIdentityByName(args[0])
-			} else {
-				_, id2, _ := requireIdentity()
-				id = id2
+			lr, err := getRelay()
+			if err != nil {
+				return err
 			}
-			if id == nil {
+
+			var chain *relay.StoredIdentityChain
+			if len(args) > 0 {
+				did := resolveIdentityDID(args[0])
+				chain, _ = lr.Relay.GetIdentity(did)
+			} else {
+				_, chain2, _ := requireIdentity()
+				chain = chain2
+			}
+			if chain == nil {
 				return fmt.Errorf("identity not found")
 			}
 
-			rn := relayName
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn == "" {
 				ctx, _ := resolveCtx()
@@ -554,37 +559,34 @@ func newIdentityPublishCmd() *cobra.Command {
 				}
 			}
 			if rn == "" {
-				return fmt.Errorf("--relay is required")
+				return fmt.Errorf("--peer is required")
 			}
 
-			c, _, err := getRelayClient(rn)
+			c, _, err := getPeerClient(rn)
 			if err != nil {
 				return err
 			}
 
-			results, err := c.SubmitOperations(id.Log)
+			peerResults, err := c.SubmitOperations(chain.Log)
 			if err != nil {
 				return fmt.Errorf("submit: %w", err)
 			}
 
-			allAccepted := true
-			for _, r := range results {
+			hasRejection := false
+			for _, r := range peerResults {
 				if r.Status == "rejected" {
-					allAccepted = false
+					hasRejection = true
 					fmt.Printf("  Operation %s: %s (%s)\n", r.CID, r.Status, r.Error)
 				}
 			}
+			if hasRejection {
+				return fmt.Errorf("peer rejected one or more operations")
+			}
 
-			if allAccepted {
-				if !contains(id.Local.PublishedTo, rn) {
-					id.Local.PublishedTo = append(id.Local.PublishedTo, rn)
-					store.SaveIdentity(id)
-				}
-				if jsonFlag {
-					outputJSON(map[string]any{"status": "published", "relay": rn, "operations": len(results)})
-				} else {
-					fmt.Printf("Identity published to '%s' (%d operation(s) accepted)\n", rn, len(results))
-				}
+			if jsonFlag {
+				outputJSON(map[string]any{"status": "published", "peer": rn, "operations": len(peerResults)})
+			} else {
+				fmt.Printf("Identity published to '%s' (%d operation(s))\n", rn, len(peerResults))
 			}
 			return nil
 		},
@@ -593,30 +595,19 @@ func newIdentityPublishCmd() *cobra.Command {
 
 func newIdentityFetchCmd() *cobra.Command {
 	var name string
-	var relayName string
+	var peerName string
 
 	cmd := &cobra.Command{
 		Use:   "fetch <did|name>",
-		Short: "Download identity chain from relay to local store",
+		Short: "Download identity chain from peer into local relay",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
-			did := target
+			did := resolveIdentityDID(target)
 
-			// check if it's a name of a known identity
-			if existing, _ := store.FindIdentityByName(target); existing != nil {
-				did = existing.DID
-				if name == "" {
-					name = existing.Local.Name
-				}
-			}
-			if len(did) > 4 && did[:4] != "did:" {
-				did = "did:dfos:" + did
-			}
-
-			rn := relayName
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn == "" {
 				ctx, _ := resolveCtx()
@@ -625,10 +616,10 @@ func newIdentityFetchCmd() *cobra.Command {
 				}
 			}
 			if rn == "" {
-				return fmt.Errorf("--relay is required for fetch")
+				return fmt.Errorf("--peer is required for fetch")
 			}
 
-			c, _, err := getRelayClient(rn)
+			c, _, err := getPeerClient(rn)
 			if err != nil {
 				return err
 			}
@@ -638,82 +629,57 @@ func newIdentityFetchCmd() *cobra.Command {
 				return fmt.Errorf("fetch identity: %w", err)
 			}
 
-			// parse response
+			// extract log from response
 			log, _ := toStringSlice(data["log"])
-			state := parseIdentityState(data["state"])
 
-			storedID := &store.StoredIdentity{
-				DID:   did,
-				Log:   log,
-				State: state,
-				Local: store.LocalMeta{
-					Name:   name,
-					Origin: "fetched",
-				},
+			// ingest into local relay
+			lr, err := getRelay()
+			if err != nil {
+				return err
 			}
-
-			// Preserve local metadata from existing entry so fetch
-			// never clobbers a locally-created identity's origin,
-			// publishedTo list, or name.
-			if existing, _ := store.LoadIdentity(did); existing != nil {
-				storedID.Local.Origin = existing.Local.Origin
-				storedID.Local.PublishedTo = existing.Local.PublishedTo
-				storedID.Local.BlobPath = existing.Local.BlobPath
-				if name == "" {
-					storedID.Local.Name = existing.Local.Name
+			results := lr.Relay.Ingest(log)
+			for _, r := range results {
+				if r.Status == "rejected" {
+					fmt.Printf("  Warning: operation %s rejected: %s\n", r.CID, r.Error)
 				}
 			}
 
-			if err := store.SaveIdentity(storedID); err != nil {
-				return err
-			}
-
 			// register in config if named
-			if storedID.Local.Name != "" {
-				cfg.Identities[storedID.Local.Name] = config.IdentityConfig{DID: did}
+			if name != "" {
+				cfg.Identities[name] = config.IdentityConfig{DID: did}
 				config.Save(cfg)
 			}
 
 			if jsonFlag {
-				outputJSON(map[string]any{"did": did, "name": storedID.Local.Name, "operations": len(log), "origin": storedID.Local.Origin})
+				outputJSON(map[string]any{"did": did, "name": name, "operations": len(log)})
 			} else {
-				fmt.Printf("Fetched identity: %s\n", did)
-				fmt.Printf("  Operations: %d\n", len(log))
-				if storedID.Local.Name != "" {
-					fmt.Printf("  Name:       %s\n", storedID.Local.Name)
-				}
-				if storedID.Local.Origin == "created" {
-					fmt.Printf("  (local metadata preserved)\n")
+				fmt.Printf("Fetched identity: %s (%d operations)\n", did, len(log))
+				if name != "" {
+					fmt.Printf("  Name: %s\n", name)
 				}
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Local name for this identity")
-	cmd.Flags().StringVar(&relayName, "relay", "", "Relay to fetch from")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to fetch from")
 	return cmd
 }
 
 func newIdentityRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <name>",
-		Short: "Remove an identity from local store (keys stay in keychain)",
+		Short: "Remove an identity name from config (data stays in relay)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			id, _ := store.FindIdentityByName(name)
-			if id == nil {
-				return fmt.Errorf("identity '%s' not found in local store", name)
+			idCfg, ok := cfg.Identities[name]
+			if !ok {
+				return fmt.Errorf("identity '%s' not found in config", name)
 			}
 
-			if err := store.DeleteIdentity(id.DID); err != nil {
-				return err
-			}
-
-			// remove from config
 			delete(cfg.Identities, name)
 			if cfg.ActiveContext != "" {
-				// clear active context if it references this identity
 				parts := strings.SplitN(cfg.ActiveContext, "@", 2)
 				if len(parts) > 0 && parts[0] == name {
 					cfg.ActiveContext = ""
@@ -722,14 +688,10 @@ func newIdentityRemoveCmd() *cobra.Command {
 			config.Save(cfg)
 
 			if jsonFlag {
-				outputJSON(map[string]string{"removed": name, "did": id.DID})
+				outputJSON(map[string]string{"removed": name, "did": idCfg.DID})
 			} else {
-				fmt.Printf("Removed identity '%s' (%s) from local store\n", name, id.DID)
-				fmt.Printf("  Keys remain in keychain. To delete keys, use Keychain Access or:\n")
-				allKeys := append(append(id.State.AuthKeys, id.State.ControllerKeys...), id.State.AssertKeys...)
-				for _, k := range allKeys {
-					fmt.Printf("    security delete-generic-password -s dfos -a \"%s#%s\"\n", id.DID, k.ID)
-				}
+				fmt.Printf("Removed identity name '%s' (%s) from config\n", name, idCfg.DID)
+				fmt.Printf("  Data remains in local relay. Keys remain in keychain.\n")
 			}
 			return nil
 		},
@@ -737,6 +699,16 @@ func newIdentityRemoveCmd() *cobra.Command {
 }
 
 // helpers
+
+func resolveIdentityDID(nameOrDID string) string {
+	if idCfg, ok := cfg.Identities[nameOrDID]; ok {
+		return idCfg.DID
+	}
+	if len(nameOrDID) > 4 && nameOrDID[:4] != "did:" {
+		return "did:dfos:" + nameOrDID
+	}
+	return nameOrDID
+}
 
 func toStringSlice(v any) ([]string, bool) {
 	arr, ok := v.([]any)
@@ -754,76 +726,18 @@ func toStringSlice(v any) ([]string, bool) {
 	return result, true
 }
 
-func parseIdentityState(v any) protocol.IdentityState {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return protocol.IdentityState{}
-	}
-	state := protocol.IdentityState{}
-	if d, ok := m["did"].(string); ok {
-		state.DID = d
-	}
-	if d, ok := m["isDeleted"].(bool); ok {
-		state.IsDeleted = d
-	}
-	state.AuthKeys = parseMultikeyArray(m["authKeys"])
-	state.AssertKeys = parseMultikeyArray(m["assertKeys"])
-	state.ControllerKeys = parseMultikeyArray(m["controllerKeys"])
-	return state
-}
-
-func parseMultikeyArray(v any) []protocol.MultikeyPublicKey {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
-	var result []protocol.MultikeyPublicKey
-	for _, item := range arr {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		mk := protocol.MultikeyPublicKey{}
-		if id, ok := m["id"].(string); ok {
-			mk.ID = id
-		}
-		if t, ok := m["type"].(string); ok {
-			mk.Type = t
-		}
-		if p, ok := m["publicKeyMultibase"].(string); ok {
-			mk.PublicKeyMultibase = p
-		}
-		result = append(result, mk)
-	}
-	return result
-}
-
-// publishIdentityIfNeeded checks if identity is published to the relay and publishes if needed.
-func publishIdentityIfNeeded(id *store.StoredIdentity, relayName string, c *client.Client) error {
-	if contains(id.Local.PublishedTo, relayName) {
-		return nil
-	}
-
-	if !yesFlag {
-		fmt.Printf("Identity '%s' has not been published to relay '%s'.\n", id.Local.Name, relayName)
-		fmt.Printf("Publish now? This is required to continue. Use --yes to auto-confirm.\n")
-		return fmt.Errorf("identity not published to relay '%s'. Re-run with --yes to auto-publish", relayName)
-	}
-
-	fmt.Printf("Publishing identity to '%s'... ", relayName)
-	results, err := c.SubmitOperations(id.Log)
+// publishIdentityIfNeeded ensures the identity's chain is on the peer before
+// publishing content or beacons. Submits the full identity log — duplicates
+// are idempotent on the peer side.
+func publishIdentityIfNeeded(chain *relay.StoredIdentityChain, peerName string, c *client.Client) error {
+	results, err := c.SubmitOperations(chain.Log)
 	if err != nil {
-		return fmt.Errorf("submit: %w", err)
+		return fmt.Errorf("publish identity to '%s': %w", peerName, err)
 	}
 	for _, r := range results {
 		if r.Status == "rejected" {
-			return fmt.Errorf("relay rejected: %s", r.Error)
+			return fmt.Errorf("peer rejected identity op: %s", r.Error)
 		}
 	}
-	if !contains(id.Local.PublishedTo, relayName) {
-		id.Local.PublishedTo = append(id.Local.PublishedTo, relayName)
-		store.SaveIdentity(id)
-	}
-	fmt.Println("accepted")
 	return nil
 }

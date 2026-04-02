@@ -8,9 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/store"
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +39,7 @@ func newContentCmd() *cobra.Command {
 
 func newContentCreateCmd() *cobra.Command {
 	var note string
-	var relayName string
+	var peerName string
 	var noSchemaWarn bool
 
 	cmd := &cobra.Command{
@@ -45,8 +47,12 @@ func newContentCreateCmd() *cobra.Command {
 		Short: "Create a content chain",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// resolve identity
-			ctx, id, err := requireIdentity()
+			_, chain, err := requireIdentity()
+			if err != nil {
+				return err
+			}
+
+			lr, err := getRelay()
 			if err != nil {
 				return err
 			}
@@ -62,13 +68,11 @@ func newContentCreateCmd() *cobra.Command {
 				return fmt.Errorf("read document: %w", err)
 			}
 
-			// parse as JSON
 			var doc any
 			if err := json.Unmarshal(docBytes, &doc); err != nil {
 				return fmt.Errorf("document must be valid JSON: %w", err)
 			}
 
-			// check $schema
 			if !noSchemaWarn {
 				if docMap, ok := doc.(map[string]any); ok {
 					if _, has := docMap["$schema"]; !has {
@@ -77,91 +81,63 @@ func newContentCreateCmd() *cobra.Command {
 				}
 			}
 
-			// compute document CID
 			documentCID, _, err := protocol.DocumentCID(doc)
 			if err != nil {
 				return fmt.Errorf("compute document CID: %w", err)
 			}
 
-			// find auth key
-			if len(id.State.AuthKeys) == 0 {
+			if len(chain.State.AuthKeys) == 0 {
 				return fmt.Errorf("identity has no auth keys")
 			}
-			authKeyID := id.State.AuthKeys[0].ID
-			kid := id.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+			authKeyID := chain.State.AuthKeys[0].ID
+			kid := chain.DID + "#" + authKeyID
+			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
 
-			// sign content create
-			jwsToken, contentID, opCID, err := protocol.SignContentCreate(id.DID, documentCID, kid, note, privKey)
+			jwsToken, contentID, opCID, err := protocol.SignContentCreate(chain.DID, documentCID, kid, note, privKey)
 			if err != nil {
 				return fmt.Errorf("sign content: %w", err)
 			}
 
-			// store blob locally
-			blobPath, err := store.SaveBlob(contentID, docBytes)
-			if err != nil {
-				return fmt.Errorf("save blob: %w", err)
+			// ingest into local relay
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
 			}
 
-			// store content chain
-			docCIDPtr := &documentCID
-			sc := &store.StoredContent{
-				ContentID:  contentID,
-				GenesisCID: opCID,
-				Log:        []string{jwsToken},
-				State: protocol.ContentState{
-					ContentID:          contentID,
-					GenesisCID:         opCID,
-					HeadCID:            opCID,
-					IsDeleted:          false,
-					CurrentDocumentCID: docCIDPtr,
-					Length:             1,
-					CreatorDID:         id.DID,
-				},
-				Local: store.LocalMeta{
-					Origin:   "created",
-					BlobPath: blobPath,
-				},
-			}
+			// store blob in relay
+			lr.Store.PutBlob(relay.BlobKey{CreatorDID: chain.DID, DocumentCID: documentCID}, docBytes)
 
-			// determine relay
-			rn := relayName
+			// push to peer if specified
+			var publishedTo []string
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
-			if rn == "" && ctx.RelayName != "" {
-				// don't auto-publish, just note the relay in context
-			}
-
-			// publish if relay specified
 			if rn != "" {
-				c, _, err := getRelayClient(rn)
+				c, _, err := getPeerClient(rn)
 				if err != nil {
 					return err
 				}
-
-				// ensure identity is published
-				if err := publishIdentityIfNeeded(id, rn, c); err != nil {
+				if err := publishIdentityIfNeeded(chain, rn, c); err != nil {
 					return err
 				}
-
-				results, err := c.SubmitOperations([]string{jwsToken})
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
 					return fmt.Errorf("submit: %w", err)
 				}
-				if len(results) > 0 && results[0].Status == "rejected" {
-					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
 
-				// upload blob
+				// upload blob to peer
 				info, err := c.GetRelayInfo()
 				if err != nil {
-					return fmt.Errorf("get relay info: %w", err)
+					return fmt.Errorf("get peer info: %w", err)
 				}
-				authToken, err := protocol.CreateAuthToken(id.DID, info.DID, kid, 5*time.Minute, privKey)
+				authToken, err := protocol.CreateAuthToken(chain.DID, info.DID, kid, 5*time.Minute, privKey)
 				if err != nil {
 					return fmt.Errorf("create auth token: %w", err)
 				}
@@ -169,36 +145,32 @@ func newContentCreateCmd() *cobra.Command {
 					return fmt.Errorf("upload blob: %w", err)
 				}
 
-				sc.Local.PublishedTo = []string{rn}
-			}
-
-			if err := store.SaveContent(sc); err != nil {
-				return err
+				publishedTo = append(publishedTo, rn)
 			}
 
 			if jsonFlag {
 				outputJSON(map[string]any{
-					"contentId":   contentID,
-					"documentCID": documentCID,
+					"contentId":    contentID,
+					"documentCID":  documentCID,
 					"operationCID": opCID,
-					"creatorDID":  id.DID,
-					"publishedTo": sc.Local.PublishedTo,
+					"creatorDID":   chain.DID,
+					"publishedTo":  publishedTo,
 				})
 			} else {
 				fmt.Printf("Content created:\n")
 				fmt.Printf("  Content ID:   %s\n", contentID)
 				fmt.Printf("  Document CID: %s\n", documentCID)
-				if len(sc.Local.PublishedTo) > 0 {
-					fmt.Printf("  Published to: %s\n", joinComma(sc.Local.PublishedTo))
+				if len(publishedTo) > 0 {
+					fmt.Printf("  Published to: %s\n", joinComma(publishedTo))
 				} else {
-					fmt.Printf("  Status:       local only. Use 'dfos content publish' to submit to a relay.\n")
+					fmt.Printf("  Status:       local only. Use 'dfos content publish' to push to a peer.\n")
 				}
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&note, "note", "", "Operation note")
-	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().BoolVar(&noSchemaWarn, "no-schema-warn", false, "Suppress $schema warning")
 	return cmd
 }
@@ -209,7 +181,12 @@ func newContentListCmd() *cobra.Command {
 		Short:   "List all locally stored content chains",
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			chains, err := store.ListContent()
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			chains, err := lr.Store.ListContentChains()
 			if err != nil {
 				return err
 			}
@@ -227,21 +204,15 @@ func newContentListCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("%-24s %-36s %-4s %-10s %s\n", "CONTENT ID", "CREATOR", "OPS", "ORIGIN", "PUBLISHED")
+			fmt.Printf("%-24s %-36s %-4s\n", "CONTENT ID", "CREATOR", "OPS")
 			for _, c := range chains {
 				creatorName := config.FindIdentityName(cfg, c.State.CreatorDID)
 				creator := c.State.CreatorDID
 				if creatorName != "" {
 					creator = creatorName
 				}
-				published := "—"
-				if len(c.Local.PublishedTo) > 0 {
-					published = joinComma(c.Local.PublishedTo)
-				} else if c.Local.Origin == "created" {
-					published = "(unpublished)"
-				}
-				fmt.Printf("%-24s %-36s %-4d %-10s %s\n",
-					c.ContentID, creator, c.State.Length, c.Local.Origin, published)
+				fmt.Printf("%-24s %-36s %-4d\n",
+					c.ContentID, creator, c.State.Length)
 			}
 			return nil
 		},
@@ -255,30 +226,31 @@ func newContentShowCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
-			sc, err := store.LoadContent(contentID)
+			lr, err := getRelay()
 			if err != nil {
 				return err
 			}
-			if sc == nil {
-				return fmt.Errorf("content chain '%s' not found in local store", contentID)
+
+			chain, err := lr.Relay.GetContent(contentID)
+			if err != nil {
+				return err
+			}
+			if chain == nil {
+				return fmt.Errorf("content chain '%s' not found", contentID)
 			}
 
 			if jsonFlag {
-				outputJSON(sc)
+				outputJSON(chain)
 				return nil
 			}
 
-			fmt.Printf("Content ID:   %s\n", sc.ContentID)
-			fmt.Printf("Creator:      %s\n", sc.State.CreatorDID)
-			fmt.Printf("Operations:   %d\n", sc.State.Length)
-			if sc.State.CurrentDocumentCID != nil {
-				fmt.Printf("Current Doc:  %s\n", *sc.State.CurrentDocumentCID)
+			fmt.Printf("Content ID:   %s\n", chain.ContentID)
+			fmt.Printf("Creator:      %s\n", chain.State.CreatorDID)
+			fmt.Printf("Operations:   %d\n", chain.State.Length)
+			if chain.State.CurrentDocumentCID != nil {
+				fmt.Printf("Current Doc:  %s\n", *chain.State.CurrentDocumentCID)
 			}
-			fmt.Printf("Deleted:      %v\n", sc.State.IsDeleted)
-			fmt.Printf("Origin:       %s\n", sc.Local.Origin)
-			if len(sc.Local.PublishedTo) > 0 {
-				fmt.Printf("Published:    %s\n", joinComma(sc.Local.PublishedTo))
-			}
+			fmt.Printf("Deleted:      %v\n", chain.State.IsDeleted)
 			return nil
 		},
 	}
@@ -287,7 +259,7 @@ func newContentShowCmd() *cobra.Command {
 func newContentDownloadCmd() *cobra.Command {
 	var outputFile string
 	var credential string
-	var relayName string
+	var peerName string
 	var ref string
 
 	cmd := &cobra.Command{
@@ -297,63 +269,68 @@ func newContentDownloadCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
 
-			// resolve identity for access control
-			ctx, id, err := requireIdentity()
+			ctx, chain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
-			// try local blob — enforce same access rules as relay:
-			// creator can read without credential, everyone else needs one
-			// skip local fallback if --ref is specified or content is deleted
-			sc, _ := store.LoadContent(contentID)
-			if sc != nil && ref == "" && !sc.State.IsDeleted {
-				isCreator := id.DID == sc.State.CreatorDID
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			// try local blob first
+			contentChain, _ := lr.Relay.GetContent(contentID)
+			if contentChain != nil && ref == "" && !contentChain.State.IsDeleted && contentChain.State.CurrentDocumentCID != nil {
+				isCreator := chain.DID == contentChain.State.CreatorDID
+				blobKey := relay.BlobKey{
+					CreatorDID:  contentChain.State.CreatorDID,
+					DocumentCID: *contentChain.State.CurrentDocumentCID,
+				}
 				if isCreator {
-					blob, err := store.LoadBlob(contentID)
-					if err == nil {
+					blob, _ := lr.Store.GetBlob(blobKey)
+					if blob != nil {
 						return writeBlob(blob, outputFile)
 					}
 				}
-				// non-creator with credential and local blob → verify locally
+				// non-creator with credential — try local verification
 				if !isCreator && credential != "" {
-					blob, blobErr := store.LoadBlob(contentID)
-					if blobErr == nil {
-						if _, err := verifyCredentialLocally(credential, sc.State.CreatorDID, id.DID, contentID); err == nil {
+					blob, _ := lr.Store.GetBlob(blobKey)
+					if blob != nil {
+						if verifyCredentialLocally(lr, credential, contentChain.State.CreatorDID, chain.DID, contentID) == nil {
 							return writeBlob(blob, outputFile)
 						}
-						// verification failed — fall through to relay
+						// verification failed — fall through to peer
 					}
 				}
-				// not the creator and no credential → don't serve local blob
 				if !isCreator && credential == "" {
 					return fmt.Errorf("DFOSContentRead credential required (you are not the content creator)")
 				}
 			}
 
-			rn := relayName
+			// fall through to peer download
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn == "" {
 				rn = ctx.RelayName
 			}
 			if rn == "" {
-				return fmt.Errorf("--relay is required for remote download")
+				return fmt.Errorf("--peer is required for remote download")
 			}
 
-			c, _, err := getRelayClient(rn)
+			c, _, err := getPeerClient(rn)
 			if err != nil {
 				return err
 			}
 
-			// get auth key
-			if len(id.State.AuthKeys) == 0 {
+			if len(chain.State.AuthKeys) == 0 {
 				return fmt.Errorf("identity has no auth keys")
 			}
-			authKeyID := id.State.AuthKeys[0].ID
-			kid := id.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+			authKeyID := chain.State.AuthKeys[0].ID
+			kid := chain.DID + "#" + authKeyID
+			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
@@ -362,7 +339,7 @@ func newContentDownloadCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			authToken, err := protocol.CreateAuthToken(id.DID, info.DID, kid, 5*time.Minute, privKey)
+			authToken, err := protocol.CreateAuthToken(chain.DID, info.DID, kid, 5*time.Minute, privKey)
 			if err != nil {
 				return err
 			}
@@ -377,79 +354,79 @@ func newContentDownloadCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "Write to file instead of stdout")
 	cmd.Flags().StringVar(&credential, "credential", "", "DFOSContentRead VC-JWT credential")
-	cmd.Flags().StringVar(&relayName, "relay", "", "Relay to download from")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to download from")
 	cmd.Flags().StringVar(&ref, "ref", "", "Download blob at specific operation CID (historical version)")
 	return cmd
 }
 
 func newContentPublishCmd() *cobra.Command {
-	var relayName string
+	var peerName string
 	return &cobra.Command{
 		Use:   "publish <contentId>",
-		Short: "Submit content chain + blob to a relay",
+		Short: "Push content chain + blob to a peer",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
-			sc, err := store.LoadContent(contentID)
-			if err != nil || sc == nil {
+
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+			contentChain, err := lr.Relay.GetContent(contentID)
+			if err != nil || contentChain == nil {
 				return fmt.Errorf("content chain '%s' not found", contentID)
 			}
 
-			_, id, err := requireIdentity()
+			_, idChain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
-			rn := relayName
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn == "" {
-				return fmt.Errorf("--relay is required")
+				return fmt.Errorf("--peer is required")
 			}
 
-			c, _, err := getRelayClient(rn)
+			c, _, err := getPeerClient(rn)
 			if err != nil {
 				return err
 			}
 
-			// ensure identity is published first
-			if err := publishIdentityIfNeeded(id, rn, c); err != nil {
+			if err := publishIdentityIfNeeded(idChain, rn, c); err != nil {
 				return err
 			}
 
-			// submit operations
-			results, err := c.SubmitOperations(sc.Log)
+			peerResults, err := c.SubmitOperations(contentChain.Log)
 			if err != nil {
 				return fmt.Errorf("submit: %w", err)
 			}
-			for _, r := range results {
+			for _, r := range peerResults {
 				if r.Status == "rejected" {
-					return fmt.Errorf("relay rejected: %s", r.Error)
+					return fmt.Errorf("peer rejected: %s", r.Error)
 				}
 			}
 
-			// upload blob if we have it (use the head operation CID)
-			if sc.State.CurrentDocumentCID != nil {
-				blob, err := store.LoadBlob(contentID)
-				if err == nil {
-					authKeyID := id.State.AuthKeys[0].ID
-					kid := id.DID + "#" + authKeyID
-					privKey, _ := keys.GetPrivateKey(id.DID + "#" + authKeyID)
-
+			// upload blob if we have it
+			if contentChain.State.CurrentDocumentCID != nil {
+				blob, _ := lr.Store.GetBlob(relay.BlobKey{
+					CreatorDID:  contentChain.State.CreatorDID,
+					DocumentCID: *contentChain.State.CurrentDocumentCID,
+				})
+				if blob != nil && len(idChain.State.AuthKeys) > 0 {
+					authKeyID := idChain.State.AuthKeys[0].ID
+					kid := idChain.DID + "#" + authKeyID
+					privKey, _ := keys.GetPrivateKey(idChain.DID + "#" + authKeyID)
 					info, _ := c.GetRelayInfo()
-					authToken, _ := protocol.CreateAuthToken(id.DID, info.DID, kid, 5*time.Minute, privKey)
-					c.UploadBlob(contentID, sc.State.HeadCID, blob, authToken)
+					authToken, _ := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
+					c.UploadBlob(contentID, contentChain.State.HeadCID, blob, authToken)
 				}
-			}
-
-			if !contains(sc.Local.PublishedTo, rn) {
-				sc.Local.PublishedTo = append(sc.Local.PublishedTo, rn)
-				store.SaveContent(sc)
 			}
 
 			if jsonFlag {
-				outputJSON(map[string]any{"status": "published", "relay": rn, "contentId": contentID})
+				outputJSON(map[string]any{"status": "published", "peer": rn, "contentId": contentID})
 			} else {
 				fmt.Printf("Content '%s' published to '%s'\n", contentID, rn)
 			}
@@ -459,16 +436,16 @@ func newContentPublishCmd() *cobra.Command {
 }
 
 func newContentFetchCmd() *cobra.Command {
-	var relayName string
+	var peerName string
 	cmd := &cobra.Command{
 		Use:   "fetch <contentId>",
-		Short: "Download content chain from relay to local store",
+		Short: "Download content chain from peer into local relay",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
-			rn := relayName
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn == "" {
 				ctx, _ := resolveCtx()
@@ -477,10 +454,10 @@ func newContentFetchCmd() *cobra.Command {
 				}
 			}
 			if rn == "" {
-				return fmt.Errorf("--relay is required for fetch")
+				return fmt.Errorf("--peer is required for fetch")
 			}
 
-			c, _, err := getRelayClient(rn)
+			c, _, err := getPeerClient(rn)
 			if err != nil {
 				return err
 			}
@@ -491,32 +468,45 @@ func newContentFetchCmd() *cobra.Command {
 			}
 
 			log, _ := toStringSlice(data["log"])
-			state := parseContentState(data["state"])
-			genesisCID, _ := data["genesisCID"].(string)
 
-			sc := &store.StoredContent{
-				ContentID:  contentID,
-				GenesisCID: genesisCID,
-				Log:        log,
-				State:      state,
-				Local: store.LocalMeta{
-					Origin: "fetched",
-				},
-			}
-
-			if err := store.SaveContent(sc); err != nil {
+			lr, err := getRelay()
+			if err != nil {
 				return err
 			}
 
+			// fetch creator identity first — ingestion needs it for key resolution
+			if len(log) > 0 {
+				_, p, _ := protocol.DecodeJWSUnsafe(log[0])
+				if p != nil {
+					if kid, ok := p["kid"].(string); ok {
+						if idx := strings.Index(kid, "#"); idx > 0 {
+							creatorDID := kid[:idx]
+							fetchAndIngestIdentity(lr, c, creatorDID)
+						}
+					}
+					// also try the did field in the payload (content create has it)
+					if creatorDID, ok := p["did"].(string); ok && strings.HasPrefix(creatorDID, "did:dfos:") {
+						fetchAndIngestIdentity(lr, c, creatorDID)
+					}
+				}
+			}
+
+			results := lr.Relay.Ingest(log)
+			for _, r := range results {
+				if r.Status == "rejected" {
+					fmt.Printf("  Warning: operation %s rejected: %s\n", r.CID, r.Error)
+				}
+			}
+
 			if jsonFlag {
-				outputJSON(map[string]any{"contentId": contentID, "operations": len(log), "origin": "fetched"})
+				outputJSON(map[string]any{"contentId": contentID, "operations": len(log)})
 			} else {
 				fmt.Printf("Fetched content: %s (%d operations)\n", contentID, len(log))
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&relayName, "relay", "", "Relay to fetch from")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to fetch from")
 	return cmd
 }
 
@@ -527,8 +517,12 @@ func newContentLogCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
-			sc, err := store.LoadContent(contentID)
-			if err != nil || sc == nil {
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+			chain, err := lr.Relay.GetContent(contentID)
+			if err != nil || chain == nil {
 				return fmt.Errorf("content chain '%s' not found", contentID)
 			}
 
@@ -539,7 +533,7 @@ func newContentLogCmd() *cobra.Command {
 					Type  string `json:"type,omitempty"`
 				}
 				var ops []opInfo
-				for i, token := range sc.Log {
+				for i, token := range chain.Log {
 					h, p, _ := protocol.DecodeJWSUnsafe(token)
 					op := opInfo{Index: i}
 					if h != nil {
@@ -556,8 +550,8 @@ func newContentLogCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("Content: %s (%d operations)\n\n", contentID, len(sc.Log))
-			for i, token := range sc.Log {
+			fmt.Printf("Content: %s (%d operations)\n\n", contentID, len(chain.Log))
+			for i, token := range chain.Log {
 				h, p, _ := protocol.DecodeJWSUnsafe(token)
 				opType := "?"
 				if p != nil {
@@ -594,7 +588,7 @@ func newContentGrantCmd() *cobra.Command {
 				return fmt.Errorf("specify --read or --write")
 			}
 
-			_, id, err := requireIdentity()
+			_, chain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
@@ -609,12 +603,12 @@ func newContentGrantCmd() *cobra.Command {
 				dur = 24 * time.Hour
 			}
 
-			if len(id.State.AuthKeys) == 0 {
+			if len(chain.State.AuthKeys) == 0 {
 				return fmt.Errorf("identity has no auth keys")
 			}
-			authKeyID := id.State.AuthKeys[0].ID
-			kid := id.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+			authKeyID := chain.State.AuthKeys[0].ID
+			kid := chain.DID + "#" + authKeyID
+			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
@@ -626,7 +620,7 @@ func newContentGrantCmd() *cobra.Command {
 				scope = scopeContentID
 			}
 
-			token, err := protocol.CreateCredential(id.DID, subjectDID, kid, credType, dur, scope, privKey)
+			token, err := protocol.CreateCredential(chain.DID, subjectDID, kid, credType, dur, scope, privKey)
 			if err != nil {
 				return fmt.Errorf("create credential: %w", err)
 			}
@@ -635,7 +629,7 @@ func newContentGrantCmd() *cobra.Command {
 				outputJSON(map[string]any{
 					"credential": token,
 					"type":       credType,
-					"issuer":     id.DID,
+					"issuer":     chain.DID,
 					"subject":    subjectDID,
 					"contentId":  scope,
 					"expiresIn":  dur.String(),
@@ -656,7 +650,7 @@ func newContentGrantCmd() *cobra.Command {
 
 func newContentUpdateCmd() *cobra.Command {
 	var note string
-	var relayName string
+	var peerName string
 	var authorization string
 	var baseDocumentCID string
 
@@ -666,21 +660,24 @@ func newContentUpdateCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
-			sc, err := store.LoadContent(contentID)
-			if err != nil || sc == nil {
+
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+			contentChain, err := lr.Relay.GetContent(contentID)
+			if err != nil || contentChain == nil {
 				return fmt.Errorf("content chain '%s' not found", contentID)
 			}
-
-			if sc.State.IsDeleted {
+			if contentChain.State.IsDeleted {
 				return fmt.Errorf("content chain is deleted — cannot update")
 			}
 
-			_, id, err := requireIdentity()
+			_, idChain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
-			// read document
 			var docBytes []byte
 			if args[1] == "-" {
 				docBytes, err = io.ReadAll(os.Stdin)
@@ -701,15 +698,15 @@ func newContentUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			authKeyID := id.State.AuthKeys[0].ID
-			kid := id.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+			authKeyID := idChain.State.AuthKeys[0].ID
+			kid := idChain.DID + "#" + authKeyID
+			privKey, err := keys.GetPrivateKey(idChain.DID + "#" + authKeyID)
 			if err != nil {
 				return err
 			}
 
 			jwsToken, opCID, err := protocol.SignContentUpdateWithOptions(
-				id.DID, sc.State.HeadCID, documentCID, kid, privKey,
+				idChain.DID, contentChain.State.HeadCID, documentCID, kid, privKey,
 				protocol.ContentUpdateOptions{
 					Note:            note,
 					BaseDocumentCID: baseDocumentCID,
@@ -720,37 +717,34 @@ func newContentUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			sc.Log = append(sc.Log, jwsToken)
-			sc.State.HeadCID = opCID
-			sc.State.CurrentDocumentCID = &documentCID
-			sc.State.Length++
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
+			}
 
-			store.SaveBlob(contentID, docBytes)
+			lr.Store.PutBlob(relay.BlobKey{CreatorDID: contentChain.State.CreatorDID, DocumentCID: documentCID}, docBytes)
 
-			// publish if relay
-			rn := relayName
+			// push to peer
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn != "" {
-				c, _, err := getRelayClient(rn)
+				c, _, err := getPeerClient(rn)
 				if err != nil {
 					return err
 				}
-				results, err := c.SubmitOperations([]string{jwsToken})
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
 					return err
 				}
-				if len(results) > 0 && results[0].Status == "rejected" {
-					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
-
 				info, _ := c.GetRelayInfo()
-				authToken, _ := protocol.CreateAuthToken(id.DID, info.DID, kid, 5*time.Minute, privKey)
+				authToken, _ := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
 				c.UploadBlob(contentID, opCID, docBytes, authToken)
 			}
-
-			store.SaveContent(sc)
 
 			if jsonFlag {
 				outputJSON(map[string]any{"contentId": contentID, "operationCID": opCID, "documentCID": documentCID})
@@ -761,7 +755,7 @@ func newContentUpdateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&note, "note", "", "Operation note")
-	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOSContentWrite VC-JWT for delegated writes")
 	cmd.Flags().StringVar(&baseDocumentCID, "base-document-cid", "", "CID of the base document this update is derived from")
 	return cmd
@@ -769,7 +763,7 @@ func newContentUpdateCmd() *cobra.Command {
 
 func newContentDeleteCmd() *cobra.Command {
 	var note string
-	var relayName string
+	var peerName string
 	var authorization string
 
 	cmd := &cobra.Command{
@@ -778,62 +772,62 @@ func newContentDeleteCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
-			sc, err := store.LoadContent(contentID)
-			if err != nil || sc == nil {
+
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+			contentChain, err := lr.Relay.GetContent(contentID)
+			if err != nil || contentChain == nil {
 				return fmt.Errorf("content chain '%s' not found", contentID)
 			}
-
-			if sc.State.IsDeleted {
+			if contentChain.State.IsDeleted {
 				return fmt.Errorf("content chain is already deleted")
 			}
 
-			_, id, err := requireIdentity()
+			_, idChain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
-			if len(id.State.AuthKeys) == 0 {
+			if len(idChain.State.AuthKeys) == 0 {
 				return fmt.Errorf("identity has no auth keys")
 			}
-			authKeyID := id.State.AuthKeys[0].ID
-			kid := id.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(id.DID + "#" + authKeyID)
+			authKeyID := idChain.State.AuthKeys[0].ID
+			kid := idChain.DID + "#" + authKeyID
+			privKey, err := keys.GetPrivateKey(idChain.DID + "#" + authKeyID)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
 
-			jwsToken, opCID, err := protocol.SignContentDelete(id.DID, sc.State.HeadCID, kid, note, authorization, privKey)
+			jwsToken, opCID, err := protocol.SignContentDelete(idChain.DID, contentChain.State.HeadCID, kid, note, authorization, privKey)
 			if err != nil {
 				return fmt.Errorf("sign delete: %w", err)
 			}
 
-			// update local state
-			sc.Log = append(sc.Log, jwsToken)
-			sc.State.HeadCID = opCID
-			sc.State.IsDeleted = true
-			sc.State.CurrentDocumentCID = nil
-			sc.State.Length++
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
+			}
 
-			// publish if relay specified
-			rn := relayName
+			// push to peer
+			rn := peerName
 			if rn == "" {
-				rn = relayFlag
+				rn = peerFlag
 			}
 			if rn != "" {
-				c, _, err := getRelayClient(rn)
+				c, _, err := getPeerClient(rn)
 				if err != nil {
 					return err
 				}
-				results, err := c.SubmitOperations([]string{jwsToken})
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
 					return fmt.Errorf("submit: %w", err)
 				}
-				if len(results) > 0 && results[0].Status == "rejected" {
-					return fmt.Errorf("relay rejected: %s", results[0].Error)
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
 			}
-
-			store.SaveContent(sc)
 
 			if jsonFlag {
 				outputJSON(map[string]any{"contentId": contentID, "operationCID": opCID, "deleted": true})
@@ -847,7 +841,7 @@ func newContentDeleteCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&note, "note", "", "Operation note")
-	cmd.Flags().StringVar(&relayName, "relay", "", "Publish to this relay immediately")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOSContentWrite VC-JWT for delegated deletes")
 	return cmd
 }
@@ -859,21 +853,24 @@ func newContentVerifyCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			contentID := args[0]
-			sc, _ := store.LoadContent(contentID)
-			if sc == nil {
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+			chain, _ := lr.Relay.GetContent(contentID)
+			if chain == nil {
 				return fmt.Errorf("content chain '%s' not found. Use 'dfos content fetch' first.", contentID)
 			}
 
 			result := map[string]any{
-				"valid":     true,
-				"contentId": contentID,
-				"operations": len(sc.Log),
+				"valid":      true,
+				"contentId":  contentID,
+				"operations": len(chain.Log),
 			}
 
-			// verify each operation's CID matches
 			cidsVerified := 0
 			sigsVerified := 0
-			for i, token := range sc.Log {
+			for i, token := range chain.Log {
 				h, p, err := protocol.DecodeJWSUnsafe(token)
 				if err != nil {
 					result["valid"] = false
@@ -881,7 +878,6 @@ func newContentVerifyCmd() *cobra.Command {
 					break
 				}
 
-				// re-derive CID
 				_, _, cidStr, err := protocol.DagCborCID(p)
 				if err != nil {
 					result["valid"] = false
@@ -895,15 +891,14 @@ func newContentVerifyCmd() *cobra.Command {
 				}
 				cidsVerified++
 
-				// verify signature if we have the key
 				kid := h.Kid
 				hashIdx := strings.Index(kid, "#")
 				if hashIdx >= 0 {
 					did := kid[:hashIdx]
 					keyID := kid[hashIdx+1:]
-					storedID, _ := store.LoadIdentity(did)
-					if storedID != nil {
-						allKeys := append(append(storedID.State.AuthKeys, storedID.State.ControllerKeys...), storedID.State.AssertKeys...)
+					storedChain, _ := lr.Relay.GetIdentity(did)
+					if storedChain != nil {
+						allKeys := append(append(storedChain.State.AuthKeys, storedChain.State.ControllerKeys...), storedChain.State.AssertKeys...)
 						for _, k := range allKeys {
 							if k.ID == keyID {
 								pubBytes, err := protocol.DecodeMultikey(k.PublicKeyMultibase)
@@ -925,17 +920,17 @@ func newContentVerifyCmd() *cobra.Command {
 
 			result["cidsVerified"] = cidsVerified
 			result["signaturesVerified"] = sigsVerified
-			result["creatorDID"] = sc.State.CreatorDID
+			result["creatorDID"] = chain.State.CreatorDID
 
 			if jsonFlag {
 				outputJSON(result)
 			} else {
 				if result["valid"].(bool) {
 					fmt.Printf("Content chain '%s' is valid.\n", contentID)
-					fmt.Printf("  Operations:      %d\n", len(sc.Log))
+					fmt.Printf("  Operations:      %d\n", len(chain.Log))
 					fmt.Printf("  CIDs verified:   %d\n", cidsVerified)
 					fmt.Printf("  Sigs verified:   %d\n", sigsVerified)
-					fmt.Printf("  Creator:         %s\n", sc.State.CreatorDID)
+					fmt.Printf("  Creator:         %s\n", chain.State.CreatorDID)
 				} else {
 					fmt.Printf("Content chain '%s' FAILED verification.\n", contentID)
 					fmt.Printf("  Error: %s\n", result["error"])
@@ -949,31 +944,86 @@ func newContentVerifyCmd() *cobra.Command {
 func newContentRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <contentId>",
-		Short: "Remove a content chain from local store",
+		Short: "Sign a protocol-level content deletion",
+		Long:  "Content data in the local relay cannot be selectively un-ingested. Use 'dfos content delete' to sign a protocol-level deletion operation.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			contentID := args[0]
-			sc, _ := store.LoadContent(contentID)
-			if sc == nil {
-				return fmt.Errorf("content chain '%s' not found in local store", contentID)
-			}
-
-			if err := store.DeleteContent(contentID); err != nil {
-				return err
-			}
-			store.DeleteBlob(contentID)
-
-			if jsonFlag {
-				outputJSON(map[string]string{"removed": contentID})
-			} else {
-				fmt.Printf("Removed content '%s' from local store\n", contentID)
-			}
+			fmt.Printf("Content data lives in the local relay and cannot be selectively removed.\n")
+			fmt.Printf("Use 'dfos content delete %s' to sign a protocol-level deletion.\n", args[0])
 			return nil
 		},
 	}
 }
 
 // helpers
+
+// fetchAndIngestIdentity fetches an identity chain from a peer and ingests it
+// into the local relay. Used to ensure creator identities are available before
+// ingesting content that references them.
+func fetchAndIngestIdentity(lr *localrelay.LocalRelay, c *client.Client, did string) {
+	// skip if already local
+	existing, _ := lr.Relay.GetIdentity(did)
+	if existing != nil {
+		return
+	}
+	data, err := c.GetIdentity(did)
+	if err != nil {
+		return
+	}
+	log, ok := toStringSlice(data["log"])
+	if !ok || len(log) == 0 {
+		return
+	}
+	lr.Relay.Ingest(log)
+}
+
+// verifyCredentialLocally verifies a VC-JWT credential using the creator's
+// identity from the local relay.
+func verifyCredentialLocally(lr *localrelay.LocalRelay, credential, creatorDID, subjectDID, contentID string) error {
+	header, _, err := protocol.DecodeJWTUnsafe(credential)
+	if err != nil {
+		return err
+	}
+	kid, ok := header["kid"]
+	if !ok || kid == "" {
+		return fmt.Errorf("credential has no kid")
+	}
+	hashIdx := strings.Index(kid, "#")
+	if hashIdx < 0 {
+		return fmt.Errorf("credential kid is not a DID URL")
+	}
+	kidDID := kid[:hashIdx]
+	keyID := kid[hashIdx+1:]
+	if kidDID != creatorDID {
+		return fmt.Errorf("credential issuer does not match content creator")
+	}
+	creatorChain, err := lr.Relay.GetIdentity(creatorDID)
+	if err != nil || creatorChain == nil {
+		return fmt.Errorf("creator identity not in local relay")
+	}
+	allKeys := append(append(creatorChain.State.AuthKeys, creatorChain.State.ControllerKeys...), creatorChain.State.AssertKeys...)
+	var pubBytes []byte
+	for _, k := range allKeys {
+		if k.ID == keyID {
+			pubBytes, err = protocol.DecodeMultikey(k.PublicKeyMultibase)
+			if err != nil {
+				return err
+			}
+			break
+		}
+	}
+	if pubBytes == nil {
+		return fmt.Errorf("issuer key not found in creator identity")
+	}
+	vc, err := protocol.VerifyCredential(credential, pubBytes, subjectDID, "DFOSContentRead")
+	if err != nil {
+		return err
+	}
+	if vc.ContentID != "" && vc.ContentID != contentID {
+		return fmt.Errorf("credential scoped to different content")
+	}
+	return nil
+}
 
 func writeBlob(data []byte, outputFile string) error {
 	if outputFile != "" {
@@ -985,96 +1035,4 @@ func writeBlob(data []byte, outputFile string) error {
 	}
 	_, err := os.Stdout.Write(data)
 	return err
-}
-
-// verifyCredentialLocally verifies a VC-JWT credential using the creator's
-// identity from the local store. Returns the verified credential or an error.
-func verifyCredentialLocally(credential, creatorDID, subjectDID, contentID string) (*protocol.VerifiedCredential, error) {
-	// decode credential to get kid (issuer key reference)
-	header, _, err := protocol.DecodeJWTUnsafe(credential)
-	if err != nil {
-		return nil, fmt.Errorf("decode credential: %w", err)
-	}
-	kid, ok := header["kid"]
-	if !ok || kid == "" {
-		return nil, fmt.Errorf("credential has no kid")
-	}
-
-	// kid must be a DID URL — extract the DID and key ID
-	hashIdx := strings.Index(kid, "#")
-	if hashIdx < 0 {
-		return nil, fmt.Errorf("credential kid is not a DID URL")
-	}
-	kidDID := kid[:hashIdx]
-	keyID := kid[hashIdx+1:]
-
-	// the issuer DID should match the creator DID
-	if kidDID != creatorDID {
-		return nil, fmt.Errorf("credential issuer does not match content creator")
-	}
-
-	// load the creator's identity from local store
-	creatorIdentity, err := store.LoadIdentity(creatorDID)
-	if err != nil || creatorIdentity == nil {
-		return nil, fmt.Errorf("creator identity not in local store")
-	}
-
-	// find the issuer's public key in the creator's key state
-	allKeys := append(append(creatorIdentity.State.AuthKeys, creatorIdentity.State.ControllerKeys...), creatorIdentity.State.AssertKeys...)
-	var pubBytes []byte
-	for _, k := range allKeys {
-		if k.ID == keyID {
-			pubBytes, err = protocol.DecodeMultikey(k.PublicKeyMultibase)
-			if err != nil {
-				return nil, fmt.Errorf("decode issuer public key: %w", err)
-			}
-			break
-		}
-	}
-	if pubBytes == nil {
-		return nil, fmt.Errorf("issuer key not found in creator identity")
-	}
-
-	// verify the credential
-	vc, err := protocol.VerifyCredential(credential, pubBytes, subjectDID, "DFOSContentRead")
-	if err != nil {
-		return nil, fmt.Errorf("credential verification failed: %w", err)
-	}
-
-	// check content scope: if credential has a contentId, it must match
-	if vc.ContentID != "" && vc.ContentID != contentID {
-		return nil, fmt.Errorf("credential scoped to different content (%s)", vc.ContentID)
-	}
-
-	return vc, nil
-}
-
-func parseContentState(v any) protocol.ContentState {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return protocol.ContentState{}
-	}
-	state := protocol.ContentState{}
-	if s, ok := m["contentId"].(string); ok {
-		state.ContentID = s
-	}
-	if s, ok := m["genesisCID"].(string); ok {
-		state.GenesisCID = s
-	}
-	if s, ok := m["headCID"].(string); ok {
-		state.HeadCID = s
-	}
-	if b, ok := m["isDeleted"].(bool); ok {
-		state.IsDeleted = b
-	}
-	if s, ok := m["currentDocumentCID"].(string); ok {
-		state.CurrentDocumentCID = &s
-	}
-	if f, ok := m["length"].(float64); ok {
-		state.Length = int(f)
-	}
-	if s, ok := m["creatorDID"].(string); ok {
-		state.CreatorDID = s
-	}
-	return state
 }

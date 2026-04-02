@@ -7,7 +7,8 @@ import (
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/store"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
 
@@ -15,21 +16,24 @@ var (
 	// persistent flags
 	ctxFlag      string
 	identityFlag string
-	relayFlag    string
+	peerFlag     string
 	jsonFlag     bool
 	yesFlag      bool
 
 	// shared state
-	cfg   *config.Config
-	keys  keystore.Store
+	cfg     *config.Config
+	keys    keystore.Store
 	Version = "dev"
+
+	// lazy-initialized local relay
+	localRelayInstance *localrelay.LocalRelay
 )
 
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "dfos",
-		Short: "DFOS CLI — interact with DFOS protocol relays",
-		Long:  "Command-line interface for the DFOS protocol. Manage identities, content chains, beacons, and credentials. Interact with relays.",
+		Short: "DFOS CLI — local-first relay node for the DFOS protocol",
+		Long:  "Command-line interface for the DFOS protocol. Your machine is a relay. Manage identities, content chains, beacons, and credentials. Sync with peers.",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			cfg, err = config.Load()
@@ -39,13 +43,18 @@ func NewRootCmd() *cobra.Command {
 			keys = keystore.New()
 			return nil
 		},
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			if localRelayInstance != nil {
+				localRelayInstance.Close()
+			}
+		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 
-	root.PersistentFlags().StringVar(&ctxFlag, "ctx", "", "Context (identity@relay)")
+	root.PersistentFlags().StringVar(&ctxFlag, "ctx", "", "Context (identity@peer)")
 	root.PersistentFlags().StringVar(&identityFlag, "identity", "", "Identity name override")
-	root.PersistentFlags().StringVar(&relayFlag, "relay", "", "Relay name override")
+	root.PersistentFlags().StringVar(&peerFlag, "peer", "", "Peer name override")
 	root.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output as JSON")
 	root.PersistentFlags().BoolVar(&yesFlag, "yes", false, "Auto-confirm prompts")
 
@@ -54,10 +63,10 @@ func NewRootCmd() *cobra.Command {
 	contentGroup := &cobra.Group{ID: "content", Title: "Content Commands"}
 	beaconGroup := &cobra.Group{ID: "beacon", Title: "Beacon Commands"}
 	authGroup := &cobra.Group{ID: "auth", Title: "Auth Commands"}
-	relayGroup := &cobra.Group{ID: "relay", Title: "Relay Commands"}
+	peerGroup := &cobra.Group{ID: "peer", Title: "Peer Commands"}
 	configGroup := &cobra.Group{ID: "config", Title: "Config Commands"}
 
-	root.AddGroup(identityGroup, contentGroup, beaconGroup, authGroup, relayGroup, configGroup)
+	root.AddGroup(identityGroup, contentGroup, beaconGroup, authGroup, peerGroup, configGroup)
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newStatusCmd())
@@ -68,36 +77,51 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newWitnessCmd())
 	root.AddCommand(newCountersigsCmd())
 	root.AddCommand(newAuthCmd())
-	root.AddCommand(newRelayCmd())
+	root.AddCommand(newPeerCmd())
 	root.AddCommand(newAPICmd())
 	root.AddCommand(newConfigCmd())
+	root.AddCommand(newServeCmd())
+	root.AddCommand(newSyncCmd())
 
 	return root
 }
 
-// resolveCtx resolves the current context from flags/env/config.
-func resolveCtx() (*config.ResolvedContext, error) {
-	return config.ResolveContext(cfg, ctxFlag, identityFlag, relayFlag)
+// getRelay returns the lazily-initialized local relay.
+func getRelay() (*localrelay.LocalRelay, error) {
+	if localRelayInstance != nil {
+		return localRelayInstance, nil
+	}
+	var err error
+	localRelayInstance, err = localrelay.Open(cfg, nil)
+	if err != nil {
+		return nil, fmt.Errorf("open local relay: %w", err)
+	}
+	return localRelayInstance, nil
 }
 
-// requireRelay resolves context and ensures a relay is configured.
-func requireRelay(relayOverride string) (*config.ResolvedContext, *client.Client, error) {
-	r := relayOverride
+// resolveCtx resolves the current context from flags/env/config.
+func resolveCtx() (*config.ResolvedContext, error) {
+	return config.ResolveContext(cfg, ctxFlag, identityFlag, peerFlag)
+}
+
+// requirePeer resolves context and ensures a peer is configured.
+func requirePeer(peerOverride string) (*config.ResolvedContext, *client.Client, error) {
+	r := peerOverride
 	if r == "" {
-		r = relayFlag
+		r = peerFlag
 	}
 	ctx, err := config.ResolveContext(cfg, ctxFlag, identityFlag, r)
 	if err != nil {
 		return nil, nil, err
 	}
 	if ctx.RelayURL == "" {
-		return nil, nil, fmt.Errorf("no relay configured. Use --relay or 'dfos relay add'")
+		return nil, nil, fmt.Errorf("no peer configured. Use --peer or 'dfos peer add'")
 	}
 	return ctx, client.New(ctx.RelayURL), nil
 }
 
-// requireIdentity resolves and ensures an identity is available.
-func requireIdentity() (*config.ResolvedContext, *store.StoredIdentity, error) {
+// requireIdentity resolves and ensures an identity is available in the local relay.
+func requireIdentity() (*config.ResolvedContext, *relay.StoredIdentityChain, error) {
 	ctx, err := resolveCtx()
 	if err != nil {
 		return nil, nil, err
@@ -106,26 +130,28 @@ func requireIdentity() (*config.ResolvedContext, *store.StoredIdentity, error) {
 		return nil, nil, fmt.Errorf("no identity configured. Use --identity or 'dfos identity create'")
 	}
 
-	id, err := store.FindIdentityByName(ctx.IdentityName)
+	lr, err := getRelay()
 	if err != nil {
 		return nil, nil, err
 	}
-	if id == nil {
-		// try by DID
-		if ctx.IdentityDID != "" {
-			id, err = store.LoadIdentity(ctx.IdentityDID)
-			if err != nil {
-				return nil, nil, err
-			}
-		}
+
+	// resolve DID from config
+	did := ctx.IdentityDID
+	if did == "" {
+		return nil, nil, fmt.Errorf("identity '%s' not found in config", ctx.IdentityName)
 	}
-	if id == nil {
-		return nil, nil, fmt.Errorf("identity '%s' not found in local store", ctx.IdentityName)
+
+	chain, err := lr.Relay.GetIdentity(did)
+	if err != nil {
+		return nil, nil, err
 	}
-	if id.State.IsDeleted {
+	if chain == nil {
+		return nil, nil, fmt.Errorf("identity '%s' (%s) not found in local relay", ctx.IdentityName, did)
+	}
+	if chain.State.IsDeleted {
 		return nil, nil, fmt.Errorf("identity '%s' is deleted — cannot sign operations", ctx.IdentityName)
 	}
-	return ctx, id, nil
+	return ctx, chain, nil
 }
 
 // outputJSON outputs a value as JSON.
@@ -158,7 +184,13 @@ func newStatusCmd() *cobra.Command {
 			status := map[string]any{}
 
 			if ctx != nil && ctx.IdentityName != "" {
-				id, _ := store.FindIdentityByName(ctx.IdentityName)
+				lr, relayErr := getRelay()
+
+				var chain *relay.StoredIdentityChain
+				if relayErr == nil && ctx.IdentityDID != "" {
+					chain, _ = lr.Relay.GetIdentity(ctx.IdentityDID)
+				}
+
 				contextStr := ""
 				if ctx.IdentityName != "" && ctx.RelayName != "" {
 					contextStr = ctx.IdentityName + "@" + ctx.RelayName
@@ -168,33 +200,24 @@ func newStatusCmd() *cobra.Command {
 					status["context"] = contextStr
 					status["identity"] = ctx.IdentityDID
 					status["identityName"] = ctx.IdentityName
-					status["relay"] = ctx.RelayURL
-					status["relayName"] = ctx.RelayName
-					if id != nil {
-						status["origin"] = id.Local.Origin
-						status["publishedTo"] = id.Local.PublishedTo
-						status["operations"] = len(id.Log)
+					status["peer"] = ctx.RelayURL
+					status["peerName"] = ctx.RelayName
+					if chain != nil {
+						status["operations"] = len(chain.Log)
 					}
 					outputJSON(status)
 					return nil
 				}
 
 				fmt.Printf("Context:   %s\n", contextStr)
-				if id != nil {
-					fmt.Printf("Identity:  %s (%s)\n", id.DID, ctx.IdentityName)
-
-					published := "unpublished"
-					if len(id.Local.PublishedTo) > 0 {
-						published = fmt.Sprintf("published (%s)", joinComma(id.Local.PublishedTo))
-					}
-					fmt.Printf("  Status:  %s\n", published)
-
-					totalKeys := len(id.State.AuthKeys) + len(id.State.ControllerKeys) + len(id.State.AssertKeys)
-					haveKeys := countKeysInKeychain(id)
+				if chain != nil {
+					fmt.Printf("Identity:  %s (%s)\n", chain.DID, ctx.IdentityName)
+					totalKeys := len(chain.State.AuthKeys) + len(chain.State.ControllerKeys) + len(chain.State.AssertKeys)
+					haveKeys := countKeysInChain(chain)
 					fmt.Printf("  Keys:    %d/%d (%s)\n", haveKeys, totalKeys, keys.Backend())
-					fmt.Printf("  Chain:   %d operation(s)\n", len(id.Log))
+					fmt.Printf("  Chain:   %d operation(s)\n", len(chain.Log))
 				} else {
-					fmt.Printf("Identity:  %s (%s) — not in local store\n", ctx.IdentityDID, ctx.IdentityName)
+					fmt.Printf("Identity:  %s (%s) — not in local relay\n", ctx.IdentityDID, ctx.IdentityName)
 				}
 			} else {
 				if jsonFlag {
@@ -203,7 +226,7 @@ func newStatusCmd() *cobra.Command {
 					outputJSON(status)
 					return nil
 				}
-				fmt.Println("No active context. Use 'dfos use <identity@relay>' or 'dfos identity create'")
+				fmt.Println("No active context. Use 'dfos use <identity@peer>' or 'dfos identity create'")
 			}
 
 			if ctx != nil && ctx.RelayURL != "" {
@@ -214,7 +237,7 @@ func newStatusCmd() *cobra.Command {
 					if r, ok := cfg.Relays[ctx.RelayName]; ok && r.ProfileName != "" {
 						label = r.ProfileName + " (" + ctx.RelayURL + ")"
 					}
-					fmt.Printf("Relay:     %s\n", label)
+					fmt.Printf("Peer:      %s\n", label)
 					if err == nil {
 						fmt.Printf("  DID:     %s\n", info.DID)
 						fmt.Printf("  Version: %s %s\n", info.Protocol, info.Version)
@@ -232,7 +255,7 @@ func newStatusCmd() *cobra.Command {
 func newUseCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "use <context>",
-		Short: "Set active context (identity@relay)",
+		Short: "Set active context (identity@peer)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.ActiveContext = args[0]
@@ -247,11 +270,11 @@ func newUseCmd() *cobra.Command {
 
 // helpers
 
-func countKeysInKeychain(id *store.StoredIdentity) int {
+func countKeysInChain(chain *relay.StoredIdentityChain) int {
 	count := 0
-	allKeys := append(append(id.State.AuthKeys, id.State.ControllerKeys...), id.State.AssertKeys...)
+	allKeys := append(append(chain.State.AuthKeys, chain.State.ControllerKeys...), chain.State.AssertKeys...)
 	for _, k := range allKeys {
-		account := id.DID + "#" + k.ID
+		account := chain.DID + "#" + k.ID
 		if keys.HasKey(account) {
 			count++
 		}

@@ -182,6 +182,11 @@ type Store interface {
 	MarkOpRejected(cid string, reason string) error
 	CountUnsequenced() (int, error)
 
+	// listing — enumerate all chains/beacons in the store
+	ListIdentityChains() ([]StoredIdentityChain, error)
+	ListContentChains() ([]StoredContentChain, error)
+	ListBeacons() ([]StoredBeacon, error)
+
 	// admin
 	ResetPeerCursors() error
 	ResetSequencer() error
