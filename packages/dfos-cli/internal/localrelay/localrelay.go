@@ -18,12 +18,28 @@ type LocalRelay struct {
 	RelayDID string // the auto-bootstrapped relay identity DID (invisible to user)
 }
 
+// Options configures the local relay. All fields are optional — sensible
+// defaults are used when omitted.
+type Options struct {
+	DBPath      string       // override database path (default: ~/.dfos/relay.db)
+	ProfileName string       // relay profile name (default: "DFOS CLI")
+	ExtraPeers  []string     // additional peer URLs beyond config.toml
+}
+
 // Open opens (or creates) the local relay database and bootstraps the relay
-// identity. Peer configuration is derived from config.toml relay entries.
-func Open(cfg *config.Config) (*LocalRelay, error) {
-	dbPath := filepath.Join(config.ConfigDir(), "relay.db")
-	if err := os.MkdirAll(config.ConfigDir(), 0o700); err != nil {
-		return nil, fmt.Errorf("create config dir: %w", err)
+// identity. Peer configuration is derived from config.toml relay entries
+// plus any extra peers in opts.
+func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
+	if opts == nil {
+		opts = &Options{}
+	}
+
+	dbPath := opts.DBPath
+	if dbPath == "" {
+		dbPath = filepath.Join(config.ConfigDir(), "relay.db")
+	}
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create db dir: %w", err)
 	}
 
 	store, err := relay.NewSQLiteStore(dbPath)
@@ -37,15 +53,25 @@ func Open(cfg *config.Config) (*LocalRelay, error) {
 		return nil, fmt.Errorf("migration: %w", err)
 	}
 
+	profileName := opts.ProfileName
+	if profileName == "" {
+		profileName = "DFOS CLI"
+	}
+
 	// persistent bootstrap — reuse existing key material or generate new
-	identity, err := bootstrapPersistent(store)
+	identity, err := bootstrapPersistent(store, profileName)
 	if err != nil {
 		store.Close()
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
 
-	// build peer configs from config.toml relay entries
+	// build peer configs from config.toml relay entries + extra peers
 	peers := buildPeerConfigs(cfg)
+	for _, url := range opts.ExtraPeers {
+		if url != "" {
+			peers = append(peers, relay.PeerConfig{URL: url})
+		}
+	}
 
 	// wire up peer client if peers exist
 	var peerClient relay.PeerClient
@@ -74,7 +100,7 @@ func (lr *LocalRelay) Close() error {
 
 // bootstrapPersistent loads existing relay key material from SQLite or generates
 // new keys and persists them. The relay identity is invisible to the user.
-func bootstrapPersistent(store *relay.SQLiteStore) (*relay.RelayIdentity, error) {
+func bootstrapPersistent(store *relay.SQLiteStore, profileName string) (*relay.RelayIdentity, error) {
 	privBytes, err := store.GetMeta("relay_private_key")
 	if err != nil {
 		return nil, fmt.Errorf("read relay_private_key: %w", err)
@@ -87,8 +113,6 @@ func bootstrapPersistent(store *relay.SQLiteStore) (*relay.RelayIdentity, error)
 	if err != nil {
 		return nil, fmt.Errorf("read relay_did: %w", err)
 	}
-
-	profile := relay.ProfileConfig{Name: "DFOS CLI"}
 
 	if privBytes != nil && keyIDBytes != nil && didBytes != nil {
 		if len(privBytes) != ed25519.PrivateKeySize {
@@ -104,6 +128,7 @@ func bootstrapPersistent(store *relay.SQLiteStore) (*relay.RelayIdentity, error)
 	}
 
 	// first boot — generate new relay identity
+	profile := relay.ProfileConfig{Name: profileName}
 	identity, err := relay.BootstrapRelayIdentityWithProfile(store, profile)
 	if err != nil {
 		return nil, err

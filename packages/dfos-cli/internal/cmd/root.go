@@ -92,7 +92,7 @@ func getRelay() (*localrelay.LocalRelay, error) {
 		return localRelayInstance, nil
 	}
 	var err error
-	localRelayInstance, err = localrelay.Open(cfg)
+	localRelayInstance, err = localrelay.Open(cfg, nil)
 	if err != nil {
 		return nil, fmt.Errorf("open local relay: %w", err)
 	}
