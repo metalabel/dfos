@@ -24,6 +24,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# strip leading "v" if present (e.g., --version v0.7.0)
+VERSION="${VERSION#v}"
+
 # --- helpers ---
 
 info() { echo "  $1"; }
