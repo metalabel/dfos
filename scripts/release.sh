@@ -49,7 +49,7 @@ VERSION="${VERSION#v}"
 
 # --- helpers ---
 
-info() { echo "  $1"; }
+info() { printf "  %s\n" "$1"; }
 error() { printf "ERROR: %s\n" "$1" >&2; exit 1; }
 
 # --- validation ---
@@ -90,10 +90,10 @@ CURRENT="$(node -p "require('./package.json').version")"
 info "Bumping ${CURRENT} → ${VERSION}"
 
 # update root package.json
-node -e "
+VERSION="$VERSION" node -e "
   const fs = require('fs');
   const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-  pkg.version = '${VERSION}';
+  pkg.version = process.env.VERSION;
   fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 "
 
@@ -116,12 +116,12 @@ fi
 
 # --- commit, tag, push ---
 
-git add -A
+git add package.json packages/*/package.json
 git commit -m "release: v${VERSION}"
 git tag -a "v${VERSION}" -m "v${VERSION}"
 
 info "Pushing commit + tag..."
-git push origin main "v${VERSION}"
+git push --atomic origin main "v${VERSION}"
 
 echo ""
 info "v${VERSION} released! CI is now building:"
