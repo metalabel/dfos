@@ -10,7 +10,28 @@ permissions:
   packages: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate version lockstep
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          echo "Tag version:     $TAG_VERSION"
+          echo "Package version: $PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            echo "Run: ./scripts/release.sh $TAG_VERSION"
+            exit 1
+          fi
+
   release-npm:
+    needs: [validate]
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -48,6 +69,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release-goreleaser:
+    needs: [validate]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
