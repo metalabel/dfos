@@ -3,6 +3,8 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
@@ -254,15 +256,33 @@ func newStatusCmd() *cobra.Command {
 
 func newUseCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "use <context>",
+		Use:   "use <identity@peer>",
 		Short: "Set active context (identity@peer)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg.ActiveContext = args[0]
+			ctx := args[0]
+
+			// validate: must be identity@relay format or a named context
+			if _, ok := cfg.Contexts[ctx]; !ok {
+				parts := strings.SplitN(ctx, "@", 2)
+				if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+					return fmt.Errorf("invalid context format: %q (expected identity@peer, e.g. alice@prod)", ctx)
+				}
+				// validate identity exists
+				if _, ok := cfg.Identities[parts[0]]; !ok {
+					fmt.Fprintf(os.Stderr, "Warning: identity '%s' not found in config\n", parts[0])
+				}
+				// validate relay exists
+				if _, ok := cfg.Relays[parts[1]]; !ok {
+					fmt.Fprintf(os.Stderr, "Warning: relay '%s' not found in config\n", parts[1])
+				}
+			}
+
+			cfg.ActiveContext = ctx
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
-			fmt.Printf("Active context set to: %s\n", args[0])
+			fmt.Printf("Active context set to: %s\n", ctx)
 			return nil
 		},
 	}

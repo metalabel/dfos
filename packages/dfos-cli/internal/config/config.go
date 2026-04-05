@@ -132,11 +132,12 @@ func ResolveContext(cfg *Config, ctxFlag, identityFlag, relayFlag string) (*Reso
 			identityName = parts[0]
 			relayName = parts[1]
 		} else {
-			return nil, fmt.Errorf("unknown context: %s", ctxName)
+			// treat as identity-only context (local work without a relay)
+			identityName = ctxName
 		}
 	}
 
-	// override with explicit flags/env
+	// override with explicit flags/env (higher priority than context)
 	if identityFlag != "" {
 		identityName = identityFlag
 	} else if v := os.Getenv("DFOS_IDENTITY"); v != "" {
