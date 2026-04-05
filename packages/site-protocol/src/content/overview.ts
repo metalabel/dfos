@@ -49,7 +49,7 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 
 ## Status
 
-The specification is under active development. It is open source under the MIT license. Discussion happens in the [clear.txt](https://clear.dfos.com) space on DFOS.
+The specification is under active development. It is open source under the MIT license. The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, Docker, or a single curl command. Discussion happens in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
 Install the [CLI](https://protocol.dfos.com/cli) to create identities, sign content, and run relays locally. Read the [full specification](https://protocol.dfos.com/spec), explore the [FAQ](https://protocol.dfos.com/faq), or browse the [source on GitHub](https://github.com/metalabel/dfos).
 `;

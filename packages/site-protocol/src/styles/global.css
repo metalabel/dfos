@@ -90,10 +90,10 @@ body {
 .site-header nav a {
   font-family: var(--font-body);
   font-weight: 300;
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--teal-dim);
+  letter-spacing: 0.15em;
+  color: var(--teal);
   text-decoration: none;
   transition: color 0.2s;
 }
