@@ -3,6 +3,8 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
@@ -194,6 +196,8 @@ func newStatusCmd() *cobra.Command {
 				contextStr := ""
 				if ctx.IdentityName != "" && ctx.RelayName != "" {
 					contextStr = ctx.IdentityName + "@" + ctx.RelayName
+				} else if ctx.IdentityName != "" {
+					contextStr = ctx.IdentityName + " (local only)"
 				}
 
 				if jsonFlag {
@@ -254,21 +258,50 @@ func newStatusCmd() *cobra.Command {
 
 func newUseCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "use <context>",
-		Short: "Set active context (identity@peer)",
+		Use:   "use <identity[@peer]>",
+		Short: "Set active context (identity or identity@peer)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg.ActiveContext = args[0]
+			ctx := args[0]
+
+			// validate components exist in config
+			if _, ok := cfg.Contexts[ctx]; !ok {
+				if parts := strings.SplitN(ctx, "@", 2); len(parts) == 2 {
+					// identity@relay format
+					if _, ok := cfg.Identities[parts[0]]; !ok {
+						fmt.Fprintf(os.Stderr, "Warning: identity '%s' not found in config\n", parts[0])
+					}
+					if _, ok := cfg.Relays[parts[1]]; !ok {
+						fmt.Fprintf(os.Stderr, "Warning: relay '%s' not found in config\n", parts[1])
+					}
+				} else {
+					// identity-only (local work without a relay)
+					if _, ok := cfg.Identities[ctx]; !ok {
+						fmt.Fprintf(os.Stderr, "Warning: identity '%s' not found in config\n", ctx)
+					}
+				}
+			}
+
+			cfg.ActiveContext = ctx
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
-			fmt.Printf("Active context set to: %s\n", args[0])
+			fmt.Printf("Active context set to: %s\n", ctx)
 			return nil
 		},
 	}
 }
 
 // helpers
+
+// didFromKid extracts the DID from a KID string (did:dfos:abc#key_123 → did:dfos:abc).
+// Returns the full kid if no '#' separator is found.
+func didFromKid(kid string) string {
+	if idx := strings.Index(kid, "#"); idx > 0 {
+		return kid[:idx]
+	}
+	return kid
+}
 
 func countKeysInChain(chain *relay.StoredIdentityChain) int {
 	count := 0

@@ -498,6 +498,15 @@ func newContentFetchCmd() *cobra.Command {
 				}
 			}
 
+			if len(log) == 0 {
+				if jsonFlag {
+					outputJSON(map[string]any{"contentId": contentID, "operations": 0, "warning": "content not found on peer"})
+				} else {
+					fmt.Fprintf(os.Stderr, "Warning: content '%s' not found on peer (0 operations fetched)\n", contentID)
+				}
+				return nil
+			}
+
 			if jsonFlag {
 				outputJSON(map[string]any{"contentId": contentID, "operations": len(log)})
 			} else {
@@ -528,9 +537,10 @@ func newContentLogCmd() *cobra.Command {
 
 			if jsonFlag {
 				type opInfo struct {
-					Index int    `json:"index"`
-					CID   string `json:"cid,omitempty"`
-					Type  string `json:"type,omitempty"`
+					Index  int    `json:"index"`
+					CID    string `json:"cid,omitempty"`
+					Type   string `json:"type,omitempty"`
+					Signer string `json:"signer,omitempty"`
 				}
 				var ops []opInfo
 				for i, token := range chain.Log {
@@ -538,6 +548,7 @@ func newContentLogCmd() *cobra.Command {
 					op := opInfo{Index: i}
 					if h != nil {
 						op.CID = h.CID
+						op.Signer = didFromKid(h.Kid)
 					}
 					if p != nil {
 						if t, ok := p["type"].(string); ok {
@@ -560,10 +571,16 @@ func newContentLogCmd() *cobra.Command {
 					}
 				}
 				cid := ""
+				signer := ""
 				if h != nil {
 					cid = h.CID
+					signer = didFromKid(h.Kid)
 				}
-				fmt.Printf("  [%d] %s  %s\n", i, opType, cid)
+				if signer != "" {
+					fmt.Printf("  [%d] %-8s %s  (%s)\n", i, opType, cid, signer)
+				} else {
+					fmt.Printf("  [%d] %-8s %s\n", i, opType, cid)
+				}
 			}
 			return nil
 		},
@@ -918,9 +935,24 @@ func newContentVerifyCmd() *cobra.Command {
 				}
 			}
 
+			// collect unique signers in stable order
+			var signers []string
+			seen := make(map[string]bool)
+			for _, token := range chain.Log {
+				h, _, _ := protocol.DecodeJWSUnsafe(token)
+				if h != nil && h.Kid != "" {
+					did := didFromKid(h.Kid)
+					if !seen[did] {
+						seen[did] = true
+						signers = append(signers, did)
+					}
+				}
+			}
+
 			result["cidsVerified"] = cidsVerified
 			result["signaturesVerified"] = sigsVerified
 			result["creatorDID"] = chain.State.CreatorDID
+			result["signers"] = signers
 
 			if jsonFlag {
 				outputJSON(result)
@@ -931,6 +963,19 @@ func newContentVerifyCmd() *cobra.Command {
 					fmt.Printf("  CIDs verified:   %d\n", cidsVerified)
 					fmt.Printf("  Sigs verified:   %d\n", sigsVerified)
 					fmt.Printf("  Creator:         %s\n", chain.State.CreatorDID)
+					if len(signers) > 1 {
+						fmt.Printf("  Signers:\n")
+						for _, s := range signers {
+							label := s
+							if s == chain.State.CreatorDID {
+								label += " (creator)"
+							}
+							if name := config.FindIdentityName(cfg, s); name != "" {
+								label += " (" + name + ")"
+							}
+							fmt.Printf("    - %s\n", label)
+						}
+					}
 				} else {
 					fmt.Printf("Content chain '%s' FAILED verification.\n", contentID)
 					fmt.Printf("  Error: %s\n", result["error"])

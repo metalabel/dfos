@@ -284,17 +284,28 @@ func newIdentityDeleteCmd() *cobra.Command {
 	var peerName string
 
 	cmd := &cobra.Command{
-		Use:   "delete",
+		Use:   "delete [name|did]",
 		Short: "Permanently delete an identity (sign delete operation)",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, chain, err := requireIdentity()
+			lr, err := getRelay()
 			if err != nil {
 				return err
 			}
 
-			lr, err := getRelay()
-			if err != nil {
-				return err
+			var chain *relay.StoredIdentityChain
+			if len(args) > 0 {
+				did := resolveIdentityDID(args[0])
+				chain, _ = lr.Relay.GetIdentity(did)
+				if chain == nil {
+					return fmt.Errorf("identity '%s' not found", args[0])
+				}
+			} else {
+				_, chain2, err := requireIdentity()
+				if err != nil {
+					return err
+				}
+				chain = chain2
 			}
 
 			if len(chain.State.ControllerKeys) == 0 {
