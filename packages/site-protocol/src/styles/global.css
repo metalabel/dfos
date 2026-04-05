@@ -11,21 +11,21 @@
 }
 
 :root {
-  /* ── Dark World (The Forest) ── */
-  --bg: #0a1f1a;
-  --bg-deep: #071612;
-  --surface: #1a3a35;
-  --surface-border: #2a4a44;
+  /* ── Dark World (The Void) ── */
+  --bg: #0a0a0a;
+  --bg-deep: #060606;
+  --surface: #151515;
+  --surface-border: #252525;
   --green: #00ff09;
-  --teal: #8eccc4;
-  --teal-dim: #5a9990;
+  --teal: #9aaba6;
+  --teal-dim: #5a6562;
   --fg: #ffffff;
   --fg-dim: rgba(255, 255, 255, 0.35);
   --fg-body: rgba(255, 255, 255, 0.82);
 
   /* ── Layout ── */
   --max-w: 900px;
-  --max-w-spec: 78ch;
+  --max-w-spec: 900px;
 
   /* ── Typography ── */
   --font-body: 'Helvetica Neue', Helvetica, Arial, sans-serif;
@@ -34,7 +34,7 @@
 
 html {
   font-family: var(--font-body);
-  font-size: 16px;
+  font-size: 17px;
   line-height: 1.7;
   color: var(--fg-body);
   background: var(--bg);
@@ -90,12 +90,18 @@ body {
 .site-header nav a {
   font-family: var(--font-body);
   font-weight: 300;
-  font-size: 0.7rem;
+  font-size: 0.82rem;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--teal-dim);
+  letter-spacing: 0.15em;
+  color: var(--teal);
   text-decoration: none;
   transition: color 0.2s;
+}
+
+.site-header--landing nav a {
+  font-size: 0.85rem;
+  letter-spacing: 0.15em;
+  color: var(--teal);
 }
 
 .site-header nav a:hover {
@@ -363,11 +369,11 @@ img {
   background:
     linear-gradient(
       180deg,
-      rgba(7, 22, 18, 0.85) 0%,
-      rgba(10, 31, 26, 0.7) 40%,
-      rgba(10, 31, 26, 0.92) 100%
+      rgba(6, 6, 6, 0.88) 0%,
+      rgba(10, 10, 10, 0.72) 40%,
+      rgba(10, 10, 10, 0.95) 100%
     ),
-    radial-gradient(ellipse 60% 40% at 30% 70%, rgba(0, 255, 9, 0.06) 0%, transparent 70%);
+    radial-gradient(ellipse 60% 40% at 30% 70%, rgba(0, 255, 9, 0.04) 0%, transparent 70%);
   z-index: 1;
 }
 
@@ -414,12 +420,50 @@ img {
 
 .hero-tagline {
   font-family: var(--font-body);
-  font-weight: 300;
-  font-size: 0.7rem;
+  font-weight: 400;
+  font-size: 0.85rem;
   text-transform: uppercase;
-  letter-spacing: 0.35em;
-  color: var(--teal-dim);
+  letter-spacing: 0.25em;
+  color: var(--teal);
+  margin-bottom: 3rem;
+}
+
+.hero-cta {
+  display: flex;
+  gap: 1.5rem;
   padding-bottom: 6rem;
+}
+
+.hero-cta-link {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--green);
+  text-decoration: none;
+  border: 1px solid var(--green);
+  padding: 0.6em 1.4em;
+  border-radius: 2px;
+  transition:
+    background 0.2s,
+    color 0.2s;
+}
+
+.hero-cta-link:hover {
+  background: var(--green);
+  color: #000;
+  text-decoration: none;
+}
+
+.hero-cta-link--dim {
+  color: var(--teal-dim);
+  border-color: var(--teal-dim);
+}
+
+.hero-cta-link--dim:hover {
+  background: var(--teal-dim);
+  color: #000;
+  border-color: var(--teal-dim);
 }
 
 /* ═══ Split Composition ═══ */
@@ -439,7 +483,7 @@ img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  filter: brightness(0.5) saturate(0.7);
+  filter: brightness(0.4) saturate(0.5);
 }
 
 .split-text {
@@ -549,7 +593,7 @@ img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  filter: brightness(0.35) saturate(0.6);
+  filter: brightness(0.25) saturate(0.4);
 }
 
 .image-break-overlay {
@@ -561,7 +605,7 @@ img {
   background: radial-gradient(
     ellipse 50% 60% at 50% 50%,
     transparent 0%,
-    rgba(10, 31, 26, 0.8) 100%
+    rgba(10, 10, 10, 0.85) 100%
   );
 }
 
@@ -589,7 +633,7 @@ img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  filter: brightness(0.4) saturate(0.6);
+  filter: brightness(0.3) saturate(0.4);
 }
 
 .closing-content {
@@ -703,7 +747,7 @@ a.card {
 }
 
 a.card:hover {
-  background: #1f4a42;
+  background: #1e1e1e;
   text-decoration: none;
 }
 
@@ -987,6 +1031,197 @@ a.card:hover {
   color: var(--green);
 }
 
+/* ═══ Concepts (Two-Column) ═══ */
+
+.concepts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4rem;
+  margin-bottom: 3rem;
+}
+
+.concept .section-label {
+  margin-bottom: 0.5rem;
+}
+
+.concept h2 {
+  font-size: clamp(1.3rem, 2.5vw, 1.8rem);
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+}
+
+.concept p {
+  color: var(--teal);
+  line-height: 1.8;
+  font-size: 0.95rem;
+}
+
+/* ═══ Spec Links ═══ */
+
+.spec-links {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin-bottom: 3rem;
+}
+
+.spec-link {
+  display: block;
+  padding: 1.25rem 0;
+  border-bottom: 1px solid var(--surface-border);
+  text-decoration: none;
+  transition: background 0.2s;
+}
+
+.spec-link:hover {
+  text-decoration: none;
+}
+
+.spec-link:nth-child(odd) {
+  padding-right: 2rem;
+  border-right: 1px solid var(--surface-border);
+}
+
+.spec-link:nth-child(even) {
+  padding-left: 2rem;
+}
+
+.spec-link-title {
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--green);
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.spec-link-desc {
+  font-size: 0.82rem;
+  color: var(--teal-dim);
+  line-height: 1.5;
+}
+
+.spec-link:hover .spec-link-title {
+  color: var(--fg);
+}
+
+.spec-link:hover .spec-link-desc {
+  color: var(--teal);
+}
+
+/* ═══ Get Started / Install ═══ */
+
+.get-started .get-started-intro {
+  color: var(--teal);
+  font-size: 0.95rem;
+  line-height: 1.8;
+  max-width: 600px;
+  margin-bottom: 3rem;
+}
+
+.install-label {
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.25em;
+  color: var(--teal-dim);
+  margin-bottom: 0.75rem;
+}
+
+.install-primary {
+  margin-bottom: 3rem;
+}
+
+.install-code {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--surface-border);
+  border-radius: 4px;
+  padding: 1rem 1.25rem;
+}
+
+.install-code--wide {
+  max-width: 540px;
+}
+
+.install-code code {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--green);
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: nowrap;
+  overflow-x: auto;
+  min-width: 0;
+  scrollbar-width: none;
+}
+
+.install-code code::-webkit-scrollbar {
+  display: none;
+}
+
+.install-copy {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--teal-dim);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.15em 0.4em;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.install-copy:hover {
+  color: var(--green);
+}
+
+.install-alt {
+  margin-top: 1rem;
+  font-size: 0.82rem;
+  color: var(--teal-dim);
+}
+
+.install-alt code {
+  font-size: 0.78rem;
+  color: var(--teal);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.quickstart-block {
+  max-width: 540px;
+}
+
+.quickstart-pre {
+  background: var(--surface);
+  border: 1px solid var(--surface-border);
+  border-radius: 4px;
+  padding: 1.5rem 1.75rem;
+  font-size: 0.8rem;
+  line-height: 1.8;
+  color: var(--teal);
+  margin-bottom: 0;
+}
+
+.quickstart-pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+.qs-comment {
+  color: var(--teal-dim);
+}
+
 /* ═══ Responsive ═══ */
 
 @media (max-width: 1100px) {
@@ -999,6 +1234,10 @@ a.card:hover {
 }
 
 @media (max-width: 768px) {
+  html {
+    font-size: 16px;
+  }
+
   .hero {
     min-height: 85vh;
   }
@@ -1073,6 +1312,24 @@ a.card:hover {
 
   .closing-content {
     padding: 3rem 1.5rem;
+  }
+
+  .concepts {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+
+  .spec-links {
+    grid-template-columns: 1fr;
+  }
+
+  .spec-link:nth-child(odd) {
+    padding-right: 0;
+    border-right: none;
+  }
+
+  .spec-link:nth-child(even) {
+    padding-left: 0;
   }
 }
 

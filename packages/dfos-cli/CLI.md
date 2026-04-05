@@ -77,13 +77,9 @@ The CLI is designed for both human operators and AI agents. Every command that p
 └──────────┬───────────────┘
            │
 ┌──────────▼───────────────┐
-│   ~/.dfos/               │  Configuration + local chain store
+│   ~/.dfos/               │  Configuration + local relay
 │   ├── config.toml        │  Relays, identities, contexts, defaults
-│   └── store/             │  Chain data (owned + fetched)
-│       ├── identities/    │  One JSON file per DID
-│       ├── content/       │  One JSON file per content ID
-│       ├── beacons/       │  One JSON file per DID
-│       └── blobs/         │  Raw document bytes
+│   └── relay.db           │  SQLite — chains, operations, blobs
 └──────────┬───────────────┘
            │
 ┌──────────▼───────────────┐
@@ -93,10 +89,12 @@ The CLI is designed for both human operators and AI agents. Every command that p
 └──────────────────────────┘
 ```
 
+The CLI embeds a full relay locally — the same SQLite-backed relay that runs as a network service via `dfos serve`. Every CLI command reads and writes to this local relay. Running `dfos serve` exposes it over HTTP with peer sync, gossip, and read-through.
+
 The CLI has three layers of state:
 
 - **OS Keychain**: private key material only. One entry per Ed25519 key, keyed by `dfos` service + `did:dfos:xxx#key_yyy` account. Hex-encoded 32-byte seed. Never written to disk.
-- **Local store** (`~/.dfos/store/`): chain data, operation logs, and blobs. Both chains you own (have private keys for) and chains you've fetched from relays. Flat JSON files per entity.
+- **Local relay** (`~/.dfos/relay.db`): SQLite database storing identity chains, content chains, operations, beacons, countersignatures, and blobs. Both chains you own (have private keys for) and chains you've fetched from relays.
 - **Config** (`~/.dfos/config.toml`): relay URLs, identity names, active context, defaults.
 
 ---
@@ -181,11 +179,11 @@ The default mode is local. Operations are signed and stored in `~/.dfos/store/` 
 ```bash
 # create identity (local only)
 dfos identity create --name alice
-# → keys stored in keychain, genesis stored in ~/.dfos/store/identities/
+# → keys stored in keychain, genesis stored in ~/.dfos/relay.db
 
 # create content (local only)
 dfos content create post.json
-# → blob stored in ~/.dfos/store/blobs/, chain in ~/.dfos/store/content/
+# → blob and chain stored in ~/.dfos/relay.db
 
 # publish when ready
 dfos identity publish alice --relay local
@@ -207,26 +205,11 @@ If you create content with `--relay` but the identity hasn't been published to t
 
 ---
 
-## Local Store
+## Local Relay
 
-Each stored entity is a JSON file with chain data plus local metadata:
+The CLI stores all chain data in a SQLite database at `~/.dfos/relay.db`. This is the same relay implementation that powers network relays via `dfos serve` — the CLI just runs it embedded, without HTTP.
 
-```json
-{
-  "did": "did:dfos:f2r3vt89fnh9ntkk7neffe",
-  "log": ["eyJ..."],
-  "state": { "did": "...", "isDeleted": false, "authKeys": [...], ... },
-  "local": {
-    "name": "alice",
-    "origin": "created",
-    "publishedTo": ["local", "prod"]
-  }
-}
-```
-
-- `origin: "created"` — we generated the keys and signed genesis
-- `origin: "fetched"` — downloaded from a relay (no private keys)
-- `publishedTo` — which named relays have accepted this chain
+Identity chains, content chains, operations, beacons, countersignatures, and blobs all live in this single database. Local metadata (identity names, publish state) is tracked in `config.toml`.
 
 ### Fetching Remote Chains
 
