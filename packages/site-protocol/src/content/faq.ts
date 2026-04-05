@@ -46,9 +46,9 @@ export const faqs: FaqEntry[] = [
   {
     question: 'What languages are supported?',
     answer:
-      'The reference implementation is in TypeScript (available as @metalabel/dfos-protocol on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the protocol specification.',
+      'The reference implementation is in TypeScript (available as @metalabel/dfos-protocol on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the protocol specification. The CLI is written in Go with pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, curl, or Docker.',
     answerHtml:
-      'The reference implementation is in TypeScript (available as <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">@metalabel/dfos-protocol</a> on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the <a href="/spec">protocol specification</a>.',
+      'The reference implementation is in TypeScript (available as <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">@metalabel/dfos-protocol</a> on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the <a href="/spec">protocol specification</a>. The <a href="/cli">CLI</a> is written in Go with pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, curl, or Docker.',
   },
   {
     question: 'How is this different from blockchain-based identity?',
@@ -79,9 +79,9 @@ export const faqs: FaqEntry[] = [
   {
     question: 'Is this production-ready?',
     answer:
-      'The protocol specification is under active review and development. The TypeScript reference implementation is published and tested, with deterministic test vectors verified across five languages. The DFOS platform runs on this protocol in production. The specification has not been submitted to any formal standards body.',
+      'The protocol specification is under active review and development. The TypeScript reference implementation is published and tested, with deterministic test vectors verified across five languages. The CLI ships pre-built binaries for 6 platforms via Homebrew, Docker, and direct download. The DFOS platform runs on this protocol in production. The specification has not been submitted to any formal standards body.',
     answerHtml:
-      'The <a href="/spec">protocol specification</a> is under active review and development. The TypeScript <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">reference implementation</a> is published and tested, with deterministic test vectors verified across five languages. The <a href="https://dfos.com">DFOS platform</a> runs on this protocol in production. The specification has not been submitted to any formal standards body.',
+      'The <a href="/spec">protocol specification</a> is under active review and development. The TypeScript <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">reference implementation</a> is published and tested, with deterministic test vectors verified across five languages. The <a href="/cli">CLI</a> ships pre-built binaries for 6 platforms via Homebrew, Docker, and direct download. The <a href="https://dfos.com">DFOS platform</a> runs on this protocol in production. The specification has not been submitted to any formal standards body.',
   },
   {
     question: 'Where can I discuss the protocol?',

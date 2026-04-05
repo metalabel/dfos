@@ -51,5 +51,5 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 
 The specification is under active development. It is open source under the MIT license. Discussion happens in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
-Read the [full specification](https://protocol.dfos.com/spec), explore the [FAQ](https://protocol.dfos.com/faq), or browse the [source on GitHub](https://github.com/metalabel/dfos).
+Install the [CLI](https://protocol.dfos.com/cli) to create identities, sign content, and run relays locally. Read the [full specification](https://protocol.dfos.com/spec), explore the [FAQ](https://protocol.dfos.com/faq), or browse the [source on GitHub](https://github.com/metalabel/dfos).
 `;
