@@ -539,7 +539,7 @@ func newContentLogCmd() *cobra.Command {
 					op := opInfo{Index: i}
 					if h != nil {
 						op.CID = h.CID
-						if idx := strings.Index(h.Kid, "#"); idx >= 0 {
+						if idx := strings.Index(h.Kid, "#"); idx > 0 {
 							op.Signer = h.Kid[:idx]
 						}
 					}
@@ -567,7 +567,7 @@ func newContentLogCmd() *cobra.Command {
 				signer := ""
 				if h != nil {
 					cid = h.CID
-					if idx := strings.Index(h.Kid, "#"); idx >= 0 {
+					if idx := strings.Index(h.Kid, "#"); idx > 0 {
 						signer = h.Kid[:idx]
 					}
 				}
@@ -936,7 +936,7 @@ func newContentVerifyCmd() *cobra.Command {
 			for _, token := range chain.Log {
 				h, _, _ := protocol.DecodeJWSUnsafe(token)
 				if h != nil {
-					if idx := strings.Index(h.Kid, "#"); idx >= 0 {
+					if idx := strings.Index(h.Kid, "#"); idx > 0 {
 						did := h.Kid[:idx]
 						if !seen[did] {
 							seen[did] = true
