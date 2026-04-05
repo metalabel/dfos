@@ -256,25 +256,27 @@ func newStatusCmd() *cobra.Command {
 
 func newUseCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "use <identity@peer>",
-		Short: "Set active context (identity@peer)",
+		Use:   "use <identity[@peer]>",
+		Short: "Set active context (identity or identity@peer)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := args[0]
 
-			// validate: must be identity@relay format or a named context
+			// validate components exist in config
 			if _, ok := cfg.Contexts[ctx]; !ok {
-				parts := strings.SplitN(ctx, "@", 2)
-				if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-					return fmt.Errorf("invalid context format: %q (expected identity@peer, e.g. alice@prod)", ctx)
-				}
-				// validate identity exists
-				if _, ok := cfg.Identities[parts[0]]; !ok {
-					fmt.Fprintf(os.Stderr, "Warning: identity '%s' not found in config\n", parts[0])
-				}
-				// validate relay exists
-				if _, ok := cfg.Relays[parts[1]]; !ok {
-					fmt.Fprintf(os.Stderr, "Warning: relay '%s' not found in config\n", parts[1])
+				if parts := strings.SplitN(ctx, "@", 2); len(parts) == 2 {
+					// identity@relay format
+					if _, ok := cfg.Identities[parts[0]]; !ok {
+						fmt.Fprintf(os.Stderr, "Warning: identity '%s' not found in config\n", parts[0])
+					}
+					if _, ok := cfg.Relays[parts[1]]; !ok {
+						fmt.Fprintf(os.Stderr, "Warning: relay '%s' not found in config\n", parts[1])
+					}
+				} else {
+					// identity-only (local work without a relay)
+					if _, ok := cfg.Identities[ctx]; !ok {
+						fmt.Fprintf(os.Stderr, "Warning: identity '%s' not found in config\n", ctx)
+					}
 				}
 			}
 
