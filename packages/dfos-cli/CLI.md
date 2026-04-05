@@ -8,6 +8,56 @@ This spec is under active review. Discuss it in the [clear.txt](https://clear.df
 
 ---
 
+## Install
+
+### One-liner (Linux / macOS)
+
+```bash
+curl -sSL https://protocol.dfos.com/install.sh | sh
+```
+
+### Homebrew (macOS)
+
+```bash
+brew install metalabel/tap/dfos
+```
+
+### Container
+
+```bash
+docker pull ghcr.io/metalabel/dfos:latest
+```
+
+### Windows
+
+Download the latest release from [GitHub Releases](https://github.com/metalabel/dfos/releases/latest). Extract the zip and add `dfos.exe` to your PATH.
+
+### From source
+
+```bash
+cd packages/dfos-cli && make build
+```
+
+---
+
+## Quickstart
+
+```bash
+# create your identity
+dfos identity create --name myname
+
+# publish your first post
+echo '{"body":"gm"}' | dfos content create -
+
+# see it
+dfos content list
+
+# run a relay
+dfos serve
+```
+
+---
+
 ## Philosophy
 
 The DFOS protocol defines signed chain primitives — identity and content chains, beacons, credentials — but says nothing about how a user manages keys or communicates with relays. The CLI is the user-side agent that bridges this gap.
@@ -280,14 +330,15 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 
 ## Environment Variables
 
-| Variable           | Purpose                                           |
-| ------------------ | ------------------------------------------------- |
-| `DFOS_CONTEXT`     | Override active context (`identity@relay`)        |
-| `DFOS_IDENTITY`    | Override active identity name                     |
-| `DFOS_RELAY`       | Override active relay name                        |
-| `DFOS_CONFIG`      | Config file path (default: `~/.dfos/config.toml`) |
-| `DFOS_NO_KEYCHAIN` | In-memory keys only (CI/testing)                  |
-| `DFOS_DEBUG`       | Debug logging (HTTP traffic, key resolution)      |
+| Variable               | Purpose                                           |
+| ---------------------- | ------------------------------------------------- |
+| `DFOS_CONTEXT`         | Override active context (`identity@relay`)        |
+| `DFOS_IDENTITY`        | Override active identity name                     |
+| `DFOS_RELAY`           | Override active relay name                        |
+| `DFOS_CONFIG`          | Config file path (default: `~/.dfos/config.toml`) |
+| `DFOS_NO_KEYCHAIN`     | In-memory keys only (CI/testing)                  |
+| `DFOS_NO_UPDATE_CHECK` | Disable automatic version update checks           |
+| `DFOS_DEBUG`           | Debug logging (HTTP traffic, key resolution)      |
 
 ---
 
