@@ -73,5 +73,6 @@ release:
   github:
     owner: metalabel
     name: dfos
+  replace_existing_artifacts: true
   extra_files:
     - glob: ./scripts/install.sh
