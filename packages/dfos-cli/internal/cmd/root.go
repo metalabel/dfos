@@ -294,6 +294,15 @@ func newUseCmd() *cobra.Command {
 
 // helpers
 
+// didFromKid extracts the DID from a KID string (did:dfos:abc#key_123 → did:dfos:abc).
+// Returns the full kid if no '#' separator is found.
+func didFromKid(kid string) string {
+	if idx := strings.Index(kid, "#"); idx > 0 {
+		return kid[:idx]
+	}
+	return kid
+}
+
 func countKeysInChain(chain *relay.StoredIdentityChain) int {
 	count := 0
 	allKeys := append(append(chain.State.AuthKeys, chain.State.ControllerKeys...), chain.State.AssertKeys...)
