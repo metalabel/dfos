@@ -196,6 +196,8 @@ func newStatusCmd() *cobra.Command {
 				contextStr := ""
 				if ctx.IdentityName != "" && ctx.RelayName != "" {
 					contextStr = ctx.IdentityName + "@" + ctx.RelayName
+				} else if ctx.IdentityName != "" {
+					contextStr = ctx.IdentityName + " (local only)"
 				}
 
 				if jsonFlag {

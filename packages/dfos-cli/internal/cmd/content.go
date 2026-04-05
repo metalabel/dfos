@@ -498,6 +498,15 @@ func newContentFetchCmd() *cobra.Command {
 				}
 			}
 
+			if len(log) == 0 {
+				if jsonFlag {
+					outputJSON(map[string]any{"contentId": contentID, "operations": 0, "warning": "content not found on peer"})
+				} else {
+					fmt.Fprintf(os.Stderr, "Warning: content '%s' not found on peer (0 operations fetched)\n", contentID)
+				}
+				return nil
+			}
+
 			if jsonFlag {
 				outputJSON(map[string]any{"contentId": contentID, "operations": len(log)})
 			} else {
