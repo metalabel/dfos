@@ -2,9 +2,19 @@ package relay
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 )
+
+// BatchableStore is optionally implemented by stores that support wrapping
+// writes in a single transaction.
+type BatchableStore interface {
+	BeginWriteBatch() error
+	CommitWriteBatch() error
+	RollbackWriteBatch() error
+}
 
 // Relay is a DFOS web relay — the core verification and storage engine.
 type Relay struct {
@@ -13,6 +23,7 @@ type Relay struct {
 	profileArtifactJWS string
 	contentEnabled     bool
 	logEnabled         bool
+	logger     *slog.Logger
 	peers      []PeerConfig
 	peerClient PeerClient
 	ingestMu   sync.Mutex // serializes all chain-state mutations (ingest + sequencer)
@@ -37,12 +48,18 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		}
 	}
 
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &Relay{
 		store:              opts.Store,
 		did:                identity.DID,
 		profileArtifactJWS: identity.ProfileArtifactJWS,
 		contentEnabled:     contentEnabled,
 		logEnabled:         logEnabled,
+		logger:     logger,
 		peers:      opts.Peers,
 		peerClient: opts.PeerClient,
 	}, nil
@@ -56,6 +73,8 @@ func (r *Relay) ProfileArtifactJWS() string { return r.profileArtifactJWS }
 
 // Ingest stores raw ops, processes a batch for immediate results, and gossips.
 func (r *Relay) Ingest(tokens []string) []IngestionResult {
+	start := time.Now()
+
 	// store all raw ops first — they can never be lost
 	for _, token := range tokens {
 		cid := computeOpCID(token)
@@ -66,6 +85,16 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 
 	// process immediately — mutex serializes all chain-state mutations
 	r.ingestMu.Lock()
+
+	// wrap in a transaction if the store supports it
+	batchable, hasBatch := r.store.(BatchableStore)
+	if hasBatch {
+		if err := batchable.BeginWriteBatch(); err != nil {
+			r.logger.Error("failed to begin write batch", "error", err)
+			hasBatch = false
+		}
+	}
+
 	var opts []IngestOption
 	if !r.logEnabled {
 		opts = append(opts, WithLogDisabled())
@@ -74,6 +103,7 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 
 	// mark results in raw store
 	var newOps []string
+	var newCount, dupCount, rejCount int
 	for i, res := range results {
 		if res.CID == "" {
 			continue
@@ -82,16 +112,35 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 		case res.Status == "new":
 			r.store.MarkOpsSequenced([]string{res.CID})
 			newOps = append(newOps, tokens[i])
+			newCount++
 		case res.Status == "duplicate":
 			r.store.MarkOpsSequenced([]string{res.CID})
+			dupCount++
 		case res.Status == "rejected" && isPermanentRejection(res.Error):
 			r.store.MarkOpRejected(res.CID, res.Error)
+			rejCount++
 		}
 	}
 
 	// run sequencer while still holding mutex — resolves pending ops whose deps just arrived
 	seqNewOps, _ := r.runSequencerLocked()
+
+	if hasBatch {
+		if err := batchable.CommitWriteBatch(); err != nil {
+			r.logger.Error("failed to commit write batch", "error", err)
+			batchable.RollbackWriteBatch()
+		}
+	}
+
 	r.ingestMu.Unlock()
+
+	r.logger.Info("ingest complete",
+		"batch", len(tokens),
+		"new", newCount,
+		"duplicate", dupCount,
+		"rejected", rejCount,
+		"duration", time.Since(start),
+	)
 
 	// gossip outside the lock
 	r.gossipOps(newOps)
@@ -111,15 +160,20 @@ func (r *Relay) SyncFromPeers() error {
 			continue
 		}
 		cursor, _ := r.store.GetPeerCursor(peer.URL)
+		fetched := 0
 		for {
 			page, err := r.peerClient.GetOperationLog(peer.URL, cursor, 1000)
-			if err != nil || page == nil || len(page.Entries) == 0 {
+			if err != nil {
+				r.logger.Error("peer sync failed", "peer", peer.URL, "error", err)
 				break
 			}
-			// store raw — no verification during sync
+			if page == nil || len(page.Entries) == 0 {
+				break
+			}
 			for _, e := range page.Entries {
 				r.store.PutRawOp(e.CID, e.JWSToken)
 			}
+			fetched += len(page.Entries)
 			if page.Cursor != nil {
 				cursor = *page.Cursor
 			} else {
@@ -129,6 +183,9 @@ func (r *Relay) SyncFromPeers() error {
 			if page.Cursor == nil {
 				break
 			}
+		}
+		if fetched > 0 {
+			r.logger.Info("peer sync fetched ops", "peer", peer.URL, "ops", fetched)
 		}
 	}
 
@@ -164,5 +221,35 @@ func (r *Relay) GetBeacon(did string) (*StoredBeacon, error) {
 
 // Handler returns an http.Handler implementing the DFOS web relay HTTP API.
 func (r *Relay) Handler() http.Handler {
-	return newRouter(r)
+	return r.withRequestLogging(newRouter(r))
+}
+
+func (r *Relay) withRequestLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(rw, req)
+		duration := time.Since(start)
+
+		level := slog.LevelInfo
+		if rw.status == 200 && req.Method == http.MethodGet {
+			level = slog.LevelDebug
+		}
+		r.logger.Log(req.Context(), level, "http request",
+			"method", req.Method,
+			"path", req.URL.Path,
+			"status", rw.status,
+			"duration", duration,
+		)
+	})
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
 }

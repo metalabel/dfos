@@ -1,0 +1,29 @@
+services:
+  relay:
+    image: ghcr.io/metalabel/dfos:latest
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      RELAY_NAME: "My Relay"
+      # PEERS: "https://other-relay.example.com"
+      # SYNC_INTERVAL: "30s"
+    volumes:
+      - relay-data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

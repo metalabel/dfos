@@ -649,6 +649,5 @@ resetSequencer(): Promise<void>;
 - **Fork visibility API**: Dedicated endpoint to list tips/branches
 - **Branch termination op**: Protocol-level operation to explicitly kill fork branches
 - **Rate limiting / anti-spam**: Operational concern, not protocol concern
-- **Docker/CF reference deployments**: Focus on the core library first
 - **Blob size limits**: No enforcement yet — production deployments should add limits at the middleware layer
 - **Artifact `$schema` registry**: Schema names are free-form strings for now — no formal registry or validation beyond structural checks

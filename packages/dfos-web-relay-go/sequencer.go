@@ -79,6 +79,13 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 // RunSequencerAndGossip runs the sequencer and gossips newly sequenced ops.
 func (r *Relay) RunSequencerAndGossip() SequenceResult {
 	newOps, result := r.RunSequencer()
+	if result.Sequenced > 0 {
+		r.logger.Info("sequencer processed ops",
+			"sequenced", result.Sequenced,
+			"rejected", result.Rejected,
+			"pending", result.Pending,
+		)
+	}
 	r.gossipOps(newOps)
 	return result
 }

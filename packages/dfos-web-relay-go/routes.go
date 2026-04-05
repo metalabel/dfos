@@ -66,7 +66,8 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"did":      r.did,
 		"protocol": "dfos-web-relay",
-		"version":  Version,
+		"version":  ProtocolVersion,
+		"software": SoftwareVersion,
 		"proof":    true,
 		"content":  r.contentEnabled,
 		"log":      r.logEnabled,

@@ -2,12 +2,16 @@ package relay
 
 import (
 	"crypto/ed25519"
+	"log/slog"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
-// Version is the release version of the dfos-web-relay-go package.
-const Version = "0.6.1"
+// ProtocolVersion is the DFOS protocol version implemented by this relay.
+const ProtocolVersion = "0.6.1"
+
+// SoftwareVersion is the release version of this relay binary, set via ldflags.
+var SoftwareVersion = "dev"
 
 // RelayIdentity holds the relay's DID, profile artifact, and key material.
 type RelayIdentity struct {
@@ -21,8 +25,9 @@ type RelayIdentity struct {
 type RelayOptions struct {
 	Store      Store
 	Identity   *RelayIdentity
-	Content    *bool  // nil or true = enabled (default), false = disabled
-	Log        *bool  // nil or true = enabled (default), false = disabled
+	Content    *bool        // nil or true = enabled (default), false = disabled
+	Log        *bool        // nil or true = enabled (default), false = disabled
+	Logger     *slog.Logger // nil = slog.Default()
 	Peers      []PeerConfig
 	PeerClient   PeerClient // injected peer transport (nil = no peering)
 	ResyncOnBoot bool       // if true, reset peer cursors + sequencer on startup
