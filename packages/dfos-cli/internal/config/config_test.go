@@ -115,18 +115,27 @@ func TestResolveContext_EnvVarOverridesActiveContext(t *testing.T) {
 	}
 }
 
-func TestResolveContext_EnvVarOverridesBrokenActiveContext(t *testing.T) {
+func TestResolveContext_UnknownBareContextErrors(t *testing.T) {
 	cfg := testConfig()
-	cfg.ActiveContext = "nonexistent-identity"
-	os.Setenv("DFOS_IDENTITY", "alice")
+	_, err := ResolveContext(cfg, "nonexistent", "", "")
+	if err == nil {
+		t.Fatal("expected error for unknown bare context name")
+	}
+}
+
+func TestResolveContext_EnvVarOverridesBrokenActiveContext(t *testing.T) {
+	// When active_context is a valid identity@relay but env var overrides identity
+	cfg := testConfig()
+	cfg.ActiveContext = "alice@prod"
+	os.Setenv("DFOS_IDENTITY", "bob")
 	defer os.Unsetenv("DFOS_IDENTITY")
 
 	ctx, err := ResolveContext(cfg, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ctx.IdentityName != "alice" {
-		t.Errorf("identity = %q, want alice (env var should override broken active_context)", ctx.IdentityName)
+	if ctx.IdentityName != "bob" {
+		t.Errorf("identity = %q, want bob (env var should override context identity)", ctx.IdentityName)
 	}
 }
 

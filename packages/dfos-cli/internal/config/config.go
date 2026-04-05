@@ -131,9 +131,11 @@ func ResolveContext(cfg *Config, ctxFlag, identityFlag, relayFlag string) (*Reso
 			// inline context: identity@relay
 			identityName = parts[0]
 			relayName = parts[1]
-		} else {
-			// treat as identity-only context (local work without a relay)
+		} else if _, ok := cfg.Identities[ctxName]; ok {
+			// identity-only context (local work without a relay)
 			identityName = ctxName
+		} else {
+			return nil, fmt.Errorf("unknown context: %s (not a named context, identity@relay pair, or known identity)", ctxName)
 		}
 	}
 
