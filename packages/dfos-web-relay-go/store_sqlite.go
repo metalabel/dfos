@@ -96,16 +96,26 @@ type SQLiteStore struct {
 }
 
 // writerDB returns the active transaction if one exists, otherwise the raw db.
-func (s *SQLiteStore) writerDB() dbWriter {
+func (s *SQLiteStore) writerDB() dbConn {
 	if s.tx != nil {
 		return s.tx
 	}
 	return s.db
 }
 
-// dbWriter is the common interface between *sql.DB and *sql.Tx for write operations.
-type dbWriter interface {
+// readerDB returns the active transaction if one exists (so reads see
+// uncommitted writes within a batch), otherwise the read connection pool.
+func (s *SQLiteStore) readerDB() dbConn {
+	if s.tx != nil {
+		return s.tx
+	}
+	return s.readDB
+}
+
+// dbConn is the common interface between *sql.DB and *sql.Tx.
+type dbConn interface {
 	Exec(query string, args ...any) (sql.Result, error)
+	Query(query string, args ...any) (*sql.Rows, error)
 	QueryRow(query string, args ...any) *sql.Row
 }
 
@@ -206,7 +216,7 @@ func (s *SQLiteStore) Close() error {
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) GetOperation(cid string) (*StoredOperation, error) {
-	row := s.readDB.QueryRow("SELECT cid, jws_token, chain_type, chain_id FROM operations WHERE cid = ?", cid)
+	row := s.readerDB().QueryRow("SELECT cid, jws_token, chain_type, chain_id FROM operations WHERE cid = ?", cid)
 	var op StoredOperation
 	err := row.Scan(&op.CID, &op.JWSToken, &op.ChainType, &op.ChainID)
 	if err == sql.ErrNoRows {
@@ -231,7 +241,7 @@ func (s *SQLiteStore) PutOperation(op StoredOperation) error {
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) GetIdentityChain(did string) (*StoredIdentityChain, error) {
-	row := s.readDB.QueryRow("SELECT did, log, head_cid, last_created_at, state FROM identity_chains WHERE did = ?", did)
+	row := s.readerDB().QueryRow("SELECT did, log, head_cid, last_created_at, state FROM identity_chains WHERE did = ?", did)
 	var chain StoredIdentityChain
 	var logJSON, stateJSON []byte
 	err := row.Scan(&chain.DID, &logJSON, &chain.HeadCID, &chain.LastCreatedAt, &stateJSON)
@@ -271,7 +281,7 @@ func (s *SQLiteStore) PutIdentityChain(chain StoredIdentityChain) error {
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) GetContentChain(contentID string) (*StoredContentChain, error) {
-	row := s.readDB.QueryRow("SELECT content_id, genesis_cid, log, last_created_at, state FROM content_chains WHERE content_id = ?", contentID)
+	row := s.readerDB().QueryRow("SELECT content_id, genesis_cid, log, last_created_at, state FROM content_chains WHERE content_id = ?", contentID)
 	var chain StoredContentChain
 	var logJSON, stateJSON []byte
 	err := row.Scan(&chain.ContentID, &chain.GenesisCID, &logJSON, &chain.LastCreatedAt, &stateJSON)
@@ -311,7 +321,7 @@ func (s *SQLiteStore) PutContentChain(chain StoredContentChain) error {
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) GetBeacon(did string) (*StoredBeacon, error) {
-	row := s.readDB.QueryRow("SELECT did, jws_token, beacon_cid, payload FROM beacons WHERE did = ?", did)
+	row := s.readerDB().QueryRow("SELECT did, jws_token, beacon_cid, payload FROM beacons WHERE did = ?", did)
 	var beacon StoredBeacon
 	var payloadJSON []byte
 	err := row.Scan(&beacon.DID, &beacon.JWSToken, &beacon.BeaconCID, &payloadJSON)
@@ -344,7 +354,7 @@ func (s *SQLiteStore) PutBeacon(beacon StoredBeacon) error {
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) ListIdentityChains() ([]StoredIdentityChain, error) {
-	rows, err := s.readDB.Query("SELECT did, log, head_cid, last_created_at, state FROM identity_chains")
+	rows, err := s.readerDB().Query("SELECT did, log, head_cid, last_created_at, state FROM identity_chains")
 	if err != nil {
 		return nil, err
 	}
@@ -371,7 +381,7 @@ func (s *SQLiteStore) ListIdentityChains() ([]StoredIdentityChain, error) {
 }
 
 func (s *SQLiteStore) ListContentChains() ([]StoredContentChain, error) {
-	rows, err := s.readDB.Query("SELECT content_id, genesis_cid, log, last_created_at, state FROM content_chains")
+	rows, err := s.readerDB().Query("SELECT content_id, genesis_cid, log, last_created_at, state FROM content_chains")
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +408,7 @@ func (s *SQLiteStore) ListContentChains() ([]StoredContentChain, error) {
 }
 
 func (s *SQLiteStore) ListBeacons() ([]StoredBeacon, error) {
-	rows, err := s.readDB.Query("SELECT did, jws_token, beacon_cid, payload FROM beacons")
+	rows, err := s.readerDB().Query("SELECT did, jws_token, beacon_cid, payload FROM beacons")
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +436,7 @@ func (s *SQLiteStore) ListBeacons() ([]StoredBeacon, error) {
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) GetBlob(key BlobKey) ([]byte, error) {
-	row := s.readDB.QueryRow("SELECT data FROM blobs WHERE creator_did = ? AND document_cid = ?", key.CreatorDID, key.DocumentCID)
+	row := s.readerDB().QueryRow("SELECT data FROM blobs WHERE creator_did = ? AND document_cid = ?", key.CreatorDID, key.DocumentCID)
 	var data []byte
 	err := row.Scan(&data)
 	if err == sql.ErrNoRows {
@@ -451,7 +461,7 @@ func (s *SQLiteStore) PutBlob(key BlobKey, data []byte) error {
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) GetCountersignatures(operationCID string) ([]string, error) {
-	rows, err := s.readDB.Query("SELECT jws_token FROM countersignatures WHERE operation_cid = ?", operationCID)
+	rows, err := s.readerDB().Query("SELECT jws_token FROM countersignatures WHERE operation_cid = ?", operationCID)
 	if err != nil {
 		return nil, err
 	}
@@ -510,14 +520,14 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 
 	if after != "" {
 		// find the seq of the cursor CID, then fetch after it
-		rows, err = s.readDB.Query(
+		rows, err = s.readerDB().Query(
 			`SELECT cid, jws_token, kind, chain_id FROM operation_log
 			 WHERE seq > (SELECT COALESCE((SELECT seq FROM operation_log WHERE cid = ? LIMIT 1), 999999999))
 			 ORDER BY seq ASC LIMIT ?`,
 			after, limit,
 		)
 	} else {
-		rows, err = s.readDB.Query(
+		rows, err = s.readerDB().Query(
 			"SELECT cid, jws_token, kind, chain_id FROM operation_log ORDER BY seq ASC LIMIT ?",
 			limit,
 		)
@@ -648,7 +658,7 @@ func (s *SQLiteStore) GetContentStateAtCID(contentID, cid string) (*ContentState
 }
 
 func (s *SQLiteStore) GetPeerCursor(peerURL string) (string, error) {
-	row := s.readDB.QueryRow("SELECT cursor FROM peer_cursors WHERE peer_url = ?", peerURL)
+	row := s.readerDB().QueryRow("SELECT cursor FROM peer_cursors WHERE peer_url = ?", peerURL)
 	var cursor string
 	err := row.Scan(&cursor)
 	if err == sql.ErrNoRows {
@@ -674,7 +684,7 @@ func (s *SQLiteStore) SetPeerCursor(peerURL string, cursor string) error {
 
 // GetMeta returns the value for a metadata key, or nil if not found.
 func (s *SQLiteStore) GetMeta(key string) ([]byte, error) {
-	row := s.readDB.QueryRow("SELECT value FROM relay_meta WHERE key = ?", key)
+	row := s.readerDB().QueryRow("SELECT value FROM relay_meta WHERE key = ?", key)
 	var value []byte
 	err := row.Scan(&value)
 	if err == sql.ErrNoRows {
@@ -711,7 +721,7 @@ func (s *SQLiteStore) PutRawOp(cid string, jwsToken string) error {
 
 // GetUnsequencedOps returns JWS tokens for ops that haven't been sequenced yet.
 func (s *SQLiteStore) GetUnsequencedOps(limit int) ([]string, error) {
-	rows, err := s.readDB.Query(
+	rows, err := s.readerDB().Query(
 		"SELECT jws_token FROM raw_ops WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
 		limit,
 	)
@@ -751,7 +761,7 @@ func (s *SQLiteStore) MarkOpRejected(cid string, reason string) error {
 // CountUnsequenced returns the number of pending (unsequenced) raw ops.
 func (s *SQLiteStore) CountUnsequenced() (int, error) {
 	var count int
-	err := s.readDB.QueryRow("SELECT COUNT(*) FROM raw_ops WHERE status = 'pending'").Scan(&count)
+	err := s.readerDB().QueryRow("SELECT COUNT(*) FROM raw_ops WHERE status = 'pending'").Scan(&count)
 	return count, err
 }
 

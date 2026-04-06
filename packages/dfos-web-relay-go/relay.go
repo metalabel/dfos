@@ -122,15 +122,15 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 		}
 	}
 
-	// run sequencer while still holding mutex — resolves pending ops whose deps just arrived
-	seqNewOps, _ := r.runSequencerLocked()
-
 	if hasBatch {
 		if err := batchable.CommitWriteBatch(); err != nil {
 			r.logger.Error("failed to commit write batch", "error", err)
 			batchable.RollbackWriteBatch()
 		}
 	}
+
+	// run sequencer after commit — reads must see the committed status updates
+	seqNewOps, _ := r.runSequencerLocked()
 
 	r.ingestMu.Unlock()
 
