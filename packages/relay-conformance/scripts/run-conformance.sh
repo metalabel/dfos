@@ -3,14 +3,14 @@
 # Run Go conformance tests against the local TS Hono relay.
 #
 # Usage:
-#   cd packages/dfos-web-relay && ./tests/run-conformance.sh
+#   cd packages/relay-conformance && ./scripts/run-conformance.sh
 #
 # Starts a TS relay on a random port, runs `go test`, then kills the relay.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RELAY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFORMANCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # find an available port
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
@@ -43,7 +43,7 @@ echo "Relay ready at http://localhost:$PORT"
 echo ""
 
 # run Go conformance tests
-cd "$RELAY_DIR/conformance"
+cd "$CONFORMANCE_DIR"
 RELAY_URL="http://localhost:$PORT" go test -v -count=1 ./...
 EXIT_CODE=$?
 
