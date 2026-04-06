@@ -7,12 +7,14 @@ import (
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/cmd"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/update"
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 )
 
 var version = "dev"
 
 func main() {
 	cmd.Version = version
+	relay.SoftwareVersion = version
 
 	// start background version check (non-blocking, 2s timeout, 24h cache)
 	updateDone := make(chan struct{})

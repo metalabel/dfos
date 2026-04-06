@@ -92,6 +92,55 @@ DROP TABLE IF EXISTS pending_ops;
 type SQLiteStore struct {
 	db     *sql.DB // write connection (single writer)
 	readDB *sql.DB // read connection pool (concurrent reads)
+	tx     *sql.Tx // active write batch transaction, if any
+}
+
+// writerDB returns the active transaction if one exists, otherwise the raw db.
+func (s *SQLiteStore) writerDB() dbWriter {
+	if s.tx != nil {
+		return s.tx
+	}
+	return s.db
+}
+
+// dbWriter is the common interface between *sql.DB and *sql.Tx for write operations.
+type dbWriter interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// BeginWriteBatch starts a SQLite transaction for batching writes.
+// Only safe to call when the caller holds exclusive write access (e.g. ingestMu).
+func (s *SQLiteStore) BeginWriteBatch() error {
+	if s.tx != nil {
+		return fmt.Errorf("write batch already active")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	s.tx = tx
+	return nil
+}
+
+// CommitWriteBatch commits the active write batch transaction.
+func (s *SQLiteStore) CommitWriteBatch() error {
+	if s.tx == nil {
+		return fmt.Errorf("no write batch active")
+	}
+	err := s.tx.Commit()
+	s.tx = nil
+	return err
+}
+
+// RollbackWriteBatch rolls back the active write batch transaction.
+func (s *SQLiteStore) RollbackWriteBatch() error {
+	if s.tx == nil {
+		return nil
+	}
+	err := s.tx.Rollback()
+	s.tx = nil
+	return err
 }
 
 // NewSQLiteStore opens or creates a SQLite database at the given path
@@ -170,7 +219,7 @@ func (s *SQLiteStore) GetOperation(cid string) (*StoredOperation, error) {
 }
 
 func (s *SQLiteStore) PutOperation(op StoredOperation) error {
-	_, err := s.db.Exec(
+	_, err := s.writerDB().Exec(
 		"INSERT OR REPLACE INTO operations (cid, jws_token, chain_type, chain_id) VALUES (?, ?, ?, ?)",
 		op.CID, op.JWSToken, op.ChainType, op.ChainID,
 	)
@@ -210,7 +259,7 @@ func (s *SQLiteStore) PutIdentityChain(chain StoredIdentityChain) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(
+	_, err = s.writerDB().Exec(
 		"INSERT OR REPLACE INTO identity_chains (did, log, head_cid, last_created_at, state) VALUES (?, ?, ?, ?, ?)",
 		chain.DID, logJSON, chain.HeadCID, chain.LastCreatedAt, stateJSON,
 	)
@@ -250,7 +299,7 @@ func (s *SQLiteStore) PutContentChain(chain StoredContentChain) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(
+	_, err = s.writerDB().Exec(
 		"INSERT OR REPLACE INTO content_chains (content_id, genesis_cid, log, last_created_at, state) VALUES (?, ?, ?, ?, ?)",
 		chain.ContentID, chain.GenesisCID, logJSON, chain.LastCreatedAt, stateJSON,
 	)
@@ -283,7 +332,7 @@ func (s *SQLiteStore) PutBeacon(beacon StoredBeacon) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(
+	_, err = s.writerDB().Exec(
 		"INSERT OR REPLACE INTO beacons (did, jws_token, beacon_cid, payload) VALUES (?, ?, ?, ?)",
 		beacon.DID, beacon.JWSToken, beacon.BeaconCID, payloadJSON,
 	)
@@ -390,7 +439,7 @@ func (s *SQLiteStore) GetBlob(key BlobKey) ([]byte, error) {
 }
 
 func (s *SQLiteStore) PutBlob(key BlobKey, data []byte) error {
-	_, err := s.db.Exec(
+	_, err := s.writerDB().Exec(
 		"INSERT OR REPLACE INTO blobs (creator_did, document_cid, data) VALUES (?, ?, ?)",
 		key.CreatorDID, key.DocumentCID, data,
 	)
@@ -436,7 +485,7 @@ func (s *SQLiteStore) AddCountersignature(operationCID string, jwsToken string) 
 	}
 
 	// INSERT OR IGNORE deduplicates by (operation_cid, witness_did)
-	_, err = s.db.Exec(
+	_, err = s.writerDB().Exec(
 		"INSERT OR IGNORE INTO countersignatures (operation_cid, jws_token, witness_did) VALUES (?, ?, ?)",
 		operationCID, jwsToken, witnessDID,
 	)
@@ -448,7 +497,7 @@ func (s *SQLiteStore) AddCountersignature(operationCID string, jwsToken string) 
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) AppendToLog(entry LogEntry) error {
-	_, err := s.db.Exec(
+	_, err := s.writerDB().Exec(
 		"INSERT INTO operation_log (cid, jws_token, kind, chain_id) VALUES (?, ?, ?, ?)",
 		entry.CID, entry.JWSToken, entry.Kind, entry.ChainID,
 	)
@@ -612,7 +661,7 @@ func (s *SQLiteStore) GetPeerCursor(peerURL string) (string, error) {
 }
 
 func (s *SQLiteStore) SetPeerCursor(peerURL string, cursor string) error {
-	_, err := s.db.Exec(
+	_, err := s.writerDB().Exec(
 		"INSERT OR REPLACE INTO peer_cursors (peer_url, cursor) VALUES (?, ?)",
 		peerURL, cursor,
 	)
@@ -639,7 +688,7 @@ func (s *SQLiteStore) GetMeta(key string) ([]byte, error) {
 
 // SetMeta stores a metadata key-value pair (upsert).
 func (s *SQLiteStore) SetMeta(key string, value []byte) error {
-	_, err := s.db.Exec(
+	_, err := s.writerDB().Exec(
 		"INSERT OR REPLACE INTO relay_meta (key, value) VALUES (?, ?)",
 		key, value,
 	)
@@ -653,7 +702,7 @@ func (s *SQLiteStore) SetMeta(key string, value []byte) error {
 // PutRawOp stores a JWS token in the content-addressed raw op store.
 // Idempotent — ignores duplicates.
 func (s *SQLiteStore) PutRawOp(cid string, jwsToken string) error {
-	_, err := s.db.Exec(
+	_, err := s.writerDB().Exec(
 		"INSERT OR IGNORE INTO raw_ops (cid, jws_token) VALUES (?, ?)",
 		cid, jwsToken,
 	)
@@ -683,15 +732,16 @@ func (s *SQLiteStore) GetUnsequencedOps(limit int) ([]string, error) {
 
 // MarkOpsSequenced marks the given CIDs as successfully sequenced.
 func (s *SQLiteStore) MarkOpsSequenced(cids []string) error {
+	w := s.writerDB()
 	for _, cid := range cids {
-		s.db.Exec("UPDATE raw_ops SET status = 'sequenced' WHERE cid = ?", cid)
+		w.Exec("UPDATE raw_ops SET status = 'sequenced' WHERE cid = ?", cid)
 	}
 	return nil
 }
 
 // MarkOpRejected marks a CID as permanently rejected with a reason.
 func (s *SQLiteStore) MarkOpRejected(cid string, reason string) error {
-	_, err := s.db.Exec(
+	_, err := s.writerDB().Exec(
 		"UPDATE raw_ops SET status = 'rejected', error = ? WHERE cid = ?",
 		reason, cid,
 	)
@@ -711,12 +761,12 @@ func (s *SQLiteStore) CountUnsequenced() (int, error) {
 
 // ResetPeerCursors clears all peer cursors, forcing a full re-sync.
 func (s *SQLiteStore) ResetPeerCursors() error {
-	_, err := s.db.Exec("DELETE FROM peer_cursors")
+	_, err := s.writerDB().Exec("DELETE FROM peer_cursors")
 	return err
 }
 
 // ResetSequencer marks all non-rejected raw ops as pending for re-sequencing.
 func (s *SQLiteStore) ResetSequencer() error {
-	_, err := s.db.Exec("UPDATE raw_ops SET status = 'pending' WHERE status != 'rejected'")
+	_, err := s.writerDB().Exec("UPDATE raw_ops SET status = 'pending' WHERE status != 'rejected'")
 	return err
 }

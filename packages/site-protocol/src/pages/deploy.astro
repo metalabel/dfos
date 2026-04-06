@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import { Marked } from 'marked';
 import Base from '../layouts/Base.astro';
 
-// Read CLI.md at build time from the CLI package
-const cliMd = fs.readFileSync('../dfos-cli/CLI.md', 'utf-8');
+// Read QUICKSTART.md at build time from the deploy directory
+const deployMd = fs.readFileSync('../../deploy/QUICKSTART.md', 'utf-8');
 
 function slugify(text: string): string {
   return text
@@ -17,7 +17,7 @@ function slugify(text: string): string {
 }
 
 const marked = new Marked();
-let html = await marked.parse(cliMd);
+let html = await marked.parse(deployMd);
 
 // Fix GFM strikethrough
 html = html.replace(/<del>/g, '~');
@@ -43,9 +43,9 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
 ---
 
 <Base
-  title="CLI"
-  description="DFOS CLI — Go command-line interface for managing identities, content chains, beacons, and credentials against protocol relays."
-  path="/cli"
+  title="Deploy"
+  description="Running a DFOS relay — Docker Compose with Caddy auto-TLS, configuration, peering, and container images."
+  path="/deploy"
 >
   <div class="page-content spec-width">
     <nav class="site-nav">
@@ -73,7 +73,7 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
     <p class="credits"><a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT License</a> &middot; 2026</p>
   </footer>
 
-  <template id="raw-md">{cliMd}</template>
+  <template id="raw-md">{deployMd}</template>
   <script is:inline>
     document.getElementById('copy-md').addEventListener('click', function () {
       const md = document.getElementById('raw-md').content.textContent;

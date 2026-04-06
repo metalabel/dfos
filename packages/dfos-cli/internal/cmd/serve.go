@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
 	"github.com/spf13/cobra"
 )
@@ -75,6 +77,11 @@ All flags support environment variable fallbacks for container deployment:
 				extraPeers = parsePeerURLs(peers)
 			}
 
+			// set up structured JSON logging for server mode
+			slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+				Level: slog.LevelInfo,
+			})))
+
 			// open relay with serve-specific options
 			opts := &localrelay.Options{
 				DBPath:      dbPath,
@@ -101,7 +108,7 @@ All flags support environment variable fallbacks for container deployment:
 				lr.Store.ResetSequencer()
 			}
 
-			fmt.Printf("DFOS relay serving\n")
+			fmt.Printf("DFOS relay serving (%s)\n", relay.SoftwareVersion)
 			fmt.Printf("  DID:    %s\n", lr.Relay.DID())
 			fmt.Printf("  Port:   %s\n", port)
 			fmt.Printf("  Sync:   every %s\n", interval)
