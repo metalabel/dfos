@@ -1170,12 +1170,12 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 | Language   | Tests | Source                                                                                                   |
 | ---------- | ----- | -------------------------------------------------------------------------------------------------------- |
-| TypeScript | 224   | [`dfos-protocol/tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)      |
-| TypeScript | 63    | [`protocol-verify/ts/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/ts)        |
-| Go         | 18    | [`protocol-verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/go)        |
-| Rust       | 18    | [`protocol-verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/rust)    |
+| TypeScript | 224   | [`dfos-protocol/tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)       |
+| TypeScript | 63    | [`protocol-verify/ts/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/ts)         |
+| Go         | 18    | [`protocol-verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/go)         |
+| Rust       | 18    | [`protocol-verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/rust)     |
 | Python     | 3     | [`protocol-verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/python) |
-| Swift      | 3     | [`protocol-verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/swift)  |
+| Swift      | 3     | [`protocol-verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/swift)   |
 
 ---
 
