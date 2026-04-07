@@ -27,29 +27,22 @@ import Base from '../layouts/Base.astro';
     </header>
 
     <div class="hero-inner">
-      <div class="hero-split">
-        <div class="hero-split-left">
-          <h1 class="hero-headline">
-            The proof is public
-            <span class="hero-headline-break"></span>
-            The content is private
-          </h1>
-        </div>
-        <div class="hero-split-right">
-          <p class="hero-setup">
-            Identity on the internet is platform-granted.<br />
-            The places that matter most are private.<br />
-            Proofs don't survive the platform.
-          </p>
-          <img src="/key-icon-green.svg" alt="" class="hero-key" />
-        </div>
+      <div class="hero-zingers">
+        <p>Your identity on the internet belongs to someone else.</p>
+        <p>The places that matter most are private.</p>
+        <p>Proofs don't outlive the platform.</p>
       </div>
+      <h1 class="hero-headline">
+        The proof is public
+        <span class="hero-headline-break"></span>
+        The content is private
+      </h1>
       <p class="hero-tagline">
         Prove you authored something without revealing what it is.
       </p>
       <div class="hero-cta">
         <a href="#get-started" class="hero-cta-link">Install the CLI</a>
-        <a href="/overview" class="hero-cta-link hero-cta-link--dim">Understand the protocol</a>
+        <a href="/overview" class="hero-cta-link hero-cta-link--dim">Why this exists</a>
         <a href="/spec" class="hero-cta-link hero-cta-link--dim">Read the spec</a>
       </div>
     </div>
@@ -64,19 +57,20 @@ import Base from '../layouts/Base.astro';
       <span class="section-label">T H E &nbsp; D A R K &nbsp; F O R E S T</span>
       <h2>Two realms</h2>
       <p>
-        The internet is not a public square. The most meaningful creative and social
-        coordination happens in private groups, closed communities, invite-only spaces.
+        The most meaningful creative and social coordination on the internet
+        happens in private groups, closed communities, invite-only spaces.
         The topology is private-first.
       </p>
       <p>
-        Existing systems collapse proof and content into the same surface. If you
-        can't access the content, you can't verify anything about it. DFOS separates them.
+        Every existing system collapses proof and content into the same surface.
+        If you can't access the content, you can't verify anything about it.
+        DFOS separates them.
       </p>
       <p>
-        The proof surface is public &mdash; signed chains that anyone can verify.
-        The content surface is private &mdash; documents in member-governed spaces,
+        The proof realm is public &mdash; signed chains that anyone can verify.
+        The content realm is private &mdash; documents in member-governed spaces,
         visible only to participants.
-        The protocol defines the proof surface. It sees hashes, never documents.
+        The protocol defines the proof realm. It sees hashes, never documents.
       </p>
     </div>
   </section>
@@ -84,11 +78,11 @@ import Base from '../layouts/Base.astro';
   <!-- ═══ How It Works ═══ -->
   <section class="dark-section">
     <div class="dark-section-inner">
-      <span class="section-label">H O W &nbsp; I T &nbsp; W O R K S</span>
+      <span class="section-label">T H E &nbsp; P R O T O C O L</span>
 
       <div class="concepts-three">
         <div class="concept-card">
-          <h2>Signed chains</h2>
+          <h2>Self-certifying identity</h2>
           <p>
             Identity is a chain of cryptographic operations you control.
             Your <a href="/did-method"><code>did:dfos</code></a> identifier derives from
@@ -98,7 +92,7 @@ import Base from '../layouts/Base.astro';
         </div>
 
         <div class="concept-card">
-          <h2>Verify locally</h2>
+          <h2>Offline verification</h2>
           <p>
             Verification is a pure function. Public key + signed chain = valid or invalid.
             Any Ed25519 library, any language. The chain carries everything needed.
@@ -107,9 +101,9 @@ import Base from '../layouts/Base.astro';
         </div>
 
         <div class="concept-card">
-          <h2>Web relays</h2>
+          <h2>Trustless distribution</h2>
           <p>
-            <a href="/web-relay">HTTP endpoints</a> that independently verify every operation
+            <a href="/web-relay">Web relays</a> independently verify every operation
             on ingestion. No trust between relays. No hierarchy.
             Topology is emergent. Three peering behaviors compose the network:
             gossip, read-through, and sync.
@@ -124,7 +118,7 @@ import Base from '../layouts/Base.astro';
     <div class="credibility-strip">
       <span>MIT License</span>
       <span class="credibility-dot">&middot;</span>
-      <span>Production-used</span>
+      <span>Powers the <a href="https://dfos.com">DFOS platform</a></span>
       <span class="credibility-dot">&middot;</span>
       <span>TypeScript &middot; Go &middot; Python &middot; Rust &middot; Swift</span>
     </div>
@@ -137,17 +131,17 @@ import Base from '../layouts/Base.astro';
       <a href="#get-started" class="intent-card">
         <span class="intent-label">B U I L D</span>
         <span class="intent-title">Install the CLI</span>
-        <span class="intent-desc">Create identities, sign content, run relays. Pre-built binaries for Linux, macOS, and Windows.</span>
+        <span class="intent-desc">One binary. Create identities, sign content, run relays. Linux, macOS, Windows.</span>
       </a>
       <a href="/overview" class="intent-card">
         <span class="intent-label">U N D E R S T A N D</span>
         <span class="intent-title">Why this exists</span>
-        <span class="intent-desc">The structural condition, the dark forest topology, design principles. What the protocol is and isn't.</span>
+        <span class="intent-desc">The structural condition of platform identity, the dark forest topology, and what falls out of it.</span>
       </a>
       <a href="/spec" class="intent-card">
         <span class="intent-label">E V A L U A T E</span>
         <span class="intent-title">Read the spec</span>
-        <span class="intent-desc">Chains, beacons, merkle trees, CID derivation, verification rules, deterministic test vectors.</span>
+        <span class="intent-desc">Chains, beacons, merkle trees, CID derivation, verification rules, and deterministic test vectors.</span>
       </a>
     </div>
   </section>
@@ -197,8 +191,8 @@ dfos serve`} /></pre>
 
   <!-- ═══ Specifications ═══ -->
   <section class="landing-section">
-    <span class="section-label">T H E &nbsp; P R O T O C O L</span>
-    <h2>Specifications</h2>
+    <span class="section-label">S P E C I F I C A T I O N S</span>
+    <h2>Read the protocol</h2>
 
     <div class="spec-links spec-links--quad">
       <a href="/spec" class="spec-link">
