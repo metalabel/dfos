@@ -343,7 +343,7 @@ img {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.35em;
-  color: var(--teal-dim);
+  color: var(--teal);
   margin-bottom: 0.75rem;
   display: block;
 }
@@ -1155,11 +1155,11 @@ a.card:hover {
 
 .install-label {
   font-family: var(--font-body);
-  font-weight: 300;
+  font-weight: 400;
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.25em;
-  color: var(--teal-dim);
+  color: var(--teal);
   margin-bottom: 0.75rem;
 }
 
@@ -1337,10 +1337,10 @@ a.card:hover {
 
 .intent-label {
   font-family: var(--font-body);
-  font-weight: 300;
-  font-size: 0.6rem;
+  font-weight: 400;
+  font-size: 0.65rem;
   letter-spacing: 0.35em;
-  color: var(--teal-dim);
+  color: var(--teal);
   margin-bottom: 0.75rem;
   display: block;
 }
