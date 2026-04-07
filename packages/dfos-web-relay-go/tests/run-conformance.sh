@@ -58,7 +58,7 @@ echo "Relay ready at http://localhost:$PORT"
 echo ""
 
 # run Go conformance tests
-cd "$REPO_ROOT/packages/dfos-web-relay/conformance"
+cd "$REPO_ROOT/packages/relay-conformance"
 RELAY_URL="http://localhost:$PORT" go test -v -count=1 ./...
 EXIT_CODE=$?
 

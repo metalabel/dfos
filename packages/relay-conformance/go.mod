@@ -1,4 +1,4 @@
-module github.com/metalabel/dfos/packages/dfos-web-relay/conformance
+module github.com/metalabel/dfos/packages/relay-conformance
 
 go 1.26
 
@@ -10,4 +10,4 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 )
 
-replace github.com/metalabel/dfos/packages/dfos-protocol-go => ../../dfos-protocol-go
+replace github.com/metalabel/dfos/packages/dfos-protocol-go => ../dfos-protocol-go

@@ -51,7 +51,6 @@
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:conformance": "./tests/run-conformance.sh",
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
