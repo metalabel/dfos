@@ -433,13 +433,18 @@ img {
   font-size: clamp(2rem, 4.5vw, 3.5rem);
   text-transform: uppercase;
   letter-spacing: -0.02em;
-  line-height: 1.5;
+  line-height: 1.1;
   color: var(--green);
   margin-bottom: 0;
 }
 
 .hero-headline .period {
   color: var(--fg);
+}
+
+.hero-headline-break {
+  display: block;
+  height: 1rem;
 }
 
 .hero-tagline {
@@ -1173,9 +1178,6 @@ a.card:hover {
   padding: 1rem 1.25rem;
 }
 
-.install-code--wide {
-  max-width: 540px;
-}
 
 .install-code code {
   font-family: var(--font-mono);
@@ -1228,7 +1230,7 @@ a.card:hover {
 }
 
 .quickstart-block {
-  max-width: 540px;
+  max-width: 100%;
 }
 
 .quickstart-pre {
@@ -1374,20 +1376,6 @@ a.card:hover {
   width: auto;
   opacity: 0.75;
   filter: drop-shadow(0 0 40px rgba(0, 255, 9, 0.25));
-}
-
-/* ═══ Get Started Wide ═══ */
-
-.get-started-wide {
-  max-width: 100%;
-}
-
-.get-started-wide .install-code {
-  max-width: 100%;
-}
-
-.quickstart-block--wide {
-  max-width: 100%;
 }
 
 /* ═══ Spec Links Quad ═══ */

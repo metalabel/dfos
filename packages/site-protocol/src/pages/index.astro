@@ -30,7 +30,8 @@ import Base from '../layouts/Base.astro';
       <div class="hero-split">
         <div class="hero-split-left">
           <h1 class="hero-headline">
-            The proof is public<br />
+            The proof is public.
+            <span class="hero-headline-break"></span>
             The content is private
           </h1>
         </div>
@@ -118,12 +119,9 @@ import Base from '../layouts/Base.astro';
     </div>
   </section>
 
-  <!-- ═══ Image Break ═══ -->
-  <section class="image-break">
-    <img src="/painting-deer.jpg" alt="" class="image-break-bg" />
-    <div class="image-break-overlay">
-      <img src="/key-icon-green.svg" alt="" class="image-break-key" />
-    </div>
+  <!-- ═══ Key Separator ═══ -->
+  <section class="key-separator">
+    <img src="/key-icon-green.svg" alt="" class="key-separator-icon" />
   </section>
 
   <!-- ═══ Credibility + Routing ═══ -->
@@ -159,37 +157,31 @@ import Base from '../layouts/Base.astro';
     </div>
   </section>
 
-  <!-- ═══ Key Separator ═══ -->
-  <section class="key-separator">
-    <img src="/key-icon-green.svg" alt="" class="key-separator-icon" />
-  </section>
-
   <!-- ═══ Get Started ═══ -->
-  <section class="dark-section get-started" id="get-started">
-    <div class="dark-section-inner get-started-wide">
-      <span class="section-label">G E T &nbsp; S T A R T E D</span>
-      <h2>Install the CLI</h2>
-      <p class="get-started-intro">
-        One binary. Keys in your OS keychain. Local-first by default.
-        <a href="/cli">Full documentation</a>.
-      </p>
+  <section class="landing-section get-started" id="get-started">
+    <span class="section-label">G E T &nbsp; S T A R T E D</span>
+    <h2>Install the CLI</h2>
+    <p class="get-started-intro">
+      One binary. Keys in your OS keychain. Local-first by default.
+      <a href="/cli">Full documentation</a>.
+    </p>
 
-      <div class="install-primary">
-        <div class="install-code">
-          <code>curl -sSL https://protocol.dfos.com/install.sh | sh</code>
-          <button class="install-copy" aria-label="Copy command">copy</button>
-        </div>
-        <p class="install-alt">
-          Also available via
-          <code>brew install metalabel/tap/dfos</code>
-          and
-          <code>docker pull ghcr.io/metalabel/dfos</code>
-        </p>
+    <div class="install-primary">
+      <div class="install-code">
+        <code>curl -sSL https://protocol.dfos.com/install.sh | sh</code>
+        <button class="install-copy" aria-label="Copy command">copy</button>
       </div>
+      <p class="install-alt">
+        Also available via
+        <code>brew install metalabel/tap/dfos</code>
+        and
+        <code>docker pull ghcr.io/metalabel/dfos</code>
+      </p>
+    </div>
 
-      <div class="quickstart-block quickstart-block--wide">
-        <div class="install-label">Quickstart</div>
-        <pre class="quickstart-pre"><code set:html={`<span class="qs-comment"># create your identity</span>
+    <div class="quickstart-block">
+      <div class="install-label">Quickstart</div>
+      <pre class="quickstart-pre"><code set:html={`<span class="qs-comment"># create your identity</span>
 dfos identity create --name myname
 
 <span class="qs-comment"># publish your first post</span>
@@ -200,7 +192,6 @@ dfos content list
 
 <span class="qs-comment"># run a relay</span>
 dfos serve`} /></pre>
-      </div>
     </div>
   </section>
 
