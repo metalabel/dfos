@@ -396,9 +396,9 @@ img {
 }
 
 .hero-key {
-  height: 120px;
+  height: 80px;
   width: auto;
-  margin-bottom: 3rem;
+  margin-top: 2.5rem;
   opacity: 0.85;
   filter: drop-shadow(0 0 30px rgba(0, 255, 9, 0.25));
 }
@@ -437,12 +437,11 @@ img {
 }
 
 .hero-tagline {
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   font-weight: 400;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  color: var(--teal-dim);
+  font-size: clamp(0.9rem, 1.3vw, 1rem);
+  letter-spacing: 0.01em;
+  color: var(--teal);
   margin-bottom: 3rem;
 }
 
