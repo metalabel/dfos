@@ -403,38 +403,38 @@ img {
   filter: drop-shadow(0 0 30px rgba(0, 255, 9, 0.25));
 }
 
+.hero-setup {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: clamp(0.95rem, 1.6vw, 1.1rem);
+  line-height: 2.2;
+  color: var(--fg-body);
+  margin-bottom: 3rem;
+  letter-spacing: 0.01em;
+}
+
 .hero-headline {
   font-family: var(--font-body);
   font-weight: 700;
-  font-size: clamp(1.8rem, 4.5vw, 3.2rem);
+  font-size: clamp(2.2rem, 5.5vw, 4rem);
   text-transform: uppercase;
   letter-spacing: -0.02em;
-  line-height: 1.1;
+  line-height: 1.08;
   color: var(--green);
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
 }
 
 .hero-headline .period {
   color: var(--fg);
 }
 
-.hero-setup {
-  font-family: var(--font-body);
-  font-weight: 500;
-  font-size: clamp(1.05rem, 2vw, 1.35rem);
-  line-height: 2;
-  color: var(--fg);
-  margin-bottom: 2.5rem;
-  letter-spacing: 0.01em;
-}
-
 .hero-tagline {
-  font-family: var(--font-body);
-  font-weight: 600;
-  font-size: clamp(0.9rem, 1.5vw, 1.05rem);
+  font-family: var(--font-mono);
+  font-weight: 400;
+  font-size: 0.75rem;
   text-transform: uppercase;
-  letter-spacing: 0.2em;
-  color: var(--teal);
+  letter-spacing: 0.18em;
+  color: var(--teal-dim);
   margin-bottom: 3rem;
 }
 
@@ -883,21 +883,21 @@ a.card:hover {
 
 .copy-md {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--teal-dim);
+  font-size: 0.8rem;
+  color: var(--green);
   background: none;
-  border: 1px solid var(--surface-border);
+  border: 1px solid rgba(0, 255, 9, 0.3);
   border-radius: 3px;
-  padding: 0.3em 0.8em;
+  padding: 0.4em 1em;
   cursor: pointer;
   transition:
-    color 0.15s,
+    background 0.15s,
     border-color 0.15s;
   margin-left: auto;
 }
 
 .copy-md:hover {
-  color: var(--green);
+  background: rgba(0, 255, 9, 0.08);
   border-color: var(--green);
 }
 
@@ -959,16 +959,17 @@ a.card:hover {
   top: 0.5rem;
   right: 0.5rem;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
-  color: var(--teal-dim);
+  font-size: 0.8rem;
+  color: var(--green);
   background: none;
-  border: none;
+  border: 1px solid rgba(0, 255, 9, 0.3);
+  border-radius: 3px;
   cursor: pointer;
   opacity: 0;
   transition:
     opacity 0.15s,
-    color 0.15s;
-  padding: 0.15em 0.4em;
+    background 0.15s;
+  padding: 0.35em 0.8em;
 }
 
 .code-wrap:hover .code-copy {
@@ -976,7 +977,8 @@ a.card:hover {
 }
 
 .code-copy:hover {
-  color: var(--green);
+  background: rgba(0, 255, 9, 0.08);
+  border-color: var(--green);
 }
 
 .spec .table-wrap {
@@ -1178,18 +1180,22 @@ a.card:hover {
 
 .install-copy {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--teal-dim);
+  font-size: 0.8rem;
+  color: var(--green);
   background: none;
-  border: none;
+  border: 1px solid rgba(0, 255, 9, 0.3);
+  border-radius: 3px;
   cursor: pointer;
-  padding: 0.15em 0.4em;
+  padding: 0.35em 0.8em;
   flex-shrink: 0;
-  transition: color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
 
 .install-copy:hover {
-  color: var(--green);
+  background: rgba(0, 255, 9, 0.08);
+  border-color: var(--green);
 }
 
 .install-alt {
@@ -1368,7 +1374,7 @@ a.card:hover {
   }
 
   .hero-headline {
-    font-size: clamp(2rem, 9vw, 3.5rem);
+    font-size: clamp(1.6rem, 8vw, 2.8rem);
   }
 
   .site-header {
