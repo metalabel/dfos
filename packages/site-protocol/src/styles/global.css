@@ -403,25 +403,33 @@ img {
   filter: drop-shadow(0 0 30px rgba(0, 255, 9, 0.25));
 }
 
+.hero-split {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4rem;
+  align-items: end;
+  margin-bottom: 2.5rem;
+}
+
 .hero-setup {
   font-family: var(--font-body);
   font-weight: 400;
-  font-size: clamp(0.95rem, 1.6vw, 1.1rem);
+  font-size: clamp(0.9rem, 1.4vw, 1.05rem);
   line-height: 2.2;
   color: var(--fg-body);
-  margin-bottom: 3rem;
+  margin-bottom: 0;
   letter-spacing: 0.01em;
 }
 
 .hero-headline {
   font-family: var(--font-body);
   font-weight: 700;
-  font-size: clamp(2.2rem, 5.5vw, 4rem);
+  font-size: clamp(2rem, 4.5vw, 3.5rem);
   text-transform: uppercase;
   letter-spacing: -0.02em;
   line-height: 1.08;
   color: var(--green);
-  margin-bottom: 1.5rem;
+  margin-bottom: 0;
 }
 
 .hero-headline .period {
@@ -1274,6 +1282,13 @@ a.card:hover {
   align-items: center;
 }
 
+/* copy buttons: all-caps */
+.copy-md,
+.code-copy,
+.install-copy {
+  text-transform: uppercase;
+}
+
 .credibility-dot {
   color: var(--teal-dim);
 }
@@ -1371,6 +1386,15 @@ a.card:hover {
   .hero-key {
     height: 80px;
     margin-bottom: 2rem;
+  }
+
+  .hero-split {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+
+  .hero-setup {
+    margin-bottom: 0;
   }
 
   .hero-headline {
