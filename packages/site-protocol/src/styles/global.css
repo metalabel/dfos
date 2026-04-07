@@ -406,24 +406,34 @@ img {
 .hero-headline {
   font-family: var(--font-body);
   font-weight: 700;
-  font-size: clamp(2.8rem, 7vw, 5.5rem);
+  font-size: clamp(1.8rem, 4.5vw, 3.2rem);
   text-transform: uppercase;
-  letter-spacing: -0.03em;
-  line-height: 1.02;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
   color: var(--green);
-  margin-bottom: 2.5rem;
+  margin-bottom: 2rem;
 }
 
 .hero-headline .period {
   color: var(--fg);
 }
 
-.hero-tagline {
+.hero-setup {
   font-family: var(--font-body);
   font-weight: 400;
-  font-size: 0.85rem;
+  font-size: clamp(0.85rem, 1.5vw, 1rem);
+  line-height: 1.9;
+  color: var(--teal);
+  margin-bottom: 2.5rem;
+  letter-spacing: 0.01em;
+}
+
+.hero-tagline {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: clamp(0.9rem, 1.5vw, 1.05rem);
   text-transform: uppercase;
-  letter-spacing: 0.25em;
+  letter-spacing: 0.2em;
   color: var(--teal);
   margin-bottom: 3rem;
 }
@@ -1222,6 +1232,112 @@ a.card:hover {
   color: var(--teal-dim);
 }
 
+/* ═══ Three-Column Concepts ═══ */
+
+.concepts-three {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 3rem;
+  margin-bottom: 3rem;
+}
+
+.concept-card h2 {
+  font-size: clamp(1.1rem, 2vw, 1.4rem);
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+.concept-card p {
+  color: var(--teal);
+  line-height: 1.8;
+  font-size: 0.9rem;
+}
+
+/* ═══ Credibility Strip ═══ */
+
+.credibility-strip {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--green);
+  margin-bottom: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.credibility-dot {
+  color: var(--teal-dim);
+}
+
+.credibility-sub {
+  font-size: 0.88rem;
+  color: var(--teal-dim);
+  margin-bottom: 3.5rem;
+  max-width: 600px;
+}
+
+/* ═══ Intent Routing ═══ */
+
+.intent-routing {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1px;
+  border: 1px solid var(--surface-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.intent-card {
+  background: var(--surface);
+  padding: 2rem;
+  text-decoration: none;
+  transition: background 0.2s;
+  display: flex;
+  flex-direction: column;
+}
+
+.intent-card:hover {
+  background: #1e1e1e;
+  text-decoration: none;
+}
+
+.intent-label {
+  font-family: var(--font-body);
+  font-weight: 300;
+  font-size: 0.6rem;
+  letter-spacing: 0.35em;
+  color: var(--teal-dim);
+  margin-bottom: 0.75rem;
+  display: block;
+}
+
+.intent-title {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--green);
+  margin-bottom: 0.75rem;
+  display: block;
+}
+
+.intent-desc {
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--teal);
+  flex: 1;
+}
+
+/* ═══ Spec Links Quad ═══ */
+
+.spec-links--quad {
+  grid-template-columns: 1fr 1fr;
+}
+
 /* ═══ Responsive ═══ */
 
 @media (max-width: 1100px) {
@@ -1319,7 +1435,17 @@ a.card:hover {
     gap: 2rem;
   }
 
-  .spec-links {
+  .concepts-three {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+
+  .intent-routing {
+    grid-template-columns: 1fr;
+  }
+
+  .spec-links,
+  .spec-links--quad {
     grid-template-columns: 1fr;
   }
 

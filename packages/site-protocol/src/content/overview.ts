@@ -1,55 +1,49 @@
-export const overviewMarkdown = `# Overview
-
-The DFOS Protocol specifies how [Ed25519 signed chains](https://protocol.dfos.com/spec) establish identity, commit content, and produce proofs that anyone can verify — with a public key and any standard signature library, offline, in any language. It is transport-agnostic: a proof obtained from an API, a USB drive, or a peer-to-peer exchange verifies the same way.
-
-## Why This Exists
+export const overviewMarkdown = `# Why This Exists
 
 Identity on the internet is platform-granted. Your account, your content history, your social graph — all exist at the discretion of the service you're using. If the platform changes its rules, locks your account, or shuts down, your identity goes with it. This is structural, not a policy failure. The architecture of platform identity means someone else always holds the keys.
 
-## Chain Topology
+The DFOS Protocol inverts this. Identity derives from cryptographic keys you control. Content authorship is verifiable without trusting the source. Proofs survive the platform.
 
-The protocol inverts this by deriving identity from cryptographic keys you control. An identity is a directed acyclic graph (DAG) of signed operations — key rotations, content commitments, recoveries, deletions — rooted at a genesis. Each operation links to its predecessor via content-addressed CID ([\`did:dfos\`](https://protocol.dfos.com/did-method) derives from the genesis hash, making it self-certifying).
+## The Dark Forest
 
-Forks are valid. Two operations referencing the same predecessor both get accepted. All implementations converge to the same head via a deterministic rule: highest \`createdAt\` timestamp among tips, with lexicographic CID as tiebreaker. Given the same set of operations, any relay computes the same head regardless of ingestion order. Convergence without consensus.
+The internet is not a public square. The most meaningful creative and social coordination happens in private groups, closed communities, invite-only spaces. This is where real work gets done, real relationships form, real culture develops. The topology is private-first.
 
-Content chains use the same mechanics — signed commitments to content-addressed documents. The protocol sees document hashes, never documents. It doesn't know what a "post" or "profile" is. Application semantics live in a [separate content layer](https://protocol.dfos.com/content-model), free to evolve without protocol changes.
+Every existing protocol collapses proof and content into the same surface. If you can access the content, you can verify it. If you can't access the content, you can't verify anything about it. The proof and the content are the same artifact, served from the same place, gated by the same access control.
 
-## Proof and Content
+DFOS separates them.
 
-The internet is a dark forest — the most meaningful creative and social activity happens in private groups, closed communities, invite-only spaces. The protocol is designed for this topology.
+The proof surface is public — signed chains of cryptographic commitments, verifiable by anyone with a public key and any standard Ed25519 library, offline, in any language. The content surface is private — documents live in member-governed spaces, visible only to participants. The protocol defines the proof surface. It sees hashes, never documents.
 
-Two surfaces: the proof surface is public — signed chains that anyone can verify. The content surface is private — documents live in member-governed spaces, visible only to participants. The protocol defines the proof surface. You can prove you authored something without revealing what it is.
+**You can prove you authored something without revealing what it is.**
 
-## Relay Network
+This separation is architectural, not a privacy setting. It is an engineering response to the structural condition of where the internet actually lives.
 
-[Web relays](https://protocol.dfos.com/web-relay) are verifying HTTP endpoints that store and serve chains. Every relay independently verifies every operation on ingestion — relays don't trust each other or any central authority.
+## What the Protocol Is
 
-Three peering behaviors compose to form the network:
+The DFOS Protocol specifies how [Ed25519 signed chains](https://protocol.dfos.com/spec) establish identity, commit content, and produce proofs. It defines [self-certifying identifiers](https://protocol.dfos.com/did-method) (\`did:dfos\`) derived from genesis operations, [content-addressed commitments](https://protocol.dfos.com/content-model) via CID, and a [relay network](https://protocol.dfos.com/web-relay) of verifying HTTP endpoints that distribute proofs without trusting each other.
 
-- **Gossip** — push new operations to peers when ingested (fire-and-forget, only on first ingestion to prevent storms)
-- **Read-through** — fetch chains from peers on local cache miss
-- **Sync** — periodically pull operations from peers via cursor-based polling
-
-There are no relay roles, tiers, or hierarchy. Topology is emergent from per-peer configuration. A relay with only gossip enabled is a write-only edge node. One with only read-through is a read cache. Full peering creates a convergent mesh.
-
-## Verification
-
-Verification is a pure function. Given a chain and a public key, any Ed25519 implementation returns valid or invalid. The chain carries everything needed — public keys, signatures, content-addressed hashes. There is no registry to query, no blockchain to sync.
+Verification is a pure function. Given a chain and a public key, any Ed25519 implementation returns valid or invalid. The chain carries everything needed — public keys, signatures, content-addressed hashes. There is no registry to query, no blockchain to sync. A proof exported today is verifiable by code that doesn't exist yet.
 
 The reference implementation is in [TypeScript](https://www.npmjs.com/package/@metalabel/dfos-protocol). Cross-language verification exists in Go, Python, Rust, and Swift — all running against the same [deterministic test vectors](https://protocol.dfos.com/spec#deterministic-reference-artifacts) from the specification.
 
+## What It Isn't
+
+- **Not a social protocol.** No federation model, no feeds, no application semantics. The protocol doesn't know what a "post" or "profile" is. [Application semantics](https://protocol.dfos.com/content-model) are a separate concern, free to evolve without protocol changes.
+- **Not a blockchain.** No consensus layer, no gas fees, no chain state to sync. Forks are valid. Convergence is deterministic without coordination — highest \`createdAt\` timestamp among tips, with lexicographic CID as tiebreaker.
+- **Not an encryption system.** Privacy comes from separation, not obscurity. The proof surface is fully public. The content surface is governed by application-layer access control. The protocol doesn't encrypt anything.
+- **Not coupled to the DFOS platform.** [DFOS](https://dfos.com) is one implementation. Any system implementing the same chain primitives produces interoperable, cross-verifiable proofs.
+
 ## Design Principles
 
-- **Self-certifying.** Identity derives from cryptographic operations. The DID is a deterministic hash of the genesis operation.
-- **DAG-native.** Chains are directed acyclic graphs. Forks are valid. Convergence is deterministic without consensus.
-- **Transport-agnostic.** No privileged registry, blockchain, or API. Chains verify from any source.
-- **Offline-first.** Verification requires no network. A chain exported today is verifiable by code that doesn't exist yet.
+- **Self-certifying.** Identity derives from cryptographic operations. The DID is a deterministic hash of the genesis operation. No external authority needed.
+- **DAG-native.** Chains are directed acyclic graphs. Forks are valid. Convergence is deterministic without consensus. Given the same set of operations, any relay computes the same head regardless of ingestion order.
+- **Transport-agnostic.** No privileged registry, blockchain, or API. A proof obtained from an API, a USB drive, or a peer-to-peer exchange verifies the same way.
+- **Offline-first.** Verification requires no network. The chain carries everything needed.
 - **Protocol-only.** Signed chains, CID derivation, [DID resolution](https://protocol.dfos.com/did-method), merkle trees, beacons. Application semantics are a [separate concern](https://protocol.dfos.com/content-model).
-- **Platform-independent.** Not coupled to the [DFOS platform](https://dfos.com). Any system implementing the same primitives produces interoperable proofs.
 
 ## Status
 
-The specification is under active development. It is open source under the MIT license. The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, Docker, or a single curl command. Discussion happens in the [clear.txt](https://clear.dfos.com) space on DFOS.
+The specification is under active development. It is open source under the [MIT license](https://github.com/metalabel/dfos/blob/main/LICENSE). The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, Docker, or a single curl command. The [DFOS platform](https://dfos.com) runs on this protocol in production.
 
-Install the [CLI](https://protocol.dfos.com/cli) to create identities, sign content, and run relays locally. Read the [full specification](https://protocol.dfos.com/spec), explore the [FAQ](https://protocol.dfos.com/faq), or browse the [source on GitHub](https://github.com/metalabel/dfos).
+Discussion happens in the [clear.txt](https://clear.dfos.com) space on DFOS. Read the [full specification](https://protocol.dfos.com/spec), explore the [FAQ](https://protocol.dfos.com/faq), or browse the [source on GitHub](https://github.com/metalabel/dfos).
 `;

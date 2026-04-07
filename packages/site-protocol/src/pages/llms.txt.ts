@@ -9,7 +9,7 @@ export const GET: APIRoute = () => {
     '',
     '## About',
     '',
-    '- [Overview](https://protocol.dfos.com/overview): Why the protocol exists, what it does, how verification works',
+    '- [Why](https://protocol.dfos.com/overview): Why the protocol exists — the structural condition, dark forest topology, design principles',
     '- [FAQ](https://protocol.dfos.com/faq): Common questions about the protocol, its design, and how it compares to alternatives',
     '',
     '## Specifications',
