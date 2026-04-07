@@ -385,7 +385,7 @@ img {
 .hero-inner {
   position: relative;
   z-index: 2;
-  max-width: 900px;
+  max-width: 1100px;
   margin: 0 auto;
   width: 100%;
   padding: 0 2.5rem;
@@ -405,10 +405,16 @@ img {
 
 .hero-split {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: 3fr 2fr;
   gap: 4rem;
   align-items: start;
   margin-bottom: 2.5rem;
+}
+
+.hero-split-right .hero-key {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .hero-setup {
@@ -439,14 +445,17 @@ img {
 .hero-tagline {
   font-family: var(--font-body);
   font-weight: 400;
-  font-size: clamp(0.9rem, 1.3vw, 1rem);
-  letter-spacing: 0.01em;
+  font-size: clamp(0.8rem, 1.2vw, 0.9rem);
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
   color: var(--teal);
   margin-bottom: 3rem;
+  text-align: center;
 }
 
 .hero-cta {
   display: flex;
+  justify-content: center;
   gap: 1.5rem;
   padding-bottom: 6rem;
 }
