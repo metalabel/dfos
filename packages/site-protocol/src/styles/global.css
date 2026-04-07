@@ -17,11 +17,11 @@
   --surface: #151515;
   --surface-border: #252525;
   --green: #00ff09;
-  --teal: #9aaba6;
-  --teal-dim: #5a6562;
+  --teal: #adbdb8;
+  --teal-dim: #7a8e88;
   --fg: #ffffff;
-  --fg-dim: rgba(255, 255, 255, 0.35);
-  --fg-body: rgba(255, 255, 255, 0.82);
+  --fg-dim: rgba(255, 255, 255, 0.5);
+  --fg-body: rgba(255, 255, 255, 0.85);
 
   /* ── Layout ── */
   --max-w: 900px;
@@ -73,7 +73,7 @@ body {
 .site-header .key-icon {
   height: 52px;
   width: auto;
-  opacity: 0.7;
+  opacity: 0.85;
   transition: opacity 0.3s;
 }
 
@@ -399,8 +399,8 @@ img {
   height: 120px;
   width: auto;
   margin-bottom: 3rem;
-  opacity: 0.6;
-  filter: drop-shadow(0 0 30px rgba(0, 255, 9, 0.15));
+  opacity: 0.85;
+  filter: drop-shadow(0 0 30px rgba(0, 255, 9, 0.25));
 }
 
 .hero-headline {
@@ -420,10 +420,10 @@ img {
 
 .hero-setup {
   font-family: var(--font-body);
-  font-weight: 400;
-  font-size: clamp(0.85rem, 1.5vw, 1rem);
-  line-height: 1.9;
-  color: var(--teal);
+  font-weight: 500;
+  font-size: clamp(1.05rem, 2vw, 1.35rem);
+  line-height: 2;
+  color: var(--fg);
   margin-bottom: 2.5rem;
   letter-spacing: 0.01em;
 }
@@ -622,8 +622,8 @@ img {
 .image-break-key {
   height: 160px;
   width: auto;
-  opacity: 0.5;
-  filter: drop-shadow(0 0 40px rgba(0, 255, 9, 0.2));
+  opacity: 0.75;
+  filter: drop-shadow(0 0 40px rgba(0, 255, 9, 0.3));
 }
 
 /* ═══ Closing ═══ */
@@ -659,7 +659,7 @@ img {
 .closing-key {
   height: 60px;
   width: auto;
-  opacity: 0.4;
+  opacity: 0.7;
   margin-bottom: 2rem;
 }
 
@@ -836,7 +836,7 @@ a.card:hover {
 .footer-key {
   height: 48px;
   width: auto;
-  opacity: 0.3;
+  opacity: 0.55;
   margin-bottom: 2rem;
   display: block;
   margin-left: auto;
