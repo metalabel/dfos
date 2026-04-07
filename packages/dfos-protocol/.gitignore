@@ -1,5 +1,2 @@
 dist/
 node_modules/
-verify/rust/target/
-verify/swift/.build/
-verify/swift/.swiftpm/
