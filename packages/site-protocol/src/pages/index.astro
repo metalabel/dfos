@@ -97,16 +97,6 @@ import Base from '../layouts/Base.astro';
         </div>
 
         <div class="concept-card">
-          <h2>Verifying relays</h2>
-          <p>
-            <a href="/web-relay">HTTP endpoints</a> that independently verify every operation
-            on ingestion. No trust between relays. No hierarchy.
-            Topology is emergent. Three peering behaviors compose the network:
-            gossip, read-through, and sync.
-          </p>
-        </div>
-
-        <div class="concept-card">
           <h2>Verify locally</h2>
           <p>
             Verification is a pure function. Public key + signed chain = valid or invalid.
@@ -114,18 +104,16 @@ import Base from '../layouts/Base.astro';
             A proof exported today is verifiable by code that doesn't exist yet.
           </p>
         </div>
-      </div>
 
-      <div class="chain-diagram">
-        <div class="chain-node genesis">genesis</div>
-        <div class="chain-edge"></div>
-        <div class="chain-node">rotate</div>
-        <div class="chain-edge"></div>
-        <div class="chain-node">commit</div>
-        <div class="chain-edge"></div>
-        <div class="chain-node">commit</div>
-        <div class="chain-edge"></div>
-        <div class="chain-node head">head</div>
+        <div class="concept-card">
+          <h2>Web relays</h2>
+          <p>
+            <a href="/web-relay">HTTP endpoints</a> that independently verify every operation
+            on ingestion. No trust between relays. No hierarchy.
+            Topology is emergent. Three peering behaviors compose the network:
+            gossip, read-through, and sync.
+          </p>
+        </div>
       </div>
     </div>
   </section>
@@ -171,9 +159,14 @@ import Base from '../layouts/Base.astro';
     </div>
   </section>
 
+  <!-- ═══ Key Separator ═══ -->
+  <section class="key-separator">
+    <img src="/key-icon-green.svg" alt="" class="key-separator-icon" />
+  </section>
+
   <!-- ═══ Get Started ═══ -->
   <section class="dark-section get-started" id="get-started">
-    <div class="dark-section-inner">
+    <div class="dark-section-inner get-started-wide">
       <span class="section-label">G E T &nbsp; S T A R T E D</span>
       <h2>Install the CLI</h2>
       <p class="get-started-intro">
@@ -182,7 +175,7 @@ import Base from '../layouts/Base.astro';
       </p>
 
       <div class="install-primary">
-        <div class="install-code install-code--wide">
+        <div class="install-code">
           <code>curl -sSL https://protocol.dfos.com/install.sh | sh</code>
           <button class="install-copy" aria-label="Copy command">copy</button>
         </div>
@@ -194,7 +187,7 @@ import Base from '../layouts/Base.astro';
         </p>
       </div>
 
-      <div class="quickstart-block">
+      <div class="quickstart-block quickstart-block--wide">
         <div class="install-label">Quickstart</div>
         <pre class="quickstart-pre"><code set:html={`<span class="qs-comment"># create your identity</span>
 dfos identity create --name myname

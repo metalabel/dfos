@@ -433,7 +433,7 @@ img {
   font-size: clamp(2rem, 4.5vw, 3.5rem);
   text-transform: uppercase;
   letter-spacing: -0.02em;
-  line-height: 1.08;
+  line-height: 1.5;
   color: var(--green);
   margin-bottom: 0;
 }
@@ -1359,6 +1359,35 @@ a.card:hover {
   line-height: 1.6;
   color: var(--teal);
   flex: 1;
+}
+
+/* ═══ Key Separator ═══ */
+
+.key-separator {
+  padding: 5rem 0;
+  text-align: center;
+  background: var(--bg);
+}
+
+.key-separator-icon {
+  height: 140px;
+  width: auto;
+  opacity: 0.75;
+  filter: drop-shadow(0 0 40px rgba(0, 255, 9, 0.25));
+}
+
+/* ═══ Get Started Wide ═══ */
+
+.get-started-wide {
+  max-width: 100%;
+}
+
+.get-started-wide .install-code {
+  max-width: 100%;
+}
+
+.quickstart-block--wide {
+  max-width: 100%;
 }
 
 /* ═══ Spec Links Quad ═══ */
