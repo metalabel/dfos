@@ -407,7 +407,7 @@ img {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 4rem;
-  align-items: end;
+  align-items: start;
   margin-bottom: 2.5rem;
 }
 
