@@ -1,23 +1,24 @@
 # DFOS
 
-The DFOS Protocol is a system for cryptographic identity and content proof. It specifies how identity chains, content chains, beacons, merkle trees, and verification work — independent of any particular platform, implementation, or infrastructure.
+Your identity and content are rented back to you by the platforms that own it. The DFOS Protocol gives you back the keys.
 
-Identity derives from signed operations, not platform accounts. Proofs are self-contained — they verify offline, in any language, with no network dependency. A chain exported today is verifiable by code that may not even exist yet.
+An open protocol for cryptographic identity and verifiable content. Identity derives from Ed25519 signed operations, not platform accounts. Proofs verify offline, in any language, from any source. The proof is public. The content is private.
 
-In the dark forest, identity and content authority derive from math alone. The proof is public. The content is private.
-
-This repository contains the open-source protocol implementation and supporting packages.
+This repository contains the protocol specification, reference implementations in TypeScript and Go, cross-language verification suites, and the CLI.
 
 ## Packages
 
-| Package                                                  | Language   | Description                                                              |
-| -------------------------------------------------------- | ---------- | ------------------------------------------------------------------------ |
-| [`@metalabel/dfos-protocol`](./packages/dfos-protocol)   | TypeScript | Ed25519 signed chain primitives, beacons, merkle trees, and verification |
-| [`dfos-protocol-go`](./packages/dfos-protocol-go)        | Go         | Go protocol library — signing, verification, CID derivation, credentials |
-| [`@metalabel/dfos-web-relay`](./packages/dfos-web-relay) | TypeScript | Portable HTTP relay with Go conformance test suite                       |
-| [`dfos-cli`](./packages/dfos-cli)                        | Go         | CLI for managing identities, content, beacons, and relay interactions    |
-| [`site-protocol`](./packages/site-protocol)              | Astro      | Static site for [protocol.dfos.com](https://protocol.dfos.com)           |
-| [`site-schemas`](./packages/site-schemas)                | Hono       | Worker for [schemas.dfos.com](https://schemas.dfos.com)                  |
+| Package                                                  | Language            | Description                                                              |
+| -------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------ |
+| [`@metalabel/dfos-protocol`](./packages/dfos-protocol)   | TypeScript          | Ed25519 signed chain primitives, beacons, merkle trees, and verification |
+| [`dfos-protocol-go`](./packages/dfos-protocol-go)        | Go                  | Go protocol library — signing, verification, CID derivation, credentials |
+| [`@metalabel/dfos-web-relay`](./packages/dfos-web-relay) | TypeScript          | Portable HTTP relay — Hono app, any runtime                              |
+| [`dfos-web-relay-go`](./packages/dfos-web-relay-go)      | Go                  | Go relay — single binary, SQLite, built-in peering                       |
+| [`dfos-cli`](./packages/dfos-cli)                        | Go                  | The sovereign actor — keys, signing, relay interaction                   |
+| [`protocol-verify`](./packages/protocol-verify)          | TS/Go/Py/Rust/Swift | Cross-language verification against shared test vectors                  |
+| [`relay-conformance`](./packages/relay-conformance)      | Go                  | Integration tests against any live relay                                 |
+| [`site-protocol`](./packages/site-protocol)              | Astro               | Static site for [protocol.dfos.com](https://protocol.dfos.com)           |
+| [`site-schemas`](./packages/site-schemas)                | Hono                | Worker for [schemas.dfos.com](https://schemas.dfos.com)                  |
 
 ## Links
 

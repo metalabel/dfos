@@ -1,6 +1,6 @@
 # @metalabel/dfos-protocol
 
-Cryptographic identity and content proof — Ed25519 signed chains, content-addressed CIDs, W3C DIDs. The protocol knows about keys and document hashes. It doesn't know about posts, profiles, or any application concept.
+Ed25519 signed chain primitives for cryptographic identity and verifiable content. Self-certifying DIDs, content-addressed CIDs, offline verification. The protocol operates on keys and document hashes — application semantics are a separate concern, free to evolve without protocol changes.
 
 ## Install
 

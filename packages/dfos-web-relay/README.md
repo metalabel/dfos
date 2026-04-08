@@ -1,6 +1,6 @@
 # @metalabel/dfos-web-relay
 
-Portable HTTP relay for the [DFOS protocol](https://protocol.dfos.com). Receives, verifies, stores, and serves identity chains, content chains, beacons, countersignatures, and content blobs.
+Relays verify everything they receive and serve everything they've verified. No trust between relays, no hierarchy, no central authority. Topology is emergent. Portable HTTP relay for the [DFOS protocol](https://protocol.dfos.com).
 
 See [WEB-RELAY.md](../../specs/WEB-RELAY.md) for the full relay specification.
 

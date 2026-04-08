@@ -10,14 +10,14 @@ export const faqs: FaqEntry[] = [
   {
     question: 'What is the DFOS Protocol?',
     answer:
-      'A specification for cryptographic identity and content proof. It defines how Ed25519 signed chains, content-addressed CIDs, and W3C DIDs work together to create verifiable identity and content — independent of any particular platform, infrastructure, or trust assumption. Chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
+      'An open protocol for cryptographic identity and verifiable content. Ed25519 signed chains establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
     answerHtml:
-      'A specification for cryptographic identity and content proof. It defines how <a href="/spec">Ed25519 signed chains</a>, content-addressed CIDs, and <a href="/did-method">W3C DIDs</a> work together to create verifiable identity and content — independent of any particular platform, infrastructure, or trust assumption. Chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
+      'An open protocol for cryptographic identity and verifiable content. <a href="/spec">Ed25519 signed chains</a> establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
   },
   {
     question: 'What problem does it solve?',
     answer:
-      'Platform identity is platform-controlled. If a service shuts down or locks your account, your identity and content history disappear with it. The DFOS Protocol makes identity and content provenance self-sovereign — derived from cryptographic keys you control, verifiable by anyone with your public key and any standard EdDSA library.',
+      'Your identity and content are rented back to you by the platforms that own it. If a service shuts down or locks your account, everything disappears. The DFOS Protocol makes identity and content provenance self-sovereign — derived from cryptographic keys you control, verifiable by anyone with your public key and any standard EdDSA library.',
   },
   {
     question: 'What does "dark forest" mean in this context?',

@@ -4,7 +4,7 @@ import Base from '../layouts/Base.astro';
 
 <Base
   title="DFOS Protocol"
-  description="Ed25519 signed chains, content-addressed proofs, W3C DIDs. Verifiable identity and content without trusting the platform."
+  description="Cryptographic identity and verifiable authorship for private spaces. Ed25519 signed chains, content-addressed proofs, W3C DIDs. MIT License."
   landing={true}
 >
   <!-- ═══ Hero ═══ -->
@@ -14,52 +14,62 @@ import Base from '../layouts/Base.astro';
         <img src="/dfos-logo-green.svg" alt="DFOS" />
       </a>
       <nav>
-        <a href="/overview">Overview</a>
+        <a href="/overview">Why</a>
         <a href="/spec">Spec</a>
         <a href="/did-method">DID</a>
         <a href="/content-model">Content</a>
         <a href="/web-relay">Relay</a>
         <a href="/cli">CLI</a>
         <a href="/deploy">Deploy</a>
-        <a href="/skill">Skill</a>
         <a href="/faq">FAQ</a>
         <a href="https://github.com/metalabel/dfos">GitHub</a>
       </nav>
     </header>
 
     <div class="hero-inner">
-      <img src="/key-icon-green.svg" alt="" class="hero-key" />
-      <h1 class="hero-headline">
-        The proof is public<span class="period">.</span><br />
-        The content is private<span class="period">.</span>
-      </h1>
-      <p class="hero-tagline">
-        Ed25519 signed DAGs &middot; content-addressed CIDs &middot; W3C DIDs &middot; MIT License
+      <p class="hero-declaration">
+        Your identity and content are rented back to you by the platforms that own it
       </p>
+      <p class="hero-bridge">
+        DFOS Protocol gives you back the keys
+      </p>
+      <p class="hero-pitch">
+        An open protocol for cryptographic identity and verifiable content. Runs anywhere, portable across everything, no permission required
+      </p>
+      <h1 class="hero-headline">
+        The proof is public. The content is private
+      </h1>
       <div class="hero-cta">
         <a href="#get-started" class="hero-cta-link">Install the CLI</a>
-        <a href="/spec" class="hero-cta-link hero-cta-link--dim">Read the spec</a>
+        <a href="/overview" class="hero-cta-link">Why this exists</a>
+        <a href="/spec" class="hero-cta-link">Read the spec</a>
       </div>
     </div>
   </section>
 
-  <!-- ═══ Two Surfaces ═══ -->
+  <!-- ═══ Dark Forest ═══ -->
   <section class="split-section">
     <div class="split-image">
       <img src="/painting-hand.jpg" alt="" />
     </div>
     <div class="split-text">
-      <span class="section-label">T O P O L O G Y</span>
-      <h2>Two surfaces<span class="period">.</span></h2>
+      <span class="section-label">T H E &nbsp; D A R K &nbsp; F O R E S T</span>
+      <h2>Two worlds</h2>
       <p>
-        The proof surface is public — signed chains of cryptographic commitments,
-        verifiable by anyone with a public key and any standard Ed25519 library.
-        The content surface is private — documents live in member-governed spaces,
-        visible only to participants.
+        The most meaningful creative and social coordination on the internet
+        happens in private groups, closed communities, invite-only spaces.
+        The topology is private-first.
       </p>
       <p>
-        The protocol defines the proof surface. It sees hashes, never documents.
-        You can prove you authored something without revealing what it is.
+        Every existing system collapses proof and content into the same surface.
+        If you can't access the content, you can't verify anything about it.
+        DFOS separates them.
+      </p>
+      <p>
+        The world of proofs is public &mdash; signed chains that anyone can verify.
+        The world of content exists in dark forests &mdash; member-governed spaces,
+        visible only to participants.
+        The protocol defines the proof world. It sees hashes, never documents.
       </p>
     </div>
   </section>
@@ -67,90 +77,104 @@ import Base from '../layouts/Base.astro';
   <!-- ═══ How It Works ═══ -->
   <section class="dark-section">
     <div class="dark-section-inner">
-      <div class="concepts">
-        <div class="concept">
-          <span class="section-label">S T R U C T U R E</span>
-          <h2>Signed DAGs<span class="period">.</span></h2>
+      <span class="section-label">T H E &nbsp; P R O T O C O L</span>
+
+      <div class="concepts-three">
+        <div class="concept-card">
+          <h2>Self-certifying identity</h2>
           <p>
-            Identity is a directed acyclic graph of Ed25519-signed operations —
-            key rotations, content commitments, recoveries — rooted at a genesis.
-            Forks are valid. Convergence is deterministic: highest timestamp, lexicographic
-            CID tiebreaker. No consensus needed.
-          </p>
-          <p>
-            The <a href="/did-method"><code>did:dfos</code></a> identifier derives from the
-            genesis hash — self-certifying. Content chains use the same mechanics.
-            The protocol doesn't know what a "post" is.
-            <a href="/content-model">Application semantics</a> are a separate concern.
+            Identity is a chain of cryptographic operations you control.
+            Your <a href="/did-method"><code>did:dfos</code></a> identifier derives from
+            your genesis &mdash; self-certifying. Forks are valid. Convergence is deterministic.
+            No consensus needed.
           </p>
         </div>
 
-        <div class="concept">
-          <span class="section-label">N E T W O R K</span>
-          <h2>Verifying relays<span class="period">.</span></h2>
+        <div class="concept-card">
+          <h2>Offline verification</h2>
           <p>
-            <a href="/web-relay">Web relays</a> are HTTP endpoints that independently verify
-            every operation on ingestion. No trust between relays. Three peering behaviors
-            compose the network: gossip, read-through, and sync. There are no relay roles
-            or hierarchy — topology is emergent.
-          </p>
-          <p>
-            Verification is a pure function. Given a chain and a public key, any Ed25519
-            library returns valid or invalid. Offline, in any language. The
-            <a href="/spec">reference implementation</a> is verified across
-            TypeScript, Go, Python, Rust, and Swift.
+            Verification is a pure function. Public key + signed chain = valid or invalid.
+            Any Ed25519 library, any language. The chain carries everything needed.
+            A proof exported today is verifiable by code that doesn't exist yet.
           </p>
         </div>
-      </div>
 
-      <div class="chain-diagram">
-        <div class="chain-node genesis">genesis</div>
-        <div class="chain-edge"></div>
-        <div class="chain-node">rotate</div>
-        <div class="chain-edge"></div>
-        <div class="chain-node">commit</div>
-        <div class="chain-edge"></div>
-        <div class="chain-node">commit</div>
-        <div class="chain-edge"></div>
-        <div class="chain-node head">head</div>
+        <div class="concept-card">
+          <h2>Trustless distribution</h2>
+          <p>
+            <a href="/web-relay">Web relays</a> independently verify every operation
+            on ingestion. No trust between relays. No hierarchy.
+            Topology is emergent. Three peering behaviors compose the network:
+            gossip, read-through, and sync.
+          </p>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══ Image Break ═══ -->
-  <section class="image-break">
-    <img src="/painting-deer.jpg" alt="" class="image-break-bg" />
-    <div class="image-break-overlay">
-      <img src="/key-icon-green.svg" alt="" class="image-break-key" />
+  <!-- ═══ Credibility + Routing ═══ -->
+  <section class="landing-section">
+    <div class="credibility-strip">
+      <span>MIT License</span>
+      <span class="credibility-dot">&middot;</span>
+      <span>Powers the <a href="https://dfos.com">DFOS platform</a></span>
+      <span class="credibility-dot">&middot;</span>
+      <span>TypeScript &middot; Go &middot; Python &middot; Rust &middot; Swift</span>
     </div>
+    <p class="credibility-sub">
+      Same deterministic test vectors across all five implementations.
+      <a href="/spec">The protocol specification</a> is the single source of truth.
+    </p>
+
+    <div class="intent-routing">
+      <a href="#get-started" class="intent-card">
+        <span class="intent-label">B U I L D</span>
+        <span class="intent-title">Install the CLI</span>
+        <span class="intent-desc">One binary. Create identities, sign content, run relays. Linux, macOS, Windows.</span>
+      </a>
+      <a href="/overview" class="intent-card">
+        <span class="intent-label">U N D E R S T A N D</span>
+        <span class="intent-title">Why this exists</span>
+        <span class="intent-desc">The structural condition of platform identity, the dark forest topology, and what falls out of it.</span>
+      </a>
+      <a href="/spec" class="intent-card">
+        <span class="intent-label">E V A L U A T E</span>
+        <span class="intent-title">Read the spec</span>
+        <span class="intent-desc">Chains, beacons, merkle trees, CID derivation, verification rules, and deterministic test vectors.</span>
+      </a>
+    </div>
+  </section>
+
+  <!-- ═══ Key Separator ═══ -->
+  <section class="key-separator">
+    <img src="/key-icon-green.svg" alt="" class="key-separator-icon" />
   </section>
 
   <!-- ═══ Get Started ═══ -->
-  <section class="dark-section get-started" id="get-started">
-    <div class="dark-section-inner">
-      <span class="section-label">G E T &nbsp; S T A R T E D</span>
-      <h2>Install the CLI<span class="period">.</span></h2>
-      <p class="get-started-intro">
-        One binary. Keys in your OS keychain. Local-first by default.
-        <a href="/cli">Full documentation</a>.
-      </p>
+  <section class="landing-section get-started" id="get-started">
+    <span class="section-label">G E T &nbsp; S T A R T E D</span>
+    <h2>Install the CLI</h2>
+    <p class="get-started-intro">
+      One binary. Keys in your OS keychain. Local-first by default.
+      <a href="/cli">Full documentation</a>.
+    </p>
 
-      <div class="install-primary">
-        <div class="install-code install-code--wide">
-          <code>curl -sSL https://protocol.dfos.com/install.sh | sh</code>
-          <button class="install-copy" aria-label="Copy command">copy</button>
-        </div>
-        <p class="install-alt">
-          Also available via
-          <code>brew install metalabel/tap/dfos</code>
-          and
-          <code>docker pull ghcr.io/metalabel/dfos</code>
-        </p>
+    <div class="install-primary">
+      <div class="install-code">
+        <code>curl -sSL https://protocol.dfos.com/install.sh | sh</code>
+        <button class="install-copy" aria-label="Copy command">copy</button>
       </div>
+      <p class="install-alt">
+        Also available via
+        <code>brew install metalabel/tap/dfos</code>
+        and
+        <code>docker pull ghcr.io/metalabel/dfos</code>
+      </p>
+    </div>
 
-      <div class="quickstart-block">
-        <div class="install-label">Quickstart</div>
-        <pre class="quickstart-pre"><code set:html={`<span class="qs-comment"># create your identity</span>
+    <div class="quickstart-block">
+      <div class="install-label">Quickstart</div>
+      <pre class="quickstart-pre"><code set:html={`<span class="qs-comment"># create your identity</span>
 dfos identity create --name myname
 
 <span class="qs-comment"># publish your first post</span>
@@ -161,23 +185,22 @@ dfos content list
 
 <span class="qs-comment"># run a relay</span>
 dfos serve`} /></pre>
-      </div>
     </div>
   </section>
 
-  <!-- ═══ Specifications + Resources ═══ -->
+  <!-- ═══ Specifications ═══ -->
   <section class="landing-section">
     <span class="section-label">S P E C I F I C A T I O N S</span>
-    <h2>Read the protocol<span class="period">.</span></h2>
+    <h2>Read the protocol</h2>
 
-    <div class="spec-links">
+    <div class="spec-links spec-links--quad">
       <a href="/spec" class="spec-link">
         <span class="spec-link-title">Protocol Specification</span>
         <span class="spec-link-desc">Chains, beacons, merkle trees, CID derivation, verification rules, test vectors</span>
       </a>
       <a href="/did-method" class="spec-link">
         <span class="spec-link-title">DID Method</span>
-        <span class="spec-link-desc">W3C <code>did:dfos</code> — self-certifying, transport-agnostic identifiers</span>
+        <span class="spec-link-desc">W3C <code>did:dfos</code> &mdash; self-certifying, transport-agnostic identifiers</span>
       </a>
       <a href="/content-model" class="spec-link">
         <span class="spec-link-title">Content Model</span>
@@ -187,9 +210,14 @@ dfos serve`} /></pre>
         <span class="spec-link-title">Web Relay</span>
         <span class="spec-link-desc">Verifying HTTP relay with gossip, read-through, and sync peering</span>
       </a>
+    </div>
+
+    <span class="section-label" style="margin-top: 3rem;">U S E &nbsp; I T</span>
+
+    <div class="spec-links">
       <a href="/cli" class="spec-link">
         <span class="spec-link-title">CLI</span>
-        <span class="spec-link-desc">Identities, content chains, credentials, relays — Linux, macOS, Windows</span>
+        <span class="spec-link-desc">Identities, content chains, credentials, relays &mdash; Linux, macOS, Windows</span>
       </a>
       <a href="/deploy" class="spec-link">
         <span class="spec-link-title">Deploy</span>
@@ -197,11 +225,11 @@ dfos serve`} /></pre>
       </a>
       <a href="/skill" class="spec-link">
         <span class="spec-link-title">Claude Code Skill</span>
-        <span class="spec-link-desc">AI-assisted CLI workflows — install the DFOS skill for Claude Code</span>
+        <span class="spec-link-desc">AI-assisted CLI workflows &mdash; install the DFOS skill for Claude Code</span>
       </a>
       <a href="/overview" class="spec-link">
-        <span class="spec-link-title">Overview</span>
-        <span class="spec-link-desc">Why the protocol exists, design principles, chain topology</span>
+        <span class="spec-link-title">Why</span>
+        <span class="spec-link-desc">The structural condition, design principles, what the protocol is and isn't</span>
       </a>
     </div>
 
@@ -210,27 +238,27 @@ dfos serve`} /></pre>
     <ul class="resource-list">
       <li>
         <a href="/faq">FAQ</a>
-        <span class="desc">— design decisions, AT Protocol comparison, blockchain identity</span>
+        <span class="desc">&mdash; design decisions, AT Protocol comparison, blockchain identity</span>
       </li>
       <li>
         <a href="https://github.com/metalabel/dfos">GitHub</a>
-        <span class="desc">— metalabel/dfos — MIT License</span>
+        <span class="desc">&mdash; metalabel/dfos &mdash; MIT License</span>
       </li>
       <li>
         <a href="https://github.com/metalabel/dfos/releases/latest">Releases</a>
-        <span class="desc">— pre-built binaries for all platforms</span>
+        <span class="desc">&mdash; pre-built binaries for all platforms</span>
       </li>
       <li>
         <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">npm</a>
-        <span class="desc">— <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">dfos-protocol</a>, <a href="https://www.npmjs.com/package/@metalabel/dfos-web-relay">dfos-web-relay</a></span>
+        <span class="desc">&mdash; TypeScript protocol library (see also: <a href="https://www.npmjs.com/package/@metalabel/dfos-web-relay">dfos-web-relay</a>)</span>
       </li>
       <li>
         <a href="https://schemas.dfos.com">schemas.dfos.com</a>
-        <span class="desc">— JSON Schema definitions</span>
+        <span class="desc">&mdash; JSON Schema definitions</span>
       </li>
       <li>
         <a href="/llms-full.txt">llms-full.txt</a>
-        <span class="desc">— full protocol content as plain text</span>
+        <span class="desc">&mdash; full protocol content as plain text</span>
       </li>
     </ul>
   </section>
@@ -246,6 +274,50 @@ dfos serve`} /></pre>
         });
       });
     });
+
+    // scroll-driven image brightness
+    // images stay bright while in viewport, dim only when leaving
+    (function () {
+      var targets = [
+        { el: document.querySelector('.hero--forest'), mode: 'top' },
+      ];
+      document.querySelectorAll('.split-image, .key-separator').forEach(function (el) {
+        targets.push({ el: el, mode: 'contain' });
+      });
+      document.querySelectorAll('.closing-image').forEach(function (el) {
+        targets.push({ el: el, mode: 'enter' });
+      });
+      targets = targets.filter(function (t) { return t.el; });
+
+      function update() {
+        var vh = window.innerHeight;
+        targets.forEach(function (t) {
+          var rect = t.el.getBoundingClientRect();
+          var ratio;
+          if (t.mode === 'top') {
+            // hero: bright at top, dims as you scroll past
+            ratio = 1 - Math.min(1, Math.max(0, -rect.top / (rect.height * 0.5)));
+          } else if (t.mode === 'enter') {
+            // bottom elements: brighten as they enter from below, stay bright
+            var entered = vh - rect.top;
+            ratio = Math.min(1, Math.max(0, entered / (rect.height * 0.5)));
+          } else {
+            // containment: bright when element is fully or mostly in viewport
+            var visibleTop = Math.max(0, rect.top);
+            var visibleBottom = Math.min(vh, rect.bottom);
+            var visibleHeight = Math.max(0, visibleBottom - visibleTop);
+            var visibleRatio = visibleHeight / rect.height;
+            // stay at 1.0 until less than 80% visible, then fade
+            ratio = Math.min(1, visibleRatio / 0.8);
+          }
+          // ease
+          ratio = ratio * ratio;
+          t.el.style.setProperty('--scroll-brightness', ratio.toFixed(3));
+        });
+        requestAnimationFrame(update);
+      }
+      update();
+    })();
   </script>
 
   <!-- ═══ Closing ═══ -->
@@ -257,7 +329,7 @@ dfos serve`} /></pre>
       <img src="/key-icon-green.svg" alt="" class="closing-key" />
       <div class="closing-mark">DFOS Protocol</div>
       <nav class="closing-nav">
-        <a href="/overview">Overview</a>
+        <a href="/overview">Why</a>
         <a href="/spec">Spec</a>
         <a href="/did-method">DID</a>
         <a href="/content-model">Content</a>

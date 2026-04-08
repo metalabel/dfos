@@ -10,11 +10,11 @@ This spec is under active review. Discuss it in the [clear.txt](https://clear.df
 
 ## Philosophy
 
-DFOS is a dark forest operating system. Content lives in private spaces — visible only to members, governed by the communities that create it. The cryptographic proof layer is public: signed chains of commitments that anyone can independently verify with a public key and any standard EdDSA library.
+DFOS is a dark forest operating system. Content lives in private spaces — visible only to members, governed by the communities that create it. The cryptographic proof layer is public: signed chains of commitments that anyone can independently verify with a public key and any standard EdDSA library. The proof is public. The content is private.
 
-Two chain types — identity and content — use the same mechanics: Ed25519 signatures, JWS compact tokens, content-addressed CIDs. The protocol knows about keys and document hashes. It doesn't know about posts, profiles, or any application concept. Document semantics are application layer — free to evolve without protocol changes.
+Two chain types — identity and content — use the same mechanics: Ed25519 signatures, JWS compact tokens, content-addressed CIDs. The protocol operates on keys and document hashes. Application semantics — posts, profiles, feeds — are a separate concern, free to evolve without protocol changes.
 
-The protocol is not coupled to the DFOS platform. Any system implementing the same chain primitives produces interoperable, cross-verifiable proofs. An identity created on one system can sign content on another.
+Any system implementing the same chain primitives produces interoperable, cross-verifiable proofs. An identity created on one system can sign content on another. No platform dependency, no coordination required.
 
 ---
 

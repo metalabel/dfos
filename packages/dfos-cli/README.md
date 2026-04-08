@@ -1,8 +1,8 @@
 # DFOS CLI
 
-Command-line interface for the [DFOS protocol](https://protocol.dfos.com). Manage identities, content chains, beacons, and credentials. Interact with relays.
+The sovereign actor in the DFOS architecture. Generates keys, signs operations, decides what to publish and when, independently verifies what relays serve back. Private key material never leaves the local machine.
 
-Private keys live in the OS keychain (macOS Keychain, Linux secret-service, Windows Credential Manager). Operations are signed locally and submitted to relays via HTTP.
+Keys live in the OS keychain. Operations are signed locally and submitted to [relays](https://protocol.dfos.com/web-relay) via HTTP. Local-first by default — create identities and content offline, publish when ready.
 
 ## Install
 

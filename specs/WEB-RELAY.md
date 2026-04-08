@@ -10,11 +10,9 @@ This spec is under active review. Discuss it in the [clear.txt](https://clear.df
 
 ## Philosophy
 
-The DFOS protocol defines signed chain primitives — identity and content chains, beacons, credentials — but says nothing about transport. A web relay is the HTTP layer that carries these primitives between participants.
+Relays verify everything they receive and serve everything they've verified. They don't issue identity, grant permissions, or define content semantics. Give any two relays the same operations and they produce the same deterministic head state. No trust between relays, no coordination required.
 
-Relays are not authorities. They verify what they receive and serve what they've verified, but they don't issue identity, grant permissions, or define content semantics. Any relay implementing the same verification rules and given the same operations produces the same deterministic head state. Clients can replicate their data across multiple relays without coordination.
-
-A relay is a library, not a service. `createRelay()` returns a portable Hono application that any runtime can host — Node.js, Cloudflare Workers, Deno, Bun, a Docker container, a Raspberry Pi. The consumer provides a storage backend, peer configuration, and optional capabilities. The relay handles verification, peering, and HTTP semantics.
+A relay is a library, not a service. `createRelay()` returns a portable Hono application — Node.js, Cloudflare Workers, Deno, Bun, Docker, a Raspberry Pi. You provide storage and peer configuration. The relay handles verification, peering, and HTTP semantics.
 
 ---
 

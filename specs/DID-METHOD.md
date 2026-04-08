@@ -10,13 +10,7 @@ This spec is under active review. Discuss it in the [clear.txt](https://clear.df
 
 ## Abstract
 
-This document defines the `did:dfos` DID method in conformance with the [W3C Decentralized Identifiers (DIDs) v1.0](https://www.w3.org/TR/did-core/) specification. A `did:dfos` identifier is derived deterministically from the genesis operation of a cryptographically signed identity chain. Resolution is verification-first and transport-agnostic — the identifier itself is the trust anchor, not any particular registry or consensus layer.
-
----
-
-## Status
-
-This specification is under active development. It has not been submitted to any formal standards body.
+`did:dfos` identifiers are self-certifying — derived deterministically from the genesis operation of a cryptographically signed identity chain. No registry, no blockchain, no resolution service. The identifier itself is the trust anchor. Conforms to [W3C Decentralized Identifiers (DIDs) v1.0](https://www.w3.org/TR/did-core/).
 
 ---
 

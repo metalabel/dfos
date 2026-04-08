@@ -8,16 +8,25 @@ let html = await marked.parse(overviewMarkdown);
 
 // Strip the h1 — we render it explicitly for consistency with other pages
 html = html.replace(/^<h1>.*?<\/h1>\n?/, '');
+
+// Add IDs and anchor links to headings
+function slugify(text: string): string {
+  return text.replace(/<[^>]*>/g, '').replace(/`/g, '').trim().toLowerCase().replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
+}
+html = html.replace(/<h([2-6])>([\s\S]*?)<\/h\1>/g, (_: string, level: string, content: string) => {
+  const id = slugify(content);
+  return `<h${level} id="${id}"><a href="#${id}" class="anchor" aria-hidden="true">#</a>${content}</h${level}>`;
+});
 ---
 
 <Base
-  title="Overview"
-  description="Why the DFOS Protocol exists — cryptographic identity without platform trust, offline verification, and verifiable content in private spaces."
+  title="Why"
+  description="Why the DFOS Protocol exists — the structural condition of platform identity, the dark forest topology, and the proof/content separation that falls out of it."
   path="/overview"
 >
   <div class="page-content">
     <article>
-      <h1>Overview</h1>
+      <h1>Why This Exists</h1>
       <Fragment set:html={html} />
     </article>
   </div>
@@ -32,7 +41,6 @@ html = html.replace(/^<h1>.*?<\/h1>\n?/, '');
       <a href="/web-relay">Web Relay</a>
       <a href="/cli">CLI</a>
       <a href="/deploy">Deploy</a>
-      <a href="/skill">Skill</a>
       <a href="/faq">FAQ</a>
       <a href="https://github.com/metalabel/dfos">GitHub</a>
       <a href="https://dfos.com">dfos.com</a>
