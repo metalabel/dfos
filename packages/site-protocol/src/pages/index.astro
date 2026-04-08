@@ -27,23 +27,22 @@ import Base from '../layouts/Base.astro';
     </header>
 
     <div class="hero-inner">
-      <div class="hero-zingers">
-        <p>Your identity on the internet belongs to someone else.</p>
-        <p>The places that matter most are private.</p>
-        <p>Proofs don't outlive the platform.</p>
-      </div>
-      <h1 class="hero-headline">
-        The proof is public
-        <span class="hero-headline-break"></span>
-        The content is private
-      </h1>
-      <p class="hero-tagline">
-        Prove you authored something without revealing what it is.
+      <p class="hero-declaration">
+        Your identity and content are rented back to you by the platforms that own it
       </p>
+      <p class="hero-bridge">
+        DFOS Protocol gives you back the keys
+      </p>
+      <p class="hero-pitch">
+        An open protocol for cryptographic identity and verifiable content. Runs anywhere, portable across everything, no permission required
+      </p>
+      <h1 class="hero-headline">
+        The proof is public. The content is private
+      </h1>
       <div class="hero-cta">
         <a href="#get-started" class="hero-cta-link">Install the CLI</a>
-        <a href="/overview" class="hero-cta-link hero-cta-link--dim">Why this exists</a>
-        <a href="/spec" class="hero-cta-link hero-cta-link--dim">Read the spec</a>
+        <a href="/overview" class="hero-cta-link">Why this exists</a>
+        <a href="/spec" class="hero-cta-link">Read the spec</a>
       </div>
     </div>
   </section>
@@ -55,7 +54,7 @@ import Base from '../layouts/Base.astro';
     </div>
     <div class="split-text">
       <span class="section-label">T H E &nbsp; D A R K &nbsp; F O R E S T</span>
-      <h2>Two realms</h2>
+      <h2>Two worlds</h2>
       <p>
         The most meaningful creative and social coordination on the internet
         happens in private groups, closed communities, invite-only spaces.
@@ -67,10 +66,10 @@ import Base from '../layouts/Base.astro';
         DFOS separates them.
       </p>
       <p>
-        The proof realm is public &mdash; signed chains that anyone can verify.
-        The content realm is private &mdash; documents in member-governed spaces,
+        The world of proofs is public &mdash; signed chains that anyone can verify.
+        The world of content exists in dark forests &mdash; member-governed spaces,
         visible only to participants.
-        The protocol defines the proof realm. It sees hashes, never documents.
+        The protocol defines the proof world. It sees hashes, never documents.
       </p>
     </div>
   </section>
@@ -251,7 +250,7 @@ dfos serve`} /></pre>
       </li>
       <li>
         <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">npm</a>
-        <span class="desc">&mdash; <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">dfos-protocol</a>, <a href="https://www.npmjs.com/package/@metalabel/dfos-web-relay">dfos-web-relay</a></span>
+        <span class="desc">&mdash; TypeScript protocol library (see also: <a href="https://www.npmjs.com/package/@metalabel/dfos-web-relay">dfos-web-relay</a>)</span>
       </li>
       <li>
         <a href="https://schemas.dfos.com">schemas.dfos.com</a>
@@ -275,6 +274,50 @@ dfos serve`} /></pre>
         });
       });
     });
+
+    // scroll-driven image brightness
+    // images stay bright while in viewport, dim only when leaving
+    (function () {
+      var targets = [
+        { el: document.querySelector('.hero--forest'), mode: 'top' },
+      ];
+      document.querySelectorAll('.split-image, .key-separator').forEach(function (el) {
+        targets.push({ el: el, mode: 'contain' });
+      });
+      document.querySelectorAll('.closing-image').forEach(function (el) {
+        targets.push({ el: el, mode: 'enter' });
+      });
+      targets = targets.filter(function (t) { return t.el; });
+
+      function update() {
+        var vh = window.innerHeight;
+        targets.forEach(function (t) {
+          var rect = t.el.getBoundingClientRect();
+          var ratio;
+          if (t.mode === 'top') {
+            // hero: bright at top, dims as you scroll past
+            ratio = 1 - Math.min(1, Math.max(0, -rect.top / (rect.height * 0.5)));
+          } else if (t.mode === 'enter') {
+            // bottom elements: brighten as they enter from below, stay bright
+            var entered = vh - rect.top;
+            ratio = Math.min(1, Math.max(0, entered / (rect.height * 0.5)));
+          } else {
+            // containment: bright when element is fully or mostly in viewport
+            var visibleTop = Math.max(0, rect.top);
+            var visibleBottom = Math.min(vh, rect.bottom);
+            var visibleHeight = Math.max(0, visibleBottom - visibleTop);
+            var visibleRatio = visibleHeight / rect.height;
+            // stay at 1.0 until less than 80% visible, then fade
+            ratio = Math.min(1, visibleRatio / 0.8);
+          }
+          // ease
+          ratio = ratio * ratio;
+          t.el.style.setProperty('--scroll-brightness', ratio.toFixed(3));
+        });
+        requestAnimationFrame(update);
+      }
+      update();
+    })();
   </script>
 
   <!-- ═══ Closing ═══ -->

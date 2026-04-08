@@ -1,6 +1,6 @@
 # DFOS CLI
 
-A command-line interface for the DFOS protocol — manages identities, signs operations, interacts with relays, and stores chains locally. The sovereign actor in the DFOS architecture.
+The sovereign actor in the DFOS architecture. Generates keys, signs operations, stores chains locally, decides what to publish and when. Relays are dumb pipes — the CLI holds the keys.
 
 This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
 

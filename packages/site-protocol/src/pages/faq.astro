@@ -54,12 +54,15 @@ const schema = [
       <h1>Frequently Asked Questions</h1>
 
       {
-        faqs.map((faq) => (
-          <section class="faq-item">
-            <h2>{faq.question}</h2>
-            <p set:html={faq.answerHtml ?? faq.answer} />
-          </section>
-        ))
+        faqs.map((faq) => {
+          const id = faq.question.toLowerCase().replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
+          return (
+            <section class="faq-item" id={id}>
+              <h2><a href={`#${id}`} class="anchor" aria-hidden="true">#</a>{faq.question}</h2>
+              <p set:html={faq.answerHtml ?? faq.answer} />
+            </section>
+          );
+        })
       }
     </article>
   </div>

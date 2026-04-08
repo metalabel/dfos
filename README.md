@@ -1,12 +1,10 @@
 # DFOS
 
-The DFOS Protocol is a system for cryptographic identity and content proof. It specifies how identity chains, content chains, beacons, merkle trees, and verification work — independent of any particular platform, implementation, or infrastructure.
+Your identity and content are rented back to you by the platforms that own it. The DFOS Protocol gives you back the keys.
 
-Identity derives from signed operations, not platform accounts. Proofs are self-contained — they verify offline, in any language, with no network dependency. A chain exported today is verifiable by code that may not even exist yet.
+An open protocol for cryptographic identity and verifiable content. Identity derives from Ed25519 signed operations, not platform accounts. Proofs verify offline, in any language, from any source. The proof is public. The content is private.
 
-In the dark forest, identity and content authority derive from math alone. The proof is public. The content is private.
-
-This repository contains the open-source protocol implementation and supporting packages.
+This repository contains the protocol specification, reference implementations in TypeScript and Go, cross-language verification suites, and the CLI.
 
 ## Packages
 
