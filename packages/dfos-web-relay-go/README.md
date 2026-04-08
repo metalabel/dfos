@@ -1,6 +1,6 @@
 # dfos-web-relay-go
 
-Go implementation of the [DFOS web relay](https://protocol.dfos.com/web-relay). Single binary, SQLite persistence, built-in peering.
+Go relay for the [DFOS protocol](https://protocol.dfos.com). Single binary, SQLite persistence, built-in peering. Verifies everything on ingestion, trusts nothing.
 
 See [WEB-RELAY.md](../../specs/WEB-RELAY.md) for the full relay specification.
 

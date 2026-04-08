@@ -4,8 +4,8 @@ export const GET: APIRoute = () => {
   const content = [
     '# DFOS Protocol',
     '',
-    '> Ed25519 signed chain primitives, content-addressed proofs, W3C DIDs.',
-    '> Verifiable identity and content without trusting the platform.',
+    '> An open protocol for cryptographic identity and verifiable content.',
+    '> The proof is public. The content is private.',
     '',
     '## About',
     '',

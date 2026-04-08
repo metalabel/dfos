@@ -28,7 +28,7 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 
 ## What It Isn't
 
-- **Not a social protocol.** No federation model, no feeds, no application semantics. The protocol doesn't know what a "post" or "profile" is. [Application semantics](https://protocol.dfos.com/content-model) are a separate concern, free to evolve without protocol changes.
+- **Not a social protocol.** No federation model, no feeds, no application semantics. The protocol operates on keys and document hashes. [Application semantics](https://protocol.dfos.com/content-model) are a separate concern, free to evolve without protocol changes.
 - **Not a blockchain.** No consensus layer, no gas fees, no chain state to sync. Forks are valid. Convergence is deterministic without coordination — highest \`createdAt\` timestamp among tips, with lexicographic CID as tiebreaker.
 - **Not an encryption system.** Privacy comes from separation, not obscurity. The proof surface is fully public. The content surface is governed by application-layer access control. The protocol doesn't encrypt anything.
 - **Not coupled to the DFOS platform.** [DFOS](https://dfos.com) is one implementation. Any system implementing the same chain primitives produces interoperable, cross-verifiable proofs.
