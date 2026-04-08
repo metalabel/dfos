@@ -395,7 +395,7 @@ img {
   margin: 0 auto;
   width: 100%;
   padding: 0 2.5rem;
-  padding-top: 4rem;
+  padding-top: 2.5rem;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -406,8 +406,8 @@ img {
   font-weight: 700;
   font-size: clamp(1.5rem, 3.2vw, 2.2rem);
   text-transform: uppercase;
-  letter-spacing: -0.01em;
-  line-height: 1.35;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
   color: var(--green);
   margin-bottom: 2.5rem;
   text-align: justify;
@@ -418,8 +418,8 @@ img {
   font-weight: 700;
   font-size: clamp(1.5rem, 3.2vw, 2.2rem);
   text-transform: uppercase;
-  letter-spacing: -0.01em;
-  line-height: 1.35;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
   color: var(--fg);
   margin-bottom: 2.5rem;
   text-align: justify;
@@ -428,9 +428,10 @@ img {
 .hero-pitch {
   font-family: var(--font-body);
   font-weight: 600;
-  font-size: clamp(1.1rem, 2vw, 1.4rem);
-  line-height: 2;
-  color: var(--fg-body);
+  font-size: clamp(0.95rem, 1.7vw, 1.2rem);
+  letter-spacing: -0.02em;
+  line-height: 1.55;
+  color: var(--fg);
   text-transform: uppercase;
   text-align: justify;
   margin-bottom: 3rem;
@@ -441,8 +442,8 @@ img {
   font-weight: 700;
   font-size: clamp(1.5rem, 3.2vw, 2.2rem);
   text-transform: uppercase;
-  letter-spacing: -0.01em;
-  line-height: 1.35;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
   color: var(--green);
   margin-bottom: 3rem;
   text-align: justify;
