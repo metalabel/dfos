@@ -29,6 +29,7 @@
 
   /* ── Typography ── */
   --font-body: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-heading: 'Forum', 'Georgia', serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
 }
 
@@ -89,10 +90,9 @@ body {
 
 .site-header nav a {
   font-family: var(--font-body);
-  font-weight: 300;
-  font-size: 0.82rem;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
+  font-weight: 400;
+  font-size: 0.85rem;
+  letter-spacing: 0.01em;
   color: var(--teal);
   text-decoration: none;
   transition: color 0.2s;
@@ -100,7 +100,7 @@ body {
 
 .site-header--landing nav a {
   font-size: 0.85rem;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.01em;
   color: var(--teal);
 }
 
@@ -128,8 +128,8 @@ h3,
 h4,
 h5,
 h6 {
-  font-family: var(--font-body);
-  font-weight: 700;
+  font-family: var(--font-heading);
+  font-weight: 400;
   color: var(--fg);
   margin-top: 3rem;
   margin-bottom: 1rem;
@@ -137,36 +137,30 @@ h6 {
 }
 
 h1 {
-  font-size: 2.5rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.02em;
+  font-size: 2.8rem;
+  letter-spacing: -0.01em;
   color: var(--green);
   margin-top: 0;
-  line-height: 1.1;
+  line-height: 1.15;
 }
 
 h2 {
-  font-size: 1.1rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 1.6rem;
+  letter-spacing: 0;
   color: var(--green);
   margin-top: 3.5rem;
 }
 
 h3 {
-  font-size: 1rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 1.25rem;
+  letter-spacing: 0;
   color: var(--fg);
 }
 
 h4,
 h5,
 h6 {
-  font-size: 0.95rem;
-  font-weight: 600;
+  font-size: 1.05rem;
   color: var(--teal);
 }
 
@@ -274,9 +268,8 @@ td {
 th {
   font-weight: 600;
   color: var(--green);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 0.75rem;
+  letter-spacing: 0;
+  font-size: 0.85rem;
   background: var(--surface);
 }
 
@@ -344,11 +337,10 @@ img {
 
 .section-label {
   font-family: var(--font-body);
-  font-weight: 300;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.35em;
-  color: var(--teal);
+  font-weight: 400;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  color: var(--teal-dim);
   margin-bottom: 0.75rem;
   display: block;
 }
@@ -361,26 +353,25 @@ img {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--bg);
 }
 
-.hero--forest {
-  background: url('/bg-forest.jpg') center/cover no-repeat;
-}
-
-.hero--forest::before {
+.hero::after {
   content: '';
   position: absolute;
   inset: 0;
-  background:
-    linear-gradient(
-      180deg,
-      rgba(6, 6, 6, calc(0.92 - var(--scroll-brightness, 0) * 0.3)) 0%,
-      rgba(10, 10, 10, calc(0.78 - var(--scroll-brightness, 0) * 0.35)) 40%,
-      rgba(10, 10, 10, 0.95) 100%
-    ),
-    radial-gradient(ellipse 60% 40% at 30% 70%, rgba(0, 255, 9, 0.04) 0%, transparent 70%);
+  background: url('/hero-painting.jpg') center/cover no-repeat;
+  opacity: 0;
+  animation: bgFadeIn 2.5s ease-out 0.2s forwards;
+  z-index: 0;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
   z-index: 1;
-  transition: background 0.15s ease-out;
 }
 
 .hero .site-header {
@@ -388,88 +379,91 @@ img {
   z-index: 10;
 }
 
-.hero-inner {
+/* ── Hero Text Overlay ── */
+
+.hero-overlay {
   position: relative;
   z-index: 2;
-  max-width: 693px;
-  margin: 0 auto;
-  width: 100%;
-  padding: 0 2.5rem;
-  padding-top: 2.5rem;
   flex: 1;
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 0 3rem;
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
+  opacity: 0;
+  animation: heroFadeIn 1.8s ease-out 0.3s forwards;
 }
 
 .hero-declaration {
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: clamp(1.5rem, 3.2vw, 2.2rem);
-  text-transform: uppercase;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-  color: var(--green);
-  margin-bottom: 2.5rem;
-  text-align: justify;
+  font-family: var(--font-heading);
+  font-weight: 400;
+  font-size: clamp(1.5rem, 3.2vw, 2.5rem);
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+  color: var(--fg);
+  margin-bottom: 2rem;
+  text-align: center;
 }
 
-.hero-bridge {
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: clamp(1.5rem, 3.2vw, 2.2rem);
-  text-transform: uppercase;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-  color: var(--fg);
-  margin-bottom: 2.5rem;
-  text-align: justify;
+.hero-declaration .green {
+  color: var(--green);
 }
 
 .hero-pitch {
   font-family: var(--font-body);
-  font-weight: 600;
-  font-size: clamp(0.95rem, 1.7vw, 1.2rem);
-  letter-spacing: -0.02em;
-  line-height: 1.55;
-  color: var(--fg);
-  text-transform: uppercase;
-  text-align: justify;
-  margin-bottom: 3rem;
+  font-weight: 400;
+  font-size: clamp(0.85rem, 1.4vw, 1rem);
+  letter-spacing: 0;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: center;
+  margin-bottom: 0;
+  max-width: 480px;
+}
+
+/* ── Below Hero ── */
+
+.hero-below {
+  position: relative;
+  z-index: 2;
+  text-align: center;
+  padding: 3.5rem 2.5rem 2.5rem;
+  opacity: 0;
+  animation: heroFadeIn 1.4s ease-out 1.2s forwards;
 }
 
 .hero-headline {
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: clamp(1.5rem, 3.2vw, 2.2rem);
-  text-transform: uppercase;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
+  font-family: var(--font-heading);
+  font-weight: 400;
+  font-size: clamp(1.6rem, 3.2vw, 2.4rem);
+  letter-spacing: -0.01em;
+  line-height: 1.3;
   color: var(--green);
-  margin-bottom: 3rem;
-  text-align: justify;
-}
-
-.hero-headline-break {
-  display: block;
-  height: 0.5rem;
+  margin-bottom: 2.5rem;
+  margin-top: 0;
+  text-align: center;
 }
 
 .hero-cta {
   display: flex;
   justify-content: center;
   gap: 1.25rem;
-  padding-bottom: 6rem;
+  padding-bottom: 4rem;
 }
 
 .hero-cta-link {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   color: var(--green);
   text-decoration: none;
   border: 1px solid var(--green);
-  padding: 0.6em 1.4em;
+  padding: 0.55em 1.3em;
   border-radius: 2px;
   transition:
     background 0.2s,
@@ -480,6 +474,96 @@ img {
   background: var(--green);
   color: #000;
   text-decoration: none;
+}
+
+/* ── Hero Typewriter ── */
+
+.hero-typed {
+  visibility: hidden;
+}
+
+.hero-typed.typing {
+  visibility: visible;
+}
+
+.hero-typed .char {
+  opacity: 0;
+}
+
+.hero-typed .char.visible {
+  opacity: 1;
+  transition: opacity 0.05s ease-in;
+}
+
+/* ── Hero Animations ── */
+
+@keyframes heroFadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes bgFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ═══ Two Worlds ═══ */
+
+.two-worlds-section {
+  background: var(--bg);
+  padding: 6rem 2.5rem;
+}
+
+.two-worlds-inner {
+  max-width: 900px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4rem;
+  align-items: start;
+}
+
+.two-worlds-card {
+  width: 360px;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+  transform-style: preserve-3d;
+  perspective: 800px;
+  will-change: transform;
+}
+
+.two-worlds-card-img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.two-worlds-text {
+  padding-top: 0.5rem;
+}
+
+.two-worlds-text h2 {
+  margin-top: 0.5rem;
+}
+
+.two-worlds-text p {
+  color: var(--teal);
+  line-height: 1.8;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 768px) {
+  .two-worlds-inner {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+
+  .two-worlds-card {
+    width: 220px;
+    margin: 0 auto;
+  }
 }
 
 /* ═══ Split Composition ═══ */
@@ -513,7 +597,7 @@ img {
 }
 
 .split-text h2 {
-  font-size: clamp(1.5rem, 3vw, 2.2rem);
+  font-size: clamp(1.4rem, 2.8vw, 2rem);
   margin-top: 0;
   margin-bottom: 1.5rem;
 }
@@ -538,7 +622,7 @@ img {
 }
 
 .dark-section h2 {
-  font-size: clamp(1.5rem, 3.5vw, 2.5rem);
+  font-size: clamp(1.4rem, 3vw, 2.2rem);
   margin-top: 0;
   margin-bottom: 2rem;
 }
@@ -568,9 +652,8 @@ img {
 
 .chain-node {
   font-family: var(--font-mono);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
   color: var(--teal-dim);
   border: 1px solid var(--surface-border);
   padding: 0.6rem 1.2rem;
@@ -638,26 +721,28 @@ img {
 /* ═══ Closing ═══ */
 
 .closing {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  min-height: 400px;
+  position: relative;
+  min-height: 700px;
 }
 
 .closing-image {
+  position: absolute;
+  inset: 0;
   overflow: hidden;
-  position: relative;
 }
 
 .closing-image img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  filter: brightness(0.5) saturate(0.6);
+  filter: brightness(0.3) saturate(0.6);
 }
 
 .closing-content {
-  background: var(--bg-deep);
-  padding: 4rem;
+  position: relative;
+  z-index: 1;
+  padding: 8rem 4rem;
+  min-height: 700px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -673,9 +758,9 @@ img {
 }
 
 .closing-mark {
-  font-weight: 700;
-  font-size: 1.2rem;
-  text-transform: uppercase;
+  font-family: var(--font-heading);
+  font-weight: 400;
+  font-size: 1.4rem;
   letter-spacing: -0.01em;
   color: var(--green);
   margin-bottom: 1.5rem;
@@ -690,10 +775,9 @@ img {
 }
 
 .closing-nav a {
-  font-size: 0.65rem;
-  font-weight: 300;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
+  font-size: 0.85rem;
+  font-weight: 400;
+  letter-spacing: 0.01em;
   color: var(--teal-dim);
   text-decoration: none;
   transition: color 0.2s;
@@ -771,11 +855,10 @@ a.card:hover {
 }
 
 .card-title {
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: 0.9rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-family: var(--font-heading);
+  font-weight: 400;
+  font-size: 1.1rem;
+  letter-spacing: 0;
   color: var(--green);
   margin-bottom: 0.75rem;
 }
@@ -788,10 +871,9 @@ a.card:hover {
 }
 
 .card-label {
-  font-size: 0.65rem;
-  font-weight: 300;
-  text-transform: uppercase;
-  letter-spacing: 0.25em;
+  font-size: 0.8rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
   color: var(--teal-dim);
   margin-bottom: 0.5rem;
 }
@@ -861,10 +943,9 @@ a.card:hover {
 }
 
 .site-footer nav a {
-  font-size: 0.75rem;
-  font-weight: 300;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
+  font-size: 0.85rem;
+  font-weight: 400;
+  letter-spacing: 0.01em;
   color: var(--teal-dim);
   text-decoration: none;
   transition: color 0.2s;
@@ -922,10 +1003,9 @@ a.card:hover {
 .site-nav a {
   color: var(--teal-dim);
   text-decoration: none;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  font-weight: 300;
-  font-size: 0.75rem;
+  letter-spacing: 0.01em;
+  font-weight: 400;
+  font-size: 0.85rem;
   transition: color 0.2s;
 }
 
@@ -1034,10 +1114,10 @@ a.card:hover {
 }
 
 .faq-item h2 {
-  font-weight: 700;
-  font-size: 1rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-family: var(--font-heading);
+  font-weight: 400;
+  font-size: 1.25rem;
+  letter-spacing: 0;
   color: var(--green);
   margin-top: 0;
   margin-bottom: 1rem;
@@ -1113,10 +1193,10 @@ a.card:hover {
 }
 
 .spec-link-title {
-  font-weight: 700;
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-family: var(--font-heading);
+  font-weight: 400;
+  font-size: 1.1rem;
+  letter-spacing: 0;
   color: var(--green);
   display: block;
   margin-bottom: 0.25rem;
@@ -1150,9 +1230,8 @@ a.card:hover {
 .install-label {
   font-family: var(--font-body);
   font-weight: 400;
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  letter-spacing: 0.25em;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
   color: var(--teal);
   margin-bottom: 0.75rem;
 }
@@ -1275,9 +1354,8 @@ a.card:hover {
 
 .credibility-strip {
   font-family: var(--font-mono);
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
   color: var(--green);
   margin-bottom: 1rem;
   display: flex;
@@ -1286,11 +1364,10 @@ a.card:hover {
   align-items: center;
 }
 
-/* copy buttons: all-caps */
+/* copy buttons */
 .copy-md,
 .code-copy,
 .install-copy {
-  text-transform: uppercase;
 }
 
 .credibility-dot {
@@ -1331,19 +1408,18 @@ a.card:hover {
 .intent-label {
   font-family: var(--font-body);
   font-weight: 400;
-  font-size: 0.65rem;
-  letter-spacing: 0.35em;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
   color: var(--teal);
   margin-bottom: 0.75rem;
   display: block;
 }
 
 .intent-title {
-  font-family: var(--font-body);
-  font-weight: 700;
-  font-size: 0.9rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-family: var(--font-heading);
+  font-weight: 400;
+  font-size: 1.1rem;
+  letter-spacing: 0;
   color: var(--green);
   margin-bottom: 0.75rem;
   display: block;
@@ -1399,16 +1475,18 @@ a.card:hover {
     font-size: 16px;
   }
 
-  .hero {
-    min-height: 85vh;
-  }
-
-  .hero-inner {
+  .hero-overlay {
     padding: 0 1.5rem;
   }
 
-  .hero-declaration,
-  .hero-bridge,
+  .hero-declaration {
+    font-size: 1.6rem;
+  }
+
+  .hero-pitch {
+    font-size: 0.85rem;
+  }
+
   .hero-headline {
     font-size: 1.4rem;
   }
@@ -1416,10 +1494,14 @@ a.card:hover {
   .hero-cta {
     flex-direction: column;
     align-items: stretch;
+    gap: 0.75rem;
+    padding-bottom: 3rem;
   }
 
   .hero-cta-link {
     text-align: center;
+    padding: 0.5em 1em;
+    font-size: 0.8rem;
   }
 
   .site-header {

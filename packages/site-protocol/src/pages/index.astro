@@ -8,7 +8,7 @@ import Base from '../layouts/Base.astro';
   landing={true}
 >
   <!-- ═══ Hero ═══ -->
-  <section class="hero hero--forest">
+  <section class="hero">
     <header class="site-header site-header--landing">
       <a href="/" class="logo">
         <img src="/dfos-logo-green.svg" alt="DFOS" />
@@ -26,16 +26,16 @@ import Base from '../layouts/Base.astro';
       </nav>
     </header>
 
-    <div class="hero-inner">
-      <p class="hero-declaration">
-        Your identity and content are rented back to you by the platforms that own it
-      </p>
-      <p class="hero-bridge">
-        DFOS Protocol gives you back the keys
+    <div class="hero-overlay">
+      <p class="hero-declaration" id="hero-typed">
+        YOUR IDENTITY AND CONTENT ARE RENTED BACK TO YOU BY THE PLATFORMS THAT OWN IT. <span class="green">DFOS PROTOCOL GIVES YOU BACK THE KEYS.</span>
       </p>
       <p class="hero-pitch">
-        An open standard for cryptographic identity and verifiable content. Runs anywhere, portable across everything, no permission required
+        An open standard for cryptographic identity and verifiable content. Runs anywhere, portable across everything, no permission required.
       </p>
+    </div>
+
+    <div class="hero-below">
       <h1 class="hero-headline">
         The proof is public. The content is private
       </h1>
@@ -48,29 +48,31 @@ import Base from '../layouts/Base.astro';
   </section>
 
   <!-- ═══ Dark Forest ═══ -->
-  <section class="split-section">
-    <div class="split-image">
-      <img src="/painting-hand.jpg" alt="" />
-    </div>
-    <div class="split-text">
-      <span class="section-label">T H E &nbsp; D A R K &nbsp; F O R E S T</span>
-      <h2>Two worlds</h2>
-      <p>
-        The most meaningful creative and social coordination on the internet
-        happens in private groups, closed communities, invite-only spaces.
-        The topology is private-first.
-      </p>
-      <p>
-        Every existing system collapses proof and content into the same surface.
-        If you can't access the content, you can't verify anything about it.
-        DFOS separates them.
-      </p>
-      <p>
-        The world of proofs is public &mdash; signed chains that anyone can verify.
-        The world of content exists in dark forests &mdash; member-governed spaces,
-        visible only to participants.
-        The protocol defines the proof world. It sees hashes, never documents.
-      </p>
+  <section class="two-worlds-section">
+    <div class="two-worlds-inner">
+      <div class="two-worlds-card" id="tilt-card">
+        <img src="/card-hands.png" alt="" class="two-worlds-card-img" />
+      </div>
+      <div class="two-worlds-text">
+        <span class="section-label">The Dark Forest</span>
+        <h2>Two worlds</h2>
+        <p>
+          The most meaningful creative and social coordination on the internet
+          happens in private groups, closed communities, invite-only spaces.
+          The topology is private-first.
+        </p>
+        <p>
+          Every existing system collapses proof and content into the same surface.
+          If you can't access the content, you can't verify anything about it.
+          DFOS separates them.
+        </p>
+        <p>
+          The world of proofs is public &mdash; signed chains that anyone can verify.
+          The world of content exists in dark forests &mdash; member-governed spaces,
+          visible only to participants.
+          The protocol defines the proof world. It sees hashes, never documents.
+        </p>
+      </div>
     </div>
   </section>
 
@@ -276,11 +278,8 @@ dfos serve`} /></pre>
     });
 
     // scroll-driven image brightness
-    // images stay bright while in viewport, dim only when leaving
     (function () {
-      var targets = [
-        { el: document.querySelector('.hero--forest'), mode: 'top' },
-      ];
+      var targets = [];
       document.querySelectorAll('.split-image, .key-separator').forEach(function (el) {
         targets.push({ el: el, mode: 'contain' });
       });
@@ -294,29 +293,87 @@ dfos serve`} /></pre>
         targets.forEach(function (t) {
           var rect = t.el.getBoundingClientRect();
           var ratio;
-          if (t.mode === 'top') {
-            // hero: bright at top, dims as you scroll past
-            ratio = 1 - Math.min(1, Math.max(0, -rect.top / (rect.height * 0.5)));
-          } else if (t.mode === 'enter') {
-            // bottom elements: brighten as they enter from below, stay bright
+          if (t.mode === 'enter') {
             var entered = vh - rect.top;
             ratio = Math.min(1, Math.max(0, entered / (rect.height * 0.5)));
           } else {
-            // containment: bright when element is fully or mostly in viewport
             var visibleTop = Math.max(0, rect.top);
             var visibleBottom = Math.min(vh, rect.bottom);
             var visibleHeight = Math.max(0, visibleBottom - visibleTop);
             var visibleRatio = visibleHeight / rect.height;
-            // stay at 1.0 until less than 80% visible, then fade
             ratio = Math.min(1, visibleRatio / 0.8);
           }
-          // ease
           ratio = ratio * ratio;
           t.el.style.setProperty('--scroll-brightness', ratio.toFixed(3));
         });
         requestAnimationFrame(update);
       }
       update();
+    })();
+
+    // 3D tilt card
+    (function () {
+      var card = document.getElementById('tilt-card');
+      if (!card) return;
+      card.addEventListener('mousemove', function (e) {
+        var rect = card.getBoundingClientRect();
+        var x = (e.clientX - rect.left) / rect.width;
+        var y = (e.clientY - rect.top) / rect.height;
+        var rotateY = (x - 0.5) * 20;
+        var rotateX = (0.5 - y) * 20;
+        card.style.transform = 'perspective(800px) rotateX(' + rotateX + 'deg) rotateY(' + rotateY + 'deg) scale(1.03)';
+        card.style.boxShadow = '0 ' + (20 + rotateX * 2) + 'px 60px rgba(0,0,0,0.6)';
+      });
+      card.addEventListener('mouseleave', function () {
+        card.style.transform = 'perspective(800px) rotateX(0) rotateY(0) scale(1)';
+        card.style.boxShadow = '0 20px 60px rgba(0,0,0,0.5)';
+      });
+    })();
+
+    // Mobile scroll tilt for card
+    (function () {
+      if (window.innerWidth > 768) return;
+      var card = document.getElementById('tilt-card');
+      if (!card) return;
+      function update() {
+        var rect = card.getBoundingClientRect();
+        var vh = window.innerHeight;
+        var center = (rect.top + rect.height / 2) / vh;
+        var rotateX = (center - 0.5) * -18;
+        var rotateY = Math.sin(center * 3) * 10;
+        card.style.transform = 'perspective(800px) rotateX(' + rotateX + 'deg) rotateY(' + rotateY + 'deg)';
+        requestAnimationFrame(update);
+      }
+      update();
+    })();
+
+    // Hero typewriter effect
+    (function () {
+      var el = document.getElementById('hero-typed');
+      if (!el) return;
+      var html = el.innerHTML;
+      // Wrap each character in a span, preserving HTML tags
+      var wrapped = '';
+      var inTag = false;
+      for (var i = 0; i < html.length; i++) {
+        var ch = html[i];
+        if (ch === '<') { inTag = true; wrapped += ch; continue; }
+        if (ch === '>') { inTag = false; wrapped += ch; continue; }
+        if (inTag) { wrapped += ch; continue; }
+        if (ch === ' ') { wrapped += ' '; continue; }
+        wrapped += '<span class="char">' + ch + '</span>';
+      }
+      el.innerHTML = wrapped;
+      el.classList.add('typing');
+
+      var chars = el.querySelectorAll('.char');
+      var delay = 800; // wait for painting fade-in
+      var speed = 25;  // ms per character
+      for (var j = 0; j < chars.length; j++) {
+        (function (c, t) {
+          setTimeout(function () { c.classList.add('visible'); }, t);
+        })(chars[j], delay + j * speed);
+      }
     })();
   </script>
 
