@@ -268,8 +268,8 @@ export interface RelayStore {
   getRevocations(issuerDID: string): Promise<string[]>;
   /** Add a revocation to the revocation set */
   addRevocation(revocation: StoredRevocation): Promise<void>;
-  /** Check if a specific credential CID has been revoked */
-  isCredentialRevoked(credentialCID: string): Promise<boolean>;
+  /** Check if a specific credential CID has been revoked by a specific issuer */
+  isCredentialRevoked(issuerDID: string, credentialCID: string): Promise<boolean>;
 
   // --- public credentials (standing authorization) ---
 

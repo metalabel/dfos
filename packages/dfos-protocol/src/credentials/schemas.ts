@@ -26,9 +26,10 @@ export type Attenuation = z.infer<typeof Attenuation>;
 
 /** DFOS credential payload — UCAN-style authorization token */
 export const DFOSCredentialPayload = z.strictObject({
+  version: z.literal(1),
   type: z.literal('DFOSCredential'),
   /** Issuer DID */
-  iss: z.string().max(MAX_DID),
+  iss: z.string().min(1).max(MAX_DID),
   /** Audience DID or "*" for public credentials */
   aud: z.string().min(1).max(MAX_AUD),
   /** Attenuations — resource + action pairs */

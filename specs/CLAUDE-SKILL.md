@@ -53,8 +53,8 @@ The CLI checks for updates automatically on each run (non-blocking, cached 24h).
 
 - **Identity**: An Ed25519 keypair with a DID (`did:dfos:...`). Keys are stored in the OS keychain (macOS Keychain, Linux secret-service) with automatic file-based fallback at `~/.dfos/keys/`.
 - **Content chain**: An append-only chain of signed operations over a document (arbitrary JSON). Each operation has a CID (IPFS CIDv1, `bafyrei...`). Content IDs are base36 strings (e.g., `kv67tf3n97324dc24an266`). The document blob is stored separately.
-- **Beacon**: A signed merkle root over content IDs — a periodic integrity checkpoint.
-- **Credential**: A VC-JWT granting scoped read or write access to content.
+- **Beacon**: A signed manifest pointer — a periodic announcement of an identity's current manifest content chain.
+- **Credential**: A DFOS credential (UCAN-style JWS) granting scoped read or write access to content.
 - **Relay/Peer**: A node that stores and syncs protocol operations. The CLI itself embeds a local relay backed by `~/.dfos/store/` — all operations work offline. Remote peers are HTTP relays you can publish to and fetch from. `dfos serve` exposes your local relay over HTTP so others can peer with you.
 - **Context**: A (identity, relay) pair. Most commands need both — set a default with `dfos use alice@prod` or override per-command with `--ctx alice@prod`.
 
@@ -235,7 +235,7 @@ dfos content grant <contentId> <did> --write
 dfos content grant <contentId> <did> --read --ttl 1h
 
 # Delegated write (bob updates alice's content using a write credential)
-dfos --ctx bob@prod content update <contentId> new.json --authorization <vc-jwt>
+dfos --ctx bob@prod content update <contentId> new.json --authorization <credential-jws>
 
 # --credential = presenting a READ credential (downloads)
 # --authorization = presenting a WRITE credential (mutations)
@@ -244,7 +244,7 @@ dfos --ctx bob@prod content update <contentId> new.json --authorization <vc-jwt>
 ### Beacons
 
 ```bash
-dfos beacon announce <contentId...> [--peer <relay>]   # sign merkle root, optionally submit to relay
+dfos beacon announce <contentId...> [--peer <relay>]   # sign manifest pointer, optionally submit to relay
 dfos beacon show [name|did]                            # show latest beacon
 dfos beacon countersign <name|did> --peer <relay>      # countersign someone's beacon
 ```
@@ -385,9 +385,9 @@ dfos content publish <contentId> --peer prod
 - **"content verify failed"**: Chain integrity issue. Re-fetch from relay: `dfos content fetch <id> --peer <relay>`.
 - **"blob bytes do not match documentCID"**: Remote relay rejected the blob upload. Create content locally first (`dfos content create file.json`), then publish separately (`dfos content publish <id> --peer <relay>`).
 - **"content not found on peer" / 0 operations fetched**: The content doesn't exist on that relay. Verify the content ID and check which relay it was published to with `dfos content show <id>`.
-- **"DFOSContentRead credential required"**: You're trying to download content you don't own. The creator must issue a read credential: `dfos content grant <contentId> <your-did> --read`. Present it with `--credential <vc-jwt>`.
+- **"read credential required"**: You're trying to download content you don't own. The creator must issue a read credential: `dfos content grant <contentId> <your-did> --read`. Present it with `--credential <credential-jws>`.
 - **"unknown identity" on content publish**: If content includes delegated operations (writes by non-creators via credentials), all referenced identities must be published to the relay first. Publish each delegate's identity before the content.
-- **"signer is not the chain creator"**: Content mutations (update, delete) must be signed by the creator identity or via a write credential. Switch to the creator's context, or use `--authorization <vc-jwt>` with a DFOSContentWrite credential.
+- **"signer is not the chain creator"**: Content mutations (update, delete) must be signed by the creator identity or via a write credential. Switch to the creator's context, or use `--authorization <credential-jws>` with a DFOS write credential.
 
 ## Confirmation Behavior
 

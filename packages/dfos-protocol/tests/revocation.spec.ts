@@ -125,6 +125,7 @@ describe('revocation', () => {
     // manually create a JWS with wrong typ
     const { createJws, dagCborCanonicalEncode } = await import('../src/crypto');
     const payload = {
+      version: 1 as const,
       type: 'revocation' as const,
       did: issuer.did,
       credentialCID: 'bafyrei' + 'e'.repeat(52),

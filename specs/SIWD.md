@@ -70,7 +70,7 @@ https://3p.com/callback?
 If a credential was requested via `scope`, it is included as an additional parameter:
 
 ```
-  &credential=<VC-JWT>
+  &credential=<DFOS credential JWS>
 ```
 
 ---
@@ -162,7 +162,7 @@ No DFOS platform server is contacted during verification. The third party only n
 
 ## Optional Credential Return
 
-When `scope` includes resource access beyond `identity`, the callback includes a credential as a VC-JWT alongside the signed challenge.
+When `scope` includes resource access beyond `identity`, the callback includes a DFOS credential alongside the signed challenge.
 
 ### User-owned content
 

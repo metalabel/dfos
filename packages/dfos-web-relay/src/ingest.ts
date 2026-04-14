@@ -839,8 +839,8 @@ const ingestPublicCredential = async (
     return { cid, status: 'duplicate', kind: 'credential', chainId: verified.iss };
   }
 
-  // check if already revoked
-  const revoked = await store.isCredentialRevoked(cid);
+  // check if already revoked (scoped to credential issuer)
+  const revoked = await store.isCredentialRevoked(verified.iss, cid);
   if (revoked) {
     return { cid, status: 'rejected', error: 'credential is revoked' };
   }

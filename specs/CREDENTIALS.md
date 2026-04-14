@@ -21,7 +21,7 @@ Credentials are content-addressed via CID (same `dagCborCanonicalEncode` + SHA-2
 
 ### Why Not VC-JWTs
 
-The prior credential format (W3C VC-JWT, `typ: "vc+jwt"`) carried unnecessary complexity for the protocol's needs: the `vc` wrapper object, `@context` arrays, `credentialSubject` nesting. DFOS credentials flatten this into a direct payload with explicit resource/action pairs and native delegation support. The VC-JWT format remains supported for backward compatibility but is superseded by DFOS credentials for all new authorization flows.
+The prior credential format (W3C VC-JWT, `typ: "vc+jwt"`) carried unnecessary complexity for the protocol's needs: the `vc` wrapper object, `@context` arrays, `credentialSubject` nesting. DFOS credentials flatten this into a direct payload with explicit resource/action pairs and native delegation support. The VC-JWT format has been fully replaced — no backward compatibility is maintained.
 
 ---
 
@@ -33,6 +33,7 @@ The credential payload is validated by a strict Zod schema. No extra fields are 
 
 ```json
 {
+  "version": 1,
   "type": "DFOSCredential",
   "iss": "did:dfos:e3vvtck42d4eacdnzvtrn6",
   "aud": "did:dfos:nzkf838efr424433rn2rzk",
@@ -45,9 +46,10 @@ The credential payload is validated by a strict Zod schema. No extra fields are 
 }
 ```
 
-| Field  | Type           | Description                                          |
-| ------ | -------------- | ---------------------------------------------------- |
-| `type` | `"DFOSCredential"` | Literal discriminator                           |
+| Field     | Type           | Description                                          |
+| --------- | -------------- | ---------------------------------------------------- |
+| `version` | `1`            | Schema version (literal `1`)                         |
+| `type`    | `"DFOSCredential"` | Literal discriminator                           |
 | `iss`  | string         | Issuer DID — the authority granting permission       |
 | `aud`  | string         | Audience DID, or `"*"` for public credentials        |
 | `att`  | Attenuation[]  | Resource + action pairs (min 1, max 32)              |
@@ -229,6 +231,7 @@ A credential with `aud` set to `"*"` is a **public credential**. It is not addre
 
 ```json
 {
+  "version": 1,
   "type": "DFOSCredential",
   "iss": "did:dfos:e3vvtck42d4eacdnzvtrn6",
   "aud": "*",
@@ -274,6 +277,7 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 
 ```json
 {
+  "version": 1,
   "type": "revocation",
   "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
   "credentialCID": "bafyrei...",
@@ -283,6 +287,7 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 
 | Field           | Type   | Description                                     |
 | --------------- | ------ | ----------------------------------------------- |
+| `version`       | `1`    | Schema version (literal `1`)                    |
 | `type`          | `"revocation"` | Literal discriminator                    |
 | `did`           | string | Issuer DID revoking the credential              |
 | `credentialCID` | CID    | CID of the credential being revoked             |
@@ -297,7 +302,7 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 
 ### Relay Enforcement
 
-Relays maintain a revocation set per issuer DID. During credential verification, the relay checks whether the credential's CID appears in the revocation set. A revoked credential fails verification regardless of its expiry or signature validity.
+Relays maintain a revocation set keyed by `(issuerDID, credentialCID)`. During credential verification, the relay checks whether the credential's CID appears in the revocation set for that credential's issuer. This scoping prevents a rogue DID from revoking credentials it did not issue. A revoked credential fails verification regardless of its expiry or signature validity.
 
 ---
 
@@ -342,6 +347,7 @@ Alice (`did:dfos:alice...`) grants Bob (`did:dfos:bob...`) write access to a con
 
 // JWS Payload
 {
+  "version": 1,
   "type": "DFOSCredential",
   "iss": "did:dfos:alice...",
   "aud": "did:dfos:bob...",
@@ -368,6 +374,7 @@ Space (root) -> Member -> Device (leaf)
 
 ```json
 {
+  "version": 1,
   "type": "DFOSCredential",
   "iss": "did:dfos:space...",
   "aud": "did:dfos:member...",
@@ -384,6 +391,7 @@ Space (root) -> Member -> Device (leaf)
 
 ```json
 {
+  "version": 1,
   "type": "DFOSCredential",
   "iss": "did:dfos:member...",
   "aud": "did:dfos:device...",
@@ -411,6 +419,7 @@ A space DID issues a public read credential for a content chain. Any DID can rea
 
 ```json
 {
+  "version": 1,
   "type": "DFOSCredential",
   "iss": "did:dfos:space...",
   "aud": "*",

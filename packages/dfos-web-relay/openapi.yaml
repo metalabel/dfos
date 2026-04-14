@@ -8,7 +8,7 @@ info:
 
     Two data planes:
     - **Proof plane** (public): signed chain operations, beacons, countersignatures
-    - **Content plane** (authenticated): raw content blobs gated by DID auth tokens and VC-JWT credentials
+    - **Content plane** (authenticated): raw content blobs gated by DID auth tokens and DFOS credentials
 
 servers:
   - url: http://localhost:3000
@@ -28,7 +28,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [did, protocol, version, proof, content, log, profile]
+                required: [did, protocol, version, capabilities, profile]
                 properties:
                   did:
                     type: string
@@ -39,16 +39,23 @@ paths:
                     enum: [dfos-web-relay]
                   version:
                     type: string
-                    example: '0.1.0'
-                  proof:
-                    type: boolean
-                    description: Always true — a relay without proof plane is not a relay
-                  content:
-                    type: boolean
-                    description: Whether the relay supports content plane (blob upload/download)
-                  log:
-                    type: boolean
-                    description: Whether the global operation log is available (GET /log)
+                    example: '0.8.0'
+                  capabilities:
+                    type: object
+                    required: [proof, content, documents, log]
+                    properties:
+                      proof:
+                        type: boolean
+                        description: Always true — a relay without proof plane is not a relay
+                      content:
+                        type: boolean
+                        description: Whether the relay supports content plane (blob upload/download)
+                      documents:
+                        type: boolean
+                        description: Whether the relay serves the documents endpoint
+                      log:
+                        type: boolean
+                        description: Whether the global operation log is available (GET /log)
                   profile:
                     type: string
                     description: The relay's profile artifact as a compact JWS token
@@ -263,7 +270,7 @@ paths:
           required: false
           schema:
             type: string
-          description: DFOSContentRead VC-JWT (required for non-creators)
+          description: DFOS read credential JWS (required for non-creators)
       responses:
         '200':
           description: Blob data
@@ -311,7 +318,7 @@ paths:
           required: false
           schema:
             type: string
-          description: DFOSContentRead VC-JWT (required for non-creators)
+          description: DFOS read credential JWS (required for non-creators)
       responses:
         '200':
           description: Blob data
@@ -330,6 +337,80 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /content/{contentId}/documents:
+    get:
+      operationId: getDocuments
+      summary: List documents in a content chain
+      description: |
+        Returns all documents committed to a content chain as an ordered list,
+        from genesis to head. Cursor-based pagination.
+      tags: [Content Plane]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CID cursor — start after this operation CID
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 1000
+        - name: X-Credential
+          in: header
+          required: false
+          schema:
+            type: string
+          description: DFOS read credential JWS (required for non-creators)
+      responses:
+        '200':
+          description: Document list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [documents, cursor]
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      type: object
+                      required: [operationCID, documentCID, document, signerDID, createdAt]
+                      properties:
+                        operationCID:
+                          type: string
+                        documentCID:
+                          type: string
+                          nullable: true
+                        document:
+                          nullable: true
+                        signerDID:
+                          type: string
+                        createdAt:
+                          type: string
+                          format: date-time
+                  cursor:
+                    type: string
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          description: Documents capability not enabled
 
   /countersignatures/{cid}:
     get:
@@ -492,7 +573,7 @@ components:
 
     BeaconResponse:
       type: object
-      required: [did, jwsToken, beaconCID, payload]
+      required: [did, jwsToken, beaconCID, manifestContentId, createdAt]
       properties:
         did:
           type: string
@@ -500,24 +581,12 @@ components:
           type: string
         beaconCID:
           type: string
-        payload:
-          type: object
-          required: [version, type, did, merkleRoot, createdAt]
-          properties:
-            version:
-              type: integer
-              enum: [1]
-            type:
-              type: string
-              enum: [beacon]
-            did:
-              type: string
-            merkleRoot:
-              type: string
-              pattern: '^[0-9a-f]{64}$'
-            createdAt:
-              type: string
-              format: date-time
+        manifestContentId:
+          type: string
+          description: Content ID of the manifest chain
+        createdAt:
+          type: string
+          format: date-time
 
     MultikeyPublicKey:
       type: object

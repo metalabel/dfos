@@ -49,6 +49,7 @@ export const signRevocation = async (input: {
   const now = new Date().toISOString().replace(/\d{3}Z$/, '000Z');
 
   const payload = {
+    version: 1 as const,
     type: 'revocation' as const,
     did: input.issuerDID,
     credentialCID: input.credentialCID,

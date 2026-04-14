@@ -175,6 +175,7 @@ export type CountersignPayload = z.infer<typeof CountersignPayload>;
 
 /** Revocation: signed credential revocation artifact, gossiped like beacons */
 export const RevocationPayload = z.strictObject({
+  version: z.literal(1),
   type: z.literal('revocation'),
   did: z.string().max(MAX_DID),
   credentialCID: CIDString,

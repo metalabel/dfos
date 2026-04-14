@@ -29,7 +29,7 @@ The DFOS protocol has six components:
 | **Beacons**           | Signed manifest announcements — periodic commitment over content sets            |
 | **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data |
 | **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op    |
-| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for beacon roots       |
+| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for content sets       |
 
 > **Note:** The credential format (auth tokens, read/write credentials, revocation) is specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials). This document covers the crypto core, chain primitives, beacons, artifacts, countersignatures, and merkle trees.
 
@@ -113,7 +113,7 @@ Content chain verification requires a **valid EdDSA signature** and delegates ke
 - The EdDSA signature on each operation is valid against the key returned by `resolveKey(kid)`
 - Chain integrity (CID links, timestamp ordering, terminal state)
 - The `kid` DID matches the payload `did` for chain operations
-- Creator-sovereignty authorization (when `enforceAuthorization` is enabled): non-creator signers must present a valid DFOSContentWrite VC-JWT issued by the creator
+- Creator-sovereignty authorization (when `enforceAuthorization` is enabled): non-creator signers must present a valid DFOS credential with `action: "write"` issued by the creator
 
 **What the protocol does NOT enforce (application concerns):**
 
@@ -408,7 +408,7 @@ Every operation JWS (identity-op and content-op) includes a `cid` field in the p
 
 A CID mismatch between header and derived value immediately surfaces dag-cbor encoding disagreements across implementations.
 
-Note: JWT auth tokens and VC-JWT credentials do NOT include a `cid` header — this field is specific to operation JWS tokens and beacons.
+Note: JWT auth tokens do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). This field is present on operation JWS tokens, beacons, credentials, and revocations.
 
 ### CID Derivation
 
@@ -434,11 +434,10 @@ Credentials handle authentication and authorization for relay access and content
 
 Summary of credential types:
 
-| Credential Type    | Purpose                                                      |
-| ------------------ | ------------------------------------------------------------ |
-| Auth token         | DID-signed JWT proving identity (relay AuthN)                |
-| `DFOSContentWrite` | Authorize extending a content chain (embedded in operations) |
-| `DFOSContentRead`  | Authorize reading content plane data (presented to relay)    |
+| Credential Type      | Purpose                                                      |
+| -------------------- | ------------------------------------------------------------ |
+| Auth token           | DID-signed JWT proving identity (relay AuthN)                |
+| DFOS credential      | Authorize actions on resources (read, write) via attenuations|
 
 ### Content Chain Authorization
 
@@ -446,12 +445,10 @@ When `enforceAuthorization` is enabled on content chain verification:
 
 1. **Genesis operation**: The signer is the chain creator, always authorized
 2. **Creator signs subsequent ops**: Authorized directly — no credential needed
-3. **Different DID signs**: Must include an `authorization` field containing a valid `DFOSContentWrite` credential where:
-   - `iss` matches the chain creator DID
-   - `sub` matches the signing DID
+3. **Different DID signs**: Must include an `authorization` field containing a valid DFOS credential where:
+   - The delegation chain roots at the chain creator DID
+   - The credential's `att` includes an entry with `action: "write"` covering this chain's resource
    - The credential is temporally valid (`iat <= op.createdAt < exp`, not wall clock)
-   - If `contentId` is present in `credentialSubject`, it must match this chain's contentId
-   - The credential type is `DFOSContentWrite`
 
 The `authorization` field is available on `update` and `delete` content operations. It is absent for creator-signed operations.
 
@@ -722,7 +719,7 @@ Relay-level semantic checks (target exists, witness ≠ author, deduplication) a
 5. Verify the `kid` DID matches the payload `did` field
 6. Resolve `kid` via external key resolver (caller provides)
 7. Verify EdDSA JWS signature
-8. If `enforceAuthorization` is enabled and the signer DID differs from the chain creator: verify the `authorization` field contains a valid `DFOSContentWrite` VC-JWT issued by the creator DID, with `sub` matching the signer, not expired at `op.createdAt`, and `contentId` (if present) matching this chain
+8. If `enforceAuthorization` is enabled and the signer DID differs from the chain creator: verify the `authorization` field contains a valid DFOS credential with `action: "write"` covering this chain, with a delegation chain rooting at the creator DID, and not expired at `op.createdAt`
 9. Apply state change (set document, clear, or delete)
 
 ---
@@ -1072,8 +1069,9 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/artifact`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/artifact.ts) — `signArtifact`, `verifyArtifact`
 - [`chain/countersign`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/countersign.ts) — `signCountersignature`, `verifyCountersignature`
 - [`credentials/auth-token`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/auth-token.ts) — `createAuthToken`, `verifyAuthToken`
-- [`credentials/credential`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/credential.ts) — `createCredential`, `verifyCredential`, `decodeCredentialUnsafe`
-- [`credentials/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/schemas.ts) — `AuthTokenClaims`, `CredentialClaims`, `DFOSCredentialType`
+- [`chain/revocation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/revocation.ts) — `signRevocation`, `verifyRevocation`
+- [`credentials/dfos-credential`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/dfos-credential.ts) — `createDFOSCredential`, `verifyDFOSCredential`, `decodeDFOSCredentialUnsafe`
+- [`credentials/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/schemas.ts) — `AuthTokenClaims`, `DFOSCredentialPayload`, `Attenuation`
 - [`merkle/tree`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/merkle/tree.ts) — `buildMerkleTree`, `hashLeaf`
 - [`merkle/proof`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/merkle/proof.ts) — `generateMerkleProof`, `verifyMerkleProof`
 

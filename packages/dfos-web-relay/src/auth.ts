@@ -114,8 +114,8 @@ export const verifyContentAccess = async (options: {
     try {
       const cred = await verifyDFOSCredential(credJws, { resolveIdentity });
 
-      // check revocation
-      const revoked = await store.isCredentialRevoked(cred.credentialCID);
+      // check revocation (scoped to credential issuer)
+      const revoked = await store.isCredentialRevoked(cred.iss, cred.credentialCID);
       if (revoked) continue;
 
       // check resource + action match
@@ -141,8 +141,8 @@ export const verifyContentAccess = async (options: {
     try {
       const cred = await verifyDFOSCredential(credentialJWS, { resolveIdentity });
 
-      // check revocation
-      const revoked = await store.isCredentialRevoked(cred.credentialCID);
+      // check revocation (scoped to credential issuer)
+      const revoked = await store.isCredentialRevoked(cred.iss, cred.credentialCID);
       if (revoked) {
         return { granted: false, source: 'none' };
       }
@@ -151,8 +151,10 @@ export const verifyContentAccess = async (options: {
       await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID });
 
       // audience verification for non-public credentials
-      if (cred.aud !== '*' && requesterDID && cred.aud !== requesterDID) {
-        return { granted: false, source: 'none' };
+      if (cred.aud !== '*') {
+        if (!requesterDID || cred.aud !== requesterDID) {
+          return { granted: false, source: 'none' };
+        }
       }
 
       // check resource + action match

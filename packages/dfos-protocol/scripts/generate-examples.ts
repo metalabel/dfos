@@ -523,7 +523,7 @@ const main = async () => {
   });
 
   write('credential-write', {
-    description: 'VC-JWT: DFOSContentWrite credential (broad + narrowed)',
+    description: 'DFOS credential: write access (broad + narrowed)',
     type: 'credential',
     broadCredential: writeCredentialJws,
     narrowCredential: narrowWriteCredentialJws,
@@ -537,7 +537,7 @@ const main = async () => {
   });
 
   write('credential-read', {
-    description: 'VC-JWT: DFOSContentRead credential',
+    description: 'DFOS credential: read access',
     type: 'credential',
     credential: readCredentialJws,
     issuerPublicKey: multikey1,
@@ -549,7 +549,7 @@ const main = async () => {
   });
 
   write('content-delegated', {
-    description: 'Content chain: creator signs genesis, delegate signs update with write VC',
+    description: 'Content chain: creator signs genesis, delegate signs update with write credential',
     type: 'content-delegated',
     chain: [delegatedCreateJws, delegatedUpdateJws],
     creatorPublicKey: multikey1,

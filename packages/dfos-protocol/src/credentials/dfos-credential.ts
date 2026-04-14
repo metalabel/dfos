@@ -109,6 +109,7 @@ export const createDFOSCredential = async (options: {
   const now = options.iat ?? Math.floor(Date.now() / 1000);
 
   const payload = {
+    version: 1 as const,
     type: 'DFOSCredential' as const,
     iss: options.issuerDID,
     aud: options.audienceDID,

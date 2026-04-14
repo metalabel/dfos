@@ -40,7 +40,7 @@ export class MemoryRelayStore implements RelayStore {
   private countersignatures = new Map<string, string[]>();
   private operationLog: LogEntry[] = [];
   private peerCursors = new Map<string, string>();
-  /** Keyed by credentialCID for fast lookup */
+  /** Keyed by `issuerDID::credentialCID` for issuer-scoped revocation */
   private revocations = new Map<string, StoredRevocation>();
   /** Keyed by credential CID */
   private publicCredentials = new Map<string, StoredPublicCredential>();
@@ -121,11 +121,12 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async addRevocation(revocation: StoredRevocation): Promise<void> {
-    this.revocations.set(revocation.credentialCID, revocation);
+    const key = `${revocation.issuerDID}::${revocation.credentialCID}`;
+    this.revocations.set(key, revocation);
   }
 
-  async isCredentialRevoked(credentialCID: string): Promise<boolean> {
-    return this.revocations.has(credentialCID);
+  async isCredentialRevoked(issuerDID: string, credentialCID: string): Promise<boolean> {
+    return this.revocations.has(`${issuerDID}::${credentialCID}`);
   }
 
   // --- public credentials ---
