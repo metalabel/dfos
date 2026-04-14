@@ -708,8 +708,7 @@ func TestBeaconCreate(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	kid := id.did + "#" + id.auth.keyID
-	merkle := dfos.BuildMerkleRoot([]string{cc.contentID})
-	token, beaconCID, err := dfos.SignBeacon(id.did, merkle, kid, id.auth.priv)
+	token, beaconCID, err := dfos.SignBeacon(id.did, cc.contentID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,8 +9,8 @@
 import {
   matchesResource,
   verifyAuthToken,
-  verifyDFOSCredential,
   verifyDelegationChain,
+  verifyDFOSCredential,
   type VerifiedAuthToken,
   type VerifiedDFOSCredential,
 } from '@metalabel/dfos-protocol/credentials';

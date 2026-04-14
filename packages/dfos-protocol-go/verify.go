@@ -3,7 +3,6 @@ package dfos
 import (
 	"crypto/ed25519"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -13,7 +12,8 @@ type KeyResolver func(kid string) (ed25519.PublicKey, error)
 
 // protocolTimeFormat is declared in timestamp.go
 
-var merkleRootPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+// contentIDLength is the expected length of a DFOS content ID.
+const contentIDLength = 22
 
 // -----------------------------------------------------------------------------
 // Result types
@@ -34,10 +34,10 @@ type VerifiedContentResult struct {
 
 // VerifiedBeaconResult is the result of beacon verification.
 type VerifiedBeaconResult struct {
-	BeaconCID  string
-	DID        string
-	MerkleRoot string
-	CreatedAt  string
+	BeaconCID         string
+	DID               string
+	ManifestContentId string
+	CreatedAt         string
 }
 
 // VerifiedArtifactResult is the result of artifact verification.
@@ -490,7 +490,7 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 // public keys from kid values.
 //
 // When enforceAuthorization is true, non-creator signers must include a valid
-// DFOSContentWrite VC-JWT in the operation's authorization field.
+// DFOSContentWrite DFOS credential in the operation's authorization field.
 func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorization bool) (*VerifiedContentResult, error) {
 	if len(log) == 0 {
 		return nil, fmt.Errorf("log must have at least one operation")
@@ -830,9 +830,6 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 	}
 
 	// validate payload
-	if v, ok := payload["version"].(int64); !ok || v != 1 {
-		return nil, fmt.Errorf("invalid beacon payload: invalid or missing version")
-	}
 	if payloadString(payload, "type") != "beacon" {
 		return nil, fmt.Errorf("invalid beacon payload: wrong type")
 	}
@@ -840,9 +837,9 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 	if beaconDID == "" {
 		return nil, fmt.Errorf("invalid beacon payload: missing did")
 	}
-	merkleRoot := payloadString(payload, "merkleRoot")
-	if !merkleRootPattern.MatchString(merkleRoot) {
-		return nil, fmt.Errorf("invalid beacon payload: merkleRoot must be 64 lowercase hex characters")
+	manifestContentId := payloadString(payload, "manifestContentId")
+	if len(manifestContentId) != contentIDLength {
+		return nil, fmt.Errorf("invalid beacon payload: manifestContentId must be a 22-character content ID")
 	}
 	createdAt := payloadString(payload, "createdAt")
 	if err := validateCreatedAt(createdAt); err != nil {
@@ -896,10 +893,10 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 	}
 
 	return &VerifiedBeaconResult{
-		BeaconCID:  beaconCID,
-		DID:        beaconDID,
-		MerkleRoot: merkleRoot,
-		CreatedAt:  createdAt,
+		BeaconCID:         beaconCID,
+		DID:               beaconDID,
+		ManifestContentId: manifestContentId,
+		CreatedAt:         createdAt,
 	}, nil
 }
 

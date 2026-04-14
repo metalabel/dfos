@@ -162,13 +162,19 @@ export class MemoryRelayStore implements RelayStore {
     if (!chain) return { documents: [], cursor: null };
 
     // build ordered entries with metadata
-    const entries: { cid: string; documentCID: string | null; signerDID: string; createdAt: string }[] = [];
+    const entries: {
+      cid: string;
+      documentCID: string | null;
+      signerDID: string;
+      createdAt: string;
+    }[] = [];
     for (const jws of chain.log) {
       const decoded = decodeJwsUnsafe(jws);
       if (!decoded) continue;
       const payload = decoded.payload as Record<string, unknown>;
       const cid = typeof decoded.header.cid === 'string' ? decoded.header.cid : '';
-      const documentCID = typeof payload['documentCID'] === 'string' ? payload['documentCID'] : null;
+      const documentCID =
+        typeof payload['documentCID'] === 'string' ? payload['documentCID'] : null;
       const signerDID = typeof payload['did'] === 'string' ? payload['did'] : '';
       const createdAt = typeof payload['createdAt'] === 'string' ? payload['createdAt'] : '';
       entries.push({ cid, documentCID, signerDID, createdAt });
@@ -188,7 +194,10 @@ export class MemoryRelayStore implements RelayStore {
     for (const entry of page) {
       let document: unknown | null = null;
       if (entry.documentCID) {
-        const blob = await this.getBlob({ creatorDID: chain.state.creatorDID, documentCID: entry.documentCID });
+        const blob = await this.getBlob({
+          creatorDID: chain.state.creatorDID,
+          documentCID: entry.documentCID,
+        });
         if (blob) {
           try {
             document = JSON.parse(new TextDecoder().decode(blob));
@@ -315,7 +324,12 @@ export class MemoryRelayStore implements RelayStore {
       const chain2 = await this.getIdentityChain(did);
       return chain2?.state;
     };
-    const content = await verifyContentChain({ log: path, resolveKey, enforceAuthorization: true, resolveIdentity });
+    const content = await verifyContentChain({
+      log: path,
+      resolveKey,
+      enforceAuthorization: true,
+      resolveIdentity,
+    });
 
     const targetDecoded = decodeJwsUnsafe(opsByCID.get(cid)!.jws);
     const lastCreatedAt =

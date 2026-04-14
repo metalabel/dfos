@@ -269,7 +269,11 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
     // verify read access
     const accessError = await verifyReadAccess(
-      auth, chain, contentId, c.req.header('x-credential'), store,
+      auth,
+      chain,
+      contentId,
+      c.req.header('x-credential'),
+      store,
     );
     if (accessError) return accessError;
 

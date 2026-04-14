@@ -727,8 +727,8 @@ func TestVerifyBeacon(t *testing.T) {
 	)
 
 	kid := did + "#" + keyID
-	merkle := BuildMerkleRoot([]string{"content1", "content2"})
-	beaconJWS, beaconCID, err := SignBeacon(did, merkle, kid, priv)
+	manifestContentId := DeriveContentID([]byte("test-manifest-bytes!"))
+	beaconJWS, beaconCID, err := SignBeacon(did, manifestContentId, kid, priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -750,8 +750,8 @@ func TestVerifyBeacon(t *testing.T) {
 	if result.DID != did {
 		t.Errorf("DID: got %s, want %s", result.DID, did)
 	}
-	if result.MerkleRoot != merkle {
-		t.Errorf("MerkleRoot mismatch")
+	if result.ManifestContentId != manifestContentId {
+		t.Errorf("ManifestContentId mismatch")
 	}
 }
 
@@ -763,8 +763,8 @@ func TestVerifyBeacon_FutureClock(t *testing.T) {
 	)
 
 	kid := did + "#" + keyID
-	merkle := BuildMerkleRoot([]string{"a"})
-	beaconJWS, _, _ := SignBeacon(did, merkle, kid, priv)
+	manifestContentId := DeriveContentID([]byte("test-manifest-future!"))
+	beaconJWS, _, _ := SignBeacon(did, manifestContentId, kid, priv)
 
 	resolver := func(k string) (ed25519.PublicKey, error) {
 		if k == kid {

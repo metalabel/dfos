@@ -28,7 +28,7 @@ header, payload, err := dfos.VerifyJWS(token, pubKey)
 // Compute a document CID (dag-cbor canonical encoding)
 cid, bytes, err := dfos.DocumentCID(map[string]any{"type": "post", "body": "hello"})
 
-// Create a VC-JWT credential
+// Create a DFOS credential
 cred, err := dfos.CreateCredential(
     issuerDID, subjectDID, kid, "DFOSContentRead",
     5*time.Minute, contentID, privateKey,
@@ -47,13 +47,13 @@ All protocol operations are covered:
 | `SignContentCreate`  | Sign a content chain genesis                 |
 | `SignContentUpdate`  | Sign a content chain update                  |
 | `SignContentDelete`  | Sign a content chain deletion                |
-| `SignBeacon`         | Sign a merkle root beacon                    |
+| `SignBeacon`         | Sign a manifest beacon                       |
 | `SignArtifact`       | Sign a standalone inline document            |
 | `SignCountersign`    | Countersign a target operation by CID        |
 | `CreateAuthToken`    | Create a relay-scoped JWT auth token         |
-| `CreateCredential`   | Issue a VC-JWT credential (read/write)       |
+| `CreateCredential`   | Issue a DFOS credential (read/write)         |
 | `VerifyJWS`          | Verify an Ed25519 JWS token                  |
-| `VerifyCredential`   | Verify a VC-JWT credential                   |
+| `VerifyCredential`   | Verify a DFOS credential                     |
 | `DocumentCID`        | Canonical dag-cbor encode and CIDv1 hash     |
 | `BuildMerkleRoot`    | Compute SHA-256 merkle root over content IDs |
 

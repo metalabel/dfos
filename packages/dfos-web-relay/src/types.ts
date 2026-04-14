@@ -121,7 +121,14 @@ export interface StoredOperation {
   cid: string;
   jwsToken: string;
   /** Which chain type this operation belongs to */
-  chainType: 'identity' | 'content' | 'artifact' | 'beacon' | 'countersign' | 'revocation' | 'credential';
+  chainType:
+    | 'identity'
+    | 'content'
+    | 'artifact'
+    | 'beacon'
+    | 'countersign'
+    | 'revocation'
+    | 'credential';
   /** The chain identifier — DID for identity/beacon/artifact, contentId for content, targetCID for countersign */
   chainId: string;
 }
