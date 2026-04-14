@@ -249,18 +249,22 @@ describe('web relay', () => {
       expect(body.protocol).toBe('dfos-web-relay');
     });
 
-    it('should include proof: true and content: true by default', async () => {
+    it('should include capabilities with proof and content by default', async () => {
       const res = await req('/.well-known/dfos-relay');
       const body = await json(res);
-      expect(body.proof).toBe(true);
-      expect(body.content).toBe(true);
+      expect(body.capabilities.proof).toBe(true);
+      expect(body.capabilities.content).toBe(true);
+      expect(body.capabilities.documents).toBe(true);
+      expect(body.capabilities.log).toBe(true);
     });
 
-    it('should include content: false when relay created with content: false', async () => {
+    it('should include content: false in capabilities when relay created with content: false', async () => {
       const noContentRelay = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
       const res = await noContentRelay.app.request('http://localhost/.well-known/dfos-relay');
       const body = (await res.json()) as Record<string, unknown>;
-      expect(body.content).toBe(false);
+      const caps = body.capabilities as Record<string, unknown>;
+      expect(caps.content).toBe(false);
+      expect(caps.documents).toBe(false);
     });
 
     it('should always include profile in well-known response', async () => {

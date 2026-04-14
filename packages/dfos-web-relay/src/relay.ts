@@ -10,17 +10,11 @@
 
 */
 
-import {
-  decodeDFOSCredentialUnsafe,
-  matchesResource,
-  verifyDFOSCredential,
-  verifyDelegationChain,
-} from '@metalabel/dfos-protocol/credentials';
 import type { VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { authenticateRequest } from './auth';
+import { authenticateRequest, verifyContentAccess } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { ingestOperations } from './ingest';
 import { computeOpCID, sequenceOps } from './sequencer';
@@ -129,10 +123,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return c.json({
       did: relayDID,
       protocol: 'dfos-web-relay',
-      version: '0.6.0',
-      proof: true,
-      content: contentEnabled,
-      log: logEnabled,
+      version: '0.8.0',
+      capabilities: {
+        proof: true,
+        content: contentEnabled,
+        documents: contentEnabled,
+        log: logEnabled,
+      },
       profile: profileArtifactJws,
     });
   });
@@ -482,7 +479,7 @@ const readBlob = async (params: {
   if (!chain) return jsonResponse({ error: 'content chain not found' }, 404);
 
   // verify read credential — unless the caller is the chain creator
-  const credError = await verifyReadCredential(auth, chain, contentId, credHeader, store);
+  const credError = await verifyReadAccess(auth, chain, contentId, credHeader, store);
   if (credError) return credError;
 
   // resolve documentCID for the requested ref
@@ -518,57 +515,23 @@ const readBlob = async (params: {
   });
 };
 
-/** Resolve a DID to a VerifiedIdentity from the relay store */
-const createIdentityResolver = (store: RelayStore) => {
-  return async (did: string) => {
-    const chain = await store.getIdentityChain(did);
-    return chain?.state;
-  };
-};
-
-/** Verify the read credential if the caller is not the chain creator. Returns an error Response or null. */
-const verifyReadCredential = async (
+/** Verify read access — delegates to verifyContentAccess. Returns an error Response or null. */
+const verifyReadAccess = async (
   auth: VerifiedAuthToken,
   chain: StoredContentChain,
   contentId: string,
   credHeader: string | undefined,
   store: RelayStore,
 ): Promise<Response | null> => {
-  if (auth.iss === chain.state.creatorDID) return null;
+  const result = await verifyContentAccess({
+    ...(credHeader ? { credentialJWS: credHeader } : {}),
+    requestedResource: `chain:${contentId}`,
+    action: 'read',
+    store,
+    creatorDID: chain.state.creatorDID,
+    requesterDID: auth.iss,
+  });
 
-  if (!credHeader) {
-    return jsonResponse({ error: 'read credential required' }, 403);
-  }
-
-  const resolveIdentity = createIdentityResolver(store);
-  try {
-    // verify the DFOS credential signature + schema + expiry
-    const credential = await verifyDFOSCredential(credHeader, { resolveIdentity });
-
-    // verify delegation chain roots at the content chain creator
-    await verifyDelegationChain(credential, {
-      resolveIdentity,
-      rootDID: chain.state.creatorDID,
-    });
-
-    // verify audience matches the requester
-    if (credential.aud !== '*' && credential.aud !== auth.iss) {
-      throw new Error('credential audience does not match requester');
-    }
-
-    // verify the credential covers read access to this content chain
-    const covers = await matchesResource(
-      credential.att,
-      `chain:${contentId}`,
-      'read',
-    );
-    if (!covers) {
-      throw new Error('credential does not cover read access to this content chain');
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'credential verification failed';
-    return jsonResponse({ error: message }, 403);
-  }
-
-  return null;
+  if (result.granted) return null;
+  return jsonResponse({ error: 'read credential required' }, 403);
 };

@@ -6,7 +6,14 @@
 
 */
 
-import { verifyAuthToken, type VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
+import {
+  matchesResource,
+  verifyAuthToken,
+  verifyDFOSCredential,
+  verifyDelegationChain,
+  type VerifiedAuthToken,
+  type VerifiedDFOSCredential,
+} from '@metalabel/dfos-protocol/credentials';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { createCurrentKeyResolver } from './ingest';
 import type { RelayStore } from './types';
@@ -55,4 +62,110 @@ export const authenticateRequest = async (
   } catch {
     return null;
   }
+};
+
+// -----------------------------------------------------------------------------
+// content access verification
+// -----------------------------------------------------------------------------
+
+export interface AccessVerification {
+  granted: boolean;
+  source: 'public-credential' | 'request-credential' | 'creator' | 'none';
+  credential?: VerifiedDFOSCredential;
+}
+
+/**
+ * Verify content access for a specific resource
+ *
+ * Checks in order:
+ * 1. Is the requester the content creator? → granted
+ * 2. Does a stored public credential cover this resource? → granted
+ * 3. Does the per-request credential (Authorization header) cover this resource? → granted
+ * 4. None → denied
+ */
+export const verifyContentAccess = async (options: {
+  /** Per-request credential JWS (from X-Credential header) */
+  credentialJWS?: string;
+  /** The resource being accessed, e.g., "chain:<contentId>" */
+  requestedResource: string;
+  /** The action being requested */
+  action: 'read' | 'write';
+  store: RelayStore;
+  /** The DID of the content chain creator (root authority) */
+  creatorDID: string;
+  /** From auth token — the DID making the request */
+  requesterDID?: string;
+}): Promise<AccessVerification> => {
+  const { credentialJWS, requestedResource, action, store, creatorDID, requesterDID } = options;
+
+  // 1. creator always has access
+  if (requesterDID && requesterDID === creatorDID) {
+    return { granted: true, source: 'creator' };
+  }
+
+  // 2. check stored public credentials
+  const publicCreds = await store.getPublicCredentials(requestedResource);
+  for (const credJws of publicCreds) {
+    const resolveIdentity = async (did: string) => {
+      const chain = await store.getIdentityChain(did);
+      return chain?.state;
+    };
+
+    try {
+      const cred = await verifyDFOSCredential(credJws, { resolveIdentity });
+
+      // check revocation
+      const revoked = await store.isCredentialRevoked(cred.credentialCID);
+      if (revoked) continue;
+
+      // check resource + action match
+      const covers = await matchesResource(cred.att, requestedResource, action);
+      if (!covers) continue;
+
+      // verify delegation chain roots at creator
+      await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID });
+
+      return { granted: true, source: 'public-credential' as const, credential: cred };
+    } catch {
+      continue; // invalid credential, skip
+    }
+  }
+
+  // 3. check per-request credential
+  if (credentialJWS) {
+    const resolveIdentity = async (did: string) => {
+      const chain = await store.getIdentityChain(did);
+      return chain?.state;
+    };
+
+    try {
+      const cred = await verifyDFOSCredential(credentialJWS, { resolveIdentity });
+
+      // check revocation
+      const revoked = await store.isCredentialRevoked(cred.credentialCID);
+      if (revoked) {
+        return { granted: false, source: 'none' };
+      }
+
+      // verify delegation chain roots at creator
+      await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID });
+
+      // audience verification for non-public credentials
+      if (cred.aud !== '*' && requesterDID && cred.aud !== requesterDID) {
+        return { granted: false, source: 'none' };
+      }
+
+      // check resource + action match
+      const covers = await matchesResource(cred.att, requestedResource, action);
+      if (!covers) {
+        return { granted: false, source: 'none' };
+      }
+
+      return { granted: true, source: 'request-credential' as const, credential: cred };
+    } catch {
+      return { granted: false, source: 'none' };
+    }
+  }
+
+  return { granted: false, source: 'none' };
 };
