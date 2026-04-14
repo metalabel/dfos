@@ -96,11 +96,10 @@ type StoredContentChain struct {
 
 // BeaconPayload is the decoded beacon payload for JSON serialization.
 type BeaconPayload struct {
-	Version    int    `json:"version"`
-	Type       string `json:"type"`
-	DID        string `json:"did"`
-	MerkleRoot string `json:"merkleRoot"`
-	CreatedAt  string `json:"createdAt"`
+	Type              string `json:"type"`
+	DID               string `json:"did"`
+	ManifestContentId string `json:"manifestContentId"`
+	CreatedAt         string `json:"createdAt"`
 }
 
 // StoredBeacon is the relay's representation of a beacon.

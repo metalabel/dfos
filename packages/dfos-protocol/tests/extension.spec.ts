@@ -580,14 +580,26 @@ describe('verifyContentExtensionFromTrustedState', () => {
     const creatorVerifiedIdentity: VerifiedIdentity = {
       did: creator.identity.did,
       isDeleted: false,
-      authKeys: [{ id: creator.keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(creator.keypair.publicKey) }],
+      authKeys: [
+        {
+          id: creator.keyId,
+          type: 'Multikey',
+          publicKeyMultibase: encodeEd25519Multikey(creator.keypair.publicKey),
+        },
+      ],
       assertKeys: [],
       controllerKeys: [],
     };
     const delegateVerifiedIdentity: VerifiedIdentity = {
       did: delegate.identity.did,
       isDeleted: false,
-      authKeys: [{ id: delegate.keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(delegate.keypair.publicKey) }],
+      authKeys: [
+        {
+          id: delegate.keyId,
+          type: 'Multikey',
+          publicKeyMultibase: encodeEd25519Multikey(delegate.keypair.publicKey),
+        },
+      ],
       assertKeys: [],
       controllerKeys: [],
     };

@@ -17,9 +17,9 @@
 
 */
 
-import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { decodeMultikey } from '../chain/multikey';
 import type { VerifiedIdentity } from '../chain/schemas';
+import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { DFOSCredentialPayload, type Attenuation } from './schemas';
 
 // -----------------------------------------------------------------------------
@@ -285,9 +285,7 @@ export const verifyDelegationChain = async (
     }
 
     // the child's issuer must be the audience of at least one parent
-    const matchingParent = parents.find(
-      (p) => p.aud === '*' || p.aud === current.iss,
-    );
+    const matchingParent = parents.find((p) => p.aud === '*' || p.aud === current.iss);
     if (!matchingParent) {
       throw new CredentialVerificationError(
         `delegation gap: no parent credential has audience matching child issuer ${current.iss}`,

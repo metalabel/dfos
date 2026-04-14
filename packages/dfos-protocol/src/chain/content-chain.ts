@@ -20,14 +20,13 @@
 import {
   decodeDFOSCredentialUnsafe,
   matchesResource,
-  verifyDFOSCredential,
   verifyDelegationChain,
+  verifyDFOSCredential,
 } from '../credentials';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { deriveContentId } from './derivation';
 import { ContentOperation } from './schemas';
-import type { VerifiedIdentity } from './schemas';
-import type { Signer } from './schemas';
+import type { Signer, VerifiedIdentity } from './schemas';
 
 // -----------------------------------------------------------------------------
 // types
@@ -123,15 +122,9 @@ const verifyOperationAuthorization = async (input: {
   }
 
   // verify the credential covers write access to this content chain
-  const covers = await matchesResource(
-    credential.att,
-    `chain:${input.contentId}`,
-    'write',
-  );
+  const covers = await matchesResource(credential.att, `chain:${input.contentId}`, 'write');
   if (!covers) {
-    throw new Error(
-      `credential does not cover write access to chain:${input.contentId}`,
-    );
+    throw new Error(`credential does not cover write access to chain:${input.contentId}`);
   }
 };
 
@@ -407,7 +400,9 @@ export const verifyContentExtensionFromTrustedState = async (input: {
   if (op.did !== currentState.creatorDID && input.enforceAuthorization) {
     const authorization = (op as { authorization?: string }).authorization;
     if (!authorization) {
-      throw new Error(`signer ${op.did} is not the chain creator — authorization credential required`);
+      throw new Error(
+        `signer ${op.did} is not the chain creator — authorization credential required`,
+      );
     }
 
     try {

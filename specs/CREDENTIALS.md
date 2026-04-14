@@ -37,25 +37,23 @@ The credential payload is validated by a strict Zod schema. No extra fields are 
   "type": "DFOSCredential",
   "iss": "did:dfos:e3vvtck42d4eacdnzvtrn6",
   "aud": "did:dfos:nzkf838efr424433rn2rzk",
-  "att": [
-    { "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "write" }
-  ],
+  "att": [{ "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "write" }],
   "prf": [],
   "exp": 1798761600,
   "iat": 1772841600
 }
 ```
 
-| Field     | Type           | Description                                          |
-| --------- | -------------- | ---------------------------------------------------- |
-| `version` | `1`            | Schema version (literal `1`)                         |
-| `type`    | `"DFOSCredential"` | Literal discriminator                           |
-| `iss`  | string         | Issuer DID — the authority granting permission       |
-| `aud`  | string         | Audience DID, or `"*"` for public credentials        |
-| `att`  | Attenuation[]  | Resource + action pairs (min 1, max 32)              |
-| `prf`  | string[]       | Parent credential JWS tokens (max 8, default `[]`)   |
-| `exp`  | number         | Expiration — unix seconds (positive integer)         |
-| `iat`  | number         | Issued-at — unix seconds (positive integer)          |
+| Field     | Type               | Description                                        |
+| --------- | ------------------ | -------------------------------------------------- |
+| `version` | `1`                | Schema version (literal `1`)                       |
+| `type`    | `"DFOSCredential"` | Literal discriminator                              |
+| `iss`     | string             | Issuer DID — the authority granting permission     |
+| `aud`     | string             | Audience DID, or `"*"` for public credentials      |
+| `att`     | Attenuation[]      | Resource + action pairs (min 1, max 32)            |
+| `prf`     | string[]           | Parent credential JWS tokens (max 8, default `[]`) |
+| `exp`     | number             | Expiration — unix seconds (positive integer)       |
+| `iat`     | number             | Issued-at — unix seconds (positive integer)        |
 
 ### Attenuation Entry
 
@@ -65,21 +63,21 @@ Each attenuation entry is a strict object with two fields:
 { "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "write" }
 ```
 
-| Field      | Type   | Max    | Description                              |
-| ---------- | ------ | ------ | ---------------------------------------- |
-| `resource` | string | 512    | Resource identifier (`type:id` format)   |
-| `action`   | string | 64     | Comma-separated action list              |
+| Field      | Type   | Max | Description                            |
+| ---------- | ------ | --- | -------------------------------------- |
+| `resource` | string | 512 | Resource identifier (`type:id` format) |
+| `action`   | string | 64  | Comma-separated action list            |
 
 ### Field Limits
 
-| Field      | Limit     | Rationale                              |
-| ---------- | --------- | -------------------------------------- |
-| `iss`      | 256 chars | ~8x typical `did:dfos:` length         |
-| `aud`      | 512 chars | Relay hostnames or `"*"`               |
-| `resource` | 512 chars | Resource type + content ID             |
-| `action`   | 64 chars  | Comma-separated action names           |
-| `att`      | 32 items  | Generous for multi-resource grants     |
-| `prf`      | 8 items   | Multi-parent delegation support        |
+| Field      | Limit     | Rationale                          |
+| ---------- | --------- | ---------------------------------- |
+| `iss`      | 256 chars | ~8x typical `did:dfos:` length     |
+| `aud`      | 512 chars | Relay hostnames or `"*"`           |
+| `resource` | 512 chars | Resource type + content ID         |
+| `action`   | 64 chars  | Comma-separated action names       |
+| `att`      | 32 items  | Generous for multi-resource grants |
+| `prf`      | 8 items   | Multi-parent delegation support    |
 
 ### CID Derivation
 
@@ -110,12 +108,12 @@ The credential is signed as a JWS Compact Serialization token (`header.payload.s
 }
 ```
 
-| Field | Value                    | Description                                      |
-| ----- | ------------------------ | ------------------------------------------------ |
-| `alg` | `"EdDSA"`                | Ed25519 signature algorithm                      |
-| `typ` | `"did:dfos:credential"`  | Protocol-specific type discriminator              |
-| `kid` | DID URL                  | `did:dfos:<id>#<keyId>` — identifies the signing key |
-| `cid` | CID string               | Content address of the payload (for revocation)  |
+| Field | Value                   | Description                                          |
+| ----- | ----------------------- | ---------------------------------------------------- |
+| `alg` | `"EdDSA"`               | Ed25519 signature algorithm                          |
+| `typ` | `"did:dfos:credential"` | Protocol-specific type discriminator                 |
+| `kid` | DID URL                 | `did:dfos:<id>#<keyId>` — identifies the signing key |
+| `cid` | CID string              | Content address of the payload (for revocation)      |
 
 **kid format:** The `kid` MUST be a DID URL containing `#`. The DID portion (before `#`) MUST match the `iss` field in the payload. The key fragment (after `#`) identifies which key on the issuer's identity was used to sign.
 
@@ -212,12 +210,12 @@ Matching at the relay:
 
 ### Attenuation Between Types
 
-| Parent            | Child             | Valid? | Reason                                    |
-| ----------------- | ----------------- | ------ | ----------------------------------------- |
-| `chain:X`         | `chain:X`         | Yes    | Exact match                               |
-| `manifest:M`      | `manifest:M`      | Yes    | Exact match                               |
-| `manifest:M`      | `chain:X`         | Yes    | Narrowing from manifest to specific chain |
-| `chain:X`         | `manifest:M`      | No     | Widening from chain to manifest           |
+| Parent       | Child        | Valid? | Reason                                    |
+| ------------ | ------------ | ------ | ----------------------------------------- |
+| `chain:X`    | `chain:X`    | Yes    | Exact match                               |
+| `manifest:M` | `manifest:M` | Yes    | Exact match                               |
+| `manifest:M` | `chain:X`    | Yes    | Narrowing from manifest to specific chain |
+| `chain:X`    | `manifest:M` | No     | Widening from chain to manifest           |
 
 The `manifest -> chain` narrowing is valid structurally during delegation chain verification. The actual membership check (does manifest M contain chain X?) happens at the relay during resource matching, not during chain verification.
 
@@ -285,13 +283,13 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 }
 ```
 
-| Field           | Type   | Description                                     |
-| --------------- | ------ | ----------------------------------------------- |
-| `version`       | `1`    | Schema version (literal `1`)                    |
-| `type`          | `"revocation"` | Literal discriminator                    |
-| `did`           | string | Issuer DID revoking the credential              |
-| `credentialCID` | CID    | CID of the credential being revoked             |
-| `createdAt`     | string | ISO 8601 timestamp                              |
+| Field           | Type           | Description                         |
+| --------------- | -------------- | ----------------------------------- |
+| `version`       | `1`            | Schema version (literal `1`)        |
+| `type`          | `"revocation"` | Literal discriminator               |
+| `did`           | string         | Issuer DID revoking the credential  |
+| `credentialCID` | CID            | CID of the credential being revoked |
+| `createdAt`     | string         | ISO 8601 timestamp                  |
 
 ### Rules
 
@@ -310,16 +308,16 @@ Relays maintain a revocation set keyed by `(issuerDID, credentialCID)`. During c
 
 The credential system serves a different purpose than auth tokens. Both are DID-signed JWTs using Ed25519, but they answer different questions.
 
-| Concern | Auth Token | DFOS Credential |
-| ------- | ---------- | --------------- |
+| Concern           | Auth Token                           | DFOS Credential                             |
+| ----------------- | ------------------------------------ | ------------------------------------------- |
 | Question answered | "Does this caller control this DID?" | "Does this DID have permission to do this?" |
-| Role | AuthN (authentication) | AuthZ (authorization) |
-| JWS `typ` | `JWT` | `did:dfos:credential` |
-| Lifetime | Short (minutes) | Long (hours to months) |
-| Audience | Relay hostname (prevents replay) | Specific DID or `"*"` |
-| Content-addressed | No (`cid` not in header) | Yes (`cid` in header) |
-| Revocable | No (short-lived, expires naturally) | Yes (via revocation artifact) |
-| Delegation | None | Via `prf` chains |
+| Role              | AuthN (authentication)               | AuthZ (authorization)                       |
+| JWS `typ`         | `JWT`                                | `did:dfos:credential`                       |
+| Lifetime          | Short (minutes)                      | Long (hours to months)                      |
+| Audience          | Relay hostname (prevents replay)     | Specific DID or `"*"`                       |
+| Content-addressed | No (`cid` not in header)             | Yes (`cid` in header)                       |
+| Revocable         | No (short-lived, expires naturally)  | Yes (via revocation artifact)               |
+| Delegation        | None                                 | Via `prf` chains                            |
 
 A typical relay request flow:
 
@@ -378,9 +376,7 @@ Space (root) -> Member -> Device (leaf)
   "type": "DFOSCredential",
   "iss": "did:dfos:space...",
   "aud": "did:dfos:member...",
-  "att": [
-    { "resource": "chain:content1", "action": "write" }
-  ],
+  "att": [{ "resource": "chain:content1", "action": "write" }],
   "prf": [],
   "exp": 1798761600,
   "iat": 1772841600
@@ -395,9 +391,7 @@ Space (root) -> Member -> Device (leaf)
   "type": "DFOSCredential",
   "iss": "did:dfos:member...",
   "aud": "did:dfos:device...",
-  "att": [
-    { "resource": "chain:content1", "action": "write" }
-  ],
+  "att": [{ "resource": "chain:content1", "action": "write" }],
   "prf": ["<full JWS from Hop 1>"],
   "exp": 1796169600,
   "iat": 1772841600
@@ -423,9 +417,7 @@ A space DID issues a public read credential for a content chain. Any DID can rea
   "type": "DFOSCredential",
   "iss": "did:dfos:space...",
   "aud": "*",
-  "att": [
-    { "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "read" }
-  ],
+  "att": [{ "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "read" }],
   "prf": [],
   "exp": 1798761600,
   "iat": 1772841600

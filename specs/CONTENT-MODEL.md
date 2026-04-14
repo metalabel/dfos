@@ -147,11 +147,11 @@ Unlike a living document (where the head document is the state) or a stream (whe
 
 Each schema implies a default projection — how applications derive resolved state from the chain:
 
-| Schema      | Projection                                                                                     |
-| ----------- | ---------------------------------------------------------------------------------------------- |
-| `post/v1`   | Living document — head `documentCID` is the current post. History is edit trail                 |
-| `profile/v1`| Living document — head `documentCID` is the current profile                                    |
-| `manifest/v1`| Living document — head `documentCID` is the current manifest index                            |
+| Schema        | Projection                                                                      |
+| ------------- | ------------------------------------------------------------------------------- |
+| `post/v1`     | Living document — head `documentCID` is the current post. History is edit trail |
+| `profile/v1`  | Living document — head `documentCID` is the current profile                     |
+| `manifest/v1` | Living document — head `documentCID` is the current manifest index              |
 
 Stream and event fold schemas define their own projection rules in their schema documentation. The protocol does not enforce projections — these are reading conventions that applications agree on.
 
@@ -177,13 +177,13 @@ The content stream is the canonical example of the stream interpretation pattern
 
 A stream entry document. Each document in a content stream chain is a standalone entry in the sequence.
 
-| Field               | Type   | Required | Description                                                           |
-| ------------------- | ------ | -------- | --------------------------------------------------------------------- |
-| `$schema`           | string | yes      | `"https://schemas.dfos.com/content-stream/v1"`                        |
-| `body`              | string | no       | Entry body content                                                    |
-| `attachments`       | media[]| no       | Attached media objects                                                |
-| `targetOperationCID`| string | no       | CID of an operation this entry references (reply, annotation, etc.)   |
-| `createdByDID`      | string | no       | DID of the content author (distinct from the operation signer)        |
+| Field                | Type    | Required | Description                                                         |
+| -------------------- | ------- | -------- | ------------------------------------------------------------------- |
+| `$schema`            | string  | yes      | `"https://schemas.dfos.com/content-stream/v1"`                      |
+| `body`               | string  | no       | Entry body content                                                  |
+| `attachments`        | media[] | no       | Attached media objects                                              |
+| `targetOperationCID` | string  | no       | CID of an operation this entry references (reply, annotation, etc.) |
+| `createdByDID`       | string  | no       | DID of the content author (distinct from the operation signer)      |
 
 ```json
 {

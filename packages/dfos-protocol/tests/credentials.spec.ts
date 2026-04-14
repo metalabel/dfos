@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { encodeEd25519Multikey } from '../src/chain';
+import type { VerifiedIdentity } from '../src/chain';
 import {
   AuthTokenVerificationError,
   createAuthToken,
@@ -8,12 +10,10 @@ import {
   isAttenuated,
   matchesResource,
   verifyAuthToken,
-  verifyDFOSCredential,
   verifyDelegationChain,
+  verifyDFOSCredential,
 } from '../src/credentials';
 import { createNewEd25519Keypair, generateId, signPayloadEd25519 } from '../src/crypto';
-import { encodeEd25519Multikey } from '../src/chain';
-import type { VerifiedIdentity } from '../src/chain';
 
 // =============================================================================
 // helpers
@@ -28,7 +28,9 @@ const makeIdentity = () => {
   const identity: VerifiedIdentity = {
     did,
     isDeleted: false,
-    authKeys: [{ id: keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey) }],
+    authKeys: [
+      { id: keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey) },
+    ],
     assertKeys: [],
     controllerKeys: [],
   };
@@ -285,7 +287,13 @@ describe('dfos credential', () => {
     identityMap.set(issuer.did, {
       did: issuer.did,
       isDeleted: false,
-      authKeys: [{ id: issuer.keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(wrong.keypair.publicKey) }],
+      authKeys: [
+        {
+          id: issuer.keyId,
+          type: 'Multikey',
+          publicKeyMultibase: encodeEd25519Multikey(wrong.keypair.publicKey),
+        },
+      ],
       assertKeys: [],
       controllerKeys: [],
     });
@@ -299,9 +307,7 @@ describe('dfos credential', () => {
       keyId: issuer.keyId,
     });
 
-    await expect(verifyDFOSCredential(token, { resolveIdentity })).rejects.toThrow(
-      /signature/i,
-    );
+    await expect(verifyDFOSCredential(token, { resolveIdentity })).rejects.toThrow(/signature/i);
 
     // clean up
     identityMap.delete(issuer.did);
@@ -320,9 +326,7 @@ describe('dfos credential', () => {
       keyId: issuer.keyId,
     });
 
-    await expect(verifyDFOSCredential(token, { resolveIdentity })).rejects.toThrow(
-      /expired/i,
-    );
+    await expect(verifyDFOSCredential(token, { resolveIdentity })).rejects.toThrow(/expired/i);
   });
 
   it('should reject credential not yet valid (iat in future)', async () => {
@@ -339,9 +343,9 @@ describe('dfos credential', () => {
       keyId: issuer.keyId,
     });
 
-    await expect(
-      verifyDFOSCredential(token, { resolveIdentity, now: 10000 }),
-    ).rejects.toThrow(/not yet valid/i);
+    await expect(verifyDFOSCredential(token, { resolveIdentity, now: 10000 })).rejects.toThrow(
+      /not yet valid/i,
+    );
   });
 
   // --- delegation chains ---
@@ -651,7 +655,13 @@ describe('dfos credential', () => {
     identityMap.set(issuer.did, {
       did: issuer.did,
       isDeleted: false,
-      authKeys: [{ id: issuer.keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(wrong.keypair.publicKey) }],
+      authKeys: [
+        {
+          id: issuer.keyId,
+          type: 'Multikey',
+          publicKeyMultibase: encodeEd25519Multikey(wrong.keypair.publicKey),
+        },
+      ],
       assertKeys: [],
       controllerKeys: [],
     });

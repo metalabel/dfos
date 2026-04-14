@@ -31,12 +31,14 @@ func TestWellKnown(t *testing.T) {
 	// ---------------------------------------------------------------
 
 	var meta struct {
-		DID      string `json:"did"`
-		Protocol string `json:"protocol"`
-		Version  string `json:"version"`
-		Proof    bool   `json:"proof"`
-		Content  bool   `json:"content"`
-		Profile  string `json:"profile"`
+		DID          string `json:"did"`
+		Protocol     string `json:"protocol"`
+		Version      string `json:"version"`
+		Capabilities struct {
+			Proof   bool `json:"proof"`
+			Content bool `json:"content"`
+		} `json:"capabilities"`
+		Profile string `json:"profile"`
 	}
 	resp := getJSON(t, base+"/.well-known/dfos-relay", &meta)
 	if resp.StatusCode != 200 {
@@ -48,8 +50,8 @@ func TestWellKnown(t *testing.T) {
 	if meta.Protocol == "" {
 		t.Fatal("protocol field is empty")
 	}
-	if !meta.Proof {
-		t.Fatal("proof must be true")
+	if !meta.Capabilities.Proof {
+		t.Fatal("capabilities.proof must be true")
 	}
 
 	relayDID := meta.DID

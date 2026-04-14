@@ -549,7 +549,8 @@ const main = async () => {
   });
 
   write('content-delegated', {
-    description: 'Content chain: creator signs genesis, delegate signs update with write credential',
+    description:
+      'Content chain: creator signs genesis, delegate signs update with write credential',
     type: 'content-delegated',
     chain: [delegatedCreateJws, delegatedUpdateJws],
     creatorPublicKey: multikey1,

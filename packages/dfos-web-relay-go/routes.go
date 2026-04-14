@@ -68,10 +68,12 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 		"protocol": "dfos-web-relay",
 		"version":  ProtocolVersion,
 		"software": SoftwareVersion,
-		"proof":    true,
-		"content":  r.contentEnabled,
-		"log":      r.logEnabled,
-		"profile":  r.profileArtifactJWS,
+		"capabilities": map[string]any{
+			"proof":   true,
+			"content": r.contentEnabled,
+			"log":     r.logEnabled,
+		},
+		"profile": r.profileArtifactJWS,
 	})
 }
 
@@ -413,10 +415,11 @@ func (r *Relay) handleGetBeacon(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"did":       beacon.DID,
-		"jwsToken":  beacon.JWSToken,
-		"beaconCID": beacon.BeaconCID,
-		"payload":   beacon.Payload,
+		"did":               beacon.DID,
+		"jwsToken":          beacon.JWSToken,
+		"beaconCID":         beacon.BeaconCID,
+		"manifestContentId": beacon.Payload.ManifestContentId,
+		"createdAt":         beacon.Payload.CreatedAt,
 	})
 }
 

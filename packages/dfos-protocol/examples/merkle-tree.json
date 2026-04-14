@@ -1,21 +1,9 @@
 {
   "description": "Merkle tree: 5 content IDs → sorted → leaf hashes → root, with inclusion proof for \"charlie\"",
   "type": "merkle",
-  "contentIds": [
-    "alpha",
-    "bravo",
-    "charlie",
-    "delta",
-    "echo"
-  ],
+  "contentIds": ["alpha", "bravo", "charlie", "delta", "echo"],
   "expected": {
-    "sortedIds": [
-      "alpha",
-      "bravo",
-      "charlie",
-      "delta",
-      "echo"
-    ],
+    "sortedIds": ["alpha", "bravo", "charlie", "delta", "echo"],
     "root": "7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e",
     "leafCount": 5,
     "charlieProof": {

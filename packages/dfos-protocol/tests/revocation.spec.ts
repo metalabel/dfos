@@ -133,7 +133,12 @@ describe('revocation', () => {
     };
     const encoded = await dagCborCanonicalEncode(payload);
     const jwsToken = await createJws({
-      header: { alg: 'EdDSA', typ: 'did:dfos:beacon', kid: issuer.kid, cid: encoded.cid.toString() },
+      header: {
+        alg: 'EdDSA',
+        typ: 'did:dfos:beacon',
+        kid: issuer.kid,
+        cid: encoded.cid.toString(),
+      },
       payload: payload as unknown as Record<string, unknown>,
       sign: issuer.signer,
     });

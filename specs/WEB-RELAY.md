@@ -267,17 +267,17 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 }
 ```
 
-| Field                       | Type    | Description                                                                |
-| --------------------------- | ------- | -------------------------------------------------------------------------- |
-| `did`                       | string  | The relay's DID, resolvable on this relay's proof plane                    |
-| `protocol`                  | string  | Protocol identifier, always `"dfos-web-relay"`                             |
-| `version`                   | string  | Relay protocol version (semver)                                            |
-| `capabilities`              | object  | Capability flags for optional features                                     |
-| `capabilities.proof`        | boolean | MUST be `true`. A relay without proof plane capability is not a relay      |
-| `capabilities.content`      | boolean | Whether the relay supports content plane (blob upload/download)            |
-| `capabilities.documents`    | boolean | Whether the relay serves the documents endpoint                            |
-| `capabilities.log`          | boolean | Whether the global operation log is available (`GET /log`)                 |
-| `profile`                   | string  | The relay's profile artifact as a compact JWS token — self-proving payload |
+| Field                    | Type    | Description                                                                |
+| ------------------------ | ------- | -------------------------------------------------------------------------- |
+| `did`                    | string  | The relay's DID, resolvable on this relay's proof plane                    |
+| `protocol`               | string  | Protocol identifier, always `"dfos-web-relay"`                             |
+| `version`                | string  | Relay protocol version (semver)                                            |
+| `capabilities`           | object  | Capability flags for optional features                                     |
+| `capabilities.proof`     | boolean | MUST be `true`. A relay without proof plane capability is not a relay      |
+| `capabilities.content`   | boolean | Whether the relay supports content plane (blob upload/download)            |
+| `capabilities.documents` | boolean | Whether the relay serves the documents endpoint                            |
+| `capabilities.log`       | boolean | Whether the global operation log is available (`GET /log`)                 |
+| `profile`                | string  | The relay's profile artifact as a compact JWS token — self-proving payload |
 
 `capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /operations` like all other operation types.
 
@@ -311,13 +311,13 @@ Returns log entries starting after the given CID cursor.
 }
 ```
 
-| Field                | Type         | Description                                                                      |
-| -------------------- | ------------ | -------------------------------------------------------------------------------- |
-| `entries[].cid`      | string       | Operation CID                                                                    |
-| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync               |
+| Field                | Type         | Description                                                                                                  |
+| -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------ |
+| `entries[].cid`      | string       | Operation CID                                                                                                |
+| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync                                           |
 | `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `beacon`, `artifact`, `countersign`, `revocation`, `credential` |
-| `entries[].chainId`  | string       | DID (identity/beacon/artifact), contentId (content), or targetCID (countersign)  |
-| `cursor`             | string\|null | CID to pass as `after` for the next page. `null` means caught up                 |
+| `entries[].chainId`  | string       | DID (identity/beacon/artifact), contentId (content), or targetCID (countersign)                              |
+| `cursor`             | string\|null | CID to pass as `after` for the next page. `null` means caught up                                             |
 
 Parameters:
 

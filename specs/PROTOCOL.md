@@ -22,14 +22,14 @@ Any system implementing the same chain primitives produces interoperable, cross-
 
 The DFOS protocol has six components:
 
-| Component             | Concern                                                                         |
-| --------------------- | ------------------------------------------------------------------------------- |
-| **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links    |
+| Component             | Concern                                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links                                     |
 | **Credentials**       | Auth tokens and DFOS credentials for authorization — see [CREDENTIALS.md](https://protocol.dfos.com/credentials) |
-| **Beacons**           | Signed manifest announcements — periodic commitment over content sets            |
-| **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data |
-| **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op    |
-| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for content sets       |
+| **Beacons**           | Signed manifest announcements — periodic commitment over content sets                                            |
+| **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data                                  |
+| **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op                                     |
+| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for content sets                                        |
 
 > **Note:** The credential format (auth tokens, read/write credentials, revocation) is specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials). This document covers the crypto core, chain primitives, beacons, artifacts, countersignatures, and merkle trees.
 
@@ -132,15 +132,15 @@ Content chain verification requires a **valid EdDSA signature** and delegates ke
 
 The JWS `typ` header uses protocol-specific values (not IANA media types):
 
-| `typ` value              | Usage                                         |
-| ------------------------ | --------------------------------------------- |
-| `did:dfos:identity-op`   | Identity chain operations                     |
-| `did:dfos:content-op`    | Content chain operations                      |
-| `did:dfos:beacon`        | Beacon announcements                          |
-| `did:dfos:artifact`      | Standalone signed inline documents            |
-| `did:dfos:countersign`   | Standalone witness attestations               |
-| `did:dfos:revocation`    | Credential revocation artifacts               |
-| `JWT`                    | Auth tokens (DID-signed relay authentication) |
+| `typ` value            | Usage                                         |
+| ---------------------- | --------------------------------------------- |
+| `did:dfos:identity-op` | Identity chain operations                     |
+| `did:dfos:content-op`  | Content chain operations                      |
+| `did:dfos:beacon`      | Beacon announcements                          |
+| `did:dfos:artifact`    | Standalone signed inline documents            |
+| `did:dfos:countersign` | Standalone witness attestations               |
+| `did:dfos:revocation`  | Credential revocation artifacts               |
+| `JWT`                  | Auth tokens (DID-signed relay authentication) |
 
 Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for credential `typ` values and format.
 
@@ -434,10 +434,10 @@ Credentials handle authentication and authorization for relay access and content
 
 Summary of credential types:
 
-| Credential Type      | Purpose                                                      |
-| -------------------- | ------------------------------------------------------------ |
-| Auth token           | DID-signed JWT proving identity (relay AuthN)                |
-| DFOS credential      | Authorize actions on resources (read, write) via attenuations|
+| Credential Type | Purpose                                                       |
+| --------------- | ------------------------------------------------------------- |
+| Auth token      | DID-signed JWT proving identity (relay AuthN)                 |
+| DFOS credential | Authorize actions on resources (read, write) via attenuations |
 
 ### Content Chain Authorization
 
@@ -473,12 +473,12 @@ A beacon is a signed announcement referencing a manifest content chain — a per
 }
 ```
 
-| Field               | Type   | Description                                                    |
-| ------------------- | ------ | -------------------------------------------------------------- |
-| `type`              | string | Literal `"beacon"`                                             |
-| `did`               | string | DID of the identity publishing the beacon                      |
-| `manifestContentId` | string | Content ID of the manifest chain (22-char bare hash)           |
-| `createdAt`         | string | ISO 8601 timestamp                                             |
+| Field               | Type   | Description                                          |
+| ------------------- | ------ | ---------------------------------------------------- |
+| `type`              | string | Literal `"beacon"`                                   |
+| `did`               | string | DID of the identity publishing the beacon            |
+| `manifestContentId` | string | Content ID of the manifest chain (22-char bare hash) |
+| `createdAt`         | string | ISO 8601 timestamp                                   |
 
 ### Beacon JWS Header
 

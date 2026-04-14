@@ -545,11 +545,10 @@ func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult
 		JWSToken:  jwsToken,
 		BeaconCID: cid,
 		Payload: BeaconPayload{
-			Version:    1,
-			Type:       "beacon",
-			DID:        did,
-			MerkleRoot: result.MerkleRoot,
-			CreatedAt:  result.CreatedAt,
+			Type:              "beacon",
+			DID:               did,
+			ManifestContentId: result.ManifestContentId,
+			CreatedAt:         result.CreatedAt,
 		},
 	}
 	store.PutBeacon(beacon)

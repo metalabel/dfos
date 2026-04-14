@@ -33,16 +33,15 @@ func TestBeaconReplacement(t *testing.T) {
 	kid := id.did + "#" + id.auth.keyID
 
 	// first beacon
-	merkle1 := dfos.BuildMerkleRoot([]string{cc.contentID})
-	tok1, _, err := dfos.SignBeacon(id.did, merkle1, kid, id.auth.priv)
+	tok1, _, err := dfos.SignBeacon(id.did, cc.contentID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
 	postOperations(t, base, []string{tok1}).Body.Close()
 
-	// second beacon with different merkle root
-	merkle2 := dfos.BuildMerkleRoot([]string{cc.contentID, "extra-content-id"})
-	tok2, beaconCID2, err := dfos.SignBeacon(id.did, merkle2, kid, id.auth.priv)
+	// second beacon with different manifest content ID
+	manifest2 := "extra22charcontent0000"
+	tok2, beaconCID2, err := dfos.SignBeacon(id.did, manifest2, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,10 +49,8 @@ func TestBeaconReplacement(t *testing.T) {
 
 	// relay should serve only the latest beacon
 	var beacon struct {
-		BeaconCID string `json:"beaconCID"`
-		Payload   struct {
-			MerkleRoot string `json:"merkleRoot"`
-		} `json:"payload"`
+		BeaconCID         string `json:"beaconCID"`
+		ManifestContentId string `json:"manifestContentId"`
 	}
 	resp := getJSON(t, base+"/beacons/"+id.did, &beacon)
 	if resp.StatusCode != 200 {
@@ -62,8 +59,8 @@ func TestBeaconReplacement(t *testing.T) {
 	if beacon.BeaconCID != beaconCID2 {
 		t.Fatalf("beacon should be replaced: got CID %s, want %s", beacon.BeaconCID, beaconCID2)
 	}
-	if beacon.Payload.MerkleRoot != merkle2 {
-		t.Fatalf("merkle root: got %s, want %s", beacon.Payload.MerkleRoot, merkle2)
+	if beacon.ManifestContentId != manifest2 {
+		t.Fatalf("manifestContentId: got %s, want %s", beacon.ManifestContentId, manifest2)
 	}
 }
 

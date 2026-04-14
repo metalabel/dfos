@@ -1126,7 +1126,11 @@ describe('delegated content chain', () => {
       did,
       isDeleted: false,
       authKeys: [
-        { id: keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey) },
+        {
+          id: keyId,
+          type: 'Multikey',
+          publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey),
+        },
       ],
       assertKeys: [],
       controllerKeys: [],

@@ -6,13 +6,13 @@ This directory contains a worked example of the `reference-content-stream/v1` sc
 
 `reference-content-stream/v1` is a discriminated union of five actions:
 
-| Action | Required fields | Description |
-|--------|----------------|-------------|
-| `create-item` | `title` | Create a new item with optional `body` |
-| `update-item` | `targetOperationCID`, `title` | Update an existing item |
-| `delete-item` | `targetOperationCID` | Delete an existing item |
-| `react` | `targetOperationCID`, `reaction` | Add a reaction to an operation |
-| `unreact` | `targetOperationCID`, `reaction` | Remove a reaction from an operation |
+| Action        | Required fields                  | Description                            |
+| ------------- | -------------------------------- | -------------------------------------- |
+| `create-item` | `title`                          | Create a new item with optional `body` |
+| `update-item` | `targetOperationCID`, `title`    | Update an existing item                |
+| `delete-item` | `targetOperationCID`             | Delete an existing item                |
+| `react`       | `targetOperationCID`, `reaction` | Add a reaction to an operation         |
+| `unreact`     | `targetOperationCID`, `reaction` | Remove a reaction from an operation    |
 
 Every document also carries `createdByDID` — the DID of the content author. This is a content-layer convention, distinct from the operation signer (who may be a delegate or device key).
 
