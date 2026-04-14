@@ -16,6 +16,7 @@ import type {
   RelayStore,
   StoredBeacon,
   StoredContentChain,
+  StoredDocument,
   StoredIdentityChain,
   StoredOperation,
   StoredPublicCredential,
@@ -148,6 +149,64 @@ export class MemoryRelayStore implements RelayStore {
 
   async removePublicCredential(credentialCID: string): Promise<void> {
     this.publicCredentials.delete(credentialCID);
+  }
+
+  // --- documents ---
+
+  async getDocuments(
+    contentId: string,
+    params: { after?: string; limit: number },
+  ): Promise<{ documents: StoredDocument[]; cursor: string | null }> {
+    const chain = this.contentChains.get(contentId);
+    if (!chain) return { documents: [], cursor: null };
+
+    // build ordered entries with metadata
+    const entries: { cid: string; documentCID: string | null; signerDID: string; createdAt: string }[] = [];
+    for (const jws of chain.log) {
+      const decoded = decodeJwsUnsafe(jws);
+      if (!decoded) continue;
+      const payload = decoded.payload as Record<string, unknown>;
+      const cid = typeof decoded.header.cid === 'string' ? decoded.header.cid : '';
+      const documentCID = typeof payload['documentCID'] === 'string' ? payload['documentCID'] : null;
+      const signerDID = typeof payload['did'] === 'string' ? payload['did'] : '';
+      const createdAt = typeof payload['createdAt'] === 'string' ? payload['createdAt'] : '';
+      entries.push({ cid, documentCID, signerDID, createdAt });
+    }
+
+    // find start position
+    let startIdx = 0;
+    if (params.after) {
+      const idx = entries.findIndex((e) => e.cid === params.after);
+      startIdx = idx >= 0 ? idx + 1 : entries.length;
+    }
+
+    const page = entries.slice(startIdx, startIdx + params.limit);
+
+    // resolve documents from blobs
+    const documents: StoredDocument[] = [];
+    for (const entry of page) {
+      let document: unknown | null = null;
+      if (entry.documentCID) {
+        const blob = await this.getBlob({ creatorDID: chain.state.creatorDID, documentCID: entry.documentCID });
+        if (blob) {
+          try {
+            document = JSON.parse(new TextDecoder().decode(blob));
+          } catch {
+            document = null;
+          }
+        }
+      }
+      documents.push({
+        operationCID: entry.cid,
+        documentCID: entry.documentCID,
+        document,
+        signerDID: entry.signerDID,
+        createdAt: entry.createdAt,
+      });
+    }
+
+    const cursor = page.length === params.limit ? page[page.length - 1]!.cid : null;
+    return { documents, cursor };
   }
 
   // --- operation log ---

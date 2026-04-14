@@ -165,6 +165,14 @@ export interface StoredRevocation {
   jwsToken: string;
 }
 
+export interface StoredDocument {
+  operationCID: string;
+  documentCID: string | null;
+  document: unknown | null;
+  signerDID: string;
+  createdAt: string;
+}
+
 export interface StoredPublicCredential {
   cid: string;
   issuerDID: string;
@@ -271,6 +279,14 @@ export interface RelayStore {
   addPublicCredential(credential: StoredPublicCredential): Promise<void>;
   /** Remove a public credential (e.g., after revocation) */
   removePublicCredential(credentialCID: string): Promise<void>;
+
+  // --- documents ---
+
+  /** Get paginated documents for a content chain */
+  getDocuments(
+    contentId: string,
+    params: { after?: string; limit: number },
+  ): Promise<{ documents: StoredDocument[]; cursor: string | null }>;
 
   // --- peer sync state ---
 
