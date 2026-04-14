@@ -516,14 +516,15 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	}
 
 	// check contentID scope if the credential specifies one
-	if vc.ContentID != "" && vc.ContentID != contentID {
+	// chain:* wildcard covers any content chain
+	if vc.ContentID != "" && vc.ContentID != "*" && vc.ContentID != contentID {
 		return fmt.Errorf("credential contentId %s does not match chain %s", vc.ContentID, contentID)
 	}
 
 	// walk the delegation chain — verify it roots at the creator DID
 	childAtt := parseAtt(vcPayload)
 	childPrf := parsePrf(vcPayload)
-	if err := VerifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, nil, 0); err != nil {
+	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, nil, 0); err != nil {
 		return err
 	}
 

@@ -133,7 +133,7 @@ func isAttenuated(parentAtt []attEntry, childAtt []attEntry) bool {
 	return true
 }
 
-// VerifyDelegationChain verifies a DFOS credential's delegation chain.
+// verifyDelegationChain verifies a DFOS credential's delegation chain.
 // Walks the prf array recursively, verifying each parent credential's
 // signature, audience linkage, expiry bounds, and monotonic attenuation.
 // The chain must root at rootDID.
@@ -141,7 +141,7 @@ func isAttenuated(parentAtt []attEntry, childAtt []attEntry) bool {
 // The optional isRevoked callback checks revocation at each level. Pass nil
 // to skip revocation checks (useful at the protocol layer where revocation
 // state may not be available).
-func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []attEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked func(issuerDID, credentialCID string) (bool, error), depth int) error {
+func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []attEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked func(issuerDID, credentialCID string) (bool, error), depth int) error {
 	if depth > 16 {
 		return fmt.Errorf("delegation chain too deep (max 16 hops)")
 	}
@@ -237,5 +237,5 @@ func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 
 	// recurse into the first parent (all parents verified above)
 	first := parents[0]
-	return VerifyDelegationChain(first.jws, first.verified, first.att, first.prf, resolveKey, rootDID, isRevoked, depth+1)
+	return verifyDelegationChain(first.jws, first.verified, first.att, first.prf, resolveKey, rootDID, isRevoked, depth+1)
 }
