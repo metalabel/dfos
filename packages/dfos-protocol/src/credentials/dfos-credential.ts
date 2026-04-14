@@ -353,9 +353,13 @@ const parseActions = (action: string): Set<string> => {
  * `parentAtt`. Coverage rules:
  *
  * - `chain:X` covered by `chain:X` (exact match)
+ * - `chain:X` covered by `chain:*` (narrowing from wildcard — valid)
  * - `chain:X` covered by `manifest:M` (narrowing from manifest — valid structurally)
+ * - `manifest:M` covered by `chain:*` (narrowing from wildcard — valid)
  * - `manifest:M` covered by `manifest:M` (exact match)
  * - `manifest:M` NOT covered by `chain:X` (widening — invalid)
+ * - `chain:*` covered by `chain:*` (exact match)
+ * - `chain:*` NOT covered by `chain:X` or `manifest:M` (widening — invalid)
  * - Actions: child action set must be a subset of parent action set
  */
 export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]): boolean => {
@@ -375,6 +379,15 @@ export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]):
       }
 
       // check resource coverage
+      if (parentRes.type === 'chain' && parentRes.id === '*') {
+        // chain:* covers everything: chain:X, chain:*, manifest:M
+        return true;
+      }
+      if (childRes.type === 'chain' && childRes.id === '*') {
+        // chain:* can only be covered by chain:* (checked above) — not by
+        // chain:X or manifest:M (both would be widening)
+        return false;
+      }
       if (childRes.type === 'chain' && parentRes.type === 'chain') {
         // chain:X covered by chain:X (exact match)
         return childRes.id === parentRes.id;
@@ -388,6 +401,7 @@ export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]):
         return childRes.id === parentRes.id;
       }
       // manifest:M NOT covered by chain:X (widening)
+      // chain:* NOT covered by chain:X or manifest:M (widening)
       return false;
     });
   });
@@ -433,6 +447,11 @@ export const matchesResource = async (
       }
     }
     if (!actionsCovered) continue;
+
+    // chain:* covers any chain: request
+    if (entryRes.type === 'chain' && entryRes.id === '*' && requestedRes.type === 'chain') {
+      return true;
+    }
 
     // exact resource match (chain:X == chain:X, manifest:M == manifest:M)
     if (entryRes.type === requestedRes.type && entryRes.id === requestedRes.id) {

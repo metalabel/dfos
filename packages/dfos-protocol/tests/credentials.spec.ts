@@ -681,4 +681,48 @@ describe('dfos credential', () => {
 
     identityMap.delete(issuer.did);
   });
+
+  // --- chain:* wildcard attenuation ---
+
+  it('should accept chain:X as attenuated from chain:*', () => {
+    const parent = [{ resource: 'chain:*', action: 'read' }];
+    const child = [{ resource: 'chain:content1', action: 'read' }];
+    expect(isAttenuated(parent, child)).toBe(true);
+  });
+
+  it('should accept manifest:M as attenuated from chain:*', () => {
+    const parent = [{ resource: 'chain:*', action: 'read' }];
+    const child = [{ resource: 'manifest:manifest1', action: 'read' }];
+    expect(isAttenuated(parent, child)).toBe(true);
+  });
+
+  it('should accept chain:* as attenuated from chain:* (exact match)', () => {
+    const parent = [{ resource: 'chain:*', action: 'read' }];
+    const child = [{ resource: 'chain:*', action: 'read' }];
+    expect(isAttenuated(parent, child)).toBe(true);
+  });
+
+  it('should reject chain:* as attenuated from chain:X (widening)', () => {
+    const parent = [{ resource: 'chain:content1', action: 'read' }];
+    const child = [{ resource: 'chain:*', action: 'read' }];
+    expect(isAttenuated(parent, child)).toBe(false);
+  });
+
+  it('should reject chain:* as attenuated from manifest:M (widening)', () => {
+    const parent = [{ resource: 'manifest:manifest1', action: 'read' }];
+    const child = [{ resource: 'chain:*', action: 'read' }];
+    expect(isAttenuated(parent, child)).toBe(false);
+  });
+
+  // --- chain:* wildcard resource matching ---
+
+  it('should match chain:* with read against chain:someId with read', async () => {
+    const att = [{ resource: 'chain:*', action: 'read' }];
+    expect(await matchesResource(att, 'chain:someId', 'read')).toBe(true);
+  });
+
+  it('should not match chain:* with read against chain:someId with write (action mismatch)', async () => {
+    const att = [{ resource: 'chain:*', action: 'read' }];
+    expect(await matchesResource(att, 'chain:someId', 'write')).toBe(false);
+  });
 });

@@ -473,6 +473,11 @@ func (s *MemoryStore) GetPublicCredentials(resource string) ([]string, error) {
 				tokens = append(tokens, cred.JWSToken)
 				break
 			}
+			// chain:* credentials match any chain: resource
+			if strings.HasPrefix(resource, "chain:") && att.Resource == "chain:*" {
+				tokens = append(tokens, cred.JWSToken)
+				break
+			}
 			// manifest-scoped credentials match chain: resources
 			if strings.HasPrefix(resource, "chain:") && strings.HasPrefix(att.Resource, "manifest:") {
 				tokens = append(tokens, cred.JWSToken)

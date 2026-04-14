@@ -483,6 +483,54 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 }
 
 // -----------------------------------------------------------------------------
+// Content authorization verification (internal)
+// -----------------------------------------------------------------------------
+
+// verifyContentAuthorization verifies that a delegated content operation has a
+// valid DFOS credential authorizing the signer to write to this content chain.
+// Walks the delegation chain to confirm it roots at the creator DID.
+func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt string, resolveKey KeyResolver) error {
+	vcHeader, vcPayload, vcErr := DecodeJWSUnsafe(authorization)
+	if vcErr != nil {
+		return fmt.Errorf("failed to decode authorization credential")
+	}
+	vcKid := vcHeader.Kid
+	if vcKid == "" || !strings.Contains(vcKid, "#") {
+		return fmt.Errorf("authorization credential kid must be a DID URL")
+	}
+
+	creatorPubKey, err := resolveKey(vcKid)
+	if err != nil {
+		return fmt.Errorf("cannot resolve creator key for authorization verification")
+	}
+
+	opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
+	if parseErr != nil {
+		return fmt.Errorf("invalid createdAt format: %w", parseErr)
+	}
+	opTimeUnix := opTime.Unix()
+
+	vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "DFOSContentWrite", opTimeUnix)
+	if err != nil {
+		return err
+	}
+
+	// check contentID scope if the credential specifies one
+	if vc.ContentID != "" && vc.ContentID != contentID {
+		return fmt.Errorf("credential contentId %s does not match chain %s", vc.ContentID, contentID)
+	}
+
+	// walk the delegation chain — verify it roots at the creator DID
+	childAtt := parseAtt(vcPayload)
+	childPrf := parsePrf(vcPayload)
+	if err := VerifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, nil, 0); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// -----------------------------------------------------------------------------
 // Content chain verification
 // -----------------------------------------------------------------------------
 
@@ -589,35 +637,8 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 				return nil, fmt.Errorf("log[%d]: signer %s is not the chain creator — authorization credential required", idx, opDID)
 			}
 
-			vcHeader, _, vcErr := DecodeJWSUnsafe(authorization)
-			if vcErr != nil {
-				return nil, fmt.Errorf("log[%d]: failed to decode authorization credential", idx)
-			}
-			vcKid := vcHeader.Kid
-			if vcKid == "" || !strings.Contains(vcKid, "#") {
-				return nil, fmt.Errorf("log[%d]: authorization credential kid must be a DID URL", idx)
-			}
-
-			creatorPubKey, err := resolveKey(vcKid)
-			if err != nil {
-				return nil, fmt.Errorf("log[%d]: cannot resolve creator key for authorization verification", idx)
-			}
-
-			opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
-			if parseErr != nil {
-				return nil, fmt.Errorf("log[%d]: invalid createdAt format: %w", idx, parseErr)
-			}
-			opTimeUnix := opTime.Unix()
-
-			vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "DFOSContentWrite", opTimeUnix)
-			if err != nil {
+			if err := verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt, resolveKey); err != nil {
 				return nil, fmt.Errorf("log[%d]: authorization verification failed: %s", idx, err)
-			}
-			if vc.Iss != creatorDID {
-				return nil, fmt.Errorf("log[%d]: authorization verification failed: credential issuer is not the chain creator", idx)
-			}
-			if vc.ContentID != "" && vc.ContentID != contentID {
-				return nil, fmt.Errorf("log[%d]: authorization verification failed: credential contentId %s does not match chain %s", idx, vc.ContentID, contentID)
 			}
 		}
 
@@ -745,35 +766,8 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 			return nil, fmt.Errorf("signer %s is not the chain creator — authorization credential required", opDID)
 		}
 
-		vcHeader, _, vcErr := DecodeJWSUnsafe(authorization)
-		if vcErr != nil {
-			return nil, fmt.Errorf("failed to decode authorization credential")
-		}
-		vcKid := vcHeader.Kid
-		if vcKid == "" || !strings.Contains(vcKid, "#") {
-			return nil, fmt.Errorf("authorization credential kid must be a DID URL")
-		}
-
-		creatorPubKey, err := resolveKey(vcKid)
-		if err != nil {
-			return nil, fmt.Errorf("cannot resolve creator key for authorization verification")
-		}
-
-		opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
-		if parseErr != nil {
-			return nil, fmt.Errorf("invalid createdAt format: %w", parseErr)
-		}
-		opTimeUnix := opTime.Unix()
-
-		vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "DFOSContentWrite", opTimeUnix)
-		if err != nil {
+		if err := verifyContentAuthorization(authorization, opDID, currentState.CreatorDID, currentState.ContentID, createdAt, resolveKey); err != nil {
 			return nil, fmt.Errorf("authorization verification failed: %s", err)
-		}
-		if vc.Iss != currentState.CreatorDID {
-			return nil, fmt.Errorf("authorization verification failed: credential issuer is not the chain creator")
-		}
-		if vc.ContentID != "" && vc.ContentID != currentState.ContentID {
-			return nil, fmt.Errorf("authorization verification failed: credential contentId %s does not match chain %s", vc.ContentID, currentState.ContentID)
 		}
 	}
 

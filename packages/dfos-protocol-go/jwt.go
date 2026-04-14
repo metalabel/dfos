@@ -239,20 +239,32 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("subject mismatch: expected %s, got %s", subject, claims.Aud)
 	}
 
-	// derive action and legacy credential type from att
+	// derive action, contentID, and legacy type from the first recognized att entry.
+	// Action and resource are paired from the same entry to avoid cross-pairing
+	// when multiple att entries exist.
 	var action string
 	var credType string
+	var contentID string
 	for _, a := range claims.Att {
 		switch a.Action {
 		case "write":
 			action = "write"
 			credType = "DFOSContentWrite"
 		case "read":
-			if action == "" {
-				action = "read"
-				credType = "DFOSContentRead"
-			}
+			action = "read"
+			credType = "DFOSContentRead"
+		default:
+			continue
 		}
+		// extract contentID from the same att entry
+		if a.Resource != "" {
+			r := a.Resource
+			if strings.HasPrefix(r, "chain:") {
+				r = r[len("chain:"):]
+			}
+			contentID = r
+		}
+		break
 	}
 	if action == "" {
 		return nil, fmt.Errorf("no recognized action in att")
@@ -261,21 +273,6 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 	// verify type if specified
 	if expectedType != "" && credType != expectedType {
 		return nil, fmt.Errorf("type mismatch: expected %s, got %s", expectedType, credType)
-	}
-
-	// extract optional contentID from att resource (strip "chain:" prefix)
-	var contentID string
-	for _, a := range claims.Att {
-		if a.Resource != "" {
-			r := a.Resource
-			if strings.HasPrefix(r, "chain:") {
-				r = r[len("chain:"):]
-			}
-			if r != "" {
-				contentID = r
-				break
-			}
-		}
 	}
 
 	return &VerifiedCredential{

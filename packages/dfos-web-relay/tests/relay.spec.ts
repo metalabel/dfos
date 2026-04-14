@@ -3085,4 +3085,137 @@ describe('web relay', () => {
       expect(body.documents.length).toBe(1);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // cascading revocation
+  // ---------------------------------------------------------------------------
+
+  describe('cascading revocation', () => {
+    it('should invalidate child credential when parent credential is revoked', async () => {
+      const creator = await createIdentity();
+      const member = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, member.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // upload blob as creator
+      const creatorToken = await createTestAuthToken(creator);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+
+      // creator issues root credential to member granting read access
+      const now = Math.floor(Date.now() / 1000);
+      const rootCredential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: member.did,
+        att: [{ resource: `chain:${contentId}`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+
+      // member issues a child credential (re-delegation) to anyone, with root as proof
+      const childCredential = await createDFOSCredential({
+        issuerDID: member.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:${contentId}`, action: 'read' }],
+        prf: [rootCredential],
+        exp: now + 1800,
+        signer: member.authKey.signer,
+        keyId: member.authKey.keyId,
+        iat: now,
+      });
+
+      // verify child credential grants access — member can read blob
+      const memberToken = await createTestAuthToken(member);
+      const downloadRes = await req(`/content/${contentId}/blob`, {
+        headers: {
+          authorization: `Bearer ${memberToken}`,
+          'x-credential': childCredential,
+        },
+      });
+      expect(downloadRes.status).toBe(200);
+
+      // creator revokes the root credential
+      const decoded = decodeDFOSCredentialUnsafe(rootCredential);
+      const credentialCID = decoded!.header.cid;
+      const { jwsToken: revocationJws } = await signRevocation({
+        issuerDID: creator.did,
+        credentialCID,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+      });
+      await postOps([revocationJws]);
+
+      // child credential should no longer grant access
+      const downloadRes2 = await req(`/content/${contentId}/blob`, {
+        headers: {
+          authorization: `Bearer ${memberToken}`,
+          'x-credential': childCredential,
+        },
+      });
+      expect(downloadRes2.status).toBe(403);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // chain:* wildcard standing authorization
+  // ---------------------------------------------------------------------------
+
+  describe('chain:* wildcard standing authorization', () => {
+    it('should grant read access to all creator content via chain:* public credential', async () => {
+      const creator = await createIdentity();
+      const reader = await createIdentity();
+
+      // create first content chain and upload blob
+      const content1 = await createContentOp(creator);
+      await postOps([creator.jwsToken, reader.jwsToken, content1.jwsToken]);
+
+      const ingest1 = await postOps([content1.jwsToken]);
+      const contentId1 = (await json(ingest1)).results[0].chainId;
+
+      const creatorToken = await createTestAuthToken(creator);
+      const docBytes1 = new TextEncoder().encode(JSON.stringify(content1.document));
+      await putBlob(contentId1, content1.operationCID, creatorToken, docBytes1);
+
+      // ingest public credential with chain:* from creator
+      const now = Math.floor(Date.now() / 1000);
+      const wildcardCred = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: '*',
+        att: [{ resource: 'chain:*', action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+      await postOps([wildcardCred]);
+
+      // create second content chain and upload blob
+      const content2 = await createContentOp(creator, { createdAt: ts(2) });
+      await postOps([content2.jwsToken]);
+
+      const ingest2 = await postOps([content2.jwsToken]);
+      const contentId2 = (await json(ingest2)).results[0].chainId;
+
+      const docBytes2 = new TextEncoder().encode(JSON.stringify(content2.document));
+      await putBlob(contentId2, content2.operationCID, creatorToken, docBytes2);
+
+      // reader can download blob from first content chain (standing auth)
+      const readerToken = await createTestAuthToken(reader);
+      const dl1 = await req(`/content/${contentId1}/blob`, {
+        headers: { authorization: `Bearer ${readerToken}` },
+      });
+      expect(dl1.status).toBe(200);
+
+      // reader can download blob from second content chain (standing auth)
+      const dl2 = await req(`/content/${contentId2}/blob`, {
+        headers: { authorization: `Bearer ${readerToken}` },
+      });
+      expect(dl2.status).toBe(200);
+    });
+  });
 });

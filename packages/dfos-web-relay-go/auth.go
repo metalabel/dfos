@@ -364,6 +364,11 @@ func (r *Relay) matchesResource(att []attEntry, resource string, action string) 
 			continue
 		}
 
+		// chain:* covers any chain: request
+		if entryType == "chain" && entryID == "*" && reqType == "chain" {
+			return true
+		}
+
 		// exact resource match
 		if entryType == reqType && entryID == reqID {
 			return true
@@ -464,7 +469,15 @@ func isAttenuated(parentAtt []attEntry, childAtt []attEntry) bool {
 			}
 
 			// check resource coverage
-			if childType == "chain" && parentType == "chain" {
+			if parentType == "chain" && parentID == "*" {
+				// chain:* covers everything: chain:X, chain:*, manifest:M
+				covered = true
+				break
+			} else if childType == "chain" && childID == "*" {
+				// chain:* can only be covered by chain:* (checked above) — not by
+				// chain:X or manifest:M (both would be widening)
+				continue
+			} else if childType == "chain" && parentType == "chain" {
 				if childID == parentID {
 					covered = true
 					break
@@ -480,6 +493,7 @@ func isAttenuated(parentAtt []attEntry, childAtt []attEntry) bool {
 				}
 			}
 			// manifest:M NOT covered by chain:X (widening — invalid)
+			// chain:* NOT covered by chain:X or manifest:M (widening — invalid)
 		}
 
 		if !covered {
