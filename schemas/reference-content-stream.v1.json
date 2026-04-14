@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dfos.com/reference-content-stream/v1",
+  "title": "Reference Content Stream",
+  "description": "Reference schema for developing and testing content stream patterns. Demonstrates CRUD operations, reactions, and multi-action discrimination in a single content chain.",
+  "type": "object",
+  "required": ["$schema", "action", "createdByDID"],
+  "properties": {
+    "$schema": { "const": "https://schemas.dfos.com/reference-content-stream/v1" },
+    "action": { "enum": ["create-item", "update-item", "delete-item", "react", "unreact"] },
+    "createdByDID": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "action": { "const": "create-item" } } },
+      "then": {
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string" },
+          "body": { "type": "string" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "action": { "enum": ["update-item", "delete-item"] } } },
+      "then": {
+        "required": ["targetOperationCID"],
+        "properties": {
+          "targetOperationCID": { "type": "string" },
+          "title": { "type": "string" },
+          "body": { "type": "string" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "action": { "enum": ["react", "unreact"] } } },
+      "then": {
+        "required": ["targetOperationCID", "reaction"],
+        "properties": {
+          "targetOperationCID": { "type": "string" },
+          "reaction": { "type": "string" }
+        }
+      }
+    }
+  ]
+}

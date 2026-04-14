@@ -1,0 +1,83 @@
+{
+  "description": "Six operations demonstrating reference-content-stream/v1 lifecycle",
+  "schema": "https://schemas.dfos.com/reference-content-stream/v1",
+  "participants": {
+    "alice": "did:dfos:alice",
+    "bob": "did:dfos:bob",
+    "carol": "did:dfos:carol"
+  },
+  "operations": [
+    {
+      "sequence": 0,
+      "operationCID": "op1_create_item_1",
+      "action": "create-item",
+      "document": {
+        "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
+        "action": "create-item",
+        "createdByDID": "did:dfos:alice",
+        "title": "Hello world",
+        "body": "My first post."
+      }
+    },
+    {
+      "sequence": 1,
+      "operationCID": "op2_create_item_2",
+      "action": "create-item",
+      "document": {
+        "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
+        "action": "create-item",
+        "createdByDID": "did:dfos:bob",
+        "title": "Second item",
+        "body": "Bob's contribution."
+      }
+    },
+    {
+      "sequence": 2,
+      "operationCID": "op3_react_thumbsup",
+      "action": "react",
+      "document": {
+        "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
+        "action": "react",
+        "createdByDID": "did:dfos:carol",
+        "targetOperationCID": "op1_create_item_1",
+        "reaction": "thumbsup"
+      }
+    },
+    {
+      "sequence": 3,
+      "operationCID": "op4_update_item_1",
+      "action": "update-item",
+      "document": {
+        "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
+        "action": "update-item",
+        "createdByDID": "did:dfos:alice",
+        "targetOperationCID": "op1_create_item_1",
+        "title": "Hello world (edited)",
+        "body": "My first post, now edited."
+      }
+    },
+    {
+      "sequence": 4,
+      "operationCID": "op5_react_fire",
+      "action": "react",
+      "document": {
+        "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
+        "action": "react",
+        "createdByDID": "did:dfos:alice",
+        "targetOperationCID": "op2_create_item_2",
+        "reaction": "fire"
+      }
+    },
+    {
+      "sequence": 5,
+      "operationCID": "op6_delete_item_2",
+      "action": "delete-item",
+      "document": {
+        "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
+        "action": "delete-item",
+        "createdByDID": "did:dfos:bob",
+        "targetOperationCID": "op2_create_item_2"
+      }
+    }
+  ]
+}
