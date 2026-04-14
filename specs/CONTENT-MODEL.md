@@ -59,7 +59,7 @@ The primary content type. Covers short posts, long-form posts, comments, and rep
 | `topics`       | string[] | no       | Topic names (stored as names for portability)                                      |
 | `createdByDID` | string   | no       | DID of the content author — distinct from the chain operation signer               |
 
-`createdByDID` answers "who authored this content", which may differ from the signer of the chain operation (the `kid` DID). For example, an agent acting on behalf of a user commits the operation, but `createdByDID` records the human author.
+`createdByDID` is a content-layer authorship convention, distinct from the operation signer. The `kid` DID in the JWS header identifies who cryptographically signed the operation — this is the protocol-level signer with key authority. `createdByDID` records who authored the content at the application layer. These often differ: an agent, bot, or delegate may sign the operation on behalf of a human author. The protocol verifies the signer; applications display `createdByDID`.
 
 ### Profile (`https://schemas.dfos.com/profile/v1`)
 
@@ -135,9 +135,65 @@ This is the default interpretation for the standard schemas. Edit lineage is tra
 
 The chain represents a sequence — a feed, a journal, a log. Each operation is a discrete emission, not a revision. There is no single "current state" — the chain _is_ the content. Previous documents aren't superseded, they're siblings in a series.
 
-### Other Patterns
+A stream chain accumulates documents over time. The resolved content is the full ordered list of documents, not just the head. Applications read streams by walking the chain log and collecting each operation's `documentCID`.
 
-The protocol cannot distinguish these patterns — the operation schema is identical in both cases. The difference is a reading convention, signaled by the `$schema` of the documents. Future content types could define event-sourcing patterns, append-only collections, or interpretations not yet imagined.
+### Event Fold
+
+The chain represents a sequence of events that fold into a computed state. Each operation contributes a delta or event. The resolved state is the result of replaying all events in order — similar to event sourcing. The `$schema` of the documents defines the event types and fold semantics.
+
+Unlike a living document (where the head document is the state) or a stream (where all documents are siblings), an event fold requires interpretation logic specific to the schema. The chain log is the source of truth; the projected state is derived.
+
+### Projection Rules per Schema
+
+Each schema implies a default projection — how applications derive resolved state from the chain:
+
+| Schema      | Projection                                                                                     |
+| ----------- | ---------------------------------------------------------------------------------------------- |
+| `post/v1`   | Living document — head `documentCID` is the current post. History is edit trail                 |
+| `profile/v1`| Living document — head `documentCID` is the current profile                                    |
+| `manifest/v1`| Living document — head `documentCID` is the current manifest index                            |
+
+Stream and event fold schemas define their own projection rules in their schema documentation. The protocol does not enforce projections — these are reading conventions that applications agree on.
+
+### Intra-Chain References (`targetOperationCID`)
+
+Content documents may reference specific operations within their own chain or other chains via `targetOperationCID`. This is a content-layer convention — the protocol does not validate or enforce it.
+
+Use cases for `targetOperationCID`:
+
+- **Comments and replies**: A reply document references the operation CID of the post being replied to
+- **Reactions**: A reaction document references the operation it reacts to
+- **Annotations**: A document annotates a specific version (operation) of another chain's content
+
+`targetOperationCID` is a content field (inside the document committed by CID), not an operation field. The protocol commits to it via `documentCID` but does not interpret it. Applications resolve the reference by looking up the target operation on the relay.
+
+---
+
+## Reference Content Stream Schema
+
+The content stream is the canonical example of the stream interpretation pattern. A stream chain accumulates discrete entries — each operation appends a new document to the sequence rather than replacing the previous one.
+
+### Content Stream (`https://schemas.dfos.com/content-stream/v1`)
+
+A stream entry document. Each document in a content stream chain is a standalone entry in the sequence.
+
+| Field               | Type   | Required | Description                                                           |
+| ------------------- | ------ | -------- | --------------------------------------------------------------------- |
+| `$schema`           | string | yes      | `"https://schemas.dfos.com/content-stream/v1"`                        |
+| `body`              | string | no       | Entry body content                                                    |
+| `attachments`       | media[]| no       | Attached media objects                                                |
+| `targetOperationCID`| string | no       | CID of an operation this entry references (reply, annotation, etc.)   |
+| `createdByDID`      | string | no       | DID of the content author (distinct from the operation signer)        |
+
+```json
+{
+  "$schema": "https://schemas.dfos.com/content-stream/v1",
+  "body": "This is a stream entry.",
+  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
+}
+```
+
+Content stream chains use the **stream** interpretation — the resolved content is the full ordered list of documents, not just the head. Applications read content streams by walking the chain log and collecting each operation's `documentCID`.
 
 ---
 
