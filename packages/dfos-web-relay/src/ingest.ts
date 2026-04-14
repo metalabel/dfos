@@ -26,9 +26,15 @@ import {
   verifyCountersignature,
   verifyIdentityChain,
   verifyIdentityExtensionFromTrustedState,
+  verifyRevocation,
   type VerifiedBeacon,
   type VerifiedCountersignature,
+  type VerifiedRevocation,
 } from '@metalabel/dfos-protocol/chain';
+import {
+  verifyDFOSCredential,
+  type VerifiedDFOSCredential,
+} from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityChain } from './types';
 
@@ -56,6 +62,8 @@ type ClassificationKind =
   | 'beacon'
   | 'countersign'
   | 'artifact'
+  | 'revocation'
+  | 'credential'
   | 'unknown';
 
 interface ClassifiedOperation {
@@ -144,6 +152,32 @@ const classify = (jwsToken: string): ClassifiedOperation => {
       referencedDID: artifactDID,
       signerDID: null,
       priority: 1, // same as beacons — needs identity keys resolved first
+      previousCID: null,
+    };
+  }
+
+  if (typ === 'did:dfos:revocation') {
+    const revocationDID = typeof payload['did'] === 'string' ? payload['did'] : null;
+    return {
+      ...base,
+      kind: 'revocation',
+      referencedDID: revocationDID,
+      signerDID: null,
+      priority: 1, // same as beacons — needs identity keys to verify
+      previousCID: null,
+    };
+  }
+
+  if (typ === 'did:dfos:credential') {
+    const aud = typeof payload['aud'] === 'string' ? payload['aud'] : null;
+    // only ingest public credentials (aud: "*"), silently ignore private ones
+    if (aud !== '*') return unknown;
+    return {
+      ...base,
+      kind: 'credential',
+      referencedDID: kidDID,
+      signerDID: null,
+      priority: 1, // needs identity keys to verify
       previousCID: null,
     };
   }
@@ -726,6 +760,107 @@ const ingestArtifact = async (
   return { cid, status: 'new', kind: 'artifact', chainId: did };
 };
 
+const ingestRevocation = async (
+  jwsToken: string,
+  store: RelayStore,
+  logEnabled: boolean,
+): Promise<IngestionResult> => {
+  const resolveKey = createKeyResolver(store);
+
+  let verified: VerifiedRevocation;
+  try {
+    verified = await verifyRevocation({ jwsToken, resolveKey });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'verification failed';
+    return { cid: '', status: 'rejected', error: message };
+  }
+
+  const cid = verified.revocationCID;
+  const did = verified.did;
+
+  // idempotent
+  const existing = await store.getOperation(cid);
+  if (existing) {
+    return { cid, status: 'duplicate', kind: 'revocation', chainId: did };
+  }
+
+  // reject revocations from deleted identities
+  const identity = await store.getIdentityChain(did);
+  if (identity?.state.isDeleted) {
+    return { cid, status: 'rejected', error: 'identity is deleted' };
+  }
+
+  // add to revocation set
+  await store.addRevocation({
+    cid,
+    issuerDID: did,
+    credentialCID: verified.credentialCID,
+    jwsToken,
+  });
+
+  // if the revoked credential was a stored public credential, remove it
+  await store.removePublicCredential(verified.credentialCID);
+
+  await store.putOperation({ cid, jwsToken, chainType: 'revocation', chainId: did });
+  if (logEnabled) {
+    await store.appendToLog({ cid, jwsToken, kind: 'revocation', chainId: did });
+  }
+  return { cid, status: 'new', kind: 'revocation', chainId: did };
+};
+
+const ingestPublicCredential = async (
+  jwsToken: string,
+  store: RelayStore,
+  logEnabled: boolean,
+): Promise<IngestionResult> => {
+  const resolveIdentity = async (did: string) => {
+    const chain = await store.getIdentityChain(did);
+    return chain?.state;
+  };
+
+  let verified: VerifiedDFOSCredential;
+  try {
+    verified = await verifyDFOSCredential(jwsToken, { resolveIdentity });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'verification failed';
+    return { cid: '', status: 'rejected', error: message };
+  }
+
+  const cid = verified.credentialCID;
+
+  // only ingest public credentials
+  if (verified.aud !== '*') {
+    return { cid: '', status: 'rejected', error: 'not a public credential' };
+  }
+
+  // idempotent
+  const existing = await store.getOperation(cid);
+  if (existing) {
+    return { cid, status: 'duplicate', kind: 'credential', chainId: verified.iss };
+  }
+
+  // check if already revoked
+  const revoked = await store.isCredentialRevoked(cid);
+  if (revoked) {
+    return { cid, status: 'rejected', error: 'credential is revoked' };
+  }
+
+  // store as standing authorization
+  await store.addPublicCredential({
+    cid,
+    issuerDID: verified.iss,
+    att: verified.att,
+    exp: verified.exp,
+    jwsToken,
+  });
+
+  await store.putOperation({ cid, jwsToken, chainType: 'credential', chainId: verified.iss });
+  if (logEnabled) {
+    await store.appendToLog({ cid, jwsToken, kind: 'credential', chainId: verified.iss });
+  }
+  return { cid, status: 'new', kind: 'credential', chainId: verified.iss };
+};
+
 // -----------------------------------------------------------------------------
 // topological sort
 // -----------------------------------------------------------------------------
@@ -922,6 +1057,12 @@ export const ingestOperations = async (
           break;
         case 'artifact':
           result = await ingestArtifact(op.jwsToken, store, logEnabled);
+          break;
+        case 'revocation':
+          result = await ingestRevocation(op.jwsToken, store, logEnabled);
+          break;
+        case 'credential':
+          result = await ingestPublicCredential(op.jwsToken, store, logEnabled);
           break;
         default:
           result = { cid: '', status: 'rejected', error: 'unrecognized operation type' };

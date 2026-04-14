@@ -18,6 +18,8 @@ import type {
   StoredContentChain,
   StoredIdentityChain,
   StoredOperation,
+  StoredPublicCredential,
+  StoredRevocation,
 } from './types';
 
 /** Serialize a BlobKey to a string for map indexing */
@@ -37,6 +39,10 @@ export class MemoryRelayStore implements RelayStore {
   private countersignatures = new Map<string, string[]>();
   private operationLog: LogEntry[] = [];
   private peerCursors = new Map<string, string>();
+  /** Keyed by credentialCID for fast lookup */
+  private revocations = new Map<string, StoredRevocation>();
+  /** Keyed by credential CID */
+  private publicCredentials = new Map<string, StoredPublicCredential>();
 
   async getOperation(cid: string): Promise<StoredOperation | undefined> {
     return this.operations.get(cid);
@@ -102,6 +108,49 @@ export class MemoryRelayStore implements RelayStore {
     existing.push(jwsToken);
     this.countersignatures.set(operationCID, existing);
   }
+
+  // --- revocations ---
+
+  async getRevocations(issuerDID: string): Promise<string[]> {
+    const cids: string[] = [];
+    for (const rev of this.revocations.values()) {
+      if (rev.issuerDID === issuerDID) cids.push(rev.credentialCID);
+    }
+    return cids;
+  }
+
+  async addRevocation(revocation: StoredRevocation): Promise<void> {
+    this.revocations.set(revocation.credentialCID, revocation);
+  }
+
+  async isCredentialRevoked(credentialCID: string): Promise<boolean> {
+    return this.revocations.has(credentialCID);
+  }
+
+  // --- public credentials ---
+
+  async getPublicCredentials(resource: string): Promise<string[]> {
+    const tokens: string[] = [];
+    for (const cred of this.publicCredentials.values()) {
+      for (const att of cred.att) {
+        if (att.resource === resource) {
+          tokens.push(cred.jwsToken);
+          break;
+        }
+      }
+    }
+    return tokens;
+  }
+
+  async addPublicCredential(credential: StoredPublicCredential): Promise<void> {
+    this.publicCredentials.set(credential.cid, credential);
+  }
+
+  async removePublicCredential(credentialCID: string): Promise<void> {
+    this.publicCredentials.delete(credentialCID);
+  }
+
+  // --- operation log ---
 
   async appendToLog(entry: LogEntry): Promise<void> {
     this.operationLog.push(entry);
