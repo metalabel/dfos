@@ -105,7 +105,7 @@ const ContentUpdate = z.strictObject({
   baseDocumentCID: CIDString.nullable(),
   createdAt: Iso8601,
   note: z.string().max(MAX_NOTE).nullable(),
-  /** VC-JWT authorizing this operation when signer is not the chain creator */
+  /** DFOS credential authorizing this operation when signer is not the chain creator */
   authorization: z.string().optional(),
 });
 
@@ -117,7 +117,7 @@ const ContentDelete = z.strictObject({
   previousOperationCID: CIDString,
   createdAt: Iso8601,
   note: z.string().max(MAX_NOTE).nullable(),
-  /** VC-JWT authorizing this operation when signer is not the chain creator */
+  /** DFOS credential authorizing this operation when signer is not the chain creator */
   authorization: z.string().optional(),
 });
 
@@ -130,12 +130,11 @@ export type ContentOperation = z.infer<typeof ContentOperation>;
 
 // ---
 
-/** Beacon: floating signed merkle root announcement */
+/** Beacon: floating signed manifest pointer announcement */
 export const BeaconPayload = z.strictObject({
-  version: z.literal(1),
   type: z.literal('beacon'),
   did: z.string().max(MAX_DID),
-  merkleRoot: z.string().regex(/^[0-9a-f]{64}$/),
+  manifestContentId: z.string().max(MAX_CID),
   createdAt: Iso8601,
 });
 export type BeaconPayload = z.infer<typeof BeaconPayload>;
@@ -171,3 +170,14 @@ export const CountersignPayload = z.strictObject({
   createdAt: Iso8601,
 });
 export type CountersignPayload = z.infer<typeof CountersignPayload>;
+
+// ---
+
+/** Revocation: signed credential revocation artifact, gossiped like beacons */
+export const RevocationPayload = z.strictObject({
+  type: z.literal('revocation'),
+  did: z.string().max(MAX_DID),
+  credentialCID: CIDString,
+  createdAt: Iso8601,
+});
+export type RevocationPayload = z.infer<typeof RevocationPayload>;

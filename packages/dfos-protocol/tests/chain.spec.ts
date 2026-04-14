@@ -9,12 +9,17 @@ import {
   verifyContentChain,
   verifyIdentityChain,
 } from '../src/chain';
-import type { ContentOperation, IdentityOperation, MultikeyPublicKey } from '../src/chain';
+import type {
+  ContentOperation,
+  IdentityOperation,
+  MultikeyPublicKey,
+  VerifiedIdentity,
+} from '../src/chain';
 import {
   ContentOperation as ContentOperationSchema,
   IdentityOperation as IdentityOperationSchema,
 } from '../src/chain/schemas';
-import { createCredential, VC_TYPE_CONTENT_READ, VC_TYPE_CONTENT_WRITE } from '../src/credentials';
+import { createDFOSCredential } from '../src/credentials';
 import {
   base64urlEncode,
   createNewEd25519Keypair,
@@ -1117,7 +1122,16 @@ describe('delegated content chain', () => {
     const did = `did:dfos:${generateId('test').substring(5)}`;
     const kid = `${did}#${keyId}`;
     const signer = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair.privateKey);
-    return { keypair, keyId, did, kid, signer };
+    const identity: VerifiedIdentity = {
+      did,
+      isDeleted: false,
+      authKeys: [
+        { id: keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey) },
+      ],
+      assertKeys: [],
+      controllerKeys: [],
+    };
+    return { keypair, keyId, did, kid, signer, identity };
   };
 
   const ts = (offset = 0) => new Date(Date.now() + offset * 60_000).toISOString();
@@ -1154,34 +1168,45 @@ describe('delegated content chain', () => {
     const keys = new Map<string, Uint8Array>();
     keys.set(creator.kid, creator.keypair.publicKey);
 
+    // build identity map for resolveIdentity
+    const identityMap = new Map<string, VerifiedIdentity>();
+    identityMap.set(creator.did, creator.identity);
+
     const resolveKey = async (kid: string) => {
       const key = keys.get(kid);
       if (!key) throw new Error(`unknown kid: ${kid}`);
       return key;
     };
 
+    const resolveIdentity = async (did: string) => identityMap.get(did);
+
     const addDelegate = (delegate: ReturnType<typeof makeIdentity>) => {
       keys.set(delegate.kid, delegate.keypair.publicKey);
+      identityMap.set(delegate.did, delegate.identity);
     };
 
-    return { creator, createJws, createCID, doc, resolveKey, addDelegate };
+    return { creator, createJws, createCID, doc, resolveKey, resolveIdentity, addDelegate };
   };
 
   it('should accept delegated update with valid write VC', async () => {
-    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
+      await createGenesisChain();
     const delegate = makeIdentity();
     addDelegate(delegate);
 
     const doc2 = await makeDocCID({ type: 'post', title: 'delegated edit' });
 
-    // creator issues write VC to delegate
-    const vc = await createCredential({
-      iss: creator.did,
-      sub: delegate.did,
+    // verify the chain to get the contentId
+    const chain = await verifyContentChain({ log: [createJws], resolveKey });
+
+    // creator issues write credential to delegate
+    const vc = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: `chain:${chain.contentId}`, action: 'write' }],
       exp: futureUnix(60),
-      kid: creator.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      sign: creator.signer,
+      signer: creator.signer,
+      keyId: creator.keyId,
     });
 
     const updateOp: ContentOperation = {
@@ -1205,6 +1230,7 @@ describe('delegated content chain', () => {
       log: [createJws, updateJws],
       resolveKey,
       enforceAuthorization: true,
+      resolveIdentity,
     });
 
     expect(result.length).toBe(2);
@@ -1214,7 +1240,8 @@ describe('delegated content chain', () => {
   });
 
   it('should accept delegated update with contentId-narrowed VC', async () => {
-    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
+      await createGenesisChain();
     const delegate = makeIdentity();
     addDelegate(delegate);
 
@@ -1223,15 +1250,14 @@ describe('delegated content chain', () => {
 
     const doc2 = await makeDocCID({ type: 'post', title: 'narrowed edit' });
 
-    // creator issues narrowed write VC
-    const vc = await createCredential({
-      iss: creator.did,
-      sub: delegate.did,
+    // creator issues narrowed write credential
+    const vc = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: `chain:${chain.contentId}`, action: 'write' }],
       exp: futureUnix(60),
-      kid: creator.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      contentId: chain.contentId,
-      sign: creator.signer,
+      signer: creator.signer,
+      keyId: creator.keyId,
     });
 
     const updateOp: ContentOperation = {
@@ -1255,6 +1281,7 @@ describe('delegated content chain', () => {
       log: [createJws, updateJws],
       resolveKey,
       enforceAuthorization: true,
+      resolveIdentity,
     });
 
     expect(result.length).toBe(2);
@@ -1262,7 +1289,8 @@ describe('delegated content chain', () => {
   });
 
   it('should reject delegated update without authorization', async () => {
-    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
+      await createGenesisChain();
     const delegate = makeIdentity();
     addDelegate(delegate);
 
@@ -1285,25 +1313,31 @@ describe('delegated content chain', () => {
     });
 
     await expect(
-      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
-    ).rejects.toThrow(/authorization VC required/i);
+      verifyContentChain({
+        log: [createJws, updateJws],
+        resolveKey,
+        enforceAuthorization: true,
+        resolveIdentity,
+      }),
+    ).rejects.toThrow(/authorization credential required/i);
   });
 
   it('should reject delegated update with expired VC', async () => {
-    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
+      await createGenesisChain();
     const delegate = makeIdentity();
     addDelegate(delegate);
 
     const doc2 = await makeDocCID({ type: 'post', title: 'expired vc' });
 
-    // VC that expired well before the operation's createdAt
-    const vc = await createCredential({
-      iss: creator.did,
-      sub: delegate.did,
+    // credential that expired well before the operation's createdAt
+    const vc = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: 'chain:*', action: 'write' }],
       exp: pastUnix(60),
-      kid: creator.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      sign: creator.signer,
+      signer: creator.signer,
+      keyId: creator.keyId,
     });
 
     const updateOp: ContentOperation = {
@@ -1324,26 +1358,32 @@ describe('delegated content chain', () => {
     });
 
     await expect(
-      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+      verifyContentChain({
+        log: [createJws, updateJws],
+        resolveKey,
+        enforceAuthorization: true,
+        resolveIdentity,
+      }),
     ).rejects.toThrow(/authorization verification failed/i);
   });
 
   it('should reject delegated update with wrong subject', async () => {
-    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
+      await createGenesisChain();
     const delegate = makeIdentity();
     const other = makeIdentity();
     addDelegate(delegate);
 
     const doc2 = await makeDocCID({ type: 'post', title: 'wrong sub' });
 
-    // VC issued to a different DID than the actual signer
-    const vc = await createCredential({
-      iss: creator.did,
-      sub: other.did,
+    // credential issued to a different DID than the actual signer
+    const vc = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: other.did,
+      att: [{ resource: 'chain:*', action: 'write' }],
       exp: futureUnix(60),
-      kid: creator.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      sign: creator.signer,
+      signer: creator.signer,
+      keyId: creator.keyId,
     });
 
     const updateOp: ContentOperation = {
@@ -1364,26 +1404,32 @@ describe('delegated content chain', () => {
     });
 
     await expect(
-      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+      verifyContentChain({
+        log: [createJws, updateJws],
+        resolveKey,
+        enforceAuthorization: true,
+        resolveIdentity,
+      }),
     ).rejects.toThrow(/authorization verification failed/i);
   });
 
   it('should reject delegated update with future-issued VC (iat > op.createdAt)', async () => {
-    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
+      await createGenesisChain();
     const delegate = makeIdentity();
     addDelegate(delegate);
 
     const doc2 = await makeDocCID({ type: 'post', title: 'future vc' });
 
-    // VC issued far in the future relative to the operation's createdAt
-    const vc = await createCredential({
-      iss: creator.did,
-      sub: delegate.did,
+    // credential issued far in the future relative to the operation's createdAt
+    const vc = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: 'chain:*', action: 'write' }],
       exp: futureUnix(120),
-      kid: creator.kid,
-      type: VC_TYPE_CONTENT_WRITE,
       iat: futureUnix(60),
-      sign: creator.signer,
+      signer: creator.signer,
+      keyId: creator.keyId,
     });
 
     const updateOp: ContentOperation = {
@@ -1404,26 +1450,31 @@ describe('delegated content chain', () => {
     });
 
     await expect(
-      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+      verifyContentChain({
+        log: [createJws, updateJws],
+        resolveKey,
+        enforceAuthorization: true,
+        resolveIdentity,
+      }),
     ).rejects.toThrow(/authorization verification failed/i);
   });
 
   it('should reject delegated update with wrong contentId narrowing', async () => {
-    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+    const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
+      await createGenesisChain();
     const delegate = makeIdentity();
     addDelegate(delegate);
 
     const doc2 = await makeDocCID({ type: 'post', title: 'wrong chain' });
 
-    // VC narrowed to a different contentId
-    const vc = await createCredential({
-      iss: creator.did,
-      sub: delegate.did,
+    // credential narrowed to a different contentId
+    const vc = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: 'chain:wrong_content_id', action: 'write' }],
       exp: futureUnix(60),
-      kid: creator.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      contentId: 'wrong_content_id',
-      sign: creator.signer,
+      signer: creator.signer,
+      keyId: creator.keyId,
     });
 
     const updateOp: ContentOperation = {
@@ -1444,25 +1495,31 @@ describe('delegated content chain', () => {
     });
 
     await expect(
-      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+      verifyContentChain({
+        log: [createJws, updateJws],
+        resolveKey,
+        enforceAuthorization: true,
+        resolveIdentity,
+      }),
     ).rejects.toThrow(/authorization verification failed/i);
   });
 
-  it('should reject delegated update with read VC (wrong type)', async () => {
-    const { creator, createJws, createCID, resolveKey, addDelegate } = await createGenesisChain();
+  it('should reject delegated update with read credential (wrong action)', async () => {
+    const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
+      await createGenesisChain();
     const delegate = makeIdentity();
     addDelegate(delegate);
 
     const doc2 = await makeDocCID({ type: 'post', title: 'read vc' });
 
-    // Read VC cannot authorize writes
-    const vc = await createCredential({
-      iss: creator.did,
-      sub: delegate.did,
+    // read credential cannot authorize writes
+    const vc = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: 'chain:*', action: 'read' }],
       exp: futureUnix(60),
-      kid: creator.kid,
-      type: VC_TYPE_CONTENT_READ,
-      sign: creator.signer,
+      signer: creator.signer,
+      keyId: creator.keyId,
     });
 
     const updateOp: ContentOperation = {
@@ -1483,7 +1540,12 @@ describe('delegated content chain', () => {
     });
 
     await expect(
-      verifyContentChain({ log: [createJws, updateJws], resolveKey, enforceAuthorization: true }),
+      verifyContentChain({
+        log: [createJws, updateJws],
+        resolveKey,
+        enforceAuthorization: true,
+        resolveIdentity,
+      }),
     ).rejects.toThrow(/authorization verification failed/i);
   });
 

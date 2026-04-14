@@ -202,7 +202,11 @@ export class MemoryRelayStore implements RelayStore {
     }
 
     const resolveKey = createKeyResolver(this);
-    const content = await verifyContentChain({ log: path, resolveKey, enforceAuthorization: true });
+    const resolveIdentity = async (did: string) => {
+      const chain2 = await this.getIdentityChain(did);
+      return chain2?.state;
+    };
+    const content = await verifyContentChain({ log: path, resolveKey, enforceAuthorization: true, resolveIdentity });
 
     const targetDecoded = decodeJwsUnsafe(opsByCID.get(cid)!.jws);
     const lastCreatedAt =

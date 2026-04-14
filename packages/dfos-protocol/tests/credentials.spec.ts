@@ -2,15 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   AuthTokenVerificationError,
   createAuthToken,
-  createCredential,
+  createDFOSCredential,
   CredentialVerificationError,
-  decodeCredentialUnsafe,
-  VC_TYPE_CONTENT_READ,
-  VC_TYPE_CONTENT_WRITE,
+  decodeDFOSCredentialUnsafe,
+  isAttenuated,
+  matchesResource,
   verifyAuthToken,
-  verifyCredential,
+  verifyDFOSCredential,
+  verifyDelegationChain,
 } from '../src/credentials';
 import { createNewEd25519Keypair, generateId, signPayloadEd25519 } from '../src/crypto';
+import { encodeEd25519Multikey } from '../src/chain';
+import type { VerifiedIdentity } from '../src/chain';
 
 // =============================================================================
 // helpers
@@ -22,11 +25,22 @@ const makeIdentity = () => {
   const did = `did:dfos:${generateId('test').substring(5)}`;
   const kid = `${did}#${keyId}`;
   const signer = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair.privateKey);
-  return { keypair, keyId, did, kid, signer };
+  const identity: VerifiedIdentity = {
+    did,
+    isDeleted: false,
+    authKeys: [{ id: keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey) }],
+    assertKeys: [],
+    controllerKeys: [],
+  };
+  return { keypair, keyId, did, kid, signer, identity };
 };
 
 const futureUnix = (minutes: number) => Math.floor(Date.now() / 1000) + minutes * 60;
 const pastUnix = (minutes: number) => Math.floor(Date.now() / 1000) - minutes * 60;
+
+// shared identity registry for resolveIdentity
+const identityMap = new Map<string, VerifiedIdentity>();
+const resolveIdentity = async (did: string) => identityMap.get(did);
 
 // =============================================================================
 // auth tokens
@@ -231,336 +245,430 @@ describe('auth token', () => {
 });
 
 // =============================================================================
-// credentials (VC-JWT)
+// DFOS credentials
 // =============================================================================
 
-describe('credential', () => {
-  // --- create / verify round-trips ---
+describe('dfos credential', () => {
+  // --- create / verify round-trip ---
 
-  it('should create and verify a DFOSContentWrite credential', async () => {
+  it('should create and verify round-trip', async () => {
     const issuer = makeIdentity();
-    const subject = makeIdentity();
+    const target = makeIdentity();
+    identityMap.set(issuer.did, issuer.identity);
 
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
+    const token = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: target.did,
+      att: [{ resource: 'chain:content123', action: 'write' }],
+      prf: [],
       exp: futureUnix(60),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      sign: issuer.signer,
+      signer: issuer.signer,
+      keyId: issuer.keyId,
     });
 
-    const result = verifyCredential({
-      token,
-      publicKey: issuer.keypair.publicKey,
-    });
+    const verified = await verifyDFOSCredential(token, { resolveIdentity });
 
-    expect(result.iss).toBe(issuer.did);
-    expect(result.sub).toBe(subject.did);
-    expect(result.type).toBe(VC_TYPE_CONTENT_WRITE);
-    expect(result.contentId).toBeUndefined();
-  });
-
-  it('should create and verify a DFOSContentRead credential', async () => {
-    const issuer = makeIdentity();
-    const subject = makeIdentity();
-
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
-      exp: futureUnix(60),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_READ,
-      sign: issuer.signer,
-    });
-
-    const result = verifyCredential({
-      token,
-      publicKey: issuer.keypair.publicKey,
-    });
-
-    expect(result.type).toBe(VC_TYPE_CONTENT_READ);
-  });
-
-  it('should create and verify a credential with contentId narrowing', async () => {
-    const issuer = makeIdentity();
-    const subject = makeIdentity();
-
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
-      exp: futureUnix(60),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      contentId: 'k2abc123',
-      sign: issuer.signer,
-    });
-
-    const result = verifyCredential({
-      token,
-      publicKey: issuer.keypair.publicKey,
-    });
-
-    expect(result.contentId).toBe('k2abc123');
-    expect(result.type).toBe(VC_TYPE_CONTENT_WRITE);
+    expect(verified.iss).toBe(issuer.did);
+    expect(verified.aud).toBe(target.did);
+    expect(verified.att).toEqual([{ resource: 'chain:content123', action: 'write' }]);
+    expect(verified.prf).toEqual([]);
+    expect(verified.credentialCID).toBeTruthy();
+    expect(verified.signerKeyId).toBe(issuer.kid);
   });
 
   // --- verification failures ---
 
+  it('should reject verification with wrong key', async () => {
+    const issuer = makeIdentity();
+    const wrong = makeIdentity();
+    // register identity with issuer's DID and key ID but wrong public key bytes
+    identityMap.set(issuer.did, {
+      did: issuer.did,
+      isDeleted: false,
+      authKeys: [{ id: issuer.keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(wrong.keypair.publicKey) }],
+      assertKeys: [],
+      controllerKeys: [],
+    });
+
+    const token = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:abc', action: 'write' }],
+      exp: futureUnix(60),
+      signer: issuer.signer,
+      keyId: issuer.keyId,
+    });
+
+    await expect(verifyDFOSCredential(token, { resolveIdentity })).rejects.toThrow(
+      /signature/i,
+    );
+
+    // clean up
+    identityMap.delete(issuer.did);
+  });
+
   it('should reject expired credential', async () => {
     const issuer = makeIdentity();
-    const subject = makeIdentity();
+    identityMap.set(issuer.did, issuer.identity);
 
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
+    const token = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:abc', action: 'write' }],
       exp: pastUnix(5),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      sign: issuer.signer,
+      signer: issuer.signer,
+      keyId: issuer.keyId,
     });
 
-    expect(() =>
-      verifyCredential({
-        token,
-        publicKey: issuer.keypair.publicKey,
-      }),
-    ).toThrow(/expired/i);
+    await expect(verifyDFOSCredential(token, { resolveIdentity })).rejects.toThrow(
+      /expired/i,
+    );
   });
 
-  it('should reject credential issued in the future (iat > currentTime)', async () => {
+  it('should reject credential not yet valid (iat in future)', async () => {
     const issuer = makeIdentity();
-    const subject = makeIdentity();
+    identityMap.set(issuer.did, issuer.identity);
 
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
-      exp: 10000,
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      iat: 5000,
-      sign: issuer.signer,
+    const token = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:abc', action: 'write' }],
+      exp: 20000,
+      iat: 15000,
+      signer: issuer.signer,
+      keyId: issuer.keyId,
     });
 
-    // currentTime before iat — should reject
-    expect(() =>
-      verifyCredential({
-        token,
-        publicKey: issuer.keypair.publicKey,
-        currentTime: 3000,
-      }),
-    ).toThrow(/not yet valid/i);
-
-    // currentTime at iat — should pass
-    const result = verifyCredential({
-      token,
-      publicKey: issuer.keypair.publicKey,
-      currentTime: 5000,
-    });
-    expect(result.iss).toBe(issuer.did);
-  });
-
-  it('should reject wrong subject', async () => {
-    const issuer = makeIdentity();
-    const subject = makeIdentity();
-    const other = makeIdentity();
-
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
-      exp: futureUnix(60),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      sign: issuer.signer,
-    });
-
-    expect(() =>
-      verifyCredential({
-        token,
-        publicKey: issuer.keypair.publicKey,
-        subject: other.did,
-      }),
-    ).toThrow(/subject mismatch/i);
-  });
-
-  it('should reject wrong credential type', async () => {
-    const issuer = makeIdentity();
-    const subject = makeIdentity();
-
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
-      exp: futureUnix(60),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_READ,
-      sign: issuer.signer,
-    });
-
-    expect(() =>
-      verifyCredential({
-        token,
-        publicKey: issuer.keypair.publicKey,
-        expectedType: VC_TYPE_CONTENT_WRITE,
-      }),
-    ).toThrow(/type mismatch/i);
-  });
-
-  it('should reject invalid signature', async () => {
-    const issuer = makeIdentity();
-    const subject = makeIdentity();
-    const wrong = createNewEd25519Keypair();
-
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
-      exp: futureUnix(60),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      sign: issuer.signer,
-    });
-
-    expect(() =>
-      verifyCredential({
-        token,
-        publicKey: wrong.publicKey,
-      }),
-    ).toThrow(/invalid signature/i);
-  });
-
-  it('should reject kid without DID URL', async () => {
-    const issuer = makeIdentity();
     await expect(
-      createCredential({
-        iss: issuer.did,
-        sub: 'did:dfos:someone',
-        exp: futureUnix(60),
-        kid: 'bare_key',
-        type: VC_TYPE_CONTENT_WRITE,
-        sign: issuer.signer,
-      }),
-    ).rejects.toThrow(/DID URL/i);
+      verifyDFOSCredential(token, { resolveIdentity, now: 10000 }),
+    ).rejects.toThrow(/not yet valid/i);
   });
 
-  it('should reject kid DID mismatch with iss', async () => {
-    const issuer = makeIdentity();
-    const other = makeIdentity();
-    await expect(
-      createCredential({
-        iss: issuer.did,
-        sub: 'did:dfos:someone',
-        exp: futureUnix(60),
-        kid: other.kid,
-        type: VC_TYPE_CONTENT_WRITE,
-        sign: issuer.signer,
-      }),
-    ).rejects.toThrow(/does not match/i);
-  });
+  // --- delegation chains ---
 
-  it('should respect currentTime for expiry checking', async () => {
-    const issuer = makeIdentity();
-    const subject = makeIdentity();
+  it('should verify a 2-hop delegation chain (space -> member)', async () => {
+    const space = makeIdentity();
+    const member = makeIdentity();
+    identityMap.set(space.did, space.identity);
+    identityMap.set(member.did, member.identity);
 
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
-      exp: 5000,
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      iat: 500,
-      sign: issuer.signer,
-    });
-
-    // passes at time between iat and exp
-    const result = verifyCredential({
-      token,
-      publicKey: issuer.keypair.publicKey,
-      currentTime: 1000,
-    });
-    expect(result.iss).toBe(issuer.did);
-
-    // fails at time after expiry
-    expect(() =>
-      verifyCredential({
-        token,
-        publicKey: issuer.keypair.publicKey,
-        currentTime: 6000,
-      }),
-    ).toThrow(/expired/i);
-  });
-
-  it('should throw CredentialVerificationError', async () => {
-    const issuer = makeIdentity();
-    const subject = makeIdentity();
-    const wrong = createNewEd25519Keypair();
-
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
+    // root credential: space -> member
+    const rootToken = await createDFOSCredential({
+      issuerDID: space.did,
+      audienceDID: member.did,
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [],
       exp: futureUnix(60),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      sign: issuer.signer,
+      signer: space.signer,
+      keyId: space.keyId,
     });
 
-    expect(() =>
-      verifyCredential({
-        token,
-        publicKey: wrong.publicKey,
-      }),
-    ).toThrow(CredentialVerificationError);
+    // leaf credential: member -> anyone, with parent proof
+    const leafToken = await createDFOSCredential({
+      issuerDID: member.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [rootToken],
+      exp: futureUnix(30),
+      signer: member.signer,
+      keyId: member.keyId,
+    });
+
+    const leaf = await verifyDFOSCredential(leafToken, { resolveIdentity });
+    const chain = await verifyDelegationChain(leaf, { resolveIdentity, rootDID: space.did });
+
+    expect(chain.rootDID).toBe(space.did);
+    expect(chain.chain).toHaveLength(2);
+    expect(chain.credential.iss).toBe(member.did);
+  });
+
+  it('should verify a 3-hop delegation chain (space -> member -> device)', async () => {
+    const space = makeIdentity();
+    const member = makeIdentity();
+    const device = makeIdentity();
+    identityMap.set(space.did, space.identity);
+    identityMap.set(member.did, member.identity);
+    identityMap.set(device.did, device.identity);
+
+    const rootToken = await createDFOSCredential({
+      issuerDID: space.did,
+      audienceDID: member.did,
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [],
+      exp: futureUnix(120),
+      signer: space.signer,
+      keyId: space.keyId,
+    });
+
+    const midToken = await createDFOSCredential({
+      issuerDID: member.did,
+      audienceDID: device.did,
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [rootToken],
+      exp: futureUnix(60),
+      signer: member.signer,
+      keyId: member.keyId,
+    });
+
+    const leafToken = await createDFOSCredential({
+      issuerDID: device.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [midToken],
+      exp: futureUnix(30),
+      signer: device.signer,
+      keyId: device.keyId,
+    });
+
+    const leaf = await verifyDFOSCredential(leafToken, { resolveIdentity });
+    const chain = await verifyDelegationChain(leaf, { resolveIdentity, rootDID: space.did });
+
+    expect(chain.rootDID).toBe(space.did);
+    expect(chain.chain).toHaveLength(3);
+  });
+
+  // --- attenuation enforcement ---
+
+  it('should accept child that narrows scope', () => {
+    const parent = [
+      { resource: 'chain:content1', action: 'write' },
+      { resource: 'chain:content2', action: 'write' },
+    ];
+    const child = [{ resource: 'chain:content1', action: 'write' }];
+    expect(isAttenuated(parent, child)).toBe(true);
+  });
+
+  it('should reject child that widens scope', () => {
+    const parent = [{ resource: 'chain:content1', action: 'write' }];
+    const child = [
+      { resource: 'chain:content1', action: 'write' },
+      { resource: 'chain:content2', action: 'write' },
+    ];
+    expect(isAttenuated(parent, child)).toBe(false);
+  });
+
+  it('should reject child that extends expiry in delegation chain', async () => {
+    const space = makeIdentity();
+    const member = makeIdentity();
+    identityMap.set(space.did, space.identity);
+    identityMap.set(member.did, member.identity);
+
+    const rootToken = await createDFOSCredential({
+      issuerDID: space.did,
+      audienceDID: member.did,
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [],
+      exp: futureUnix(30),
+      signer: space.signer,
+      keyId: space.keyId,
+    });
+
+    // child has exp beyond parent
+    const leafToken = await createDFOSCredential({
+      issuerDID: member.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [rootToken],
+      exp: futureUnix(120),
+      signer: member.signer,
+      keyId: member.keyId,
+    });
+
+    const leaf = await verifyDFOSCredential(leafToken, { resolveIdentity });
+    await expect(
+      verifyDelegationChain(leaf, { resolveIdentity, rootDID: space.did }),
+    ).rejects.toThrow(/expiry/i);
+  });
+
+  // --- resource matching ---
+
+  it('should match chain:X against chain:X', async () => {
+    const att = [{ resource: 'chain:content1', action: 'write' }];
+    expect(await matchesResource(att, 'chain:content1', 'write')).toBe(true);
+  });
+
+  it('should not match chain:X against chain:Y', async () => {
+    const att = [{ resource: 'chain:content1', action: 'write' }];
+    expect(await matchesResource(att, 'chain:content2', 'write')).toBe(false);
+  });
+
+  it('should match manifest:M with lookup', async () => {
+    const att = [{ resource: 'manifest:manifest1', action: 'write' }];
+    const result = await matchesResource(att, 'chain:content1', 'write', {
+      manifestLookup: async () => ['content1', 'content2'],
+    });
+    expect(result).toBe(true);
+  });
+
+  it('should not match manifest:M without lookup', async () => {
+    const att = [{ resource: 'manifest:manifest1', action: 'write' }];
+    const result = await matchesResource(att, 'chain:content1', 'write');
+    expect(result).toBe(false);
+  });
+
+  // --- attenuation: manifest / chain interactions ---
+
+  it('should accept manifest:M -> chain:X as valid narrowing', () => {
+    const parent = [{ resource: 'manifest:manifest1', action: 'write' }];
+    const child = [{ resource: 'chain:content1', action: 'write' }];
+    expect(isAttenuated(parent, child)).toBe(true);
+  });
+
+  it('should reject chain:X -> manifest:M as invalid widening', () => {
+    const parent = [{ resource: 'chain:content1', action: 'write' }];
+    const child = [{ resource: 'manifest:manifest1', action: 'write' }];
+    expect(isAttenuated(parent, child)).toBe(false);
+  });
+
+  // --- public credentials ---
+
+  it('should create and verify public credential with aud "*"', async () => {
+    const issuer = makeIdentity();
+    identityMap.set(issuer.did, issuer.identity);
+
+    const token = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:pub1', action: 'write' }],
+      prf: [],
+      exp: futureUnix(60),
+      signer: issuer.signer,
+      keyId: issuer.keyId,
+    });
+
+    const verified = await verifyDFOSCredential(token, { resolveIdentity });
+    expect(verified.aud).toBe('*');
+    expect(verified.iss).toBe(issuer.did);
   });
 
   // --- decode unsafe ---
 
-  it('should decode credential without verification', async () => {
+  it('should decode credential without verification via decodeDFOSCredentialUnsafe', async () => {
     const issuer = makeIdentity();
-    const subject = makeIdentity();
 
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
+    const token = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:abc', action: 'write' }],
+      prf: [],
       exp: futureUnix(60),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      contentId: 'k2narrow',
-      sign: issuer.signer,
+      signer: issuer.signer,
+      keyId: issuer.keyId,
     });
 
-    const decoded = decodeCredentialUnsafe(token);
+    const decoded = decodeDFOSCredentialUnsafe(token);
     expect(decoded).not.toBeNull();
-    expect(decoded!.header.typ).toBe('vc+jwt');
+    expect(decoded!.header.typ).toBe('did:dfos:credential');
     expect(decoded!.header.kid).toBe(issuer.kid);
-    expect(decoded!.claims.iss).toBe(issuer.did);
-    expect(decoded!.claims.sub).toBe(subject.did);
-    expect(decoded!.claims.vc.type[1]).toBe(VC_TYPE_CONTENT_WRITE);
-    expect(decoded!.claims.vc.credentialSubject.contentId).toBe('k2narrow');
+    expect(decoded!.payload.iss).toBe(issuer.did);
+    expect(decoded!.payload.aud).toBe('*');
+    expect(decoded!.payload.att).toEqual([{ resource: 'chain:abc', action: 'write' }]);
+    expect(decoded!.header.cid).toBeTruthy();
   });
 
-  it('should return null for malformed tokens', () => {
-    expect(decodeCredentialUnsafe('not-a-token')).toBeNull();
-    expect(decodeCredentialUnsafe('a.b')).toBeNull();
-    expect(decodeCredentialUnsafe('')).toBeNull();
+  it('should return null for malformed tokens via decodeDFOSCredentialUnsafe', () => {
+    expect(decodeDFOSCredentialUnsafe('not-a-token')).toBeNull();
+    expect(decodeDFOSCredentialUnsafe('a.b')).toBeNull();
+    expect(decodeDFOSCredentialUnsafe('')).toBeNull();
   });
 
-  // --- VC-JWT structure ---
+  // --- delegation failures ---
 
-  it('should produce valid VC-JWT structure', async () => {
-    const issuer = makeIdentity();
-    const subject = makeIdentity();
+  it('should reject delegation gap (child iss does not match any parent aud)', async () => {
+    const space = makeIdentity();
+    const member = makeIdentity();
+    const outsider = makeIdentity();
+    identityMap.set(space.did, space.identity);
+    identityMap.set(member.did, member.identity);
+    identityMap.set(outsider.did, outsider.identity);
 
-    const token = await createCredential({
-      iss: issuer.did,
-      sub: subject.did,
+    // root credential: space -> member
+    const rootToken = await createDFOSCredential({
+      issuerDID: space.did,
+      audienceDID: member.did,
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [],
       exp: futureUnix(60),
-      kid: issuer.kid,
-      type: VC_TYPE_CONTENT_WRITE,
-      sign: issuer.signer,
+      signer: space.signer,
+      keyId: space.keyId,
     });
 
-    const decoded = decodeCredentialUnsafe(token)!;
-    expect(decoded.header.alg).toBe('EdDSA');
-    expect(decoded.header.typ).toBe('vc+jwt');
-    expect(decoded.claims.vc['@context']).toEqual(['https://www.w3.org/ns/credentials/v2']);
-    expect(decoded.claims.vc.type).toEqual(['VerifiableCredential', 'DFOSContentWrite']);
+    // outsider tries to use root credential they are not audience of
+    const leafToken = await createDFOSCredential({
+      issuerDID: outsider.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [rootToken],
+      exp: futureUnix(30),
+      signer: outsider.signer,
+      keyId: outsider.keyId,
+    });
+
+    const leaf = await verifyDFOSCredential(leafToken, { resolveIdentity });
+    await expect(
+      verifyDelegationChain(leaf, { resolveIdentity, rootDID: space.did }),
+    ).rejects.toThrow(/delegation gap/i);
+  });
+
+  it('should reject delegation root mismatch', async () => {
+    const space = makeIdentity();
+    const member = makeIdentity();
+    const wrongRoot = makeIdentity();
+    identityMap.set(space.did, space.identity);
+    identityMap.set(member.did, member.identity);
+
+    // root credential issued by space
+    const rootToken = await createDFOSCredential({
+      issuerDID: space.did,
+      audienceDID: member.did,
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [],
+      exp: futureUnix(60),
+      signer: space.signer,
+      keyId: space.keyId,
+    });
+
+    const leafToken = await createDFOSCredential({
+      issuerDID: member.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [rootToken],
+      exp: futureUnix(30),
+      signer: member.signer,
+      keyId: member.keyId,
+    });
+
+    const leaf = await verifyDFOSCredential(leafToken, { resolveIdentity });
+    // verify against wrong root DID
+    await expect(
+      verifyDelegationChain(leaf, { resolveIdentity, rootDID: wrongRoot.did }),
+    ).rejects.toThrow(/root/i);
+  });
+
+  it('should throw CredentialVerificationError on failures', async () => {
+    const issuer = makeIdentity();
+    const wrong = makeIdentity();
+    identityMap.set(issuer.did, {
+      did: issuer.did,
+      isDeleted: false,
+      authKeys: [{ id: issuer.keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(wrong.keypair.publicKey) }],
+      assertKeys: [],
+      controllerKeys: [],
+    });
+
+    const token = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:abc', action: 'write' }],
+      exp: futureUnix(60),
+      signer: issuer.signer,
+      keyId: issuer.keyId,
+    });
+
+    await expect(verifyDFOSCredential(token, { resolveIdentity })).rejects.toThrow(
+      CredentialVerificationError,
+    );
+
+    identityMap.delete(issuer.did);
   });
 });

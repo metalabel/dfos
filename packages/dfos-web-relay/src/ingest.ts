@@ -437,6 +437,10 @@ const ingestContentOp = async (
   }
 
   const resolveKey = createKeyResolver(store);
+  const resolveIdentity = async (did: string) => {
+    const chain = await store.getIdentityChain(did);
+    return chain?.state;
+  };
   const opType = (payload as Record<string, unknown>)['type'];
   const isGenesis = opType === 'create';
 
@@ -445,6 +449,7 @@ const ingestContentOp = async (
       log: [jwsToken],
       resolveKey,
       enforceAuthorization: true,
+      resolveIdentity,
     });
     const createdAt = (payload as Record<string, unknown>)['createdAt'] as string;
     const chain: StoredContentChain = {
@@ -493,6 +498,7 @@ const ingestContentOp = async (
       newOp: jwsToken,
       resolveKey,
       enforceAuthorization: true,
+      resolveIdentity,
     });
     const updated: StoredContentChain = {
       contentId: chain.contentId,
@@ -526,6 +532,7 @@ const ingestContentOp = async (
     newOp: jwsToken,
     resolveKey,
     enforceAuthorization: true,
+    resolveIdentity,
   });
 
   // add to log and recompute head
@@ -570,7 +577,7 @@ const ingestBeacon = async (
     return { cid: '', status: 'rejected', error: message };
   }
 
-  const did = verified.payload.did;
+  const did = verified.did;
   const cid = verified.beaconCID;
 
   // reject beacons from deleted identities
@@ -582,8 +589,8 @@ const ingestBeacon = async (
   // replace-on-newer: only store if this beacon is more recent
   const existing = await store.getBeacon(did);
   if (existing) {
-    const existingTime = new Date(existing.state.payload.createdAt).getTime();
-    const newTime = new Date(verified.payload.createdAt).getTime();
+    const existingTime = new Date(existing.state.createdAt).getTime();
+    const newTime = new Date(verified.createdAt).getTime();
     if (newTime <= existingTime) {
       return { cid, status: 'duplicate', kind: 'beacon', chainId: did };
     }

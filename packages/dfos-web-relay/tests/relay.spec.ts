@@ -13,12 +13,7 @@ import {
   type IdentityOperation,
   type MultikeyPublicKey,
 } from '@metalabel/dfos-protocol/chain';
-import {
-  createAuthToken,
-  createCredential,
-  VC_TYPE_CONTENT_READ,
-  VC_TYPE_CONTENT_WRITE,
-} from '@metalabel/dfos-protocol/credentials';
+import { createAuthToken, createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import {
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
@@ -534,10 +529,9 @@ describe('web relay', () => {
       await postOps([identity.jwsToken]);
 
       const beaconPayload: BeaconPayload = {
-        version: 1,
         type: 'beacon',
         did: identity.did,
-        merkleRoot: 'a'.repeat(64),
+        manifestContentId: 'test_manifest_content_id',
         createdAt: ts(2),
       };
 
@@ -557,7 +551,7 @@ describe('web relay', () => {
       const beaconRes = await req(`/beacons/${identity.did}`);
       expect(beaconRes.status).toBe(200);
       const beaconBody = await json(beaconRes);
-      expect(beaconBody.payload.merkleRoot).toBe('a'.repeat(64));
+      expect(beaconBody.manifestContentId).toBe('test_manifest_content_id');
     });
 
     it('should replace beacon with newer one', async () => {
@@ -567,10 +561,9 @@ describe('web relay', () => {
       const kid = `${identity.did}#${identity.controller.keyId}`;
 
       const beacon1: BeaconPayload = {
-        version: 1,
         type: 'beacon',
         did: identity.did,
-        merkleRoot: 'a'.repeat(64),
+        manifestContentId: 'test_manifest_content_id_a',
         createdAt: ts(2),
       };
       const { jwsToken: token1 } = await signBeacon({
@@ -580,10 +573,9 @@ describe('web relay', () => {
       });
 
       const beacon2: BeaconPayload = {
-        version: 1,
         type: 'beacon',
         did: identity.did,
-        merkleRoot: 'b'.repeat(64),
+        manifestContentId: 'test_manifest_content_id_b',
         createdAt: ts(3),
       };
       const { jwsToken: token2 } = await signBeacon({
@@ -597,7 +589,7 @@ describe('web relay', () => {
 
       const beaconRes = await req(`/beacons/${identity.did}`);
       const beaconBody = await json(beaconRes);
-      expect(beaconBody.payload.merkleRoot).toBe('b'.repeat(64));
+      expect(beaconBody.manifestContentId).toBe('test_manifest_content_id_b');
     });
   });
 
@@ -727,10 +719,9 @@ describe('web relay', () => {
 
       // create and ingest a beacon
       const beaconPayload: BeaconPayload = {
-        version: 1,
         type: 'beacon',
         did: controller.did,
-        merkleRoot: 'c'.repeat(64),
+        manifestContentId: 'test_manifest_content_id',
         createdAt: ts(2),
       };
 
@@ -924,14 +915,14 @@ describe('web relay', () => {
 
       // create a read credential from creator to reader
       const now = Math.floor(Date.now() / 1000);
-      const readCredential = await createCredential({
-        iss: creator.did,
-        sub: reader.did,
+      const readCredential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: reader.did,
+        att: [{ resource: `chain:${contentId}`, action: 'read' }],
         exp: now + 300,
-        kid: `${creator.did}#${creator.authKey.keyId}`,
-        type: VC_TYPE_CONTENT_READ,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
         iat: now,
-        sign: creator.authKey.signer,
       });
 
       // download as reader with credential
@@ -986,14 +977,14 @@ describe('web relay', () => {
 
       // attacker issues a read credential to reader (not the creator!)
       const now = Math.floor(Date.now() / 1000);
-      const fakeCredential = await createCredential({
-        iss: attacker.did,
-        sub: reader.did,
+      const fakeCredential = await createDFOSCredential({
+        issuerDID: attacker.did,
+        audienceDID: reader.did,
+        att: [{ resource: `chain:${contentId}`, action: 'read' }],
         exp: now + 300,
-        kid: `${attacker.did}#${attacker.authKey.keyId}`,
-        type: VC_TYPE_CONTENT_READ,
+        signer: attacker.authKey.signer,
+        keyId: attacker.authKey.keyId,
         iat: now,
-        sign: attacker.authKey.signer,
       });
 
       // reader tries to download with attacker-issued credential
@@ -1551,15 +1542,14 @@ describe('web relay', () => {
 
       // creator issues write credential to delegate
       const now = Math.floor(Date.now() / 1000);
-      const writeCredential = await createCredential({
-        iss: creator.did,
-        sub: delegate.did,
+      const writeCredential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: delegate.did,
+        att: [{ resource: `chain:${contentId}`, action: 'write' }],
         exp: now + 300,
-        kid: `${creator.did}#${creator.authKey.keyId}`,
-        type: VC_TYPE_CONTENT_WRITE,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
         iat: now,
-        sign: creator.authKey.signer,
-        contentId,
       });
 
       // delegate signs an update with the authorization credential
@@ -1643,15 +1633,14 @@ describe('web relay', () => {
 
       // creator issues write credential to delegate
       const now = Math.floor(Date.now() / 1000);
-      const writeCredential = await createCredential({
-        iss: creator.did,
-        sub: delegate.did,
+      const writeCredential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: delegate.did,
+        att: [{ resource: `chain:${contentId}`, action: 'write' }],
         exp: now + 300,
-        kid: `${creator.did}#${creator.authKey.keyId}`,
-        type: VC_TYPE_CONTENT_WRITE,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
         iat: now,
-        sign: creator.authKey.signer,
-        contentId,
       });
 
       // delegate signs an update
@@ -2025,10 +2014,9 @@ describe('web relay', () => {
 
       // ingest a beacon
       const beaconPayload: BeaconPayload = {
-        version: 1,
         type: 'beacon',
         did: identity.did,
-        merkleRoot: 'd'.repeat(64),
+        manifestContentId: 'test_manifest_content_id',
         createdAt: ts(2),
       };
       const kid = `${identity.did}#${identity.controller.keyId}`;

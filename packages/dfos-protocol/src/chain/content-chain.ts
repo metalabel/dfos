@@ -12,15 +12,21 @@
   Authorization model:
   - The creator DID (signer of the genesis operation) owns the chain
   - The creator can sign subsequent operations directly (no credential needed)
-  - Other DIDs require a DFOSContentWrite VC-JWT in the operation's
-    `authorization` field, issued by the creator DID
+  - Other DIDs require a DFOS credential in the operation's `authorization`
+    field, with a delegation chain rooting at the creator DID
 
 */
 
-import { decodeCredentialUnsafe, VC_TYPE_CONTENT_WRITE, verifyCredential } from '../credentials';
+import {
+  decodeDFOSCredentialUnsafe,
+  matchesResource,
+  verifyDFOSCredential,
+  verifyDelegationChain,
+} from '../credentials';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { deriveContentId } from './derivation';
 import { ContentOperation } from './schemas';
+import type { VerifiedIdentity } from './schemas';
 import type { Signer } from './schemas';
 
 // -----------------------------------------------------------------------------
@@ -71,6 +77,65 @@ export const signContentOperation = async (input: {
 };
 
 // -----------------------------------------------------------------------------
+// authorization verification (internal)
+// -----------------------------------------------------------------------------
+
+/**
+ * Verify that a delegated content operation has a valid DFOS credential
+ * authorizing the signer to write to this content chain.
+ */
+const verifyOperationAuthorization = async (input: {
+  authorization: string;
+  operationDID: string;
+  creatorDID: string;
+  contentId: string;
+  createdAt: string;
+  resolveIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
+}): Promise<void> => {
+  // decode to check typ before full verification
+  const decoded = decodeDFOSCredentialUnsafe(input.authorization);
+  if (!decoded) {
+    throw new Error('failed to decode authorization credential');
+  }
+  if (decoded.header.typ !== 'did:dfos:credential') {
+    throw new Error(`invalid authorization typ: ${decoded.header.typ}`);
+  }
+
+  // verify the credential signature + schema + expiry
+  const opCreatedAtUnix = Math.floor(new Date(input.createdAt).getTime() / 1000);
+  const credential = await verifyDFOSCredential(input.authorization, {
+    resolveIdentity: input.resolveIdentity,
+    now: opCreatedAtUnix,
+  });
+
+  // verify the delegation chain roots at the creator DID
+  await verifyDelegationChain(credential, {
+    resolveIdentity: input.resolveIdentity,
+    rootDID: input.creatorDID,
+    now: opCreatedAtUnix,
+  });
+
+  // verify the credential's audience matches the operation signer
+  if (credential.aud !== '*' && credential.aud !== input.operationDID) {
+    throw new Error(
+      `credential audience ${credential.aud} does not match operation signer ${input.operationDID}`,
+    );
+  }
+
+  // verify the credential covers write access to this content chain
+  const covers = await matchesResource(
+    credential.att,
+    `chain:${input.contentId}`,
+    'write',
+  );
+  if (!covers) {
+    throw new Error(
+      `credential does not cover write access to chain:${input.contentId}`,
+    );
+  }
+};
+
+// -----------------------------------------------------------------------------
 // verification
 // -----------------------------------------------------------------------------
 
@@ -84,7 +149,8 @@ export const signContentOperation = async (input: {
  * - Genesis (create) operation: the signer is the chain creator, always authorized
  * - Subsequent operations signed by the creator DID: authorized (no credential needed)
  * - Subsequent operations signed by a different DID: must include an `authorization`
- *   field containing a valid DFOSContentWrite VC-JWT issued by the creator DID
+ *   field containing a valid DFOS credential with a delegation chain rooting at
+ *   the creator DID
  */
 export const verifyContentChain = async (input: {
   log: string[];
@@ -92,15 +158,21 @@ export const verifyContentChain = async (input: {
   resolveKey: (kid: string) => Promise<Uint8Array>;
   /**
    * Enforce creator-sovereignty authorization. When true, non-creator signers
-   * must include a DFOSContentWrite VC-JWT in the operation's `authorization`
-   * field. When false (default), any signer with a valid signature is accepted.
-   *
-   * Web relays should set this to true. Applications migrating to VC-based
-   * authorization can enable this once all chains include authorization fields.
+   * must include a DFOS credential in the operation's `authorization` field
+   * with a delegation chain rooting at the creator DID.
    */
   enforceAuthorization?: boolean;
+  /**
+   * Resolve a DID to a VerifiedIdentity. Required when `enforceAuthorization`
+   * is true, as credential verification needs identity resolution.
+   */
+  resolveIdentity?: (did: string) => Promise<VerifiedIdentity | undefined>;
 }): Promise<VerifiedContentChain> => {
   if (input.log.length === 0) throw new Error('log must have at least one operation');
+
+  if (input.enforceAuthorization && !input.resolveIdentity) {
+    throw new Error('resolveIdentity is required when enforceAuthorization is true');
+  }
 
   const state = {
     contentId: null as string | null,
@@ -175,54 +247,24 @@ export const verifyContentChain = async (input: {
       // genesis: signer is the creator, always authorized
       state.creatorDID = op.did;
     } else if (op.did !== state.creatorDID && input.enforceAuthorization) {
-      // delegated operation: signer differs from creator, requires authorization VC
+      // delegated operation: signer differs from creator, requires DFOS credential
       const authorization =
         op.type !== 'create' ? (op as { authorization?: string }).authorization : undefined;
       if (!authorization) {
         throw new Error(
-          `log[${idx}]: signer ${op.did} is not the chain creator — authorization VC required`,
+          `log[${idx}]: signer ${op.did} is not the chain creator — authorization credential required`,
         );
       }
 
-      // extract the kid from the VC to resolve the creator's signing key
-      const vcDecoded = decodeCredentialUnsafe(authorization);
-      if (!vcDecoded) {
-        throw new Error(`log[${idx}]: failed to decode authorization VC`);
-      }
-      const vcKid = vcDecoded.header.kid;
-      if (!vcKid || !vcKid.includes('#')) {
-        throw new Error(`log[${idx}]: authorization VC kid must be a DID URL`);
-      }
-
-      let creatorPublicKey: Uint8Array;
       try {
-        creatorPublicKey = await input.resolveKey(vcKid);
-      } catch {
-        throw new Error(`log[${idx}]: cannot resolve creator key for authorization verification`);
-      }
-
-      // verify the authorization VC
-      const opCreatedAtUnix = Math.floor(new Date(op.createdAt).getTime() / 1000);
-      try {
-        const credential = verifyCredential({
-          token: authorization,
-          publicKey: creatorPublicKey,
-          subject: op.did,
-          expectedType: VC_TYPE_CONTENT_WRITE,
-          currentTime: opCreatedAtUnix,
+        await verifyOperationAuthorization({
+          authorization,
+          operationDID: op.did,
+          creatorDID: state.creatorDID!,
+          contentId: state.contentId!,
+          createdAt: op.createdAt,
+          resolveIdentity: input.resolveIdentity!,
         });
-
-        // verify VC issuer is the chain creator
-        if (credential.iss !== state.creatorDID) {
-          throw new Error('VC issuer is not the chain creator');
-        }
-
-        // if VC is narrowed to a contentId, it must match this chain
-        if (credential.contentId && credential.contentId !== state.contentId) {
-          throw new Error(
-            `VC contentId ${credential.contentId} does not match chain ${state.contentId}`,
-          );
-        }
       } catch (err) {
         const message = err instanceof Error ? err.message : 'unknown error';
         throw new Error(`log[${idx}]: authorization verification failed: ${message}`);
@@ -297,6 +339,8 @@ export const verifyContentExtensionFromTrustedState = async (input: {
   resolveKey: (kid: string) => Promise<Uint8Array>;
   /** Enforce creator-sovereignty authorization (see verifyContentChain) */
   enforceAuthorization?: boolean;
+  /** Resolve a DID to a VerifiedIdentity. Required when enforceAuthorization is true. */
+  resolveIdentity?: (did: string) => Promise<VerifiedIdentity | undefined>;
 }): Promise<{
   state: VerifiedContentChain;
   operationCID: string;
@@ -306,6 +350,10 @@ export const verifyContentExtensionFromTrustedState = async (input: {
 
   if (currentState.isDeleted) {
     throw new Error('cannot extend a deleted chain');
+  }
+
+  if (input.enforceAuthorization && !input.resolveIdentity) {
+    throw new Error('resolveIdentity is required when enforceAuthorization is true');
   }
 
   // decode JWS
@@ -355,46 +403,22 @@ export const verifyContentExtensionFromTrustedState = async (input: {
     throw new Error('invalid signature');
   }
 
-  // authorization check — delegated writes need a VC
+  // authorization check — delegated writes need a DFOS credential
   if (op.did !== currentState.creatorDID && input.enforceAuthorization) {
     const authorization = (op as { authorization?: string }).authorization;
     if (!authorization) {
-      throw new Error(`signer ${op.did} is not the chain creator — authorization VC required`);
+      throw new Error(`signer ${op.did} is not the chain creator — authorization credential required`);
     }
 
-    const vcDecoded = decodeCredentialUnsafe(authorization);
-    if (!vcDecoded) throw new Error('failed to decode authorization VC');
-    const vcKid = vcDecoded.header.kid;
-    if (!vcKid || !vcKid.includes('#')) {
-      throw new Error('authorization VC kid must be a DID URL');
-    }
-
-    let creatorPublicKey: Uint8Array;
     try {
-      creatorPublicKey = await resolveKey(vcKid);
-    } catch {
-      throw new Error('cannot resolve creator key for authorization verification');
-    }
-
-    const opCreatedAtUnix = Math.floor(new Date(op.createdAt).getTime() / 1000);
-    try {
-      const credential = verifyCredential({
-        token: authorization,
-        publicKey: creatorPublicKey,
-        subject: op.did,
-        expectedType: VC_TYPE_CONTENT_WRITE,
-        currentTime: opCreatedAtUnix,
+      await verifyOperationAuthorization({
+        authorization,
+        operationDID: op.did,
+        creatorDID: currentState.creatorDID,
+        contentId: currentState.contentId,
+        createdAt: op.createdAt,
+        resolveIdentity: input.resolveIdentity!,
       });
-
-      if (credential.iss !== currentState.creatorDID) {
-        throw new Error('VC issuer is not the chain creator');
-      }
-
-      if (credential.contentId && credential.contentId !== currentState.contentId) {
-        throw new Error(
-          `VC contentId ${credential.contentId} does not match chain ${currentState.contentId}`,
-        );
-      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown error';
       throw new Error(`authorization verification failed: ${message}`);

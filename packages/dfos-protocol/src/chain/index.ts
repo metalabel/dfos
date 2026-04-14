@@ -6,3 +6,4 @@ export * from './content-chain';
 export * from './beacon';
 export * from './countersign';
 export * from './artifact';
+export * from './revocation';

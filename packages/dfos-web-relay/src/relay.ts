@@ -6,18 +6,23 @@
   implementing the DFOS web relay HTTP interface.
 
   Proof plane routes are public. Content plane routes require authentication
-  via DID-signed auth tokens and optional VC-JWT credentials.
+  via DID-signed auth tokens and DFOS credentials for authorization.
 
 */
 
-import { VC_TYPE_CONTENT_READ, verifyCredential } from '@metalabel/dfos-protocol/credentials';
+import {
+  decodeDFOSCredentialUnsafe,
+  matchesResource,
+  verifyDFOSCredential,
+  verifyDelegationChain,
+} from '@metalabel/dfos-protocol/credentials';
 import type { VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authenticateRequest } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
-import { createCurrentKeyResolver, ingestOperations } from './ingest';
+import { ingestOperations } from './ingest';
 import { computeOpCID, sequenceOps } from './sequencer';
 import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
 
@@ -323,7 +328,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       did: beacon.did,
       jwsToken: beacon.jwsToken,
       beaconCID: beacon.beaconCID,
-      payload: beacon.state.payload,
+      manifestContentId: beacon.state.manifestContentId,
+      createdAt: beacon.state.createdAt,
     });
   });
 
@@ -512,6 +518,14 @@ const readBlob = async (params: {
   });
 };
 
+/** Resolve a DID to a VerifiedIdentity from the relay store */
+const createIdentityResolver = (store: RelayStore) => {
+  return async (did: string) => {
+    const chain = await store.getIdentityChain(did);
+    return chain?.state;
+  };
+};
+
 /** Verify the read credential if the caller is not the chain creator. Returns an error Response or null. */
 const verifyReadCredential = async (
   auth: VerifiedAuthToken,
@@ -523,44 +537,33 @@ const verifyReadCredential = async (
   if (auth.iss === chain.state.creatorDID) return null;
 
   if (!credHeader) {
-    return jsonResponse({ error: 'DFOSContentRead credential required' }, 403);
+    return jsonResponse({ error: 'read credential required' }, 403);
   }
 
-  const resolveKey = createCurrentKeyResolver(store);
+  const resolveIdentity = createIdentityResolver(store);
   try {
-    const vcDecoded = decodeJwsUnsafe(credHeader);
-    if (!vcDecoded) throw new Error('invalid credential format');
-    const vcHeader = vcDecoded.header as { kid?: string };
-    if (!vcHeader.kid) throw new Error('credential missing kid');
+    // verify the DFOS credential signature + schema + expiry
+    const credential = await verifyDFOSCredential(credHeader, { resolveIdentity });
 
-    const kidHashIdx = vcHeader.kid.indexOf('#');
-    if (kidHashIdx < 0) throw new Error('credential kid must be a DID URL');
-    const vcIssuerDID = vcHeader.kid.substring(0, kidHashIdx);
-    if (vcIssuerDID !== chain.state.creatorDID) {
-      throw new Error('credential must be issued by the chain creator');
-    }
-
-    // reject credentials from deleted issuers — identity deletion revokes
-    // all authority, including outstanding credentials
-    const issuerIdentity = await store.getIdentityChain(vcIssuerDID);
-    if (issuerIdentity?.state.isDeleted) {
-      throw new Error('credential issuer identity is deleted');
-    }
-
-    const creatorKey = await resolveKey(vcHeader.kid);
-    const credential = verifyCredential({
-      token: credHeader,
-      publicKey: creatorKey,
-      subject: auth.iss,
-      expectedType: VC_TYPE_CONTENT_READ,
+    // verify delegation chain roots at the content chain creator
+    await verifyDelegationChain(credential, {
+      resolveIdentity,
+      rootDID: chain.state.creatorDID,
     });
 
-    if (credential.iss !== chain.state.creatorDID) {
-      throw new Error('credential issuer is not the chain creator');
+    // verify audience matches the requester
+    if (credential.aud !== '*' && credential.aud !== auth.iss) {
+      throw new Error('credential audience does not match requester');
     }
 
-    if (credential.contentId && credential.contentId !== contentId) {
-      return jsonResponse({ error: 'credential contentId does not match' }, 403);
+    // verify the credential covers read access to this content chain
+    const covers = await matchesResource(
+      credential.att,
+      `chain:${contentId}`,
+      'read',
+    );
+    if (!covers) {
+      throw new Error('credential does not cover read access to this content chain');
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'credential verification failed';
