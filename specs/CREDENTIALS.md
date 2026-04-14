@@ -196,6 +196,18 @@ Grants access to a specific content chain identified by its 22-character content
 
 Matching: `chain:X` matches only `chain:X`. Exact content ID comparison.
 
+### `chain:*` -- Wildcard Match
+
+Grants access to all content chains owned by the credential's root authority. The wildcard covers all present and future content without enumerating specific chain IDs.
+
+```json
+{ "resource": "chain:*", "action": "read" }
+```
+
+Matching: `chain:*` matches any `chain:<contentId>` request for content where the delegation chain roots at the expected creator DID.
+
+This is the broadest resource scope. Common use case: granting a collaborator access to all of a creator's content without maintaining an exhaustive manifest.
+
 ### `manifest:<contentId>` -- Transitive Match
 
 Grants access to a manifest and all content chains it indexes. A manifest is itself a content chain whose document lists other content IDs.
@@ -214,10 +226,17 @@ Matching at the relay:
 
 | Parent       | Child        | Valid? | Reason                                    |
 | ------------ | ------------ | ------ | ----------------------------------------- |
+| `chain:*`    | `chain:*`    | Yes    | Exact match                               |
+| `chain:*`    | `chain:X`    | Yes    | Narrowing from wildcard to specific chain |
+| `chain:*`    | `manifest:M` | Yes    | Narrowing from wildcard to manifest       |
 | `chain:X`    | `chain:X`    | Yes    | Exact match                               |
 | `manifest:M` | `manifest:M` | Yes    | Exact match                               |
 | `manifest:M` | `chain:X`    | Yes    | Narrowing from manifest to specific chain |
+| `chain:X`    | `chain:*`    | No     | Widening from specific to wildcard        |
 | `chain:X`    | `manifest:M` | No     | Widening from chain to manifest           |
+| `manifest:M` | `chain:*`    | No     | Widening from manifest to wildcard        |
+
+The resource hierarchy from broadest to narrowest is: `chain:*` > `manifest:M` > `chain:X`. Each delegation hop can only move down this hierarchy, never up.
 
 The `manifest -> chain` narrowing is valid structurally during delegation chain verification. The actual membership check (does manifest M contain chain X?) happens at the relay during resource matching, not during chain verification.
 

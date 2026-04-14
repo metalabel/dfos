@@ -522,8 +522,8 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	}
 
 	// walk the delegation chain — verify it roots at the creator DID
-	childAtt := parseAtt(vcPayload)
-	childPrf := parsePrf(vcPayload)
+	childAtt := ParseAtt(vcPayload)
+	childPrf := ParsePrf(vcPayload)
 	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, nil, 0); err != nil {
 		return err
 	}

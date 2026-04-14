@@ -28,7 +28,7 @@ func createRevocation(t *testing.T, issuerDID, credentialCID string, kp keypair)
 	t.Helper()
 
 	kid := issuerDID + "#" + kp.keyID
-	now := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 
 	payload := map[string]any{
 		"version":       int64(1),

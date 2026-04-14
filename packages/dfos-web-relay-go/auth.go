@@ -135,7 +135,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 	}
 
 	// parse att from raw payload for resource matching and delegation
-	att := parseAtt(payload)
+	att := dfos.ParseAtt(payload)
 
 	// check resource + action match (with manifest transitive lookup)
 	if !r.matchesResource(att, requestedResource, action) {
@@ -151,7 +151,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 	}
 
 	// verify delegation chain
-	prf := parsePrf(payload)
+	prf := dfos.ParsePrf(payload)
 	if err := r.verifyDelegationChain(credJws, prf, att, verified, resolveKey, creatorDID, 0); err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 // verifyDelegationChain walks the prf array recursively, verifying each parent
 // credential's signature, revocation status, audience linkage, monotonic
 // attenuation, and expiry bounds. The chain must root at creatorDID.
-func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []attEntry, child *dfos.VerifiedCredential, resolveKey dfos.KeyResolver, creatorDID string, depth int) error {
+func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []dfos.AttEntry, child *dfos.VerifiedCredential, resolveKey dfos.KeyResolver, creatorDID string, depth int) error {
 	if depth > 16 {
 		return fmt.Errorf("delegation chain too deep (max 16 hops)")
 	}
@@ -182,7 +182,7 @@ func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []
 	type verifiedParent struct {
 		jws      string
 		verified *dfos.VerifiedCredential
-		att      []attEntry
+		att      []dfos.AttEntry
 		prf      []string
 		aud      string
 		exp      int64
@@ -228,8 +228,8 @@ func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []
 		parents = append(parents, verifiedParent{
 			jws:      parentJws,
 			verified: pVerified,
-			att:      parseAtt(pPayload),
-			prf:      parsePrf(pPayload),
+			att:      dfos.ParseAtt(pPayload),
+			prf:      dfos.ParsePrf(pPayload),
 			aud:      pAud,
 			exp:      pVerified.Exp,
 		})
@@ -255,11 +255,11 @@ func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []
 	}
 
 	// child's att must be attenuated from the union of all parents' att
-	var parentAttUnion []attEntry
+	var parentAttUnion []dfos.AttEntry
 	for _, p := range parents {
 		parentAttUnion = append(parentAttUnion, p.att...)
 	}
-	if !isAttenuated(parentAttUnion, childAtt) {
+	if !dfos.IsAttenuated(parentAttUnion, childAtt) {
 		return fmt.Errorf("delegation chain: child credential scope exceeds parent scope")
 	}
 
@@ -272,85 +272,21 @@ func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []
 // resource matching
 // ---------------------------------------------------------------------------
 
-// attEntry is a resource + action pair parsed from a credential payload.
-type attEntry struct {
-	Resource string
-	Action   string
-}
-
-// parseAtt extracts the att array from a raw credential payload.
-func parseAtt(payload map[string]any) []attEntry {
-	attRaw, ok := payload["att"].([]any)
-	if !ok {
-		return nil
-	}
-	var result []attEntry
-	for _, item := range attRaw {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		resource, _ := m["resource"].(string)
-		action, _ := m["action"].(string)
-		if resource != "" && action != "" {
-			result = append(result, attEntry{Resource: resource, Action: action})
-		}
-	}
-	return result
-}
-
-// parsePrf extracts the prf array from a raw credential payload.
-func parsePrf(payload map[string]any) []string {
-	prfRaw, ok := payload["prf"].([]any)
-	if !ok {
-		return nil
-	}
-	var result []string
-	for _, item := range prfRaw {
-		s, ok := item.(string)
-		if ok && s != "" {
-			result = append(result, s)
-		}
-	}
-	return result
-}
-
-// parseResource splits a resource string into type and id (e.g., "chain:abc" → "chain", "abc").
-func parseResource(resource string) (string, string, bool) {
-	idx := strings.Index(resource, ":")
-	if idx < 0 {
-		return "", "", false
-	}
-	return resource[:idx], resource[idx+1:], true
-}
-
-// parseActions splits a comma-separated action string into a set.
-func parseActions(action string) map[string]bool {
-	result := make(map[string]bool)
-	for _, a := range strings.Split(action, ",") {
-		a = strings.TrimSpace(a)
-		if a != "" {
-			result[a] = true
-		}
-	}
-	return result
-}
-
 // matchesResource checks if an att array covers a requested resource+action.
 // Handles manifest transitive lookup for manifest: → chain: coverage.
-func (r *Relay) matchesResource(att []attEntry, resource string, action string) bool {
-	reqType, reqID, ok := parseResource(resource)
+func (r *Relay) matchesResource(att []dfos.AttEntry, resource string, action string) bool {
+	reqType, reqID, ok := dfos.ParseResource(resource)
 	if !ok {
 		return false
 	}
-	reqActions := parseActions(action)
+	reqActions := dfos.ParseActions(action)
 
 	for _, entry := range att {
-		entryType, entryID, ok := parseResource(entry.Resource)
+		entryType, entryID, ok := dfos.ParseResource(entry.Resource)
 		if !ok {
 			continue
 		}
-		entryActions := parseActions(entry.Action)
+		entryActions := dfos.ParseActions(entry.Action)
 
 		// check action coverage — all requested actions must be in entry actions
 		actionsCovered := true
@@ -434,71 +370,3 @@ func (r *Relay) manifestLookup(manifestContentID string) []string {
 	return result
 }
 
-// ---------------------------------------------------------------------------
-// attenuation
-// ---------------------------------------------------------------------------
-
-// isAttenuated checks if childAtt is a valid attenuation of parentAtt.
-// Every entry in childAtt must be covered by at least one entry in parentAtt.
-func isAttenuated(parentAtt []attEntry, childAtt []attEntry) bool {
-	for _, child := range childAtt {
-		childType, childID, ok := parseResource(child.Resource)
-		if !ok {
-			return false
-		}
-		childActions := parseActions(child.Action)
-
-		covered := false
-		for _, parent := range parentAtt {
-			parentType, parentID, ok := parseResource(parent.Resource)
-			if !ok {
-				continue
-			}
-			parentActions := parseActions(parent.Action)
-
-			// check action coverage — child actions must be subset of parent actions
-			actionOK := true
-			for a := range childActions {
-				if !parentActions[a] {
-					actionOK = false
-					break
-				}
-			}
-			if !actionOK {
-				continue
-			}
-
-			// check resource coverage
-			if parentType == "chain" && parentID == "*" {
-				// chain:* covers everything: chain:X, chain:*, manifest:M
-				covered = true
-				break
-			} else if childType == "chain" && childID == "*" {
-				// chain:* can only be covered by chain:* (checked above) — not by
-				// chain:X or manifest:M (both would be widening)
-				continue
-			} else if childType == "chain" && parentType == "chain" {
-				if childID == parentID {
-					covered = true
-					break
-				}
-			} else if childType == "chain" && parentType == "manifest" {
-				// narrowing from manifest — valid structurally
-				covered = true
-				break
-			} else if childType == "manifest" && parentType == "manifest" {
-				if childID == parentID {
-					covered = true
-					break
-				}
-			}
-			// manifest:M NOT covered by chain:X (widening — invalid)
-			// chain:* NOT covered by chain:X or manifest:M (widening — invalid)
-		}
-
-		if !covered {
-			return false
-		}
-	}
-	return true
-}

@@ -5,19 +5,19 @@ import (
 	"strings"
 )
 
-// attEntry is a resource + action pair parsed from a credential payload.
-type attEntry struct {
+// AttEntry is a resource + action pair parsed from a credential payload.
+type AttEntry struct {
 	Resource string
 	Action   string
 }
 
-// parseAtt extracts the att array from a raw credential payload.
-func parseAtt(payload map[string]any) []attEntry {
+// ParseAtt extracts the att array from a raw credential payload.
+func ParseAtt(payload map[string]any) []AttEntry {
 	attRaw, ok := payload["att"].([]any)
 	if !ok {
 		return nil
 	}
-	var result []attEntry
+	var result []AttEntry
 	for _, item := range attRaw {
 		m, ok := item.(map[string]any)
 		if !ok {
@@ -26,14 +26,14 @@ func parseAtt(payload map[string]any) []attEntry {
 		resource, _ := m["resource"].(string)
 		action, _ := m["action"].(string)
 		if resource != "" && action != "" {
-			result = append(result, attEntry{Resource: resource, Action: action})
+			result = append(result, AttEntry{Resource: resource, Action: action})
 		}
 	}
 	return result
 }
 
-// parsePrf extracts the prf array from a raw credential payload.
-func parsePrf(payload map[string]any) []string {
+// ParsePrf extracts the prf array from a raw credential payload.
+func ParsePrf(payload map[string]any) []string {
 	prfRaw, ok := payload["prf"].([]any)
 	if !ok {
 		return nil
@@ -48,8 +48,8 @@ func parsePrf(payload map[string]any) []string {
 	return result
 }
 
-// parseResource splits a resource string into type and id (e.g., "chain:abc" → "chain", "abc").
-func parseResource(resource string) (string, string, bool) {
+// ParseResource splits a resource string into type and id (e.g., "chain:abc" → "chain", "abc").
+func ParseResource(resource string) (string, string, bool) {
 	idx := strings.Index(resource, ":")
 	if idx < 0 {
 		return "", "", false
@@ -57,8 +57,8 @@ func parseResource(resource string) (string, string, bool) {
 	return resource[:idx], resource[idx+1:], true
 }
 
-// parseActions splits a comma-separated action string into a set.
-func parseActions(action string) map[string]bool {
+// ParseActions splits a comma-separated action string into a set.
+func ParseActions(action string) map[string]bool {
 	result := make(map[string]bool)
 	for _, a := range strings.Split(action, ",") {
 		a = strings.TrimSpace(a)
@@ -69,23 +69,23 @@ func parseActions(action string) map[string]bool {
 	return result
 }
 
-// isAttenuated checks if childAtt is a valid attenuation of parentAtt.
+// IsAttenuated checks if childAtt is a valid attenuation of parentAtt.
 // Every entry in childAtt must be covered by at least one entry in parentAtt.
-func isAttenuated(parentAtt []attEntry, childAtt []attEntry) bool {
+func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 	for _, child := range childAtt {
-		childType, childID, ok := parseResource(child.Resource)
+		childType, childID, ok := ParseResource(child.Resource)
 		if !ok {
 			return false
 		}
-		childActions := parseActions(child.Action)
+		childActions := ParseActions(child.Action)
 
 		covered := false
 		for _, parent := range parentAtt {
-			parentType, parentID, ok := parseResource(parent.Resource)
+			parentType, parentID, ok := ParseResource(parent.Resource)
 			if !ok {
 				continue
 			}
-			parentActions := parseActions(parent.Action)
+			parentActions := ParseActions(parent.Action)
 
 			// check action coverage — child actions must be subset of parent actions
 			actionOK := true
@@ -141,7 +141,7 @@ func isAttenuated(parentAtt []attEntry, childAtt []attEntry) bool {
 // The optional isRevoked callback checks revocation at each level. Pass nil
 // to skip revocation checks (useful at the protocol layer where revocation
 // state may not be available).
-func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []attEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked func(issuerDID, credentialCID string) (bool, error), depth int) error {
+func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked func(issuerDID, credentialCID string) (bool, error), depth int) error {
 	if depth > 16 {
 		return fmt.Errorf("delegation chain too deep (max 16 hops)")
 	}
@@ -157,7 +157,7 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 	type verifiedParent struct {
 		jws      string
 		verified *VerifiedCredential
-		att      []attEntry
+		att      []AttEntry
 		prf      []string
 		aud      string
 		exp      int64
@@ -200,8 +200,8 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 		parents = append(parents, verifiedParent{
 			jws:      parentJws,
 			verified: pVerified,
-			att:      parseAtt(pPayload),
-			prf:      parsePrf(pPayload),
+			att:      ParseAtt(pPayload),
+			prf:      ParsePrf(pPayload),
 			aud:      pAud,
 			exp:      pVerified.Exp,
 		})
@@ -227,11 +227,11 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 	}
 
 	// child's att must be attenuated from the union of all parents' att
-	var parentAttUnion []attEntry
+	var parentAttUnion []AttEntry
 	for _, p := range parents {
 		parentAttUnion = append(parentAttUnion, p.att...)
 	}
-	if !isAttenuated(parentAttUnion, childAtt) {
+	if !IsAttenuated(parentAttUnion, childAtt) {
 		return fmt.Errorf("delegation chain: child credential scope exceeds parent scope")
 	}
 
