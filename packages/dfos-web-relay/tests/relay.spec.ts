@@ -6,6 +6,7 @@ import {
   signContentOperation,
   signCountersignature,
   signIdentityOperation,
+  signRevocation,
   type ArtifactPayload,
   type BeaconPayload,
   type ContentOperation,
@@ -13,7 +14,11 @@ import {
   type IdentityOperation,
   type MultikeyPublicKey,
 } from '@metalabel/dfos-protocol/chain';
-import { createAuthToken, createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
+import {
+  createAuthToken,
+  createDFOSCredential,
+  decodeDFOSCredentialUnsafe,
+} from '@metalabel/dfos-protocol/credentials';
 import {
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
@@ -533,6 +538,7 @@ describe('web relay', () => {
       await postOps([identity.jwsToken]);
 
       const beaconPayload: BeaconPayload = {
+        version: 1,
         type: 'beacon',
         did: identity.did,
         manifestContentId: 'test_manifest_content_id',
@@ -565,6 +571,7 @@ describe('web relay', () => {
       const kid = `${identity.did}#${identity.controller.keyId}`;
 
       const beacon1: BeaconPayload = {
+        version: 1,
         type: 'beacon',
         did: identity.did,
         manifestContentId: 'test_manifest_content_id_a',
@@ -577,6 +584,7 @@ describe('web relay', () => {
       });
 
       const beacon2: BeaconPayload = {
+        version: 1,
         type: 'beacon',
         did: identity.did,
         manifestContentId: 'test_manifest_content_id_b',
@@ -723,6 +731,7 @@ describe('web relay', () => {
 
       // create and ingest a beacon
       const beaconPayload: BeaconPayload = {
+        version: 1,
         type: 'beacon',
         did: controller.did,
         manifestContentId: 'test_manifest_content_id',
@@ -903,7 +912,7 @@ describe('web relay', () => {
       expect(res.status).toBe(401);
     });
 
-    it('should allow reader with DFOSContentRead credential to download', async () => {
+    it('should allow reader with read credential to download', async () => {
       const creator = await createIdentity();
       const reader = await createIdentity();
       const content = await createContentOp(creator);
@@ -1535,7 +1544,7 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('delegated content write', () => {
-    it('should accept content update with DFOSContentWrite credential', async () => {
+    it('should accept content update with write credential', async () => {
       const creator = await createIdentity();
       const delegate = await createIdentity();
       const content = await createContentOp(creator);
@@ -2018,6 +2027,7 @@ describe('web relay', () => {
 
       // ingest a beacon
       const beaconPayload: BeaconPayload = {
+        version: 1,
         type: 'beacon',
         did: identity.did,
         manifestContentId: 'test_manifest_content_id',
@@ -2723,6 +2733,356 @@ describe('web relay', () => {
         const cursor = await localStore.getPeerCursor('http://peer-a');
         expect(cursor).toBeUndefined();
       });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // revocation ingestion
+  // ---------------------------------------------------------------------------
+
+  describe('revocation ingestion', () => {
+    it('should accept a valid revocation', async () => {
+      const creator = await createIdentity();
+      await postOps([creator.jwsToken]);
+
+      // create a credential to revoke
+      const now = Math.floor(Date.now() / 1000);
+      const credential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:someContentId`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+
+      // decode to get credentialCID
+      const decoded = decodeDFOSCredentialUnsafe(credential);
+      expect(decoded).not.toBeNull();
+      const credentialCID = decoded!.header.cid;
+
+      // sign and submit revocation
+      const { jwsToken: revocationJws } = await signRevocation({
+        issuerDID: creator.did,
+        credentialCID,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+      });
+
+      const res = await postOps([revocationJws]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('new');
+      expect(body.results[0].kind).toBe('revocation');
+    });
+
+    it('should be idempotent for duplicate revocations', async () => {
+      const creator = await createIdentity();
+      await postOps([creator.jwsToken]);
+
+      const now = Math.floor(Date.now() / 1000);
+      const credential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:someContentId`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+
+      const decoded = decodeDFOSCredentialUnsafe(credential);
+      const credentialCID = decoded!.header.cid;
+
+      const { jwsToken: revocationJws } = await signRevocation({
+        issuerDID: creator.did,
+        credentialCID,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+      });
+
+      await postOps([revocationJws]);
+      const res = await postOps([revocationJws]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('duplicate');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // public credential ingestion
+  // ---------------------------------------------------------------------------
+
+  describe('public credential ingestion', () => {
+    it('should accept a public credential (aud: *)', async () => {
+      const creator = await createIdentity();
+      await postOps([creator.jwsToken]);
+
+      const now = Math.floor(Date.now() / 1000);
+      const credential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:someContentId`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+
+      const res = await postOps([credential]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('new');
+      expect(body.results[0].kind).toBe('credential');
+    });
+
+    it('should reject non-public credential ingestion', async () => {
+      const creator = await createIdentity();
+      const reader = await createIdentity();
+      await postOps([creator.jwsToken, reader.jwsToken]);
+
+      const now = Math.floor(Date.now() / 1000);
+      const credential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: reader.did,
+        att: [{ resource: `chain:someContentId`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+
+      const res = await postOps([credential]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+    });
+
+    it('should reject ingestion of already-revoked credential', async () => {
+      const creator = await createIdentity();
+      await postOps([creator.jwsToken]);
+
+      const now = Math.floor(Date.now() / 1000);
+      const credential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:someContentId`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+
+      const decoded = decodeDFOSCredentialUnsafe(credential);
+      const credentialCID = decoded!.header.cid;
+
+      // revoke first
+      const { jwsToken: revocationJws } = await signRevocation({
+        issuerDID: creator.did,
+        credentialCID,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+      });
+      await postOps([revocationJws]);
+
+      // now try to ingest the credential — should be rejected
+      const res = await postOps([credential]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+      expect(body.results[0].error).toContain('revoked');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // standing authorization (public credentials for read access)
+  // ---------------------------------------------------------------------------
+
+  describe('standing authorization', () => {
+    it('should grant read access via stored public credential', async () => {
+      const creator = await createIdentity();
+      const reader = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, reader.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // upload blob as creator
+      const creatorToken = await createTestAuthToken(creator);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+
+      // ingest public credential from creator
+      const now = Math.floor(Date.now() / 1000);
+      const publicCred = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:${contentId}`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+      await postOps([publicCred]);
+
+      // reader can download WITHOUT per-request credential (standing auth)
+      const readerToken = await createTestAuthToken(reader);
+      const downloadRes = await req(`/content/${contentId}/blob`, {
+        headers: { authorization: `Bearer ${readerToken}` },
+      });
+      expect(downloadRes.status).toBe(200);
+    });
+
+    it('should deny read access after revoking public credential', async () => {
+      const creator = await createIdentity();
+      const reader = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, reader.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // upload blob
+      const creatorToken = await createTestAuthToken(creator);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+
+      // ingest public credential
+      const now = Math.floor(Date.now() / 1000);
+      const publicCred = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:${contentId}`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+      await postOps([publicCred]);
+
+      // revoke the public credential
+      const decoded = decodeDFOSCredentialUnsafe(publicCred);
+      const credentialCID = decoded!.header.cid;
+      const { jwsToken: revocationJws } = await signRevocation({
+        issuerDID: creator.did,
+        credentialCID,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+      });
+      await postOps([revocationJws]);
+
+      // reader should now be denied
+      const readerToken = await createTestAuthToken(reader);
+      const downloadRes = await req(`/content/${contentId}/blob`, {
+        headers: { authorization: `Bearer ${readerToken}` },
+      });
+      expect(downloadRes.status).toBe(403);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // documents endpoint
+  // ---------------------------------------------------------------------------
+
+  describe('documents endpoint', () => {
+    it('should return documents for a content chain', async () => {
+      const creator = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // upload blob
+      const creatorToken = await createTestAuthToken(creator);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+
+      // fetch documents
+      const res = await req(`/content/${contentId}/documents`, {
+        headers: { authorization: `Bearer ${creatorToken}` },
+      });
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.contentId).toBe(contentId);
+      expect(body.documents).toBeDefined();
+      expect(body.documents.length).toBe(1);
+      expect(body.documents[0].operationCID).toBe(content.operationCID);
+      expect(body.documents[0].document).toEqual(content.document);
+    });
+
+    it('should require authentication', async () => {
+      const creator = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      const res = await req(`/content/${contentId}/documents`);
+      expect(res.status).toBe(401);
+    });
+
+    it('should return 404 for unknown content', async () => {
+      const creator = await createIdentity();
+      await postOps([creator.jwsToken]);
+      const creatorToken = await createTestAuthToken(creator);
+
+      const res = await req(`/content/nonexistent/documents`, {
+        headers: { authorization: `Bearer ${creatorToken}` },
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('should require read credential for non-creator', async () => {
+      const creator = await createIdentity();
+      const reader = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, reader.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      const readerToken = await createTestAuthToken(reader);
+      const res = await req(`/content/${contentId}/documents`, {
+        headers: { authorization: `Bearer ${readerToken}` },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it('should allow access with read credential', async () => {
+      const creator = await createIdentity();
+      const reader = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, reader.jwsToken, content.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // upload blob
+      const creatorToken = await createTestAuthToken(creator);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+
+      // create read credential
+      const now = Math.floor(Date.now() / 1000);
+      const readCred = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: reader.did,
+        att: [{ resource: `chain:${contentId}`, action: 'read' }],
+        exp: now + 300,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+
+      const readerToken = await createTestAuthToken(reader);
+      const res = await req(`/content/${contentId}/documents`, {
+        headers: {
+          authorization: `Bearer ${readerToken}`,
+          'x-credential': readCred,
+        },
+      });
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.documents.length).toBe(1);
     });
   });
 });

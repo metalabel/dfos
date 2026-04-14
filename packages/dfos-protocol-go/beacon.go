@@ -12,6 +12,7 @@ func SignBeacon(did, manifestContentId, kid string, privateKey ed25519.PrivateKe
 	now := protocolTimestamp()
 
 	payload := map[string]any{
+		"version":           int64(1),
 		"type":              "beacon",
 		"did":               did,
 		"manifestContentId": manifestContentId,

@@ -132,6 +132,7 @@ export type ContentOperation = z.infer<typeof ContentOperation>;
 
 /** Beacon: floating signed manifest pointer announcement */
 export const BeaconPayload = z.strictObject({
+  version: z.literal(1),
   type: z.literal('beacon'),
   did: z.string().max(MAX_DID),
   manifestContentId: z.string().max(MAX_CID),

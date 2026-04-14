@@ -565,6 +565,7 @@ func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult
 		JWSToken:  jwsToken,
 		BeaconCID: cid,
 		Payload: BeaconPayload{
+			Version:           result.Version,
 			Type:              "beacon",
 			DID:               did,
 			ManifestContentId: result.ManifestContentId,
@@ -700,6 +701,16 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 		return IngestionResult{Status: "rejected", Error: "missing required revocation fields"}
 	}
 
+	// validate version and type
+	version, _ := payload["version"].(float64)
+	if version != 1 {
+		return IngestionResult{Status: "rejected", Error: "unsupported revocation version"}
+	}
+	payloadType, _ := payload["type"].(string)
+	if payloadType != "revocation" {
+		return IngestionResult{Status: "rejected", Error: "invalid revocation type"}
+	}
+
 	// re-derive CID from payload
 	dfos.NormalizeJSONNumbers(payload)
 	_, _, cid, err := dfos.DagCborCID(payload)
@@ -708,7 +719,7 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 	}
 
 	// verify header CID matches derived CID
-	if header.CID != "" && header.CID != cid {
+	if header.CID == "" || header.CID != cid {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "CID mismatch"}
 	}
 

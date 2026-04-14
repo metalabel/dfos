@@ -34,6 +34,7 @@ type VerifiedContentResult struct {
 
 // VerifiedBeaconResult is the result of beacon verification.
 type VerifiedBeaconResult struct {
+	Version           int
 	BeaconCID         string
 	DID               string
 	ManifestContentId string
@@ -830,6 +831,9 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 	}
 
 	// validate payload
+	if v, ok := payload["version"].(int64); !ok || v != 1 {
+		return nil, fmt.Errorf("invalid beacon payload: invalid or missing version")
+	}
 	if payloadString(payload, "type") != "beacon" {
 		return nil, fmt.Errorf("invalid beacon payload: wrong type")
 	}
@@ -893,6 +897,7 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 	}
 
 	return &VerifiedBeaconResult{
+		Version:           1,
 		BeaconCID:         beaconCID,
 		DID:               beaconDID,
 		ManifestContentId: manifestContentId,

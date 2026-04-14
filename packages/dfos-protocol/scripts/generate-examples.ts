@@ -226,6 +226,7 @@ const main = async () => {
   // Sign a beacon with key1 (controller)
   const kid1 = `${identity.did}#${keyId1}`;
   const beaconPayload: BeaconPayload = {
+    version: 1,
     type: 'beacon',
     did: identity.did,
     manifestContentId: contentChain.contentId,

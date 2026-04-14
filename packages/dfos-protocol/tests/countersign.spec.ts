@@ -239,6 +239,7 @@ describe('countersignature', () => {
     const witness = makeIdentity();
 
     const beaconPayload: BeaconPayload = {
+      version: 1,
       type: 'beacon',
       did: controller.did,
       manifestContentId: 'test_manifest_content_id',

@@ -2,11 +2,9 @@ package relay
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -577,13 +575,11 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 		return
 	}
 
-	// verify read credential unless caller is creator
-	if auth.Iss != chain.State.CreatorDID {
-		credHeader := req.Header.Get("X-Credential")
-		if credErr := r.verifyReadCredential(auth, chain, contentID, credHeader); credErr != "" {
-			writeError(w, 403, credErr)
-			return
-		}
+	// verify read access
+	credHeader := req.Header.Get("X-Credential")
+	if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
+		writeError(w, 403, errMsg)
+		return
 	}
 
 	// resolve documentCID for the requested ref
@@ -629,54 +625,6 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 	w.Write(blob)
 }
 
-func (r *Relay) verifyReadCredential(auth *dfos.VerifiedAuthToken, chain *StoredContentChain, contentID, credHeader string) string {
-	if credHeader == "" {
-		return "read credential required"
-	}
-
-	resolveKey := CreateCurrentKeyResolver(r.store)
-
-	header, _, err := dfos.DecodeJWSUnsafe(credHeader)
-	if err != nil || header == nil {
-		return "invalid credential format"
-	}
-	kid := header.Kid
-	if kid == "" || !strings.Contains(kid, "#") {
-		return "credential kid must be a DID URL"
-	}
-
-	vcIssuerDID := kid[:strings.Index(kid, "#")]
-	if vcIssuerDID != chain.State.CreatorDID {
-		return "credential must be issued by the chain creator"
-	}
-
-	// reject credentials from deleted issuers
-	issuerIdentity, _ := r.store.GetIdentityChain(vcIssuerDID)
-	if issuerIdentity != nil && issuerIdentity.State.IsDeleted {
-		return "credential issuer identity is deleted"
-	}
-
-	creatorKey, err := resolveKey(kid)
-	if err != nil {
-		return fmt.Sprintf("failed to resolve credential key: %v", err)
-	}
-
-	credential, err := dfos.VerifyCredential(credHeader, creatorKey, auth.Iss, "DFOSContentRead")
-	if err != nil {
-		return err.Error()
-	}
-
-	if credential.Iss != chain.State.CreatorDID {
-		return "credential issuer is not the chain creator"
-	}
-
-	if credential.ContentID != "" && credential.ContentID != contentID {
-		return "credential contentId does not match"
-	}
-
-	return "" // no error
-}
-
 // ---------------------------------------------------------------------------
 // documents
 // ---------------------------------------------------------------------------
@@ -705,13 +653,11 @@ func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// verify read access (same as blob read)
-	if auth.Iss != chain.State.CreatorDID {
-		credHeader := req.Header.Get("X-Credential")
-		if credErr := r.verifyReadCredential(auth, chain, contentID, credHeader); credErr != "" {
-			writeError(w, 403, credErr)
-			return
-		}
+	// verify read access
+	credHeader := req.Header.Get("X-Credential")
+	if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
+		writeError(w, 403, errMsg)
+		return
 	}
 
 	after := req.URL.Query().Get("after")

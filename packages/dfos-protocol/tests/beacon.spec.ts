@@ -34,6 +34,7 @@ describe('beacon', () => {
     const id = makeIdentity();
 
     const payload: BeaconPayload = {
+      version: 1,
       type: 'beacon',
       did: id.did,
       manifestContentId,
@@ -62,6 +63,7 @@ describe('beacon', () => {
     const id = makeIdentity();
 
     const payload: BeaconPayload = {
+      version: 1,
       type: 'beacon',
       did: id.did,
       manifestContentId,
@@ -80,6 +82,7 @@ describe('beacon', () => {
     const id = makeIdentity();
 
     const payload: BeaconPayload = {
+      version: 1,
       type: 'beacon',
       did: id.did,
       manifestContentId,
@@ -106,6 +109,7 @@ describe('beacon', () => {
     const other = makeIdentity();
 
     const payload: BeaconPayload = {
+      version: 1,
       type: 'beacon',
       did: author.did,
       manifestContentId,
@@ -131,6 +135,7 @@ describe('beacon', () => {
     const now = Date.now();
 
     const payload: BeaconPayload = {
+      version: 1,
       type: 'beacon',
       did: id.did,
       manifestContentId,
@@ -155,6 +160,7 @@ describe('beacon', () => {
     const now = Date.now();
 
     const payload: BeaconPayload = {
+      version: 1,
       type: 'beacon',
       did: id.did,
       manifestContentId,
@@ -178,6 +184,7 @@ describe('beacon', () => {
     const wrongKey = createNewEd25519Keypair();
 
     const payload: BeaconPayload = {
+      version: 1,
       type: 'beacon',
       did: id.did,
       manifestContentId,
@@ -205,6 +212,7 @@ describe('beacon', () => {
     const id = makeIdentity();
 
     const payload: BeaconPayload = {
+      version: 1,
       type: 'beacon',
       did: id.did,
       manifestContentId,
