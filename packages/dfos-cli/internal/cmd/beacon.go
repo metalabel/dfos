@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
@@ -12,7 +11,7 @@ import (
 func newBeaconCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "beacon",
-		Short:   "Merkle root announcements",
+		Short:   "Manifest pointer announcements",
 		GroupID: "beacon",
 	}
 	cmd.AddCommand(newBeaconAnnounceCmd())
@@ -25,10 +24,12 @@ func newBeaconAnnounceCmd() *cobra.Command {
 	var peerName string
 
 	cmd := &cobra.Command{
-		Use:   "announce <contentId...>",
-		Short: "Build merkle root over content IDs, sign, and optionally submit",
-		Args:  cobra.MinimumNArgs(1),
+		Use:   "announce <manifestContentId>",
+		Short: "Sign a manifest pointer beacon and optionally submit",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			manifestContentId := args[0]
+
 			_, chain, err := requireIdentity()
 			if err != nil {
 				return err
@@ -38,8 +39,6 @@ func newBeaconAnnounceCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			merkleRoot := protocol.BuildMerkleRoot(args)
 
 			if len(chain.State.ControllerKeys) == 0 {
 				return fmt.Errorf("identity has no controller keys")
@@ -51,7 +50,7 @@ func newBeaconAnnounceCmd() *cobra.Command {
 				return err
 			}
 
-			jwsToken, beaconCID, err := protocol.SignBeacon(chain.DID, merkleRoot, kid, privKey)
+			jwsToken, beaconCID, err := protocol.SignBeacon(chain.DID, manifestContentId, kid, privKey)
 			if err != nil {
 				return err
 			}
@@ -86,16 +85,14 @@ func newBeaconAnnounceCmd() *cobra.Command {
 
 			if jsonFlag {
 				outputJSON(map[string]any{
-					"beaconCID":  beaconCID,
-					"merkleRoot": merkleRoot,
-					"contentIds": args,
-					"did":        chain.DID,
+					"beaconCID":         beaconCID,
+					"manifestContentId": manifestContentId,
+					"did":               chain.DID,
 				})
 			} else {
 				fmt.Printf("Beacon announced:\n")
-				fmt.Printf("  Beacon CID:   %s\n", beaconCID)
-				fmt.Printf("  Merkle root:  %s\n", merkleRoot)
-				fmt.Printf("  Content IDs:  %s\n", strings.Join(args, ", "))
+				fmt.Printf("  Beacon CID:          %s\n", beaconCID)
+				fmt.Printf("  Manifest content ID: %s\n", manifestContentId)
 			}
 			return nil
 		},
@@ -137,10 +134,10 @@ func newBeaconShowCmd() *cobra.Command {
 					if name != "" {
 						label = did + " (" + name + ")"
 					}
-					fmt.Printf("DID:         %s\n", label)
-					fmt.Printf("Beacon CID:  %s\n", beacon.BeaconCID)
-					fmt.Printf("Merkle Root: %s\n", beacon.Payload.MerkleRoot)
-					fmt.Printf("Created:     %s\n", beacon.Payload.CreatedAt)
+					fmt.Printf("DID:                %s\n", label)
+					fmt.Printf("Beacon CID:         %s\n", beacon.BeaconCID)
+					fmt.Printf("Manifest content ID: %s\n", beacon.Payload.ManifestContentId)
+					fmt.Printf("Created:            %s\n", beacon.Payload.CreatedAt)
 				}
 				return nil
 			}
@@ -158,10 +155,8 @@ func newBeaconShowCmd() *cobra.Command {
 						if cid, ok := data["beaconCID"].(string); ok {
 							fmt.Printf("Beacon CID:  %s\n", cid)
 						}
-						if p, ok := data["payload"].(map[string]any); ok {
-							if mr, ok := p["merkleRoot"].(string); ok {
-								fmt.Printf("Merkle Root: %s\n", mr)
-							}
+						if mc, ok := data["manifestContentId"].(string); ok {
+							fmt.Printf("Manifest content ID: %s\n", mc)
 						}
 					}
 					return nil

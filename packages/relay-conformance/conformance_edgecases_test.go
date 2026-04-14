@@ -275,8 +275,7 @@ func TestBeaconFromUnknownIdentity(t *testing.T) {
 	fakeDID := "did:dfos:unknownbeacontest00000"
 	kid := fakeDID + "#" + kp.keyID
 
-	merkle := dfos.BuildMerkleRoot([]string{"some-content-id"})
-	token, _, err := dfos.SignBeacon(fakeDID, merkle, kid, kp.priv)
+	token, _, err := dfos.SignBeacon(fakeDID, "some22charcontent0000", kid, kp.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,8 +307,7 @@ func TestBeaconFromDeletedIdentity(t *testing.T) {
 
 	// beacon from deleted identity — should be rejected
 	authKid := id.did + "#" + id.auth.keyID
-	merkle := dfos.BuildMerkleRoot([]string{"some-content-id"})
-	beaconToken, _, err := dfos.SignBeacon(id.did, merkle, authKid, id.auth.priv)
+	beaconToken, _, err := dfos.SignBeacon(id.did, "some22charcontent0000", authKid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}

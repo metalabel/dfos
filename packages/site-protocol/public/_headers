@@ -33,5 +33,3 @@
   Cache-Control: public, max-age=3600, must-revalidate
 /content-model/
   Cache-Control: public, max-age=3600, must-revalidate
-/poster/
-  Cache-Control: public, max-age=3600, must-revalidate
