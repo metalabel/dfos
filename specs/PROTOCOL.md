@@ -104,7 +104,7 @@ This is a self-sovereign invariant: the identity chain defines its own valid sig
 
 Content chain verification requires a **valid EdDSA signature** and delegates key resolution to the caller. The `kid` in each operation's JWS header is a DID URL (`did:dfos:<id>#<keyId>`). The verifier calls `resolveKey(kid)` to obtain the raw Ed25519 public key bytes for that key on that identity. How the resolver obtains and validates the identity's key state is application-defined.
 
-**Creator sovereignty**: The DID that signs the genesis (create) operation is the **chain creator** and permanently owns the chain. The creator can sign subsequent operations directly — no credential needed. Other DIDs require a **DFOSContentWrite** credential in the operation's `authorization` field, issued by the creator DID. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the credential format.
+**Creator sovereignty**: The DID that signs the genesis (create) operation is the **chain creator** and permanently owns the chain. The creator can sign subsequent operations directly — no credential needed. Other DIDs require a **DFOS credential with write access** in the operation's `authorization` field, issued by the creator DID. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the credential format.
 
 **Signer-payload consistency**: The `kid` DID in the JWS header MUST match the `did` field in the content operation payload. This enables discrimination between author operations and countersignatures — if the kid DID differs from the payload `did`, it is a countersignature (witness attestation), not a chain operation.
 
@@ -1038,9 +1038,9 @@ Given the artifacts above, verify:
 
 11. **Chain completeness**: all operation CIDs, DID derivation, key rotation, and content chain linkage verified end-to-end.
 
-12. **Credential verify**: using the issuer's public key, verify a `DFOSContentWrite` or `DFOSContentRead` credential: check EdDSA signature, expiration, `kid` DID URL format, `kid` DID matches `iss`, credential type matches expected DFOS type. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for format details. Test vectors in [`examples/credential-write.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-write.json) and [`examples/credential-read.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-read.json).
+12. **Credential verify**: using the issuer's public key, verify a DFOS credential with write or read access: check EdDSA signature, expiration, `kid` DID URL format, `kid` DID matches `iss`, credential type matches expected DFOS type. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for format details. Test vectors in [`examples/credential-write.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-write.json) and [`examples/credential-read.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-read.json).
 
-13. **Delegated content chain verify**: using [`examples/content-delegated.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/content-delegated.json), verify a content chain where the genesis is signed by the creator and a subsequent update is signed by a delegate with an embedded `DFOSContentWrite` credential in the `authorization` field. The credential must be issued by the creator DID, with `sub` matching the delegate DID.
+13. **Delegated content chain verify**: using [`examples/content-delegated.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/content-delegated.json), verify a content chain where the genesis is signed by the creator and a subsequent update is signed by a delegate with an embedded DFOS write credential in the `authorization` field. The credential must be issued by the creator DID, with `aud` matching the delegate DID.
 
 14. **Number encoding determinism**: dag-cbor encode `{"version": 1, "type": "test"}` and verify:
     - CBOR hex is `a2647479706564746573746776657273696f6e01` (20 bytes)

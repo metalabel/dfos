@@ -585,16 +585,16 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 		} else if opDID != creatorDID && enforceAuthorization {
 			authorization := payloadString(payload, "authorization")
 			if authorization == "" {
-				return nil, fmt.Errorf("log[%d]: signer %s is not the chain creator — authorization VC required", idx, opDID)
+				return nil, fmt.Errorf("log[%d]: signer %s is not the chain creator — authorization credential required", idx, opDID)
 			}
 
 			vcHeader, _, vcErr := DecodeJWSUnsafe(authorization)
 			if vcErr != nil {
-				return nil, fmt.Errorf("log[%d]: failed to decode authorization VC", idx)
+				return nil, fmt.Errorf("log[%d]: failed to decode authorization credential", idx)
 			}
 			vcKid := vcHeader.Kid
 			if vcKid == "" || !strings.Contains(vcKid, "#") {
-				return nil, fmt.Errorf("log[%d]: authorization VC kid must be a DID URL", idx)
+				return nil, fmt.Errorf("log[%d]: authorization credential kid must be a DID URL", idx)
 			}
 
 			creatorPubKey, err := resolveKey(vcKid)
@@ -613,10 +613,10 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 				return nil, fmt.Errorf("log[%d]: authorization verification failed: %s", idx, err)
 			}
 			if vc.Iss != creatorDID {
-				return nil, fmt.Errorf("log[%d]: authorization verification failed: VC issuer is not the chain creator", idx)
+				return nil, fmt.Errorf("log[%d]: authorization verification failed: credential issuer is not the chain creator", idx)
 			}
 			if vc.ContentID != "" && vc.ContentID != contentID {
-				return nil, fmt.Errorf("log[%d]: authorization verification failed: VC contentId %s does not match chain %s", idx, vc.ContentID, contentID)
+				return nil, fmt.Errorf("log[%d]: authorization verification failed: credential contentId %s does not match chain %s", idx, vc.ContentID, contentID)
 			}
 		}
 
@@ -741,16 +741,16 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 	if opDID != currentState.CreatorDID && enforceAuthorization {
 		authorization := payloadString(payload, "authorization")
 		if authorization == "" {
-			return nil, fmt.Errorf("signer %s is not the chain creator — authorization VC required", opDID)
+			return nil, fmt.Errorf("signer %s is not the chain creator — authorization credential required", opDID)
 		}
 
 		vcHeader, _, vcErr := DecodeJWSUnsafe(authorization)
 		if vcErr != nil {
-			return nil, fmt.Errorf("failed to decode authorization VC")
+			return nil, fmt.Errorf("failed to decode authorization credential")
 		}
 		vcKid := vcHeader.Kid
 		if vcKid == "" || !strings.Contains(vcKid, "#") {
-			return nil, fmt.Errorf("authorization VC kid must be a DID URL")
+			return nil, fmt.Errorf("authorization credential kid must be a DID URL")
 		}
 
 		creatorPubKey, err := resolveKey(vcKid)
@@ -769,10 +769,10 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 			return nil, fmt.Errorf("authorization verification failed: %s", err)
 		}
 		if vc.Iss != currentState.CreatorDID {
-			return nil, fmt.Errorf("authorization verification failed: VC issuer is not the chain creator")
+			return nil, fmt.Errorf("authorization verification failed: credential issuer is not the chain creator")
 		}
 		if vc.ContentID != "" && vc.ContentID != currentState.ContentID {
-			return nil, fmt.Errorf("authorization verification failed: VC contentId %s does not match chain %s", vc.ContentID, currentState.ContentID)
+			return nil, fmt.Errorf("authorization verification failed: credential contentId %s does not match chain %s", vc.ContentID, currentState.ContentID)
 		}
 	}
 

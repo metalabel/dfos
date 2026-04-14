@@ -304,7 +304,7 @@ func newContentDownloadCmd() *cobra.Command {
 					}
 				}
 				if !isCreator && credential == "" {
-					return fmt.Errorf("DFOSContentRead credential required (you are not the content creator)")
+					return fmt.Errorf("read credential required (you are not the content creator)")
 				}
 			}
 
@@ -353,7 +353,7 @@ func newContentDownloadCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&outputFile, "output", "o", "", "Write to file instead of stdout")
-	cmd.Flags().StringVar(&credential, "credential", "", "DFOSContentRead VC-JWT credential")
+	cmd.Flags().StringVar(&credential, "credential", "", "DFOS read credential JWS")
 	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to download from")
 	cmd.Flags().StringVar(&ref, "ref", "", "Download blob at specific operation CID (historical version)")
 	return cmd
@@ -657,8 +657,8 @@ func newContentGrantCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&read, "read", false, "Issue DFOSContentRead credential")
-	cmd.Flags().BoolVar(&write, "write", false, "Issue DFOSContentWrite credential")
+	cmd.Flags().BoolVar(&read, "read", false, "Issue DFOS read credential")
+	cmd.Flags().BoolVar(&write, "write", false, "Issue DFOS write credential")
 	cmd.Flags().StringVar(&ttl, "ttl", "24h", "Credential TTL")
 	cmd.Flags().StringVar(&scopeContentID, "scope", "", "Scope credential to specific content ID")
 	cmd.Flags().BoolVar(&noScope, "broad", false, "Issue broad credential (not scoped to any content ID)")
@@ -773,7 +773,7 @@ func newContentUpdateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&note, "note", "", "Operation note")
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
-	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOSContentWrite VC-JWT for delegated writes")
+	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOS write credential for delegated writes")
 	cmd.Flags().StringVar(&baseDocumentCID, "base-document-cid", "", "CID of the base document this update is derived from")
 	return cmd
 }
@@ -859,7 +859,7 @@ func newContentDeleteCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&note, "note", "", "Operation note")
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
-	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOSContentWrite VC-JWT for delegated deletes")
+	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOS write credential for delegated deletes")
 	return cmd
 }
 
@@ -1022,7 +1022,7 @@ func fetchAndIngestIdentity(lr *localrelay.LocalRelay, c *client.Client, did str
 	lr.Relay.Ingest(log)
 }
 
-// verifyCredentialLocally verifies a VC-JWT credential using the creator's
+// verifyCredentialLocally verifies a DFOS credential using the creator's
 // identity from the local relay.
 func verifyCredentialLocally(lr *localrelay.LocalRelay, credential, creatorDID, subjectDID, contentID string) error {
 	header, _, err := protocol.DecodeJWTUnsafe(credential)

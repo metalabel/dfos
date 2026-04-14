@@ -528,10 +528,10 @@ const main = async () => {
     broadCredential: writeCredentialJws,
     narrowCredential: narrowWriteCredentialJws,
     issuerPublicKey: multikey1,
-    subjectPublicKey: multikey3,
+    audiencePublicKey: multikey3,
     expected: {
       iss: identity.did,
-      sub: identity3.did,
+      aud: identity3.did,
       narrowContentId: contentChain.contentId,
     },
   });
@@ -541,10 +541,10 @@ const main = async () => {
     type: 'credential',
     credential: readCredentialJws,
     issuerPublicKey: multikey1,
-    subjectPublicKey: multikey3,
+    audiencePublicKey: multikey3,
     expected: {
       iss: identity.did,
-      sub: identity3.did,
+      aud: identity3.did,
     },
   });
 

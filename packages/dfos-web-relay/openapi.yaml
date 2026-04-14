@@ -196,13 +196,14 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /content/{contentId}/blob:
+  /content/{contentId}/blob/{operationCID}:
     put:
       operationId: uploadBlob
       summary: Upload a content blob
       description: |
-        Upload raw bytes for a document referenced by a content chain.
-        Requires auth token. Caller must be the chain creator.
+        Upload raw bytes for a document referenced by a content chain operation.
+        Requires auth token. Caller must be the chain creator or the signer of the
+        referenced operation.
       tags: [Content Plane]
       security:
         - BearerAuth: []
@@ -212,12 +213,12 @@ paths:
           required: true
           schema:
             type: string
-        - name: X-Document-CID
-          in: header
+        - name: operationCID
+          in: path
           required: true
           schema:
             type: string
-          description: The documentCID this blob corresponds to
+          description: CID of the content operation whose documentCID this blob satisfies
       requestBody:
         required: true
         content:
@@ -250,12 +251,13 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /content/{contentId}/blob:
     get:
       operationId: downloadBlob
       summary: Download a content blob at head
       description: |
         Download the raw bytes of the current document at chain head.
-        Requires auth token. Non-creators must present a DFOSContentRead credential.
+        Requires auth token. Non-creators must present a DFOS read credential.
       tags: [Content Plane]
       security:
         - BearerAuth: []
@@ -365,7 +367,7 @@ paths:
           required: false
           schema:
             type: integer
-            default: 50
+            default: 100
             maximum: 1000
         - name: X-Credential
           in: header
@@ -380,8 +382,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [documents, cursor]
+                required: [contentId, documents, nextCursor]
                 properties:
+                  contentId:
+                    type: string
                   documents:
                     type: array
                     items:
@@ -400,7 +404,7 @@ paths:
                         createdAt:
                           type: string
                           format: date-time
-                  cursor:
+                  nextCursor:
                     type: string
                     nullable: true
         '401':
@@ -411,6 +415,112 @@ paths:
           $ref: '#/components/responses/NotFound'
         '501':
           description: Documents capability not enabled
+
+  /identities/{did}/log:
+    get:
+      operationId: getIdentityLog
+      summary: Paginated log of identity chain operations
+      description: |
+        Returns operations belonging to this identity chain in chain order.
+        Cursor-based pagination.
+      tags: [Proof Plane]
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema:
+            type: string
+          description: DID of the identity
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CID cursor — start after this operation CID
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+      responses:
+        '200':
+          description: Identity chain log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries, cursor]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, jwsToken]
+                      properties:
+                        cid:
+                          type: string
+                        jwsToken:
+                          type: string
+                  cursor:
+                    type: string
+                    nullable: true
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /content/{contentId}/log:
+    get:
+      operationId: getContentLog
+      summary: Paginated log of content chain operations
+      description: |
+        Returns operations belonging to this content chain in chain order.
+        Cursor-based pagination.
+      tags: [Proof Plane]
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Content identifier (22-char hash)
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CID cursor — start after this operation CID
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+      responses:
+        '200':
+          description: Content chain log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries, cursor]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, jwsToken]
+                      properties:
+                        cid:
+                          type: string
+                        jwsToken:
+                          type: string
+                  cursor:
+                    type: string
+                    nullable: true
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /countersignatures/{cid}:
     get:
@@ -487,7 +597,7 @@ components:
           description: Error message if rejected
         kind:
           type: string
-          enum: [identity-op, content-op, beacon, countersig, beacon-countersig]
+          enum: [identity-op, content-op, beacon, artifact, countersign, revocation, credential]
         chainId:
           type: string
           description: Chain identifier (DID or contentId)
@@ -502,21 +612,19 @@ components:
           type: string
         chainType:
           type: string
-          enum: [identity, content]
+          enum: [identity, content, artifact, beacon, countersign, revocation, credential]
         chainId:
           type: string
 
     IdentityChainResponse:
       type: object
-      required: [did, log, state]
+      required: [did, headCID, state]
       properties:
         did:
           type: string
-        log:
-          type: array
-          items:
-            type: string
-          description: Ordered JWS tokens from genesis to head
+        headCID:
+          type: string
+          description: CID of the current head operation
         state:
           type: object
           required: [did, isDeleted, authKeys, assertKeys, controllerKeys]

@@ -23,6 +23,7 @@ func newRouter(r *Relay) http.Handler {
 	mux.HandleFunc("GET /operations/{cid}", r.handleGetOperation)
 	mux.HandleFunc("GET /identities/{did}/log", r.handleIdentityLog)
 	mux.HandleFunc("GET /identities/{did...}", r.handleGetIdentity)
+	mux.HandleFunc("GET /content/{contentId}/documents", r.handleGetDocuments)
 	mux.HandleFunc("GET /content/{contentId}/log", r.handleContentLog)
 	mux.HandleFunc("GET /content/{contentId}/blob/{ref}", r.handleGetBlob)
 	mux.HandleFunc("GET /content/{contentId}/blob", r.handleGetBlobHead)
@@ -69,9 +70,10 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 		"version":  ProtocolVersion,
 		"software": SoftwareVersion,
 		"capabilities": map[string]any{
-			"proof":   true,
-			"content": r.contentEnabled,
-			"log":     r.logEnabled,
+			"proof":     true,
+			"content":   r.contentEnabled,
+			"log":       r.logEnabled,
+			"documents": r.contentEnabled,
 		},
 		"profile": r.profileArtifactJWS,
 	})
@@ -629,7 +631,7 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 
 func (r *Relay) verifyReadCredential(auth *dfos.VerifiedAuthToken, chain *StoredContentChain, contentID, credHeader string) string {
 	if credHeader == "" {
-		return "DFOSContentRead credential required"
+		return "read credential required"
 	}
 
 	resolveKey := CreateCurrentKeyResolver(r.store)
@@ -673,6 +675,63 @@ func (r *Relay) verifyReadCredential(auth *dfos.VerifiedAuthToken, chain *Stored
 	}
 
 	return "" // no error
+}
+
+// ---------------------------------------------------------------------------
+// documents
+// ---------------------------------------------------------------------------
+
+func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
+	if !r.contentEnabled {
+		writeError(w, 501, "content plane not available")
+		return
+	}
+	contentID := req.PathValue("contentId")
+
+	// authenticate
+	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
+	if auth == nil {
+		writeError(w, 401, "authentication required")
+		return
+	}
+
+	// verify chain exists
+	chain, err := r.store.GetContentChain(contentID)
+	if storeErr(w, err) {
+		return
+	}
+	if chain == nil {
+		writeError(w, 404, "not found")
+		return
+	}
+
+	// verify read access (same as blob read)
+	if auth.Iss != chain.State.CreatorDID {
+		credHeader := req.Header.Get("X-Credential")
+		if credErr := r.verifyReadCredential(auth, chain, contentID, credHeader); credErr != "" {
+			writeError(w, 403, credErr)
+			return
+		}
+	}
+
+	after := req.URL.Query().Get("after")
+	limit := parseLimit(req, 100, 1000)
+
+	docs, cursor, err := r.store.GetDocuments(contentID, after, limit)
+	if storeErr(w, err) {
+		return
+	}
+
+	var cursorPtr *string
+	if cursor != "" {
+		cursorPtr = &cursor
+	}
+
+	writeJSON(w, 200, map[string]any{
+		"contentId":  contentID,
+		"documents":  docs,
+		"nextCursor": cursorPtr,
+	})
 }
 
 // ---------------------------------------------------------------------------

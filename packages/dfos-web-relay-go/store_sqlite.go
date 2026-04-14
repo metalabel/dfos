@@ -766,6 +766,46 @@ func (s *SQLiteStore) CountUnsequenced() (int, error) {
 }
 
 // ---------------------------------------------------------------------------
+// revocations (stub)
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteStore) GetRevocations(issuerDID string) ([]string, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *SQLiteStore) AddRevocation(revocation StoredRevocation) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (s *SQLiteStore) IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error) {
+	return false, fmt.Errorf("not implemented")
+}
+
+// ---------------------------------------------------------------------------
+// public credentials (stub)
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteStore) GetPublicCredentials(resource string) ([]string, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (s *SQLiteStore) RemovePublicCredential(credentialCID string) error {
+	return fmt.Errorf("not implemented")
+}
+
+// ---------------------------------------------------------------------------
+// documents (stub)
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteStore) GetDocuments(contentID string, after string, limit int) ([]StoredDocument, string, error) {
+	return nil, "", fmt.Errorf("not implemented")
+}
+
+// ---------------------------------------------------------------------------
 // admin
 // ---------------------------------------------------------------------------
 

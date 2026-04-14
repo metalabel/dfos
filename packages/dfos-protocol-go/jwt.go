@@ -11,11 +11,18 @@ import (
 // VerifiedCredential represents a successfully verified DFOS credential.
 type VerifiedCredential struct {
 	Iss       string
-	Sub       string
+	Aud       string // audience DID or "*" for public
 	Exp       int64
-	Type      string // "DFOSContentRead" or "DFOSContentWrite"
+	Iat       int64
+	Action    string // "read" or "write" (from att)
 	Kid       string
-	ContentID string // optional scope (derived from att resource)
+	ContentID string // optional scope (from att resource)
+	CID       string // credential CID from header
+
+	// Deprecated: use Aud instead
+	Sub string
+	// Deprecated: use Action instead. Maps: "read" → "DFOSContentRead", "write" → "DFOSContentWrite"
+	Type string
 }
 
 // CreateAuthToken creates a DID-signed auth token JWT for relay authentication.
@@ -139,6 +146,7 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		Alg string `json:"alg"`
 		Typ string `json:"typ"`
 		Kid string `json:"kid"`
+		CID string `json:"cid"`
 	}
 	if err := json.Unmarshal(headerBytes, &header); err != nil {
 		return nil, fmt.Errorf("failed to decode token")
@@ -186,6 +194,27 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 	if claims.Type != "DFOSCredential" {
 		return nil, fmt.Errorf("invalid credential type: %s", claims.Type)
 	}
+	if claims.Version != 1 {
+		return nil, fmt.Errorf("unsupported credential version: %d", claims.Version)
+	}
+
+	// verify CID integrity — re-derive from payload and compare to header
+	headerCID := header.CID
+	if headerCID == "" {
+		return nil, fmt.Errorf("missing cid in credential header")
+	}
+	var payloadMap map[string]any
+	if err := json.Unmarshal(payloadBytes, &payloadMap); err != nil {
+		return nil, fmt.Errorf("failed to parse credential payload for CID derivation")
+	}
+	NormalizeJSONNumbers(payloadMap)
+	_, _, derivedCID, err := DagCborCID(payloadMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive credential CID: %w", err)
+	}
+	if headerCID != derivedCID {
+		return nil, fmt.Errorf("credential CID mismatch: header %s, derived %s", headerCID, derivedCID)
+	}
 
 	// verify kid is a DID URL and matches iss
 	kid := header.Kid
@@ -210,20 +239,22 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("subject mismatch: expected %s, got %s", subject, claims.Aud)
 	}
 
-	// derive credential type from att actions: "read" → DFOSContentRead,
-	// "write" → DFOSContentWrite
+	// derive action and legacy credential type from att
+	var action string
 	var credType string
 	for _, a := range claims.Att {
 		switch a.Action {
 		case "write":
+			action = "write"
 			credType = "DFOSContentWrite"
 		case "read":
-			if credType == "" {
+			if action == "" {
+				action = "read"
 				credType = "DFOSContentRead"
 			}
 		}
 	}
-	if credType == "" {
+	if action == "" {
 		return nil, fmt.Errorf("no recognized action in att")
 	}
 
@@ -249,11 +280,15 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 
 	return &VerifiedCredential{
 		Iss:       claims.Iss,
-		Sub:       claims.Aud,
+		Aud:       claims.Aud,
+		Sub:       claims.Aud, // backward compat
 		Exp:       claims.Exp,
-		Type:      credType,
+		Iat:       claims.Iat,
+		Action:    action,
+		Type:      credType, // backward compat
 		Kid:       kid,
 		ContentID: contentID,
+		CID:       headerCID,
 	}, nil
 }
 

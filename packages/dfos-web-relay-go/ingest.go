@@ -115,6 +115,26 @@ func classify(jwsToken string) classifiedOp {
 			base.referencedDID = did
 		}
 		return base
+
+	case "did:dfos:revocation":
+		base.kind = "revocation"
+		base.priority = 1 // same as beacons — needs identity keys to verify
+		base.previousCID = ""
+		if did, ok := payload["did"].(string); ok {
+			base.referencedDID = did
+		}
+		return base
+
+	case "did:dfos:credential":
+		base.kind = "credential"
+		base.priority = 1
+		base.previousCID = ""
+		// only ingest public credentials (aud: "*"), silently ignore private ones
+		if aud, ok := payload["aud"].(string); ok && aud != "*" {
+			return unknown
+		}
+		base.referencedDID = kidDID
+		return base
 	}
 
 	return unknown
@@ -662,6 +682,174 @@ func ingestArtifact(jwsToken string, store Store, logEnabled bool) IngestionResu
 	return IngestionResult{CID: cid, Status: "new", Kind: "artifact", ChainID: did}
 }
 
+func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionResult {
+	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+	if err != nil || header == nil {
+		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
+	}
+
+	// verify typ
+	if header.Typ != "did:dfos:revocation" {
+		return IngestionResult{Status: "rejected", Error: "invalid typ for revocation"}
+	}
+
+	// parse payload fields
+	did, _ := payload["did"].(string)
+	credentialCID, _ := payload["credentialCID"].(string)
+	if did == "" || credentialCID == "" {
+		return IngestionResult{Status: "rejected", Error: "missing required revocation fields"}
+	}
+
+	// re-derive CID from payload
+	dfos.NormalizeJSONNumbers(payload)
+	_, _, cid, err := dfos.DagCborCID(payload)
+	if err != nil {
+		return IngestionResult{Status: "rejected", Error: "failed to compute CID"}
+	}
+
+	// verify header CID matches derived CID
+	if header.CID != "" && header.CID != cid {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "CID mismatch"}
+	}
+
+	// verify kid DID matches payload.did (only issuer can revoke)
+	kid := header.Kid
+	if kid == "" || !strings.Contains(kid, "#") {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "kid must be a DID URL"}
+	}
+	kidDID := kid[:strings.Index(kid, "#")]
+	if kidDID != did {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "kid DID must match revocation did"}
+	}
+
+	// idempotent
+	existing, _ := store.GetOperation(cid)
+	if existing != nil {
+		if existing.JWSToken != jwsToken {
+			return IngestionResult{CID: cid, Status: "rejected", Error: "operation already exists with a different signature"}
+		}
+		return IngestionResult{CID: cid, Status: "duplicate", Kind: "revocation", ChainID: did}
+	}
+
+	// reject if identity is deleted
+	identity, _ := store.GetIdentityChain(did)
+	if identity != nil && identity.State.IsDeleted {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
+	}
+
+	// verify signature using the issuer's key
+	resolveKey := CreateKeyResolver(store)
+	publicKey, err := resolveKey(kid)
+	if err != nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to resolve key: %v", err)}
+	}
+
+	if _, _, err := dfos.VerifyJWS(jwsToken, publicKey); err != nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("invalid signature: %v", err)}
+	}
+
+	// store revocation
+	store.AddRevocation(StoredRevocation{
+		CID:           cid,
+		IssuerDID:     did,
+		CredentialCID: credentialCID,
+		JWSToken:      jwsToken,
+	})
+
+	// revoke any standing public credential
+	store.RemovePublicCredential(credentialCID)
+
+	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "revocation", ChainID: did})
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "revocation", ChainID: did})
+	}
+	return IngestionResult{CID: cid, Status: "new", Kind: "revocation", ChainID: did}
+}
+
+func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) IngestionResult {
+	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+	if err != nil || header == nil {
+		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
+	}
+
+	// verify it's a credential
+	if header.Typ != "did:dfos:credential" {
+		return IngestionResult{Status: "rejected", Error: "invalid typ for credential"}
+	}
+
+	// must be public (aud: "*")
+	aud, _ := payload["aud"].(string)
+	if aud != "*" {
+		return IngestionResult{Status: "rejected", Error: "only public credentials (aud: *) are ingested"}
+	}
+
+	// parse issuer from kid
+	kid := header.Kid
+	if kid == "" || !strings.Contains(kid, "#") {
+		return IngestionResult{Status: "rejected", Error: "kid must be a DID URL"}
+	}
+	kidDID := kid[:strings.Index(kid, "#")]
+
+	cid := header.CID
+	if cid == "" {
+		return IngestionResult{Status: "rejected", Error: "missing cid in credential header"}
+	}
+
+	// idempotent
+	existing, _ := store.GetOperation(cid)
+	if existing != nil {
+		if existing.JWSToken != jwsToken {
+			return IngestionResult{CID: cid, Status: "rejected", Error: "operation already exists with a different signature"}
+		}
+		return IngestionResult{CID: cid, Status: "duplicate", Kind: "credential", ChainID: kidDID}
+	}
+
+	// check if already revoked
+	revoked, _ := store.IsCredentialRevoked(kidDID, cid)
+	if revoked {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "credential has been revoked"}
+	}
+
+	// resolve key and verify credential
+	resolveKey := CreateKeyResolver(store)
+	publicKey, err := resolveKey(kid)
+	if err != nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to resolve key: %v", err)}
+	}
+
+	credential, err := dfos.VerifyCredential(jwsToken, publicKey, "", "")
+	if err != nil {
+		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
+	}
+
+	// build att pairs
+	attRaw, _ := payload["att"].([]any)
+	var att []AttenuationPair
+	for _, a := range attRaw {
+		am, ok := a.(map[string]any)
+		if !ok {
+			continue
+		}
+		resource, _ := am["resource"].(string)
+		action, _ := am["action"].(string)
+		att = append(att, AttenuationPair{Resource: resource, Action: action})
+	}
+
+	store.AddPublicCredential(StoredPublicCredential{
+		CID:       cid,
+		IssuerDID: credential.Iss,
+		Att:       att,
+		Exp:       credential.Exp,
+		JWSToken:  jwsToken,
+	})
+
+	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "credential", ChainID: kidDID})
+	if logEnabled {
+		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "credential", ChainID: kidDID})
+	}
+	return IngestionResult{CID: cid, Status: "new", Kind: "credential", ChainID: kidDID}
+}
+
 // ---------------------------------------------------------------------------
 // fork helpers
 // ---------------------------------------------------------------------------
@@ -881,6 +1069,10 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 				result = ingestCountersign(op.jwsToken, store, cfg.logEnabled)
 			case "artifact":
 				result = ingestArtifact(op.jwsToken, store, cfg.logEnabled)
+			case "revocation":
+				result = ingestRevocation(op.jwsToken, store, cfg.logEnabled)
+			case "credential":
+				result = ingestPublicCredential(op.jwsToken, store, cfg.logEnabled)
 			default:
 				result = IngestionResult{Status: "rejected", Error: "unrecognized operation type"}
 			}

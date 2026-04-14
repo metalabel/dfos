@@ -35,8 +35,10 @@ func TestWellKnown(t *testing.T) {
 		Protocol     string `json:"protocol"`
 		Version      string `json:"version"`
 		Capabilities struct {
-			Proof   bool `json:"proof"`
-			Content bool `json:"content"`
+			Proof     bool `json:"proof"`
+			Content   bool `json:"content"`
+			Documents bool `json:"documents"`
+			Log       bool `json:"log"`
 		} `json:"capabilities"`
 		Profile string `json:"profile"`
 	}

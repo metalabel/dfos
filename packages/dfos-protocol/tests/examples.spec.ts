@@ -181,7 +181,7 @@ describe('example fixtures', () => {
       });
 
       expect(result.iss).toBe(fixture.expected.iss);
-      expect(result.aud).toBe(fixture.expected.sub);
+      expect(result.aud).toBe(fixture.expected.aud);
     });
 
     it('verifies credential-write.json narrow credential', async () => {
@@ -209,7 +209,7 @@ describe('example fixtures', () => {
       });
 
       expect(result.iss).toBe(fixture.expected.iss);
-      expect(result.aud).toBe(fixture.expected.sub);
+      expect(result.aud).toBe(fixture.expected.aud);
     });
   });
 

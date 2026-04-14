@@ -148,6 +148,8 @@ Chain verification proceeds from the leaf credential upward:
 
 **Linear walk:** For multi-parent credentials, all parents are verified, but the chain walk continues through the first parent. All parents contribute to the attenuation union.
 
+**Revocation at every level:** Relays SHOULD check revocation at every level of the delegation chain, not just the leaf credential. A revoked intermediate credential invalidates all downstream delegations rooted through it.
+
 ---
 
 ## Attenuation Rules

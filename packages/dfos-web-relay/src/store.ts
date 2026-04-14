@@ -133,9 +133,16 @@ export class MemoryRelayStore implements RelayStore {
 
   async getPublicCredentials(resource: string): Promise<string[]> {
     const tokens: string[] = [];
+    const isChainRequest = resource.startsWith('chain:');
     for (const cred of this.publicCredentials.values()) {
       for (const att of cred.att) {
         if (att.resource === resource) {
+          tokens.push(cred.jwsToken);
+          break;
+        }
+        // also include manifest-scoped credentials when requesting chain access —
+        // matchesResource with manifestLookup will determine actual coverage
+        if (isChainRequest && att.resource.startsWith('manifest:')) {
           tokens.push(cred.jwsToken);
           break;
         }

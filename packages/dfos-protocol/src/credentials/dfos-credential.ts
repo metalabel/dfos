@@ -256,6 +256,8 @@ export const verifyDelegationChain = async (
     rootDID: string;
     /** Current time in seconds (defaults to Date.now() / 1000) */
     now?: number;
+    /** Check if a credential has been revoked (checked at every level of the chain) */
+    isRevoked?: (issuerDID: string, credentialCID: string) => Promise<boolean>;
   },
 ): Promise<VerifiedDelegationChain> => {
   const chain: VerifiedDFOSCredential[] = [credential];
@@ -281,6 +283,17 @@ export const verifyDelegationChain = async (
         resolveIdentity: options.resolveIdentity,
         ...(options.now !== undefined ? { now: options.now } : {}),
       });
+
+      // check revocation at every level of the chain
+      if (options.isRevoked) {
+        const revoked = await options.isRevoked(parent.iss, parent.credentialCID);
+        if (revoked) {
+          throw new CredentialVerificationError(
+            'parent credential in delegation chain is revoked',
+          );
+        }
+      }
+
       parents.push(parent);
     }
 

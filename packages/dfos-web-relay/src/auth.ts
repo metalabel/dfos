@@ -103,27 +103,55 @@ export const verifyContentAccess = async (options: {
     return { granted: true, source: 'creator' };
   }
 
+  // shared helpers for credential verification
+  const resolveIdentity = async (did: string) => {
+    const chain = await store.getIdentityChain(did);
+    return chain?.state;
+  };
+
+  const isRevoked = async (issuerDID: string, credentialCID: string) =>
+    store.isCredentialRevoked(issuerDID, credentialCID);
+
+  // manifest lookup — resolves which contentIds a manifest indexes
+  const manifestLookup = async (manifestContentId: string): Promise<string[]> => {
+    const chain = await store.getContentChain(manifestContentId);
+    if (!chain) return [];
+    const docCID = chain.state.currentDocumentCID;
+    if (!docCID) return [];
+    const blob = await store.getBlob({ creatorDID: chain.state.creatorDID, documentCID: docCID });
+    if (!blob) return [];
+    try {
+      const doc = JSON.parse(new TextDecoder().decode(blob)) as Record<string, unknown>;
+      const entries = doc['entries'];
+      if (!entries || typeof entries !== 'object') return [];
+      // extract contentId references (22-char bare hashes, not DIDs or CIDs)
+      return Object.values(entries as Record<string, unknown>).filter(
+        (v): v is string =>
+          typeof v === 'string' && !v.startsWith('did:') && !v.startsWith('bafyrei'),
+      );
+    } catch {
+      return [];
+    }
+  };
+
   // 2. check stored public credentials
   const publicCreds = await store.getPublicCredentials(requestedResource);
   for (const credJws of publicCreds) {
-    const resolveIdentity = async (did: string) => {
-      const chain = await store.getIdentityChain(did);
-      return chain?.state;
-    };
-
     try {
       const cred = await verifyDFOSCredential(credJws, { resolveIdentity });
 
       // check revocation (scoped to credential issuer)
-      const revoked = await store.isCredentialRevoked(cred.iss, cred.credentialCID);
-      if (revoked) continue;
+      const leafRevoked = await isRevoked(cred.iss, cred.credentialCID);
+      if (leafRevoked) continue;
 
-      // check resource + action match
-      const covers = await matchesResource(cred.att, requestedResource, action);
+      // check resource + action match (with manifest transitive lookup)
+      const covers = await matchesResource(cred.att, requestedResource, action, {
+        manifestLookup,
+      });
       if (!covers) continue;
 
-      // verify delegation chain roots at creator
-      await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID });
+      // verify delegation chain roots at creator (with revocation at every level)
+      await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID, isRevoked });
 
       return { granted: true, source: 'public-credential' as const, credential: cred };
     } catch {
@@ -133,22 +161,17 @@ export const verifyContentAccess = async (options: {
 
   // 3. check per-request credential
   if (credentialJWS) {
-    const resolveIdentity = async (did: string) => {
-      const chain = await store.getIdentityChain(did);
-      return chain?.state;
-    };
-
     try {
       const cred = await verifyDFOSCredential(credentialJWS, { resolveIdentity });
 
       // check revocation (scoped to credential issuer)
-      const revoked = await store.isCredentialRevoked(cred.iss, cred.credentialCID);
-      if (revoked) {
+      const leafRevoked = await isRevoked(cred.iss, cred.credentialCID);
+      if (leafRevoked) {
         return { granted: false, source: 'none' };
       }
 
-      // verify delegation chain roots at creator
-      await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID });
+      // verify delegation chain roots at creator (with revocation at every level)
+      await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID, isRevoked });
 
       // audience verification for non-public credentials
       if (cred.aud !== '*') {
@@ -157,8 +180,10 @@ export const verifyContentAccess = async (options: {
         }
       }
 
-      // check resource + action match
-      const covers = await matchesResource(cred.att, requestedResource, action);
+      // check resource + action match (with manifest transitive lookup)
+      const covers = await matchesResource(cred.att, requestedResource, action, {
+        manifestLookup,
+      });
       if (!covers) {
         return { granted: false, source: 'none' };
       }

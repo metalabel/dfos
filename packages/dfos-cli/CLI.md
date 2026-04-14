@@ -250,7 +250,7 @@ If the document has no `$schema` field, the CLI warns but proceeds. The relay is
 
 ## Credentials
 
-The CLI issues VC-JWT credentials for content access control:
+The CLI issues DFOS credentials for content access control:
 
 ```bash
 # grant read access
@@ -266,7 +266,7 @@ dfos content grant <contentId> <did> --read --ttl 1h
 Credentials are printed to stdout (or as JSON with `--json`). The recipient passes them to relay endpoints via the `X-Credential` header, or to the CLI via `--credential`:
 
 ```bash
-dfos content download <contentId> --credential <vc-jwt> --relay local
+dfos content download <contentId> --credential <jws> --relay local
 ```
 
 Credential transport is out-of-band — the CLI mints and consumes them, but doesn't transmit them between parties.
