@@ -288,9 +288,7 @@ export const verifyDelegationChain = async (
       if (options.isRevoked) {
         const revoked = await options.isRevoked(parent.iss, parent.credentialCID);
         if (revoked) {
-          throw new CredentialVerificationError(
-            'parent credential in delegation chain is revoked',
-          );
+          throw new CredentialVerificationError('parent credential in delegation chain is revoked');
         }
       }
 
