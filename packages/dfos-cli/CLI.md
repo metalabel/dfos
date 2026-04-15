@@ -250,7 +250,7 @@ If the document has no `$schema` field, the CLI warns but proceeds. The relay is
 
 ## Credentials
 
-The CLI issues DFOS credentials for content access control:
+The CLI issues DFOS credentials for content access control. `dfos cred` is an alias for `dfos credential`.
 
 ```bash
 # grant read access
@@ -261,12 +261,28 @@ dfos credential grant <contentId> <did> --write
 
 # with custom TTL
 dfos credential grant <contentId> <did> --read --ttl 1h
+
+# wildcard credential covering all content
+dfos credential grant <contentId> <did> --read --broad
+
+# scope to a specific content ID (different from the positional arg)
+dfos credential grant <contentId> <did> --read --scope <otherContentId>
+
+# revoke a credential
+dfos credential revoke <credentialCID>
+
+# revoke and push to a peer immediately
+dfos credential revoke <credentialCID> --peer prod
 ```
 
-Credentials are printed to stdout (or as JSON with `--json`). The recipient passes them to relay endpoints via the `X-Credential` header, or to the CLI via `--credential`:
+Credentials are printed to stdout (or as JSON with `--json`). The recipient passes them to relay endpoints via the `X-Credential` header, or to the CLI via `--credential` (reads) or `--authorization` (writes):
 
 ```bash
+# present a read credential for downloads
 dfos content download <contentId> --credential <jws> --relay local
+
+# present a write credential for delegated mutations
+dfos --ctx bob@prod content update <contentId> new.json --authorization <jws>
 ```
 
 Credential transport is out-of-band — the CLI mints and consumes them, but doesn't transmit them between parties.

@@ -49,14 +49,14 @@ serve({ port: 4444 });
 | `GET`  | `/countersignatures/:cid`                | Get countersignatures for an operation                           |
 | `GET`  | `/operations/:cid/countersignatures`     | Same as above (alias)                                            |
 | `PUT`  | `/content/:contentId/blob/:operationCID` | Upload blob (auth required)                                      |
-| `GET`  | `/content/:contentId/blob`               | Download blob at head (auth + credential)                        |
+| `GET`  | `/content/:contentId/blob`               | Download blob at head (standing auth, or auth + credential)      |
 | `GET`  | `/content/:contentId/blob/:ref`          | Download blob at specific operation ref                          |
 
 ## Blob Authorization
 
 **Upload**: Auth token required. Caller must be the chain creator or the signer of the referenced operation (enables delegated upload).
 
-**Download**: Auth token required. Chain creator can download directly. Other identities must present a DFOS read credential (issued by the creator) in the `X-Credential` header.
+**Download**: If a public credential (`aud: *`) exists as a standing authorization, the blob is served without authentication. Otherwise, auth token required — chain creator can download directly, other identities must present a DFOS read credential (issued by the creator) in the `X-Credential` header.
 
 ## Peering
 

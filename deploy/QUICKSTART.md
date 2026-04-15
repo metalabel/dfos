@@ -92,7 +92,7 @@ Registry:
 ghcr.io/metalabel/dfos:latest
 ```
 
-Pinned version tags (e.g. `ghcr.io/metalabel/dfos:0.7.1`) are also available.
+Pinned version tags (e.g. `ghcr.io/metalabel/dfos:0.9.0`) are also available.
 
 Browse available tags at
 https://github.com/metalabel/dfos/pkgs/container/dfos.
