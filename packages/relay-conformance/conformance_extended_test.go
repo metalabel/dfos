@@ -322,8 +322,8 @@ func TestCredentialExpired(t *testing.T) {
 	reader := createIdentity(t, base)
 	issuerKid := id.did + "#" + id.auth.keyID
 	cred, err := dfos.CreateCredential(
-		id.did, reader.did, issuerKid, "DFOSContentRead",
-		-1*time.Hour, cc.contentID, id.auth.priv,
+		id.did, reader.did, issuerKid, "chain:"+cc.contentID, "read",
+		-1*time.Hour, id.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -356,8 +356,8 @@ func TestCredentialScopeMismatch(t *testing.T) {
 	reader := createIdentity(t, base)
 	issuerKid := id.did + "#" + id.auth.keyID
 	credA, err := dfos.CreateCredential(
-		id.did, reader.did, issuerKid, "DFOSContentRead",
-		5*time.Minute, ccA.contentID, id.auth.priv,
+		id.did, reader.did, issuerKid, "chain:"+ccA.contentID, "read",
+		5*time.Minute, id.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -386,8 +386,8 @@ func TestDelegatedContentDelete(t *testing.T) {
 	// creator issues write credential to delegate
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	cred, err := dfos.CreateCredential(
-		creator.did, delegate.did, creatorKid, "DFOSContentWrite",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, delegate.did, creatorKid, "chain:"+cc.contentID, "write",
+		5*time.Minute, creator.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)

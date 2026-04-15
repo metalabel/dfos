@@ -10,19 +10,17 @@ import (
 
 // VerifiedCredential represents a successfully verified DFOS credential.
 type VerifiedCredential struct {
-	Iss       string
-	Aud       string // audience DID or "*" for public
-	Exp       int64
-	Iat       int64
-	Action    string // "read" or "write" (from att)
-	Kid       string
-	ContentID string // optional scope (from att resource)
-	CID       string // credential CID from header
+	Iss string
+	Aud string // audience DID or "*" for public
+	Exp int64
+	Iat int64
+	Att []AttEntry // full attenuation array
+	Kid string
+	CID string // credential CID from header
 
-	// Deprecated: use Aud instead
-	Sub string
-	// Deprecated: use Action instead. Maps: "read" → "DFOSContentRead", "write" → "DFOSContentWrite"
-	Type string
+	// Convenience fields derived from the first att entry.
+	Action    string // "read" or "write"
+	ContentID string // resource ID (without "chain:" prefix)
 }
 
 // CreateAuthToken creates a DID-signed auth token JWT for relay authentication.
@@ -58,21 +56,16 @@ func CreateAuthToken(iss, aud, kid string, ttl time.Duration, privateKey ed25519
 
 // CreateCredential creates a DFOS credential (UCAN-style authorization token).
 //
-// The credType parameter maps to an action: "DFOSContentRead" → "read",
-// "DFOSContentWrite" → "write". The sub parameter is the audience DID.
-func CreateCredential(iss, sub, kid, credType string, ttl time.Duration, contentID string, privateKey ed25519.PrivateKey) (string, error) {
+// The resource parameter is the full resource string (e.g., "chain:contentId",
+// "chain:*", "manifest:manifestId"). The action is "read" or "write".
+// The aud parameter is the audience DID (or "*" for public credentials).
+func CreateCredential(iss, aud, kid, resource, action string, ttl time.Duration, privateKey ed25519.PrivateKey) (string, error) {
 	now := time.Now().Unix()
 	exp := now + int64(ttl.Seconds())
 
-	// map legacy credential type to action
-	action := "read"
-	if credType == "DFOSContentWrite" {
-		action = "write"
-	}
-
 	att := []map[string]string{
 		{
-			"resource": "chain:" + contentID,
+			"resource": resource,
 			"action":   action,
 		},
 	}
@@ -81,7 +74,7 @@ func CreateCredential(iss, sub, kid, credType string, ttl time.Duration, content
 		"version": 1,
 		"type":    "DFOSCredential",
 		"iss":     iss,
-		"aud":     sub,
+		"aud":     aud,
 		"att":     att,
 		"prf":     []string{},
 		"exp":     exp,
@@ -239,24 +232,22 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("subject mismatch: expected %s, got %s", subject, claims.Aud)
 	}
 
-	// derive action, contentID, and legacy type from the first recognized att entry.
-	// Action and resource are paired from the same entry to avoid cross-pairing
-	// when multiple att entries exist.
+	// build full att array
+	att := make([]AttEntry, 0, len(claims.Att))
+	for _, a := range claims.Att {
+		att = append(att, AttEntry{Resource: a.Resource, Action: a.Action})
+	}
+
+	// derive convenience fields from the first recognized att entry
 	var action string
-	var credType string
 	var contentID string
 	for _, a := range claims.Att {
 		switch a.Action {
-		case "write":
-			action = "write"
-			credType = "DFOSContentWrite"
-		case "read":
-			action = "read"
-			credType = "DFOSContentRead"
+		case "write", "read":
+			action = a.Action
 		default:
 			continue
 		}
-		// extract contentID from the same att entry
 		if a.Resource != "" {
 			r := a.Resource
 			if strings.HasPrefix(r, "chain:") {
@@ -270,19 +261,24 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("no recognized action in att")
 	}
 
-	// verify type if specified
-	if expectedType != "" && credType != expectedType {
-		return nil, fmt.Errorf("type mismatch: expected %s, got %s", expectedType, credType)
+	// verify type if specified (legacy compatibility)
+	if expectedType != "" {
+		credType := "DFOSContentRead"
+		if action == "write" {
+			credType = "DFOSContentWrite"
+		}
+		if credType != expectedType {
+			return nil, fmt.Errorf("type mismatch: expected %s, got %s", expectedType, credType)
+		}
 	}
 
 	return &VerifiedCredential{
 		Iss:       claims.Iss,
 		Aud:       claims.Aud,
-		Sub:       claims.Aud, // backward compat
 		Exp:       claims.Exp,
 		Iat:       claims.Iat,
+		Att:       att,
 		Action:    action,
-		Type:      credType, // backward compat
 		Kid:       kid,
 		ContentID: contentID,
 		CID:       headerCID,

@@ -325,6 +325,12 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 
 Relays maintain a revocation set keyed by `(issuerDID, credentialCID)`. During credential verification, the relay checks whether the credential's CID appears in the revocation set for that credential's issuer. This scoping prevents a rogue DID from revoking credentials it did not issue. A revoked credential fails verification regardless of its expiry or signature validity.
 
+### Revocation Scope
+
+Revocation is **forward-looking**: it prevents future use of a credential but does not retroactively invalidate operations already committed to the content chain. Once a delegated content operation (create, update, delete) has been ingested and verified by a relay, revoking the authorizing credential does not undo that operation — the operation is permanently part of the content chain's log.
+
+This is consistent with the content chain's append-only semantics: operations are immutable once committed. Revocation controls future access (standing authorization checks, per-request credential verification) but not the historical record.
+
 ---
 
 ## Relationship to Auth Tokens

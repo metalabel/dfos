@@ -645,7 +645,7 @@ func TestVerifyContentChain_DelegatedWriteWithCredential(t *testing.T) {
 	contentJWS, _, contentCID := testSignContentGenesis(t, did, docCID, kid, priv, genesisTime)
 
 	// creator issues a write credential to did2
-	vc, err := CreateCredential(did, did2, kid, "DFOSContentWrite", 1*time.Hour, "", priv)
+	vc, err := CreateCredential(did, did2, kid, "chain:*", "write", 1*time.Hour, priv)
 	if err != nil {
 		t.Fatal(err)
 	}

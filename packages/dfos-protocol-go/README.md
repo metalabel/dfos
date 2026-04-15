@@ -30,8 +30,8 @@ cid, bytes, err := dfos.DocumentCID(map[string]any{"type": "post", "body": "hell
 
 // Create a DFOS credential
 cred, err := dfos.CreateCredential(
-    issuerDID, subjectDID, kid, "DFOSContentRead",
-    5*time.Minute, contentID, privateKey,
+    issuerDID, audienceDID, kid, "chain:"+contentID, "read",
+    5*time.Minute, privateKey,
 )
 ```
 

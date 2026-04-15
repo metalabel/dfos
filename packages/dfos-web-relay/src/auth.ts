@@ -15,7 +15,7 @@ import {
   type VerifiedDFOSCredential,
 } from '@metalabel/dfos-protocol/credentials';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import { createCurrentKeyResolver } from './ingest';
+import { createCurrentKeyResolver, createHistoricalIdentityResolver } from './ingest';
 import type { RelayStore } from './types';
 
 /**
@@ -104,57 +104,7 @@ export const verifyContentAccess = async (options: {
   }
 
   // shared helpers for credential verification
-  //
-  // Credentials are long-lived artifacts — their validity persists across key
-  // rotations. Return identity with all historical keys so credentials signed
-  // by rotated-out keys still verify. Revocation (not key rotation) is the
-  // invalidation mechanism.
-  const resolveIdentity = async (did: string) => {
-    const chain = await store.getIdentityChain(did);
-    if (!chain) return undefined;
-
-    const { state, log } = chain;
-    const keyMaps = {
-      authKeys: new Map(state.authKeys.map((k) => [k.id, k])),
-      assertKeys: new Map(state.assertKeys.map((k) => [k.id, k])),
-      controllerKeys: new Map(state.controllerKeys.map((k) => [k.id, k])),
-    };
-
-    for (const token of log) {
-      const decoded = decodeJwsUnsafe(token);
-      if (!decoded) continue;
-      const payload = decoded.payload as Record<string, unknown>;
-      const opType = payload['type'];
-      if (opType !== 'create' && opType !== 'update') continue;
-
-      for (const arrayName of ['authKeys', 'assertKeys', 'controllerKeys'] as const) {
-        const keys = payload[arrayName];
-        if (!Array.isArray(keys)) continue;
-        const map = keyMaps[arrayName];
-        for (const k of keys) {
-          if (
-            k &&
-            typeof k === 'object' &&
-            'id' in k &&
-            'publicKeyMultibase' in k &&
-            !map.has((k as { id: string }).id)
-          ) {
-            map.set(
-              (k as { id: string }).id,
-              k as { id: string; type: 'Multikey'; publicKeyMultibase: string },
-            );
-          }
-        }
-      }
-    }
-
-    return {
-      ...state,
-      authKeys: [...keyMaps.authKeys.values()],
-      assertKeys: [...keyMaps.assertKeys.values()],
-      controllerKeys: [...keyMaps.controllerKeys.values()],
-    };
-  };
+  const resolveIdentity = createHistoricalIdentityResolver(store);
 
   const isRevoked = async (issuerDID: string, credentialCID: string) =>
     store.isCredentialRevoked(issuerDID, credentialCID);

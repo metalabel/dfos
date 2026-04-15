@@ -937,8 +937,8 @@ func TestBlobDownloadWithCredential(t *testing.T) {
 	reader := createIdentity(t, base)
 	readerKid := id.did + "#" + id.auth.keyID
 	cred, err := dfos.CreateCredential(
-		id.did, reader.did, readerKid, "DFOSContentRead",
-		5*time.Minute, cc.contentID, id.auth.priv,
+		id.did, reader.did, readerKid, "chain:"+cc.contentID, "read",
+		5*time.Minute, id.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -989,8 +989,8 @@ func TestBlobRejectCredentialFromNonCreator(t *testing.T) {
 	reader := createIdentity(t, base)
 	imposterKid := imposter.did + "#" + imposter.auth.keyID
 	cred, _ := dfos.CreateCredential(
-		imposter.did, reader.did, imposterKid, "DFOSContentRead",
-		5*time.Minute, cc.contentID, imposter.auth.priv,
+		imposter.did, reader.did, imposterKid, "chain:"+cc.contentID, "read",
+		5*time.Minute, imposter.auth.priv,
 	)
 
 	readerTok := authToken(t, base, reader)
@@ -1013,11 +1013,11 @@ func TestDelegatedContentUpdate(t *testing.T) {
 	// create delegate identity
 	delegate := createIdentity(t, base)
 
-	// creator issues DFOSContentWrite credential to delegate
+	// creator issues write credential to delegate
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	cred, err := dfos.CreateCredential(
-		creator.did, delegate.did, creatorKid, "DFOSContentWrite",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, delegate.did, creatorKid, "chain:"+cc.contentID, "write",
+		5*time.Minute, creator.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1092,8 +1092,8 @@ func TestDelegatedBlobUpload(t *testing.T) {
 	// issue write credential
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	cred, _ := dfos.CreateCredential(
-		creator.did, delegate.did, creatorKid, "DFOSContentWrite",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, delegate.did, creatorKid, "chain:"+cc.contentID, "write",
+		5*time.Minute, creator.auth.priv,
 	)
 
 	// delegate signs update

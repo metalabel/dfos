@@ -212,14 +212,14 @@ func TestWriteCredentialCannotRead(t *testing.T) {
 	reader := createIdentity(t, base)
 	issuerKid := id.did + "#" + id.auth.keyID
 	cred, _ := dfos.CreateCredential(
-		id.did, reader.did, issuerKid, "DFOSContentWrite",
-		5*time.Minute, cc.contentID, id.auth.priv,
+		id.did, reader.did, issuerKid, "chain:"+cc.contentID, "write",
+		5*time.Minute, id.auth.priv,
 	)
 
 	readerTok := authToken(t, base, reader)
 	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
 	if dlRes.StatusCode == 200 {
-		t.Fatal("DFOSContentWrite credential should not grant read access")
+		t.Fatal("write credential should not grant read access")
 	}
 	dlRes.Body.Close()
 }
@@ -234,8 +234,8 @@ func TestReadCredentialCannotWrite(t *testing.T) {
 	delegate := createIdentity(t, base)
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	cred, _ := dfos.CreateCredential(
-		creator.did, delegate.did, creatorKid, "DFOSContentRead",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, delegate.did, creatorKid, "chain:"+cc.contentID, "read",
+		5*time.Minute, creator.auth.priv,
 	)
 
 	doc2 := map[string]any{"type": "post", "title": "sneaky write"}
@@ -562,8 +562,8 @@ func TestCredentialFromDeletedIssuer(t *testing.T) {
 	reader := createIdentity(t, base)
 	issuerKid := creator.did + "#" + creator.auth.keyID
 	cred, err := dfos.CreateCredential(
-		creator.did, reader.did, issuerKid, "DFOSContentRead",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, reader.did, issuerKid, "chain:"+cc.contentID, "read",
+		5*time.Minute, creator.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -599,8 +599,8 @@ func TestDelegatedWriteFromDeletedCreator(t *testing.T) {
 	// issue write credential while creator is alive
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	cred, err := dfos.CreateCredential(
-		creator.did, delegate.did, creatorKid, "DFOSContentWrite",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, delegate.did, creatorKid, "chain:"+cc.contentID, "write",
+		5*time.Minute, creator.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)

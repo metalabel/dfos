@@ -610,8 +610,10 @@ func newContentGrantCmd() *cobra.Command {
 				return err
 			}
 
+			action := "read"
 			credType := "DFOSContentRead"
 			if write {
+				action = "write"
 				credType = "DFOSContentWrite"
 			}
 
@@ -636,8 +638,9 @@ func newContentGrantCmd() *cobra.Command {
 			} else if scopeContentID != "" {
 				scope = scopeContentID
 			}
+			resource := "chain:" + scope
 
-			token, err := protocol.CreateCredential(chain.DID, subjectDID, kid, credType, dur, scope, privKey)
+			token, err := protocol.CreateCredential(chain.DID, subjectDID, kid, resource, action, dur, privKey)
 			if err != nil {
 				return fmt.Errorf("create credential: %w", err)
 			}
