@@ -1,9 +1,42 @@
 package dfos
 
 import (
+	"crypto/ed25519"
 	"fmt"
 	"strings"
 )
+
+// SignRevocation signs a credential revocation.
+func SignRevocation(did, credentialCID, kid string, privateKey ed25519.PrivateKey) (jwsToken string, revocationCID string, err error) {
+	now := protocolTimestamp()
+
+	payload := map[string]any{
+		"version":       int64(1),
+		"type":          "revocation",
+		"did":           did,
+		"credentialCID": credentialCID,
+		"createdAt":     now.Format("2006-01-02T15:04:05.000Z"),
+	}
+
+	_, _, cidStr, err := DagCborCID(payload)
+	if err != nil {
+		return "", "", err
+	}
+
+	header := JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:revocation",
+		Kid: kid,
+		CID: cidStr,
+	}
+
+	jwsToken, err = CreateJWS(header, payload, privateKey)
+	if err != nil {
+		return "", "", err
+	}
+
+	return jwsToken, cidStr, nil
+}
 
 // VerifiedRevocationResult is the result of revocation verification.
 type VerifiedRevocationResult struct {

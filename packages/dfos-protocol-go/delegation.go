@@ -101,7 +101,7 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 
 			// check resource coverage
 			if parentType == "chain" && parentID == "*" {
-				// chain:* covers everything: chain:X, chain:*, manifest:M
+				// chain:* covers everything: chain:X, chain:*
 				covered = true
 				break
 			} else if childType == "chain" && childID == "*" {
@@ -112,18 +112,8 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 					covered = true
 					break
 				}
-			} else if childType == "chain" && parentType == "manifest" {
-				// narrowing from manifest — valid structurally
-				covered = true
-				break
-			} else if childType == "manifest" && parentType == "manifest" {
-				if childID == parentID {
-					covered = true
-					break
-				}
 			}
-			// manifest:M NOT covered by chain:X (widening — invalid)
-			// chain:* NOT covered by chain:X or manifest:M (widening — invalid)
+			// chain:* NOT covered by chain:X (widening — invalid)
 		}
 
 		if !covered {

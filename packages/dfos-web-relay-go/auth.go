@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -48,6 +47,30 @@ func AuthenticateRequest(authHeader string, relayDID string, store Store) *dfos.
 	}
 
 	return result
+}
+
+// ---------------------------------------------------------------------------
+// public standing auth
+// ---------------------------------------------------------------------------
+
+// hasPublicStandingAuth checks if a valid public standing credential exists
+// for the given content. Verifies expiry and revocation.
+func (r *Relay) hasPublicStandingAuth(contentID string, action string) bool {
+	resource := "chain:" + contentID
+	publicCreds, _ := r.readStore.GetPublicCredentials(resource)
+	resolveKey := CreateKeyResolver(r.store)
+
+	chain, _ := r.readStore.GetContentChain(contentID)
+	if chain == nil {
+		return false
+	}
+
+	for _, credJws := range publicCreds {
+		if err := r.verifyCredentialForAccess(credJws, resolveKey, resource, action, chain.State.CreatorDID, ""); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +296,6 @@ func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []
 // ---------------------------------------------------------------------------
 
 // matchesResource checks if an att array covers a requested resource+action.
-// Handles manifest transitive lookup for manifest: → chain: coverage.
 func (r *Relay) matchesResource(att []dfos.AttEntry, resource string, action string) bool {
 	reqType, reqID, ok := dfos.ParseResource(resource)
 	if !ok {
@@ -310,63 +332,8 @@ func (r *Relay) matchesResource(att []dfos.AttEntry, resource string, action str
 			return true
 		}
 
-		// manifest covers chain transitively
-		if entryType == "manifest" && reqType == "chain" {
-			indexed := r.manifestLookup(entryID)
-			for _, id := range indexed {
-				if id == reqID {
-					return true
-				}
-			}
-		}
 	}
 
 	return false
-}
-
-// manifestLookup resolves which contentIds a manifest indexes by reading its
-// head document blob and extracting entries values.
-func (r *Relay) manifestLookup(manifestContentID string) []string {
-	chain, err := r.readStore.GetContentChain(manifestContentID)
-	if err != nil || chain == nil {
-		return nil
-	}
-	if chain.State.CurrentDocumentCID == nil {
-		return nil
-	}
-	docCID := *chain.State.CurrentDocumentCID
-
-	blob, _ := r.readStore.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: docCID})
-	if blob == nil {
-		return nil
-	}
-
-	var doc map[string]any
-	if err := json.Unmarshal(blob, &doc); err != nil {
-		return nil
-	}
-
-	entries, ok := doc["entries"]
-	if !ok {
-		return nil
-	}
-	entriesMap, ok := entries.(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	var result []string
-	for _, v := range entriesMap {
-		s, ok := v.(string)
-		if !ok {
-			continue
-		}
-		// contentId references are 22-char bare hashes, not DIDs or CIDs
-		if strings.HasPrefix(s, "did:") || strings.HasPrefix(s, "bafyrei") {
-			continue
-		}
-		result = append(result, s)
-	}
-	return result
 }
 

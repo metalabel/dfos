@@ -559,13 +559,6 @@ func (r *Relay) handleGetBlob(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, ref string) {
-	// authenticate
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
-	if auth == nil {
-		writeError(w, 401, "authentication required")
-		return
-	}
-
 	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
 		return
@@ -575,11 +568,22 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 		return
 	}
 
-	// verify read access
-	credHeader := req.Header.Get("X-Credential")
-	if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
-		writeError(w, 403, errMsg)
-		return
+	// check for public standing authorization (no auth needed)
+	if r.hasPublicStandingAuth(contentID, "read") {
+		// access granted via public credential — skip auth
+	} else {
+		// require auth token
+		auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
+		if auth == nil {
+			writeError(w, 401, "authentication required")
+			return
+		}
+		// verify read access with auth context
+		credHeader := req.Header.Get("X-Credential")
+		if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
+			writeError(w, 403, errMsg)
+			return
+		}
 	}
 
 	// resolve documentCID for the requested ref
@@ -636,13 +640,6 @@ func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
 	}
 	contentID := req.PathValue("contentId")
 
-	// authenticate
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
-	if auth == nil {
-		writeError(w, 401, "authentication required")
-		return
-	}
-
 	// verify chain exists
 	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
@@ -653,11 +650,22 @@ func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// verify read access
-	credHeader := req.Header.Get("X-Credential")
-	if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
-		writeError(w, 403, errMsg)
-		return
+	// check for public standing authorization (no auth needed)
+	if r.hasPublicStandingAuth(contentID, "read") {
+		// access granted via public credential — skip auth
+	} else {
+		// require auth token
+		auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
+		if auth == nil {
+			writeError(w, 401, "authentication required")
+			return
+		}
+		// verify read access with auth context
+		credHeader := req.Header.Get("X-Credential")
+		if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
+			writeError(w, 403, errMsg)
+			return
+		}
 	}
 
 	after := req.URL.Query().Get("after")

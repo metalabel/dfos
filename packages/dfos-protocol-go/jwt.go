@@ -57,7 +57,7 @@ func CreateAuthToken(iss, aud, kid string, ttl time.Duration, privateKey ed25519
 // CreateCredential creates a DFOS credential (UCAN-style authorization token).
 //
 // The resource parameter is the full resource string (e.g., "chain:contentId",
-// "chain:*", "manifest:manifestId"). The action is "read" or "write".
+// "chain:*"). The action is "read" or "write".
 // The aud parameter is the audience DID (or "*" for public credentials).
 func CreateCredential(iss, aud, kid, resource, action string, ttl time.Duration, privateKey ed25519.PrivateKey) (string, error) {
 	now := time.Now().Unix()

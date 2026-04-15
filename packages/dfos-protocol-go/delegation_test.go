@@ -16,7 +16,6 @@ func TestParseResource(t *testing.T) {
 		wantOK   bool
 	}{
 		{"chain:abc", "chain", "abc", true},
-		{"manifest:manifest1", "manifest", "manifest1", true},
 		{"chain:*", "chain", "*", true},
 		{"invalid", "", "", false},
 		{":", "", "", true}, // edge: empty type and id
@@ -70,7 +69,7 @@ func TestParseAtt(t *testing.T) {
 	payload := map[string]any{
 		"att": []any{
 			map[string]any{"resource": "chain:abc", "action": "read"},
-			map[string]any{"resource": "manifest:m1", "action": "write"},
+			map[string]any{"resource": "chain:def", "action": "write"},
 		},
 	}
 
@@ -81,7 +80,7 @@ func TestParseAtt(t *testing.T) {
 	if att[0].Resource != "chain:abc" || att[0].Action != "read" {
 		t.Errorf("att[0]: got %+v", att[0])
 	}
-	if att[1].Resource != "manifest:m1" || att[1].Action != "write" {
+	if att[1].Resource != "chain:def" || att[1].Action != "write" {
 		t.Errorf("att[1]: got %+v", att[1])
 	}
 }
@@ -212,14 +211,6 @@ func TestIsAttenuatedChainWildcardCoversChainX(t *testing.T) {
 	}
 }
 
-func TestIsAttenuatedChainWildcardCoversManifest(t *testing.T) {
-	parent := []AttEntry{{Resource: "chain:*", Action: "read"}}
-	child := []AttEntry{{Resource: "manifest:manifest1", Action: "read"}}
-	if !IsAttenuated(parent, child) {
-		t.Fatal("chain:* should cover manifest:M")
-	}
-}
-
 func TestIsAttenuatedChainWildcardCoversChainWildcard(t *testing.T) {
 	parent := []AttEntry{{Resource: "chain:*", Action: "read"}}
 	child := []AttEntry{{Resource: "chain:*", Action: "read"}}
@@ -236,46 +227,3 @@ func TestIsAttenuatedChainXCannotCoverChainWildcard(t *testing.T) {
 	}
 }
 
-func TestIsAttenuatedManifestCannotCoverChainWildcard(t *testing.T) {
-	parent := []AttEntry{{Resource: "manifest:manifest1", Action: "read"}}
-	child := []AttEntry{{Resource: "chain:*", Action: "read"}}
-	if IsAttenuated(parent, child) {
-		t.Fatal("manifest:M should NOT cover chain:* (widening)")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// IsAttenuated — manifest / chain interactions
-// ---------------------------------------------------------------------------
-
-func TestIsAttenuatedManifestToChainNarrowing(t *testing.T) {
-	parent := []AttEntry{{Resource: "manifest:manifest1", Action: "write"}}
-	child := []AttEntry{{Resource: "chain:content1", Action: "write"}}
-	if !IsAttenuated(parent, child) {
-		t.Fatal("manifest:M → chain:X should be valid narrowing")
-	}
-}
-
-func TestIsAttenuatedChainToManifestWidening(t *testing.T) {
-	parent := []AttEntry{{Resource: "chain:content1", Action: "write"}}
-	child := []AttEntry{{Resource: "manifest:manifest1", Action: "write"}}
-	if IsAttenuated(parent, child) {
-		t.Fatal("chain:X → manifest:M should be invalid widening")
-	}
-}
-
-func TestIsAttenuatedManifestExactMatch(t *testing.T) {
-	parent := []AttEntry{{Resource: "manifest:m1", Action: "read"}}
-	child := []AttEntry{{Resource: "manifest:m1", Action: "read"}}
-	if !IsAttenuated(parent, child) {
-		t.Fatal("manifest:M → manifest:M exact match should be attenuated")
-	}
-}
-
-func TestIsAttenuatedManifestMismatch(t *testing.T) {
-	parent := []AttEntry{{Resource: "manifest:m1", Action: "read"}}
-	child := []AttEntry{{Resource: "manifest:m2", Action: "read"}}
-	if IsAttenuated(parent, child) {
-		t.Fatal("manifest:m1 should NOT cover manifest:m2")
-	}
-}
