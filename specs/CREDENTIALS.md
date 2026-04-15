@@ -19,10 +19,6 @@ Two mechanisms from UCAN make credentials composable:
 
 Credentials are content-addressed via CID (same `dagCborCanonicalEncode` + SHA-256 scheme as all protocol objects). The CID appears in the JWS header, making each credential a stable, revocable artifact.
 
-### Why Not VC-JWTs
-
-The prior credential format (W3C VC-JWT, `typ: "vc+jwt"`) carried unnecessary complexity for the protocol's needs: the `vc` wrapper object, `@context` arrays, `credentialSubject` nesting. DFOS credentials flatten this into a direct payload with explicit resource/action pairs and native delegation support. The VC-JWT format has been fully replaced — no backward compatibility is maintained.
-
 ---
 
 ## Schema
