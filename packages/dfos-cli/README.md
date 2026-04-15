@@ -136,7 +136,7 @@ dfos content publish <id> --relay prod   # submit when ready
 | `credential grant`           | Issue read/write credential            |
 | `credential revoke`          | Revoke a credential                    |
 | `content verify`             | Re-verify chain integrity              |
-| `beacon announce`            | Sign merkle root over content IDs      |
+| `beacon announce`            | Announce manifest content ID           |
 | `beacon show`                | Show latest beacon                     |
 | `beacon countersign`         | Countersign someone's beacon           |
 | `witness`                    | Countersign an operation               |

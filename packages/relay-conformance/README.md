@@ -14,7 +14,7 @@ RELAY_URL=http://localhost:4444 go test -v -count=1 ./...
 
 ## Coverage
 
-77 tests covering:
+Tests covering:
 
 - Well-known discovery and relay metadata
 - Identity lifecycle (create, update, delete, batch, idempotency, controller key rotation)

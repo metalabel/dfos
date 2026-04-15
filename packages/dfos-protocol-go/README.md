@@ -62,7 +62,7 @@ All protocol operations are covered:
 go test -v -cover ./...
 ```
 
-41 tests, 85% statement coverage.
+Run with `-cover` for statement coverage.
 
 ## Dependencies
 
