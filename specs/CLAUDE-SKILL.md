@@ -226,13 +226,13 @@ Content without a `$schema` field triggers a warning. Pass `--no-schema-warn` to
 
 ```bash
 # Grant read access (default 24h TTL)
-dfos content grant <contentId> <did> --read
+dfos credential grant <contentId> <did> --read
 
 # Grant write access
-dfos content grant <contentId> <did> --write
+dfos credential grant <contentId> <did> --write
 
 # Custom TTL
-dfos content grant <contentId> <did> --read --ttl 1h
+dfos credential grant <contentId> <did> --read --ttl 1h
 
 # Delegated write (bob updates alice's content using a write credential)
 dfos --ctx bob@prod content update <contentId> new.json --authorization <credential-jws>
@@ -321,7 +321,7 @@ All data commands support `--json` for machine-readable output. Always use `--js
 ```bash
 dfos identity show alice --json | jq .did
 dfos content create post.json --peer prod --json | jq -r .contentId
-dfos content grant <id> <did> --read --json | jq -r .credential
+dfos credential grant <id> <did> --read --json | jq -r .credential
 dfos identity list --json | jq '.[].did'
 dfos peer list --json | jq '.[].url'
 ```
@@ -348,7 +348,7 @@ dfos content show "$CONTENT"
 
 ```bash
 BOB_DID=$(dfos identity show bob --json | jq -r .did)
-CRED=$(dfos content grant "$CONTENT" "$BOB_DID" --read --json | jq -r .credential)
+CRED=$(dfos credential grant "$CONTENT" "$BOB_DID" --read --json | jq -r .credential)
 
 # Bob downloads using the credential
 dfos --ctx bob@prod content download "$CONTENT" --credential "$CRED"
@@ -385,7 +385,7 @@ dfos content publish <contentId> --peer prod
 - **"content verify failed"**: Chain integrity issue. Re-fetch from relay: `dfos content fetch <id> --peer <relay>`.
 - **"blob bytes do not match documentCID"**: Remote relay rejected the blob upload. Create content locally first (`dfos content create file.json`), then publish separately (`dfos content publish <id> --peer <relay>`).
 - **"content not found on peer" / 0 operations fetched**: The content doesn't exist on that relay. Verify the content ID and check which relay it was published to with `dfos content show <id>`.
-- **"read credential required"**: You're trying to download content you don't own. The creator must issue a read credential: `dfos content grant <contentId> <your-did> --read`. Present it with `--credential <credential-jws>`.
+- **"read credential required"**: You're trying to download content you don't own. The creator must issue a read credential: `dfos credential grant <contentId> <your-did> --read`. Present it with `--credential <credential-jws>`.
 - **"unknown identity" on content publish**: If content includes delegated operations (writes by non-creators via credentials), all referenced identities must be published to the relay first. Publish each delegate's identity before the content.
 - **"signer is not the chain creator"**: Content mutations (update, delete) must be signed by the creator identity or via a write credential. Switch to the creator's context, or use `--authorization <credential-jws>` with a DFOS write credential.
 

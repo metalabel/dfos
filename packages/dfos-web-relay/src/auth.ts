@@ -75,6 +75,56 @@ export interface AccessVerification {
 }
 
 /**
+ * Check if a valid public standing credential exists for the given content.
+ *
+ * This is used at the route level to allow unauthenticated reads when public
+ * credentials exist — matching the Go relay's `hasPublicStandingAuth`.
+ */
+export const hasPublicStandingAuth = async (
+  contentId: string,
+  action: 'read' | 'write',
+  store: RelayStore,
+): Promise<boolean> => {
+  const resource = `chain:${contentId}`;
+  const publicCreds = await store.getPublicCredentials(resource);
+  if (publicCreds.length === 0) return false;
+
+  const chain = await store.getContentChain(contentId);
+  if (!chain) return false;
+
+  const resolveIdentity = createHistoricalIdentityResolver(store);
+  const isRevoked = async (issuerDID: string, credentialCID: string) =>
+    store.isCredentialRevoked(issuerDID, credentialCID);
+
+  for (const credJws of publicCreds) {
+    try {
+      const cred = await verifyDFOSCredential(credJws, { resolveIdentity });
+
+      // check revocation
+      const leafRevoked = await isRevoked(cred.iss, cred.credentialCID);
+      if (leafRevoked) continue;
+
+      // check resource + action match
+      const covers = await matchesResource(cred.att, resource, action);
+      if (!covers) continue;
+
+      // verify delegation chain roots at creator
+      await verifyDelegationChain(cred, {
+        resolveIdentity,
+        rootDID: chain.state.creatorDID,
+        isRevoked,
+      });
+
+      return true;
+    } catch {
+      continue;
+    }
+  }
+
+  return false;
+};
+
+/**
  * Verify content access for a specific resource
  *
  * Checks in order:
@@ -109,28 +159,6 @@ export const verifyContentAccess = async (options: {
   const isRevoked = async (issuerDID: string, credentialCID: string) =>
     store.isCredentialRevoked(issuerDID, credentialCID);
 
-  // manifest lookup — resolves which contentIds a manifest indexes
-  const manifestLookup = async (manifestContentId: string): Promise<string[]> => {
-    const chain = await store.getContentChain(manifestContentId);
-    if (!chain) return [];
-    const docCID = chain.state.currentDocumentCID;
-    if (!docCID) return [];
-    const blob = await store.getBlob({ creatorDID: chain.state.creatorDID, documentCID: docCID });
-    if (!blob) return [];
-    try {
-      const doc = JSON.parse(new TextDecoder().decode(blob)) as Record<string, unknown>;
-      const entries = doc['entries'];
-      if (!entries || typeof entries !== 'object') return [];
-      // extract contentId references (22-char bare hashes, not DIDs or CIDs)
-      return Object.values(entries as Record<string, unknown>).filter(
-        (v): v is string =>
-          typeof v === 'string' && !v.startsWith('did:') && !v.startsWith('bafyrei'),
-      );
-    } catch {
-      return [];
-    }
-  };
-
   // 2. check stored public credentials
   const publicCreds = await store.getPublicCredentials(requestedResource);
   for (const credJws of publicCreds) {
@@ -141,10 +169,8 @@ export const verifyContentAccess = async (options: {
       const leafRevoked = await isRevoked(cred.iss, cred.credentialCID);
       if (leafRevoked) continue;
 
-      // check resource + action match (with manifest transitive lookup)
-      const covers = await matchesResource(cred.att, requestedResource, action, {
-        manifestLookup,
-      });
+      // check resource + action match
+      const covers = await matchesResource(cred.att, requestedResource, action);
       if (!covers) continue;
 
       // verify delegation chain roots at creator (with revocation at every level)
@@ -177,10 +203,8 @@ export const verifyContentAccess = async (options: {
         }
       }
 
-      // check resource + action match (with manifest transitive lookup)
-      const covers = await matchesResource(cred.att, requestedResource, action, {
-        manifestLookup,
-      });
+      // check resource + action match
+      const covers = await matchesResource(cred.att, requestedResource, action);
       if (!covers) {
         return { granted: false, source: 'none' };
       }

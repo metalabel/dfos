@@ -166,13 +166,13 @@ Valid narrowing examples:
 
 - Parent grants `chain:X` and `chain:Y` -- child requests only `chain:X` (subset of resources)
 - Parent grants `read,write` -- child requests only `read` (subset of actions)
-- Parent grants `manifest:M` -- child requests `chain:X` (type narrowing, see below)
+- Parent grants `chain:*` -- child requests `chain:X` (wildcard to specific)
 
 Invalid widening:
 
 - Parent grants `chain:X` -- child requests `chain:X` and `chain:Y` (new resource)
 - Parent grants `read` -- child requests `read,write` (new action)
-- Parent grants `chain:X` -- child requests `manifest:M` (type widening)
+- Parent grants `chain:X` -- child requests `chain:*` (specific to wildcard)
 
 ### Action Coverage
 
@@ -186,7 +186,7 @@ The child's `exp` MUST be less than or equal to every parent's `exp`. A delegate
 
 ## Resource Types
 
-Two resource types are defined. Both use the `type:id` format.
+Two resource forms are defined. Both use the `chain:` prefix.
 
 ### `chain:<contentId>` -- Exact Match
 
@@ -208,39 +208,18 @@ Grants access to all content chains owned by the credential's root authority. Th
 
 Matching: `chain:*` matches any `chain:<contentId>` request for content where the delegation chain roots at the expected creator DID.
 
-This is the broadest resource scope. Common use case: granting a collaborator access to all of a creator's content without maintaining an exhaustive manifest.
+This is the broadest resource scope. Common use case: granting a collaborator access to all of a creator's content.
 
-### `manifest:<contentId>` -- Transitive Match
+### Attenuation Between Forms
 
-Grants access to a manifest and all content chains it indexes. A manifest is itself a content chain whose document lists other content IDs.
+| Parent    | Child     | Valid? | Reason                                    |
+| --------- | --------- | ------ | ----------------------------------------- |
+| `chain:*` | `chain:*` | Yes    | Exact match                               |
+| `chain:*` | `chain:X` | Yes    | Narrowing from wildcard to specific chain |
+| `chain:X` | `chain:X` | Yes    | Exact match                               |
+| `chain:X` | `chain:*` | No     | Widening from specific to wildcard        |
 
-```json
-{ "resource": "manifest:k4f9t2r6v8n3h7d2c9a4e6", "action": "write" }
-```
-
-Matching at the relay:
-
-- `manifest:M` matches a request for `manifest:M` (exact)
-- `manifest:M` matches a request for `chain:X` IF a manifest lookup confirms that content ID `X` is indexed by manifest `M`
-- Without a manifest lookup callback, `manifest:` resources can only match exact `manifest:` requests
-
-### Attenuation Between Types
-
-| Parent       | Child        | Valid? | Reason                                    |
-| ------------ | ------------ | ------ | ----------------------------------------- |
-| `chain:*`    | `chain:*`    | Yes    | Exact match                               |
-| `chain:*`    | `chain:X`    | Yes    | Narrowing from wildcard to specific chain |
-| `chain:*`    | `manifest:M` | Yes    | Narrowing from wildcard to manifest       |
-| `chain:X`    | `chain:X`    | Yes    | Exact match                               |
-| `manifest:M` | `manifest:M` | Yes    | Exact match                               |
-| `manifest:M` | `chain:X`    | Yes    | Narrowing from manifest to specific chain |
-| `chain:X`    | `chain:*`    | No     | Widening from specific to wildcard        |
-| `chain:X`    | `manifest:M` | No     | Widening from chain to manifest           |
-| `manifest:M` | `chain:*`    | No     | Widening from manifest to wildcard        |
-
-The resource hierarchy from broadest to narrowest is: `chain:*` > `manifest:M` > `chain:X`. Each delegation hop can only move down this hierarchy, never up.
-
-The `manifest -> chain` narrowing is valid structurally during delegation chain verification. The actual membership check (does manifest M contain chain X?) happens at the relay during resource matching, not during chain verification.
+The resource hierarchy from broadest to narrowest is: `chain:*` > `chain:X`. Each delegation hop can only move down this hierarchy, never up.
 
 ---
 

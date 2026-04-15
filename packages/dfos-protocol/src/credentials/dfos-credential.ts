@@ -7,9 +7,9 @@
   delegation chains via embedded parent tokens (`prf`), and monotonic
   attenuation enforcement.
 
-  Two resource types:
+  Resource types:
+  - chain:*            — wildcard covering all content chains
   - chain:<contentId>  — exact match for a specific content chain
-  - manifest:<contentId> — transitive match covering a manifest and its entries
 
   Two audience modes:
   - aud: "*"          — public credential, ingested into relays as standing auth
@@ -354,12 +354,8 @@ const parseActions = (action: string): Set<string> => {
  *
  * - `chain:X` covered by `chain:X` (exact match)
  * - `chain:X` covered by `chain:*` (narrowing from wildcard — valid)
- * - `chain:X` covered by `manifest:M` (narrowing from manifest — valid structurally)
- * - `manifest:M` covered by `chain:*` (narrowing from wildcard — valid)
- * - `manifest:M` covered by `manifest:M` (exact match)
- * - `manifest:M` NOT covered by `chain:X` (widening — invalid)
  * - `chain:*` covered by `chain:*` (exact match)
- * - `chain:*` NOT covered by `chain:X` or `manifest:M` (widening — invalid)
+ * - `chain:*` NOT covered by `chain:X` (widening — invalid)
  * - Actions: child action set must be a subset of parent action set
  */
 export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]): boolean => {
@@ -380,28 +376,17 @@ export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]):
 
       // check resource coverage
       if (parentRes.type === 'chain' && parentRes.id === '*') {
-        // chain:* covers everything: chain:X, chain:*, manifest:M
-        return true;
+        // chain:* covers chain:X and chain:*
+        return childRes.type === 'chain';
       }
       if (childRes.type === 'chain' && childRes.id === '*') {
-        // chain:* can only be covered by chain:* (checked above) — not by
-        // chain:X or manifest:M (both would be widening)
+        // chain:* can only be covered by chain:* (checked above)
         return false;
       }
       if (childRes.type === 'chain' && parentRes.type === 'chain') {
         // chain:X covered by chain:X (exact match)
         return childRes.id === parentRes.id;
       }
-      if (childRes.type === 'chain' && parentRes.type === 'manifest') {
-        // chain:X covered by manifest:M (narrowing — valid structurally)
-        return true;
-      }
-      if (childRes.type === 'manifest' && parentRes.type === 'manifest') {
-        // manifest:M covered by manifest:M (exact match)
-        return childRes.id === parentRes.id;
-      }
-      // manifest:M NOT covered by chain:X (widening)
-      // chain:* NOT covered by chain:X or manifest:M (widening)
       return false;
     });
   });
@@ -416,18 +401,11 @@ export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]):
  *
  * Used at the relay to determine if a credential authorizes access to a
  * specific content chain.
- *
- * For `manifest:` resources, requires a `manifestLookup` callback to resolve
- * which contentIds the manifest indexes. Without the callback, `manifest:`
- * resources can only match exact `manifest:` requests, not `chain:` requests.
  */
 export const matchesResource = async (
   att: Attenuation[],
   resource: string,
   action: string,
-  options?: {
-    manifestLookup?: (manifestContentId: string) => Promise<string[]>;
-  },
 ): Promise<boolean> => {
   const requestedRes = parseResource(resource);
   if (!requestedRes) return false;
@@ -453,18 +431,9 @@ export const matchesResource = async (
       return true;
     }
 
-    // exact resource match (chain:X == chain:X, manifest:M == manifest:M)
+    // exact resource match (chain:X == chain:X)
     if (entryRes.type === requestedRes.type && entryRes.id === requestedRes.id) {
       return true;
-    }
-
-    // manifest covers chain transitively
-    if (entryRes.type === 'manifest' && requestedRes.type === 'chain') {
-      if (options?.manifestLookup) {
-        const indexed = await options.manifestLookup(entryRes.id);
-        if (indexed.includes(requestedRes.id)) return true;
-      }
-      // without lookup, manifest: can't resolve to chain: — fall through
     }
   }
 

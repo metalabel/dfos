@@ -912,3 +912,70 @@ func TestDelegationRootMismatchRejection(t *testing.T) {
 	}
 	dlRes.Body.Close()
 }
+
+// ===================================================================
+// public standing auth anonymous read + revocation
+// ===================================================================
+
+func TestPublicStandingAuthAnonymousRead(t *testing.T) {
+	base := relayURL(t)
+	alice := createIdentity(t, base)
+	cc := createContent(t, base, alice)
+
+	// upload blob as creator
+	tok := authToken(t, base, alice)
+	blobData, _ := json.Marshal(cc.document)
+	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+
+	// issue and submit public credential (aud: "*")
+	kid := alice.did + "#" + alice.auth.keyID
+	credToken := createPublicCredential(t, alice.did, kid, "read", cc.contentID, 5*time.Minute, alice.auth.priv)
+	res := postOperations(t, base, []string{credToken})
+	body := readBody(t, res)
+	if res.StatusCode != 200 {
+		t.Fatalf("submit public credential: status %d, body: %s", res.StatusCode, body)
+	}
+
+	// anonymous blob download — no Authorization header at all
+	anonURL := fmt.Sprintf("%s/content/%s/blob", base, cc.contentID)
+	anonReq, _ := http.NewRequest("GET", anonURL, nil)
+	anonResp, err := http.DefaultClient.Do(anonReq)
+	if err != nil {
+		t.Fatalf("anonymous GET blob: %v", err)
+	}
+	anonBody := readBody(t, anonResp)
+	if anonResp.StatusCode != 200 {
+		t.Fatalf("expected anonymous read to succeed with standing auth: status %d, body: %s", anonResp.StatusCode, anonBody)
+	}
+	if string(anonBody) != string(blobData) {
+		t.Fatal("anonymous downloaded blob does not match uploaded data")
+	}
+
+	// decode credential to get its CID, then revoke it
+	credHeader, _, err := dfos.DecodeJWSUnsafe(credToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credCID := credHeader.CID
+
+	revToken, _ := createRevocation(t, alice.did, credCID, alice.auth)
+	revRes := postOperations(t, base, []string{revToken})
+	revBody := readBody(t, revRes)
+	if revRes.StatusCode != 200 {
+		t.Fatalf("revocation submit: status %d, body: %s", revRes.StatusCode, revBody)
+	}
+
+	// anonymous blob download again — should be denied after revocation
+	anonReq2, _ := http.NewRequest("GET", anonURL, nil)
+	anonResp2, err := http.DefaultClient.Do(anonReq2)
+	if err != nil {
+		t.Fatalf("anonymous GET blob after revocation: %v", err)
+	}
+	anonResp2.Body.Close()
+	if anonResp2.StatusCode == 200 {
+		t.Fatal("expected anonymous read to be denied after credential revocation")
+	}
+	if anonResp2.StatusCode != 401 && anonResp2.StatusCode != 403 {
+		t.Fatalf("expected 401 or 403 after revocation, got %d", anonResp2.StatusCode)
+	}
+}

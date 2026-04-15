@@ -496,34 +496,6 @@ describe('dfos credential', () => {
     expect(await matchesResource(att, 'chain:content2', 'write')).toBe(false);
   });
 
-  it('should match manifest:M with lookup', async () => {
-    const att = [{ resource: 'manifest:manifest1', action: 'write' }];
-    const result = await matchesResource(att, 'chain:content1', 'write', {
-      manifestLookup: async () => ['content1', 'content2'],
-    });
-    expect(result).toBe(true);
-  });
-
-  it('should not match manifest:M without lookup', async () => {
-    const att = [{ resource: 'manifest:manifest1', action: 'write' }];
-    const result = await matchesResource(att, 'chain:content1', 'write');
-    expect(result).toBe(false);
-  });
-
-  // --- attenuation: manifest / chain interactions ---
-
-  it('should accept manifest:M -> chain:X as valid narrowing', () => {
-    const parent = [{ resource: 'manifest:manifest1', action: 'write' }];
-    const child = [{ resource: 'chain:content1', action: 'write' }];
-    expect(isAttenuated(parent, child)).toBe(true);
-  });
-
-  it('should reject chain:X -> manifest:M as invalid widening', () => {
-    const parent = [{ resource: 'chain:content1', action: 'write' }];
-    const child = [{ resource: 'manifest:manifest1', action: 'write' }];
-    expect(isAttenuated(parent, child)).toBe(false);
-  });
-
   // --- public credentials ---
 
   it('should create and verify public credential with aud "*"', async () => {
@@ -690,12 +662,6 @@ describe('dfos credential', () => {
     expect(isAttenuated(parent, child)).toBe(true);
   });
 
-  it('should accept manifest:M as attenuated from chain:*', () => {
-    const parent = [{ resource: 'chain:*', action: 'read' }];
-    const child = [{ resource: 'manifest:manifest1', action: 'read' }];
-    expect(isAttenuated(parent, child)).toBe(true);
-  });
-
   it('should accept chain:* as attenuated from chain:* (exact match)', () => {
     const parent = [{ resource: 'chain:*', action: 'read' }];
     const child = [{ resource: 'chain:*', action: 'read' }];
@@ -704,12 +670,6 @@ describe('dfos credential', () => {
 
   it('should reject chain:* as attenuated from chain:X (widening)', () => {
     const parent = [{ resource: 'chain:content1', action: 'read' }];
-    const child = [{ resource: 'chain:*', action: 'read' }];
-    expect(isAttenuated(parent, child)).toBe(false);
-  });
-
-  it('should reject chain:* as attenuated from manifest:M (widening)', () => {
-    const parent = [{ resource: 'manifest:manifest1', action: 'read' }];
     const child = [{ resource: 'chain:*', action: 'read' }];
     expect(isAttenuated(parent, child)).toBe(false);
   });

@@ -29,7 +29,6 @@ func newContentCmd() *cobra.Command {
 	cmd.AddCommand(newContentPublishCmd())
 	cmd.AddCommand(newContentFetchCmd())
 	cmd.AddCommand(newContentLogCmd())
-	cmd.AddCommand(newContentGrantCmd())
 	cmd.AddCommand(newContentUpdateCmd())
 	cmd.AddCommand(newContentDeleteCmd())
 	cmd.AddCommand(newContentVerifyCmd())
@@ -73,6 +72,13 @@ func newContentCreateCmd() *cobra.Command {
 				return fmt.Errorf("document must be valid JSON: %w", err)
 			}
 
+			// Re-serialize for deterministic blob storage — ensures relay CID
+			// verification matches regardless of original file formatting.
+			canonicalBytes, err := json.Marshal(doc)
+			if err != nil {
+				return fmt.Errorf("serialize document: %w", err)
+			}
+
 			if !noSchemaWarn {
 				if docMap, ok := doc.(map[string]any); ok {
 					if _, has := docMap["$schema"]; !has {
@@ -108,7 +114,7 @@ func newContentCreateCmd() *cobra.Command {
 			}
 
 			// store blob in relay
-			lr.Store.PutBlob(relay.BlobKey{CreatorDID: chain.DID, DocumentCID: documentCID}, docBytes)
+			lr.Store.PutBlob(relay.BlobKey{CreatorDID: chain.DID, DocumentCID: documentCID}, canonicalBytes)
 
 			// push to peer if specified
 			var publishedTo []string
@@ -141,7 +147,7 @@ func newContentCreateCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("create auth token: %w", err)
 				}
-				if err := c.UploadBlob(contentID, opCID, docBytes, authToken); err != nil {
+				if err := c.UploadBlob(contentID, opCID, canonicalBytes, authToken); err != nil {
 					return fmt.Errorf("upload blob: %w", err)
 				}
 
@@ -303,9 +309,8 @@ func newContentDownloadCmd() *cobra.Command {
 						// verification failed — fall through to peer
 					}
 				}
-				if !isCreator && credential == "" {
-					return fmt.Errorf("read credential required (you are not the content creator)")
-				}
+				// non-creator without credential — fall through to peer download
+				// where the relay will decide based on standing auth
 			}
 
 			// fall through to peer download
@@ -418,10 +423,21 @@ func newContentPublishCmd() *cobra.Command {
 				if blob != nil && len(idChain.State.AuthKeys) > 0 {
 					authKeyID := idChain.State.AuthKeys[0].ID
 					kid := idChain.DID + "#" + authKeyID
-					privKey, _ := keys.GetPrivateKey(idChain.DID + "#" + authKeyID)
-					info, _ := c.GetRelayInfo()
-					authToken, _ := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
-					c.UploadBlob(contentID, contentChain.State.HeadCID, blob, authToken)
+					privKey, _ := keys.GetPrivateKey(kid)
+					if privKey == nil {
+						return fmt.Errorf("auth key not in keychain for blob upload")
+					}
+					info, err := c.GetRelayInfo()
+					if err != nil {
+						return fmt.Errorf("get peer info for blob upload: %w", err)
+					}
+					authToken, err := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
+					if err != nil {
+						return fmt.Errorf("create blob upload auth token: %w", err)
+					}
+					if err := c.UploadBlob(contentID, contentChain.State.HeadCID, blob, authToken); err != nil {
+						return fmt.Errorf("upload blob: %w", err)
+					}
 				}
 			}
 
@@ -587,85 +603,6 @@ func newContentLogCmd() *cobra.Command {
 	}
 }
 
-func newContentGrantCmd() *cobra.Command {
-	var read, write bool
-	var ttl string
-	var scopeContentID string
-	var noScope bool
-
-	cmd := &cobra.Command{
-		Use:   "grant <contentId> <did>",
-		Short: "Issue a read or write credential",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			contentID := args[0]
-			subjectDID := args[1]
-
-			if !read && !write {
-				return fmt.Errorf("specify --read or --write")
-			}
-
-			_, chain, err := requireIdentity()
-			if err != nil {
-				return err
-			}
-
-			action := "read"
-			if write {
-				action = "write"
-			}
-
-			dur, err := time.ParseDuration(ttl)
-			if err != nil {
-				dur = 24 * time.Hour
-			}
-
-			if len(chain.State.AuthKeys) == 0 {
-				return fmt.Errorf("identity has no auth keys")
-			}
-			authKeyID := chain.State.AuthKeys[0].ID
-			kid := chain.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
-			if err != nil {
-				return fmt.Errorf("auth key not in keychain: %w", err)
-			}
-
-			scope := contentID
-			if noScope {
-				scope = ""
-			} else if scopeContentID != "" {
-				scope = scopeContentID
-			}
-			resource := "chain:" + scope
-
-			token, err := protocol.CreateCredential(chain.DID, subjectDID, kid, resource, action, dur, privKey)
-			if err != nil {
-				return fmt.Errorf("create credential: %w", err)
-			}
-
-			if jsonFlag {
-				outputJSON(map[string]any{
-					"credential": token,
-					"action":     action,
-					"resource":   resource,
-					"issuer":     chain.DID,
-					"audience":   subjectDID,
-					"expiresIn":  dur.String(),
-				})
-			} else {
-				fmt.Printf("Credential issued (%s %s, expires in %s):\n  %s\n", action, resource, dur, token)
-			}
-			return nil
-		},
-	}
-	cmd.Flags().BoolVar(&read, "read", false, "Issue DFOS read credential")
-	cmd.Flags().BoolVar(&write, "write", false, "Issue DFOS write credential")
-	cmd.Flags().StringVar(&ttl, "ttl", "24h", "Credential TTL")
-	cmd.Flags().StringVar(&scopeContentID, "scope", "", "Scope credential to specific content ID")
-	cmd.Flags().BoolVar(&noScope, "broad", false, "Issue broad credential (not scoped to any content ID)")
-	return cmd
-}
-
 func newContentUpdateCmd() *cobra.Command {
 	var note string
 	var peerName string
@@ -711,6 +648,13 @@ func newContentUpdateCmd() *cobra.Command {
 				return fmt.Errorf("document must be valid JSON: %w", err)
 			}
 
+			// Re-serialize for deterministic blob storage — ensures relay CID
+			// verification matches regardless of original file formatting.
+			canonicalBytes, err := json.Marshal(doc)
+			if err != nil {
+				return fmt.Errorf("serialize document: %w", err)
+			}
+
 			documentCID, _, err := protocol.DocumentCID(doc)
 			if err != nil {
 				return err
@@ -740,7 +684,7 @@ func newContentUpdateCmd() *cobra.Command {
 				return fmt.Errorf("local relay rejected: %s", results[0].Error)
 			}
 
-			lr.Store.PutBlob(relay.BlobKey{CreatorDID: contentChain.State.CreatorDID, DocumentCID: documentCID}, docBytes)
+			lr.Store.PutBlob(relay.BlobKey{CreatorDID: contentChain.State.CreatorDID, DocumentCID: documentCID}, canonicalBytes)
 
 			// push to peer
 			rn := peerName
@@ -759,9 +703,17 @@ func newContentUpdateCmd() *cobra.Command {
 				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
 					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
-				info, _ := c.GetRelayInfo()
-				authToken, _ := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
-				c.UploadBlob(contentID, opCID, docBytes, authToken)
+				info, err := c.GetRelayInfo()
+				if err != nil {
+					return fmt.Errorf("peer relay info: %w", err)
+				}
+				authToken, err := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
+				if err != nil {
+					return fmt.Errorf("peer auth token: %w", err)
+				}
+				if err := c.UploadBlob(contentID, opCID, canonicalBytes, authToken); err != nil {
+					return fmt.Errorf("peer blob upload: %w", err)
+				}
 			}
 
 			if jsonFlag {
@@ -1065,7 +1017,7 @@ func verifyCredentialLocally(lr *localrelay.LocalRelay, credential, creatorDID, 
 	if err != nil {
 		return err
 	}
-	if vc.ContentID != "" && vc.ContentID != contentID {
+	if vc.ContentID != "" && vc.ContentID != "*" && vc.ContentID != contentID {
 		return fmt.Errorf("credential scoped to different content")
 	}
 	return nil

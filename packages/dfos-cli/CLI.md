@@ -254,13 +254,13 @@ The CLI issues DFOS credentials for content access control:
 
 ```bash
 # grant read access
-dfos content grant <contentId> <did> --read
+dfos credential grant <contentId> <did> --read
 
 # grant write access (allows extending the content chain)
-dfos content grant <contentId> <did> --write
+dfos credential grant <contentId> <did> --write
 
 # with custom TTL
-dfos content grant <contentId> <did> --read --ttl 1h
+dfos credential grant <contentId> <did> --read --ttl 1h
 ```
 
 Credentials are printed to stdout (or as JSON with `--json`). The recipient passes them to relay endpoints via the `X-Credential` header, or to the CLI via `--credential`:
@@ -345,7 +345,8 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `content delete <id>`            | Permanently delete content chain            |
 | `POST` | `content publish <id>`           | Submit content chain + blob to a relay      |
 | `GET`  | `content fetch <id>`             | Download content chain from relay           |
-| `POST` | `content grant <id> <did>`       | Issue read/write credential                 |
+| `POST` | `credential grant <id> <did>`    | Issue read/write credential                 |
+| `POST` | `credential revoke <cid>`        | Revoke a credential                         |
 | `GET`  | `content verify <id>`            | Re-verify chain integrity locally           |
 | `GET`  | `beacon show [did\|name]`        | Show latest beacon                          |
 | `POST` | `beacon announce <id...>`        | Build merkle root, sign, submit             |

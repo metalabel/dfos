@@ -1021,6 +1021,11 @@ describe('web relay', () => {
       const identity = await createIdentity();
       await postOps([identity.jwsToken]);
 
+      // create a content chain BEFORE key rotation so it definitely exists
+      const content = await createContentOp(identity);
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
       // rotate the auth key
       const newAuthKey = makeKey();
       const updateOp: IdentityOperation = {
@@ -1044,28 +1049,19 @@ describe('web relay', () => {
       // create an auth token with the OLD (rotated-out) key
       const oldAuthToken = await createTestAuthToken(identity); // uses identity.authKey (the old one)
 
-      // create a content chain to have something to access
-      const content = await createContentOp(identity);
-      // but this content op was signed with the old auth key during createContentOp...
-      // actually just test the auth endpoint directly
-      const contentOpRes = await postOps([content.jwsToken]);
-      const contentBody = await json(contentOpRes);
-      // content op might fail since it was signed with old key — that's fine
-      // the important test is the auth token rejection
-
-      // try to access content plane with old auth token
-      const chainLookup = await req(`/content/someid/blob`, {
+      // try to access content plane with old auth token — should be 401
+      // because the old key is no longer in current state
+      const chainLookup = await req(`/content/${contentId}/blob`, {
         headers: { authorization: `Bearer ${oldAuthToken}` },
       });
-      // should be 401 because the old key is no longer in current state
       expect(chainLookup.status).toBe(401);
 
       // create auth token with the NEW key — should work (404 because no blob, but not 401)
       const newAuthToken = await createTestAuthToken(identity, newAuthKey);
-      const newAuthRes = await req(`/content/someid/blob`, {
+      const newAuthRes = await req(`/content/${contentId}/blob`, {
         headers: { authorization: `Bearer ${newAuthToken}` },
       });
-      expect(newAuthRes.status).toBe(404); // 404 = authenticated but no content, not 401
+      expect(newAuthRes.status).toBe(404); // 404 = authenticated but no blob stored
     });
 
     it('should accept per-request credential signed with rotated-out key', async () => {

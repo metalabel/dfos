@@ -147,7 +147,10 @@ func SignContentDelete(did, previousCID, kid string, note string, authorization 
 }
 
 // DocumentCID computes the dag-cbor CID of a JSON document.
+// Normalizes JSON number types (float64 → int64 for whole numbers) to match
+// the relay's DagCborCID verification path.
 func DocumentCID(doc any) (string, []byte, error) {
+	doc = NormalizeJSONNumbers(doc)
 	cborBytes, err := DagCborEncode(doc)
 	if err != nil {
 		return "", nil, err

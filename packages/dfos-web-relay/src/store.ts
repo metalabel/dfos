@@ -145,12 +145,6 @@ export class MemoryRelayStore implements RelayStore {
           tokens.push(cred.jwsToken);
           break;
         }
-        // also include manifest-scoped credentials when requesting chain access —
-        // matchesResource with manifestLookup will determine actual coverage
-        if (isChainRequest && att.resource.startsWith('manifest:')) {
-          tokens.push(cred.jwsToken);
-          break;
-        }
       }
     }
     return tokens;

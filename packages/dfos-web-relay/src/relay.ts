@@ -15,7 +15,7 @@ import type { VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { authenticateRequest, verifyContentAccess } from './auth';
+import { authenticateRequest, hasPublicStandingAuth, verifyContentAccess } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { ingestOperations } from './ingest';
 import { computeOpCID, sequenceOps } from './sequencer';
@@ -263,23 +263,27 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (!contentEnabled) return c.json({ error: 'content plane not available' }, 501);
     const contentId = c.req.param('contentId');
 
-    // authenticate
-    const auth = await authenticateRequest(c.req.header('authorization'), relayDID, store);
-    if (!auth) return c.json({ error: 'authentication required' }, 401);
-
     // verify chain exists
     const chain = await store.getContentChain(contentId);
     if (!chain) return c.json({ error: 'not found' }, 404);
 
-    // verify read access
-    const accessError = await verifyReadAccess(
-      auth,
-      chain,
-      contentId,
-      c.req.header('x-credential'),
-      store,
-    );
-    if (accessError) return accessError;
+    // check for public standing authorization (no auth needed)
+    const publicAccess = await hasPublicStandingAuth(contentId, 'read', store);
+    if (!publicAccess) {
+      // require auth token
+      const auth = await authenticateRequest(c.req.header('authorization'), relayDID, store);
+      if (!auth) return c.json({ error: 'authentication required' }, 401);
+
+      // verify read access
+      const accessError = await verifyReadAccess(
+        auth,
+        chain,
+        contentId,
+        c.req.header('x-credential'),
+        store,
+      );
+      if (accessError) return accessError;
+    }
 
     const after = c.req.query('after');
     const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
@@ -512,17 +516,21 @@ const readBlob = async (params: {
 }): Promise<Response> => {
   const { contentId, ref, authHeader, credHeader, relayDID, store } = params;
 
-  // authenticate
-  const auth = await authenticateRequest(authHeader, relayDID, store);
-  if (!auth) return jsonResponse({ error: 'authentication required' }, 401);
-
   // look up chain
   const chain = await store.getContentChain(contentId);
   if (!chain) return jsonResponse({ error: 'content chain not found' }, 404);
 
-  // verify read credential — unless the caller is the chain creator
-  const credError = await verifyReadAccess(auth, chain, contentId, credHeader, store);
-  if (credError) return credError;
+  // check for public standing authorization (no auth needed)
+  const publicAccess = await hasPublicStandingAuth(contentId, 'read', store);
+  if (!publicAccess) {
+    // require auth token
+    const auth = await authenticateRequest(authHeader, relayDID, store);
+    if (!auth) return jsonResponse({ error: 'authentication required' }, 401);
+
+    // verify read credential — unless the caller is the chain creator
+    const credError = await verifyReadAccess(auth, chain, contentId, credHeader, store);
+    if (credError) return credError;
+  }
 
   // resolve documentCID for the requested ref
   let documentCID: string | null = null;

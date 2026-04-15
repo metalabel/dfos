@@ -851,18 +851,16 @@ func (s *SQLiteStore) IsCredentialRevoked(issuerDID string, credentialCID string
 
 func (s *SQLiteStore) GetPublicCredentials(resource string) ([]string, error) {
 	// Build a query that unnests the att JSON array and matches on resource.
-	// We handle three cases:
+	// We handle two cases:
 	//   1. Exact match on resource
 	//   2. chain:* matches any chain: resource
-	//   3. manifest: scoped credentials match chain: resources
 	var query string
 	var args []any
 
 	if strings.HasPrefix(resource, "chain:") {
 		query = `SELECT DISTINCT pc.jws_token FROM public_credentials pc, json_each(pc.att) je
 			WHERE json_extract(je.value, '$.resource') = ?
-			   OR json_extract(je.value, '$.resource') = 'chain:*'
-			   OR json_extract(je.value, '$.resource') LIKE 'manifest:%'`
+			   OR json_extract(je.value, '$.resource') = 'chain:*'`
 		args = []any{resource}
 	} else {
 		query = `SELECT DISTINCT pc.jws_token FROM public_credentials pc, json_each(pc.att) je

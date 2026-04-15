@@ -558,14 +558,27 @@ func (r *Relay) handleGetBlob(w http.ResponseWriter, req *http.Request) {
 	r.readBlob(w, req, req.PathValue("contentId"), req.PathValue("ref"))
 }
 
-func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, ref string) {
-	// authenticate
+// authorizeRead checks if the request is authorized to read the given content.
+// Returns true if authorized. Writes 401/403 error response and returns false if not.
+// Allows unauthenticated access when a valid public standing credential exists.
+func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentID string, creatorDID string) bool {
+	if r.hasPublicStandingAuth(contentID, "read") {
+		return true
+	}
 	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
 	if auth == nil {
 		writeError(w, 401, "authentication required")
-		return
+		return false
 	}
+	credHeader := req.Header.Get("X-Credential")
+	if errMsg := r.verifyContentAccess(auth.Iss, creatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
+		writeError(w, 403, errMsg)
+		return false
+	}
+	return true
+}
 
+func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, ref string) {
 	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
 		return
@@ -575,10 +588,7 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 		return
 	}
 
-	// verify read access
-	credHeader := req.Header.Get("X-Credential")
-	if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
-		writeError(w, 403, errMsg)
+	if !r.authorizeRead(w, req, contentID, chain.State.CreatorDID) {
 		return
 	}
 
@@ -636,13 +646,6 @@ func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
 	}
 	contentID := req.PathValue("contentId")
 
-	// authenticate
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
-	if auth == nil {
-		writeError(w, 401, "authentication required")
-		return
-	}
-
 	// verify chain exists
 	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
@@ -653,10 +656,7 @@ func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// verify read access
-	credHeader := req.Header.Get("X-Credential")
-	if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
-		writeError(w, 403, errMsg)
+	if !r.authorizeRead(w, req, contentID, chain.State.CreatorDID) {
 		return
 	}
 

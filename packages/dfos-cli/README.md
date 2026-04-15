@@ -68,7 +68,7 @@ EOF
 
 # alice grants bob read access
 BOB=$(dfos identity show bob --json | jq -r .did)
-CRED=$(dfos --ctx alice@local content grant "$CONTENT" "$BOB" --read --json | jq -r .credential)
+CRED=$(dfos --ctx alice@local credential grant "$CONTENT" "$BOB" --read --json | jq -r .credential)
 
 # bob downloads with credential
 dfos --ctx bob@local content download "$CONTENT" --credential "$CRED" --relay local
@@ -133,7 +133,8 @@ dfos content publish <id> --relay prod   # submit when ready
 | `content publish`            | Submit to a relay                      |
 | `content fetch`              | Download from a relay                  |
 | `content log`                | Show operation history                 |
-| `content grant`              | Issue read/write credential            |
+| `credential grant`           | Issue read/write credential            |
+| `credential revoke`          | Revoke a credential                    |
 | `content verify`             | Re-verify chain integrity              |
 | `beacon announce`            | Sign merkle root over content IDs      |
 | `beacon show`                | Show latest beacon                     |
