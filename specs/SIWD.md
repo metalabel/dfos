@@ -2,6 +2,8 @@
 
 Cryptographic identity verification for third-party applications — Ed25519 challenge-response via a universal `/authorize` endpoint. One flow, two signing paths (managed and sovereign), same JWS output. Verification is pure crypto — no DFOS server in the loop after issuance.
 
+> **Specification only.** This document describes the SIWD protocol design. No reference implementation exists yet in this repository — it is published here for review and to inform implementors.
+
 ---
 
 ## Overview
