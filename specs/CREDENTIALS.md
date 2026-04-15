@@ -433,6 +433,6 @@ A space DID issues a public read credential for a content chain. Any DID can rea
 }
 ```
 
-This credential is ingested by the relay as a standing authorization. When any authenticated caller requests read access to `chain:a82z92a3hndk6c97thcrn8`, the relay matches it against stored public credentials. No per-request credential presentation needed.
+This credential is ingested by the relay as a standing authorization. When any caller requests read access to `chain:a82z92a3hndk6c97thcrn8`, the relay matches it against stored public credentials — no auth token or per-request credential needed.
 
 Because `aud` is `"*"`, any DID can also use this credential as a parent in a delegation chain -- e.g., to issue a narrower credential to a specific collaborator with a shorter expiry.
