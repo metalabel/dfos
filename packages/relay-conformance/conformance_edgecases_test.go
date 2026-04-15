@@ -198,8 +198,8 @@ func TestBatchMultiChain(t *testing.T) {
 // credential type enforcement
 // ===================================================================
 
-// TestWriteCredentialCannotRead verifies that a DFOSContentWrite credential
-// cannot be used to download blobs (requires DFOSContentRead).
+// TestWriteCredentialCannotRead verifies that a write credential
+// cannot be used to download blobs (requires read credential).
 func TestWriteCredentialCannotRead(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
@@ -224,8 +224,8 @@ func TestWriteCredentialCannotRead(t *testing.T) {
 	dlRes.Body.Close()
 }
 
-// TestReadCredentialCannotWrite verifies that a DFOSContentRead credential
-// cannot be used as authorization for content updates (requires DFOSContentWrite).
+// TestReadCredentialCannotWrite verifies that a read credential
+// cannot be used as authorization for content updates (requires write credential).
 func TestReadCredentialCannotWrite(t *testing.T) {
 	base := relayURL(t)
 	creator := createIdentity(t, base)
@@ -258,7 +258,7 @@ func TestReadCredentialCannotWrite(t *testing.T) {
 	}
 	json.Unmarshal(body, &results)
 	if len(results.Results) > 0 && results.Results[0].Error == "" {
-		t.Fatal("DFOSContentRead credential should not grant write access")
+		t.Fatal("read credential should not grant write access")
 	}
 }
 
@@ -587,8 +587,8 @@ func TestCredentialFromDeletedIssuer(t *testing.T) {
 }
 
 // TestDelegatedWriteFromDeletedCreator verifies that a delegate holding a
-// DFOSContentWrite credential cannot mutate a content chain after the
-// credential issuer (chain creator) has been deleted.
+// write credential cannot mutate a content chain after the credential issuer
+// (chain creator) has been deleted.
 func TestDelegatedWriteFromDeletedCreator(t *testing.T) {
 	base := relayURL(t)
 	creator := createIdentity(t, base)
