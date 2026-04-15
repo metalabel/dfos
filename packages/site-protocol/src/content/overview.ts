@@ -39,7 +39,7 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 - **DAG-native.** Chains are directed acyclic graphs. Forks are valid. Convergence is deterministic without consensus. Given the same set of operations, any relay computes the same head regardless of ingestion order.
 - **Transport-agnostic.** No privileged registry, blockchain, or API. A proof obtained from an API, a USB drive, or a peer-to-peer exchange verifies the same way.
 - **Offline-first.** Verification requires no network. The chain carries everything needed.
-- **Protocol-only.** Signed chains, CID derivation, [DID resolution](https://protocol.dfos.com/did-method), merkle trees, beacons. Application semantics are a [separate concern](https://protocol.dfos.com/content-model).
+- **Protocol-only.** Signed chains, CID derivation, [DID resolution](https://protocol.dfos.com/did-method), credentials, beacons. Application semantics are a [separate concern](https://protocol.dfos.com/content-model).
 
 ## Status
 

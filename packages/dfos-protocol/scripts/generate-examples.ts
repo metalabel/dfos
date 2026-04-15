@@ -31,7 +31,6 @@ import {
   importEd25519Keypair,
   signPayloadEd25519,
 } from '../src/crypto';
-import { buildMerkleTree, generateMerkleProof } from '../src/merkle';
 
 /** Fixed iat for deterministic credential examples (2026-03-07T00:00:00Z) */
 const FIXED_IAT = Math.floor(new Date('2026-03-07T00:00:00.000Z').getTime() / 1000);
@@ -211,17 +210,8 @@ const main = async () => {
   });
 
   // ================================================================
-  // MERKLE TREE + BEACON FIXTURES
+  // BEACON FIXTURE
   // ================================================================
-
-  // Use the content chain's contentId plus 4 more deterministic IDs
-  const merkleContentIds = ['alpha', 'bravo', 'charlie', 'delta', 'echo'];
-  const { root: merkleRoot, leafCount } = await buildMerkleTree(merkleContentIds);
-  if (!merkleRoot) throw new Error('merkle root is null');
-
-  // Generate inclusion proof for "charlie"
-  const charlieProof = await generateMerkleProof(merkleContentIds, 'charlie');
-  if (!charlieProof) throw new Error('charlie proof is null');
 
   // Sign a beacon with key1 (controller)
   const kid1 = `${identity.did}#${keyId1}`;
@@ -495,19 +485,6 @@ const main = async () => {
     },
   });
 
-  write('merkle-tree', {
-    description:
-      'Merkle tree: 5 content IDs → sorted → leaf hashes → root, with inclusion proof for "charlie"',
-    type: 'merkle',
-    contentIds: merkleContentIds,
-    expected: {
-      sortedIds: [...merkleContentIds].sort(),
-      root: merkleRoot,
-      leafCount,
-      charlieProof,
-    },
-  });
-
   write('beacon', {
     description: 'Beacon: signed manifest content ID announcement with witness countersignature',
     type: 'beacon',
@@ -580,7 +557,7 @@ const main = async () => {
     },
   });
 
-  console.log('\ndone — 10 fixtures generated');
+  console.log('\ndone — 9 fixtures generated');
 };
 
 main().catch((err) => {

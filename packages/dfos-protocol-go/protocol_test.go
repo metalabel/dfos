@@ -30,9 +30,6 @@ const (
 	// Number encoding test vectors
 	numberTestCID      = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
 	numberTestWrongCID = "bafyreiawbms4476m5jlrmqtyvtwe5ta3eo2bh7mdprtomfgfype7j57o4q"
-
-	// Merkle test vector
-	expectedMerkleRoot = "7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e"
 )
 
 // ---------------------------------------------------------------------------
@@ -664,38 +661,6 @@ func TestDocumentCID(t *testing.T) {
 	// CID starts with "b" (base32lower)
 	if !strings.HasPrefix(cid1, "b") {
 		t.Fatalf("CID prefix: %s", cid1)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// 18. BuildMerkleRoot — deterministic from known IDs
-// ---------------------------------------------------------------------------
-
-func TestBuildMerkleRoot(t *testing.T) {
-	ids := []string{"alpha", "bravo", "charlie", "delta", "echo"}
-	root := BuildMerkleRoot(ids)
-	if root != expectedMerkleRoot {
-		t.Fatalf("merkle root mismatch:\n  got:  %s\n  want: %s", root, expectedMerkleRoot)
-	}
-
-	// Order shouldn't matter — BuildMerkleRoot sorts internally
-	ids2 := []string{"echo", "delta", "charlie", "bravo", "alpha"}
-	root2 := BuildMerkleRoot(ids2)
-	if root2 != expectedMerkleRoot {
-		t.Fatalf("merkle root should be order-independent: got %s", root2)
-	}
-
-	// Empty list should produce all-zeros
-	emptyRoot := BuildMerkleRoot([]string{})
-	if emptyRoot != fmt.Sprintf("%064x", 0) {
-		t.Fatalf("empty merkle root: got %s", emptyRoot)
-	}
-
-	// Single element
-	singleRoot := BuildMerkleRoot([]string{"alpha"})
-	alphaHash := sha256.Sum256([]byte("alpha"))
-	if singleRoot != fmt.Sprintf("%x", alphaHash) {
-		t.Fatalf("single-element root: got %s", singleRoot)
 	}
 }
 

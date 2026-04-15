@@ -10,7 +10,7 @@ This repository contains the protocol specification, reference implementations i
 
 | Package                                                  | Language            | Description                                                              |
 | -------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| [`@metalabel/dfos-protocol`](./packages/dfos-protocol)   | TypeScript          | Ed25519 signed chain primitives, beacons, merkle trees, and verification |
+| [`@metalabel/dfos-protocol`](./packages/dfos-protocol)   | TypeScript          | Ed25519 signed chain primitives, beacons, credentials, and verification  |
 | [`dfos-protocol-go`](./packages/dfos-protocol-go)        | Go                  | Go protocol library — signing, verification, CID derivation, credentials |
 | [`@metalabel/dfos-web-relay`](./packages/dfos-web-relay) | TypeScript          | Portable HTTP relay — Hono app, any runtime                              |
 | [`dfos-web-relay-go`](./packages/dfos-web-relay-go)      | Go                  | Go relay — single binary, SQLite, built-in peering                       |

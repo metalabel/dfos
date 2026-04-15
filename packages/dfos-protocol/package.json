@@ -2,7 +2,7 @@
   "name": "@metalabel/dfos-protocol",
   "version": "0.9.0",
   "type": "module",
-  "description": "DFOS Protocol — Ed25519 signed chain primitives, beacons, merkle trees, and verification",
+  "description": "DFOS Protocol — Ed25519 signed chain primitives, beacons, credentials, and verification",
   "license": "MIT",
   "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
   "repository": {
@@ -28,7 +28,6 @@
     ".": "./src/index.ts",
     "./crypto": "./src/crypto/index.ts",
     "./chain": "./src/chain/index.ts",
-    "./merkle": "./src/merkle/index.ts",
     "./credentials": "./src/credentials/index.ts"
   },
   "publishConfig": {
@@ -44,10 +43,6 @@
       "./chain": {
         "import": "./dist/chain/index.js",
         "types": "./dist/chain/index.d.ts"
-      },
-      "./merkle": {
-        "import": "./dist/merkle/index.js",
-        "types": "./dist/merkle/index.d.ts"
       },
       "./credentials": {
         "import": "./dist/credentials/index.js",

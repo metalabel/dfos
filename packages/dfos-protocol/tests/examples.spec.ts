@@ -18,8 +18,6 @@ import {
 import type { VerifiedContentChain } from '../src/chain';
 import type { VerifiedIdentity } from '../src/chain/schemas';
 import { decodeDFOSCredentialUnsafe, verifyDFOSCredential } from '../src/credentials';
-import { buildMerkleTree, verifyMerkleProof } from '../src/merkle';
-import type { MerkleProof } from '../src/merkle';
 
 const examplesDir = join(import.meta.dirname, '..', 'examples');
 
@@ -44,7 +42,6 @@ describe('example fixtures', () => {
       'identity-delete.json',
       'identity-genesis.json',
       'identity-rotation.json',
-      'merkle-tree.json',
     ]);
   });
 
@@ -210,22 +207,6 @@ describe('example fixtures', () => {
 
       expect(result.iss).toBe(fixture.expected.iss);
       expect(result.aud).toBe(fixture.expected.aud);
-    });
-  });
-
-  describe('merkle tree', () => {
-    it('verifies merkle-tree.json', async () => {
-      const fixture = loadFixture('merkle-tree.json');
-      expect(fixture.type).toBe('merkle');
-
-      const { root, leafCount } = await buildMerkleTree(fixture.contentIds);
-      expect(root).toBe(fixture.expected.root);
-      expect(leafCount).toBe(fixture.expected.leafCount);
-
-      // verify inclusion proof for charlie
-      const proof: MerkleProof = fixture.expected.charlieProof;
-      const valid = await verifyMerkleProof(proof);
-      expect(valid).toBe(true);
     });
   });
 

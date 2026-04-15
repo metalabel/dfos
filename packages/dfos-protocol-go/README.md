@@ -39,23 +39,22 @@ cred, err := dfos.CreateCredential(
 
 All protocol operations are covered:
 
-| Function             | Description                                  |
-| -------------------- | -------------------------------------------- |
-| `SignIdentityCreate` | Sign an identity genesis operation           |
-| `SignIdentityUpdate` | Sign an identity key rotation                |
-| `SignIdentityDelete` | Sign an identity deletion (terminal)         |
-| `SignContentCreate`  | Sign a content chain genesis                 |
-| `SignContentUpdate`  | Sign a content chain update                  |
-| `SignContentDelete`  | Sign a content chain deletion                |
-| `SignBeacon`         | Sign a manifest beacon                       |
-| `SignArtifact`       | Sign a standalone inline document            |
-| `SignCountersign`    | Countersign a target operation by CID        |
-| `CreateAuthToken`    | Create a relay-scoped JWT auth token         |
-| `CreateCredential`   | Issue a DFOS credential (read/write)         |
-| `VerifyJWS`          | Verify an Ed25519 JWS token                  |
-| `VerifyCredential`   | Verify a DFOS credential                     |
-| `DocumentCID`        | Canonical dag-cbor encode and CIDv1 hash     |
-| `BuildMerkleRoot`    | Compute SHA-256 merkle root over content IDs |
+| Function             | Description                              |
+| -------------------- | ---------------------------------------- |
+| `SignIdentityCreate` | Sign an identity genesis operation       |
+| `SignIdentityUpdate` | Sign an identity key rotation            |
+| `SignIdentityDelete` | Sign an identity deletion (terminal)     |
+| `SignContentCreate`  | Sign a content chain genesis             |
+| `SignContentUpdate`  | Sign a content chain update              |
+| `SignContentDelete`  | Sign a content chain deletion            |
+| `SignBeacon`         | Sign a manifest beacon                   |
+| `SignArtifact`       | Sign a standalone inline document        |
+| `SignCountersign`    | Countersign a target operation by CID    |
+| `CreateAuthToken`    | Create a relay-scoped JWT auth token     |
+| `CreateCredential`   | Issue a DFOS credential (read/write)     |
+| `VerifyJWS`          | Verify an Ed25519 JWS token              |
+| `VerifyCredential`   | Verify a DFOS credential                 |
+| `DocumentCID`        | Canonical dag-cbor encode and CIDv1 hash |
 
 ## Tests
 
