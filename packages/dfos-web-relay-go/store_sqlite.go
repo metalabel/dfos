@@ -109,10 +109,17 @@ CREATE INDEX IF NOT EXISTS idx_public_credentials_exp ON public_credentials(exp)
 `
 
 // SQLiteStore is a durable Store backed by SQLite.
+//
+// The readOnly flag controls readerDB() behavior. When false (default for the
+// ingestion store), readerDB() returns the active write transaction so that
+// within-batch reads see uncommitted writes. When true (for the HTTP read
+// store), readerDB() always returns the WAL read pool — safe for concurrent
+// use while ingestion holds a write transaction.
 type SQLiteStore struct {
-	db     *sql.DB // write connection (single writer)
-	readDB *sql.DB // read connection pool (concurrent reads)
-	tx     *sql.Tx // active write batch transaction, if any
+	db       *sql.DB // write connection (single writer)
+	readDB   *sql.DB // read connection pool (concurrent reads)
+	tx       *sql.Tx // active write batch transaction, if any
+	readOnly bool    // if true, readerDB() never returns tx
 }
 
 // writerDB returns the active transaction if one exists, otherwise the raw db.
@@ -123,13 +130,22 @@ func (s *SQLiteStore) writerDB() dbConn {
 	return s.db
 }
 
-// readerDB returns the active transaction if one exists (so reads see
-// uncommitted writes within a batch), otherwise the read connection pool.
+// readerDB returns the read connection to use. For the ingestion store
+// (readOnly=false), returns the active transaction if one exists so within-
+// batch reads see uncommitted writes. For the HTTP read store (readOnly=true),
+// always returns the WAL read pool.
 func (s *SQLiteStore) readerDB() dbConn {
-	if s.tx != nil {
+	if !s.readOnly && s.tx != nil {
 		return s.tx
 	}
 	return s.readDB
+}
+
+// ReadStore returns a Store that shares this store's database connections but
+// always reads from the WAL read pool, never from an active write transaction.
+// Use this for HTTP handlers that run concurrently with ingestion.
+func (s *SQLiteStore) ReadStore() *SQLiteStore {
+	return &SQLiteStore{db: s.db, readDB: s.readDB, readOnly: true}
 }
 
 // dbConn is the common interface between *sql.DB and *sql.Tx.

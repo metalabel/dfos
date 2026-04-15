@@ -70,7 +70,7 @@ func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requ
 	resolveKey := CreateKeyResolver(r.store)
 
 	// 2. check stored public credentials
-	publicCreds, _ := r.store.GetPublicCredentials(requestedResource)
+	publicCreds, _ := r.readStore.GetPublicCredentials(requestedResource)
 	for _, credJws := range publicCreds {
 		if err := r.verifyCredentialForAccess(credJws, resolveKey, requestedResource, action, creatorDID, ""); err == nil {
 			return ""
@@ -109,7 +109,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 	issuerDID := kid[:strings.Index(kid, "#")]
 
 	// check issuer identity is not deleted
-	issuerIdentity, _ := r.store.GetIdentityChain(issuerDID)
+	issuerIdentity, _ := r.readStore.GetIdentityChain(issuerDID)
 	if issuerIdentity != nil && issuerIdentity.State.IsDeleted {
 		return fmt.Errorf("credential issuer identity is deleted")
 	}
@@ -129,7 +129,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 	}
 
 	// check leaf revocation
-	revoked, _ := r.store.IsCredentialRevoked(verified.Iss, verified.CID)
+	revoked, _ := r.readStore.IsCredentialRevoked(verified.Iss, verified.CID)
 	if revoked {
 		return fmt.Errorf("credential is revoked")
 	}
@@ -203,7 +203,7 @@ func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []
 		parentIssuerDID := pKid[:strings.Index(pKid, "#")]
 
 		// check parent issuer identity is not deleted
-		parentIdentity, _ := r.store.GetIdentityChain(parentIssuerDID)
+		parentIdentity, _ := r.readStore.GetIdentityChain(parentIssuerDID)
 		if parentIdentity != nil && parentIdentity.State.IsDeleted {
 			return fmt.Errorf("parent credential issuer identity is deleted")
 		}
@@ -219,7 +219,7 @@ func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []
 		}
 
 		// check revocation at every level
-		prevoked, _ := r.store.IsCredentialRevoked(pVerified.Iss, pVerified.CID)
+		prevoked, _ := r.readStore.IsCredentialRevoked(pVerified.Iss, pVerified.CID)
 		if prevoked {
 			return fmt.Errorf("parent credential in delegation chain is revoked")
 		}
@@ -327,7 +327,7 @@ func (r *Relay) matchesResource(att []dfos.AttEntry, resource string, action str
 // manifestLookup resolves which contentIds a manifest indexes by reading its
 // head document blob and extracting entries values.
 func (r *Relay) manifestLookup(manifestContentID string) []string {
-	chain, err := r.store.GetContentChain(manifestContentID)
+	chain, err := r.readStore.GetContentChain(manifestContentID)
 	if err != nil || chain == nil {
 		return nil
 	}
@@ -336,7 +336,7 @@ func (r *Relay) manifestLookup(manifestContentID string) []string {
 	}
 	docCID := *chain.State.CurrentDocumentCID
 
-	blob, _ := r.store.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: docCID})
+	blob, _ := r.readStore.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: docCID})
 	if blob == nil {
 		return nil
 	}

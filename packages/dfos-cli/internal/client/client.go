@@ -25,12 +25,23 @@ func New(baseURL string) *Client {
 
 // RelayInfo is the response from /.well-known/dfos-relay.
 type RelayInfo struct {
-	DID      string `json:"did"`
-	Protocol string `json:"protocol"`
-	Version  string `json:"version"`
-	Proof    bool   `json:"proof"`
-	Content  bool   `json:"content"`
-	Profile  string `json:"profile,omitempty"`
+	DID          string            `json:"did"`
+	Protocol     string            `json:"protocol"`
+	Version      string            `json:"version"`
+	Capabilities RelayCapabilities `json:"capabilities"`
+	Profile      string            `json:"profile,omitempty"`
+
+	// Convenience accessors populated after unmarshal.
+	Proof   bool `json:"-"`
+	Content bool `json:"-"`
+}
+
+// RelayCapabilities are the nested capability flags from the well-known response.
+type RelayCapabilities struct {
+	Proof    bool `json:"proof"`
+	Content  bool `json:"content"`
+	Log      bool `json:"log"`
+	Documents bool `json:"documents"`
 }
 
 // IdentityResponse is the response from GET /identities/:did.
@@ -100,6 +111,8 @@ func (c *Client) GetRelayInfo() (*RelayInfo, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
 		return nil, err
 	}
+	info.Proof = info.Capabilities.Proof
+	info.Content = info.Capabilities.Content
 	return &info, nil
 }
 
