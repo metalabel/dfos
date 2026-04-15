@@ -150,6 +150,9 @@ func newCredentialRevokeCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				if err := publishIdentityIfNeeded(chain, rn, c); err != nil {
+					return err
+				}
 				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
 					return fmt.Errorf("submit: %w", err)
