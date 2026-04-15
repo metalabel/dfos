@@ -1,0 +1,36 @@
+{
+  "description": "Expected state after folding all 6 operations from chain.json",
+  "items": [
+    {
+      "operationCID": "op4_update_item_1",
+      "originalOperationCID": "op1_create_item_1",
+      "title": "Hello world (edited)",
+      "body": "My first post, now edited.",
+      "createdByDID": "did:dfos:alice"
+    }
+  ],
+  "deletedItems": [
+    {
+      "operationCID": "op2_create_item_2",
+      "deletedByOperationCID": "op6_delete_item_2",
+      "title": "Second item",
+      "createdByDID": "did:dfos:bob"
+    }
+  ],
+  "reactions": [
+    {
+      "targetOperationCID": "op1_create_item_1",
+      "reaction": "thumbsup",
+      "createdByDID": "did:dfos:carol"
+    }
+  ],
+  "droppedReactions": [
+    {
+      "targetOperationCID": "op2_create_item_2",
+      "reaction": "fire",
+      "createdByDID": "did:dfos:alice",
+      "reason": "target item was deleted"
+    }
+  ],
+  "note": "Item 2 was deleted in op6, which also dropped alice's fire reaction from op5. Carol's thumbsup on item 1 survives because item 1 was only edited, not deleted."
+}

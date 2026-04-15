@@ -31,12 +31,16 @@ func TestWellKnown(t *testing.T) {
 	// ---------------------------------------------------------------
 
 	var meta struct {
-		DID      string `json:"did"`
-		Protocol string `json:"protocol"`
-		Version  string `json:"version"`
-		Proof    bool   `json:"proof"`
-		Content  bool   `json:"content"`
-		Profile  string `json:"profile"`
+		DID          string `json:"did"`
+		Protocol     string `json:"protocol"`
+		Version      string `json:"version"`
+		Capabilities struct {
+			Proof     bool `json:"proof"`
+			Content   bool `json:"content"`
+			Documents bool `json:"documents"`
+			Log       bool `json:"log"`
+		} `json:"capabilities"`
+		Profile string `json:"profile"`
 	}
 	resp := getJSON(t, base+"/.well-known/dfos-relay", &meta)
 	if resp.StatusCode != 200 {
@@ -48,8 +52,8 @@ func TestWellKnown(t *testing.T) {
 	if meta.Protocol == "" {
 		t.Fatal("protocol field is empty")
 	}
-	if !meta.Proof {
-		t.Fatal("proof must be true")
+	if !meta.Capabilities.Proof {
+		t.Fatal("capabilities.proof must be true")
 	}
 
 	relayDID := meta.DID
@@ -708,8 +712,7 @@ func TestBeaconCreate(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	kid := id.did + "#" + id.auth.keyID
-	merkle := dfos.BuildMerkleRoot([]string{cc.contentID})
-	token, beaconCID, err := dfos.SignBeacon(id.did, merkle, kid, id.auth.priv)
+	token, beaconCID, err := dfos.SignBeacon(id.did, cc.contentID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -934,8 +937,8 @@ func TestBlobDownloadWithCredential(t *testing.T) {
 	reader := createIdentity(t, base)
 	readerKid := id.did + "#" + id.auth.keyID
 	cred, err := dfos.CreateCredential(
-		id.did, reader.did, readerKid, "DFOSContentRead",
-		5*time.Minute, cc.contentID, id.auth.priv,
+		id.did, reader.did, readerKid, "chain:"+cc.contentID, "read",
+		5*time.Minute, id.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -986,8 +989,8 @@ func TestBlobRejectCredentialFromNonCreator(t *testing.T) {
 	reader := createIdentity(t, base)
 	imposterKid := imposter.did + "#" + imposter.auth.keyID
 	cred, _ := dfos.CreateCredential(
-		imposter.did, reader.did, imposterKid, "DFOSContentRead",
-		5*time.Minute, cc.contentID, imposter.auth.priv,
+		imposter.did, reader.did, imposterKid, "chain:"+cc.contentID, "read",
+		5*time.Minute, imposter.auth.priv,
 	)
 
 	readerTok := authToken(t, base, reader)
@@ -1010,11 +1013,11 @@ func TestDelegatedContentUpdate(t *testing.T) {
 	// create delegate identity
 	delegate := createIdentity(t, base)
 
-	// creator issues DFOSContentWrite credential to delegate
+	// creator issues write credential to delegate
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	cred, err := dfos.CreateCredential(
-		creator.did, delegate.did, creatorKid, "DFOSContentWrite",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, delegate.did, creatorKid, "chain:"+cc.contentID, "write",
+		5*time.Minute, creator.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1089,8 +1092,8 @@ func TestDelegatedBlobUpload(t *testing.T) {
 	// issue write credential
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	cred, _ := dfos.CreateCredential(
-		creator.did, delegate.did, creatorKid, "DFOSContentWrite",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, delegate.did, creatorKid, "chain:"+cc.contentID, "write",
+		5*time.Minute, creator.auth.priv,
 	)
 
 	// delegate signs update

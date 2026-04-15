@@ -13,8 +13,8 @@ npm install @metalabel/dfos-protocol
 ```ts
 // Chain verification
 import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protocol/chain';
-// Credentials (auth tokens + VC-JWT)
-import { createAuthToken, verifyCredential } from '@metalabel/dfos-protocol/credentials';
+// Credentials (auth tokens + DFOS credentials)
+import { createAuthToken, createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 // Crypto primitives
 import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-protocol/crypto';
 // Merkle trees
@@ -26,7 +26,7 @@ import { buildMerkleTree, verifyMerkleProof } from '@metalabel/dfos-protocol/mer
 | Export                                 | Description                                                             |
 | -------------------------------------- | ----------------------------------------------------------------------- |
 | `@metalabel/dfos-protocol/chain`       | Identity and content chain signing, verification, beacons, countersigns |
-| `@metalabel/dfos-protocol/credentials` | Auth tokens (DID-signed JWT) and VC-JWT credentials for authorization   |
+| `@metalabel/dfos-protocol/credentials` | Auth tokens (DID-signed JWT) and DFOS credentials for authorization     |
 | `@metalabel/dfos-protocol/crypto`      | Ed25519, JWS, JWT, dag-cbor, base64url, ID generation                   |
 | `@metalabel/dfos-protocol/merkle`      | SHA-256 binary merkle tree, inclusion proofs                            |
 
@@ -47,11 +47,11 @@ The `examples/` directory contains deterministic reference fixtures that can be 
 - `identity-delete.json` — genesis + delete (terminal)
 - `content-lifecycle.json` — create + update (with both documents)
 - `content-delete.json` — create + delete
-- `content-delegated.json` — creator genesis + delegated update with DFOSContentWrite VC-JWT
-- `credential-write.json` — DFOSContentWrite VC-JWT (broad + content-narrowed)
-- `credential-read.json` — DFOSContentRead VC-JWT
+- `content-delegated.json` — creator genesis + delegated update with DFOS write credential
+- `credential-write.json` — DFOS write credential (broad + content-narrowed)
+- `credential-read.json` — DFOS read credential
 - `merkle-tree.json` — 5 content IDs → sorted tree → root, with inclusion proof
-- `beacon.json` — signed merkle root announcement with witness countersignature
+- `beacon.json` — signed manifest pointer announcement with witness countersignature
 
 ## License
 

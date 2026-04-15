@@ -11,6 +11,7 @@ import type {
   VerifiedContentChain,
   VerifiedIdentity,
 } from '@metalabel/dfos-protocol/chain';
+import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 
 // -----------------------------------------------------------------------------
 // relay options
@@ -120,7 +121,14 @@ export interface StoredOperation {
   cid: string;
   jwsToken: string;
   /** Which chain type this operation belongs to */
-  chainType: 'identity' | 'content' | 'artifact' | 'beacon' | 'countersign';
+  chainType:
+    | 'identity'
+    | 'content'
+    | 'artifact'
+    | 'beacon'
+    | 'countersign'
+    | 'revocation'
+    | 'credential';
   /** The chain identifier — DID for identity/beacon/artifact, contentId for content, targetCID for countersign */
   chainId: string;
 }
@@ -144,7 +152,41 @@ export interface LogEntry {
 }
 
 /** All operation kinds in the protocol */
-export type OperationKind = 'identity-op' | 'content-op' | 'beacon' | 'artifact' | 'countersign';
+export type OperationKind =
+  | 'identity-op'
+  | 'content-op'
+  | 'beacon'
+  | 'artifact'
+  | 'countersign'
+  | 'revocation'
+  | 'credential';
+
+// -----------------------------------------------------------------------------
+// revocations + public credentials
+// -----------------------------------------------------------------------------
+
+export interface StoredRevocation {
+  cid: string;
+  issuerDID: string;
+  credentialCID: string;
+  jwsToken: string;
+}
+
+export interface StoredDocument {
+  operationCID: string;
+  documentCID: string | null;
+  document: unknown | null;
+  signerDID: string;
+  createdAt: string;
+}
+
+export interface StoredPublicCredential {
+  cid: string;
+  issuerDID: string;
+  att: Attenuation[];
+  exp: number;
+  jwsToken: string;
+}
 
 // -----------------------------------------------------------------------------
 // relay store interface
@@ -226,6 +268,32 @@ export interface RelayStore {
     contentId: string,
     cid: string,
   ): Promise<{ state: VerifiedContentChain; lastCreatedAt: string } | null>;
+
+  // --- revocations ---
+
+  /** Get all revoked credential CIDs for an issuer */
+  getRevocations(issuerDID: string): Promise<string[]>;
+  /** Add a revocation to the revocation set */
+  addRevocation(revocation: StoredRevocation): Promise<void>;
+  /** Check if a specific credential CID has been revoked by a specific issuer */
+  isCredentialRevoked(issuerDID: string, credentialCID: string): Promise<boolean>;
+
+  // --- public credentials (standing authorization) ---
+
+  /** Get public credentials covering a specific resource */
+  getPublicCredentials(resource: string): Promise<string[]>;
+  /** Add a public credential as standing authorization */
+  addPublicCredential(credential: StoredPublicCredential): Promise<void>;
+  /** Remove a public credential (e.g., after revocation) */
+  removePublicCredential(credentialCID: string): Promise<void>;
+
+  // --- documents ---
+
+  /** Get paginated documents for a content chain */
+  getDocuments(
+    contentId: string,
+    params: { after?: string; limit: number },
+  ): Promise<{ documents: StoredDocument[]; cursor: string | null }>;
 
   // --- peer sync state ---
 

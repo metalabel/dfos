@@ -36,6 +36,8 @@ html = html.replace(/href="\.\/RELAY\.md"/g, 'href="/web-relay"');
 html = html.replace(/href="\.\.\/dfos-protocol\/PROTOCOL\.md"/g, 'href="/spec"');
 html = html.replace(/href="\.\.\/dfos-protocol\/DID-METHOD\.md"/g, 'href="/did-method"');
 html = html.replace(/href="\.\.\/dfos-protocol\/CONTENT-MODEL\.md"/g, 'href="/content-model"');
+html = html.replace(/href="\.\/CREDENTIALS\.md"/g, 'href="/credentials"');
+html = html.replace(/href="\.\/SIWD\.md"/g, 'href="/siwd"');
 
 // Wrap code blocks with copy button
 html = html.replace(
@@ -73,6 +75,8 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
       <a href="/spec">Specification</a>
       <a href="/did-method">DID Method</a>
       <a href="/content-model">Content Model</a>
+      <a href="/credentials">Credentials</a>
+      <a href="/web-relay">Web Relay</a>
       <a href="/cli">CLI</a>
       <a href="/deploy">Deploy</a>
       <a href="/faq">FAQ</a>

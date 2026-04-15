@@ -2,7 +2,7 @@
 
   BEACON
 
-  Floating signed merkle root announcement. Latest createdAt wins.
+  Floating signed manifest pointer announcement. Latest createdAt wins.
   Signed by identity controller key. No chain semantics — no backlink,
   no sequence number. Replace-on-newer.
 
@@ -11,6 +11,18 @@
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { BeaconPayload } from './schemas';
 import type { Signer } from './schemas';
+
+// -----------------------------------------------------------------------------
+// types
+// -----------------------------------------------------------------------------
+
+export interface VerifiedBeacon {
+  did: string;
+  manifestContentId: string;
+  createdAt: string;
+  signerKeyId: string;
+  beaconCID: string;
+}
 
 // -----------------------------------------------------------------------------
 // signing
@@ -42,11 +54,6 @@ export const signBeacon = async (input: {
 
 /** Max clock skew tolerance for beacon createdAt (5 minutes) */
 const MAX_FUTURE_MS = 5 * 60 * 1000;
-
-export interface VerifiedBeacon {
-  payload: BeaconPayload;
-  beaconCID: string;
-}
 
 /**
  * Verify a beacon JWS — signature, CID, payload schema, clock skew
@@ -103,5 +110,11 @@ export const verifyBeacon = async (input: {
     throw new Error('beacon createdAt is too far in the future');
   }
 
-  return { payload, beaconCID };
+  return {
+    did: payload.did,
+    manifestContentId: payload.manifestContentId,
+    createdAt: payload.createdAt,
+    signerKeyId: kid,
+    beaconCID,
+  };
 };

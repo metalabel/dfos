@@ -198,8 +198,8 @@ func TestBatchMultiChain(t *testing.T) {
 // credential type enforcement
 // ===================================================================
 
-// TestWriteCredentialCannotRead verifies that a DFOSContentWrite credential
-// cannot be used to download blobs (requires DFOSContentRead).
+// TestWriteCredentialCannotRead verifies that a write credential
+// cannot be used to download blobs (requires read credential).
 func TestWriteCredentialCannotRead(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
@@ -212,20 +212,20 @@ func TestWriteCredentialCannotRead(t *testing.T) {
 	reader := createIdentity(t, base)
 	issuerKid := id.did + "#" + id.auth.keyID
 	cred, _ := dfos.CreateCredential(
-		id.did, reader.did, issuerKid, "DFOSContentWrite",
-		5*time.Minute, cc.contentID, id.auth.priv,
+		id.did, reader.did, issuerKid, "chain:"+cc.contentID, "write",
+		5*time.Minute, id.auth.priv,
 	)
 
 	readerTok := authToken(t, base, reader)
 	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
 	if dlRes.StatusCode == 200 {
-		t.Fatal("DFOSContentWrite credential should not grant read access")
+		t.Fatal("write credential should not grant read access")
 	}
 	dlRes.Body.Close()
 }
 
-// TestReadCredentialCannotWrite verifies that a DFOSContentRead credential
-// cannot be used as authorization for content updates (requires DFOSContentWrite).
+// TestReadCredentialCannotWrite verifies that a read credential
+// cannot be used as authorization for content updates (requires write credential).
 func TestReadCredentialCannotWrite(t *testing.T) {
 	base := relayURL(t)
 	creator := createIdentity(t, base)
@@ -234,8 +234,8 @@ func TestReadCredentialCannotWrite(t *testing.T) {
 	delegate := createIdentity(t, base)
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	cred, _ := dfos.CreateCredential(
-		creator.did, delegate.did, creatorKid, "DFOSContentRead",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, delegate.did, creatorKid, "chain:"+cc.contentID, "read",
+		5*time.Minute, creator.auth.priv,
 	)
 
 	doc2 := map[string]any{"type": "post", "title": "sneaky write"}
@@ -258,7 +258,7 @@ func TestReadCredentialCannotWrite(t *testing.T) {
 	}
 	json.Unmarshal(body, &results)
 	if len(results.Results) > 0 && results.Results[0].Error == "" {
-		t.Fatal("DFOSContentRead credential should not grant write access")
+		t.Fatal("read credential should not grant write access")
 	}
 }
 
@@ -275,8 +275,7 @@ func TestBeaconFromUnknownIdentity(t *testing.T) {
 	fakeDID := "did:dfos:unknownbeacontest00000"
 	kid := fakeDID + "#" + kp.keyID
 
-	merkle := dfos.BuildMerkleRoot([]string{"some-content-id"})
-	token, _, err := dfos.SignBeacon(fakeDID, merkle, kid, kp.priv)
+	token, _, err := dfos.SignBeacon(fakeDID, "some22charcontent0000", kid, kp.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,8 +307,7 @@ func TestBeaconFromDeletedIdentity(t *testing.T) {
 
 	// beacon from deleted identity — should be rejected
 	authKid := id.did + "#" + id.auth.keyID
-	merkle := dfos.BuildMerkleRoot([]string{"some-content-id"})
-	beaconToken, _, err := dfos.SignBeacon(id.did, merkle, authKid, id.auth.priv)
+	beaconToken, _, err := dfos.SignBeacon(id.did, "some22charcontent0000", authKid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,8 +562,8 @@ func TestCredentialFromDeletedIssuer(t *testing.T) {
 	reader := createIdentity(t, base)
 	issuerKid := creator.did + "#" + creator.auth.keyID
 	cred, err := dfos.CreateCredential(
-		creator.did, reader.did, issuerKid, "DFOSContentRead",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, reader.did, issuerKid, "chain:"+cc.contentID, "read",
+		5*time.Minute, creator.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -589,8 +587,8 @@ func TestCredentialFromDeletedIssuer(t *testing.T) {
 }
 
 // TestDelegatedWriteFromDeletedCreator verifies that a delegate holding a
-// DFOSContentWrite credential cannot mutate a content chain after the
-// credential issuer (chain creator) has been deleted.
+// write credential cannot mutate a content chain after the credential issuer
+// (chain creator) has been deleted.
 func TestDelegatedWriteFromDeletedCreator(t *testing.T) {
 	base := relayURL(t)
 	creator := createIdentity(t, base)
@@ -601,8 +599,8 @@ func TestDelegatedWriteFromDeletedCreator(t *testing.T) {
 	// issue write credential while creator is alive
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	cred, err := dfos.CreateCredential(
-		creator.did, delegate.did, creatorKid, "DFOSContentWrite",
-		5*time.Minute, cc.contentID, creator.auth.priv,
+		creator.did, delegate.did, creatorKid, "chain:"+cc.contentID, "write",
+		5*time.Minute, creator.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)

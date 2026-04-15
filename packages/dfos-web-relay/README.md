@@ -56,7 +56,7 @@ serve({ port: 4444 });
 
 **Upload**: Auth token required. Caller must be the chain creator or the signer of the referenced operation (enables delegated upload).
 
-**Download**: Auth token required. Chain creator can download directly. Other identities must present a `DFOSContentRead` VC-JWT credential (issued by the creator) in the `X-Credential` header.
+**Download**: Auth token required. Chain creator can download directly. Other identities must present a DFOS read credential (issued by the creator) in the `X-Credential` header.
 
 ## Peering
 

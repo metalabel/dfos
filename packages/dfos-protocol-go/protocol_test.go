@@ -426,7 +426,7 @@ func TestCreateAuthToken(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 14. CreateCredential — VC-JWT structure
+// 14. CreateCredential — DFOS credential structure
 // ---------------------------------------------------------------------------
 
 func TestCreateCredential(t *testing.T) {
@@ -434,11 +434,10 @@ func TestCreateCredential(t *testing.T) {
 	iss := expectedDID
 	sub := expectedDID
 	kid := "key_r9ev34fvc23z999veaaft8"
-	credType := "DFOSContentRead"
 	ttl := 24 * time.Hour
 	contentID := "abc123"
 
-	token, err := CreateCredential(iss, sub, kid, credType, ttl, contentID, priv1)
+	token, err := CreateCredential(iss, sub, kid, "chain:"+contentID, "read", ttl, priv1)
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}
@@ -452,52 +451,30 @@ func TestCreateCredential(t *testing.T) {
 	if p["iss"] != iss {
 		t.Fatalf("iss: got %v", p["iss"])
 	}
-	if p["sub"] != sub {
-		t.Fatalf("sub: got %v", p["sub"])
+	if p["aud"] != sub {
+		t.Fatalf("aud: got %v, want %s", p["aud"], sub)
+	}
+	if p["type"] != "DFOSCredential" {
+		t.Fatalf("type: got %v, want DFOSCredential", p["type"])
 	}
 
-	// Check VC structure
-	vc, ok := p["vc"].(map[string]any)
+	// Check att structure
+	att, ok := p["att"].([]any)
 	if !ok {
-		t.Fatalf("vc type: %T", p["vc"])
+		t.Fatalf("att type: %T", p["att"])
 	}
-
-	vcContext, ok := vc["@context"].([]any)
+	if len(att) != 1 {
+		t.Fatalf("att length: got %d, want 1", len(att))
+	}
+	attEntry, ok := att[0].(map[string]any)
 	if !ok {
-		t.Fatalf("@context type: %T", vc["@context"])
+		t.Fatalf("att[0] type: %T", att[0])
 	}
-	if len(vcContext) != 1 || vcContext[0] != "https://www.w3.org/ns/credentials/v2" {
-		t.Fatalf("@context: %v", vcContext)
+	if attEntry["resource"] != "chain:"+contentID {
+		t.Fatalf("att[0].resource: got %v, want chain:%s", attEntry["resource"], contentID)
 	}
-
-	vcTypes, ok := vc["type"].([]any)
-	if !ok {
-		t.Fatalf("vc type field: %T", vc["type"])
-	}
-	foundVC := false
-	foundCred := false
-	for _, vt := range vcTypes {
-		if vt == "VerifiableCredential" {
-			foundVC = true
-		}
-		if vt == credType {
-			foundCred = true
-		}
-	}
-	if !foundVC {
-		t.Fatal("missing VerifiableCredential type")
-	}
-	if !foundCred {
-		t.Fatalf("missing %s type", credType)
-	}
-
-	// Check credentialSubject
-	cs, ok := vc["credentialSubject"].(map[string]any)
-	if !ok {
-		t.Fatalf("credentialSubject type: %T", vc["credentialSubject"])
-	}
-	if cs["contentId"] != contentID {
-		t.Fatalf("contentId: got %v, want %s", cs["contentId"], contentID)
+	if attEntry["action"] != "read" {
+		t.Fatalf("att[0].action: got %v, want read", attEntry["action"])
 	}
 
 	// Decode via JWT helper and verify typ
@@ -505,8 +482,8 @@ func TestCreateCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hm["typ"] != "vc+jwt" {
-		t.Fatalf("JWT typ: got %s, want vc+jwt", hm["typ"])
+	if hm["typ"] != "did:dfos:credential" {
+		t.Fatalf("JWT typ: got %s, want did:dfos:credential", hm["typ"])
 	}
 }
 
@@ -1345,16 +1322,16 @@ func TestVerifyCredentialEdgeCases(t *testing.T) {
 	iss := "did:dfos:test123"
 	sub := "did:dfos:sub456"
 	kidNoFragment := "did:dfos:test123" // missing #key_xxx
-	token, _ := CreateCredential(iss, sub, kidNoFragment, "DFOSContentRead", 1*time.Hour, "", priv)
-	_, err = VerifyCredential(token, priv.Public().(ed25519.PublicKey), sub, "DFOSContentRead")
+	token, _ := CreateCredential(iss, sub, kidNoFragment, "chain:x", "read", 1*time.Hour, priv)
+	_, err = VerifyCredential(token, priv.Public().(ed25519.PublicKey), sub, "read")
 	if err == nil {
 		t.Fatal("expected error for kid without fragment")
 	}
 
 	// credential with kid DID not matching iss
 	wrongKid := "did:dfos:other#key_1"
-	token2, _ := CreateCredential(iss, sub, wrongKid, "DFOSContentRead", 1*time.Hour, "", priv)
-	_, err = VerifyCredential(token2, priv.Public().(ed25519.PublicKey), sub, "DFOSContentRead")
+	token2, _ := CreateCredential(iss, sub, wrongKid, "chain:x", "read", 1*time.Hour, priv)
+	_, err = VerifyCredential(token2, priv.Public().(ed25519.PublicKey), sub, "read")
 	if err == nil {
 		t.Fatal("expected error for kid DID mismatch")
 	}

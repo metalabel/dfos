@@ -86,6 +86,26 @@ CREATE TABLE IF NOT EXISTS raw_ops (
 CREATE INDEX IF NOT EXISTS idx_raw_ops_status ON raw_ops(status);
 
 DROP TABLE IF EXISTS pending_ops;
+
+CREATE TABLE IF NOT EXISTS revocations (
+	cid TEXT PRIMARY KEY,
+	issuer_did TEXT NOT NULL,
+	credential_cid TEXT NOT NULL,
+	jws_token TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_revocations_issuer ON revocations(issuer_did);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_revocations_scope ON revocations(issuer_did, credential_cid);
+
+CREATE TABLE IF NOT EXISTS public_credentials (
+	cid TEXT PRIMARY KEY,
+	issuer_did TEXT NOT NULL,
+	att JSON NOT NULL,
+	exp INTEGER NOT NULL,
+	jws_token TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_public_credentials_exp ON public_credentials(exp);
 `
 
 // SQLiteStore is a durable Store backed by SQLite.
@@ -763,6 +783,201 @@ func (s *SQLiteStore) CountUnsequenced() (int, error) {
 	var count int
 	err := s.readerDB().QueryRow("SELECT COUNT(*) FROM raw_ops WHERE status = 'pending'").Scan(&count)
 	return count, err
+}
+
+// ---------------------------------------------------------------------------
+// revocations (stub)
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteStore) GetRevocations(issuerDID string) ([]string, error) {
+	rows, err := s.readerDB().Query("SELECT credential_cid FROM revocations WHERE issuer_did = ?", issuerDID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cids := []string{}
+	for rows.Next() {
+		var cid string
+		if err := rows.Scan(&cid); err != nil {
+			return nil, err
+		}
+		cids = append(cids, cid)
+	}
+	return cids, rows.Err()
+}
+
+func (s *SQLiteStore) AddRevocation(revocation StoredRevocation) error {
+	_, err := s.writerDB().Exec(
+		"INSERT OR IGNORE INTO revocations (cid, issuer_did, credential_cid, jws_token) VALUES (?, ?, ?, ?)",
+		revocation.CID, revocation.IssuerDID, revocation.CredentialCID, revocation.JWSToken,
+	)
+	return err
+}
+
+func (s *SQLiteStore) IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error) {
+	var exists int
+	err := s.readerDB().QueryRow(
+		"SELECT 1 FROM revocations WHERE issuer_did = ? AND credential_cid = ? LIMIT 1",
+		issuerDID, credentialCID,
+	).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ---------------------------------------------------------------------------
+// public credentials (standing authorization)
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteStore) GetPublicCredentials(resource string) ([]string, error) {
+	// Build a query that unnests the att JSON array and matches on resource.
+	// We handle three cases:
+	//   1. Exact match on resource
+	//   2. chain:* matches any chain: resource
+	//   3. manifest: scoped credentials match chain: resources
+	var query string
+	var args []any
+
+	if strings.HasPrefix(resource, "chain:") {
+		query = `SELECT DISTINCT pc.jws_token FROM public_credentials pc, json_each(pc.att) je
+			WHERE json_extract(je.value, '$.resource') = ?
+			   OR json_extract(je.value, '$.resource') = 'chain:*'
+			   OR json_extract(je.value, '$.resource') LIKE 'manifest:%'`
+		args = []any{resource}
+	} else {
+		query = `SELECT DISTINCT pc.jws_token FROM public_credentials pc, json_each(pc.att) je
+			WHERE json_extract(je.value, '$.resource') = ?`
+		args = []any{resource}
+	}
+
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tokens := []string{}
+	for rows.Next() {
+		var token string
+		if err := rows.Scan(&token); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, token)
+	}
+	return tokens, rows.Err()
+}
+
+func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) error {
+	attJSON, err := json.Marshal(credential.Att)
+	if err != nil {
+		return err
+	}
+	_, err = s.writerDB().Exec(
+		"INSERT OR IGNORE INTO public_credentials (cid, issuer_did, att, exp, jws_token) VALUES (?, ?, ?, ?, ?)",
+		credential.CID, credential.IssuerDID, attJSON, credential.Exp, credential.JWSToken,
+	)
+	return err
+}
+
+func (s *SQLiteStore) RemovePublicCredential(credentialCID string) error {
+	_, err := s.writerDB().Exec("DELETE FROM public_credentials WHERE cid = ?", credentialCID)
+	return err
+}
+
+// ---------------------------------------------------------------------------
+// documents
+// ---------------------------------------------------------------------------
+
+func (s *SQLiteStore) GetDocuments(contentID string, after string, limit int) ([]StoredDocument, string, error) {
+	chain, err := s.GetContentChain(contentID)
+	if err != nil {
+		return nil, "", err
+	}
+	if chain == nil {
+		return []StoredDocument{}, "", nil
+	}
+
+	// build entries from chain log
+	type docEntry struct {
+		operationCID string
+		documentCID  *string
+		signerDID    string
+		createdAt    string
+	}
+	var entries []docEntry
+	for _, jws := range chain.Log {
+		header, payload, err := dfos.DecodeJWSUnsafe(jws)
+		if err != nil || header == nil {
+			continue
+		}
+		opCID := header.CID
+		signerDID, _ := payload["did"].(string)
+		createdAt, _ := payload["createdAt"].(string)
+		var docCID *string
+		if d, ok := payload["documentCID"].(string); ok {
+			docCID = &d
+		}
+		entries = append(entries, docEntry{
+			operationCID: opCID,
+			documentCID:  docCID,
+			signerDID:    signerDID,
+			createdAt:    createdAt,
+		})
+	}
+
+	// apply cursor pagination
+	startIdx := 0
+	if after != "" {
+		found := false
+		for i, e := range entries {
+			if e.operationCID == after {
+				startIdx = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			startIdx = len(entries)
+		}
+	}
+
+	end := startIdx + limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+	page := entries[startIdx:end]
+
+	// build StoredDocument slice, reading blobs for each entry
+	docs := make([]StoredDocument, 0, len(page))
+	for _, e := range page {
+		var document any
+		if e.documentCID != nil {
+			data, err := s.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: *e.documentCID})
+			if err != nil {
+				return nil, "", fmt.Errorf("read blob: %w", err)
+			}
+			if data != nil {
+				_ = json.Unmarshal(data, &document)
+			}
+		}
+		docs = append(docs, StoredDocument{
+			OperationCID: e.operationCID,
+			DocumentCID:  e.documentCID,
+			Document:     document,
+			SignerDID:    e.signerDID,
+			CreatedAt:    e.createdAt,
+		})
+	}
+
+	var cursor string
+	if len(page) == limit {
+		cursor = page[len(page)-1].operationCID
+	}
+
+	return docs, cursor, nil
 }
 
 // ---------------------------------------------------------------------------

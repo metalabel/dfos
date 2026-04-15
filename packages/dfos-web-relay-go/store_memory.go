@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 
@@ -19,6 +20,8 @@ type MemoryStore struct {
 	operationLog      []LogEntry
 	peerCursors       map[string]string
 	rawOps            map[string]rawOpEntry // cid → entry
+	revocations       map[string]StoredRevocation      // key: "issuerDID::credentialCID"
+	publicCredentials map[string]StoredPublicCredential // key: credential CID
 }
 
 type rawOpEntry struct {
@@ -37,6 +40,8 @@ func NewMemoryStore() *MemoryStore {
 		countersignatures: make(map[string][]string),
 		peerCursors:       make(map[string]string),
 		rawOps:            make(map[string]rawOpEntry),
+		revocations:       make(map[string]StoredRevocation),
+		publicCredentials: make(map[string]StoredPublicCredential),
 	}
 }
 
@@ -417,6 +422,178 @@ func (s *MemoryStore) CountUnsequenced() (int, error) {
 		}
 	}
 	return count, nil
+}
+
+// ---------------------------------------------------------------------------
+// revocations
+// ---------------------------------------------------------------------------
+
+func (s *MemoryStore) GetRevocations(issuerDID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var cids []string
+	for _, rev := range s.revocations {
+		if rev.IssuerDID == issuerDID {
+			cids = append(cids, rev.CredentialCID)
+		}
+	}
+	if cids == nil {
+		return []string{}, nil
+	}
+	return cids, nil
+}
+
+func (s *MemoryStore) AddRevocation(revocation StoredRevocation) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := revocation.IssuerDID + "::" + revocation.CredentialCID
+	s.revocations[key] = revocation
+	return nil
+}
+
+func (s *MemoryStore) IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	key := issuerDID + "::" + credentialCID
+	_, ok := s.revocations[key]
+	return ok, nil
+}
+
+// ---------------------------------------------------------------------------
+// public credentials (standing authorization)
+// ---------------------------------------------------------------------------
+
+func (s *MemoryStore) GetPublicCredentials(resource string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var tokens []string
+	for _, cred := range s.publicCredentials {
+		for _, att := range cred.Att {
+			if att.Resource == resource {
+				tokens = append(tokens, cred.JWSToken)
+				break
+			}
+			// chain:* credentials match any chain: resource
+			if strings.HasPrefix(resource, "chain:") && att.Resource == "chain:*" {
+				tokens = append(tokens, cred.JWSToken)
+				break
+			}
+			// manifest-scoped credentials match chain: resources
+			if strings.HasPrefix(resource, "chain:") && strings.HasPrefix(att.Resource, "manifest:") {
+				tokens = append(tokens, cred.JWSToken)
+				break
+			}
+		}
+	}
+	if tokens == nil {
+		return []string{}, nil
+	}
+	return tokens, nil
+}
+
+func (s *MemoryStore) AddPublicCredential(credential StoredPublicCredential) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publicCredentials[credential.CID] = credential
+	return nil
+}
+
+func (s *MemoryStore) RemovePublicCredential(credentialCID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.publicCredentials, credentialCID)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// documents
+// ---------------------------------------------------------------------------
+
+func (s *MemoryStore) GetDocuments(contentID string, after string, limit int) ([]StoredDocument, string, error) {
+	s.mu.RLock()
+	chain, ok := s.contentChains[contentID]
+	s.mu.RUnlock()
+	if !ok {
+		return []StoredDocument{}, "", nil
+	}
+
+	// build entries from chain log
+	type docEntry struct {
+		operationCID string
+		documentCID  *string
+		signerDID    string
+		createdAt    string
+	}
+	var entries []docEntry
+	for _, jws := range chain.Log {
+		header, payload, err := dfos.DecodeJWSUnsafe(jws)
+		if err != nil || header == nil {
+			continue
+		}
+		opCID := header.CID
+		signerDID, _ := payload["did"].(string)
+		createdAt, _ := payload["createdAt"].(string)
+		var docCID *string
+		if d, ok := payload["documentCID"].(string); ok {
+			docCID = &d
+		}
+		entries = append(entries, docEntry{
+			operationCID: opCID,
+			documentCID:  docCID,
+			signerDID:    signerDID,
+			createdAt:    createdAt,
+		})
+	}
+
+	// apply cursor pagination
+	startIdx := 0
+	if after != "" {
+		found := false
+		for i, e := range entries {
+			if e.operationCID == after {
+				startIdx = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			startIdx = len(entries)
+		}
+	}
+
+	end := startIdx + limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+	page := entries[startIdx:end]
+
+	// build StoredDocument slice, reading blobs for each entry
+	docs := make([]StoredDocument, 0, len(page))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, e := range page {
+		var document any
+		if e.documentCID != nil {
+			blobKey := blobKeyStr(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: *e.documentCID})
+			if data, ok := s.blobs[blobKey]; ok {
+				_ = json.Unmarshal(data, &document)
+			}
+		}
+		docs = append(docs, StoredDocument{
+			OperationCID: e.operationCID,
+			DocumentCID:  e.documentCID,
+			Document:     document,
+			SignerDID:    e.signerDID,
+			CreatedAt:    e.createdAt,
+		})
+	}
+
+	var cursor string
+	if len(page) == limit {
+		cursor = page[len(page)-1].operationCID
+	}
+
+	return docs, cursor, nil
 }
 
 func (s *MemoryStore) ResetPeerCursors() error {

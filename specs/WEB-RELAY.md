@@ -33,7 +33,7 @@ Raw content blobs — the actual documents that content chains commit to via `do
 Content plane access requires two credentials:
 
 - **Auth token**: A DID-signed JWT proving the caller controls an identity (AuthN)
-- **Read credential** (for non-creators): A `DFOSContentRead` VC-JWT issued by the content creator, granting the caller read access (AuthZ)
+- **Read credential** (for non-creators): A DFOS credential with `action: "read"` attenuations, issued by the content creator (or delegated via chain), granting the caller read access (AuthZ). Can be presented per-request or ingested as a standing authorization (see [Standing Authorization](#standing-authorization) below)
 
 The content creator (the DID that signed the genesis content operation) can always read their own blobs with just an auth token.
 
@@ -56,6 +56,7 @@ Each token is classified by its JWS `typ` header:
 | `did:dfos:beacon`      | Beacon announcement      |
 | `did:dfos:artifact`    | Artifact                 |
 | `did:dfos:countersign` | Countersignature         |
+| `did:dfos:revocation`  | Credential revocation    |
 
 Each operation type has its own `typ` header. Classification is unambiguous — no DID comparison needed.
 
@@ -75,7 +76,8 @@ Within each priority level, genesis operations (no `previousOperationCID`) are p
 Each operation is verified against the relay's stored state:
 
 - **Identity operations**: Extension operations are verified against the relay's current trusted state using O(1) extension verification — the trusted head state plus the new operation is sufficient. Genesis operations verify the single-operation chain. The relay uses `verifyIdentityChain()` / `verifyIdentityExtensionFromTrustedState()` from the protocol library
-- **Content operations**: Extension operations are verified against trusted state with `enforceAuthorization: true`. Non-creator signers must include a `DFOSContentWrite` VC-JWT. The relay uses `verifyContentChain()` / `verifyContentExtensionFromTrustedState()` from the protocol library
+- **Content operations**: Extension operations are verified against trusted state with `enforceAuthorization: true`. Non-creator signers must include a DFOS credential with `action: "write"` attenuations. The relay uses `verifyContentChain()` / `verifyContentExtensionFromTrustedState()` from the protocol library
+- **Revocations**: Signature is verified against the revoking DID's current identity state. The revocation payload must reference a valid credential CID. Once ingested, the revoked credential is no longer honored for authorization or content plane access
 - **Artifacts**: Signature is verified against the signing DID's current identity state. CID integrity is checked. Payload must conform to the declared `$schema`. CBOR-encoded payload must not exceed 16384 bytes
 - **Beacons**: Signature, CID integrity, and clock skew are verified. Replace-on-newer: only the most recent beacon per DID is retained
 - **Countersignatures**: Two-phase verification. Protocol-level (stateless): signature, CID integrity, payload schema. Relay-level (stateful): target CID must exist in the relay, witness DID must differ from the target's author DID, one countersign per witness per target
@@ -130,7 +132,7 @@ Specifically:
 - **Content operations after deletion**: Rejected. Both paths are checked: (a) the signer's identity is deleted — no operations from that DID are accepted, and (b) the content chain's creator identity is deleted — the chain is sealed regardless of who signs.
 - **Beacons from deleted identities**: Rejected. A deleted identity MUST NOT publish new beacons.
 - **Artifacts from deleted identities**: Rejected. A deleted identity MUST NOT publish new artifacts.
-- **Credentials from deleted issuers**: Rejected. Identity deletion revokes all authority, including outstanding `DFOSContentRead` and `DFOSContentWrite` credentials issued by the deleted identity. Credentials that were valid at time of issuance cease to be honored once the issuer is deleted.
+- **Credentials from deleted issuers**: Rejected. Identity deletion revokes all authority, including outstanding DFOS credentials issued by the deleted identity. Credentials that were valid at time of issuance cease to be honored once the issuer is deleted.
 - **Countersignatures from deleted witnesses**: Rejected. A deleted identity MUST NOT publish new countersignatures. Countersignatures on operations by deleted authors are still accepted — deletion of the target's author does not prevent other identities from attesting.
 
 Self-countersignatures — where the witness DID matches the target's author DID — are rejected at the relay level. A countersignature's semantic is "a distinct witness attests." The protocol-level verifier is stateless and does not enforce this; the relay resolves the target's author and rejects self-attestation.
@@ -254,25 +256,30 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 {
   "did": "did:dfos:edgerelay0000000000000",
   "protocol": "dfos-web-relay",
-  "version": "0.1.0",
-  "proof": true,
-  "content": false,
-  "log": true,
+  "version": "0.7.1",
+  "capabilities": {
+    "proof": true,
+    "content": true,
+    "documents": true,
+    "log": true
+  },
   "profile": "eyJhbGciOiJFZERTQSIs..."
 }
 ```
 
-| Field      | Type    | Description                                                                |
-| ---------- | ------- | -------------------------------------------------------------------------- |
-| `did`      | string  | The relay's DID, resolvable on this relay's proof plane                    |
-| `protocol` | string  | Protocol identifier, always `"dfos-web-relay"`                             |
-| `version`  | string  | Relay protocol version (semver)                                            |
-| `proof`    | boolean | MUST be `true`. A relay without proof plane capability is not a relay      |
-| `content`  | boolean | Whether the relay supports content plane (blob upload/download)            |
-| `log`      | boolean | Whether the global operation log is available (`GET /log`)                 |
-| `profile`  | string  | The relay's profile artifact as a compact JWS token — self-proving payload |
+| Field                    | Type    | Description                                                                |
+| ------------------------ | ------- | -------------------------------------------------------------------------- |
+| `did`                    | string  | The relay's DID, resolvable on this relay's proof plane                    |
+| `protocol`               | string  | Protocol identifier, always `"dfos-web-relay"`                             |
+| `version`                | string  | Relay protocol version (semver)                                            |
+| `capabilities`           | object  | Capability flags for optional features                                     |
+| `capabilities.proof`     | boolean | MUST be `true`. A relay without proof plane capability is not a relay      |
+| `capabilities.content`   | boolean | Whether the relay supports content plane (blob upload/download)            |
+| `capabilities.documents` | boolean | Whether the relay serves the documents endpoint                            |
+| `capabilities.log`       | boolean | Whether the global operation log is available (`GET /log`)                 |
+| `profile`                | string  | The relay's profile artifact as a compact JWS token — self-proving payload |
 
-`proof: false` is not a valid value. A compliant relay always serves the proof plane. When `log: false`, `GET /log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting.
+`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /operations` like all other operation types.
 
 ---
 
@@ -304,13 +311,13 @@ Returns log entries starting after the given CID cursor.
 }
 ```
 
-| Field                | Type         | Description                                                                      |
-| -------------------- | ------------ | -------------------------------------------------------------------------------- |
-| `entries[].cid`      | string       | Operation CID                                                                    |
-| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync               |
-| `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `beacon`, `artifact`, `countersign` |
-| `entries[].chainId`  | string       | DID (identity/beacon/artifact), contentId (content), or targetCID (countersign)  |
-| `cursor`             | string\|null | CID to pass as `after` for the next page. `null` means caught up                 |
+| Field                | Type         | Description                                                                                                  |
+| -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------ |
+| `entries[].cid`      | string       | Operation CID                                                                                                |
+| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync                                           |
+| `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `beacon`, `artifact`, `countersign`, `revocation`, `credential` |
+| `entries[].chainId`  | string       | DID (identity/beacon/artifact), contentId (content), or targetCID (countersign)                              |
+| `cursor`             | string\|null | CID to pass as `after` for the next page. `null` means caught up                                             |
 
 Parameters:
 
@@ -394,12 +401,45 @@ Requirements:
 
 - Valid auth token (Bearer header)
 - If the caller is the chain creator: no further credentials needed
-- If the caller is not the creator: must present a `DFOSContentRead` VC-JWT in the `X-Credential` header, issued by the creator to the caller
+- If the caller is not the creator: must present a DFOS credential with `action: "read"` in the `X-Credential` header, with a delegation chain rooting at the creator. Alternatively, the relay may have a standing authorization on file (see below)
 
 The optional `:ref` parameter selects which operation's document to return:
 
 - `head` (default): the current document at chain head
 - An operation CID: the document committed by that specific operation
+
+### Documents Endpoint (`GET /content/:contentId/documents`)
+
+Returns all documents committed to a content chain as an ordered list, from genesis to head. Each entry includes the operation CID that committed the document and the resolved document content.
+
+This endpoint requires the same authorization as blob download — the caller must be the chain creator or present a valid DFOS credential with `action: "read"` (per-request or standing authorization).
+
+When `capabilities.documents: false` in the well-known response, this route returns **501 Not Implemented**.
+
+### Standing Authorization
+
+Instead of presenting a read credential on every request, a DFOS credential with `aud: "*"` (public) can be ingested by the relay as a **standing authorization**. Once ingested, the relay stores the credential and automatically authorizes matching content plane requests without requiring the `X-Credential` header.
+
+Credential ingestion uses `POST /operations` — DFOS credentials are submitted as JWS tokens alongside other proof plane operations. The relay verifies the credential signature, temporal validity, and issuer identity state, then stores it as a standing authorization.
+
+Standing authorizations are checked during content plane access: if the relay has a valid public credential on file whose `att` covers the requested resource and action, access is granted without a per-request credential. The relay verifies the credential's delegation chain roots at the content creator and checks revocation status.
+
+Standing authorizations are invalidated when:
+
+- The credential expires (temporal validity)
+- The credential is revoked via a revocation artifact
+- The issuer's identity is deleted
+
+### Revocation Ingestion
+
+Revocation artifacts (`typ: did:dfos:revocation`) are ingested via `POST /operations` alongside other proof plane operations. When a revocation is accepted:
+
+1. The revoked credential's CID is recorded
+2. Any standing authorization backed by that credential is immediately invalidated
+3. Future content chain operations embedding the revoked credential as `authorization` are rejected
+4. Future content plane requests presenting the revoked credential are rejected
+
+Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the revocation payload format.
 
 ---
 
@@ -501,6 +541,7 @@ The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFrom
 | `GET`  | `/identities/:did/log`               | proof   | none                    |
 | `GET`  | `/content/:contentId`                | proof   | none                    |
 | `GET`  | `/content/:contentId/log`            | proof   | none                    |
+| `GET`  | `/content/:contentId/documents`      | content | auth token + credential |
 | `GET`  | `/beacons/:did`                      | proof   | none                    |
 | `GET`  | `/log`                               | proof   | none                    |
 | `PUT`  | `/content/:contentId/blob/:opCID`    | content | auth token              |

@@ -6,20 +6,23 @@
   implementing the DFOS web relay HTTP interface.
 
   Proof plane routes are public. Content plane routes require authentication
-  via DID-signed auth tokens and optional VC-JWT credentials.
+  via DID-signed auth tokens and DFOS credentials for authorization.
 
 */
 
-import { VC_TYPE_CONTENT_READ, verifyCredential } from '@metalabel/dfos-protocol/credentials';
+import { createRequire } from 'node:module';
 import type { VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { authenticateRequest } from './auth';
+import { authenticateRequest, verifyContentAccess } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
-import { createCurrentKeyResolver, ingestOperations } from './ingest';
+import { ingestOperations } from './ingest';
 import { computeOpCID, sequenceOps } from './sequencer';
 import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
+
+const require = createRequire(import.meta.url);
+const { version: RELAY_VERSION } = require('../package.json') as { version: string };
 
 // -----------------------------------------------------------------------------
 // relay result type
@@ -124,10 +127,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return c.json({
       did: relayDID,
       protocol: 'dfos-web-relay',
-      version: '0.6.0',
-      proof: true,
-      content: contentEnabled,
-      log: logEnabled,
+      version: RELAY_VERSION,
+      capabilities: {
+        proof: true,
+        content: contentEnabled,
+        documents: contentEnabled,
+        log: logEnabled,
+      },
       profile: profileArtifactJws,
     });
   });
@@ -252,6 +258,44 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return c.json({ entries: page, cursor });
   });
 
+  /** Get documents for a content chain — paginated, auth-gated */
+  app.get('/content/:contentId/documents', async (c) => {
+    if (!contentEnabled) return c.json({ error: 'content plane not available' }, 501);
+    const contentId = c.req.param('contentId');
+
+    // authenticate
+    const auth = await authenticateRequest(c.req.header('authorization'), relayDID, store);
+    if (!auth) return c.json({ error: 'authentication required' }, 401);
+
+    // verify chain exists
+    const chain = await store.getContentChain(contentId);
+    if (!chain) return c.json({ error: 'not found' }, 404);
+
+    // verify read access
+    const accessError = await verifyReadAccess(
+      auth,
+      chain,
+      contentId,
+      c.req.header('x-credential'),
+      store,
+    );
+    if (accessError) return accessError;
+
+    const after = c.req.query('after');
+    const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
+
+    const result = await store.getDocuments(contentId, {
+      ...(after ? { after } : {}),
+      limit,
+    });
+
+    return c.json({
+      contentId,
+      documents: result.documents,
+      nextCursor: result.cursor,
+    });
+  });
+
   /** Get a content chain by content ID */
   app.get('/content/:contentId', async (c) => {
     const contentId = c.req.param('contentId');
@@ -323,7 +367,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       did: beacon.did,
       jwsToken: beacon.jwsToken,
       beaconCID: beacon.beaconCID,
-      payload: beacon.state.payload,
+      manifestContentId: beacon.state.manifestContentId,
+      createdAt: beacon.state.createdAt,
     });
   });
 
@@ -476,7 +521,7 @@ const readBlob = async (params: {
   if (!chain) return jsonResponse({ error: 'content chain not found' }, 404);
 
   // verify read credential — unless the caller is the chain creator
-  const credError = await verifyReadCredential(auth, chain, contentId, credHeader, store);
+  const credError = await verifyReadAccess(auth, chain, contentId, credHeader, store);
   if (credError) return credError;
 
   // resolve documentCID for the requested ref
@@ -512,60 +557,23 @@ const readBlob = async (params: {
   });
 };
 
-/** Verify the read credential if the caller is not the chain creator. Returns an error Response or null. */
-const verifyReadCredential = async (
+/** Verify read access — delegates to verifyContentAccess. Returns an error Response or null. */
+const verifyReadAccess = async (
   auth: VerifiedAuthToken,
   chain: StoredContentChain,
   contentId: string,
   credHeader: string | undefined,
   store: RelayStore,
 ): Promise<Response | null> => {
-  if (auth.iss === chain.state.creatorDID) return null;
+  const result = await verifyContentAccess({
+    ...(credHeader ? { credentialJWS: credHeader } : {}),
+    requestedResource: `chain:${contentId}`,
+    action: 'read',
+    store,
+    creatorDID: chain.state.creatorDID,
+    requesterDID: auth.iss,
+  });
 
-  if (!credHeader) {
-    return jsonResponse({ error: 'DFOSContentRead credential required' }, 403);
-  }
-
-  const resolveKey = createCurrentKeyResolver(store);
-  try {
-    const vcDecoded = decodeJwsUnsafe(credHeader);
-    if (!vcDecoded) throw new Error('invalid credential format');
-    const vcHeader = vcDecoded.header as { kid?: string };
-    if (!vcHeader.kid) throw new Error('credential missing kid');
-
-    const kidHashIdx = vcHeader.kid.indexOf('#');
-    if (kidHashIdx < 0) throw new Error('credential kid must be a DID URL');
-    const vcIssuerDID = vcHeader.kid.substring(0, kidHashIdx);
-    if (vcIssuerDID !== chain.state.creatorDID) {
-      throw new Error('credential must be issued by the chain creator');
-    }
-
-    // reject credentials from deleted issuers — identity deletion revokes
-    // all authority, including outstanding credentials
-    const issuerIdentity = await store.getIdentityChain(vcIssuerDID);
-    if (issuerIdentity?.state.isDeleted) {
-      throw new Error('credential issuer identity is deleted');
-    }
-
-    const creatorKey = await resolveKey(vcHeader.kid);
-    const credential = verifyCredential({
-      token: credHeader,
-      publicKey: creatorKey,
-      subject: auth.iss,
-      expectedType: VC_TYPE_CONTENT_READ,
-    });
-
-    if (credential.iss !== chain.state.creatorDID) {
-      throw new Error('credential issuer is not the chain creator');
-    }
-
-    if (credential.contentId && credential.contentId !== contentId) {
-      return jsonResponse({ error: 'credential contentId does not match' }, 403);
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'credential verification failed';
-    return jsonResponse({ error: message }, 403);
-  }
-
-  return null;
+  if (result.granted) return null;
+  return jsonResponse({ error: 'read credential required' }, 403);
 };

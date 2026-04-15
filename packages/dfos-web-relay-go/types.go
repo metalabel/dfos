@@ -8,7 +8,7 @@ import (
 )
 
 // ProtocolVersion is the DFOS protocol version implemented by this relay.
-const ProtocolVersion = "0.6.1"
+const ProtocolVersion = "0.8.0"
 
 // SoftwareVersion is the release version of this relay binary, set via ldflags.
 var SoftwareVersion = "dev"
@@ -96,11 +96,11 @@ type StoredContentChain struct {
 
 // BeaconPayload is the decoded beacon payload for JSON serialization.
 type BeaconPayload struct {
-	Version    int    `json:"version"`
-	Type       string `json:"type"`
-	DID        string `json:"did"`
-	MerkleRoot string `json:"merkleRoot"`
-	CreatedAt  string `json:"createdAt"`
+	Version           int    `json:"version"`
+	Type              string `json:"type"`
+	DID               string `json:"did"`
+	ManifestContentId string `json:"manifestContentId"`
+	CreatedAt         string `json:"createdAt"`
 }
 
 // StoredBeacon is the relay's representation of a beacon.
@@ -117,6 +117,38 @@ type StoredOperation struct {
 	JWSToken  string `json:"jwsToken"`
 	ChainType string `json:"chainType"`
 	ChainID   string `json:"chainId"`
+}
+
+// StoredRevocation represents a revocation in the store.
+type StoredRevocation struct {
+	CID           string `json:"cid"`
+	IssuerDID     string `json:"issuerDID"`
+	CredentialCID string `json:"credentialCID"`
+	JWSToken      string `json:"jwsToken"`
+}
+
+// StoredPublicCredential represents a public credential (standing authorization).
+type StoredPublicCredential struct {
+	CID       string            `json:"cid"`
+	IssuerDID string            `json:"issuerDID"`
+	Att       []AttenuationPair `json:"att"`
+	Exp       int64             `json:"exp"`
+	JWSToken  string            `json:"jwsToken"`
+}
+
+// AttenuationPair is a resource + action pair.
+type AttenuationPair struct {
+	Resource string `json:"resource"`
+	Action   string `json:"action"`
+}
+
+// StoredDocument represents a document in the documents endpoint response.
+type StoredDocument struct {
+	OperationCID string  `json:"operationCID"`
+	DocumentCID  *string `json:"documentCID"`
+	Document     any     `json:"document"`
+	SignerDID    string  `json:"signerDID"`
+	CreatedAt    string  `json:"createdAt"`
 }
 
 // BlobKey uniquely identifies a blob by creator and document CID.
@@ -186,6 +218,19 @@ type Store interface {
 	MarkOpsSequenced(cids []string) error
 	MarkOpRejected(cid string, reason string) error
 	CountUnsequenced() (int, error)
+
+	// revocations
+	GetRevocations(issuerDID string) ([]string, error)
+	AddRevocation(revocation StoredRevocation) error
+	IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error)
+
+	// public credentials (standing authorization)
+	GetPublicCredentials(resource string) ([]string, error) // returns JWS tokens
+	AddPublicCredential(credential StoredPublicCredential) error
+	RemovePublicCredential(credentialCID string) error
+
+	// documents
+	GetDocuments(contentID string, after string, limit int) ([]StoredDocument, string, error)
 
 	// listing — enumerate all chains/beacons in the store
 	ListIdentityChains() ([]StoredIdentityChain, error)

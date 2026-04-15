@@ -3,7 +3,6 @@ package dfos
 import (
 	"crypto/ed25519"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -13,7 +12,8 @@ type KeyResolver func(kid string) (ed25519.PublicKey, error)
 
 // protocolTimeFormat is declared in timestamp.go
 
-var merkleRootPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+// contentIDLength is the expected length of a DFOS content ID.
+const contentIDLength = 22
 
 // -----------------------------------------------------------------------------
 // Result types
@@ -34,10 +34,11 @@ type VerifiedContentResult struct {
 
 // VerifiedBeaconResult is the result of beacon verification.
 type VerifiedBeaconResult struct {
-	BeaconCID  string
-	DID        string
-	MerkleRoot string
-	CreatedAt  string
+	Version           int
+	BeaconCID         string
+	DID               string
+	ManifestContentId string
+	CreatedAt         string
 }
 
 // VerifiedArtifactResult is the result of artifact verification.
@@ -482,6 +483,55 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 }
 
 // -----------------------------------------------------------------------------
+// Content authorization verification (internal)
+// -----------------------------------------------------------------------------
+
+// verifyContentAuthorization verifies that a delegated content operation has a
+// valid DFOS credential authorizing the signer to write to this content chain.
+// Walks the delegation chain to confirm it roots at the creator DID.
+func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt string, resolveKey KeyResolver) error {
+	vcHeader, vcPayload, vcErr := DecodeJWSUnsafe(authorization)
+	if vcErr != nil {
+		return fmt.Errorf("failed to decode authorization credential")
+	}
+	vcKid := vcHeader.Kid
+	if vcKid == "" || !strings.Contains(vcKid, "#") {
+		return fmt.Errorf("authorization credential kid must be a DID URL")
+	}
+
+	creatorPubKey, err := resolveKey(vcKid)
+	if err != nil {
+		return fmt.Errorf("cannot resolve creator key for authorization verification")
+	}
+
+	opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
+	if parseErr != nil {
+		return fmt.Errorf("invalid createdAt format: %w", parseErr)
+	}
+	opTimeUnix := opTime.Unix()
+
+	vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "write", opTimeUnix)
+	if err != nil {
+		return err
+	}
+
+	// check contentID scope if the credential specifies one
+	// chain:* wildcard covers any content chain
+	if vc.ContentID != "" && vc.ContentID != "*" && vc.ContentID != contentID {
+		return fmt.Errorf("credential contentId %s does not match chain %s", vc.ContentID, contentID)
+	}
+
+	// walk the delegation chain — verify it roots at the creator DID
+	childAtt := ParseAtt(vcPayload)
+	childPrf := ParsePrf(vcPayload)
+	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, nil, 0); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// -----------------------------------------------------------------------------
 // Content chain verification
 // -----------------------------------------------------------------------------
 
@@ -490,7 +540,7 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 // public keys from kid values.
 //
 // When enforceAuthorization is true, non-creator signers must include a valid
-// DFOSContentWrite VC-JWT in the operation's authorization field.
+// DFOS credential with action "write" in the operation's authorization field.
 func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorization bool) (*VerifiedContentResult, error) {
 	if len(log) == 0 {
 		return nil, fmt.Errorf("log must have at least one operation")
@@ -585,38 +635,11 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 		} else if opDID != creatorDID && enforceAuthorization {
 			authorization := payloadString(payload, "authorization")
 			if authorization == "" {
-				return nil, fmt.Errorf("log[%d]: signer %s is not the chain creator — authorization VC required", idx, opDID)
+				return nil, fmt.Errorf("log[%d]: signer %s is not the chain creator — authorization credential required", idx, opDID)
 			}
 
-			vcHeader, _, vcErr := DecodeJWSUnsafe(authorization)
-			if vcErr != nil {
-				return nil, fmt.Errorf("log[%d]: failed to decode authorization VC", idx)
-			}
-			vcKid := vcHeader.Kid
-			if vcKid == "" || !strings.Contains(vcKid, "#") {
-				return nil, fmt.Errorf("log[%d]: authorization VC kid must be a DID URL", idx)
-			}
-
-			creatorPubKey, err := resolveKey(vcKid)
-			if err != nil {
-				return nil, fmt.Errorf("log[%d]: cannot resolve creator key for authorization verification", idx)
-			}
-
-			opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
-			if parseErr != nil {
-				return nil, fmt.Errorf("log[%d]: invalid createdAt format: %w", idx, parseErr)
-			}
-			opTimeUnix := opTime.Unix()
-
-			vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "DFOSContentWrite", opTimeUnix)
-			if err != nil {
+			if err := verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt, resolveKey); err != nil {
 				return nil, fmt.Errorf("log[%d]: authorization verification failed: %s", idx, err)
-			}
-			if vc.Iss != creatorDID {
-				return nil, fmt.Errorf("log[%d]: authorization verification failed: VC issuer is not the chain creator", idx)
-			}
-			if vc.ContentID != "" && vc.ContentID != contentID {
-				return nil, fmt.Errorf("log[%d]: authorization verification failed: VC contentId %s does not match chain %s", idx, vc.ContentID, contentID)
 			}
 		}
 
@@ -741,38 +764,11 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 	if opDID != currentState.CreatorDID && enforceAuthorization {
 		authorization := payloadString(payload, "authorization")
 		if authorization == "" {
-			return nil, fmt.Errorf("signer %s is not the chain creator — authorization VC required", opDID)
+			return nil, fmt.Errorf("signer %s is not the chain creator — authorization credential required", opDID)
 		}
 
-		vcHeader, _, vcErr := DecodeJWSUnsafe(authorization)
-		if vcErr != nil {
-			return nil, fmt.Errorf("failed to decode authorization VC")
-		}
-		vcKid := vcHeader.Kid
-		if vcKid == "" || !strings.Contains(vcKid, "#") {
-			return nil, fmt.Errorf("authorization VC kid must be a DID URL")
-		}
-
-		creatorPubKey, err := resolveKey(vcKid)
-		if err != nil {
-			return nil, fmt.Errorf("cannot resolve creator key for authorization verification")
-		}
-
-		opTime, parseErr := time.Parse(protocolTimeFormat, createdAt)
-		if parseErr != nil {
-			return nil, fmt.Errorf("invalid createdAt format: %w", parseErr)
-		}
-		opTimeUnix := opTime.Unix()
-
-		vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "DFOSContentWrite", opTimeUnix)
-		if err != nil {
+		if err := verifyContentAuthorization(authorization, opDID, currentState.CreatorDID, currentState.ContentID, createdAt, resolveKey); err != nil {
 			return nil, fmt.Errorf("authorization verification failed: %s", err)
-		}
-		if vc.Iss != currentState.CreatorDID {
-			return nil, fmt.Errorf("authorization verification failed: VC issuer is not the chain creator")
-		}
-		if vc.ContentID != "" && vc.ContentID != currentState.ContentID {
-			return nil, fmt.Errorf("authorization verification failed: VC contentId %s does not match chain %s", vc.ContentID, currentState.ContentID)
 		}
 	}
 
@@ -840,9 +836,9 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 	if beaconDID == "" {
 		return nil, fmt.Errorf("invalid beacon payload: missing did")
 	}
-	merkleRoot := payloadString(payload, "merkleRoot")
-	if !merkleRootPattern.MatchString(merkleRoot) {
-		return nil, fmt.Errorf("invalid beacon payload: merkleRoot must be 64 lowercase hex characters")
+	manifestContentId := payloadString(payload, "manifestContentId")
+	if len(manifestContentId) != contentIDLength {
+		return nil, fmt.Errorf("invalid beacon payload: manifestContentId must be a 22-character content ID")
 	}
 	createdAt := payloadString(payload, "createdAt")
 	if err := validateCreatedAt(createdAt); err != nil {
@@ -896,10 +892,11 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 	}
 
 	return &VerifiedBeaconResult{
-		BeaconCID:  beaconCID,
-		DID:        beaconDID,
-		MerkleRoot: merkleRoot,
-		CreatedAt:  createdAt,
+		Version:           1,
+		BeaconCID:         beaconCID,
+		DID:               beaconDID,
+		ManifestContentId: manifestContentId,
+		CreatedAt:         createdAt,
 	}, nil
 }
 

@@ -556,7 +556,7 @@ func TestVerifyContentChain_Delete(t *testing.T) {
 	}
 }
 
-func TestVerifyContentChain_DelegatedWriteRequiresVC(t *testing.T) {
+func TestVerifyContentChain_DelegatedWriteRequiresCredential(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
 	_, did, _ := testSignIdentityGenesis(t,
 		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
@@ -586,14 +586,14 @@ func TestVerifyContentChain_DelegatedWriteRequiresVC(t *testing.T) {
 	docCID, _, _ := DocumentCID(map[string]any{"hello": "world"})
 	contentJWS, _, contentCID := testSignContentGenesis(t, did, docCID, kid, priv, "2026-03-07T00:00:01.000Z")
 
-	// delegated update by did2 — no authorization VC
+	// delegated update by did2 — no authorization credential
 	docCID2, _, _ := DocumentCID(map[string]any{"v": int64(2)})
 	updateJWS, _ := testSignContentUpdate(t, did2, contentCID, docCID2, kid2, priv2, "2026-03-07T00:00:02.000Z")
 
 	// should fail with enforceAuthorization=true
 	_, err := VerifyContentChain([]string{contentJWS, updateJWS}, resolver, true)
 	if err == nil {
-		t.Fatal("expected error for delegated write without VC")
+		t.Fatal("expected error for delegated write without credential")
 	}
 
 	// should pass with enforceAuthorization=false
@@ -606,8 +606,8 @@ func TestVerifyContentChain_DelegatedWriteRequiresVC(t *testing.T) {
 	}
 }
 
-func TestVerifyContentChain_DelegatedWriteWithVC(t *testing.T) {
-	// Use timestamps relative to now so the VC's iat is not "in the future"
+func TestVerifyContentChain_DelegatedWriteWithCredential(t *testing.T) {
+	// Use timestamps relative to now so the credential's iat is not "in the future"
 	// relative to the operation's createdAt
 	now := time.Now().UTC()
 	genesisTime := now.Format(protocolTimeFormat)
@@ -640,17 +640,17 @@ func TestVerifyContentChain_DelegatedWriteWithVC(t *testing.T) {
 		}
 	}
 
-	// create content chain (using current time so VC iat is valid)
+	// create content chain (using current time so credential iat is valid)
 	docCID, _, _ := DocumentCID(map[string]any{"hello": "world"})
 	contentJWS, _, contentCID := testSignContentGenesis(t, did, docCID, kid, priv, genesisTime)
 
-	// creator issues a DFOSContentWrite VC to did2
-	vc, err := CreateCredential(did, did2, kid, "DFOSContentWrite", 1*time.Hour, "", priv)
+	// creator issues a write credential to did2
+	vc, err := CreateCredential(did, did2, kid, "chain:*", "write", 1*time.Hour, priv)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// delegated update with authorization VC
+	// delegated update with authorization credential
 	docCID2, _, _ := DocumentCID(map[string]any{"v": int64(2)})
 	updatePayload := map[string]any{
 		"version":              int64(1),
@@ -669,7 +669,7 @@ func TestVerifyContentChain_DelegatedWriteWithVC(t *testing.T) {
 
 	result, err := VerifyContentChain([]string{contentJWS, updateJWS}, resolver, true)
 	if err != nil {
-		t.Fatalf("VerifyContentChain with VC: %v", err)
+		t.Fatalf("VerifyContentChain with credential: %v", err)
 	}
 	if result.State.Length != 2 {
 		t.Errorf("Length: got %d, want 2", result.State.Length)
@@ -727,8 +727,8 @@ func TestVerifyBeacon(t *testing.T) {
 	)
 
 	kid := did + "#" + keyID
-	merkle := BuildMerkleRoot([]string{"content1", "content2"})
-	beaconJWS, beaconCID, err := SignBeacon(did, merkle, kid, priv)
+	manifestContentId := DeriveContentID([]byte("test-manifest-bytes!"))
+	beaconJWS, beaconCID, err := SignBeacon(did, manifestContentId, kid, priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -750,8 +750,8 @@ func TestVerifyBeacon(t *testing.T) {
 	if result.DID != did {
 		t.Errorf("DID: got %s, want %s", result.DID, did)
 	}
-	if result.MerkleRoot != merkle {
-		t.Errorf("MerkleRoot mismatch")
+	if result.ManifestContentId != manifestContentId {
+		t.Errorf("ManifestContentId mismatch")
 	}
 }
 
@@ -763,8 +763,8 @@ func TestVerifyBeacon_FutureClock(t *testing.T) {
 	)
 
 	kid := did + "#" + keyID
-	merkle := BuildMerkleRoot([]string{"a"})
-	beaconJWS, _, _ := SignBeacon(did, merkle, kid, priv)
+	manifestContentId := DeriveContentID([]byte("test-manifest-future!"))
+	beaconJWS, _, _ := SignBeacon(did, manifestContentId, kid, priv)
 
 	resolver := func(k string) (ed25519.PublicKey, error) {
 		if k == kid {

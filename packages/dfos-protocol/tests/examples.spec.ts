@@ -10,13 +10,14 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   decodeMultikey,
+  encodeEd25519Multikey,
   verifyBeacon,
   verifyContentChain,
   verifyIdentityChain,
 } from '../src/chain';
 import type { VerifiedContentChain } from '../src/chain';
 import type { VerifiedIdentity } from '../src/chain/schemas';
-import { decodeCredentialUnsafe, verifyCredential } from '../src/credentials';
+import { decodeDFOSCredentialUnsafe, verifyDFOSCredential } from '../src/credentials';
 import { buildMerkleTree, verifyMerkleProof } from '../src/merkle';
 import type { MerkleProof } from '../src/merkle';
 
@@ -105,9 +106,25 @@ describe('example fixtures', () => {
       const delegateKey = decodeMultikey(fixture.delegatePublicKey).keyBytes;
 
       // decode the VC to get the creator's kid for key resolution
-      const vcDecoded = decodeCredentialUnsafe(fixture.authorization);
+      const vcDecoded = decodeDFOSCredentialUnsafe(fixture.authorization);
       expect(vcDecoded).not.toBeNull();
       const vcKid = vcDecoded!.header.kid;
+
+      // build resolveIdentity from the creator's public key
+      const creatorMultikey = encodeEd25519Multikey(creatorKey);
+      const creatorKeyId = vcKid.includes('#') ? vcKid.split('#')[1]! : 'key_creator';
+      const resolveIdentity = async (did: string): Promise<VerifiedIdentity | undefined> => {
+        if (did !== fixture.expected.creatorDID) return undefined;
+        return {
+          did,
+          isDeleted: false,
+          authKeys: [{ id: creatorKeyId, type: 'Multikey', publicKeyMultibase: creatorMultikey }],
+          assertKeys: [{ id: creatorKeyId, type: 'Multikey', publicKeyMultibase: creatorMultikey }],
+          controllerKeys: [
+            { id: creatorKeyId, type: 'Multikey', publicKeyMultibase: creatorMultikey },
+          ],
+        };
+      };
 
       const result: VerifiedContentChain = await verifyContentChain({
         log: fixture.chain,
@@ -119,6 +136,7 @@ describe('example fixtures', () => {
           return delegateKey;
         },
         enforceAuthorization: true,
+        resolveIdentity,
       });
 
       expect(result.contentId).toBe(fixture.expected.contentId);
@@ -130,50 +148,68 @@ describe('example fixtures', () => {
   });
 
   describe('credentials', () => {
+    /**
+     * Build a resolveIdentity function from a fixture's issuerPublicKey multikey.
+     * Peeks at the credential JWS to extract the actual key ID from the kid header.
+     */
+    const makeResolveIdentity = (fixture: Record<string, unknown>, credentialJws: string) => {
+      const { keyBytes } = decodeMultikey(fixture.issuerPublicKey as string);
+      const multikey = encodeEd25519Multikey(keyBytes);
+      const decoded = decodeDFOSCredentialUnsafe(credentialJws);
+      const kid = decoded?.header.kid ?? '';
+      const keyId = kid.includes('#') ? kid.split('#')[1]! : 'key_fixture';
+      return async (did: string): Promise<VerifiedIdentity | undefined> => {
+        if (did !== (fixture.expected as Record<string, unknown>).iss) return undefined;
+        return {
+          did,
+          isDeleted: false,
+          authKeys: [{ id: keyId, type: 'Multikey', publicKeyMultibase: multikey }],
+          assertKeys: [{ id: keyId, type: 'Multikey', publicKeyMultibase: multikey }],
+          controllerKeys: [{ id: keyId, type: 'Multikey', publicKeyMultibase: multikey }],
+        };
+      };
+    };
+
     it('verifies credential-write.json broad credential', async () => {
       const fixture = loadFixture('credential-write.json');
       expect(fixture.type).toBe('credential');
 
-      const { keyBytes } = decodeMultikey(fixture.issuerPublicKey);
-      const result = verifyCredential({
-        token: fixture.broadCredential,
-        publicKey: keyBytes,
-        currentTime: Math.floor(new Date('2026-06-01T00:00:00.000Z').getTime() / 1000),
+      const resolveIdentity = makeResolveIdentity(fixture, fixture.broadCredential);
+      const result = await verifyDFOSCredential(fixture.broadCredential, {
+        resolveIdentity,
+        now: Math.floor(new Date('2026-06-01T00:00:00.000Z').getTime() / 1000),
       });
 
       expect(result.iss).toBe(fixture.expected.iss);
-      expect(result.sub).toBe(fixture.expected.sub);
-      expect(result.type).toBe(fixture.expected.vcType);
-      expect(result.contentId).toBeUndefined();
+      expect(result.aud).toBe(fixture.expected.aud);
     });
 
     it('verifies credential-write.json narrow credential', async () => {
       const fixture = loadFixture('credential-write.json');
-      const { keyBytes } = decodeMultikey(fixture.issuerPublicKey);
 
-      const result = verifyCredential({
-        token: fixture.narrowCredential,
-        publicKey: keyBytes,
-        currentTime: Math.floor(new Date('2026-06-01T00:00:00.000Z').getTime() / 1000),
+      const resolveIdentity = makeResolveIdentity(fixture, fixture.narrowCredential);
+      const result = await verifyDFOSCredential(fixture.narrowCredential, {
+        resolveIdentity,
+        now: Math.floor(new Date('2026-06-01T00:00:00.000Z').getTime() / 1000),
       });
 
-      expect(result.contentId).toBe(fixture.expected.narrowContentId);
+      expect(result.att.some((a) => a.resource.includes(fixture.expected.narrowContentId))).toBe(
+        true,
+      );
     });
 
     it('verifies credential-read.json', async () => {
       const fixture = loadFixture('credential-read.json');
       expect(fixture.type).toBe('credential');
 
-      const { keyBytes } = decodeMultikey(fixture.issuerPublicKey);
-      const result = verifyCredential({
-        token: fixture.credential,
-        publicKey: keyBytes,
-        currentTime: Math.floor(new Date('2026-06-01T00:00:00.000Z').getTime() / 1000),
+      const resolveIdentity = makeResolveIdentity(fixture, fixture.credential);
+      const result = await verifyDFOSCredential(fixture.credential, {
+        resolveIdentity,
+        now: Math.floor(new Date('2026-06-01T00:00:00.000Z').getTime() / 1000),
       });
 
       expect(result.iss).toBe(fixture.expected.iss);
-      expect(result.sub).toBe(fixture.expected.sub);
-      expect(result.type).toBe(fixture.expected.vcType);
+      expect(result.aud).toBe(fixture.expected.aud);
     });
   });
 
@@ -205,8 +241,8 @@ describe('example fixtures', () => {
       });
 
       expect(result.beaconCID).toBe(fixture.expected.beaconCID);
-      expect(result.payload.did).toBe(fixture.expected.did);
-      expect(result.payload.merkleRoot).toBe(fixture.expected.merkleRoot);
+      expect(result.did).toBe(fixture.expected.did);
+      expect(result.createdAt).toBe(fixture.expected.createdAt);
     });
   });
 });

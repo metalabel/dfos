@@ -22,14 +22,16 @@ Any system implementing the same chain primitives produces interoperable, cross-
 
 The DFOS protocol has six components:
 
-| Component             | Concern                                                                         |
-| --------------------- | ------------------------------------------------------------------------------- |
-| **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links    |
-| **Credentials**       | Auth tokens (DID-signed JWT) and VC-JWT credentials for authorization           |
-| **Beacons**           | Signed merkle root announcements — periodic commitment over content sets        |
-| **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data |
-| **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op    |
-| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for beacon roots       |
+| Component             | Concern                                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links                                     |
+| **Credentials**       | Auth tokens and DFOS credentials for authorization — see [CREDENTIALS.md](https://protocol.dfos.com/credentials) |
+| **Beacons**           | Signed manifest announcements — periodic commitment over content sets                                            |
+| **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data                                  |
+| **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op                                     |
+| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for content sets                                        |
+
+> **Note:** The credential format (auth tokens, read/write credentials, revocation) is specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials). This document covers the crypto core, chain primitives, beacons, artifacts, countersignatures, and merkle trees.
 
 The crypto core is the trust boundary — everything below it is cryptographically verified. Documents are flat content objects, content-addressed directly: `documentCID = CID(dagCborCanonicalEncode(contentObject))`. What goes inside the content object is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
 
@@ -102,7 +104,7 @@ This is a self-sovereign invariant: the identity chain defines its own valid sig
 
 Content chain verification requires a **valid EdDSA signature** and delegates key resolution to the caller. The `kid` in each operation's JWS header is a DID URL (`did:dfos:<id>#<keyId>`). The verifier calls `resolveKey(kid)` to obtain the raw Ed25519 public key bytes for that key on that identity. How the resolver obtains and validates the identity's key state is application-defined.
 
-**Creator sovereignty**: The DID that signs the genesis (create) operation is the **chain creator** and permanently owns the chain. The creator can sign subsequent operations directly — no credential needed. Other DIDs require a **DFOSContentWrite** VC-JWT credential in the operation's `authorization` field, issued by the creator DID. See [Credentials](#credentials) for the VC-JWT format.
+**Creator sovereignty**: The DID that signs the genesis (create) operation is the **chain creator** and permanently owns the chain. The creator can sign subsequent operations directly — no credential needed. Other DIDs require a **DFOS credential with write access** in the operation's `authorization` field, issued by the creator DID. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the credential format.
 
 **Signer-payload consistency**: The `kid` DID in the JWS header MUST match the `did` field in the content operation payload. This enables discrimination between author operations and countersignatures — if the kid DID differs from the payload `did`, it is a countersignature (witness attestation), not a chain operation.
 
@@ -111,7 +113,7 @@ Content chain verification requires a **valid EdDSA signature** and delegates ke
 - The EdDSA signature on each operation is valid against the key returned by `resolveKey(kid)`
 - Chain integrity (CID links, timestamp ordering, terminal state)
 - The `kid` DID matches the payload `did` for chain operations
-- Creator-sovereignty authorization (when `enforceAuthorization` is enabled): non-creator signers must present a valid DFOSContentWrite VC-JWT issued by the creator
+- Creator-sovereignty authorization (when `enforceAuthorization` is enabled): non-creator signers must present a valid DFOS credential with `action: "write"` issued by the creator
 
 **What the protocol does NOT enforce (application concerns):**
 
@@ -137,10 +139,10 @@ The JWS `typ` header uses protocol-specific values (not IANA media types):
 | `did:dfos:beacon`      | Beacon announcements                          |
 | `did:dfos:artifact`    | Standalone signed inline documents            |
 | `did:dfos:countersign` | Standalone witness attestations               |
+| `did:dfos:revocation`  | Credential revocation artifacts               |
 | `JWT`                  | Auth tokens (DID-signed relay authentication) |
-| `vc+jwt`               | VC-JWT credentials (W3C VC Data Model v2)     |
 
-Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` and `vc+jwt` follow IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions.
+Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for credential `typ` values and format.
 
 ### Operation Field Limits
 
@@ -342,7 +344,7 @@ DID:    did:dfos:e3vvtck42d4eacdnzvtrn6
   baseDocumentCID: string | null,
   createdAt: string,
   note: string | null,
-  authorization?: string }               // VC-JWT for delegated operations
+  authorization?: string }               // DFOS credential for delegated operations
 
 // Permanent destruction
 { version: 1, type: "delete",
@@ -350,7 +352,7 @@ DID:    did:dfos:e3vvtck42d4eacdnzvtrn6
   previousOperationCID: string,
   createdAt: string,
   note: string | null,
-  authorization?: string }               // VC-JWT for delegated operations
+  authorization?: string }               // DFOS credential for delegated operations
 ```
 
 ### MultikeyPublicKey
@@ -406,7 +408,7 @@ Every operation JWS (identity-op and content-op) includes a `cid` field in the p
 
 A CID mismatch between header and derived value immediately surfaces dag-cbor encoding disagreements across implementations.
 
-Note: JWT auth tokens and VC-JWT credentials do NOT include a `cid` header — this field is specific to operation JWS tokens and beacons.
+Note: JWT auth tokens do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). This field is present on operation JWS tokens, beacons, credentials, and revocations.
 
 ### CID Derivation
 
@@ -428,102 +430,14 @@ Where `idEncode` is the 19-char alphabet encoding described above.
 
 ## Credentials
 
-Two credential types handle authentication and authorization. Both are DID-signed JWTs using Ed25519 (`alg: "EdDSA"`).
+Credentials handle authentication and authorization for relay access and content chain delegation. The full credential format, verification rules, and revocation mechanism are specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials).
 
-### Auth Tokens (Relay Authentication)
+Summary of credential types:
 
-A DID-signed JWT proving the caller controls a DID. Short-lived, scoped to a specific relay via the `aud` (audience) claim. Used for relay AuthN — establishing identity before making requests.
-
-**JWT Header:**
-
-```json
-{
-  "alg": "EdDSA",
-  "typ": "JWT",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"
-}
-```
-
-**JWT Payload:**
-
-```json
-{
-  "iss": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "sub": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "aud": "relay.example.com",
-  "exp": 1772845200,
-  "iat": 1772841600
-}
-```
-
-| Field | Type   | Description                                                |
-| ----- | ------ | ---------------------------------------------------------- |
-| `iss` | string | DID proving identity (the signer)                          |
-| `sub` | string | Same as `iss` for auth tokens                              |
-| `aud` | string | Target relay hostname (prevents cross-relay replay)        |
-| `exp` | number | Expiration — unix seconds (short-lived, typically minutes) |
-| `iat` | number | Issued-at — unix seconds                                   |
-
-**Verification:** Standard JWT verification — EdDSA signature check, temporal validity (`iat` must not be in the future, `exp` must be after current time), audience match. The `kid` MUST be a DID URL (`did:dfos:xxx#key_yyy`) and the `kid` DID MUST match `iss`.
-
-Auth tokens do NOT include a `cid` header — they are ephemeral session tokens, not content-addressed artifacts.
-
-### VC-JWT Credentials (Authorization)
-
-W3C Verifiable Credential Data Model v2 credentials encoded as JWT (`typ: "vc+jwt"`). Two credential types:
-
-| Credential Type    | Purpose                                                      |
-| ------------------ | ------------------------------------------------------------ |
-| `DFOSContentWrite` | Authorize extending a content chain (embedded in operations) |
-| `DFOSContentRead`  | Authorize reading content plane data (presented to relay)    |
-
-**VC-JWT Header:**
-
-```json
-{
-  "alg": "EdDSA",
-  "typ": "vc+jwt",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"
-}
-```
-
-**VC-JWT Payload:**
-
-```json
-{
-  "iss": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "sub": "did:dfos:nzkf838efr424433rn2rzk",
-  "exp": 1798761600,
-  "iat": 1772841600,
-  "vc": {
-    "@context": ["https://www.w3.org/ns/credentials/v2"],
-    "type": ["VerifiableCredential", "DFOSContentWrite"],
-    "credentialSubject": {}
-  }
-}
-```
-
-| Field                  | Type     | Description                                              |
-| ---------------------- | -------- | -------------------------------------------------------- |
-| `iss`                  | string   | DID granting the credential (content creator/controller) |
-| `sub`                  | string   | DID receiving the credential (collaborator/reader)       |
-| `exp`                  | number   | Expiration — unix seconds                                |
-| `iat`                  | number   | Issued-at — unix seconds                                 |
-| `vc.@context`          | string[] | Must be `["https://www.w3.org/ns/credentials/v2"]`       |
-| `vc.type`              | string[] | `["VerifiableCredential", "<DFOSCredentialType>"]`       |
-| `vc.credentialSubject` | object   | Optional narrowing — see scope narrowing below           |
-
-**Scope narrowing:** The `credentialSubject` object may contain a `contentId` field. If absent, the credential grants broad access to all content by the issuer. If present, the credential is narrowed to the specific content chain.
-
-```json
-// Broad — all content by this DID
-{ "credentialSubject": {} }
-
-// Narrow — specific content chain only
-{ "credentialSubject": { "contentId": "a82z92a3hndk6c97thcrn8" } }
-```
-
-**Verification:** EdDSA signature check, temporal validity (`iat` must not be in the future, `exp` must be after current time — using operation `createdAt` for chain-embedded VCs, wall clock for relay-presented VCs), `kid` DID URL format, `kid` DID matches `iss`, payload structure via Zod schema. Optionally verify `sub` and credential type match expectations.
+| Credential Type | Purpose                                                       |
+| --------------- | ------------------------------------------------------------- |
+| Auth token      | DID-signed JWT proving identity (relay AuthN)                 |
+| DFOS credential | Authorize actions on resources (read, write) via attenuations |
 
 ### Content Chain Authorization
 
@@ -531,40 +445,40 @@ When `enforceAuthorization` is enabled on content chain verification:
 
 1. **Genesis operation**: The signer is the chain creator, always authorized
 2. **Creator signs subsequent ops**: Authorized directly — no credential needed
-3. **Different DID signs**: Must include an `authorization` field containing a valid `DFOSContentWrite` VC-JWT where:
-   - `iss` matches the chain creator DID
-   - `sub` matches the signing DID
+3. **Different DID signs**: Must include an `authorization` field containing a valid DFOS credential where:
+   - The delegation chain roots at the chain creator DID
+   - The credential's `att` includes an entry with `action: "write"` covering this chain's resource
    - The credential is temporally valid (`iat <= op.createdAt < exp`, not wall clock)
-   - If `contentId` is present in `credentialSubject`, it must match this chain's contentId
-   - The credential type is `DFOSContentWrite`
 
 The `authorization` field is available on `update` and `delete` content operations. It is absent for creator-signed operations.
+
+### Credential Revocation
+
+Credentials can be revoked by publishing a **revocation artifact** — a signed proof plane primitive with `typ: did:dfos:revocation`. Revocation is immediate and permanent. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the revocation payload format and verification rules.
 
 ---
 
 ## Beacons
 
-A beacon is a signed announcement of a merkle root — a periodic commitment over a set of content IDs. Beacons are floating signed artifacts, not chained. They provide a compact, verifiable snapshot of an identity's content set at a point in time.
+A beacon is a signed announcement referencing a manifest content chain — a periodic commitment over an identity's content set. Beacons are floating signed artifacts, not chained. They provide a compact, verifiable pointer to the identity's current manifest at a point in time.
 
 ### Beacon Payload
 
 ```json
 {
-  "version": 1,
   "type": "beacon",
   "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "merkleRoot": "7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e",
+  "manifestContentId": "67t27rzc83v7c22n9t6z7c",
   "createdAt": "2026-03-07T00:05:00.000Z"
 }
 ```
 
-| Field        | Type   | Description                                             |
-| ------------ | ------ | ------------------------------------------------------- |
-| `version`    | 1      | Protocol version                                        |
-| `type`       | string | Literal `"beacon"`                                      |
-| `did`        | string | DID of the identity publishing the beacon               |
-| `merkleRoot` | string | Hex-encoded SHA-256 root (64 chars, `/^[0-9a-f]{64}$/`) |
-| `createdAt`  | string | ISO 8601 timestamp                                      |
+| Field               | Type   | Description                                          |
+| ------------------- | ------ | ---------------------------------------------------- |
+| `type`              | string | Literal `"beacon"`                                   |
+| `did`               | string | DID of the identity publishing the beacon            |
+| `manifestContentId` | string | Content ID of the manifest chain (22-char bare hash) |
+| `createdAt`         | string | ISO 8601 timestamp                                   |
 
 ### Beacon JWS Header
 
@@ -579,7 +493,7 @@ A beacon is a signed announcement of a merkle root — a periodic commitment ove
 
 ### Worked Example: Beacon
 
-Using the reference identity (`did:dfos:e3vvtck42d4eacdnzvtrn6`) and key 1 from the identity chain examples. The beacon commits to a merkle root over 5 content IDs (see Merkle Tree worked example below).
+Using the reference identity (`did:dfos:e3vvtck42d4eacdnzvtrn6`) and key 1 from the identity chain examples. The beacon references a manifest content chain.
 
 **Beacon CID** (dag-cbor canonical encode → CIDv1):
 
@@ -607,7 +521,7 @@ Beacons are not chained — there is no `previousOperationCID`. For a given DID,
 
 **Clock skew tolerance**: Implementations MUST reject beacons with a `createdAt` more than 5 minutes in the future relative to the verifier's clock. This prevents pre-dating attacks while accommodating reasonable clock drift.
 
-**merkleRoot**: A hex-encoded SHA-256 hash (64 characters). This is a commitment, not a CID — it uses raw SHA-256, not dag-cbor encoding. See the Merkle Tree section below for construction. An empty content set produces a `null` merkle root (no beacon needed).
+**manifestContentId**: A 22-char content ID referencing the manifest content chain that indexes this identity's content set. The manifest itself is a living document on a content chain — see the [Content Model](https://protocol.dfos.com/content-model) for the manifest schema. The beacon points to the manifest chain, not to a specific snapshot — consumers resolve the manifest chain's current head to get the latest content index.
 
 ---
 
@@ -805,7 +719,7 @@ Relay-level semantic checks (target exists, witness ≠ author, deduplication) a
 5. Verify the `kid` DID matches the payload `did` field
 6. Resolve `kid` via external key resolver (caller provides)
 7. Verify EdDSA JWS signature
-8. If `enforceAuthorization` is enabled and the signer DID differs from the chain creator: verify the `authorization` field contains a valid `DFOSContentWrite` VC-JWT issued by the creator DID, with `sub` matching the signer, not expired at `op.createdAt`, and `contentId` (if present) matching this chain
+8. If `enforceAuthorization` is enabled and the signer DID differs from the chain creator: verify the `authorization` field contains a valid DFOS credential with `action: "write"` covering this chain, with a delegation chain rooting at the creator DID, and not expired at `op.createdAt`
 9. Apply state change (set document, clear, or delete)
 
 ---
@@ -1124,9 +1038,9 @@ Given the artifacts above, verify:
 
 11. **Chain completeness**: all operation CIDs, DID derivation, key rotation, and content chain linkage verified end-to-end.
 
-12. **VC-JWT credential verify**: using the issuer's public key, verify a `DFOSContentWrite` or `DFOSContentRead` credential: check EdDSA signature, `typ: "vc+jwt"`, expiration, `kid` DID URL format, `kid` DID matches `iss`, `vc` claim structure matches W3C VC Data Model v2, credential type matches expected DFOS type. Test vectors in [`examples/credential-write.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-write.json) and [`examples/credential-read.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-read.json).
+12. **Credential verify**: using the issuer's public key, verify a DFOS credential with write or read access: check EdDSA signature, expiration, `kid` DID URL format, `kid` DID matches `iss`, credential type matches expected DFOS type. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for format details. Test vectors in [`examples/credential-write.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-write.json) and [`examples/credential-read.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/credential-read.json).
 
-13. **Delegated content chain verify**: using [`examples/content-delegated.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/content-delegated.json), verify a content chain where the genesis is signed by the creator and a subsequent update is signed by a delegate with an embedded `DFOSContentWrite` VC-JWT in the `authorization` field. The VC must be issued by the creator DID, with `sub` matching the delegate DID.
+13. **Delegated content chain verify**: using [`examples/content-delegated.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/content-delegated.json), verify a content chain where the genesis is signed by the creator and a subsequent update is signed by a delegate with an embedded DFOS write credential in the `authorization` field. The credential must be issued by the creator DID, with `aud` matching the delegate DID.
 
 14. **Number encoding determinism**: dag-cbor encode `{"version": 1, "type": "test"}` and verify:
     - CBOR hex is `a2647479706564746573746776657273696f6e01` (20 bytes)
@@ -1155,14 +1069,16 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/artifact`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/artifact.ts) — `signArtifact`, `verifyArtifact`
 - [`chain/countersign`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/countersign.ts) — `signCountersignature`, `verifyCountersignature`
 - [`credentials/auth-token`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/auth-token.ts) — `createAuthToken`, `verifyAuthToken`
-- [`credentials/credential`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/credential.ts) — `createCredential`, `verifyCredential`, `decodeCredentialUnsafe`
-- [`credentials/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/schemas.ts) — `AuthTokenClaims`, `CredentialClaims`, `VCClaim`, `DFOSCredentialType`
+- [`chain/revocation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/revocation.ts) — `signRevocation`, `verifyRevocation`
+- [`credentials/dfos-credential`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/dfos-credential.ts) — `createDFOSCredential`, `verifyDFOSCredential`, `decodeDFOSCredentialUnsafe`
+- [`credentials/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/schemas.ts) — `AuthTokenClaims`, `DFOSCredentialPayload`, `Attenuation`
 - [`merkle/tree`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/merkle/tree.ts) — `buildMerkleTree`, `hashLeaf`
 - [`merkle/proof`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/merkle/proof.ts) — `generateMerkleProof`, `verifyMerkleProof`
 
 ### Related Specifications
 
 - [DID Method: `did:dfos`](https://protocol.dfos.com/did-method) — W3C DID method specification for identity chains
+- [Credentials](https://protocol.dfos.com/credentials) — Auth tokens, DFOS credentials, and revocation
 - [Content Model](https://protocol.dfos.com/content-model) — Standard content schemas (post, profile) for document content objects
 - [Web Relay](https://protocol.dfos.com/web-relay) — HTTP relay specification for ingestion, state, and content plane
 

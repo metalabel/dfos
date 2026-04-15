@@ -8,14 +8,19 @@ import (
 	"time"
 )
 
-// VerifiedCredential represents a successfully verified VC-JWT credential.
+// VerifiedCredential represents a successfully verified DFOS credential.
 type VerifiedCredential struct {
-	Iss       string
-	Sub       string
-	Exp       int64
-	Type      string // "DFOSContentRead" or "DFOSContentWrite"
-	Kid       string
-	ContentID string // optional scope
+	Iss string
+	Aud string // audience DID or "*" for public
+	Exp int64
+	Iat int64
+	Att []AttEntry // full attenuation array
+	Kid string
+	CID string // credential CID from header
+
+	// Convenience fields derived from the first att entry.
+	Action    string // "read" or "write"
+	ContentID string // resource ID (without "chain:" prefix)
 }
 
 // CreateAuthToken creates a DID-signed auth token JWT for relay authentication.
@@ -49,62 +54,70 @@ func CreateAuthToken(iss, aud, kid string, ttl time.Duration, privateKey ed25519
 	return signingInput + "." + sigB64, nil
 }
 
-// CreateCredential creates a VC-JWT credential (DFOSContentRead or DFOSContentWrite).
-func CreateCredential(iss, sub, kid, credType string, ttl time.Duration, contentID string, privateKey ed25519.PrivateKey) (string, error) {
+// CreateCredential creates a DFOS credential (UCAN-style authorization token).
+//
+// The resource parameter is the full resource string (e.g., "chain:contentId",
+// "chain:*", "manifest:manifestId"). The action is "read" or "write".
+// The aud parameter is the audience DID (or "*" for public credentials).
+func CreateCredential(iss, aud, kid, resource, action string, ttl time.Duration, privateKey ed25519.PrivateKey) (string, error) {
 	now := time.Now().Unix()
 	exp := now + int64(ttl.Seconds())
 
-	header := map[string]string{
-		"alg": "EdDSA",
-		"typ": "vc+jwt",
-		"kid": kid,
-	}
-
-	credSubject := map[string]string{}
-	if contentID != "" {
-		credSubject["contentId"] = contentID
-	}
-
-	payload := map[string]any{
-		"iss": iss,
-		"sub": sub,
-		"exp": exp,
-		"iat": now,
-		"vc": map[string]any{
-			"@context":          []string{"https://www.w3.org/ns/credentials/v2"},
-			"type":              []string{"VerifiableCredential", credType},
-			"credentialSubject": credSubject,
+	att := []map[string]string{
+		{
+			"resource": resource,
+			"action":   action,
 		},
 	}
 
-	headerJSON, _ := json.Marshal(header)
-	payloadJSON, _ := json.Marshal(payload)
+	payload := map[string]any{
+		"version": 1,
+		"type":    "DFOSCredential",
+		"iss":     iss,
+		"aud":     aud,
+		"att":     att,
+		"prf":     []string{},
+		"exp":     exp,
+		"iat":     now,
+	}
 
-	headerB64 := Base64urlEncode(headerJSON)
-	payloadB64 := Base64urlEncode(payloadJSON)
-	signingInput := headerB64 + "." + payloadB64
+	// derive CID from dag-cbor canonical encoding
+	_, _, cidStr, err := DagCborCID(payload)
+	if err != nil {
+		return "", fmt.Errorf("DagCborCID: %w", err)
+	}
 
-	sig := ed25519.Sign(privateKey, []byte(signingInput))
-	sigB64 := Base64urlEncode(sig)
+	header := JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:credential",
+		Kid: kid,
+		CID: cidStr,
+	}
 
-	return signingInput + "." + sigB64, nil
+	token, err := CreateJWS(header, payload, privateKey)
+	if err != nil {
+		return "", fmt.Errorf("CreateJWS: %w", err)
+	}
+
+	return token, nil
 }
 
-// VerifyCredential verifies a VC-JWT credential token. It checks the signature,
-// expiration, payload structure, and optionally subject and credential type.
-// Pass empty string for subject or expectedType to skip those checks.
-func VerifyCredential(token string, publicKey ed25519.PublicKey, subject string, expectedType string) (*VerifiedCredential, error) {
-	return verifyCredentialCore(token, publicKey, subject, expectedType, time.Now().Unix())
+// VerifyCredential verifies a DFOS credential token. It checks the signature,
+// expiration, payload structure, and optionally subject and expected action.
+// Pass empty string for subject or expectedAction to skip those checks.
+func VerifyCredential(token string, publicKey ed25519.PublicKey, subject string, expectedAction string) (*VerifiedCredential, error) {
+	return verifyCredentialCore(token, publicKey, subject, expectedAction, time.Now().Unix())
 }
 
-// VerifyCredentialAt is like VerifyCredential but accepts a custom current time
-// (unix seconds) for testing temporal checks.
-func VerifyCredentialAt(token string, publicKey ed25519.PublicKey, subject string, expectedType string, currentTime int64) (*VerifiedCredential, error) {
-	return verifyCredentialCore(token, publicKey, subject, expectedType, currentTime)
+// VerifyCredentialAt is like VerifyCredential but accepts a custom current
+// time (unix seconds) for testing temporal checks.
+func VerifyCredentialAt(token string, publicKey ed25519.PublicKey, subject string, expectedAction string, currentTime int64) (*VerifiedCredential, error) {
+	return verifyCredentialCore(token, publicKey, subject, expectedAction, currentTime)
 }
 
-// verifyCredentialCore is the shared implementation for credential verification.
-func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject string, expectedType string, currentTime int64) (*VerifiedCredential, error) {
+// verifyCredentialCore is the shared implementation for DFOS credential
+// verification.
+func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject string, expectedAction string, currentTime int64) (*VerifiedCredential, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid token format")
@@ -126,6 +139,7 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		Alg string `json:"alg"`
 		Typ string `json:"typ"`
 		Kid string `json:"kid"`
+		CID string `json:"cid"`
 	}
 	if err := json.Unmarshal(headerBytes, &header); err != nil {
 		return nil, fmt.Errorf("failed to decode token")
@@ -135,7 +149,7 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 	if header.Alg != "EdDSA" {
 		return nil, fmt.Errorf("unsupported algorithm: %s", header.Alg)
 	}
-	if header.Typ != "vc+jwt" {
+	if header.Typ != "did:dfos:credential" {
 		return nil, fmt.Errorf("invalid typ: %s", header.Typ)
 	}
 
@@ -149,25 +163,50 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("invalid signature")
 	}
 
-	// parse payload
+	// parse payload — DFOS credential format
 	var claims struct {
-		Iss string `json:"iss"`
-		Sub string `json:"sub"`
-		Exp int64  `json:"exp"`
-		Iat int64  `json:"iat"`
-		VC  struct {
-			Context           []string       `json:"@context"`
-			Type              []string       `json:"type"`
-			CredentialSubject map[string]any `json:"credentialSubject"`
-		} `json:"vc"`
+		Version int64  `json:"version"`
+		Type    string `json:"type"`
+		Iss     string `json:"iss"`
+		Aud     string `json:"aud"`
+		Exp     int64  `json:"exp"`
+		Iat     int64  `json:"iat"`
+		Att     []struct {
+			Resource string `json:"resource"`
+			Action   string `json:"action"`
+		} `json:"att"`
 	}
 	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
 		return nil, fmt.Errorf("invalid credential claims: %s", err)
 	}
 
 	// validate required fields
-	if claims.Iss == "" || claims.Sub == "" || claims.Exp == 0 || claims.Iat == 0 {
+	if claims.Iss == "" || claims.Aud == "" || claims.Exp == 0 || claims.Iat == 0 {
 		return nil, fmt.Errorf("invalid credential claims: missing required fields")
+	}
+	if claims.Type != "DFOSCredential" {
+		return nil, fmt.Errorf("invalid credential type: %s", claims.Type)
+	}
+	if claims.Version != 1 {
+		return nil, fmt.Errorf("unsupported credential version: %d", claims.Version)
+	}
+
+	// verify CID integrity — re-derive from payload and compare to header
+	headerCID := header.CID
+	if headerCID == "" {
+		return nil, fmt.Errorf("missing cid in credential header")
+	}
+	var payloadMap map[string]any
+	if err := json.Unmarshal(payloadBytes, &payloadMap); err != nil {
+		return nil, fmt.Errorf("failed to parse credential payload for CID derivation")
+	}
+	NormalizeJSONNumbers(payloadMap)
+	_, _, derivedCID, err := DagCborCID(payloadMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive credential CID: %w", err)
+	}
+	if headerCID != derivedCID {
+		return nil, fmt.Errorf("credential CID mismatch: header %s, derived %s", headerCID, derivedCID)
 	}
 
 	// verify kid is a DID URL and matches iss
@@ -188,37 +227,55 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("credential expired")
 	}
 
-	// verify subject if specified
-	if subject != "" && claims.Sub != subject {
-		return nil, fmt.Errorf("subject mismatch: expected %s, got %s", subject, claims.Sub)
+	// verify subject (aud) if specified
+	if subject != "" && claims.Aud != subject {
+		return nil, fmt.Errorf("subject mismatch: expected %s, got %s", subject, claims.Aud)
 	}
 
-	// extract credential type (second element after "VerifiableCredential")
-	if len(claims.VC.Type) < 2 || claims.VC.Type[0] != "VerifiableCredential" {
-		return nil, fmt.Errorf("invalid credential type array")
-	}
-	vcType := claims.VC.Type[1]
-
-	// verify type if specified
-	if expectedType != "" && vcType != expectedType {
-		return nil, fmt.Errorf("type mismatch: expected %s, got %s", expectedType, vcType)
+	// build full att array
+	att := make([]AttEntry, 0, len(claims.Att))
+	for _, a := range claims.Att {
+		att = append(att, AttEntry{Resource: a.Resource, Action: a.Action})
 	}
 
-	// extract optional contentId
+	// derive convenience fields from the first recognized att entry
+	var action string
 	var contentID string
-	if cid, ok := claims.VC.CredentialSubject["contentId"]; ok {
-		if s, ok := cid.(string); ok {
-			contentID = s
+	for _, a := range claims.Att {
+		switch a.Action {
+		case "write", "read":
+			action = a.Action
+		default:
+			continue
 		}
+		if a.Resource != "" {
+			r := a.Resource
+			if strings.HasPrefix(r, "chain:") {
+				r = r[len("chain:"):]
+			}
+			contentID = r
+		}
+		break
+	}
+	if action == "" {
+		return nil, fmt.Errorf("no recognized action in att")
+	}
+
+	// verify action if specified
+	if expectedAction != "" && action != expectedAction {
+		return nil, fmt.Errorf("action mismatch: expected %s, got %s", expectedAction, action)
 	}
 
 	return &VerifiedCredential{
 		Iss:       claims.Iss,
-		Sub:       claims.Sub,
+		Aud:       claims.Aud,
 		Exp:       claims.Exp,
-		Type:      vcType,
+		Iat:       claims.Iat,
+		Att:       att,
+		Action:    action,
 		Kid:       kid,
 		ContentID: contentID,
+		CID:       headerCID,
 	}, nil
 }
 

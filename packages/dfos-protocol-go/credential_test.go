@@ -10,15 +10,15 @@ import (
 func TestVerifyCredentialValid(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	iss := "did:dfos:abc123"
-	sub := "did:dfos:reader456"
+	aud := "did:dfos:reader456"
 	kid := iss + "#key_auth_0"
 
-	token, err := CreateCredential(iss, sub, kid, "DFOSContentRead", 1*time.Hour, "content-xyz", priv)
+	token, err := CreateCredential(iss, aud, kid, "chain:content-xyz", "read", 1*time.Hour, priv)
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}
 
-	vc, err := VerifyCredential(token, pub, sub, "DFOSContentRead")
+	vc, err := VerifyCredential(token, pub, aud, "read")
 	if err != nil {
 		t.Fatalf("VerifyCredential: %v", err)
 	}
@@ -26,11 +26,14 @@ func TestVerifyCredentialValid(t *testing.T) {
 	if vc.Iss != iss {
 		t.Errorf("iss: got %s, want %s", vc.Iss, iss)
 	}
-	if vc.Sub != sub {
-		t.Errorf("sub: got %s, want %s", vc.Sub, sub)
+	if vc.Aud != aud {
+		t.Errorf("aud: got %s, want %s", vc.Aud, aud)
 	}
-	if vc.Type != "DFOSContentRead" {
-		t.Errorf("type: got %s, want DFOSContentRead", vc.Type)
+	if vc.Action != "read" {
+		t.Errorf("action: got %s, want read", vc.Action)
+	}
+	if len(vc.Att) != 1 || vc.Att[0].Resource != "chain:content-xyz" || vc.Att[0].Action != "read" {
+		t.Errorf("att: got %+v, want [{chain:content-xyz read}]", vc.Att)
 	}
 	if vc.Kid != kid {
 		t.Errorf("kid: got %s, want %s", vc.Kid, kid)
@@ -40,13 +43,13 @@ func TestVerifyCredentialValid(t *testing.T) {
 	}
 }
 
-func TestVerifyCredentialValidNoScope(t *testing.T) {
+func TestVerifyCredentialWildcard(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	iss := "did:dfos:abc123"
-	sub := "did:dfos:reader456"
+	aud := "did:dfos:reader456"
 	kid := iss + "#key_auth_0"
 
-	token, err := CreateCredential(iss, sub, kid, "DFOSContentWrite", 1*time.Hour, "", priv)
+	token, err := CreateCredential(iss, aud, kid, "chain:*", "write", 1*time.Hour, priv)
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}
@@ -56,29 +59,30 @@ func TestVerifyCredentialValidNoScope(t *testing.T) {
 		t.Fatalf("VerifyCredential: %v", err)
 	}
 
-	if vc.Type != "DFOSContentWrite" {
-		t.Errorf("type: got %s, want DFOSContentWrite", vc.Type)
+	if vc.Action != "write" {
+		t.Errorf("action: got %s, want write", vc.Action)
 	}
-	if vc.ContentID != "" {
-		t.Errorf("contentId: got %q, want empty", vc.ContentID)
+	if vc.ContentID != "*" {
+		t.Errorf("contentId: got %q, want *", vc.ContentID)
+	}
+	if len(vc.Att) != 1 || vc.Att[0].Resource != "chain:*" {
+		t.Errorf("att: got %+v, want [{chain:* write}]", vc.Att)
 	}
 }
 
 func TestVerifyCredentialExpired(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	iss := "did:dfos:abc123"
-	sub := "did:dfos:reader456"
+	aud := "did:dfos:reader456"
 	kid := iss + "#key_auth_0"
 
-	// create with very short TTL then verify at a time after expiry
-	token, err := CreateCredential(iss, sub, kid, "DFOSContentRead", 1*time.Second, "", priv)
+	token, err := CreateCredential(iss, aud, kid, "chain:x", "read", 1*time.Second, priv)
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}
 
-	// verify at a time 10 seconds in the future (past exp)
 	futureTime := time.Now().Unix() + 10
-	_, err = VerifyCredentialAt(token, pub, sub, "DFOSContentRead", futureTime)
+	_, err = VerifyCredentialAt(token, pub, aud, "read", futureTime)
 	if err == nil {
 		t.Fatal("expected error for expired credential, got nil")
 	}
@@ -90,15 +94,15 @@ func TestVerifyCredentialExpired(t *testing.T) {
 func TestVerifyCredentialWrongSubject(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	iss := "did:dfos:abc123"
-	sub := "did:dfos:reader456"
+	aud := "did:dfos:reader456"
 	kid := iss + "#key_auth_0"
 
-	token, err := CreateCredential(iss, sub, kid, "DFOSContentRead", 1*time.Hour, "", priv)
+	token, err := CreateCredential(iss, aud, kid, "chain:x", "read", 1*time.Hour, priv)
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}
 
-	_, err = VerifyCredential(token, pub, "did:dfos:wrongperson", "DFOSContentRead")
+	_, err = VerifyCredential(token, pub, "did:dfos:wrongperson", "read")
 	if err == nil {
 		t.Fatal("expected error for wrong subject, got nil")
 	}
@@ -112,15 +116,15 @@ func TestVerifyCredentialWrongKey(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	otherPub, _, _ := ed25519.GenerateKey(rand.Reader)
 	iss := "did:dfos:abc123"
-	sub := "did:dfos:reader456"
+	aud := "did:dfos:reader456"
 	kid := iss + "#key_auth_0"
 
-	token, err := CreateCredential(iss, sub, kid, "DFOSContentRead", 1*time.Hour, "", priv)
+	token, err := CreateCredential(iss, aud, kid, "chain:x", "read", 1*time.Hour, priv)
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}
 
-	_, err = VerifyCredential(token, otherPub, sub, "DFOSContentRead")
+	_, err = VerifyCredential(token, otherPub, aud, "read")
 	if err == nil {
 		t.Fatal("expected error for wrong key, got nil")
 	}
@@ -129,22 +133,22 @@ func TestVerifyCredentialWrongKey(t *testing.T) {
 	}
 }
 
-func TestVerifyCredentialWrongType(t *testing.T) {
+func TestVerifyCredentialWrongAction(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	iss := "did:dfos:abc123"
-	sub := "did:dfos:reader456"
+	aud := "did:dfos:reader456"
 	kid := iss + "#key_auth_0"
 
-	token, err := CreateCredential(iss, sub, kid, "DFOSContentRead", 1*time.Hour, "", priv)
+	token, err := CreateCredential(iss, aud, kid, "chain:x", "read", 1*time.Hour, priv)
 	if err != nil {
 		t.Fatalf("CreateCredential: %v", err)
 	}
 
-	_, err = VerifyCredential(token, pub, sub, "DFOSContentWrite")
+	_, err = VerifyCredential(token, pub, aud, "write")
 	if err == nil {
-		t.Fatal("expected error for wrong type, got nil")
+		t.Fatal("expected error for wrong action, got nil")
 	}
-	expected := "type mismatch: expected DFOSContentWrite, got DFOSContentRead"
+	expected := "action mismatch: expected write, got read"
 	if err.Error() != expected {
 		t.Errorf("expected %q, got %q", expected, err.Error())
 	}

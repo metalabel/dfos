@@ -15,7 +15,7 @@ import type {
   VerifiedContentChain,
   VerifiedIdentity,
 } from '../src/chain';
-import { createCredential, VC_TYPE_CONTENT_WRITE } from '../src/credentials';
+import { createDFOSCredential } from '../src/credentials';
 import {
   createNewEd25519Keypair,
   decodeJwsUnsafe,
@@ -547,7 +547,7 @@ describe('verifyContentExtensionFromTrustedState', () => {
     ).rejects.toThrow(/deleted/i);
   });
 
-  it('should verify delegated extension with authorization VC', async () => {
+  it('should verify delegated extension with authorization credential', async () => {
     const {
       creator,
       kid,
@@ -557,16 +557,15 @@ describe('verifyContentExtensionFromTrustedState', () => {
     } = await setupContentChain();
     const delegate = await createIdentityGenesis();
 
-    // issue a DFOSContentWrite credential to the delegate
+    // issue a DFOS credential to the delegate
     const now = Math.floor(Date.now() / 1000);
-    const credentialToken = await createCredential({
-      iss: creator.identity.did,
-      sub: delegate.identity.did,
-      type: VC_TYPE_CONTENT_WRITE,
-      contentId: chain.contentId,
+    const credentialToken = await createDFOSCredential({
+      issuerDID: creator.identity.did,
+      audienceDID: delegate.identity.did,
+      att: [{ resource: `chain:${chain.contentId}`, action: 'write' }],
       exp: now + 3600,
-      sign: creator.signer,
-      kid,
+      signer: creator.signer,
+      keyId: creator.keyId,
     });
 
     // combined key resolver
@@ -576,6 +575,38 @@ describe('verifyContentExtensionFromTrustedState', () => {
       if (did === delegate.identity.did) return delegate.keypair.publicKey;
       throw new Error(`unknown DID: ${did}`);
     };
+
+    // build identity map for resolveIdentity
+    const creatorVerifiedIdentity: VerifiedIdentity = {
+      did: creator.identity.did,
+      isDeleted: false,
+      authKeys: [
+        {
+          id: creator.keyId,
+          type: 'Multikey',
+          publicKeyMultibase: encodeEd25519Multikey(creator.keypair.publicKey),
+        },
+      ],
+      assertKeys: [],
+      controllerKeys: [],
+    };
+    const delegateVerifiedIdentity: VerifiedIdentity = {
+      did: delegate.identity.did,
+      isDeleted: false,
+      authKeys: [
+        {
+          id: delegate.keyId,
+          type: 'Multikey',
+          publicKeyMultibase: encodeEd25519Multikey(delegate.keypair.publicKey),
+        },
+      ],
+      assertKeys: [],
+      controllerKeys: [],
+    };
+    const identityMap = new Map<string, VerifiedIdentity>();
+    identityMap.set(creator.identity.did, creatorVerifiedIdentity);
+    identityMap.set(delegate.identity.did, delegateVerifiedIdentity);
+    const resolveIdentity = async (did: string) => identityMap.get(did);
 
     const delegateKid = `${delegate.identity.did}#${delegate.keyId}`;
     const update: ContentOperation = {
@@ -600,6 +631,7 @@ describe('verifyContentExtensionFromTrustedState', () => {
       log: [genesis.jwsToken, updateJws],
       resolveKey,
       enforceAuthorization: true,
+      resolveIdentity,
     });
 
     // extension
@@ -609,6 +641,7 @@ describe('verifyContentExtensionFromTrustedState', () => {
       newOp: updateJws,
       resolveKey,
       enforceAuthorization: true,
+      resolveIdentity,
     });
 
     expect(extResult.state).toEqual(fullResult);

@@ -24,7 +24,7 @@ import type {
   IdentityOperation,
   MultikeyPublicKey,
 } from '../src/chain';
-import { createCredential, VC_TYPE_CONTENT_READ, VC_TYPE_CONTENT_WRITE } from '../src/credentials';
+import { createDFOSCredential } from '../src/credentials';
 import {
   dagCborCanonicalEncode,
   generateId,
@@ -229,7 +229,7 @@ const main = async () => {
     version: 1,
     type: 'beacon',
     did: identity.did,
-    merkleRoot,
+    manifestContentId: contentChain.contentId,
     createdAt: '2026-03-07T00:05:00.000Z',
   };
   const { jwsToken: beaconJws, beaconCID } = await signBeacon({
@@ -284,37 +284,36 @@ const main = async () => {
   // ================================================================
 
   // Write credential: key1 (controller) authorizes key3 (different DID) to write content chains
-  const writeCredentialJws = await createCredential({
-    iss: identity.did,
-    sub: identity3.did,
+  const writeCredentialJws = await createDFOSCredential({
+    issuerDID: identity.did,
+    audienceDID: identity3.did,
+    att: [{ resource: 'chain:*', action: 'write' }],
     exp: Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000),
-    kid: kid1,
-    type: VC_TYPE_CONTENT_WRITE,
+    keyId: keyId1,
     iat: FIXED_IAT,
-    sign: signer1,
+    signer: signer1,
   });
 
   // Write credential with contentId narrowing
-  const narrowWriteCredentialJws = await createCredential({
-    iss: identity.did,
-    sub: identity3.did,
+  const narrowWriteCredentialJws = await createDFOSCredential({
+    issuerDID: identity.did,
+    audienceDID: identity3.did,
+    att: [{ resource: 'chain:' + contentChain.contentId, action: 'write' }],
     exp: Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000),
-    kid: kid1,
-    type: VC_TYPE_CONTENT_WRITE,
-    contentId: contentChain.contentId,
+    keyId: keyId1,
     iat: FIXED_IAT,
-    sign: signer1,
+    signer: signer1,
   });
 
   // Read credential: key1 (controller) grants read access to key3
-  const readCredentialJws = await createCredential({
-    iss: identity.did,
-    sub: identity3.did,
+  const readCredentialJws = await createDFOSCredential({
+    issuerDID: identity.did,
+    audienceDID: identity3.did,
+    att: [{ resource: 'chain:*', action: 'read' }],
     exp: Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000),
-    kid: kid1,
-    type: VC_TYPE_CONTENT_READ,
+    keyId: keyId1,
     iat: FIXED_IAT,
-    sign: signer1,
+    signer: signer1,
   });
 
   // ================================================================
@@ -357,15 +356,14 @@ const main = async () => {
   });
 
   // key1 issues write VC to key3 (the delegate)
-  const delegateWriteVC = await createCredential({
-    iss: identity.did,
-    sub: identity3.did,
+  const delegateWriteVC = await createDFOSCredential({
+    issuerDID: identity.did,
+    audienceDID: identity3.did,
+    att: [{ resource: 'chain:' + delegatedChainGenesis.contentId, action: 'write' }],
     exp: Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000),
-    kid: kid1,
-    type: VC_TYPE_CONTENT_WRITE,
-    contentId: delegatedChainGenesis.contentId,
+    keyId: keyId1,
     iat: FIXED_IAT,
-    sign: signer1,
+    signer: signer1,
   });
 
   // key3 signs an update with the write VC
@@ -511,7 +509,7 @@ const main = async () => {
   });
 
   write('beacon', {
-    description: 'Beacon: signed merkle root announcement with witness countersignature',
+    description: 'Beacon: signed manifest content ID announcement with witness countersignature',
     type: 'beacon',
     controllerJws: beaconJws,
     witnessJws: beaconWitnessJws,
@@ -520,41 +518,40 @@ const main = async () => {
     expected: {
       beaconCID,
       did: identity.did,
-      merkleRoot,
+      manifestContentId: beaconPayload.manifestContentId,
       createdAt: beaconPayload.createdAt,
     },
   });
 
   write('credential-write', {
-    description: 'VC-JWT: DFOSContentWrite credential (broad + narrowed)',
+    description: 'DFOS credential: write access (broad + narrowed)',
     type: 'credential',
     broadCredential: writeCredentialJws,
     narrowCredential: narrowWriteCredentialJws,
     issuerPublicKey: multikey1,
-    subjectPublicKey: multikey3,
+    audiencePublicKey: multikey3,
     expected: {
       iss: identity.did,
-      sub: identity3.did,
-      vcType: VC_TYPE_CONTENT_WRITE,
+      aud: identity3.did,
       narrowContentId: contentChain.contentId,
     },
   });
 
   write('credential-read', {
-    description: 'VC-JWT: DFOSContentRead credential',
+    description: 'DFOS credential: read access',
     type: 'credential',
     credential: readCredentialJws,
     issuerPublicKey: multikey1,
-    subjectPublicKey: multikey3,
+    audiencePublicKey: multikey3,
     expected: {
       iss: identity.did,
-      sub: identity3.did,
-      vcType: VC_TYPE_CONTENT_READ,
+      aud: identity3.did,
     },
   });
 
   write('content-delegated', {
-    description: 'Content chain: creator signs genesis, delegate signs update with write VC',
+    description:
+      'Content chain: creator signs genesis, delegate signs update with write credential',
     type: 'content-delegated',
     chain: [delegatedCreateJws, delegatedUpdateJws],
     creatorPublicKey: multikey1,

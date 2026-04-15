@@ -26,7 +26,7 @@ describe('beacon', () => {
 
   const ts = (offset = 0) => new Date(Date.now() + offset * 60_000).toISOString();
 
-  const merkleRoot = 'a'.repeat(64);
+  const manifestContentId = 'manifest_' + generateId('test').substring(5);
 
   // --- round-trip ---
 
@@ -37,7 +37,7 @@ describe('beacon', () => {
       version: 1,
       type: 'beacon',
       did: id.did,
-      merkleRoot,
+      manifestContentId,
       createdAt: ts(),
     };
 
@@ -52,8 +52,8 @@ describe('beacon', () => {
       resolveKey: id.resolveKey,
     });
 
-    expect(result.payload.did).toBe(id.did);
-    expect(result.payload.merkleRoot).toBe(merkleRoot);
+    expect(result.did).toBe(id.did);
+    expect(result.manifestContentId).toBe(manifestContentId);
     expect(result.beaconCID).toBe(beaconCID);
   });
 
@@ -66,7 +66,7 @@ describe('beacon', () => {
       version: 1,
       type: 'beacon',
       did: id.did,
-      merkleRoot,
+      manifestContentId,
       createdAt: '2026-01-01T00:00:00.000Z',
     };
 
@@ -85,7 +85,7 @@ describe('beacon', () => {
       version: 1,
       type: 'beacon',
       did: id.did,
-      merkleRoot,
+      manifestContentId,
       createdAt: ts(),
     };
 
@@ -112,7 +112,7 @@ describe('beacon', () => {
       version: 1,
       type: 'beacon',
       did: author.did,
-      merkleRoot,
+      manifestContentId,
       createdAt: ts(),
     };
 
@@ -138,7 +138,7 @@ describe('beacon', () => {
       version: 1,
       type: 'beacon',
       did: id.did,
-      merkleRoot,
+      manifestContentId,
       createdAt: new Date(now + 10 * 60_000).toISOString(), // 10 min ahead
     };
 
@@ -163,7 +163,7 @@ describe('beacon', () => {
       version: 1,
       type: 'beacon',
       did: id.did,
-      merkleRoot,
+      manifestContentId,
       createdAt: new Date(now + 4 * 60_000).toISOString(), // 4 min ahead — within 5 min tolerance
     };
 
@@ -174,7 +174,7 @@ describe('beacon', () => {
     });
 
     const result = await verifyBeacon({ jwsToken, resolveKey: id.resolveKey, now });
-    expect(result.payload.merkleRoot).toBe(merkleRoot);
+    expect(result.manifestContentId).toBe(manifestContentId);
   });
 
   // --- invalid signature ---
@@ -187,7 +187,7 @@ describe('beacon', () => {
       version: 1,
       type: 'beacon',
       did: id.did,
-      merkleRoot,
+      manifestContentId,
       createdAt: ts(),
     };
 
@@ -215,7 +215,7 @@ describe('beacon', () => {
       version: 1,
       type: 'beacon',
       did: id.did,
-      merkleRoot,
+      manifestContentId,
       createdAt: ts(),
     };
 
@@ -225,11 +225,11 @@ describe('beacon', () => {
       kid: id.kid,
     });
 
-    // tamper with the payload portion of the JWS (replace merkleRoot)
+    // tamper with the payload portion of the JWS (replace manifestContentId)
     const decoded = decodeJwsUnsafe(jwsToken)!;
     const tampered: BeaconPayload = {
       ...(decoded.payload as unknown as BeaconPayload),
-      merkleRoot: 'b'.repeat(64),
+      manifestContentId: 'tampered_content_id',
     };
     const tamperedPayloadB64 = btoa(JSON.stringify(tampered))
       .replace(/\+/g, '-')

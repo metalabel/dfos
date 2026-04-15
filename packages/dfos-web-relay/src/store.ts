@@ -16,8 +16,11 @@ import type {
   RelayStore,
   StoredBeacon,
   StoredContentChain,
+  StoredDocument,
   StoredIdentityChain,
   StoredOperation,
+  StoredPublicCredential,
+  StoredRevocation,
 } from './types';
 
 /** Serialize a BlobKey to a string for map indexing */
@@ -37,6 +40,10 @@ export class MemoryRelayStore implements RelayStore {
   private countersignatures = new Map<string, string[]>();
   private operationLog: LogEntry[] = [];
   private peerCursors = new Map<string, string>();
+  /** Keyed by `issuerDID::credentialCID` for issuer-scoped revocation */
+  private revocations = new Map<string, StoredRevocation>();
+  /** Keyed by credential CID */
+  private publicCredentials = new Map<string, StoredPublicCredential>();
 
   async getOperation(cid: string): Promise<StoredOperation | undefined> {
     return this.operations.get(cid);
@@ -102,6 +109,129 @@ export class MemoryRelayStore implements RelayStore {
     existing.push(jwsToken);
     this.countersignatures.set(operationCID, existing);
   }
+
+  // --- revocations ---
+
+  async getRevocations(issuerDID: string): Promise<string[]> {
+    const cids: string[] = [];
+    for (const rev of this.revocations.values()) {
+      if (rev.issuerDID === issuerDID) cids.push(rev.credentialCID);
+    }
+    return cids;
+  }
+
+  async addRevocation(revocation: StoredRevocation): Promise<void> {
+    const key = `${revocation.issuerDID}::${revocation.credentialCID}`;
+    this.revocations.set(key, revocation);
+  }
+
+  async isCredentialRevoked(issuerDID: string, credentialCID: string): Promise<boolean> {
+    return this.revocations.has(`${issuerDID}::${credentialCID}`);
+  }
+
+  // --- public credentials ---
+
+  async getPublicCredentials(resource: string): Promise<string[]> {
+    const tokens: string[] = [];
+    const isChainRequest = resource.startsWith('chain:');
+    for (const cred of this.publicCredentials.values()) {
+      for (const att of cred.att) {
+        if (att.resource === resource) {
+          tokens.push(cred.jwsToken);
+          break;
+        }
+        // chain:* credentials match any chain: resource
+        if (isChainRequest && att.resource === 'chain:*') {
+          tokens.push(cred.jwsToken);
+          break;
+        }
+        // also include manifest-scoped credentials when requesting chain access —
+        // matchesResource with manifestLookup will determine actual coverage
+        if (isChainRequest && att.resource.startsWith('manifest:')) {
+          tokens.push(cred.jwsToken);
+          break;
+        }
+      }
+    }
+    return tokens;
+  }
+
+  async addPublicCredential(credential: StoredPublicCredential): Promise<void> {
+    this.publicCredentials.set(credential.cid, credential);
+  }
+
+  async removePublicCredential(credentialCID: string): Promise<void> {
+    this.publicCredentials.delete(credentialCID);
+  }
+
+  // --- documents ---
+
+  async getDocuments(
+    contentId: string,
+    params: { after?: string; limit: number },
+  ): Promise<{ documents: StoredDocument[]; cursor: string | null }> {
+    const chain = this.contentChains.get(contentId);
+    if (!chain) return { documents: [], cursor: null };
+
+    // build ordered entries with metadata
+    const entries: {
+      cid: string;
+      documentCID: string | null;
+      signerDID: string;
+      createdAt: string;
+    }[] = [];
+    for (const jws of chain.log) {
+      const decoded = decodeJwsUnsafe(jws);
+      if (!decoded) continue;
+      const payload = decoded.payload as Record<string, unknown>;
+      const cid = typeof decoded.header.cid === 'string' ? decoded.header.cid : '';
+      const documentCID =
+        typeof payload['documentCID'] === 'string' ? payload['documentCID'] : null;
+      const signerDID = typeof payload['did'] === 'string' ? payload['did'] : '';
+      const createdAt = typeof payload['createdAt'] === 'string' ? payload['createdAt'] : '';
+      entries.push({ cid, documentCID, signerDID, createdAt });
+    }
+
+    // find start position
+    let startIdx = 0;
+    if (params.after) {
+      const idx = entries.findIndex((e) => e.cid === params.after);
+      startIdx = idx >= 0 ? idx + 1 : entries.length;
+    }
+
+    const page = entries.slice(startIdx, startIdx + params.limit);
+
+    // resolve documents from blobs
+    const documents: StoredDocument[] = [];
+    for (const entry of page) {
+      let document: unknown | null = null;
+      if (entry.documentCID) {
+        const blob = await this.getBlob({
+          creatorDID: chain.state.creatorDID,
+          documentCID: entry.documentCID,
+        });
+        if (blob) {
+          try {
+            document = JSON.parse(new TextDecoder().decode(blob));
+          } catch {
+            document = null;
+          }
+        }
+      }
+      documents.push({
+        operationCID: entry.cid,
+        documentCID: entry.documentCID,
+        document,
+        signerDID: entry.signerDID,
+        createdAt: entry.createdAt,
+      });
+    }
+
+    const cursor = page.length === params.limit ? page[page.length - 1]!.cid : null;
+    return { documents, cursor };
+  }
+
+  // --- operation log ---
 
   async appendToLog(entry: LogEntry): Promise<void> {
     this.operationLog.push(entry);
@@ -202,7 +332,16 @@ export class MemoryRelayStore implements RelayStore {
     }
 
     const resolveKey = createKeyResolver(this);
-    const content = await verifyContentChain({ log: path, resolveKey, enforceAuthorization: true });
+    const resolveIdentity = async (did: string) => {
+      const chain2 = await this.getIdentityChain(did);
+      return chain2?.state;
+    };
+    const content = await verifyContentChain({
+      log: path,
+      resolveKey,
+      enforceAuthorization: true,
+      resolveIdentity,
+    });
 
     const targetDecoded = decodeJwsUnsafe(opsByCID.get(cid)!.jws);
     const lastCreatedAt =

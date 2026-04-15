@@ -394,8 +394,7 @@ func TestLogContainsAllKinds(t *testing.T) {
 
 	// create a beacon
 	beaconKid := id.did + "#" + id.controller.keyID
-	merkle := dfos.BuildMerkleRoot([]string{cc.contentID})
-	beaconToken, _, err := dfos.SignBeacon(id.did, merkle, beaconKid, id.controller.priv)
+	beaconToken, _, err := dfos.SignBeacon(id.did, cc.contentID, beaconKid, id.controller.priv)
 	if err != nil {
 		t.Fatalf("SignBeacon: %v", err)
 	}

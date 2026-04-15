@@ -1,8 +1,0 @@
----
-import fs from 'node:fs';
-
-// Read POSTER.html at build time from the protocol package
-const posterHtml = fs.readFileSync('../dfos-protocol/POSTER.html', 'utf-8');
----
-
-<Fragment set:html={posterHtml} />
