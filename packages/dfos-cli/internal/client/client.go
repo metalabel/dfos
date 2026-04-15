@@ -116,8 +116,30 @@ func (c *Client) GetRelayInfo() (*RelayInfo, error) {
 	return &info, nil
 }
 
-// SubmitOperations submits JWS operations to the relay.
+// SubmitOperations submits JWS operations to the relay. Automatically chunks
+// into batches of 100 to respect the relay's per-request limit.
 func (c *Client) SubmitOperations(operations []string) ([]IngestionResult, error) {
+	const maxBatch = 100
+	if len(operations) <= maxBatch {
+		return c.submitBatch(operations)
+	}
+
+	var all []IngestionResult
+	for i := 0; i < len(operations); i += maxBatch {
+		end := i + maxBatch
+		if end > len(operations) {
+			end = len(operations)
+		}
+		results, err := c.submitBatch(operations[i:end])
+		if err != nil {
+			return all, fmt.Errorf("batch %d-%d: %w", i, end, err)
+		}
+		all = append(all, results...)
+	}
+	return all, nil
+}
+
+func (c *Client) submitBatch(operations []string) ([]IngestionResult, error) {
 	body, _ := json.Marshal(map[string]any{"operations": operations})
 	resp, err := c.HTTPClient.Post(c.BaseURL+"/operations", "application/json", bytes.NewReader(body))
 	if err != nil {
