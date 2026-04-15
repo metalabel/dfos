@@ -90,7 +90,7 @@ Registry:
 
 ```
 ghcr.io/metalabel/dfos:latest
-ghcr.io/metalabel/dfos:0.7.0
+ghcr.io/metalabel/dfos:0.7.1
 ```
 
 Browse available tags at

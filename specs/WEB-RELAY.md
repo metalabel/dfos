@@ -256,7 +256,7 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 {
   "did": "did:dfos:edgerelay0000000000000",
   "protocol": "dfos-web-relay",
-  "version": "0.8.0",
+  "version": "0.7.1",
   "capabilities": {
     "proof": true,
     "content": true,
