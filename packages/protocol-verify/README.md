@@ -1,6 +1,6 @@
 # protocol-verify
 
-Cross-language verification of the [DFOS protocol](https://protocol.dfos.com/spec). Six independent implementations re-derive CIDs, verify Ed25519 signatures, check credential structures, and verify beacon announcements from the same reference fixtures — proving the protocol specification is unambiguous across languages.
+Cross-language verification of the [DFOS protocol](https://protocol.dfos.com/spec). Five independent implementations re-derive CIDs, verify Ed25519 signatures, check credential structures, and verify beacon announcements from the same reference fixtures — proving the protocol specification is unambiguous across languages.
 
 Each suite is **standalone**: it uses only its language's native Ed25519, dag-cbor, and SHA-256 implementations. None import from `@metalabel/dfos-protocol`, `dfos-protocol-go`, or any other DFOS library. The claim is about the _protocol_, not any particular library.
 

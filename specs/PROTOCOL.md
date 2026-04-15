@@ -26,7 +26,7 @@ The DFOS protocol has six components:
 | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links                                     |
 | **Credentials**       | Auth tokens and DFOS credentials for authorization — see [CREDENTIALS.md](https://protocol.dfos.com/credentials) |
-| **Beacons**           | Signed manifest announcements — periodic commitment over content sets                                            |
+| **Beacons**           | Signed manifest pointer announcements — content set discovery via manifest content ID                            |
 | **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data                                  |
 | **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op                                     |
 

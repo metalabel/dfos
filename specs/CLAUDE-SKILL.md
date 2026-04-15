@@ -258,7 +258,7 @@ dfos --ctx bob@prod content update <contentId> new.json --authorization <credent
 ### Beacons
 
 ```bash
-dfos beacon announce <contentId...> [--peer <relay>]   # sign manifest pointer, optionally submit to relay
+dfos beacon announce <contentId> [--peer <relay>]      # sign manifest pointer, optionally submit to relay
 dfos beacon show [name|did]                            # show latest beacon
 dfos beacon countersign <name|did> --peer <relay>      # countersign someone's beacon
 ```
