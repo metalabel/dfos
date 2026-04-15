@@ -160,7 +160,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 	// parse att from raw payload for resource matching and delegation
 	att := dfos.ParseAtt(payload)
 
-	// check resource + action match (with manifest transitive lookup)
+	// check resource + action match
 	if !r.matchesResource(att, requestedResource, action) {
 		return fmt.Errorf("credential does not cover requested resource")
 	}

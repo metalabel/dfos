@@ -75,6 +75,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newUseCmd())
 	root.AddCommand(newIdentityCmd())
 	root.AddCommand(newContentCmd())
+	root.AddCommand(newCredentialCmd())
 	root.AddCommand(newBeaconCmd())
 	root.AddCommand(newWitnessCmd())
 	root.AddCommand(newCountersigsCmd())

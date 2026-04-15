@@ -558,6 +558,26 @@ func (r *Relay) handleGetBlob(w http.ResponseWriter, req *http.Request) {
 	r.readBlob(w, req, req.PathValue("contentId"), req.PathValue("ref"))
 }
 
+// authorizeRead checks if the request is authorized to read the given content.
+// Returns true if authorized. Writes 401/403 error response and returns false if not.
+// Allows unauthenticated access when a valid public standing credential exists.
+func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentID string, creatorDID string) bool {
+	if r.hasPublicStandingAuth(contentID, "read") {
+		return true
+	}
+	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
+	if auth == nil {
+		writeError(w, 401, "authentication required")
+		return false
+	}
+	credHeader := req.Header.Get("X-Credential")
+	if errMsg := r.verifyContentAccess(auth.Iss, creatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
+		writeError(w, 403, errMsg)
+		return false
+	}
+	return true
+}
+
 func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, ref string) {
 	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
@@ -568,22 +588,8 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 		return
 	}
 
-	// check for public standing authorization (no auth needed)
-	if r.hasPublicStandingAuth(contentID, "read") {
-		// access granted via public credential — skip auth
-	} else {
-		// require auth token
-		auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
-		if auth == nil {
-			writeError(w, 401, "authentication required")
-			return
-		}
-		// verify read access with auth context
-		credHeader := req.Header.Get("X-Credential")
-		if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
-			writeError(w, 403, errMsg)
-			return
-		}
+	if !r.authorizeRead(w, req, contentID, chain.State.CreatorDID) {
+		return
 	}
 
 	// resolve documentCID for the requested ref
@@ -650,22 +656,8 @@ func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// check for public standing authorization (no auth needed)
-	if r.hasPublicStandingAuth(contentID, "read") {
-		// access granted via public credential — skip auth
-	} else {
-		// require auth token
-		auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
-		if auth == nil {
-			writeError(w, 401, "authentication required")
-			return
-		}
-		// verify read access with auth context
-		credHeader := req.Header.Get("X-Credential")
-		if errMsg := r.verifyContentAccess(auth.Iss, chain.State.CreatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
-			writeError(w, 403, errMsg)
-			return
-		}
+	if !r.authorizeRead(w, req, contentID, chain.State.CreatorDID) {
+		return
 	}
 
 	after := req.URL.Query().Get("after")

@@ -83,6 +83,56 @@ export interface AccessVerification {
  * 3. Does the per-request credential (Authorization header) cover this resource? → granted
  * 4. None → denied
  */
+/**
+ * Check if a valid public standing credential exists for the given content.
+ *
+ * This is used at the route level to allow unauthenticated reads when public
+ * credentials exist — matching the Go relay's `hasPublicStandingAuth`.
+ */
+export const hasPublicStandingAuth = async (
+  contentId: string,
+  action: 'read' | 'write',
+  store: RelayStore,
+): Promise<boolean> => {
+  const resource = `chain:${contentId}`;
+  const publicCreds = await store.getPublicCredentials(resource);
+  if (publicCreds.length === 0) return false;
+
+  const chain = await store.getContentChain(contentId);
+  if (!chain) return false;
+
+  const resolveIdentity = createHistoricalIdentityResolver(store);
+  const isRevoked = async (issuerDID: string, credentialCID: string) =>
+    store.isCredentialRevoked(issuerDID, credentialCID);
+
+  for (const credJws of publicCreds) {
+    try {
+      const cred = await verifyDFOSCredential(credJws, { resolveIdentity });
+
+      // check revocation
+      const leafRevoked = await isRevoked(cred.iss, cred.credentialCID);
+      if (leafRevoked) continue;
+
+      // check resource + action match
+      const covers = await matchesResource(cred.att, resource, action);
+      if (!covers) continue;
+
+      // verify delegation chain roots at creator
+      await verifyDelegationChain(cred, {
+        resolveIdentity,
+        rootDID: chain.state.creatorDID,
+        isRevoked,
+      });
+
+      return true;
+    } catch {
+      continue;
+    }
+  }
+
+  return false;
+};
+
 export const verifyContentAccess = async (options: {
   /** Per-request credential JWS (from X-Credential header) */
   credentialJWS?: string;
