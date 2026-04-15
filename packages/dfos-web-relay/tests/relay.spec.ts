@@ -1067,6 +1067,63 @@ describe('web relay', () => {
       });
       expect(newAuthRes.status).toBe(404); // 404 = authenticated but no content, not 401
     });
+
+    it('should accept per-request credential signed with rotated-out key', async () => {
+      const creator = await createIdentity();
+      const reader = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken, reader.jwsToken, content.jwsToken]);
+
+      const chainLookup = await postOps([content.jwsToken]);
+      const contentId = (await json(chainLookup)).results[0].chainId;
+
+      // upload blob as creator
+      const creatorToken = await createTestAuthToken(creator);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+
+      // issue read credential with CURRENT auth key
+      const now = Math.floor(Date.now() / 1000);
+      const readCredential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: reader.did,
+        att: [{ resource: `chain:${contentId}`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+
+      // rotate the auth key AFTER issuing the credential
+      const newAuthKey = makeKey();
+      const updateOp: IdentityOperation = {
+        version: 1,
+        type: 'update',
+        previousOperationCID: creator.operationCID,
+        authKeys: [newAuthKey.key],
+        assertKeys: [],
+        controllerKeys: [creator.controller.key],
+        createdAt: ts(3),
+      };
+
+      const { jwsToken: updateToken } = await signIdentityOperation({
+        operation: updateOp,
+        signer: creator.controller.signer,
+        keyId: creator.controller.keyId,
+        identityDID: creator.did,
+      });
+      await postOps([updateToken]);
+
+      // reader uses credential signed with the OLD key — should still work
+      const readerToken = await createTestAuthToken(reader);
+      const downloadRes = await req(`/content/${contentId}/blob`, {
+        headers: {
+          authorization: `Bearer ${readerToken}`,
+          'x-credential': readCredential,
+        },
+      });
+      expect(downloadRes.status).toBe(200);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -2853,6 +2910,50 @@ describe('web relay', () => {
       const res = await postOps([credential]);
       const body = await json(res);
       expect(body.results[0].status).toBe('rejected');
+    });
+
+    it('should accept public credential signed with rotated-out key', async () => {
+      const creator = await createIdentity();
+      await postOps([creator.jwsToken]);
+
+      // sign a public credential with the CURRENT auth key
+      const now = Math.floor(Date.now() / 1000);
+      const credential = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:someContentId`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+
+      // rotate the auth key BEFORE submitting the credential
+      const newAuthKey = makeKey();
+      const updateOp: IdentityOperation = {
+        version: 1,
+        type: 'update',
+        previousOperationCID: creator.operationCID,
+        authKeys: [newAuthKey.key],
+        assertKeys: [],
+        controllerKeys: [creator.controller.key],
+        createdAt: ts(2),
+      };
+
+      const { jwsToken: updateToken } = await signIdentityOperation({
+        operation: updateOp,
+        signer: creator.controller.signer,
+        keyId: creator.controller.keyId,
+        identityDID: creator.did,
+      });
+      await postOps([updateToken]);
+
+      // now submit the credential signed with the old (rotated-out) key
+      // it should still be accepted — revocation, not key rotation, invalidates
+      const res = await postOps([credential]);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('new');
+      expect(body.results[0].kind).toBe('credential');
     });
 
     it('should reject ingestion of already-revoked credential', async () => {

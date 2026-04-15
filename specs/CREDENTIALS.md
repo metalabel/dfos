@@ -117,7 +117,9 @@ The credential is signed as a JWS Compact Serialization token (`header.payload.s
 
 **kid format:** The `kid` MUST be a DID URL containing `#`. The DID portion (before `#`) MUST match the `iss` field in the payload. The key fragment (after `#`) identifies which key on the issuer's identity was used to sign.
 
-**Key resolution:** The signing key is resolved from the issuer's verified identity. Any key role (auth, assert, controller) is accepted — the protocol does not restrict which key role may sign credentials.
+**Key resolution:** The signing key is resolved from the issuer's identity chain using **historical key resolution** — all keys that have ever appeared in the identity chain's create and update operations are considered valid signing keys, not just the current state. This means credentials survive key rotation: a credential signed before a key rotation remains valid even after the signing key is no longer in the issuer's current state. Revocation (not key rotation) is the invalidation mechanism for credentials. Any key role (auth, assert, controller) is accepted — the protocol does not restrict which key role may sign credentials.
+
+This is distinct from auth tokens, which use **current-state-only** key resolution (rotated-out keys are immediately rejected). The difference reflects the different lifetimes: auth tokens are ephemeral (minutes), while credentials are long-lived (hours to months) and their validity is managed through explicit revocation.
 
 ---
 
@@ -339,6 +341,7 @@ The credential system serves a different purpose than auth tokens. Both are DID-
 | Content-addressed | No (`cid` not in header)             | Yes (`cid` in header)                       |
 | Revocable         | No (short-lived, expires naturally)  | Yes (via revocation artifact)               |
 | Delegation        | None                                 | Via `prf` chains                            |
+| Key resolution    | Current-state only                   | Historical (survives key rotation)          |
 
 A typical relay request flow:
 

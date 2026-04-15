@@ -6,6 +6,8 @@
 //   - public credential ingestion
 //   - standing authorization via public credential
 //   - documents endpoint
+//   - credential ingestion survives key rotation
+//   - per-request credential survives key rotation
 //   - chain:* wildcard standing authorization
 //   - chain:* wildcard per-request credential
 //   - audience mismatch rejection
@@ -262,6 +264,113 @@ func TestPublicCredentialIngestion(t *testing.T) {
 	if batchResp.Results[0].Kind != "credential" {
 		t.Fatalf("expected kind=credential, got %s", batchResp.Results[0].Kind)
 	}
+}
+
+// ===================================================================
+// credential ingestion survives key rotation
+// ===================================================================
+
+func TestPublicCredentialIngestionAfterKeyRotation(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	cc := createContent(t, base, id)
+
+	// issue a public credential signed with the CURRENT auth key
+	kid := id.did + "#" + id.auth.keyID
+	credToken := createPublicCredential(t, id.did, kid, "read", cc.contentID, 5*time.Minute, id.auth.priv)
+
+	// rotate the auth key BEFORE submitting the credential
+	newAuth := newKeypair()
+	ctrlKid := id.did + "#" + id.controller.keyID
+	rotateToken, _, err := dfos.SignIdentityUpdate(
+		id.genCID,
+		[]dfos.MultikeyPublicKey{id.controller.mk},
+		[]dfos.MultikeyPublicKey{newAuth.mk},
+		[]dfos.MultikeyPublicKey{},
+		ctrlKid,
+		id.controller.priv,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postOperations(t, base, []string{rotateToken}).Body.Close()
+
+	// submit the credential signed with the OLD (rotated-out) key
+	// it should still be accepted — revocation, not key rotation, invalidates
+	res := postOperations(t, base, []string{credToken})
+	body := readBody(t, res)
+
+	if res.StatusCode != 200 {
+		t.Fatalf("credential ingestion after key rotation: status %d, body: %s", res.StatusCode, body)
+	}
+
+	var batchResp struct {
+		Results []struct {
+			Status string `json:"status"`
+			Kind   string `json:"kind"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	json.Unmarshal(body, &batchResp)
+
+	if len(batchResp.Results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if batchResp.Results[0].Status != "new" {
+		t.Fatalf("credential signed with rotated-out key should be accepted: status=%s error=%s",
+			batchResp.Results[0].Status, batchResp.Results[0].Error)
+	}
+}
+
+// ===================================================================
+// per-request credential survives key rotation
+// ===================================================================
+
+func TestPerRequestCredentialAfterKeyRotation(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	cc := createContent(t, base, id)
+
+	// upload blob as creator
+	tok := authToken(t, base, id)
+	blobData, _ := json.Marshal(cc.document)
+	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+
+	// issue a read credential to a reader, signed with CURRENT auth key
+	reader := createIdentity(t, base)
+	issuerKid := id.did + "#" + id.auth.keyID
+	cred, err := dfos.CreateCredential(
+		id.did, reader.did, issuerKid, "DFOSContentRead",
+		5*time.Minute, cc.contentID, id.auth.priv,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// rotate the auth key AFTER issuing the credential
+	newAuth := newKeypair()
+	ctrlKid := id.did + "#" + id.controller.keyID
+	rotateToken, _, err := dfos.SignIdentityUpdate(
+		id.genCID,
+		[]dfos.MultikeyPublicKey{id.controller.mk},
+		[]dfos.MultikeyPublicKey{newAuth.mk},
+		[]dfos.MultikeyPublicKey{},
+		ctrlKid,
+		id.controller.priv,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postOperations(t, base, []string{rotateToken}).Body.Close()
+
+	// reader uses credential signed with the OLD key — should still work
+	readerTok := authToken(t, base, reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	if dlRes.StatusCode != 200 {
+		dlBody := readBody(t, dlRes)
+		t.Fatalf("credential signed with rotated-out key should grant access: status %d, body: %s", dlRes.StatusCode, dlBody)
+	}
+	dlRes.Body.Close()
 }
 
 // ===================================================================

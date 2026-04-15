@@ -813,9 +813,55 @@ const ingestPublicCredential = async (
   store: RelayStore,
   logEnabled: boolean,
 ): Promise<IngestionResult> => {
+  // Credentials are long-lived artifacts — their validity persists across key
+  // rotations. Resolve identity with all historical keys so credentials signed
+  // by rotated-out keys still verify. Revocation (not key rotation) is the
+  // invalidation mechanism.
   const resolveIdentity = async (did: string) => {
     const chain = await store.getIdentityChain(did);
-    return chain?.state;
+    if (!chain) return undefined;
+
+    const { state, log } = chain;
+    const keyMaps = {
+      authKeys: new Map(state.authKeys.map((k) => [k.id, k])),
+      assertKeys: new Map(state.assertKeys.map((k) => [k.id, k])),
+      controllerKeys: new Map(state.controllerKeys.map((k) => [k.id, k])),
+    };
+
+    for (const token of log) {
+      const decoded = decodeJwsUnsafe(token);
+      if (!decoded) continue;
+      const payload = decoded.payload as Record<string, unknown>;
+      const opType = payload['type'];
+      if (opType !== 'create' && opType !== 'update') continue;
+
+      for (const arrayName of ['authKeys', 'assertKeys', 'controllerKeys'] as const) {
+        const keys = payload[arrayName];
+        if (!Array.isArray(keys)) continue;
+        const map = keyMaps[arrayName];
+        for (const k of keys) {
+          if (
+            k &&
+            typeof k === 'object' &&
+            'id' in k &&
+            'publicKeyMultibase' in k &&
+            !map.has((k as { id: string }).id)
+          ) {
+            map.set(
+              (k as { id: string }).id,
+              k as { id: string; type: 'Multikey'; publicKeyMultibase: string },
+            );
+          }
+        }
+      }
+    }
+
+    return {
+      ...state,
+      authKeys: [...keyMaps.authKeys.values()],
+      assertKeys: [...keyMaps.assertKeys.values()],
+      controllerKeys: [...keyMaps.controllerKeys.values()],
+    };
   };
 
   let verified: VerifiedDFOSCredential;
