@@ -100,7 +100,7 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 			}
 
 			// check resource coverage
-			if parentType == "chain" && parentID == "*" {
+			if parentType == "chain" && parentID == "*" && childType == "chain" {
 				// chain:* covers any chain resource: chain:X, chain:*
 				covered = true
 				break

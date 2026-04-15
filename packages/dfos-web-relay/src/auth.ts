@@ -169,7 +169,7 @@ export const verifyContentAccess = async (options: {
       const leafRevoked = await isRevoked(cred.iss, cred.credentialCID);
       if (leafRevoked) continue;
 
-      // check resource + action match (with manifest transitive lookup)
+      // check resource + action match
       const covers = await matchesResource(cred.att, requestedResource, action);
       if (!covers) continue;
 
@@ -203,7 +203,7 @@ export const verifyContentAccess = async (options: {
         }
       }
 
-      // check resource + action match (with manifest transitive lookup)
+      // check resource + action match
       const covers = await matchesResource(cred.att, requestedResource, action);
       if (!covers) {
         return { granted: false, source: 'none' };

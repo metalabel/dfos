@@ -703,9 +703,17 @@ func newContentUpdateCmd() *cobra.Command {
 				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
 					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
-				info, _ := c.GetRelayInfo()
-				authToken, _ := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
-				c.UploadBlob(contentID, opCID, canonicalBytes, authToken)
+				info, err := c.GetRelayInfo()
+				if err != nil {
+					return fmt.Errorf("peer relay info: %w", err)
+				}
+				authToken, err := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
+				if err != nil {
+					return fmt.Errorf("peer auth token: %w", err)
+				}
+				if err := c.UploadBlob(contentID, opCID, canonicalBytes, authToken); err != nil {
+					return fmt.Errorf("peer blob upload: %w", err)
+				}
 			}
 
 			if jsonFlag {
