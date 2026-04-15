@@ -7,11 +7,8 @@ import (
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
-// ProtocolVersion is the DFOS protocol version implemented by this relay.
-const ProtocolVersion = "0.8.0"
-
-// SoftwareVersion is the release version of this relay binary, set via ldflags.
-var SoftwareVersion = "dev"
+// Version is the release version, set via ldflags at build time.
+var Version = "dev"
 
 // RelayIdentity holds the relay's DID, profile artifact, and key material.
 type RelayIdentity struct {

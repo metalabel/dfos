@@ -14,7 +14,7 @@ var version = "dev"
 
 func main() {
 	cmd.Version = version
-	relay.SoftwareVersion = version
+	relay.Version = version
 
 	// start background version check (non-blocking, 2s timeout, 24h cache)
 	updateDone := make(chan struct{})

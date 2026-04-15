@@ -224,6 +224,8 @@ Content without a `$schema` field triggers a warning. Pass `--no-schema-warn` to
 
 ### Credentials
 
+`dfos cred` is an alias for `dfos credential`.
+
 ```bash
 # Grant read access (default 24h TTL)
 dfos credential grant <contentId> <did> --read
@@ -233,6 +235,18 @@ dfos credential grant <contentId> <did> --write
 
 # Custom TTL
 dfos credential grant <contentId> <did> --read --ttl 1h
+
+# Wildcard credential covering all content
+dfos credential grant <contentId> <did> --read --broad
+
+# Scope to a specific content ID
+dfos credential grant <contentId> <did> --read --scope <otherContentId>
+
+# Revoke a credential
+dfos credential revoke <credentialCID>
+
+# Revoke and push to a peer immediately
+dfos credential revoke <credentialCID> --peer prod
 
 # Delegated write (bob updates alice's content using a write credential)
 dfos --ctx bob@prod content update <contentId> new.json --authorization <credential-jws>
@@ -385,7 +399,7 @@ dfos content publish <contentId> --peer prod
 - **"content verify failed"**: Chain integrity issue. Re-fetch from relay: `dfos content fetch <id> --peer <relay>`.
 - **"blob bytes do not match documentCID"**: Remote relay rejected the blob upload. Create content locally first (`dfos content create file.json`), then publish separately (`dfos content publish <id> --peer <relay>`).
 - **"content not found on peer" / 0 operations fetched**: The content doesn't exist on that relay. Verify the content ID and check which relay it was published to with `dfos content show <id>`.
-- **"read credential required"**: You're trying to download content you don't own. The creator must issue a read credential: `dfos credential grant <contentId> <your-did> --read`. Present it with `--credential <credential-jws>`.
+- **"read credential required"**: You're trying to download content you don't own and no public standing authorization exists. The creator must either issue a public credential (`dfos credential grant <contentId> <your-did> --read` with `aud: *` for standing auth) or a private credential to present with `--credential <credential-jws>`.
 - **"unknown identity" on content publish**: If content includes delegated operations (writes by non-creators via credentials), all referenced identities must be published to the relay first. Publish each delegate's identity before the content.
 - **"signer is not the chain creator"**: Content mutations (update, delete) must be signed by the creator identity or via a write credential. Switch to the creator's context, or use `--authorization <credential-jws>` with a DFOS write credential.
 

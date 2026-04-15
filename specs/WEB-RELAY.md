@@ -56,6 +56,7 @@ Each token is classified by its JWS `typ` header:
 | `did:dfos:beacon`      | Beacon announcement      |
 | `did:dfos:artifact`    | Artifact                 |
 | `did:dfos:countersign` | Countersignature         |
+| `did:dfos:credential`  | DFOS credential          |
 | `did:dfos:revocation`  | Credential revocation    |
 
 Each operation type has its own `typ` header. Classification is unambiguous — no DID comparison needed.
@@ -256,7 +257,7 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 {
   "did": "did:dfos:edgerelay0000000000000",
   "protocol": "dfos-web-relay",
-  "version": "0.7.1",
+  "version": "0.0.0",
   "capabilities": {
     "proof": true,
     "content": true,
@@ -399,9 +400,10 @@ Blobs are stored by `(creatorDID, documentCID)` — always keyed to the chain cr
 
 Requirements:
 
-- Valid auth token (Bearer header)
-- If the caller is the chain creator: no further credentials needed
-- If the caller is not the creator: must present a DFOS credential with `action: "read"` in the `X-Credential` header, with a delegation chain rooting at the creator. Alternatively, the relay may have a standing authorization on file (see below)
+- If a standing authorization exists for the content (a public credential with `aud: "*"` covering the resource): access is granted without any auth token or per-request credential
+- Otherwise, a valid auth token (Bearer header) is required, plus:
+  - If the caller is the chain creator: no further credentials needed
+  - If the caller is not the creator: must present a DFOS credential with `action: "read"` in the `X-Credential` header, with a delegation chain rooting at the creator
 
 The optional `:ref` parameter selects which operation's document to return:
 
@@ -412,7 +414,7 @@ The optional `:ref` parameter selects which operation's document to return:
 
 Returns all documents committed to a content chain as an ordered list, from genesis to head. Each entry includes the operation CID that committed the document and the resolved document content.
 
-This endpoint requires the same authorization as blob download — the caller must be the chain creator or present a valid DFOS credential with `action: "read"` (per-request or standing authorization).
+This endpoint requires the same authorization as blob download — standing authorization grants access without authentication, otherwise the caller must be the chain creator or present a valid DFOS credential with `action: "read"`.
 
 When `capabilities.documents: false` in the well-known response, this route returns **501 Not Implemented**.
 
@@ -530,22 +532,22 @@ setInterval(() => relay.syncFromPeers(), 30_000);
 
 The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFromPeers` (async function). The Hono app exposes:
 
-| Method | Path                                 | Plane   | Auth                    |
-| ------ | ------------------------------------ | ------- | ----------------------- |
-| `GET`  | `/.well-known/dfos-relay`            | meta    | none                    |
-| `POST` | `/operations`                        | proof   | none                    |
-| `GET`  | `/operations/:cid`                   | proof   | none                    |
-| `GET`  | `/operations/:cid/countersignatures` | proof   | none                    |
-| `GET`  | `/countersignatures/:cid`            | proof   | none                    |
-| `GET`  | `/identities/:did`                   | proof   | none                    |
-| `GET`  | `/identities/:did/log`               | proof   | none                    |
-| `GET`  | `/content/:contentId`                | proof   | none                    |
-| `GET`  | `/content/:contentId/log`            | proof   | none                    |
-| `GET`  | `/content/:contentId/documents`      | content | auth token + credential |
-| `GET`  | `/beacons/:did`                      | proof   | none                    |
-| `GET`  | `/log`                               | proof   | none                    |
-| `PUT`  | `/content/:contentId/blob/:opCID`    | content | auth token              |
-| `GET`  | `/content/:contentId/blob[/:ref]`    | content | auth token + credential |
+| Method | Path                                 | Plane   | Auth                                      |
+| ------ | ------------------------------------ | ------- | ----------------------------------------- |
+| `GET`  | `/.well-known/dfos-relay`            | meta    | none                                      |
+| `POST` | `/operations`                        | proof   | none                                      |
+| `GET`  | `/operations/:cid`                   | proof   | none                                      |
+| `GET`  | `/operations/:cid/countersignatures` | proof   | none                                      |
+| `GET`  | `/countersignatures/:cid`            | proof   | none                                      |
+| `GET`  | `/identities/:did`                   | proof   | none                                      |
+| `GET`  | `/identities/:did/log`               | proof   | none                                      |
+| `GET`  | `/content/:contentId`                | proof   | none                                      |
+| `GET`  | `/content/:contentId/log`            | proof   | none                                      |
+| `GET`  | `/content/:contentId/documents`      | content | standing auth, or auth token + credential |
+| `GET`  | `/beacons/:did`                      | proof   | none                                      |
+| `GET`  | `/log`                               | proof   | none                                      |
+| `PUT`  | `/content/:contentId/blob/:opCID`    | content | auth token                                |
+| `GET`  | `/content/:contentId/blob[/:ref]`    | content | standing auth, or auth token + credential |
 
 ---
 
