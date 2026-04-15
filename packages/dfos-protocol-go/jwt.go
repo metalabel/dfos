@@ -103,21 +103,21 @@ func CreateCredential(iss, aud, kid, resource, action string, ttl time.Duration,
 }
 
 // VerifyCredential verifies a DFOS credential token. It checks the signature,
-// expiration, payload structure, and optionally subject and credential type.
-// Pass empty string for subject or expectedType to skip those checks.
-func VerifyCredential(token string, publicKey ed25519.PublicKey, subject string, expectedType string) (*VerifiedCredential, error) {
-	return verifyCredentialCore(token, publicKey, subject, expectedType, time.Now().Unix())
+// expiration, payload structure, and optionally subject and expected action.
+// Pass empty string for subject or expectedAction to skip those checks.
+func VerifyCredential(token string, publicKey ed25519.PublicKey, subject string, expectedAction string) (*VerifiedCredential, error) {
+	return verifyCredentialCore(token, publicKey, subject, expectedAction, time.Now().Unix())
 }
 
 // VerifyCredentialAt is like VerifyCredential but accepts a custom current
 // time (unix seconds) for testing temporal checks.
-func VerifyCredentialAt(token string, publicKey ed25519.PublicKey, subject string, expectedType string, currentTime int64) (*VerifiedCredential, error) {
-	return verifyCredentialCore(token, publicKey, subject, expectedType, currentTime)
+func VerifyCredentialAt(token string, publicKey ed25519.PublicKey, subject string, expectedAction string, currentTime int64) (*VerifiedCredential, error) {
+	return verifyCredentialCore(token, publicKey, subject, expectedAction, currentTime)
 }
 
 // verifyCredentialCore is the shared implementation for DFOS credential
 // verification.
-func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject string, expectedType string, currentTime int64) (*VerifiedCredential, error) {
+func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject string, expectedAction string, currentTime int64) (*VerifiedCredential, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid token format")
@@ -261,15 +261,9 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("no recognized action in att")
 	}
 
-	// verify type if specified (legacy compatibility)
-	if expectedType != "" {
-		credType := "DFOSContentRead"
-		if action == "write" {
-			credType = "DFOSContentWrite"
-		}
-		if credType != expectedType {
-			return nil, fmt.Errorf("type mismatch: expected %s, got %s", expectedType, credType)
-		}
+	// verify action if specified
+	if expectedAction != "" && action != expectedAction {
+		return nil, fmt.Errorf("action mismatch: expected %s, got %s", expectedAction, action)
 	}
 
 	return &VerifiedCredential{

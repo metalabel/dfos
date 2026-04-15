@@ -510,7 +510,7 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	}
 	opTimeUnix := opTime.Unix()
 
-	vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "DFOSContentWrite", opTimeUnix)
+	vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "write", opTimeUnix)
 	if err != nil {
 		return err
 	}
@@ -540,7 +540,7 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 // public keys from kid values.
 //
 // When enforceAuthorization is true, non-creator signers must include a valid
-// DFOSContentWrite DFOS credential in the operation's authorization field.
+// DFOS credential with action "write" in the operation's authorization field.
 func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorization bool) (*VerifiedContentResult, error) {
 	if len(log) == 0 {
 		return nil, fmt.Errorf("log must have at least one operation")

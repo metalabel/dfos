@@ -611,10 +611,8 @@ func newContentGrantCmd() *cobra.Command {
 			}
 
 			action := "read"
-			credType := "DFOSContentRead"
 			if write {
 				action = "write"
-				credType = "DFOSContentWrite"
 			}
 
 			dur, err := time.ParseDuration(ttl)
@@ -648,14 +646,14 @@ func newContentGrantCmd() *cobra.Command {
 			if jsonFlag {
 				outputJSON(map[string]any{
 					"credential": token,
-					"type":       credType,
+					"action":     action,
+					"resource":   resource,
 					"issuer":     chain.DID,
-					"subject":    subjectDID,
-					"contentId":  scope,
+					"audience":   subjectDID,
 					"expiresIn":  dur.String(),
 				})
 			} else {
-				fmt.Printf("Credential issued (%s, expires in %s):\n  %s\n", credType, dur, token)
+				fmt.Printf("Credential issued (%s %s, expires in %s):\n  %s\n", action, resource, dur, token)
 			}
 			return nil
 		},
@@ -1063,7 +1061,7 @@ func verifyCredentialLocally(lr *localrelay.LocalRelay, credential, creatorDID, 
 	if pubBytes == nil {
 		return fmt.Errorf("issuer key not found in creator identity")
 	}
-	vc, err := protocol.VerifyCredential(credential, pubBytes, subjectDID, "DFOSContentRead")
+	vc, err := protocol.VerifyCredential(credential, pubBytes, subjectDID, "read")
 	if err != nil {
 		return err
 	}

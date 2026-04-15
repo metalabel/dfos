@@ -18,7 +18,7 @@ func TestVerifyCredentialValid(t *testing.T) {
 		t.Fatalf("CreateCredential: %v", err)
 	}
 
-	vc, err := VerifyCredential(token, pub, aud, "DFOSContentRead")
+	vc, err := VerifyCredential(token, pub, aud, "read")
 	if err != nil {
 		t.Fatalf("VerifyCredential: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestVerifyCredentialExpired(t *testing.T) {
 	}
 
 	futureTime := time.Now().Unix() + 10
-	_, err = VerifyCredentialAt(token, pub, aud, "DFOSContentRead", futureTime)
+	_, err = VerifyCredentialAt(token, pub, aud, "read", futureTime)
 	if err == nil {
 		t.Fatal("expected error for expired credential, got nil")
 	}
@@ -102,7 +102,7 @@ func TestVerifyCredentialWrongSubject(t *testing.T) {
 		t.Fatalf("CreateCredential: %v", err)
 	}
 
-	_, err = VerifyCredential(token, pub, "did:dfos:wrongperson", "DFOSContentRead")
+	_, err = VerifyCredential(token, pub, "did:dfos:wrongperson", "read")
 	if err == nil {
 		t.Fatal("expected error for wrong subject, got nil")
 	}
@@ -124,7 +124,7 @@ func TestVerifyCredentialWrongKey(t *testing.T) {
 		t.Fatalf("CreateCredential: %v", err)
 	}
 
-	_, err = VerifyCredential(token, otherPub, aud, "DFOSContentRead")
+	_, err = VerifyCredential(token, otherPub, aud, "read")
 	if err == nil {
 		t.Fatal("expected error for wrong key, got nil")
 	}
@@ -133,7 +133,7 @@ func TestVerifyCredentialWrongKey(t *testing.T) {
 	}
 }
 
-func TestVerifyCredentialWrongType(t *testing.T) {
+func TestVerifyCredentialWrongAction(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	iss := "did:dfos:abc123"
 	aud := "did:dfos:reader456"
@@ -144,11 +144,11 @@ func TestVerifyCredentialWrongType(t *testing.T) {
 		t.Fatalf("CreateCredential: %v", err)
 	}
 
-	_, err = VerifyCredential(token, pub, aud, "DFOSContentWrite")
+	_, err = VerifyCredential(token, pub, aud, "write")
 	if err == nil {
-		t.Fatal("expected error for wrong type, got nil")
+		t.Fatal("expected error for wrong action, got nil")
 	}
-	expected := "type mismatch: expected DFOSContentWrite, got DFOSContentRead"
+	expected := "action mismatch: expected write, got read"
 	if err.Error() != expected {
 		t.Errorf("expected %q, got %q", expected, err.Error())
 	}

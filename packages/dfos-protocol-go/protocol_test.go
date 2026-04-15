@@ -1323,7 +1323,7 @@ func TestVerifyCredentialEdgeCases(t *testing.T) {
 	sub := "did:dfos:sub456"
 	kidNoFragment := "did:dfos:test123" // missing #key_xxx
 	token, _ := CreateCredential(iss, sub, kidNoFragment, "chain:x", "read", 1*time.Hour, priv)
-	_, err = VerifyCredential(token, priv.Public().(ed25519.PublicKey), sub, "DFOSContentRead")
+	_, err = VerifyCredential(token, priv.Public().(ed25519.PublicKey), sub, "read")
 	if err == nil {
 		t.Fatal("expected error for kid without fragment")
 	}
@@ -1331,7 +1331,7 @@ func TestVerifyCredentialEdgeCases(t *testing.T) {
 	// credential with kid DID not matching iss
 	wrongKid := "did:dfos:other#key_1"
 	token2, _ := CreateCredential(iss, sub, wrongKid, "chain:x", "read", 1*time.Hour, priv)
-	_, err = VerifyCredential(token2, priv.Public().(ed25519.PublicKey), sub, "DFOSContentRead")
+	_, err = VerifyCredential(token2, priv.Public().(ed25519.PublicKey), sub, "read")
 	if err == nil {
 		t.Fatal("expected error for kid DID mismatch")
 	}
