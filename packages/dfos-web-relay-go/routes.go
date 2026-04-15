@@ -103,7 +103,7 @@ func (r *Relay) handlePostOperations(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleGetOperation(w http.ResponseWriter, req *http.Request) {
 	cid := req.PathValue("cid")
-	op, err := r.store.GetOperation(cid)
+	op, err := r.readStore.GetOperation(cid)
 	if storeErr(w, err) {
 		return
 	}
@@ -120,7 +120,7 @@ func (r *Relay) handleGetOperation(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 	did := req.PathValue("did")
-	chain, err := r.store.GetIdentityChain(did)
+	chain, err := r.readStore.GetIdentityChain(did)
 	if storeErr(w, err) {
 		return
 	}
@@ -147,7 +147,7 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 				}
 				after = *page.Cursor
 			}
-			chain, _ = r.store.GetIdentityChain(did)
+			chain, _ = r.readStore.GetIdentityChain(did)
 			if chain != nil {
 				break
 			}
@@ -167,7 +167,7 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleIdentityLog(w http.ResponseWriter, req *http.Request) {
 	did := req.PathValue("did")
-	chain, err := r.store.GetIdentityChain(did)
+	chain, err := r.readStore.GetIdentityChain(did)
 	if storeErr(w, err) {
 		return
 	}
@@ -234,7 +234,7 @@ func (r *Relay) handleIdentityLog(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 	contentID := req.PathValue("contentId")
-	chain, err := r.store.GetContentChain(contentID)
+	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
 		return
 	}
@@ -261,7 +261,7 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 				}
 				after = *page.Cursor
 			}
-			chain, _ = r.store.GetContentChain(contentID)
+			chain, _ = r.readStore.GetContentChain(contentID)
 			if chain != nil {
 				break
 			}
@@ -282,7 +282,7 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 
 func (r *Relay) handleContentLog(w http.ResponseWriter, req *http.Request) {
 	contentID := req.PathValue("contentId")
-	chain, err := r.store.GetContentChain(contentID)
+	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
 		return
 	}
@@ -348,12 +348,12 @@ func (r *Relay) handleContentLog(w http.ResponseWriter, req *http.Request) {
 func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Request) {
 	cid := req.PathValue("cid")
 
-	op, err := r.store.GetOperation(cid)
+	op, err := r.readStore.GetOperation(cid)
 	if storeErr(w, err) {
 		return
 	}
 	if op == nil {
-		cs, csErr := r.store.GetCountersignatures(cid)
+		cs, csErr := r.readStore.GetCountersignatures(cid)
 		if storeErr(w, csErr) {
 			return
 		}
@@ -368,7 +368,7 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	cs, csErr := r.store.GetCountersignatures(cid)
+	cs, csErr := r.readStore.GetCountersignatures(cid)
 	if storeErr(w, csErr) {
 		return
 	}
@@ -381,7 +381,7 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 func (r *Relay) handleOperationCountersignatures(w http.ResponseWriter, req *http.Request) {
 	cid := req.PathValue("cid")
 
-	op, err := r.store.GetOperation(cid)
+	op, err := r.readStore.GetOperation(cid)
 	if storeErr(w, err) {
 		return
 	}
@@ -390,7 +390,7 @@ func (r *Relay) handleOperationCountersignatures(w http.ResponseWriter, req *htt
 		return
 	}
 
-	cs, csErr := r.store.GetCountersignatures(cid)
+	cs, csErr := r.readStore.GetCountersignatures(cid)
 	if storeErr(w, csErr) {
 		return
 	}
@@ -406,7 +406,7 @@ func (r *Relay) handleOperationCountersignatures(w http.ResponseWriter, req *htt
 
 func (r *Relay) handleGetBeacon(w http.ResponseWriter, req *http.Request) {
 	did := req.PathValue("did")
-	beacon, err := r.store.GetBeacon(did)
+	beacon, err := r.readStore.GetBeacon(did)
 	if storeErr(w, err) {
 		return
 	}
@@ -435,7 +435,7 @@ func (r *Relay) handleGetLog(w http.ResponseWriter, req *http.Request) {
 	after := req.URL.Query().Get("after")
 	limit := parseLimit(req, 100, 1000)
 
-	entries, cursor, err := r.store.ReadLog(after, limit)
+	entries, cursor, err := r.readStore.ReadLog(after, limit)
 	if storeErr(w, err) {
 		return
 	}
@@ -475,7 +475,7 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// verify chain exists
-	chain, err := r.store.GetContentChain(contentID)
+	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
 		return
 	}
@@ -566,7 +566,7 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 		return
 	}
 
-	chain, err := r.store.GetContentChain(contentID)
+	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
 		return
 	}
@@ -613,7 +613,7 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 		return
 	}
 
-	blob, _ := r.store.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: documentCID})
+	blob, _ := r.readStore.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: documentCID})
 	if blob == nil {
 		writeError(w, 404, "blob not found")
 		return
@@ -644,7 +644,7 @@ func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// verify chain exists
-	chain, err := r.store.GetContentChain(contentID)
+	chain, err := r.readStore.GetContentChain(contentID)
 	if storeErr(w, err) {
 		return
 	}
@@ -663,7 +663,7 @@ func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
 	after := req.URL.Query().Get("after")
 	limit := parseLimit(req, 100, 1000)
 
-	docs, cursor, err := r.store.GetDocuments(contentID, after, limit)
+	docs, cursor, err := r.readStore.GetDocuments(contentID, after, limit)
 	if storeErr(w, err) {
 		return
 	}

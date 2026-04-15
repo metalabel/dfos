@@ -18,7 +18,8 @@ type BatchableStore interface {
 
 // Relay is a DFOS web relay — the core verification and storage engine.
 type Relay struct {
-	store              Store
+	store              Store // ingestion store — sees write transactions for within-batch reads
+	readStore          Store // HTTP read store — always uses WAL read pool, never races on tx
 	did                string
 	profileArtifactJWS string
 	contentEnabled     bool
@@ -53,8 +54,17 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		logger = slog.Default()
 	}
 
+	// If the store supports it, create a read-only view for HTTP handlers
+	// that never races on the write transaction. Falls back to the main store
+	// for non-SQLite backends (e.g. in-memory test store).
+	readStore := opts.Store
+	if sqlStore, ok := opts.Store.(*SQLiteStore); ok {
+		readStore = sqlStore.ReadStore()
+	}
+
 	return &Relay{
 		store:              opts.Store,
+		readStore:          readStore,
 		did:                identity.DID,
 		profileArtifactJWS: identity.ProfileArtifactJWS,
 		contentEnabled:     contentEnabled,
