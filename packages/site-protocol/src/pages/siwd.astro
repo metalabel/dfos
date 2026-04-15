@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import { Marked } from 'marked';
 import Base from '../layouts/Base.astro';
 
-// Read DID-METHOD.md at build time from the specs directory
-const didMethodMd = fs.readFileSync('../../specs/DID-METHOD.md', 'utf-8');
+// Read SIWD.md at build time from the specs directory
+const siwdMd = fs.readFileSync('../../specs/SIWD.md', 'utf-8');
 
 function slugify(text: string): string {
   return text
@@ -17,7 +17,7 @@ function slugify(text: string): string {
 }
 
 const marked = new Marked();
-let html = await marked.parse(didMethodMd);
+let html = await marked.parse(siwdMd);
 
 // Fix GFM strikethrough
 html = html.replace(/<del>/g, '~');
@@ -32,10 +32,11 @@ html = html.replace(/href="\.\/PROTOCOL\.md"/g, 'href="/spec"');
 html = html.replace(/href="\.\/DID-METHOD\.md"/g, 'href="/did-method"');
 html = html.replace(/href="\.\/CONTENT-MODEL\.md"/g, 'href="/content-model"');
 html = html.replace(/href="\.\/WEB-RELAY\.md"/g, 'href="/web-relay"');
-html = html.replace(/href="\.\/RELAY\.md"/g, 'href="/web-relay"');
-html = html.replace(/href="\.\.\/dfos-web-relay\/RELAY\.md"/g, 'href="/web-relay"');
 html = html.replace(/href="\.\/CREDENTIALS\.md"/g, 'href="/credentials"');
 html = html.replace(/href="\.\/SIWD\.md"/g, 'href="/siwd"');
+html = html.replace(/href="\.\.\/dfos-protocol\/PROTOCOL\.md"/g, 'href="/spec"');
+html = html.replace(/href="\.\.\/dfos-protocol\/DID-METHOD\.md"/g, 'href="/did-method"');
+html = html.replace(/href="\.\.\/dfos-protocol\/CONTENT-MODEL\.md"/g, 'href="/content-model"');
 
 // Wrap code blocks with copy button
 html = html.replace(
@@ -53,9 +54,9 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
 ---
 
 <Base
-  title="DID Method: did:dfos"
-  description="W3C DID Method specification for did:dfos — self-certifying, transport-agnostic decentralized identifiers built on Ed25519 identity chains."
-  path="/did-method"
+  title="Sign In With DFOS"
+  description="Sign In With DFOS (SIWD) — cryptographic identity verification for third-party applications using DFOS identities."
+  path="/siwd"
 >
   <div class="page-content spec-width">
     <nav class="site-nav">
@@ -71,6 +72,7 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
       <a href="/">Home</a>
       <a href="/overview">Why</a>
       <a href="/spec">Specification</a>
+      <a href="/did-method">DID Method</a>
       <a href="/content-model">Content Model</a>
       <a href="/credentials">Credentials</a>
       <a href="/web-relay">Web Relay</a>
@@ -83,7 +85,7 @@ html = html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/g, (_, level, content) => {
     <p class="credits"><a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT License</a> &middot; 2026</p>
   </footer>
 
-  <template id="raw-md">{didMethodMd}</template>
+  <template id="raw-md">{siwdMd}</template>
   <script is:inline>
     document.getElementById('copy-md').addEventListener('click', function () {
       const md = document.getElementById('raw-md').content.textContent;
