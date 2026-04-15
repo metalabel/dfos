@@ -75,15 +75,6 @@ export interface AccessVerification {
 }
 
 /**
- * Verify content access for a specific resource
- *
- * Checks in order:
- * 1. Is the requester the content creator? → granted
- * 2. Does a stored public credential cover this resource? → granted
- * 3. Does the per-request credential (Authorization header) cover this resource? → granted
- * 4. None → denied
- */
-/**
  * Check if a valid public standing credential exists for the given content.
  *
  * This is used at the route level to allow unauthenticated reads when public
@@ -133,6 +124,15 @@ export const hasPublicStandingAuth = async (
   return false;
 };
 
+/**
+ * Verify content access for a specific resource
+ *
+ * Checks in order:
+ * 1. Is the requester the content creator? → granted
+ * 2. Does a stored public credential cover this resource? → granted
+ * 3. Does the per-request credential (Authorization header) cover this resource? → granted
+ * 4. None → denied
+ */
 export const verifyContentAccess = async (options: {
   /** Per-request credential JWS (from X-Credential header) */
   credentialJWS?: string;

@@ -1017,7 +1017,7 @@ func verifyCredentialLocally(lr *localrelay.LocalRelay, credential, creatorDID, 
 	if err != nil {
 		return err
 	}
-	if vc.ContentID != "" && vc.ContentID != contentID {
+	if vc.ContentID != "" && vc.ContentID != "*" && vc.ContentID != contentID {
 		return fmt.Errorf("credential scoped to different content")
 	}
 	return nil

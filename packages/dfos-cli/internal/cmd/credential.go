@@ -95,7 +95,7 @@ func newCredentialGrantCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&write, "write", false, "Issue DFOS write credential")
 	cmd.Flags().StringVar(&ttl, "ttl", "24h", "Credential TTL")
 	cmd.Flags().StringVar(&scopeContentID, "scope", "", "Scope credential to specific content ID")
-	cmd.Flags().BoolVar(&noScope, "broad", false, "Issue broad credential (not scoped to any content ID)")
+	cmd.Flags().BoolVar(&noScope, "broad", false, "Issue wildcard credential covering all content")
 	return cmd
 }
 
