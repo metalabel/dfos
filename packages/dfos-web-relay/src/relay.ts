@@ -10,6 +10,7 @@
 
 */
 
+import { createRequire } from 'node:module';
 import type { VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { Hono } from 'hono';
@@ -19,6 +20,9 @@ import { bootstrapRelayIdentity } from './bootstrap';
 import { ingestOperations } from './ingest';
 import { computeOpCID, sequenceOps } from './sequencer';
 import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
+
+const require = createRequire(import.meta.url);
+const { version: RELAY_VERSION } = require('../package.json') as { version: string };
 
 // -----------------------------------------------------------------------------
 // relay result type
@@ -123,7 +127,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return c.json({
       did: relayDID,
       protocol: 'dfos-web-relay',
-      version: '0.8.0',
+      version: RELAY_VERSION,
       capabilities: {
         proof: true,
         content: contentEnabled,
