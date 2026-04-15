@@ -108,7 +108,7 @@ All flags support environment variable fallbacks for container deployment:
 				lr.Store.ResetSequencer()
 			}
 
-			fmt.Printf("DFOS relay serving (%s)\n", relay.SoftwareVersion)
+			fmt.Printf("DFOS relay serving (%s)\n", relay.Version)
 			fmt.Printf("  DID:    %s\n", lr.Relay.DID())
 			fmt.Printf("  Port:   %s\n", port)
 			fmt.Printf("  Sync:   every %s\n", interval)
