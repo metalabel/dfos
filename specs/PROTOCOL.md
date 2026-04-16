@@ -26,12 +26,11 @@ The DFOS protocol has six components:
 | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links                                     |
 | **Credentials**       | Auth tokens and DFOS credentials for authorization — see [CREDENTIALS.md](https://protocol.dfos.com/credentials) |
-| **Beacons**           | Signed manifest announcements — periodic commitment over content sets                                            |
+| **Beacons**           | Signed manifest pointer announcements — content set discovery via manifest content ID                            |
 | **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data                                  |
 | **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op                                     |
-| **Merkle trees**      | SHA-256 binary trees over content IDs — inclusion proofs for content sets                                        |
 
-> **Note:** The credential format (auth tokens, read/write credentials, revocation) is specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials). This document covers the crypto core, chain primitives, beacons, artifacts, countersignatures, and merkle trees.
+> **Note:** The credential format (auth tokens, read/write credentials, revocation) is specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials). This document covers the crypto core, chain primitives, beacons, artifacts, and countersignatures.
 
 The crypto core is the trust boundary — everything below it is cryptographically verified. Documents are flat content objects, content-addressed directly: `documentCID = CID(dagCborCanonicalEncode(contentObject))`. What goes inside the content object is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
 
@@ -525,100 +524,6 @@ Beacons are not chained — there is no `previousOperationCID`. For a given DID,
 
 ---
 
-## Merkle Trees
-
-Beacons commit to a set of content IDs via a pure SHA-256 binary Merkle tree. The tree has no dag-cbor dependency — it uses only SHA-256 over raw bytes.
-
-### Construction
-
-1. **Collect** all content IDs (22-char bare hashes) in the set
-2. **Sort** content IDs lexicographically (UTF-8 byte order)
-3. **Hash leaves**: for each content ID, `SHA-256(UTF-8(contentId))` → 32-byte leaf hash
-4. **Build tree**: recursively pair adjacent hashes. For each pair, `SHA-256(left || right)` → 32 bytes. If a level has an odd number of nodes, the last node is promoted to the next level unpaired.
-5. **Root**: the final 32-byte hash, hex-encoded to a 64-character string
-
-An empty set of content IDs produces a `null` root. A single content ID produces a root equal to `hex(SHA-256(UTF-8(contentId)))`.
-
-### Worked Example: Merkle Tree
-
-5 content IDs: `["alpha", "bravo", "charlie", "delta", "echo"]`
-
-Already sorted lexicographically. Hash each leaf:
-
-```
-alpha   → SHA-256("alpha")   → 8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8
-bravo   → SHA-256("bravo")   → 4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398
-charlie → SHA-256("charlie") → 36ef585cd42d49706cd2827a77d86c91bfdaf87a3f22b8f0e0308bd2c16cf85f
-delta   → SHA-256("delta")   → 18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
-echo    → SHA-256("echo")    → 092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d
-```
-
-Build tree bottom-up, pairing left-to-right. Odd nodes promote unpaired:
-
-```
-Level 0 (leaves):    [alpha]  [bravo]  [charlie]  [delta]  [echo]
-Level 1:             [alpha‖bravo]     [charlie‖delta]     [echo]  ← promoted
-Level 2:             [L1-left‖L1-mid]                      [echo]  ← promoted
-Level 3 (root):      [L2-left‖echo]
-```
-
-Interior hashes:
-
-```
-SHA-256(alpha‖bravo)          → 90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3
-SHA-256(charlie‖delta)        → 6b55e77bef32937d9ccce2bd4b18127b0483f0be8e5b63c30bcc2b0d09f7dd44
-SHA-256(alpha‖bravo ‖ charlie‖delta) → 23c83cb862e3b6a86eb2dfa0ea8ba0edcf1c3f3b8f14abc5eb9d72eab2edc2f7
-```
-
-**Root** (level 3):
-
-```
-SHA-256(23c83c...edc2f7 ‖ 092c79...f7431d) → 7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e
-```
-
-### Inclusion Proofs
-
-A Merkle inclusion proof demonstrates that a specific content ID is part of the committed set without revealing the full set. The proof consists of sibling hashes along the path from leaf to root, plus a direction (left/right) for each step.
-
-### Worked Example: Inclusion Proof for "charlie"
-
-Starting from the leaf hash of "charlie" (`36ef58...`), walk to the root using sibling hashes:
-
-```
-Step 1: charlie (index 2) paired with delta (index 3)
-        sibling: 4f4a9410...045398 (delta leaf)  position: right
-        → SHA-256(charlie ‖ delta) → 6b55e77b...f7dd44
-
-Step 2: charlie‖delta paired with alpha‖bravo
-        sibling: 90d39555...a9b4f3 (alpha‖bravo) position: left
-        → SHA-256(alpha‖bravo ‖ charlie‖delta) → 23c83cb8...edc2f7
-
-Step 3: L2-left paired with echo (promoted)
-        sibling: 092c79e8...f7431d (echo leaf)   position: right
-        → SHA-256(L2-left ‖ echo) → 7e80d478...fda28e ✓ matches root
-```
-
-Proof path (from [`examples/merkle-tree.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/merkle-tree.json)):
-
-```json
-[
-  {
-    "hash": "4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398",
-    "position": "right"
-  },
-  {
-    "hash": "90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3",
-    "position": "left"
-  },
-  {
-    "hash": "092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d",
-    "position": "right"
-  }
-]
-```
-
----
-
 ## Artifacts
 
 Artifacts are standalone signed inline documents — immutable, CID-addressable proof plane primitives. Unlike chain operations which extend a sequence, an artifact is a single signed statement with no predecessor or successor.
@@ -1072,8 +977,6 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/revocation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/revocation.ts) — `signRevocation`, `verifyRevocation`
 - [`credentials/dfos-credential`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/dfos-credential.ts) — `createDFOSCredential`, `verifyDFOSCredential`, `decodeDFOSCredentialUnsafe`
 - [`credentials/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/schemas.ts) — `AuthTokenClaims`, `DFOSCredentialPayload`, `Attenuation`
-- [`merkle/tree`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/merkle/tree.ts) — `buildMerkleTree`, `hashLeaf`
-- [`merkle/proof`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/merkle/proof.ts) — `generateMerkleProof`, `verifyMerkleProof`
 
 ### Related Specifications
 

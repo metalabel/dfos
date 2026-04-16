@@ -34,16 +34,16 @@ const JWT_TOKEN =
   'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.zhKeXJHHF7a1-MwF4QoUTRptCplAwh20-rLnuWGDFT6uJheN4E_SA5NhqvMNflLHxd7h97gdaVnMZGE67SXEBA';
 
 const BROAD_WRITE_VC =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50V3JpdGUiXSwiY3JlZGVudGlhbFN1YmplY3QiOnt9fX0.KoN20I8kerQAg7qjDN1Ju-IFi2gMjGhG2v6crWMGxheJdsY6OhfjvLu5LM_zty3IRVdmaBN-4fJngt3yscSJCg';
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwiY2lkIjoiYmFmeXJlaWh6dDV3Nmt4YnlsZWZ1N2R3ZDRmbnZxdnlueHphNnhud3N6bXpoYml6anVjNnhjeHFkNmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42IiwiYXVkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.brsN3WSdTLhN5-c0mhDriiKa2FuDD3eW5Mlj3KJYcj0cKQH0RDSACMp3qLeN2DGop-kfOtqtxlS7SAMIuCZGAw';
 
 const READ_VC =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50UmVhZCJdLCJjcmVkZW50aWFsU3ViamVjdCI6e319fQ.07JK8NPIzcoWRXqT961znL1642OF2xBVaJsBZ0CP6LTBF96IYtAX8_Xch2SgmrCzhZQN1XgbiIcgSmuTUQtsCA';
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwiY2lkIjoiYmFmeXJlaWMzbmJxemFicmxtbnl2a3o3cXI3Znk2cGd4NGFwdm52eWJvNWtzaGN6bXViaXFzemdod2EifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42IiwiYXVkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.QB-qK89S-sYXaDUkJJSF5ZbsV2djFFvRQlHCj6UDyl-47LZI-ISwwyqRV-zi6MEGdHb0seSkPxpE4if6HHvvCw';
 
 const BEACON_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0._1RgZpMv63-M3ZUeTNX679xkAeX3TY0PJ0ImH7422cKA7I88Hf8bBVQMVVhP3oNdvX7i7Q4se5EP3kk5aEuxDQ';
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYzJtdXg0cGxpNXFmZDVzYnAyeXh5MmdqbTU0Zmc1Z2NpNm02YnBldm9pdXdmZGc2cG91NCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1hbmlmZXN0Q29udGVudElkIjoiYTgyejkyYTNobmRrNmM5N3RoY3JuOCIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9._EKV036utOU-oMHwMyJ1Om1QhJzN-g9DTRbMz0U7L9SzQR-sHIeC6iNreYN-oV-mBvo5RPLg4TJ0UNv-PNBzDQ';
 
 const BEACON_WITNESS_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0.awA8ctmLHjJCHZcH0lav7HpadkIoGiG2WR-pCf-0XfPVi9dD8Z2at0E7iAnOUnVEc5VthBo-mMklSIJFK28IDw';
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpYzJtdXg0cGxpNXFmZDVzYnAyeXh5MmdqbTU0Zmc1Z2NpNm02YnBldm9pdXdmZGc2cG91NCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1hbmlmZXN0Q29udGVudElkIjoiYTgyejkyYTNobmRrNmM5N3RoY3JuOCIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.a2BN31Mqi296FJ8wIVOwy7zdTR4fEL2TVy2A6xG6SGUBmJdUdnlqro5JbjIOF-h5RSA1SW0i4WvIK-AeiB27BQ';
 
 const EXPECTED_GENESIS_CID = 'bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy';
 const EXPECTED_DID = 'did:dfos:e3vvtck42d4eacdnzvtrn6';
@@ -51,8 +51,7 @@ const EXPECTED_MULTIKEY1 = 'z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb';
 const EXPECTED_CBOR_HEX =
   'a66474797065666372656174656776657273696f6e0168617574684b65797381a3626964781a6b65795f72396576333466766332337a393939766561616674386474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a3626964781a6b65795f72396576333466766332337a393939766561616674386474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a3626964781a6b65795f72396576333466766332337a393939766561616674386474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62';
 const EXPECTED_CID_HEX = '01711220206a5e6140a5114f1e49f3ca4b339fb2cb8e70bbb34968b23156fd0e3237b486';
-const EXPECTED_BEACON_CID = 'bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu';
-const EXPECTED_MERKLE_ROOT = '7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e';
+const EXPECTED_BEACON_CID = 'bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4';
 
 // =============================================================================
 // Helpers
@@ -298,131 +297,56 @@ check(
   `got ${docCid}`,
 );
 
-// --- 11. Merkle tree ---
-console.log('\n11. Merkle Tree');
-const merkleIds = ['alpha', 'bravo', 'charlie', 'delta', 'echo'];
-const merkleSorted = [...merkleIds].sort();
-
-const leafHashes = new Map<string, Uint8Array>();
-for (const id of merkleSorted) {
-  leafHashes.set(id, sha256(new TextEncoder().encode(id)));
-}
-
-check(
-  'Leaf alpha',
-  hexEncode(leafHashes.get('alpha')!) ===
-    '8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8',
-);
-check(
-  'Leaf echo',
-  hexEncode(leafHashes.get('echo')!) ===
-    '092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d',
-);
-
-// build tree bottom-up
-let level = merkleSorted.map((id) => leafHashes.get(id)!);
-while (level.length > 1) {
-  const nextLevel: Uint8Array[] = [];
-  let i = 0;
-  while (i < level.length) {
-    if (i + 1 < level.length) {
-      const combined = new Uint8Array(64);
-      combined.set(level[i]!, 0);
-      combined.set(level[i + 1]!, 32);
-      nextLevel.push(sha256(combined));
-    } else {
-      nextLevel.push(level[i]!); // odd node promoted
-    }
-    i += 2;
-  }
-  level = nextLevel;
-}
-
-const merkleRoot = hexEncode(level[0]!);
-check('Merkle root', merkleRoot === EXPECTED_MERKLE_ROOT, `got ${merkleRoot}`);
-
-// verify inclusion proof for "charlie"
-const proofPath = [
-  {
-    hash: '4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398',
-    position: 'right',
-  },
-  {
-    hash: '90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3',
-    position: 'left',
-  },
-  {
-    hash: '092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d',
-    position: 'right',
-  },
-];
-
-let current = sha256(new TextEncoder().encode('charlie'));
-for (const step of proofPath) {
-  const sibling = hexDecode(step.hash);
-  const combined = new Uint8Array(64);
-  if (step.position === 'left') {
-    combined.set(sibling, 0);
-    combined.set(current, 32);
-  } else {
-    combined.set(current, 0);
-    combined.set(sibling, 32);
-  }
-  current = sha256(combined);
-}
-check(
-  'Merkle proof charlie',
-  hexEncode(current) === EXPECTED_MERKLE_ROOT,
-  `got ${hexEncode(current)}`,
-);
-
-// --- 12. Beacon JWS verification ---
-console.log('\n12. Beacon JWS Verification (key 1)');
+// --- 11. Beacon JWS verification ---
+console.log('\n11. Beacon JWS Verification (key 1)');
 result = verifyJws(BEACON_JWS, pub1);
 check('Beacon signature valid', true);
 check('Beacon header typ', result.header.typ === 'did:dfos:beacon');
 check('Beacon header kid', result.header.kid === `${EXPECTED_DID}#key_r9ev34fvc23z999veaaft8`);
 check('Beacon header cid', result.header.cid === EXPECTED_BEACON_CID);
 check('Beacon payload type', result.payload.type === 'beacon');
-check('Beacon payload merkleRoot', result.payload.merkleRoot === EXPECTED_MERKLE_ROOT);
+check(
+  'Beacon payload manifestContentId',
+  result.payload.manifestContentId === 'a82z92a3hndk6c97thcrn8',
+);
 
-// --- 13. Beacon countersignature verification ---
-console.log("\n13. Beacon Countersignature Verification (key 2 witnesses key 1's beacon)");
+// --- 12. Beacon countersignature verification ---
+console.log("\n12. Beacon Countersignature Verification (key 2 witnesses key 1's beacon)");
 result = verifyJws(BEACON_WITNESS_JWS, pub2);
 check('Beacon countersig valid', true);
 check('Beacon countersig typ', result.header.typ === 'did:dfos:beacon');
 check('Beacon countersig kid', result.header.kid === `${EXPECTED_DID}#key_ez9a874tckr3dv933d3ckd`);
 check('Beacon countersig same CID', result.header.cid === EXPECTED_BEACON_CID);
-check('Beacon countersig same payload', result.payload.merkleRoot === EXPECTED_MERKLE_ROOT);
+check(
+  'Beacon countersig same manifestContentId',
+  result.payload.manifestContentId === 'a82z92a3hndk6c97thcrn8',
+);
 
-// --- 14. VC-JWT Credential Verification ---
-console.log('\n14. VC-JWT Credential Verification (key 1)');
+// --- 13. DFOS Credential Verification ---
+console.log('\n13. DFOS Credential Verification (key 1)');
 result = verifyJws(BROAD_WRITE_VC, pub1);
-check('Write VC signature valid', true);
-check('Write VC header typ', result.header.typ === 'vc+jwt');
-check('Write VC header kid', result.header.kid === `${EXPECTED_DID}#key_r9ev34fvc23z999veaaft8`);
-check('Write VC payload iss', result.payload.iss === EXPECTED_DID);
-check('Write VC payload sub', result.payload.sub === EXPECTED_DID);
+check('Write credential signature valid', true);
+check('Write credential header typ', result.header.typ === 'did:dfos:credential');
 check(
-  'Write VC type contains DFOSContentWrite',
-  ((result.payload.vc as Record<string, unknown>).type as string[]).includes('DFOSContentWrite'),
+  'Write credential header kid',
+  result.header.kid === `${EXPECTED_DID}#key_r9ev34fvc23z999veaaft8`,
 );
 check(
-  'Write VC context contains W3C v2',
-  ((result.payload.vc as Record<string, unknown>)['@context'] as string[]).includes(
-    'https://www.w3.org/ns/credentials/v2',
-  ),
+  'Write credential header cid',
+  typeof result.header.cid === 'string' && (result.header.cid as string).startsWith('bafyrei'),
 );
+check('Write credential payload type', result.payload.type === 'DFOSCredential');
+check('Write credential payload iss', result.payload.iss === EXPECTED_DID);
+check('Write credential payload aud', result.payload.aud === 'did:dfos:nzkf838efr424433rn2rzk');
+check('Write credential att resource', (result.payload.att as any[])[0].resource === 'chain:*');
+check('Write credential att action', (result.payload.att as any[])[0].action === 'write');
 
 result = verifyJws(READ_VC, pub1);
-check('Read VC signature valid', true);
-check(
-  'Read VC type contains DFOSContentRead',
-  ((result.payload.vc as Record<string, unknown>).type as string[]).includes('DFOSContentRead'),
-);
+check('Read credential signature valid', true);
+check('Read credential att action', (result.payload.att as any[])[0].action === 'read');
 
-// --- 15. Number encoding determinism ---
-console.log('\n15. Number Encoding Determinism');
+// --- 14. Number encoding determinism ---
+console.log('\n14. Number Encoding Determinism');
 
 // Integer encoding
 const intPayload = { version: 1, type: 'test' };

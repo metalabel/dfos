@@ -365,7 +365,7 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `credential revoke <cid>`        | Revoke a credential                         |
 | `GET`  | `content verify <id>`            | Re-verify chain integrity locally           |
 | `GET`  | `beacon show [did\|name]`        | Show latest beacon                          |
-| `POST` | `beacon announce <id...>`        | Build merkle root, sign, submit             |
+| `POST` | `beacon announce <contentId>`    | Sign manifest pointer, submit               |
 | `POST` | `beacon countersign <did\|name>` | Countersign someone's beacon                |
 | `POST` | `witness <cid>`                  | Countersign an operation                    |
 | `GET`  | `countersigs <cid>`              | Show countersignatures for operation/beacon |

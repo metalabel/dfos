@@ -17,8 +17,6 @@ import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protoco
 import { createAuthToken, createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 // Crypto primitives
 import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-protocol/crypto';
-// Merkle trees
-import { buildMerkleTree, verifyMerkleProof } from '@metalabel/dfos-protocol/merkle';
 ```
 
 ## Subpath Exports
@@ -28,7 +26,6 @@ import { buildMerkleTree, verifyMerkleProof } from '@metalabel/dfos-protocol/mer
 | `@metalabel/dfos-protocol/chain`       | Identity and content chain signing, verification, beacons, countersigns |
 | `@metalabel/dfos-protocol/credentials` | Auth tokens (DID-signed JWT) and DFOS credentials for authorization     |
 | `@metalabel/dfos-protocol/crypto`      | Ed25519, JWS, JWT, dag-cbor, base64url, ID generation                   |
-| `@metalabel/dfos-protocol/merkle`      | SHA-256 binary merkle tree, inclusion proofs                            |
 
 ## Specifications
 
@@ -50,7 +47,6 @@ The `examples/` directory contains deterministic reference fixtures that can be 
 - `content-delegated.json` — creator genesis + delegated update with DFOS write credential
 - `credential-write.json` — DFOS write credential (broad + content-narrowed)
 - `credential-read.json` — DFOS read credential
-- `merkle-tree.json` — 5 content IDs → sorted tree → root, with inclusion proof
 - `beacon.json` — signed manifest pointer announcement with witness countersignature
 
 ## License

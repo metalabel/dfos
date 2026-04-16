@@ -323,84 +323,16 @@ func hexDecode(s string) ([]byte, error) {
 }
 
 // =============================================================================
-// Merkle tree, beacon, and countersignature tests
+// Beacon and countersignature tests
 // =============================================================================
 
 const (
-	expectedMerkleRoot  = "7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e"
-	beaconJWS           = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0._1RgZpMv63-M3ZUeTNX679xkAeX3TY0PJ0ImH7422cKA7I88Hf8bBVQMVVhP3oNdvX7i7Q4se5EP3kk5aEuxDQ"
-	expectedBeaconCID   = "bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu"
-	beaconWitnessJWS    = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0.awA8ctmLHjJCHZcH0lav7HpadkIoGiG2WR-pCf-0XfPVi9dD8Z2at0E7iAnOUnVEc5VthBo-mMklSIJFK28IDw"
-	broadWriteVC        = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50V3JpdGUiXSwiY3JlZGVudGlhbFN1YmplY3QiOnt9fX0.KoN20I8kerQAg7qjDN1Ju-IFi2gMjGhG2v6crWMGxheJdsY6OhfjvLu5LM_zty3IRVdmaBN-4fJngt3yscSJCg"
-	readVC              = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50UmVhZCJdLCJjcmVkZW50aWFsU3ViamVjdCI6e319fQ.07JK8NPIzcoWRXqT961znL1642OF2xBVaJsBZ0CP6LTBF96IYtAX8_Xch2SgmrCzhZQN1XgbiIcgSmuTUQtsCA"
+	beaconJWS         = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYzJtdXg0cGxpNXFmZDVzYnAyeXh5MmdqbTU0Zmc1Z2NpNm02YnBldm9pdXdmZGc2cG91NCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1hbmlmZXN0Q29udGVudElkIjoiYTgyejkyYTNobmRrNmM5N3RoY3JuOCIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9._EKV036utOU-oMHwMyJ1Om1QhJzN-g9DTRbMz0U7L9SzQR-sHIeC6iNreYN-oV-mBvo5RPLg4TJ0UNv-PNBzDQ"
+	expectedBeaconCID = "bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4"
+	beaconWitnessJWS  = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpYzJtdXg0cGxpNXFmZDVzYnAyeXh5MmdqbTU0Zmc1Z2NpNm02YnBldm9pdXdmZGc2cG91NCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1hbmlmZXN0Q29udGVudElkIjoiYTgyejkyYTNobmRrNmM5N3RoY3JuOCIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.a2BN31Mqi296FJ8wIVOwy7zdTR4fEL2TVy2A6xG6SGUBmJdUdnlqro5JbjIOF-h5RSA1SW0i4WvIK-AeiB27BQ"
+	broadWriteVC      = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwiY2lkIjoiYmFmeXJlaWh6dDV3Nmt4YnlsZWZ1N2R3ZDRmbnZxdnlueHphNnhud3N6bXpoYml6anVjNnhjeHFkNmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42IiwiYXVkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.brsN3WSdTLhN5-c0mhDriiKa2FuDD3eW5Mlj3KJYcj0cKQH0RDSACMp3qLeN2DGop-kfOtqtxlS7SAMIuCZGAw"
+	readVC            = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwiY2lkIjoiYmFmeXJlaWMzbmJxemFicmxtbnl2a3o3cXI3Znk2cGd4NGFwdm52eWJvNWtzaGN6bXViaXFzemdod2EifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42IiwiYXVkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.QB-qK89S-sYXaDUkJJSF5ZbsV2djFFvRQlHCj6UDyl-47LZI-ISwwyqRV-zi6MEGdHb0seSkPxpE4if6HHvvCw"
 )
-
-func TestMerkleTree(t *testing.T) {
-	ids := []string{"alpha", "bravo", "charlie", "delta", "echo"}
-	sort.Strings(ids)
-
-	// hash leaves
-	leaves := make([][]byte, len(ids))
-	for i, id := range ids {
-		h := sha256.Sum256([]byte(id))
-		leaves[i] = h[:]
-	}
-
-	// verify leaf hashes
-	if fmt.Sprintf("%x", leaves[0]) != "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8" {
-		t.Fatal("alpha leaf hash mismatch")
-	}
-
-	// build tree bottom-up
-	level := leaves
-	for len(level) > 1 {
-		var next [][]byte
-		for i := 0; i < len(level); i += 2 {
-			if i+1 < len(level) {
-				h := sha256.Sum256(append(level[i], level[i+1]...))
-				next = append(next, h[:])
-			} else {
-				next = append(next, level[i])
-			}
-		}
-		level = next
-	}
-
-	root := fmt.Sprintf("%x", level[0])
-	if root != expectedMerkleRoot {
-		t.Fatalf("merkle root mismatch: got %s", root)
-	}
-}
-
-func TestMerkleProofVerification(t *testing.T) {
-	type proofStep struct {
-		hash     string
-		position string
-	}
-	path := []proofStep{
-		{"4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398", "right"},
-		{"90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3", "left"},
-		{"092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d", "right"},
-	}
-
-	current := sha256.Sum256([]byte("charlie"))
-	currentSlice := current[:]
-
-	for _, step := range path {
-		sibling, _ := hexDecode(step.hash)
-		var h [32]byte
-		if step.position == "left" {
-			h = sha256.Sum256(append(sibling, currentSlice...))
-		} else {
-			h = sha256.Sum256(append(currentSlice, sibling...))
-		}
-		currentSlice = h[:]
-	}
-
-	if fmt.Sprintf("%x", currentSlice) != expectedMerkleRoot {
-		t.Fatalf("merkle proof verification failed: got %s", fmt.Sprintf("%x", currentSlice))
-	}
-}
 
 func TestBeaconJWSVerification(t *testing.T) {
 	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
@@ -419,8 +351,8 @@ func TestBeaconJWSVerification(t *testing.T) {
 	if payload["type"] != "beacon" {
 		t.Fatal("wrong payload type")
 	}
-	if payload["merkleRoot"] != expectedMerkleRoot {
-		t.Fatalf("wrong merkleRoot: %s", payload["merkleRoot"])
+	if payload["manifestContentId"] != "a82z92a3hndk6c97thcrn8" {
+		t.Fatalf("wrong manifestContentId: %s", payload["manifestContentId"])
 	}
 }
 
@@ -438,68 +370,68 @@ func TestBeaconCountersignatureVerification(t *testing.T) {
 	if header["cid"] != expectedBeaconCID {
 		t.Fatal("countersignature CID should match original beacon CID")
 	}
-	if payload["merkleRoot"] != expectedMerkleRoot {
-		t.Fatal("countersignature payload should match original")
+	if payload["manifestContentId"] != "a82z92a3hndk6c97thcrn8" {
+		t.Fatal("countersignature manifestContentId should match original")
 	}
 }
 
-func TestVCJWTWriteCredentialVerification(t *testing.T) {
+func TestWriteCredentialVerification(t *testing.T) {
 	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
 	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
 
 	header, payload := verifyJWS(broadWriteVC, pub1)
-	if header["typ"] != "vc+jwt" {
-		t.Fatal("wrong typ")
+	if header["typ"] != "did:dfos:credential" {
+		t.Fatalf("wrong typ: %s", header["typ"])
 	}
 	if header["kid"] != expectedDID+"#key_r9ev34fvc23z999veaaft8" {
 		t.Fatalf("wrong kid: %s", header["kid"])
 	}
+	if payload["type"] != "DFOSCredential" {
+		t.Fatalf("wrong type: %s", payload["type"])
+	}
 	if payload["iss"] != expectedDID {
 		t.Fatalf("wrong iss: %s", payload["iss"])
 	}
-	if payload["sub"] != expectedDID {
-		t.Fatalf("wrong sub: %s", payload["sub"])
+	if payload["aud"] != "did:dfos:nzkf838efr424433rn2rzk" {
+		t.Fatalf("wrong aud: %s", payload["aud"])
 	}
-	vcMap := payload["vc"].(map[string]any)
-	vcTypes := vcMap["type"].([]any)
-	found := false
-	for _, vt := range vcTypes {
-		if vt == "DFOSContentWrite" {
-			found = true
-		}
+	att := payload["att"].([]any)
+	attEntry := att[0].(map[string]any)
+	if attEntry["resource"] != "chain:*" {
+		t.Fatalf("wrong att resource: %s", attEntry["resource"])
 	}
-	if !found {
-		t.Fatal("vc type missing DFOSContentWrite")
+	if attEntry["action"] != "write" {
+		t.Fatalf("wrong att action: %s", attEntry["action"])
 	}
 }
 
-func TestVCJWTReadCredentialVerification(t *testing.T) {
+func TestReadCredentialVerification(t *testing.T) {
 	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
 	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
 
 	header, payload := verifyJWS(readVC, pub1)
-	if header["typ"] != "vc+jwt" {
-		t.Fatal("wrong typ")
+	if header["typ"] != "did:dfos:credential" {
+		t.Fatalf("wrong typ: %s", header["typ"])
 	}
 	if header["kid"] != expectedDID+"#key_r9ev34fvc23z999veaaft8" {
 		t.Fatalf("wrong kid: %s", header["kid"])
 	}
+	if payload["type"] != "DFOSCredential" {
+		t.Fatalf("wrong type: %s", payload["type"])
+	}
 	if payload["iss"] != expectedDID {
 		t.Fatalf("wrong iss: %s", payload["iss"])
 	}
-	if payload["sub"] != expectedDID {
-		t.Fatalf("wrong sub: %s", payload["sub"])
+	if payload["aud"] != "did:dfos:nzkf838efr424433rn2rzk" {
+		t.Fatalf("wrong aud: %s", payload["aud"])
 	}
-	vcMap := payload["vc"].(map[string]any)
-	vcTypes := vcMap["type"].([]any)
-	found := false
-	for _, vt := range vcTypes {
-		if vt == "DFOSContentRead" {
-			found = true
-		}
+	att := payload["att"].([]any)
+	attEntry := att[0].(map[string]any)
+	if attEntry["resource"] != "chain:*" {
+		t.Fatalf("wrong att resource: %s", attEntry["resource"])
 	}
-	if !found {
-		t.Fatal("vc type missing DFOSContentRead")
+	if attEntry["action"] != "read" {
+		t.Fatalf("wrong att action: %s", attEntry["action"])
 	}
 }
 

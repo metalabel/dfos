@@ -287,91 +287,21 @@ mod tests {
     }
 
     // =========================================================================
-    // Merkle tree, beacon, and countersignature tests
+    // Beacon and credential tests
     // =========================================================================
 
-    const EXPECTED_MERKLE_ROOT: &str =
-        "7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e";
-
-    const BEACON_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0._1RgZpMv63-M3ZUeTNX679xkAeX3TY0PJ0ImH7422cKA7I88Hf8bBVQMVVhP3oNdvX7i7Q4se5EP3kk5aEuxDQ";
+    const BEACON_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYzJtdXg0cGxpNXFmZDVzYnAyeXh5MmdqbTU0Zmc1Z2NpNm02YnBldm9pdXdmZGc2cG91NCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1hbmlmZXN0Q29udGVudElkIjoiYTgyejkyYTNobmRrNmM5N3RoY3JuOCIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9._EKV036utOU-oMHwMyJ1Om1QhJzN-g9DTRbMz0U7L9SzQR-sHIeC6iNreYN-oV-mBvo5RPLg4TJ0UNv-PNBzDQ";
 
     const EXPECTED_BEACON_CID: &str =
-        "bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu";
+        "bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4";
 
-    const BEACON_WITNESS_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0.awA8ctmLHjJCHZcH0lav7HpadkIoGiG2WR-pCf-0XfPVi9dD8Z2at0E7iAnOUnVEc5VthBo-mMklSIJFK28IDw";
+    const BEACON_WITNESS_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpYzJtdXg0cGxpNXFmZDVzYnAyeXh5MmdqbTU0Zmc1Z2NpNm02YnBldm9pdXdmZGc2cG91NCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1hbmlmZXN0Q29udGVudElkIjoiYTgyejkyYTNobmRrNmM5N3RoY3JuOCIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.a2BN31Mqi296FJ8wIVOwy7zdTR4fEL2TVy2A6xG6SGUBmJdUdnlqro5JbjIOF-h5RSA1SW0i4WvIK-AeiB27BQ";
 
-    const BROAD_WRITE_VC: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50V3JpdGUiXSwiY3JlZGVudGlhbFN1YmplY3QiOnt9fX0.KoN20I8kerQAg7qjDN1Ju-IFi2gMjGhG2v6crWMGxheJdsY6OhfjvLu5LM_zty3IRVdmaBN-4fJngt3yscSJCg";
+    const BROAD_WRITE_VC: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwiY2lkIjoiYmFmeXJlaWh6dDV3Nmt4YnlsZWZ1N2R3ZDRmbnZxdnlueHphNnhud3N6bXpoYml6anVjNnhjeHFkNmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42IiwiYXVkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.brsN3WSdTLhN5-c0mhDriiKa2FuDD3eW5Mlj3KJYcj0cKQH0RDSACMp3qLeN2DGop-kfOtqtxlS7SAMIuCZGAw";
 
-    const READ_VC: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50UmVhZCJdLCJjcmVkZW50aWFsU3ViamVjdCI6e319fQ.07JK8NPIzcoWRXqT961znL1642OF2xBVaJsBZ0CP6LTBF96IYtAX8_Xch2SgmrCzhZQN1XgbiIcgSmuTUQtsCA";
+    const READ_VC: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwiY2lkIjoiYmFmeXJlaWMzbmJxemFicmxtbnl2a3o3cXI3Znk2cGd4NGFwdm52eWJvNWtzaGN6bXViaXFzemdod2EifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42IiwiYXVkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.QB-qK89S-sYXaDUkJJSF5ZbsV2djFFvRQlHCj6UDyl-47LZI-ISwwyqRV-zi6MEGdHb0seSkPxpE4if6HHvvCw";
 
-    #[test]
-    fn test_merkle_tree() {
-        let mut ids = vec!["alpha", "bravo", "charlie", "delta", "echo"];
-        ids.sort();
-
-        let leaves: Vec<[u8; 32]> = ids.iter().map(|id| Sha256::digest(id.as_bytes()).into()).collect();
-
-        // verify leaf hash
-        assert_eq!(
-            hex::encode(leaves[0]),
-            "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8",
-            "alpha leaf mismatch"
-        );
-
-        // build tree bottom-up
-        let mut level: Vec<Vec<u8>> = leaves.iter().map(|l| l.to_vec()).collect();
-        while level.len() > 1 {
-            let mut next = Vec::new();
-            let mut i = 0;
-            while i < level.len() {
-                if i + 1 < level.len() {
-                    let mut combined = level[i].clone();
-                    combined.extend_from_slice(&level[i + 1]);
-                    let h: [u8; 32] = Sha256::digest(&combined).into();
-                    next.push(h.to_vec());
-                } else {
-                    next.push(level[i].clone());
-                }
-                i += 2;
-            }
-            level = next;
-        }
-
-        assert_eq!(
-            hex::encode(&level[0]),
-            EXPECTED_MERKLE_ROOT,
-            "merkle root mismatch"
-        );
-    }
-
-    #[test]
-    fn test_merkle_proof_verification() {
-        let proof_path = vec![
-            ("4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398", "right"),
-            ("90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3", "left"),
-            ("092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d", "right"),
-        ];
-
-        let leaf: [u8; 32] = Sha256::digest(b"charlie").into();
-        let mut current = leaf.to_vec();
-
-        for (hash_hex, position) in &proof_path {
-            let sibling = hex::decode(hash_hex).unwrap();
-            let combined = if *position == "left" {
-                [sibling.as_slice(), current.as_slice()].concat()
-            } else {
-                [current.as_slice(), sibling.as_slice()].concat()
-            };
-            let h: [u8; 32] = Sha256::digest(&combined).into();
-            current = h.to_vec();
-        }
-
-        assert_eq!(
-            hex::encode(&current),
-            EXPECTED_MERKLE_ROOT,
-            "merkle proof verification failed"
-        );
-    }
+    const EXPECTED_CREDENTIAL_AUDIENCE: &str = "did:dfos:nzkf838efr424433rn2rzk";
 
     #[test]
     fn test_beacon_jws_verification() {
@@ -383,7 +313,7 @@ mod tests {
         assert_eq!(header["kid"], expected_kid, "wrong kid");
         assert_eq!(header["cid"], EXPECTED_BEACON_CID, "wrong cid");
         assert_eq!(payload["type"], "beacon", "wrong payload type");
-        assert_eq!(payload["merkleRoot"], EXPECTED_MERKLE_ROOT, "wrong merkleRoot");
+        assert_eq!(payload["manifestContentId"], "a82z92a3hndk6c97thcrn8", "wrong manifestContentId");
     }
 
     #[test]
@@ -399,47 +329,45 @@ mod tests {
             "countersignature CID should match original beacon CID"
         );
         assert_eq!(
-            payload["merkleRoot"], EXPECTED_MERKLE_ROOT,
+            payload["manifestContentId"], "a82z92a3hndk6c97thcrn8",
             "countersignature payload should match original"
         );
     }
 
     #[test]
-    fn test_vcjwt_write_credential_verification() {
+    fn test_write_credential_verification() {
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
         let (header, payload) = verify_jws(BROAD_WRITE_VC, &pub1);
 
-        assert_eq!(header["typ"], "vc+jwt", "wrong typ");
+        assert_eq!(header["typ"], "did:dfos:credential", "wrong typ");
         let expected_kid = format!("{}#key_r9ev34fvc23z999veaaft8", EXPECTED_DID);
         assert_eq!(header["kid"], expected_kid, "wrong kid");
+        assert_eq!(payload["type"], "DFOSCredential", "wrong type");
         assert_eq!(payload["iss"], EXPECTED_DID, "wrong iss");
-        assert_eq!(payload["sub"], EXPECTED_DID, "wrong sub");
+        assert_eq!(payload["aud"], EXPECTED_CREDENTIAL_AUDIENCE, "wrong aud");
 
-        let vc = payload["vc"].as_object().expect("vc should be an object");
-        let types = vc["type"].as_array().expect("type should be an array");
-        assert!(
-            types.iter().any(|t| t.as_str() == Some("DFOSContentWrite")),
-            "vc type should contain DFOSContentWrite"
-        );
+        let att = payload["att"].as_array().expect("att should be an array");
+        assert_eq!(att.len(), 1, "att should have one entry");
+        assert_eq!(att[0]["resource"], "chain:*", "wrong resource");
+        assert_eq!(att[0]["action"], "write", "wrong action");
     }
 
     #[test]
-    fn test_vcjwt_read_credential_verification() {
+    fn test_read_credential_verification() {
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
         let (header, payload) = verify_jws(READ_VC, &pub1);
 
-        assert_eq!(header["typ"], "vc+jwt", "wrong typ");
+        assert_eq!(header["typ"], "did:dfos:credential", "wrong typ");
         let expected_kid = format!("{}#key_r9ev34fvc23z999veaaft8", EXPECTED_DID);
         assert_eq!(header["kid"], expected_kid, "wrong kid");
+        assert_eq!(payload["type"], "DFOSCredential", "wrong type");
         assert_eq!(payload["iss"], EXPECTED_DID, "wrong iss");
-        assert_eq!(payload["sub"], EXPECTED_DID, "wrong sub");
+        assert_eq!(payload["aud"], EXPECTED_CREDENTIAL_AUDIENCE, "wrong aud");
 
-        let vc = payload["vc"].as_object().expect("vc should be an object");
-        let types = vc["type"].as_array().expect("type should be an array");
-        assert!(
-            types.iter().any(|t| t.as_str() == Some("DFOSContentRead")),
-            "vc type should contain DFOSContentRead"
-        );
+        let att = payload["att"].as_array().expect("att should be an array");
+        assert_eq!(att.len(), 1, "att should have one entry");
+        assert_eq!(att[0]["resource"], "chain:*", "wrong resource");
+        assert_eq!(att[0]["action"], "read", "wrong action");
     }
 
     // =========================================================================

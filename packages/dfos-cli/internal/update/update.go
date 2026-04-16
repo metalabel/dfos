@@ -173,5 +173,26 @@ func isNewer(latest, current string) bool {
 
 func printNotice(current, latest string) {
 	fmt.Fprintf(os.Stderr, "\nUpdate available: v%s → v%s\n", current, latest)
-	fmt.Fprintf(os.Stderr, "Run: curl -sSL https://protocol.dfos.com/install.sh | sh\n\n")
+	if isHomebrew() {
+		fmt.Fprintf(os.Stderr, "Run: brew upgrade metalabel/tap/dfos\n\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "Run: curl -sSL https://protocol.dfos.com/install.sh | sh\n\n")
+	}
+}
+
+// isHomebrew returns true if the running binary is inside a Homebrew prefix.
+// Homebrew installs to a Cellar directory regardless of platform:
+//   - Apple Silicon macOS: /opt/homebrew/Cellar/
+//   - Intel macOS: /usr/local/Cellar/
+//   - Linux: /home/linuxbrew/.linuxbrew/Cellar/
+func isHomebrew() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		resolved = exe
+	}
+	return strings.Contains(resolved, "/Cellar/")
 }

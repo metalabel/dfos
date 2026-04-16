@@ -31,9 +31,9 @@ CONTENT_CREATE_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLC
 
 JWT_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.zhKeXJHHF7a1-MwF4QoUTRptCplAwh20-rLnuWGDFT6uJheN4E_SA5NhqvMNflLHxd7h97gdaVnMZGE67SXEBA"
 
-BROAD_WRITE_VC = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50V3JpdGUiXSwiY3JlZGVudGlhbFN1YmplY3QiOnt9fX0.KoN20I8kerQAg7qjDN1Ju-IFi2gMjGhG2v6crWMGxheJdsY6OhfjvLu5LM_zty3IRVdmaBN-4fJngt3yscSJCg"
+BROAD_WRITE_VC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwiY2lkIjoiYmFmeXJlaWh6dDV3Nmt4YnlsZWZ1N2R3ZDRmbnZxdnlueHphNnhud3N6bXpoYml6anVjNnhjeHFkNmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42IiwiYXVkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.brsN3WSdTLhN5-c0mhDriiKa2FuDD3eW5Mlj3KJYcj0cKQH0RDSACMp3qLeN2DGop-kfOtqtxlS7SAMIuCZGAw"
 
-READ_VC = "eyJhbGciOiJFZERTQSIsInR5cCI6InZjK2p3dCIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgifQ.eyJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42Iiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwLCJ2YyI6eyJAY29udGV4dCI6WyJodHRwczovL3d3dy53My5vcmcvbnMvY3JlZGVudGlhbHMvdjIiXSwidHlwZSI6WyJWZXJpZmlhYmxlQ3JlZGVudGlhbCIsIkRGT1NDb250ZW50UmVhZCJdLCJjcmVkZW50aWFsU3ViamVjdCI6e319fQ.07JK8NPIzcoWRXqT961znL1642OF2xBVaJsBZ0CP6LTBF96IYtAX8_Xch2SgmrCzhZQN1XgbiIcgSmuTUQtsCA"
+READ_VC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwiY2lkIjoiYmFmeXJlaWMzbmJxemFicmxtbnl2a3o3cXI3Znk2cGd4NGFwdm52eWJvNWtzaGN6bXViaXFzemdod2EifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42IiwiYXVkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6ayIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.QB-qK89S-sYXaDUkJJSF5ZbsV2djFFvRQlHCj6UDyl-47LZI-ISwwyqRV-zi6MEGdHb0seSkPxpE4if6HHvvCw"
 
 EXPECTED_GENESIS_CID = "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy"
 EXPECTED_DID = "did:dfos:e3vvtck42d4eacdnzvtrn6"
@@ -210,55 +210,10 @@ doc_cid_bytes = make_cid_bytes(doc_cbor)
 doc_cid = cid_to_base32(doc_cid_bytes)
 check("Document CID", doc_cid == "bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4", f"got {doc_cid}")
 
-# --- 11. Merkle tree ---
-print("\n11. Merkle Tree")
-merkle_ids = ["alpha", "bravo", "charlie", "delta", "echo"]
-merkle_sorted = sorted(merkle_ids)
-
-# leaf hashes
-leaf_hashes = {}
-for cid in merkle_sorted:
-    leaf_hashes[cid] = hashlib.sha256(cid.encode("utf-8")).digest()
-
-check("Leaf alpha", leaf_hashes["alpha"].hex() == "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8")
-check("Leaf echo", leaf_hashes["echo"].hex() == "092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d")
-
-# build tree bottom-up
-level = [leaf_hashes[cid] for cid in merkle_sorted]
-while len(level) > 1:
-    next_level = []
-    i = 0
-    while i < len(level):
-        if i + 1 < len(level):
-            next_level.append(hashlib.sha256(level[i] + level[i + 1]).digest())
-        else:
-            next_level.append(level[i])  # odd node promoted
-        i += 2
-    level = next_level
-
-merkle_root = level[0].hex()
-EXPECTED_MERKLE_ROOT = "7e80d4780f454e0fca0b090d8c646f572b49354f54154531606105aad2fda28e"
-check("Merkle root", merkle_root == EXPECTED_MERKLE_ROOT, f"got {merkle_root}")
-
-# verify inclusion proof for "charlie"
-proof_path = [
-    {"hash": "4f4a9410ffcdf895c4adb880659e9b5c0dd1f23a30790684340b3eaacb045398", "position": "right"},
-    {"hash": "90d39555bb3c223e12f5a375c3011d2462fe2e1e36b8416a0b623d5831a9b4f3", "position": "left"},
-    {"hash": "092c79e8f80e559e404bcf660c48f3522b67aba9ff1484b0367e1a4ddef7431d", "position": "right"},
-]
-current = hashlib.sha256(b"charlie").digest()
-for step in proof_path:
-    sibling = bytes.fromhex(step["hash"])
-    if step["position"] == "left":
-        current = hashlib.sha256(sibling + current).digest()
-    else:
-        current = hashlib.sha256(current + sibling).digest()
-check("Merkle proof charlie", current.hex() == EXPECTED_MERKLE_ROOT, f"got {current.hex()}")
-
-# --- 12. Beacon JWS verification ---
-print("\n12. Beacon JWS Verification (key 1)")
-BEACON_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0._1RgZpMv63-M3ZUeTNX679xkAeX3TY0PJ0ImH7422cKA7I88Hf8bBVQMVVhP3oNdvX7i7Q4se5EP3kk5aEuxDQ"
-EXPECTED_BEACON_CID = "bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu"
+# --- 11. Beacon JWS verification ---
+print("\n11. Beacon JWS Verification (key 1)")
+BEACON_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYzJtdXg0cGxpNXFmZDVzYnAyeXh5MmdqbTU0Zmc1Z2NpNm02YnBldm9pdXdmZGc2cG91NCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1hbmlmZXN0Q29udGVudElkIjoiYTgyejkyYTNobmRrNmM5N3RoY3JuOCIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9._EKV036utOU-oMHwMyJ1Om1QhJzN-g9DTRbMz0U7L9SzQR-sHIeC6iNreYN-oV-mBvo5RPLg4TJ0UNv-PNBzDQ"
+EXPECTED_BEACON_CID = "bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4"
 
 result = verify_jws(BEACON_JWS, pub1)
 check("Beacon signature valid", True)
@@ -266,36 +221,42 @@ check("Beacon header typ", result["header"]["typ"] == "did:dfos:beacon")
 check("Beacon header kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_r9ev34fvc23z999veaaft8")
 check("Beacon header cid", result["header"]["cid"] == EXPECTED_BEACON_CID)
 check("Beacon payload type", result["payload"]["type"] == "beacon")
-check("Beacon payload merkleRoot", result["payload"]["merkleRoot"] == EXPECTED_MERKLE_ROOT)
+check("Beacon payload manifestContentId", result["payload"]["manifestContentId"] == "a82z92a3hndk6c97thcrn8")
 
-# --- 13. Beacon countersignature verification ---
-print("\n13. Beacon Countersignature Verification (key 2 witnesses key 1's beacon)")
-BEACON_WITNESS_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpaGhvbHV1aTdzN25zNzRpZW02YWhmeHNiNDcyaHdvZ2JxZDMyeXJycDVmenRjM2t4YTVxdSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1lcmtsZVJvb3QiOiI3ZTgwZDQ3ODBmNDU0ZTBmY2EwYjA5MGQ4YzY0NmY1NzJiNDkzNTRmNTQxNTQ1MzE2MDYxMDVhYWQyZmRhMjhlIiwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowNTowMC4wMDBaIn0.awA8ctmLHjJCHZcH0lav7HpadkIoGiG2WR-pCf-0XfPVi9dD8Z2at0E7iAnOUnVEc5VthBo-mMklSIJFK28IDw"
+# --- 12. Beacon countersignature verification ---
+print("\n12. Beacon Countersignature Verification (key 2 witnesses key 1's beacon)")
+BEACON_WITNESS_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmUzdnZ0Y2s0MmQ0ZWFjZG56dnRybjYja2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2QiLCJjaWQiOiJiYWZ5cmVpYzJtdXg0cGxpNXFmZDVzYnAyeXh5MmdqbTU0Zmc1Z2NpNm02YnBldm9pdXdmZGc2cG91NCJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsIm1hbmlmZXN0Q29udGVudElkIjoiYTgyejkyYTNobmRrNmM5N3RoY3JuOCIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.a2BN31Mqi296FJ8wIVOwy7zdTR4fEL2TVy2A6xG6SGUBmJdUdnlqro5JbjIOF-h5RSA1SW0i4WvIK-AeiB27BQ"
 
 result = verify_jws(BEACON_WITNESS_JWS, pub2)
 check("Beacon countersig valid", True)
 check("Beacon countersig typ", result["header"]["typ"] == "did:dfos:beacon")
 check("Beacon countersig kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_ez9a874tckr3dv933d3ckd")
 check("Beacon countersig same CID", result["header"]["cid"] == EXPECTED_BEACON_CID)
-check("Beacon countersig same payload", result["payload"]["merkleRoot"] == EXPECTED_MERKLE_ROOT)
+check("Beacon countersig same payload", result["payload"]["manifestContentId"] == "a82z92a3hndk6c97thcrn8")
 
-# --- 14. VC-JWT Credential Verification ---
-print("\n14. VC-JWT Credential Verification (key 1)")
+# --- 13. DFOS Credential Verification ---
+print("\n13. DFOS Credential Verification (key 1)")
+EXPECTED_CREDENTIAL_AUD = "did:dfos:nzkf838efr424433rn2rzk"
+
 result = verify_jws(BROAD_WRITE_VC, pub1)
-check("Write VC signature valid", True)
-check("Write VC header typ", result["header"]["typ"] == "vc+jwt")
-check("Write VC header kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_r9ev34fvc23z999veaaft8")
-check("Write VC payload iss", result["payload"]["iss"] == EXPECTED_DID)
-check("Write VC payload sub", result["payload"]["sub"] == EXPECTED_DID)
-check("Write VC type contains DFOSContentWrite", "DFOSContentWrite" in result["payload"]["vc"]["type"])
-check("Write VC context contains W3C v2", "https://www.w3.org/ns/credentials/v2" in result["payload"]["vc"]["@context"])
+check("Write credential signature valid", True)
+check("Write credential header typ", result["header"]["typ"] == "did:dfos:credential")
+check("Write credential header kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_r9ev34fvc23z999veaaft8")
+check("Write credential payload type", result["payload"]["type"] == "DFOSCredential")
+check("Write credential payload iss", result["payload"]["iss"] == EXPECTED_DID)
+check("Write credential payload aud", result["payload"]["aud"] == EXPECTED_CREDENTIAL_AUD)
+att = result["payload"]["att"]
+check("Write credential att is list", isinstance(att, list) and len(att) > 0)
+check("Write credential att resource", att[0]["resource"] == "chain:*")
+check("Write credential att action", att[0]["action"] == "write")
 
 result = verify_jws(READ_VC, pub1)
-check("Read VC signature valid", True)
-check("Read VC type contains DFOSContentRead", "DFOSContentRead" in result["payload"]["vc"]["type"])
+check("Read credential signature valid", True)
+check("Read credential payload type", result["payload"]["type"] == "DFOSCredential")
+check("Read credential att action", result["payload"]["att"][0]["action"] == "read")
 
 # Number encoding determinism tests
-print("\n15. Number Encoding Determinism")
+print("\n14. Number Encoding Determinism")
 
 def test_number_encoding_determinism():
     payload = {"version": 1, "type": "test"}
