@@ -6,9 +6,16 @@ services:
       options:
         max-size: '50m'
         max-file: '3'
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:8080/.well-known/dfos-relay']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     environment:
       PORT: '8080'
       RELAY_NAME: 'My Relay'
+      SQLITE_PATH: '/data/relay.db'
       # PEERS: "https://other-relay.example.com"
       # SYNC_INTERVAL: "30s"
     volumes:
@@ -19,6 +26,13 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging:
+      options:
+        max-size: '50m'
+        max-file: '3'
+    depends_on:
+      relay:
+        condition: service_healthy
     ports:
       - '80:80'
       - '443:443'
