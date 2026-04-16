@@ -2,6 +2,7 @@ package relay
 
 import (
 	"strings"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -78,12 +79,15 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 
 // RunSequencerAndGossip runs the sequencer and gossips newly sequenced ops.
 func (r *Relay) RunSequencerAndGossip() SequenceResult {
+	start := time.Now()
 	newOps, result := r.RunSequencer()
+	elapsed := time.Since(start)
 	if result.Sequenced > 0 {
 		r.logger.Info("sequencer processed ops",
 			"sequenced", result.Sequenced,
 			"rejected", result.Rejected,
 			"pending", result.Pending,
+			"elapsed", elapsed.Round(time.Millisecond).String(),
 		)
 	}
 	r.gossipOps(newOps)

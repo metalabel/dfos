@@ -159,8 +159,15 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	return results
 }
 
+// maxOpsPerSyncCycle caps how many ops are fetched from a single peer in one
+// sync cycle. This prevents a large backlog from blocking the relay for
+// minutes — catch-up happens incrementally over multiple cycles.
+const maxOpsPerSyncCycle = 5000
+
 // SyncFromPeers pulls raw ops from all configured sync peers into the raw
-// store, then runs the sequencer to process everything.
+// store, then runs the sequencer to process everything. Fetch volume is
+// bounded by maxOpsPerSyncCycle per peer per cycle — if more ops are available
+// the next cycle picks up where the cursor left off.
 func (r *Relay) SyncFromPeers() error {
 	if r.peerClient == nil {
 		return nil
@@ -171,7 +178,8 @@ func (r *Relay) SyncFromPeers() error {
 		}
 		cursor, _ := r.store.GetPeerCursor(peer.URL)
 		fetched := 0
-		for {
+		caughtUp := true
+		for fetched < maxOpsPerSyncCycle {
 			page, err := r.peerClient.GetOperationLog(peer.URL, cursor, 1000)
 			if err != nil {
 				r.logger.Error("peer sync failed", "peer", peer.URL, "error", err)
@@ -194,8 +202,15 @@ func (r *Relay) SyncFromPeers() error {
 				break
 			}
 		}
+		if fetched >= maxOpsPerSyncCycle {
+			caughtUp = false
+		}
 		if fetched > 0 {
-			r.logger.Info("peer sync fetched ops", "peer", peer.URL, "ops", fetched)
+			r.logger.Info("peer sync fetched ops",
+				"peer", peer.URL,
+				"ops", fetched,
+				"caughtUp", caughtUp,
+			)
 		}
 	}
 
