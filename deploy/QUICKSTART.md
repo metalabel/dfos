@@ -97,6 +97,47 @@ Pinned version tags (e.g. `ghcr.io/metalabel/dfos:0.9.0`) are also available.
 Browse available tags at
 https://github.com/metalabel/dfos/pkgs/container/dfos.
 
+## Hardening
+
+### Log Rotation
+
+Add log rotation to prevent unbounded log growth:
+
+```yaml
+services:
+  relay:
+    logging:
+      options:
+        max-size: '50m'
+        max-file: '3'
+```
+
+### Swap
+
+On memory-constrained hosts (2 GiB or less), add a swap file to prevent
+OOM kills under load — particularly when Caddy's TLS session cache grows
+during sustained traffic:
+
+```bash
+fallocate -l 512M /swapfile
+chmod 600 /swapfile
+mkswap /swapfile
+swapon /swapfile
+echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
+```
+
+### Caddy Auto-Restart
+
+If running Caddy as a systemd service (instead of via Docker Compose), add
+`Restart=on-failure` to the unit file so it recovers automatically from
+transient failures:
+
+```ini
+[Service]
+Restart=on-failure
+RestartSec=5s
+```
+
 ## Without Docker
 
 Install the CLI directly and run the relay as a process:

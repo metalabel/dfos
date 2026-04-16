@@ -2,6 +2,10 @@ services:
   relay:
     image: ghcr.io/metalabel/dfos:latest
     restart: unless-stopped
+    logging:
+      options:
+        max-size: '50m'
+        max-file: '3'
     environment:
       PORT: '8080'
       RELAY_NAME: 'My Relay'
