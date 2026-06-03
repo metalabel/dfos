@@ -799,6 +799,43 @@ func TestCountersignatureIdempotent(t *testing.T) {
 	}
 }
 
+// The GET countersignatures response MUST contain unique tokens regardless of
+// how the operation was ingested. A bytewise-identical countersignature posted
+// via a single batch, repeated POSTs, or peer sync must appear exactly once.
+func TestCountersignatureResponseDedup(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	cc := createContent(t, base, id)
+
+	witness := createIdentity(t, base)
+	witnessKid := witness.did + "#" + witness.auth.keyID
+
+	csToken, _, _ := dfos.SignCountersign(witness.did, cc.genCID, witnessKid, witness.auth.priv)
+
+	// same token, three ingestion paths: batch-with-self, then two repeat POSTs
+	postOperations(t, base, []string{csToken, csToken}).Body.Close()
+	postOperations(t, base, []string{csToken}).Body.Close()
+	postOperations(t, base, []string{csToken}).Body.Close()
+
+	var csResult struct {
+		Countersignatures []string `json:"countersignatures"`
+	}
+	getJSON(t, base+"/countersignatures/"+cc.genCID, &csResult)
+
+	seen := map[string]int{}
+	for _, t := range csResult.Countersignatures {
+		seen[t]++
+	}
+	for tok, n := range seen {
+		if n > 1 {
+			t.Fatalf("countersig token returned %d times (expected unique): %.60s...", n, tok)
+		}
+	}
+	if len(csResult.Countersignatures) != 1 {
+		t.Fatalf("expected 1 countersig, got %d", len(csResult.Countersignatures))
+	}
+}
+
 func TestCountersignatureMultiWitness(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
