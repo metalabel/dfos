@@ -38,9 +38,9 @@ type RelayInfo struct {
 
 // RelayCapabilities are the nested capability flags from the well-known response.
 type RelayCapabilities struct {
-	Proof    bool `json:"proof"`
-	Content  bool `json:"content"`
-	Log      bool `json:"log"`
+	Proof     bool `json:"proof"`
+	Content   bool `json:"content"`
+	Log       bool `json:"log"`
 	Documents bool `json:"documents"`
 }
 
@@ -146,6 +146,11 @@ func (c *Client) submitBatch(operations []string) ([]IngestionResult, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("relay returned %d: %s", resp.StatusCode, string(body))
+	}
 
 	var result struct {
 		Results []IngestionResult `json:"results"`

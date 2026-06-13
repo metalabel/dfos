@@ -27,6 +27,9 @@ func newWitnessCmd() *cobra.Command {
 				return err
 			}
 
+			if len(chain.State.AuthKeys) == 0 {
+				return fmt.Errorf("identity has no auth keys")
+			}
 			authKeyID := chain.State.AuthKeys[0].ID
 			kid := chain.DID + "#" + authKeyID
 			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)

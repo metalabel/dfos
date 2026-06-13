@@ -48,7 +48,7 @@ func newAuthTokenCmd() *cobra.Command {
 
 			dur, err := time.ParseDuration(ttl)
 			if err != nil {
-				dur = 5 * time.Minute
+				return fmt.Errorf("invalid --ttl %q: %w (use Go duration units like 5m, 1h, 24h — note day units like \"1d\" are not supported)", ttl, err)
 			}
 
 			c := client.New(ctx.RelayURL)

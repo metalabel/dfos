@@ -208,6 +208,9 @@ func newBeaconCountersignCmd() *cobra.Command {
 				return fmt.Errorf("beacon not found for %s", targetDID)
 			}
 
+			if len(chain.State.AuthKeys) == 0 {
+				return fmt.Errorf("identity has no auth keys")
+			}
 			authKeyID := chain.State.AuthKeys[0].ID
 			kid := chain.DID + "#" + authKeyID
 			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)

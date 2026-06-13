@@ -134,7 +134,7 @@ Every command resolves its active (identity, relay) pair via:
 ```
 --ctx flag  →  DFOS_CONTEXT env  →  active_context in config  →  error
 --identity  →  DFOS_IDENTITY env →  from resolved context
---relay     →  DFOS_RELAY env    →  from resolved context     →  (optional for local-only ops)
+--peer      →  DFOS_RELAY env    →  from resolved context     →  (optional for local-only ops)
 ```
 
 The `@` syntax is shorthand: `alice@local` = identity "alice" + relay "local". If both the identity and relay names exist in config, the context resolves without pre-registration.
@@ -143,9 +143,22 @@ The `@` syntax is shorthand: `alice@local` = identity "alice" + relay "local". I
 
 ## Key Management
 
-### OS Keychain Integration
+### Backends
 
-One keychain entry per Ed25519 key:
+The CLI stores each Ed25519 seed under an account key of the form `did:dfos:xxx#key_yyy`. There are two storage backends:
+
+| Backend     | Location                | When used                                          |
+| ----------- | ----------------------- | -------------------------------------------------- |
+| OS keychain | system keychain/keyring | default, when an OS keychain is reachable          |
+| File store  | `~/.dfos/keys/`         | keychain probe fails, or `DFOS_NO_KEYCHAIN` is set |
+
+On startup the CLI probes the OS keychain with a test write/read/delete cycle (the gh CLI pattern). If the probe succeeds, keys go in the keychain. If it fails — which is the common case on headless Linux, containers, and CI where no keychain daemon is running — the CLI prints a warning to stderr and **falls back to the file store**. Setting `DFOS_NO_KEYCHAIN` to any non-empty value skips the probe and uses the file store directly.
+
+`dfos status` reports the active backend in the `Keys:` line (`keychain` or `file (<path>)`), so you can always see where your keys actually live.
+
+#### Keychain backend
+
+One keychain entry per key:
 
 | Field   | Value                            |
 | ------- | -------------------------------- |
@@ -153,20 +166,28 @@ One keychain entry per Ed25519 key:
 | Account | `did:dfos:xxx#key_yyy`           |
 | Secret  | hex-encoded 32-byte Ed25519 seed |
 
-During identity genesis (before the DID is known), keys are stored under a temporary account (`pending:<keyId>`) and renamed after the DID is derived from the genesis CID.
+Protection is whatever the host keychain provides (e.g. macOS Keychain, libsecret/gnome-keyring).
 
-The CLI discovers which keys belong to which identity by querying the identity's chain state (from local store or relay) and checking which keys have private material in the keychain.
+#### File store backend (`~/.dfos/keys/`)
 
-### In-Memory Mode
+When the keychain is unavailable, each key is written to its own file under `~/.dfos/keys/`, named after the account (`#` and `:` replaced with path-safe characters). **The file contains the hex-encoded 32-byte Ed25519 seed in plaintext — it is not encrypted.** The directory is created `0700` and each key file `0600` (owner read/write only), so the protection is filesystem permissions and nothing more.
 
-`DFOS_NO_KEYCHAIN=1` switches to in-memory key storage. Keys exist only in the current process and are lost on exit. Designed for CI, testing, and environments without an OS keychain daemon.
+Threat model for the file store:
+
+- A seed file grants full signing authority for that key to anyone who can read it. Treat `~/.dfos/keys/` like an SSH private key directory.
+- There is no passphrase, no encryption at rest, and no hardware backing. Disk theft, a permissive backup, a synced home directory, or root on the box all expose the seeds.
+- If you need encryption at rest, run on a host with a working OS keychain (the default path) or place `~/.dfos/keys/` on an encrypted volume.
+
+During identity genesis (before the DID is known), keys are stored under a temporary account (`pending:<keyId>`) and renamed after the DID is derived from the genesis CID — this happens in whichever backend is active.
+
+The CLI discovers which keys belong to which identity by querying the identity's chain state (from local store or relay) and checking which keys have private material in the active backend.
 
 ### Security Properties
 
-- Private keys exist in memory only during signing operations
-- No key material is ever written to the filesystem
-- `identity keys` shows keychain presence/absence, never key material
-- After key rotation, old keys remain in the keychain (needed for historical chain re-verification) but are no longer used for new operations
+- Private keys are loaded into memory only during signing operations
+- With the keychain backend, seeds are held by the OS keychain; with the file store backend, seeds are written **unencrypted** to `~/.dfos/keys/` at mode `0600` (see threat model above)
+- `identity keys` shows key presence/absence, never key material
+- After key rotation, old keys remain in the active backend (needed for historical chain re-verification) but are no longer used for new operations
 
 ---
 
@@ -186,22 +207,22 @@ dfos content create post.json
 # → blob and chain stored in ~/.dfos/relay.db
 
 # publish when ready
-dfos identity publish alice --relay local
-dfos content publish <contentId> --relay local
+dfos identity publish alice --peer local
+dfos content publish <contentId> --peer local
 ```
 
 ### Direct-to-Relay
 
-If `--relay` is present on create commands, the CLI creates and publishes in one step:
+If `--peer` is present on create commands, the CLI creates and publishes in one step:
 
 ```bash
-dfos identity create --name alice --relay local
-dfos content create post.json --relay local
+dfos identity create --name alice --peer local
+dfos content create post.json --peer local
 ```
 
 ### Smart Dependency Resolution
 
-If you create content with `--relay` but the identity hasn't been published to that relay, the CLI detects the dependency and either prompts or auto-publishes (with `--yes`).
+If you create content with `--peer` but the identity hasn't been published to that relay, the CLI detects the dependency and either prompts or auto-publishes (with `--yes`).
 
 ---
 
@@ -216,8 +237,8 @@ Identity chains, content chains, operations, beacons, countersignatures, and blo
 The CLI can download and store any chain from any relay, without owning the private keys:
 
 ```bash
-dfos identity fetch did:dfos:xxx --relay prod --name carol
-dfos content fetch abc123 --relay prod
+dfos identity fetch did:dfos:xxx --peer prod --name carol
+dfos content fetch abc123 --peer prod
 ```
 
 Fetched identities appear in `identity list` with `KEYS 0/N` — visible public keys but no private material in the keychain. This enables local verification, credential checking, and countersigning against remote identities.
@@ -279,7 +300,7 @@ Credentials are printed to stdout (or as JSON with `--json`). The recipient pass
 
 ```bash
 # present a read credential for downloads
-dfos content download <contentId> --credential <jws> --relay local
+dfos content download <contentId> --credential <jws> --peer local
 
 # present a write credential for delegated mutations
 dfos --ctx bob@prod content update <contentId> new.json --authorization <jws>
@@ -335,7 +356,7 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `DFOS_IDENTITY`        | Override active identity name                     |
 | `DFOS_RELAY`           | Override active relay name                        |
 | `DFOS_CONFIG`          | Config file path (default: `~/.dfos/config.toml`) |
-| `DFOS_NO_KEYCHAIN`     | In-memory keys only (CI/testing)                  |
+| `DFOS_NO_KEYCHAIN`     | Skip OS keychain; use file store `~/.dfos/keys/`  |
 | `DFOS_NO_UPDATE_CHECK` | Disable automatic version update checks           |
 | `DFOS_DEBUG`           | Debug logging (HTTP traffic, key resolution)      |
 
