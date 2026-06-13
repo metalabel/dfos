@@ -8,11 +8,17 @@ import (
 )
 
 // JWSHeader is the protected header of a JWS token.
+//
+// Crit/JWK/X5C are declared so that a header carrying them is observable; the
+// DFOS profile rejects all three (see assertJWSProfile). DFOS never emits them.
 type JWSHeader struct {
-	Alg string `json:"alg"`
-	Typ string `json:"typ"`
-	Kid string `json:"kid"`
-	CID string `json:"cid,omitempty"`
+	Alg  string          `json:"alg"`
+	Typ  string          `json:"typ"`
+	Kid  string          `json:"kid"`
+	CID  string          `json:"cid,omitempty"`
+	Crit json.RawMessage `json:"crit,omitempty"`
+	JWK  json.RawMessage `json:"jwk,omitempty"`
+	X5C  json.RawMessage `json:"x5c,omitempty"`
 }
 
 // CreateJWS creates a JWS compact serialization token.
@@ -76,6 +82,17 @@ func VerifyJWS(token string, publicKey ed25519.PublicKey) (*JWSHeader, map[strin
 		return nil, nil, fmt.Errorf("invalid JWS format")
 	}
 
+	headerBytes, err := Base64urlDecode(parts[0])
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode header: %w", err)
+	}
+
+	// apply the DFOS signature verification profile (alg pin, crit, no
+	// header-key-trust) BEFORE any signature check
+	if err := assertJWSProfile(headerBytes); err != nil {
+		return nil, nil, err
+	}
+
 	signingInput := []byte(parts[0] + "." + parts[1])
 	sig, err := Base64urlDecode(parts[2])
 	if err != nil {
@@ -86,7 +103,6 @@ func VerifyJWS(token string, publicKey ed25519.PublicKey) (*JWSHeader, map[strin
 		return nil, nil, fmt.Errorf("signature verification failed")
 	}
 
-	headerBytes, _ := Base64urlDecode(parts[0])
 	payloadBytes, _ := Base64urlDecode(parts[1])
 
 	var header JWSHeader

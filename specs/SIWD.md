@@ -147,11 +147,11 @@ The platform MAY perform a preflight health check (`GET http://localhost:<port>/
 
 ## Third-Party Verification
 
-Verification is identical regardless of signing path:
+Verification is identical regardless of signing path. The JWS signature MUST be checked under the DFOS [Signature Verification Profile](https://protocol.dfos.com/protocol#signature-verification-profile) — the same profile every DFOS verifier applies — not unprofiled "standard Ed25519 verification":
 
-1. **Decode the JWS** — extract the challenge payload, `kid` header (DID URL of signing key), and signature.
-2. **Resolve the DID** — fetch the identity chain from any DFOS relay. Extract the public key matching the `kid`.
-3. **Verify the signature** — standard Ed25519 verification of the JWS against the resolved public key.
+1. **Decode the JWS** — extract the challenge payload, `kid` header (DID URL of signing key), and signature. Before any signature work, apply the profile header gates: the protected header `alg` MUST equal the exact string `"EdDSA"`; a `crit` member MUST cause rejection; and an embedded header key (`jwk`, `x5c`, or any key-bearing member) MUST cause rejection. The key is never read from the header.
+2. **Resolve the DID** — fetch the identity chain from any DFOS relay and replay it to its **current state**. Extract the public key matching the `kid` from the current `authKeys`. Keys that have been rotated out, and identities that have been deleted or revoked, MUST NOT verify — a challenge signed by a key that is no longer current (or by a deleted/revoked identity) MUST be rejected.
+3. **Verify the signature** — Ed25519 verification of the JWS against the resolved public key, with the canonical-scalar gate (`S < L`) and the 64-byte length check from the profile.
 4. **Validate the nonce** — confirm the `nonce` in the challenge payload matches the server-side value issued to this session. Discard the nonce after use.
 5. **Validate the timestamp** — reject challenges older than a reasonable window (implementation-defined, e.g., 5 minutes).
 6. **Validate the domain** — confirm the `domain` in the challenge matches the verifier's own origin.

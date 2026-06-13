@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ import (
 // =============================================================================
 
 const (
-	genesisJWS       = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.EDryDK1uvtix-17cHun9t6MacFIx2rMmMF1QLzfD5TFlSsOvMcue97pCgGn3CXeLVFtVxgpCoh0kGSXioKKzAw"
+	genesisJWS        = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.EDryDK1uvtix-17cHun9t6MacFIx2rMmMF1QLzfD5TFlSsOvMcue97pCgGn3CXeLVFtVxgpCoh0kGSXioKKzAw"
 	rotationJWS       = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNpZCI6ImJhZnlyZWljeW00Y3lpZWRubGQ3M3NtYngzMnN6YWVpN3hkdWxxbjRnM3N0ZTVlMncydWxhanIzb3FtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.MScuoBlgOK3j5QX9tFcw1ou0o4LgJziGJEsZ5pvqiBr1SagAyAv5h-wajQhtg8IP7dLlM0U4leW2iRra945cDg"
 	contentCreateJWS  = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWFlZGhqcTY0YWFqcHdvY2lhaGw1dzM3ajZ1b3hyNW1vam9xNWRuYWg2ZnB2eHI1ZDRseHUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWh6d3VvdXBmZzNkeGlwNnhtZ3pteHN5d3lpaTJqZW94eHpiZ3gzenhtMmluN2tub2kzZzQiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.Rv6vlz5MfrwqDUrSVIGs4ZfeBbkQUSBcXhxwZ6hfudSr5MxhYl08hTqLDOA0W1NMjN0Hs0IW9jXTwLwP1dMDBg"
 	jwtToken          = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIn0.eyJpc3MiOiJkZm9zIiwic3ViIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImF1ZCI6ImRmb3MtYXBpIiwiZXhwIjoxNzcyOTAyODAwLCJpYXQiOjE3NzI4OTkyMDAsImp0aSI6InNlc3Npb25fcmVmX2V4YW1wbGVfMDEifQ.zhKeXJHHF7a1-MwF4QoUTRptCplAwh20-rLnuWGDFT6uJheN4E_SA5NhqvMNflLHxd7h97gdaVnMZGE67SXEBA"
@@ -97,18 +98,82 @@ func cidToBase32(cidBytes []byte) string {
 }
 
 func verifyJWS(token string, pubKey ed25519.PublicKey) (header, payload map[string]any) {
+	h, p, err := verifyJWSProfiled(token, pubKey)
+	if err != nil {
+		panic(err)
+	}
+	return h, p
+}
+
+// ed25519L is the group order L, little-endian — the canonical S < L bound.
+var ed25519L = []byte{
+	0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+}
+
+// scalarIsCanonical reports whether the 32-byte little-endian scalar s is < L.
+func scalarIsCanonical(s []byte) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 31; i >= 0; i-- {
+		if s[i] < ed25519L[i] {
+			return true
+		}
+		if s[i] > ed25519L[i] {
+			return false
+		}
+	}
+	return false // s == L is non-canonical
+}
+
+// verifyJWSProfiled applies the DFOS Signature Verification Profile (pragmatic
+// v1) — alg pin, crit rejection, no header-key-trust, 64-byte signature, and
+// canonical S < L — BEFORE the signature check, returning an error on any
+// violation instead of panicking. Used by the reject corpus.
+func verifyJWSProfiled(token string, pubKey ed25519.PublicKey) (header, payload map[string]any, err error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		panic("invalid JWS format")
+		return nil, nil, fmt.Errorf("invalid JWS format")
 	}
+
+	var h map[string]any
+	if uErr := json.Unmarshal(b64urlDecode(parts[0]), &h); uErr != nil {
+		return nil, nil, fmt.Errorf("decode header: %w", uErr)
+	}
+
+	// profile header gates, before any signature work
+	if h["alg"] != "EdDSA" {
+		return nil, nil, fmt.Errorf("unsupported algorithm: %v", h["alg"])
+	}
+	if _, present := h["crit"]; present {
+		return nil, nil, fmt.Errorf("crit header is not supported")
+	}
+	if _, present := h["jwk"]; present {
+		return nil, nil, fmt.Errorf("jwk header is not allowed")
+	}
+	if _, present := h["x5c"]; present {
+		return nil, nil, fmt.Errorf("x5c header is not allowed")
+	}
+
 	signingInput := []byte(parts[0] + "." + parts[1])
 	sig := b64urlDecode(parts[2])
-	if !ed25519.Verify(pubKey, signingInput, sig) {
-		panic("signature verification failed")
+
+	// length + canonical-scalar gates
+	if len(sig) != 64 {
+		return nil, nil, fmt.Errorf("signature must be 64 bytes, got %d", len(sig))
 	}
-	json.Unmarshal(b64urlDecode(parts[0]), &header)
-	json.Unmarshal(b64urlDecode(parts[1]), &payload)
-	return
+	if !scalarIsCanonical(sig[32:64]) {
+		return nil, nil, fmt.Errorf("non-canonical signature scalar (S >= L)")
+	}
+
+	if !ed25519.Verify(pubKey, signingInput, sig) {
+		return nil, nil, fmt.Errorf("signature verification failed")
+	}
+
+	var p map[string]any
+	json.Unmarshal(b64urlDecode(parts[1]), &p)
+	return h, p, nil
 }
 
 // dagCborEncode encodes a value in dag-cbor canonical form.
@@ -526,5 +591,126 @@ func TestNumberEncodingFloatProducesWrongCID(t *testing.T) {
 	}
 	if cidStr == numberTestCID {
 		t.Fatal("Float encoding should NOT produce the correct CID")
+	}
+}
+
+// =============================================================================
+// Reject corpus — every conformant verifier MUST reject all of these.
+// Byte-identical inputs across all five language suites.
+// =============================================================================
+
+const rejectPub1Hex = "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32"
+
+var rejectVectors = map[string]string{
+	"RV-LEN-SHORT":        "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2",
+	"RV-LEN-LONG":         "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA",
+	"RV-S-NONCANON-PLUSL": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ",
+	"RV-S-NONCANON-FF":    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w",
+	"RV-ALG-NONE":         "eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+	"RV-ALG-CASE":         "eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+	"RV-CRIT-PRESENT":     "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+	"RV-HEADER-KEY-TRUST": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+	"RV-SIG-BITFLIP":      "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA",
+}
+
+func TestRejectCorpus(t *testing.T) {
+	pub := ed25519.PublicKey(mustHex(rejectPub1Hex))
+	for name, token := range rejectVectors {
+		if _, _, err := verifyJWSProfiled(token, pub); err == nil {
+			t.Errorf("%s: expected rejection, got accept", name)
+		}
+	}
+}
+
+func mustHex(s string) []byte {
+	b, _ := hexDecode(s)
+	return b
+}
+
+// =============================================================================
+// WP-0 number-policy vectors. CIDs are byte-identical across all five suites.
+// =============================================================================
+
+const maxSafeCanonicalInteger = 9007199254740991 // 2^53 - 1
+
+// assertCanonicalNumbers rejects NaN, ±Inf, non-integers, and integers outside
+// ±(2^53-1). Mirrors the production AssertCanonicalNumbers.
+func assertCanonicalNumbers(v any) error {
+	switch val := v.(type) {
+	case map[string]any:
+		for _, vv := range val {
+			if err := assertCanonicalNumbers(vv); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, vv := range val {
+			if err := assertCanonicalNumbers(vv); err != nil {
+				return err
+			}
+		}
+	case float64:
+		if math.IsNaN(val) || math.IsInf(val, 0) {
+			return fmt.Errorf("non-finite")
+		}
+		if val != math.Trunc(val) {
+			return fmt.Errorf("non-integer")
+		}
+		if val > maxSafeCanonicalInteger || val < -maxSafeCanonicalInteger {
+			return fmt.Errorf("out of safe range")
+		}
+	case int64:
+		if val > maxSafeCanonicalInteger || val < -maxSafeCanonicalInteger {
+			return fmt.Errorf("out of safe range")
+		}
+	}
+	return nil
+}
+
+func numberCID(v any) (string, error) {
+	if err := assertCanonicalNumbers(v); err != nil {
+		return "", err
+	}
+	em, _ := cbor.CoreDetEncOptions().EncMode()
+	cborBytes, err := em.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return cidToBase32(makeCIDBytes(cborBytes)), nil
+}
+
+func TestNumberPolicyAcceptMaxSafe(t *testing.T) {
+	cid, err := numberCID(map[string]any{"n": int64(maxSafeCanonicalInteger)})
+	if err != nil {
+		t.Fatalf("2^53-1 must be accepted: %v", err)
+	}
+	if cid != "bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq" {
+		t.Fatalf("max-safe CID mismatch: got %s", cid)
+	}
+}
+
+func TestNumberPolicyRejects(t *testing.T) {
+	rejects := map[string]any{
+		"2^53": float64(9007199254740992),
+		"1.5":  float64(1.5),
+		"NaN":  math.NaN(),
+		"+Inf": math.Inf(1),
+		"-Inf": math.Inf(-1),
+	}
+	for name, bad := range rejects {
+		if _, err := numberCID(map[string]any{"x": bad}); err == nil {
+			t.Errorf("%s: expected rejection, got accept", name)
+		}
+	}
+}
+
+func TestNumberPolicyNullVector(t *testing.T) {
+	nullVec := map[string]any{"documentCID": nil, "note": nil, "prf": []any{}}
+	cid, err := numberCID(nullVec)
+	if err != nil {
+		t.Fatalf("null vector must encode: %v", err)
+	}
+	if cid != "bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue" {
+		t.Fatalf("null vector CID mismatch: got %s", cid)
 	}
 }

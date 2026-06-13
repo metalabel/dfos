@@ -74,16 +74,61 @@ def cid_to_base32(cid_bytes: bytes) -> str:
     # base32lower multibase (prefix 'b')
     return "b" + base64.b32encode(cid_bytes).decode().lower().rstrip("=")
 
+# Ed25519 group order L (little-endian 32 bytes) — the canonical S < L bound.
+ED25519_L = bytes([
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+])
+
+
+def scalar_is_canonical(s: bytes) -> bool:
+    """True iff the 32-byte little-endian scalar s is < L."""
+    if len(s) != 32:
+        return False
+    for i in range(31, -1, -1):
+        if s[i] < ED25519_L[i]:
+            return True
+        if s[i] > ED25519_L[i]:
+            return False
+    return False  # s == L is non-canonical
+
+
+def assert_jws_profile(header: dict) -> None:
+    """DFOS Signature Verification Profile (pragmatic v1) header gates.
+    Applied BEFORE any signature check. See PROTOCOL.md."""
+    if header.get("alg") != "EdDSA":
+        raise ValueError(f"unsupported algorithm: {header.get('alg')}")
+    if "crit" in header:
+        raise ValueError("crit header is not supported")
+    if "jwk" in header:
+        raise ValueError("jwk header is not allowed")
+    if "x5c" in header:
+        raise ValueError("x5c header is not allowed")
+
+
 def verify_jws(token: str, pub_key_bytes: bytes) -> dict:
     parts = token.split(".")
-    assert len(parts) == 3
+    if len(parts) != 3:
+        raise ValueError("invalid JWS format")
     header_b64, payload_b64, sig_b64 = parts
+
+    header = json.loads(b64url_decode(header_b64))
+
+    # profile gates run before any signature work
+    assert_jws_profile(header)
+
     signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
     signature = b64url_decode(sig_b64)
+
+    # length + canonical-scalar (S < L) gates
+    if len(signature) != 64:
+        raise ValueError(f"signature must be 64 bytes, got {len(signature)}")
+    if not scalar_is_canonical(signature[32:64]):
+        raise ValueError("non-canonical signature scalar (S >= L)")
+
     verify_key = nacl.signing.VerifyKey(pub_key_bytes)
     # nacl verify expects signature + message concatenated
     verify_key.verify(signing_input, signature)
-    header = json.loads(b64url_decode(header_b64))
     payload = json.loads(b64url_decode(payload_b64))
     return {"header": header, "payload": payload}
 
@@ -293,6 +338,97 @@ def test_number_encoding_float_produces_wrong_cid():
 test_number_encoding_determinism()
 test_number_encoding_from_json()
 test_number_encoding_float_produces_wrong_cid()
+
+# --- 15. Reject corpus (profile + signature gates) ---
+# Every conformant verifier MUST reject all of these. Byte-identical inputs
+# across all five language suites. Reference key 1 signs the base vector.
+print("\n15. Reject Corpus (all MUST be rejected)")
+
+REJECT_PUB1_HEX = "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32"
+reject_pub = bytes.fromhex(REJECT_PUB1_HEX)
+
+REJECT_VECTORS = {
+    "RV-LEN-SHORT": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2",
+    "RV-LEN-LONG": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA",
+    "RV-S-NONCANON-PLUSL": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ",
+    "RV-S-NONCANON-FF": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w",
+    "RV-ALG-NONE": "eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+    "RV-ALG-CASE": "eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+    "RV-CRIT-PRESENT": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+    "RV-HEADER-KEY-TRUST": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ",
+    "RV-SIG-BITFLIP": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA",
+}
+
+for name, token in REJECT_VECTORS.items():
+    rejected = False
+    try:
+        verify_jws(token, reject_pub)
+    except Exception:
+        rejected = True
+    check(f"{name} rejected", rejected, "was accepted")
+
+# --- 16. WP-0 number-policy vectors ---
+print("\n16. WP-0 Number Policy")
+
+MAX_SAFE = 9007199254740991  # 2^53 - 1
+
+
+def assert_canonical_numbers(value):
+    if isinstance(value, bool):
+        return
+    if isinstance(value, int):
+        if value > MAX_SAFE or value < -MAX_SAFE:
+            raise ValueError("out of safe range")
+        return
+    if isinstance(value, float):
+        import math as _math
+        if not _math.isfinite(value):
+            raise ValueError("non-finite")
+        if value != int(value):
+            raise ValueError("non-integer")
+        if value > MAX_SAFE or value < -MAX_SAFE:
+            raise ValueError("out of safe range")
+        return
+    if isinstance(value, list):
+        for e in value:
+            assert_canonical_numbers(e)
+        return
+    if isinstance(value, dict):
+        for e in value.values():
+            assert_canonical_numbers(e)
+
+
+def number_cid(value) -> str:
+    assert_canonical_numbers(value)
+    cbor = dag_cbor.encode(value)
+    return cid_to_base32(make_cid_bytes(cbor))
+
+
+# accept: 2^53-1
+check("accept int 2^53-1",
+      number_cid({"n": MAX_SAFE}) == "bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq",
+      "wrong CID")
+
+# reject: 2^53, 1.5, NaN, +Inf, -Inf
+for name, bad in [
+    ("2^53", 9007199254740992),
+    ("1.5", 1.5),
+    ("NaN", float("nan")),
+    ("+Inf", float("inf")),
+    ("-Inf", float("-inf")),
+]:
+    rejected = False
+    try:
+        number_cid({"x": bad})
+    except Exception:
+        rejected = True
+    check(f"reject {name}", rejected, "was accepted")
+
+# null vector: { documentCID: null, note: null, prf: [] }
+check("null vector CID",
+      number_cid({"documentCID": None, "note": None, "prf": []}) ==
+      "bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue",
+      "wrong CID")
 
 # --- Summary ---
 print(f"\n{'=' * 70}")

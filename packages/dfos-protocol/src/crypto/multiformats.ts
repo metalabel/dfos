@@ -15,14 +15,23 @@ import { sha256 } from 'multiformats/hashes/sha2';
  * Canonically encoded a value into an IPLD dag-cbor block
  */
 export const dagCborCanonicalEncode = async (value: unknown) => {
-  // enforce the DFOS number policy first — JSON.stringify below silently turns
-  // NaN/±Infinity into null, so disallowed numbers must be caught on the
-  // original value
+  // enforce the DFOS number policy on the ORIGINAL value first — JSON.stringify
+  // below silently turns NaN/±Infinity into null, so those must be caught here
+  // before serialization
   assertCanonicalNumbers(value);
+
+  // the exact shape that gets CBOR-encoded is the JSON round-trip, not the
+  // original — a toJSON()/valueOf() hook can materialize a fraction (or a huge
+  // integer) that the original walk never saw. Re-check the serialized shape so
+  // those cannot escape the number policy. (Note: NaN/±Inf become null here, so
+  // they are only catchable on the original walk above.)
+  const serialized = JSON.parse(JSON.stringify(value));
+  assertCanonicalNumbers(serialized);
+
   return await Block.encode({
     // removes any undefineds or other non-serializable values (and normalizes
     // -0 to 0)
-    value: JSON.parse(JSON.stringify(value)),
+    value: serialized,
     codec: dagCborCodec,
     hasher: sha256,
   });

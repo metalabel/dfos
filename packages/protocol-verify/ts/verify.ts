@@ -109,6 +109,31 @@ function cidToBase32(cidBytes: Uint8Array): string {
   return base32.encode(cidBytes);
 }
 
+// Ed25519 group order L (little-endian 32 bytes) — the canonical S < L bound.
+const ED25519_L = new Uint8Array([
+  0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+]);
+
+// constant-time-ish little-endian compare: returns true iff s < L
+function scalarIsCanonical(s: Uint8Array): boolean {
+  if (s.length !== 32) return false;
+  for (let i = 31; i >= 0; i--) {
+    if (s[i]! < ED25519_L[i]!) return true;
+    if (s[i]! > ED25519_L[i]!) return false;
+  }
+  return false; // s === L is non-canonical
+}
+
+// DFOS Signature Verification Profile (pragmatic v1) header gates. Applied
+// BEFORE any signature check. See PROTOCOL.md "Signature Verification Profile".
+function assertJwsProfile(header: Record<string, unknown>): void {
+  if (header.alg !== 'EdDSA') throw new Error(`unsupported algorithm: ${String(header.alg)}`);
+  if ('crit' in header) throw new Error('crit header is not supported');
+  if ('jwk' in header) throw new Error('jwk header is not allowed');
+  if ('x5c' in header) throw new Error('x5c header is not allowed');
+}
+
 function verifyJws(
   token: string,
   pubKeyBytes: Uint8Array,
@@ -116,13 +141,24 @@ function verifyJws(
   const parts = token.split('.');
   if (parts.length !== 3) throw new Error('invalid JWS');
   const [headerB64, payloadB64, sigB64] = parts as [string, string, string];
+
+  const header = JSON.parse(new TextDecoder().decode(b64urlDecode(headerB64)));
+
+  // profile gates run before any signature work
+  assertJwsProfile(header);
+
   const signingInput = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
   const signature = b64urlDecode(sigB64);
+
+  // length + canonical-scalar (S < L) gates
+  if (signature.length !== 64)
+    throw new Error(`signature must be 64 bytes, got ${signature.length}`);
+  if (!scalarIsCanonical(signature.slice(32, 64)))
+    throw new Error('non-canonical signature scalar (S >= L)');
 
   const valid = ed25519.verify(signature, signingInput, pubKeyBytes);
   if (!valid) throw new Error('signature verification failed');
 
-  const header = JSON.parse(new TextDecoder().decode(b64urlDecode(headerB64)));
   const payload = JSON.parse(new TextDecoder().decode(b64urlDecode(payloadB64)));
   return { header, payload };
 }
@@ -377,6 +413,106 @@ check(
   'Whole-number float encodes as integer (JS semantics)',
   floatCid === expectedIntCid,
   `got ${floatCid}`,
+);
+
+// --- 15. Reject corpus (profile + signature gates) ---
+// Every conformant verifier MUST reject all of these. Byte-identical inputs
+// across all five language suites. Reference key 1 signs the base vector.
+console.log('\n15. Reject Corpus (all MUST be rejected)');
+
+const REJECT_PUB1_HEX = 'ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32';
+const rejectPub = hexDecode(REJECT_PUB1_HEX);
+
+const REJECT_VECTORS: Record<string, string> = {
+  'RV-LEN-SHORT':
+    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2',
+  'RV-LEN-LONG':
+    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA',
+  'RV-S-NONCANON-PLUSL':
+    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ',
+  'RV-S-NONCANON-FF':
+    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w',
+  'RV-ALG-NONE':
+    'eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ',
+  'RV-ALG-CASE':
+    'eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ',
+  'RV-CRIT-PRESENT':
+    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ',
+  'RV-HEADER-KEY-TRUST':
+    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ',
+  'RV-SIG-BITFLIP':
+    'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA',
+};
+
+for (const [name, token] of Object.entries(REJECT_VECTORS)) {
+  let rejected = false;
+  try {
+    verifyJws(token, rejectPub);
+  } catch {
+    rejected = true;
+  }
+  check(`${name} rejected`, rejected, 'was accepted');
+}
+
+// --- 16. WP-0 number-policy vectors ---
+// dag-cbor number policy: integers must be exact and within ±(2^53-1);
+// fractions and non-finite values are non-canonicalizable.
+console.log('\n16. WP-0 Number Policy');
+
+const MAX_SAFE = 9007199254740991; // 2^53 - 1
+
+function assertCanonicalNumbers(value: unknown): void {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('non-finite');
+    if (!Number.isInteger(value)) throw new Error('non-integer');
+    if (value > MAX_SAFE || value < -MAX_SAFE) throw new Error('out of safe range');
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const e of value) assertCanonicalNumbers(e);
+    return;
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const e of Object.values(value)) assertCanonicalNumbers(e);
+  }
+}
+
+function numberCid(value: unknown): string {
+  assertCanonicalNumbers(value);
+  const cbor = dagCbor.encode(value);
+  return cidToBase32(makeCidBytes(cbor));
+}
+
+// accept: 2^53-1
+check(
+  'accept int 2^53-1',
+  numberCid({ n: MAX_SAFE }) === 'bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq',
+  'wrong CID',
+);
+
+// reject: 2^53, 1.5, NaN, +Inf, -Inf
+for (const [name, bad] of [
+  ['2^53', 9007199254740992],
+  ['1.5', 1.5],
+  ['NaN', NaN],
+  ['+Inf', Infinity],
+  ['-Inf', -Infinity],
+] as [string, number][]) {
+  let rejected = false;
+  try {
+    numberCid({ x: bad });
+  } catch {
+    rejected = true;
+  }
+  check(`reject ${name}`, rejected, 'was accepted');
+}
+
+// null vector: { documentCID: null, note: null, prf: [] }
+check(
+  'null vector CID',
+  numberCid({ documentCID: null, note: null, prf: [] }) ===
+    'bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue',
+  'wrong CID',
 );
 
 // --- Summary ---

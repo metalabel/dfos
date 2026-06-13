@@ -135,6 +135,12 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		return nil, fmt.Errorf("failed to decode token")
 	}
 
+	// apply the DFOS signature verification profile (alg pin, crit, no
+	// header-key-trust) BEFORE any signature check
+	if err := assertJWSProfile(headerBytes); err != nil {
+		return nil, err
+	}
+
 	var header struct {
 		Alg string `json:"alg"`
 		Typ string `json:"typ"`
@@ -146,9 +152,6 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 	}
 
 	// verify header fields
-	if header.Alg != "EdDSA" {
-		return nil, fmt.Errorf("unsupported algorithm: %s", header.Alg)
-	}
 	if header.Typ != "did:dfos:credential" {
 		return nil, fmt.Errorf("invalid typ: %s", header.Typ)
 	}
@@ -313,6 +316,12 @@ func verifyAuthTokenCore(token string, publicKey ed25519.PublicKey, audience str
 		return nil, fmt.Errorf("failed to decode token")
 	}
 
+	// apply the DFOS signature verification profile (alg pin, crit, no
+	// header-key-trust) BEFORE any signature check
+	if err := assertJWSProfile(headerBytes); err != nil {
+		return nil, err
+	}
+
 	var header struct {
 		Alg string `json:"alg"`
 		Typ string `json:"typ"`
@@ -322,9 +331,6 @@ func verifyAuthTokenCore(token string, publicKey ed25519.PublicKey, audience str
 		return nil, fmt.Errorf("failed to decode token")
 	}
 
-	if header.Alg != "EdDSA" {
-		return nil, fmt.Errorf("unsupported algorithm: %s", header.Alg)
-	}
 	if header.Typ != "JWT" {
 		return nil, fmt.Errorf("invalid typ: %s", header.Typ)
 	}

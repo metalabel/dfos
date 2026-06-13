@@ -166,23 +166,71 @@ func encodeID(_ hashBytes: [UInt8]) -> String {
     return String(hashBytes.prefix(idLength).map { chars[Int($0) % 19] })
 }
 
-/// Verify a JWS (or JWT) token with an Ed25519 public key, returning parsed header and payload.
-func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header: [String: Any], payload: [String: Any]) {
+/// Ed25519 group order L (little-endian 32 bytes) — the canonical S < L bound.
+let ed25519L: [UInt8] = [
+    0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+]
+
+/// Returns true iff the 32-byte little-endian scalar s is < L.
+func scalarIsCanonical(_ s: [UInt8]) -> Bool {
+    if s.count != 32 { return false }
+    for i in stride(from: 31, through: 0, by: -1) {
+        if s[i] < ed25519L[i] { return true }
+        if s[i] > ed25519L[i] { return false }
+    }
+    return false  // s == L is non-canonical
+}
+
+struct JWSRejected: Error { let reason: String }
+
+/// DFOS Signature Verification Profile (pragmatic v1) header gates — applied
+/// BEFORE any signature check. Throws JWSRejected on any violation.
+func assertJWSProfile(_ header: [String: Any]) throws {
+    guard header["alg"] as? String == "EdDSA" else {
+        throw JWSRejected(reason: "unsupported algorithm")
+    }
+    if header["crit"] != nil { throw JWSRejected(reason: "crit header is not supported") }
+    if header["jwk"] != nil { throw JWSRejected(reason: "jwk header is not allowed") }
+    if header["x5c"] != nil { throw JWSRejected(reason: "x5c header is not allowed") }
+}
+
+/// Profile-aware JWS verification — applies alg pin, crit, no header-key-trust,
+/// 64-byte length, and the canonical S < L gate BEFORE the signature check.
+/// Throws on any violation so the reject corpus can assert rejection.
+func verifyJWSProfiled(_ token: String, pubKey: Curve25519.Signing.PublicKey) throws -> (header: [String: Any], payload: [String: Any]) {
     let parts = token.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
-    precondition(parts.count == 3, "invalid JWS format")
+    guard parts.count == 3 else { throw JWSRejected(reason: "invalid JWS format") }
+
+    let headerData = b64urlDecode(parts[0])
+    guard let header = try? JSONSerialization.jsonObject(with: headerData) as? [String: Any] else {
+        throw JWSRejected(reason: "parse header")
+    }
+
+    // profile gates run before any signature work
+    try assertJWSProfile(header)
 
     let signingInput = Data((parts[0] + "." + parts[1]).utf8)
     let signature = b64urlDecode(parts[2])
 
-    guard pubKey.isValidSignature(signature, for: signingInput) else {
-        fatalError("signature verification failed")
+    // length + canonical-scalar (S < L) gates
+    guard signature.count == 64 else { throw JWSRejected(reason: "signature must be 64 bytes") }
+    if !scalarIsCanonical(Array(signature[32..<64])) {
+        throw JWSRejected(reason: "non-canonical signature scalar (S >= L)")
     }
 
-    let headerData = b64urlDecode(parts[0])
+    guard pubKey.isValidSignature(signature, for: signingInput) else {
+        throw JWSRejected(reason: "signature verification failed")
+    }
+
     let payloadData = b64urlDecode(parts[1])
-    let header = try! JSONSerialization.jsonObject(with: headerData) as! [String: Any]
     let payload = try! JSONSerialization.jsonObject(with: payloadData) as! [String: Any]
     return (header, payload)
+}
+
+/// Verify a JWS (or JWT) token with an Ed25519 public key, returning parsed header and payload.
+func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header: [String: Any], payload: [String: Any]) {
+    return try! verifyJWSProfiled(token, pubKey: pubKey)
 }
 
 // =============================================================================
@@ -360,16 +408,28 @@ let readVC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOi
 // Minimal DAG-CBOR encoder (map + text + uint + float64 only)
 // =============================================================================
 
-/// Encode a single CBOR value. Supported types: String, Int, Double, [String: Any].
-/// Map keys are sorted by (length, lexicographic) per RFC 7049 canonical ordering.
+/// Encode a single CBOR value. Supported types: String, Int, Double, [String: Any],
+/// [Any] (arrays), and NSNull. Map keys are sorted by (length, lexicographic) per
+/// RFC 7049 canonical ordering.
 func encodeCBOR(_ value: Any) -> [UInt8] {
     switch value {
+    case is NSNull:
+        // major type 7, value 22 = null
+        return [0xf6]
+    case let arr as [Any]:
+        precondition(arr.count < 24, "only small arrays supported")
+        var result = [UInt8(0x80 | arr.count)]
+        for e in arr { result += encodeCBOR(e) }
+        return result
     case let s as String:
         let bytes = Array(s.utf8)
         return [UInt8(0x60 | bytes.count)] + bytes
+    case let u as UInt64:
+        return encodeCBORUInt(u)
     case let i as Int:
-        precondition(i >= 0 && i < 24, "only small non-negative integers supported")
-        return [UInt8(i)]
+        if i >= 0 { return encodeCBORUInt(UInt64(i)) }
+        precondition(false, "negative integers not needed by these vectors")
+        return []
     case let d as Double:
         // major type 7, additional 27 = 64-bit IEEE 754
         let bits = d.bitPattern
@@ -395,6 +455,26 @@ func encodeCBOR(_ value: Any) -> [UInt8] {
         return header + body
     default:
         fatalError("unsupported CBOR value type: \(type(of: value))")
+    }
+}
+
+/// Encode an unsigned integer as a CBOR major-type-0 value using the shortest
+/// canonical form (matches dag-cbor / RFC 8949 deterministic encoding).
+func encodeCBORUInt(_ u: UInt64) -> [UInt8] {
+    if u < 24 {
+        return [UInt8(u)]
+    } else if u <= UInt64(UInt8.max) {
+        return [0x18, UInt8(u)]
+    } else if u <= UInt64(UInt16.max) {
+        return [0x19, UInt8((u >> 8) & 0xff), UInt8(u & 0xff)]
+    } else if u <= UInt64(UInt32.max) {
+        var out: [UInt8] = [0x1a]
+        for shift in stride(from: 24, through: 0, by: -8) { out.append(UInt8((u >> shift) & 0xff)) }
+        return out
+    } else {
+        var out: [UInt8] = [0x1b]
+        for shift in stride(from: 56, through: 0, by: -8) { out.append(UInt8((u >> shift) & 0xff)) }
+        return out
     }
 }
 
@@ -438,4 +518,80 @@ func encodeCBOR(_ value: Any) -> [UInt8] {
     let cid = cidToBase32(cidBytes)
 
     #expect(cid != correctCID)
+}
+
+// =============================================================================
+// Reject corpus — every conformant verifier MUST reject all of these.
+// Byte-identical inputs across all five language suites. Reference key 1 signs.
+// =============================================================================
+
+let rejectPub1Hex = "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32"
+
+let rejectVectors: [(String, String)] = [
+    ("RV-LEN-SHORT", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2"),
+    ("RV-LEN-LONG", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA"),
+    ("RV-S-NONCANON-PLUSL", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ"),
+    ("RV-S-NONCANON-FF", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w"),
+    ("RV-ALG-NONE", "eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
+    ("RV-ALG-CASE", "eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
+    ("RV-CRIT-PRESENT", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
+    ("RV-HEADER-KEY-TRUST", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
+    ("RV-SIG-BITFLIP", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA"),
+]
+
+@Test func rejectCorpus() {
+    let pubBytes = hexDecode(rejectPub1Hex)
+    let pubKey = try! Curve25519.Signing.PublicKey(rawRepresentation: Data(pubBytes))
+    for (name, token) in rejectVectors {
+        var rejected = false
+        do {
+            _ = try verifyJWSProfiled(token, pubKey: pubKey)
+        } catch {
+            rejected = true
+        }
+        #expect(rejected, "\(name): expected rejection, got accept")
+    }
+}
+
+// =============================================================================
+// WP-0 number-policy vectors. CIDs are byte-identical across all five suites.
+// =============================================================================
+
+let maxSafeCanonicalInteger: UInt64 = 9007199254740991  // 2^53 - 1
+
+/// Reject NaN, ±Inf, non-integers, and integers outside ±(2^53-1).
+func assertCanonicalNumber(_ val: Double) -> Bool {
+    if !val.isFinite { return false }
+    if val.truncatingRemainder(dividingBy: 1) != 0 { return false }
+    if val > Double(maxSafeCanonicalInteger) || val < -Double(maxSafeCanonicalInteger) { return false }
+    return true
+}
+
+@Test func testNumberPolicyAcceptMaxSafe() {
+    // { "n": 2^53-1 } — accepted, encodes to the reference CID
+    #expect(assertCanonicalNumber(Double(maxSafeCanonicalInteger)))
+    let payload: [String: Any] = ["n": maxSafeCanonicalInteger]
+    let cborBytes = encodeCBOR(payload)
+    let cid = cidToBase32(makeCIDBytes(cborBytes))
+    #expect(cid == "bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq")
+}
+
+@Test func testNumberPolicyRejects() {
+    #expect(!assertCanonicalNumber(9007199254740992.0))  // 2^53
+    #expect(!assertCanonicalNumber(1.5))
+    #expect(!assertCanonicalNumber(Double.nan))
+    #expect(!assertCanonicalNumber(Double.infinity))
+    #expect(!assertCanonicalNumber(-Double.infinity))
+}
+
+@Test func testNumberPolicyNullVector() {
+    // { "documentCID": null, "note": null, "prf": [] }
+    let payload: [String: Any] = [
+        "documentCID": NSNull(),
+        "note": NSNull(),
+        "prf": [Any](),
+    ]
+    let cborBytes = encodeCBOR(payload)
+    let cid = cidToBase32(makeCIDBytes(cborBytes))
+    #expect(cid == "bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue")
 }
