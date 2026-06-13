@@ -39,6 +39,63 @@ import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protoco
 import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityChain } from './types';
 
 // -----------------------------------------------------------------------------
+// shared error prefixes
+// -----------------------------------------------------------------------------
+
+/**
+ * Prefix for the fork-point state-computation failure. Exported as ONE shared
+ * constant so the producer (the rejection sites below) and any string-based
+ * classifier reference the same literal — eliminating the drift that the #56
+ * colon-mismatch fix patched. The Go twin mirrors this as
+ * `ForkPointStateErrorPrefix` in sequencer.go.
+ *
+ * Classification no longer depends on this string — the sequencer branches on
+ * the structured `dependencyMissing` flag — but the constant kills string drift
+ * for the human-readable error and keeps the two twins byte-identical.
+ */
+export const FORK_POINT_STATE_ERROR_PREFIX = 'failed to compute state at fork point: ';
+
+/**
+ * Substrings that mark a verify-time failure as a missing-dependency (key not
+ * yet resolvable because the signing identity has not synced). These are the
+ * only cases where a thrown verification error is retryable rather than a
+ * permanent rejection. The genesis verifiers (`verifyIdentityChain` /
+ * `verifyContentChain`) throw these via the key resolver
+ * (`createKeyResolver` → "unknown identity: <did>" / "unknown key ...").
+ *
+ * Mirrors the Go twin: its sequencer classifier matches "unknown identity:"
+ * and "unknown previous operation" as dependency failures. Keeping this as a
+ * narrow, explicit list (not the full error text) is what makes the structured
+ * `dependencyMissing` flag deterministic and twin-equivalent.
+ */
+const DEPENDENCY_FAILURE_SUBSTRINGS = ['unknown identity:', 'unknown key '];
+
+/** True if a thrown verification error message indicates a missing dependency. */
+const isKeyResolutionFailure = (message: string): boolean =>
+  DEPENDENCY_FAILURE_SUBSTRINGS.some((s) => message.includes(s));
+
+/**
+ * Credential verification surfaces the unsynced-issuer dependency with a
+ * different message ("issuer identity not found: <iss>") than the chain key
+ * resolvers. Treat that — and the per-key not-found — as retryable.
+ */
+const isCredentialDependencyFailure = (message: string): boolean =>
+  message.includes('issuer identity not found:') || message.includes(' not found on identity ');
+
+/**
+ * Derive the operation CID from a JWS token by re-encoding the decoded payload.
+ * Returns the empty string for an undecodable token. Used at verify-failure
+ * sites so a rejection still carries a CID and can be durably rejected by the
+ * sequencer (instead of being skipped forever by `if (!res.cid) continue`).
+ */
+export const computeOpCID = async (jwsToken: string): Promise<string> => {
+  const decoded = decodeJwsUnsafe(jwsToken);
+  if (!decoded) return '';
+  const encoded = await dagCborCanonicalEncode(decoded.payload);
+  return encoded.cid.toString();
+};
+
+// -----------------------------------------------------------------------------
 // temporal guard
 // -----------------------------------------------------------------------------
 
@@ -382,7 +439,17 @@ const ingestIdentityOp = async (
   const isGenesis = opType === 'create';
 
   if (isGenesis) {
-    const identity = await verifyIdentityChain({ didPrefix: 'did:dfos', log: [jwsToken] });
+    // Preserve the already-computed cid on verify failure (bad signature /
+    // malformed op) so the rejection is keyed and durably rejectable. Letting
+    // the exception propagate to the outer catch would erase the cid → skipped
+    // forever by the sequencer's `if (!res.cid) continue`.
+    let identity;
+    try {
+      identity = await verifyIdentityChain({ didPrefix: 'did:dfos', log: [jwsToken] });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'verification failed';
+      return { cid, status: 'rejected', error: message };
+    }
     const createdAt = (payload as Record<string, unknown>)['createdAt'] as string;
     const chain: StoredIdentityChain = {
       did: identity.did,
@@ -406,7 +473,13 @@ const ingestIdentityOp = async (
   const did = kid.substring(0, hashIdx);
 
   const chain = await store.getIdentityChain(did);
-  if (!chain) return { cid, status: 'rejected', error: `unknown identity: ${did}` };
+  if (!chain)
+    return {
+      cid,
+      status: 'rejected',
+      error: `unknown identity: ${did}`,
+      dependencyMissing: true,
+    };
 
   // extract previousOperationCID from payload
   const previousCID =
@@ -415,13 +488,21 @@ const ingestIdentityOp = async (
       : null;
 
   if (previousCID === chain.headCID) {
-    // linear extension (fast path) — O(1) from trusted head state
-    const extResult = await verifyIdentityExtensionFromTrustedState({
-      currentState: chain.state,
-      headCID: chain.headCID,
-      lastCreatedAt: chain.lastCreatedAt,
-      newOp: jwsToken,
-    });
+    // linear extension (fast path) — O(1) from trusted head state. Preserve the
+    // cid on verify failure (identity extensions are self-contained, so any
+    // failure is a permanent rejection, never a missing dependency).
+    let extResult;
+    try {
+      extResult = await verifyIdentityExtensionFromTrustedState({
+        currentState: chain.state,
+        headCID: chain.headCID,
+        lastCreatedAt: chain.lastCreatedAt,
+        newOp: jwsToken,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'verification failed';
+      return { cid, status: 'rejected', error: message };
+    }
     const updated: StoredIdentityChain = {
       did: chain.did,
       log: [...chain.log, jwsToken],
@@ -439,7 +520,12 @@ const ingestIdentityOp = async (
 
   // fork path — check if previousCID exists in chain operations
   if (!previousCID || !chainLogContainsCID(chain.log, previousCID)) {
-    return { cid, status: 'rejected', error: 'unknown previous operation in identity chain' };
+    return {
+      cid,
+      status: 'rejected',
+      error: 'unknown previous operation in identity chain',
+      dependencyMissing: true,
+    };
   }
 
   // load state at fork point and verify extension against it
@@ -448,16 +534,23 @@ const ingestIdentityOp = async (
     return {
       cid,
       status: 'rejected',
-      error: `failed to compute state at fork point: ${previousCID}`,
+      error: `${FORK_POINT_STATE_ERROR_PREFIX}${previousCID}`,
+      dependencyMissing: true,
     };
   }
 
-  const extResult = await verifyIdentityExtensionFromTrustedState({
-    currentState: forkState.state,
-    headCID: previousCID,
-    lastCreatedAt: forkState.lastCreatedAt,
-    newOp: jwsToken,
-  });
+  let extResult;
+  try {
+    extResult = await verifyIdentityExtensionFromTrustedState({
+      currentState: forkState.state,
+      headCID: previousCID,
+      lastCreatedAt: forkState.lastCreatedAt,
+      newOp: jwsToken,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'verification failed';
+    return { cid, status: 'rejected', error: message };
+  }
 
   // add to log and recompute head
   const updatedLog = [...chain.log, jwsToken];
@@ -534,16 +627,37 @@ const ingestContentOp = async (
 
   const resolveKey = createKeyResolver(store);
   const resolveIdentity = createHistoricalIdentityResolver(store);
+  // Thread revocation onto the WRITE path so revoked credentials (leaf AND
+  // parents) no longer authorize writes. The read path already does this
+  // (auth.ts); this closes the write-path gap.
+  const isRevoked = (issuerDID: string, credentialCID: string) =>
+    store.isCredentialRevoked(issuerDID, credentialCID);
   const opType = (payload as Record<string, unknown>)['type'];
   const isGenesis = opType === 'create';
 
   if (isGenesis) {
-    const content = await verifyContentChain({
-      log: [jwsToken],
-      resolveKey,
-      enforceAuthorization: true,
-      resolveIdentity,
-    });
+    // Preserve the already-computed cid on verify failure (bad signature /
+    // malformed op / unauthorized) so the rejection is keyed and durably
+    // rejectable — otherwise the exception erases the cid and the sequencer
+    // skips it forever.
+    let content;
+    try {
+      content = await verifyContentChain({
+        log: [jwsToken],
+        resolveKey,
+        enforceAuthorization: true,
+        resolveIdentity,
+        isRevoked,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'verification failed';
+      return {
+        cid,
+        status: 'rejected',
+        error: message,
+        dependencyMissing: isKeyResolutionFailure(message),
+      };
+    }
     const createdAt = (payload as Record<string, unknown>)['createdAt'] as string;
     const chain: StoredContentChain = {
       contentId: content.contentId,
@@ -568,14 +682,24 @@ const ingestContentOp = async (
 
   const prevOp = await store.getOperation(previousCID);
   if (!prevOp)
-    return { cid, status: 'rejected', error: `unknown previous operation: ${previousCID}` };
+    return {
+      cid,
+      status: 'rejected',
+      error: `unknown previous operation: ${previousCID}`,
+      dependencyMissing: true,
+    };
   if (prevOp.chainType !== 'content') {
     return { cid, status: 'rejected', error: 'previousOperationCID is not a content operation' };
   }
 
   const chain = await store.getContentChain(prevOp.chainId);
   if (!chain)
-    return { cid, status: 'rejected', error: `content chain not found: ${prevOp.chainId}` };
+    return {
+      cid,
+      status: 'rejected',
+      error: `content chain not found: ${prevOp.chainId}`,
+      dependencyMissing: true,
+    };
 
   // reject if the content creator's identity is deleted
   const creatorIdentity = await store.getIdentityChain(chain.state.creatorDID);
@@ -585,14 +709,26 @@ const ingestContentOp = async (
 
   if (chain.state.headCID === previousCID) {
     // linear extension (fast path) — O(1) from trusted head state
-    const extResult = await verifyContentExtensionFromTrustedState({
-      currentState: chain.state,
-      lastCreatedAt: chain.lastCreatedAt,
-      newOp: jwsToken,
-      resolveKey,
-      enforceAuthorization: true,
-      resolveIdentity,
-    });
+    let extResult;
+    try {
+      extResult = await verifyContentExtensionFromTrustedState({
+        currentState: chain.state,
+        lastCreatedAt: chain.lastCreatedAt,
+        newOp: jwsToken,
+        resolveKey,
+        enforceAuthorization: true,
+        resolveIdentity,
+        isRevoked,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'verification failed';
+      return {
+        cid,
+        status: 'rejected',
+        error: message,
+        dependencyMissing: isKeyResolutionFailure(message),
+      };
+    }
     const updated: StoredContentChain = {
       contentId: chain.contentId,
       genesisCID: chain.genesisCID,
@@ -610,7 +746,12 @@ const ingestContentOp = async (
 
   // fork path — check if previousCID exists in chain operations
   if (!chainLogContainsCID(chain.log, previousCID)) {
-    return { cid, status: 'rejected', error: 'unknown previous operation in content chain' };
+    return {
+      cid,
+      status: 'rejected',
+      error: 'unknown previous operation in content chain',
+      dependencyMissing: true,
+    };
   }
 
   // load state at fork point and verify extension against it
@@ -619,18 +760,31 @@ const ingestContentOp = async (
     return {
       cid,
       status: 'rejected',
-      error: `failed to compute state at fork point: ${previousCID}`,
+      error: `${FORK_POINT_STATE_ERROR_PREFIX}${previousCID}`,
+      dependencyMissing: true,
     };
   }
 
-  const extResult = await verifyContentExtensionFromTrustedState({
-    currentState: forkState.state,
-    lastCreatedAt: forkState.lastCreatedAt,
-    newOp: jwsToken,
-    resolveKey,
-    enforceAuthorization: true,
-    resolveIdentity,
-  });
+  let extResult;
+  try {
+    extResult = await verifyContentExtensionFromTrustedState({
+      currentState: forkState.state,
+      lastCreatedAt: forkState.lastCreatedAt,
+      newOp: jwsToken,
+      resolveKey,
+      enforceAuthorization: true,
+      resolveIdentity,
+      isRevoked,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'verification failed';
+    return {
+      cid,
+      status: 'rejected',
+      error: message,
+      dependencyMissing: isKeyResolutionFailure(message),
+    };
+  }
 
   // add to log and recompute head
   const updatedLog = [...chain.log, jwsToken];
@@ -675,7 +829,14 @@ const ingestBeacon = async (
     verified = await verifyBeacon({ jwsToken, resolveKey });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'verification failed';
-    return { cid: '', status: 'rejected', error: message };
+    // Compute the CID so the rejection is keyed and durably rejectable, unless
+    // the failure is a missing dependency (unsynced identity key).
+    return {
+      cid: await computeOpCID(jwsToken),
+      status: 'rejected',
+      error: message,
+      dependencyMissing: isKeyResolutionFailure(message),
+    };
   }
 
   const did = verified.did;
@@ -717,7 +878,12 @@ const ingestCountersign = async (
     verified = await verifyCountersignature({ jwsToken, resolveKey });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'verification failed';
-    return { cid: '', status: 'rejected', error: message };
+    return {
+      cid: await computeOpCID(jwsToken),
+      status: 'rejected',
+      error: message,
+      dependencyMissing: isKeyResolutionFailure(message),
+    };
   }
 
   const cid = verified.countersignCID;
@@ -736,10 +902,15 @@ const ingestCountersign = async (
     return { cid, status: 'duplicate', kind: 'countersign', chainId: targetCID };
   }
 
-  // target must exist
+  // target must exist (may arrive later via sync/gossip — retryable)
   const targetOp = await store.getOperation(targetCID);
   if (!targetOp) {
-    return { cid, status: 'rejected', error: `unknown target operation: ${targetCID}` };
+    return {
+      cid,
+      status: 'rejected',
+      error: `unknown target operation: ${targetCID}`,
+      dependencyMissing: true,
+    };
   }
 
   // witness must differ from target author
@@ -795,7 +966,12 @@ const ingestArtifact = async (
     verified = await verifyArtifact({ jwsToken, resolveKey });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'verification failed';
-    return { cid: '', status: 'rejected', error: message };
+    return {
+      cid: await computeOpCID(jwsToken),
+      status: 'rejected',
+      error: message,
+      dependencyMissing: isKeyResolutionFailure(message),
+    };
   }
 
   const cid = verified.artifactCID;
@@ -839,7 +1015,12 @@ const ingestRevocation = async (
     verified = await verifyRevocation({ jwsToken, resolveKey });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'verification failed';
-    return { cid: '', status: 'rejected', error: message };
+    return {
+      cid: await computeOpCID(jwsToken),
+      status: 'rejected',
+      error: message,
+      dependencyMissing: isKeyResolutionFailure(message),
+    };
   }
 
   const cid = verified.revocationCID;
@@ -894,14 +1075,19 @@ const ingestPublicCredential = async (
     verified = await verifyDFOSCredential(jwsToken, { resolveIdentity });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'verification failed';
-    return { cid: '', status: 'rejected', error: message };
+    return {
+      cid: await computeOpCID(jwsToken),
+      status: 'rejected',
+      error: message,
+      dependencyMissing: isCredentialDependencyFailure(message),
+    };
   }
 
   const cid = verified.credentialCID;
 
   // only ingest public credentials
   if (verified.aud !== '*') {
-    return { cid: '', status: 'rejected', error: 'not a public credential' };
+    return { cid, status: 'rejected', error: 'not a public credential' };
   }
 
   // idempotent: already stored (exact same JWS token)
@@ -1080,10 +1266,15 @@ const selectDeterministicHead = (log: string[]): { cid: string; createdAt: strin
 
   const tips = ops.filter((op) => !hasChild.has(op.cid));
 
-  // sort: highest createdAt first, then lexicographic highest CID
+  // sort: highest createdAt first, then highest CID. Use a code-point/byte
+  // comparator (NOT localeCompare — ICU collation is locale/engine-dependent
+  // with no determinism contract). For base32lower CIDs + ASCII ISO8601, JS
+  // string `<`/`>` (UTF-16 code-unit order) equals the Go twin's byte-wise
+  // order, so both relays select the same head on conflicting tips.
+  const cmp = (x: string, y: string): number => (x < y ? -1 : x > y ? 1 : 0);
   tips.sort((a, b) => {
-    if (a.createdAt !== b.createdAt) return b.createdAt.localeCompare(a.createdAt);
-    return b.cid.localeCompare(a.cid);
+    if (a.createdAt !== b.createdAt) return cmp(b.createdAt, a.createdAt);
+    return cmp(b.cid, a.cid);
   });
 
   return tips[0] ?? { cid: '', createdAt: '' };
@@ -1143,14 +1334,18 @@ export const ingestOperations = async (
           result = await ingestPublicCredential(op.jwsToken, store, logEnabled);
           break;
         default:
-          result = { cid: '', status: 'rejected', error: 'unrecognized operation type' };
+          result = {
+            cid: await computeOpCID(op.jwsToken),
+            status: 'rejected',
+            error: 'unrecognized operation type',
+          };
       }
       indexedResults.push({ index: op.originalIndex, result });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unexpected error';
       indexedResults.push({
         index: op.originalIndex,
-        result: { cid: '', status: 'rejected', error: message },
+        result: { cid: await computeOpCID(op.jwsToken), status: 'rejected', error: message },
       });
     }
   }

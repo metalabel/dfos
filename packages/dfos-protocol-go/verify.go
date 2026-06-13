@@ -10,6 +10,40 @@ import (
 // KeyResolver resolves a kid (DID URL: "did:dfos:xxx#key_yyy") to an Ed25519 public key.
 type KeyResolver func(kid string) (ed25519.PublicKey, error)
 
+// RevocationChecker reports whether a credential (by issuer DID + credential
+// CID) has been revoked. Threaded onto the content WRITE path so revoked
+// credentials — leaf AND parents — no longer authorize writes.
+type RevocationChecker func(issuerDID, credentialCID string) (bool, error)
+
+// IdentityDeletedChecker reports whether an identity (by DID) has been deleted.
+// Threaded onto the content WRITE path so credentials issued by a deleted
+// issuer/parent identity no longer authorize writes. The protocol package is
+// store-agnostic, so the relay supplies this closure at the call boundary.
+type IdentityDeletedChecker func(did string) (bool, error)
+
+// contentVerifyOpts holds optional WRITE-path hardening callbacks threaded from
+// the relay boundary. All are nil-safe — when a callback is nil the
+// corresponding check is skipped (the protocol layer stays store-agnostic).
+type contentVerifyOpts struct {
+	isRevoked RevocationChecker
+	isDeleted IdentityDeletedChecker
+}
+
+// ContentVerifyOption configures optional content-chain WRITE-path checks.
+type ContentVerifyOption func(*contentVerifyOpts)
+
+// WithRevocationChecker threads a leaf+parent revocation check onto the content
+// write path.
+func WithRevocationChecker(fn RevocationChecker) ContentVerifyOption {
+	return func(o *contentVerifyOpts) { o.isRevoked = fn }
+}
+
+// WithIdentityDeletedChecker threads an issuer/parent isDeleted gate onto the
+// content write path.
+func WithIdentityDeletedChecker(fn IdentityDeletedChecker) ContentVerifyOption {
+	return func(o *contentVerifyOpts) { o.isDeleted = fn }
+}
+
 // protocolTimeFormat is declared in timestamp.go
 
 // contentIDLength is the expected length of a DFOS content ID.
@@ -489,7 +523,14 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 // verifyContentAuthorization verifies that a delegated content operation has a
 // valid DFOS credential authorizing the signer to write to this content chain.
 // Walks the delegation chain to confirm it roots at the creator DID.
-func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt string, resolveKey KeyResolver) error {
+//
+// WRITE-path hardening (mirrors the relay READ path / the TS twin):
+//   - issuer-isDeleted gate (via opts.isDeleted)
+//   - aud:"*" wildcard accepted (subject="" + explicit aud check)
+//   - action/resource matched via matchesResource (comma-split + scan-ALL att
+//     entries), not the first-entry break in verifyCredentialCore
+//   - explicit LEAF revocation check (verifyDelegationChain covers PARENTS only)
+func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt string, resolveKey KeyResolver, opts contentVerifyOpts) error {
 	vcHeader, vcPayload, vcErr := DecodeJWSUnsafe(authorization)
 	if vcErr != nil {
 		return fmt.Errorf("failed to decode authorization credential")
@@ -497,6 +538,19 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	vcKid := vcHeader.Kid
 	if vcKid == "" || !strings.Contains(vcKid, "#") {
 		return fmt.Errorf("authorization credential kid must be a DID URL")
+	}
+
+	// issuer-isDeleted gate — a credential from a deleted issuer authorizes
+	// nothing (mirrors read-path auth.go:137-140 / TS verifyDFOSCredential).
+	issuerDID := vcKid[:strings.Index(vcKid, "#")]
+	if opts.isDeleted != nil {
+		deleted, err := opts.isDeleted(issuerDID)
+		if err != nil {
+			return fmt.Errorf("issuer delete-check failed: %w", err)
+		}
+		if deleted {
+			return fmt.Errorf("credential issuer identity is deleted")
+		}
 	}
 
 	creatorPubKey, err := resolveKey(vcKid)
@@ -510,25 +564,88 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	}
 	opTimeUnix := opTime.Unix()
 
-	vc, err := VerifyCredentialAt(authorization, creatorPubKey, opDID, "write", opTimeUnix)
+	// subject="" so the wildcard aud:"*" credential is accepted; the explicit
+	// aud check below replicates the TS rule (aud=="*" || aud==opDID). Do NOT
+	// loosen verifyCredentialCore's subject check directly — it is shared with
+	// other callers.
+	vc, err := VerifyCredentialAt(authorization, creatorPubKey, "", "", opTimeUnix)
 	if err != nil {
 		return err
 	}
 
-	// check contentID scope if the credential specifies one
-	// chain:* wildcard covers any content chain
-	if vc.ContentID != "" && vc.ContentID != "*" && vc.ContentID != contentID {
-		return fmt.Errorf("credential contentId %s does not match chain %s", vc.ContentID, contentID)
+	if vc.Aud != "*" && vc.Aud != opDID {
+		return fmt.Errorf("credential audience %s does not match operation signer %s", vc.Aud, opDID)
 	}
 
-	// walk the delegation chain — verify it roots at the creator DID
+	// explicit LEAF-revocation check on the write path. verifyDelegationChain
+	// covers PARENTS only — without this a revoked leaf still authorizes writes.
+	if opts.isRevoked != nil {
+		revoked, err := opts.isRevoked(vc.Iss, vc.CID)
+		if err != nil {
+			return fmt.Errorf("revocation check failed: %w", err)
+		}
+		if revoked {
+			return fmt.Errorf("credential is revoked")
+		}
+	}
+
+	// resource + action coverage — scan ALL att entries with comma-split actions
+	// (matchesResource), not verifyCredentialCore's first-recognized-entry break.
 	childAtt := ParseAtt(vcPayload)
+	if !matchesResource(childAtt, "chain:"+contentID, "write") {
+		return fmt.Errorf("credential does not cover write access to chain:%s", contentID)
+	}
+
+	// walk the delegation chain — verify it roots at the creator DID, threading
+	// the revocation + isDeleted checks onto every parent hop.
 	childPrf := ParsePrf(vcPayload)
-	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, nil, 0); err != nil {
+	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, opts.isRevoked, opts.isDeleted, 0); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// matchesResource reports whether an att array covers a requested
+// resource+action. Mirrors the relay READ path (auth.go matchesResource) and
+// the TS protocol matchesResource: comma-split actions, scan ALL entries,
+// chain:* wildcard. Lives in the protocol package so the write path no longer
+// depends on verifyCredentialCore's first-entry convenience fields.
+func matchesResource(att []AttEntry, resource, action string) bool {
+	reqType, reqID, ok := ParseResource(resource)
+	if !ok {
+		return false
+	}
+	reqActions := ParseActions(action)
+
+	for _, entry := range att {
+		entryType, entryID, ok := ParseResource(entry.Resource)
+		if !ok {
+			continue
+		}
+		entryActions := ParseActions(entry.Action)
+
+		actionsCovered := true
+		for a := range reqActions {
+			if !entryActions[a] {
+				actionsCovered = false
+				break
+			}
+		}
+		if !actionsCovered {
+			continue
+		}
+
+		// chain:* covers any chain: request
+		if entryType == "chain" && entryID == "*" && reqType == "chain" {
+			return true
+		}
+		// exact resource match
+		if entryType == reqType && entryID == reqID {
+			return true
+		}
+	}
+	return false
 }
 
 // -----------------------------------------------------------------------------
@@ -541,21 +658,26 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 //
 // When enforceAuthorization is true, non-creator signers must include a valid
 // DFOS credential with action "write" in the operation's authorization field.
-func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorization bool) (*VerifiedContentResult, error) {
+func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorization bool, options ...ContentVerifyOption) (*VerifiedContentResult, error) {
 	if len(log) == 0 {
 		return nil, fmt.Errorf("log must have at least one operation")
 	}
 
+	var opts contentVerifyOpts
+	for _, o := range options {
+		o(&opts)
+	}
+
 	var (
-		contentID      string
-		genesisCID     string
-		headCID        string
-		isDeleted      bool
-		currentDocCID  *string
-		previousCID    string
-		lastCreatedAt  string
-		creatorDID     string
-		length         int
+		contentID     string
+		genesisCID    string
+		headCID       string
+		isDeleted     bool
+		currentDocCID *string
+		previousCID   string
+		lastCreatedAt string
+		creatorDID    string
+		length        int
 	)
 
 	for idx, jwsToken := range log {
@@ -638,7 +760,7 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 				return nil, fmt.Errorf("log[%d]: signer %s is not the chain creator — authorization credential required", idx, opDID)
 			}
 
-			if err := verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt, resolveKey); err != nil {
+			if err := verifyContentAuthorization(authorization, opDID, creatorDID, contentID, createdAt, resolveKey, opts); err != nil {
 				return nil, fmt.Errorf("log[%d]: authorization verification failed: %s", idx, err)
 			}
 		}
@@ -701,9 +823,14 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 // VerifyContentExtension verifies a single new content operation against
 // already-verified chain state. O(1) — one signature verification, one
 // key resolution, one state transition.
-func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp string, resolveKey KeyResolver, enforceAuthorization bool) (*VerifiedContentResult, error) {
+func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp string, resolveKey KeyResolver, enforceAuthorization bool, options ...ContentVerifyOption) (*VerifiedContentResult, error) {
 	if currentState.IsDeleted {
 		return nil, fmt.Errorf("cannot extend a deleted chain")
+	}
+
+	var opts contentVerifyOpts
+	for _, o := range options {
+		o(&opts)
 	}
 
 	header, payload, err := DecodeJWSUnsafe(newOp)
@@ -767,7 +894,7 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 			return nil, fmt.Errorf("signer %s is not the chain creator — authorization credential required", opDID)
 		}
 
-		if err := verifyContentAuthorization(authorization, opDID, currentState.CreatorDID, currentState.ContentID, createdAt, resolveKey); err != nil {
+		if err := verifyContentAuthorization(authorization, opDID, currentState.CreatorDID, currentState.ContentID, createdAt, resolveKey, opts); err != nil {
 			return nil, fmt.Errorf("authorization verification failed: %s", err)
 		}
 	}

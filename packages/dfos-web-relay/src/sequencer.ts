@@ -8,32 +8,20 @@
 
 */
 
-import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import { ingestOperations } from './ingest';
-import type { RelayStore, SequenceResult } from './types';
+import { computeOpCID, ingestOperations } from './ingest';
+import type { IngestionResult, RelayStore, SequenceResult } from './types';
+
+export { computeOpCID };
 
 /**
- * Returns true if the rejection is due to a missing dependency that may
- * arrive later via sync or gossip. Only these specific patterns are
- * retryable — everything else is treated as permanent.
+ * Returns true if a rejection is retryable (a missing dependency that may
+ * arrive later via sync or gossip). The sequencer branches on the STRUCTURED
+ * `dependencyMissing` flag set by the ingest producer — not on substring
+ * matching of the human-readable `error` string. Mirrors the Go twin's
+ * structured discriminator.
  */
-export const isDependencyFailure = (error: string): boolean => {
-  const patterns = [
-    'unknown previous operation',
-    'unknown identity:',
-    'content chain not found:',
-    'failed to compute state at fork point:',
-  ];
-  return patterns.some((p) => error.includes(p));
-};
-
-/** Derive the operation CID from a JWS token */
-export const computeOpCID = async (jwsToken: string): Promise<string | undefined> => {
-  const decoded = decodeJwsUnsafe(jwsToken);
-  if (!decoded) return undefined;
-  const encoded = await dagCborCanonicalEncode(decoded.payload);
-  return encoded.cid.toString();
-};
+export const isDependencyFailure = (res: Pick<IngestionResult, 'dependencyMissing'>): boolean =>
+  res.dependencyMissing === true;
 
 /**
  * Process unsequenced raw ops in a fixed-point loop until no more progress
@@ -66,7 +54,7 @@ export const sequenceOps = async (
       } else if (res.status === 'duplicate') {
         sequencedCIDs.push(res.cid);
         progress = true;
-      } else if (res.status === 'rejected' && !isDependencyFailure(res.error ?? '')) {
+      } else if (res.status === 'rejected' && !isDependencyFailure(res)) {
         await store.markOpRejected(res.cid, res.error ?? 'unknown');
         result.rejected++;
         progress = true;

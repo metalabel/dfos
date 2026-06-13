@@ -46,6 +46,35 @@ const IngestBody = z.object({
 });
 
 // -----------------------------------------------------------------------------
+// query helpers
+// -----------------------------------------------------------------------------
+
+/**
+ * Parse a `limit` query param. Mirrors the Go relay's parseLimit (routes.go):
+ * empty → default; non-finite / non-integer / < 1 → default; > max → clamp.
+ *
+ * The previous inline `Math.min(Number(q || 100), 1000)` broke on every
+ * non-numeric input (`Number('abc') → NaN`, and `Math.min(NaN, 1000) → NaN`),
+ * and silently accepted negatives, zero, and fractions. This helper makes the
+ * TS relay byte-for-byte equivalent to the Go twin across all those inputs.
+ */
+export const parseLimit = (
+  raw: string | undefined,
+  defaultLimit: number,
+  maxLimit: number,
+): number => {
+  if (raw === undefined || raw === '') return defaultLimit;
+  // Only accept a plain decimal integer literal, matching Go's strconv.Atoi
+  // (which rejects "1.5", "1e3", "0x10", whitespace, etc. → default). This
+  // keeps the TS and Go clamp byte-identical across all probed inputs.
+  if (!/^-?\d+$/.test(raw)) return defaultLimit;
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n < 1) return defaultLimit;
+  if (n > maxLimit) return maxLimit;
+  return n;
+};
+
+// -----------------------------------------------------------------------------
 // factory
 // -----------------------------------------------------------------------------
 
@@ -204,7 +233,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (!chain) return c.json({ error: 'not found' }, 404);
 
     const after = c.req.query('after');
-    const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
 
     const entries = chain.log.map((jws) => {
       const decoded = decodeJwsUnsafe(jws);
@@ -262,7 +291,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (!chain) return c.json({ error: 'not found' }, 404);
 
     const after = c.req.query('after');
-    const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
 
     const entries = chain.log.map((jws) => {
       const decoded = decodeJwsUnsafe(jws);
@@ -309,7 +338,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
 
     const after = c.req.query('after');
-    const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
 
     const result = await store.getDocuments(contentId, {
       ...(after ? { after } : {}),
@@ -407,7 +436,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   app.get('/log', async (c) => {
     if (!logEnabled) return c.json({ error: 'global log not available' }, 501);
     const afterParam = c.req.query('after');
-    const limit = Math.min(Number(c.req.query('limit') || 100), 1000);
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const result = await store.readLog(afterParam ? { after: afterParam, limit } : { limit });
     return c.json(result);
   });

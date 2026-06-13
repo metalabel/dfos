@@ -431,19 +431,22 @@ describe('dfos credential', () => {
     expect(chain.chain).toHaveLength(3);
   });
 
-  it('should reject multi-parent credentials (WP-8: union-of-authority escalation)', async () => {
+  it('should reject multi-parent credentials at construction (WP-4 MAX_PRF=1)', async () => {
     // The exploit linear delegation closes: an attacker holds a legit narrow
     // parent rooted at the real creator, self-issues a second parent granting
     // chain:* that roots only at themselves, and combines both under one leaf.
     // The old union model accepted the leaf because the union of parent att
-    // covered the target while the root walk only followed the first parent —
-    // the self-issued parent's authority was never validated against rootDID.
+    // covered the target while the root walk only followed the first parent.
+    //
+    // WP-4 pins MAX_PRF=1 in the schema, so a multi-parent credential can no
+    // longer even be constructed — the spec's "reject prf>1" MUST is now
+    // enforced at construction/decode, defense-in-depth ahead of the delegation
+    // walk (which still rejects prf>1 if a token somehow bypasses the schema).
     const space = makeIdentity();
     const attacker = makeIdentity();
     identityMap.set(space.did, space.identity);
     identityMap.set(attacker.did, attacker.identity);
 
-    // legit narrow parent: space -> attacker, scoped to content1 only
     const legitParent = await createDFOSCredential({
       issuerDID: space.did,
       audienceDID: attacker.did,
@@ -454,7 +457,6 @@ describe('dfos credential', () => {
       keyId: space.keyId,
     });
 
-    // self-issued broad parent: attacker -> attacker, chain:* write, no root
     const selfParent = await createDFOSCredential({
       issuerDID: attacker.did,
       audienceDID: attacker.did,
@@ -465,21 +467,18 @@ describe('dfos credential', () => {
       keyId: attacker.keyId,
     });
 
-    // leaf combining both parents, claiming write on a chain it was never granted
-    const leafToken = await createDFOSCredential({
-      issuerDID: attacker.did,
-      audienceDID: '*',
-      att: [{ resource: 'chain:victim', action: 'write' }],
-      prf: [legitParent, selfParent],
-      exp: futureUnix(60),
-      signer: attacker.signer,
-      keyId: attacker.keyId,
-    });
-
-    const leaf = await verifyDFOSCredential(leafToken, { resolveIdentity });
+    // constructing a multi-parent leaf is now rejected by the schema (MAX_PRF=1)
     await expect(
-      verifyDelegationChain(leaf, { resolveIdentity, rootDID: space.did }),
-    ).rejects.toThrow(/multi-parent/);
+      createDFOSCredential({
+        issuerDID: attacker.did,
+        audienceDID: '*',
+        att: [{ resource: 'chain:victim', action: 'write' }],
+        prf: [legitParent, selfParent],
+        exp: futureUnix(60),
+        signer: attacker.signer,
+        keyId: attacker.keyId,
+      }),
+    ).rejects.toThrow(/credential payload/);
   });
 
   // --- attenuation enforcement ---

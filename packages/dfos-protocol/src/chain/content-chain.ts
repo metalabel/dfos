@@ -90,6 +90,13 @@ const verifyOperationAuthorization = async (input: {
   contentId: string;
   createdAt: string;
   resolveIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
+  /**
+   * Check whether a credential has been revoked. Threaded onto the WRITE path
+   * so a revoked LEAF credential no longer authorizes writes (verifyDelegationChain
+   * only checks PARENTS). When omitted, revocation is not enforced (protocol-layer
+   * callers without a revocation store).
+   */
+  isRevoked?: (issuerDID: string, credentialCID: string) => Promise<boolean>;
 }): Promise<void> => {
   // decode to check typ before full verification
   const decoded = decodeDFOSCredentialUnsafe(input.authorization);
@@ -107,11 +114,21 @@ const verifyOperationAuthorization = async (input: {
     now: opCreatedAtUnix,
   });
 
-  // verify the delegation chain roots at the creator DID
+  // explicit LEAF-revocation check on the write path. verifyDelegationChain
+  // (below) only checks PARENTS — without this, a revoked leaf credential would
+  // still authorize writes, so "revocation is the timely lever" would be false
+  // for the leaf case. Mirrors the read-path pattern (relay auth.ts:104).
+  if (input.isRevoked && (await input.isRevoked(credential.iss, credential.credentialCID))) {
+    throw new Error('credential is revoked');
+  }
+
+  // verify the delegation chain roots at the creator DID (parents covered by
+  // the same isRevoked callback)
   await verifyDelegationChain(credential, {
     resolveIdentity: input.resolveIdentity,
     rootDID: input.creatorDID,
     now: opCreatedAtUnix,
+    ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
   });
 
   // verify the credential's audience matches the operation signer
@@ -160,6 +177,11 @@ export const verifyContentChain = async (input: {
    * is true, as credential verification needs identity resolution.
    */
   resolveIdentity?: (did: string) => Promise<VerifiedIdentity | undefined>;
+  /**
+   * Check whether a credential (leaf or parent) has been revoked. Threaded onto
+   * the WRITE path so revoked credentials no longer authorize writes.
+   */
+  isRevoked?: (issuerDID: string, credentialCID: string) => Promise<boolean>;
 }): Promise<VerifiedContentChain> => {
   if (input.log.length === 0) throw new Error('log must have at least one operation');
 
@@ -257,6 +279,7 @@ export const verifyContentChain = async (input: {
           contentId: state.contentId!,
           createdAt: op.createdAt,
           resolveIdentity: input.resolveIdentity!,
+          ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'unknown error';
@@ -334,6 +357,8 @@ export const verifyContentExtensionFromTrustedState = async (input: {
   enforceAuthorization?: boolean;
   /** Resolve a DID to a VerifiedIdentity. Required when enforceAuthorization is true. */
   resolveIdentity?: (did: string) => Promise<VerifiedIdentity | undefined>;
+  /** Check whether a credential (leaf or parent) has been revoked. */
+  isRevoked?: (issuerDID: string, credentialCID: string) => Promise<boolean>;
 }): Promise<{
   state: VerifiedContentChain;
   operationCID: string;
@@ -413,6 +438,7 @@ export const verifyContentExtensionFromTrustedState = async (input: {
         contentId: currentState.contentId,
         createdAt: op.createdAt,
         resolveIdentity: input.resolveIdentity!,
+        ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown error';

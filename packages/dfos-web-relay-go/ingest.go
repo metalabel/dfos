@@ -14,6 +14,33 @@ import (
 // temporal guard
 // ---------------------------------------------------------------------------
 
+// dependencyFailureSubstrings mark a verify-time failure as a missing
+// dependency (the signing identity / key has not synced yet). These are the
+// only thrown-error cases that are retryable rather than permanent. Mirrors
+// the TS twin's DEPENDENCY_FAILURE_SUBSTRINGS in ingest.ts.
+//
+//   - "unknown identity:"   — CreateKeyResolver: identity chain not synced
+//   - "unknown key "        — CreateKeyResolver: key not on the (synced) identity
+//   - "unknown previous operation", "content chain not found:" — content
+//     chain dependency surfaced through a wrapped verify error
+var dependencyFailureSubstrings = []string{
+	"unknown identity:",
+	"unknown key ",
+	"unknown previous operation",
+	"content chain not found:",
+}
+
+// isKeyResolutionFailure reports whether a thrown verification error indicates a
+// missing dependency (retryable) rather than a permanent rejection.
+func isKeyResolutionFailure(msg string) bool {
+	for _, s := range dependencyFailureSubstrings {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // maxFutureTimestamp is the maximum allowed clock skew for operation timestamps (24 hours).
 const maxFutureTimestamp = 24 * time.Hour
 
@@ -314,7 +341,7 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 
 	chain, _ := store.GetIdentityChain(did)
 	if chain == nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown identity: %s", did)}
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown identity: %s", did), DependencyMissing: true}
 	}
 
 	// extract previousOperationCID from payload
@@ -349,15 +376,15 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 
 	// fork path — check if previousCID exists in chain ops
 	if previousCID == "" || !chainLogContainsCID(chain.Log, previousCID) {
-		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in identity chain"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in identity chain", DependencyMissing: true}
 	}
 
 	forkState, err := store.GetIdentityStateAtCID(did, previousCID)
 	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to compute state at fork point: %v", err)}
+		return IngestionResult{CID: cid, Status: "rejected", Error: ForkPointStateErrorPrefix + fmt.Sprintf("%v", err), DependencyMissing: true}
 	}
 	if forkState == nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in identity chain"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in identity chain", DependencyMissing: true}
 	}
 
 	extResult, err := dfos.VerifyIdentityExtension(forkState.State, previousCID, forkState.LastCreatedAt, jwsToken)
@@ -437,13 +464,25 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 	}
 
 	resolveKey := CreateKeyResolver(store)
+	// WRITE-path hardening callbacks (mirror the relay READ path / the TS twin):
+	// revoked credentials and deleted issuers/parents no longer authorize writes.
+	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string) (bool, error) {
+		return store.IsCredentialRevoked(issuerDID, credentialCID)
+	})
+	isDeleted := dfos.WithIdentityDeletedChecker(func(did string) (bool, error) {
+		identity, err := store.GetIdentityChain(did)
+		if err != nil {
+			return false, err
+		}
+		return identity != nil && identity.State.IsDeleted, nil
+	})
 	opType, _ := payload["type"].(string)
 	isGenesis := opType == "create"
 
 	if isGenesis {
-		result, err := dfos.VerifyContentChain([]string{jwsToken}, resolveKey, true)
+		result, err := dfos.VerifyContentChain([]string{jwsToken}, resolveKey, true, isRevoked, isDeleted)
 		if err != nil {
-			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
+			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 		}
 		createdAt, _ := payload["createdAt"].(string)
 		chain := StoredContentChain{
@@ -475,7 +514,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 
 	prevOp, _ := store.GetOperation(previousCID)
 	if prevOp == nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown previous operation: %s", previousCID)}
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown previous operation: %s", previousCID), DependencyMissing: true}
 	}
 	if prevOp.ChainType != "content" {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "previousOperationCID is not a content operation"}
@@ -483,7 +522,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 
 	chain, _ := store.GetContentChain(prevOp.ChainID)
 	if chain == nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("content chain not found: %s", prevOp.ChainID)}
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("content chain not found: %s", prevOp.ChainID), DependencyMissing: true}
 	}
 
 	// reject if creator's identity is deleted
@@ -494,9 +533,9 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 
 	if chain.State.HeadCID == previousCID {
 		// linear extension (fast path)
-		extResult, err := dfos.VerifyContentExtension(chain.State, chain.LastCreatedAt, jwsToken, resolveKey, true)
+		extResult, err := dfos.VerifyContentExtension(chain.State, chain.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted)
 		if err != nil {
-			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
+			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 		}
 		updated := StoredContentChain{
 			ContentID:     chain.ContentID,
@@ -521,20 +560,20 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 
 	// fork path — check if previousCID exists in chain ops
 	if !chainLogContainsCID(chain.Log, previousCID) {
-		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in content chain"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in content chain", DependencyMissing: true}
 	}
 
 	forkState, err := store.GetContentStateAtCID(chain.ContentID, previousCID)
 	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to compute state at fork point: %v", err)}
+		return IngestionResult{CID: cid, Status: "rejected", Error: ForkPointStateErrorPrefix + fmt.Sprintf("%v", err), DependencyMissing: true}
 	}
 	if forkState == nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in content chain"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in content chain", DependencyMissing: true}
 	}
 
-	extResult, err := dfos.VerifyContentExtension(forkState.State, forkState.LastCreatedAt, jwsToken, resolveKey, true)
+	extResult, err := dfos.VerifyContentExtension(forkState.State, forkState.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted)
 	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
+		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 	}
 
 	updatedLog := append(append([]string{}, chain.Log...), jwsToken)
@@ -578,7 +617,9 @@ func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult
 
 	result, err := dfos.VerifyBeacon(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{Status: "rejected", Error: err.Error()}
+		// Compute the CID so the rejection is keyed and durably rejectable,
+		// unless the failure is a missing dependency (unsynced identity key).
+		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 	}
 
 	did := result.DID
@@ -631,7 +672,7 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool) IngestionR
 
 	result, err := dfos.VerifyCountersignature(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{Status: "rejected", Error: err.Error()}
+		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 	}
 
 	cid := result.CountersignCID
@@ -647,10 +688,10 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool) IngestionR
 		return IngestionResult{CID: cid, Status: "duplicate", Kind: "countersign", ChainID: targetCID}
 	}
 
-	// target must exist
+	// target must exist (may arrive later via sync/gossip — retryable)
 	targetOp, _ := store.GetOperation(targetCID)
 	if targetOp == nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown target operation: %s", targetCID)}
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("unknown target operation: %s", targetCID), DependencyMissing: true}
 	}
 
 	// witness must differ from target author
@@ -707,7 +748,7 @@ func ingestArtifact(jwsToken string, store Store, logEnabled bool) IngestionResu
 
 	result, err := dfos.VerifyArtifact(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{Status: "rejected", Error: err.Error()}
+		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 	}
 
 	cid := result.ArtifactCID
@@ -744,7 +785,7 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 
 	result, err := dfos.VerifyRevocation(jwsToken, resolveKey)
 	if err != nil {
-		return IngestionResult{Status: "rejected", Error: err.Error()}
+		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 	}
 
 	cid := result.RevocationCID
@@ -797,25 +838,38 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
 	}
 
+	// the header CID keys the raw op in the store; carry it on every rejection
+	// below so a decodable-but-invalid credential is durably rejected rather than
+	// re-verified every sequencer tick (WP-3(a) — matches the TS twin). An empty
+	// header CID is genuinely unkeyable and is handled explicitly further down.
+	cid := header.CID
+
 	// verify it's a credential
 	if header.Typ != "did:dfos:credential" {
-		return IngestionResult{Status: "rejected", Error: "invalid typ for credential"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "invalid typ for credential"}
 	}
 
 	// must be public (aud: "*")
 	aud, _ := payload["aud"].(string)
 	if aud != "*" {
-		return IngestionResult{Status: "rejected", Error: "only public credentials (aud: *) are ingested"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "only public credentials (aud: *) are ingested"}
+	}
+
+	// bound prf to a single parent (spec MUST-rejects prf>1; defense-in-depth so
+	// standalone ingest matches construction/decode — TS bounds this in the zod
+	// schema). Count the RAW array length, NOT ParsePrf (which silently filters
+	// empty/non-string elements and would undercount vs TS's pre-filter length).
+	if prfRaw, ok := payload["prf"].([]any); ok && len(prfRaw) > 1 {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "multi-parent credentials are not supported (prf must have at most one entry)"}
 	}
 
 	// parse issuer from kid
 	kid := header.Kid
 	if kid == "" || !strings.Contains(kid, "#") {
-		return IngestionResult{Status: "rejected", Error: "kid must be a DID URL"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "kid must be a DID URL"}
 	}
 	kidDID := kid[:strings.Index(kid, "#")]
 
-	cid := header.CID
 	if cid == "" {
 		return IngestionResult{Status: "rejected", Error: "missing cid in credential header"}
 	}
@@ -829,17 +883,25 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 		return IngestionResult{CID: cid, Status: "duplicate", Kind: "credential", ChainID: kidDID}
 	}
 
+	// reject credentials from a deleted issuer (matches TS verifyDFOSCredential,
+	// which resolves the issuer identity and rejects when isDeleted).
+	issuerIdentity, _ := store.GetIdentityChain(kidDID)
+	if issuerIdentity != nil && issuerIdentity.State.IsDeleted {
+		return IngestionResult{CID: cid, Status: "rejected", Error: "issuer identity is deleted"}
+	}
+
 	// check if already revoked
 	revoked, _ := store.IsCredentialRevoked(kidDID, cid)
 	if revoked {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "credential has been revoked"}
 	}
 
-	// resolve key and verify credential
+	// resolve key and verify credential. An unresolved key means the issuer
+	// identity has not synced yet — retryable.
 	resolveKey := CreateKeyResolver(store)
 	publicKey, err := resolveKey(kid)
 	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to resolve key: %v", err)}
+		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("failed to resolve key: %v", err), DependencyMissing: isKeyResolutionFailure(err.Error())}
 	}
 
 	credential, err := dfos.VerifyCredential(jwsToken, publicKey, "", "")
@@ -1086,7 +1148,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					result = IngestionResult{Status: "rejected", Error: fmt.Sprintf("unexpected error: %v", r)}
+					result = IngestionResult{CID: computeOpCID(op.jwsToken), Status: "rejected", Error: fmt.Sprintf("unexpected error: %v", r)}
 				}
 			}()
 			switch op.kind {
@@ -1105,7 +1167,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 			case "credential":
 				result = ingestPublicCredential(op.jwsToken, store, cfg.logEnabled)
 			default:
-				result = IngestionResult{Status: "rejected", Error: "unrecognized operation type"}
+				result = IngestionResult{CID: computeOpCID(op.jwsToken), Status: "rejected", Error: "unrecognized operation type"}
 			}
 		}()
 		results = append(results, indexedResult{index: op.originalIndex, result: result})
@@ -1116,7 +1178,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 	for retry := 0; retry < 3; retry++ {
 		var pending []indexedResult
 		for i, ir := range results {
-			if ir.result.Status == "rejected" && !isPermanentRejection(ir.result.Error) {
+			if ir.result.Status == "rejected" && !isPermanentRejection(ir.result) {
 				pending = append(pending, results[i])
 			}
 		}
@@ -1135,7 +1197,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 			default:
 				continue
 			}
-			if result.Status != "rejected" || isPermanentRejection(result.Error) {
+			if result.Status != "rejected" || isPermanentRejection(result) {
 				// find and update the result
 				for i, ir := range results {
 					if ir.index == p.index {

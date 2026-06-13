@@ -178,6 +178,15 @@ Actions are comma-separated strings. The child's action set must be a subset of 
 
 The child's `exp` MUST be less than or equal to every parent's `exp`. A delegated credential cannot outlive its authority.
 
+### Expiry Basis (Normative)
+
+`exp` is **signer-discretionary**: the issuer chooses how long a credential is valid, and there is no protocol-imposed maximum in v1. Verifiers compare `exp` against a **deterministic time basis**, NOT a free-running wall clock:
+
+- **At ingest** (a delegated content operation carrying an inline `authorization`): `exp` is compared against the operation's own `createdAt`. A relay MUST NOT add an ingest-time wall-clock `exp` check. Each relay reads its own clock at a different instant, so a wall-clock check would make ingest verdicts diverge across relays and break convergence — the same content op would be accepted on one relay and rejected on another.
+- **At read** (standing authorization / per-request credential checks): `exp` is compared against the current time, because reads are local, ephemeral decisions that never enter the replicated log.
+
+Revocation — not expiry — is the **timely lever** for invalidating a credential ahead of its natural expiry (see Revocation, below). A relay MAY additionally enforce a local maximum-age policy as **relay policy** (rejecting credentials whose `exp` is implausibly far in the future), but this is post-v1 and out of scope for the wire protocol; v1 defines no maximum-`exp` cap.
+
 ---
 
 ## Resource Types
@@ -250,6 +259,12 @@ A credential with a specific DID as `aud` is a **private credential**. It is pre
 
 A parent credential with `aud: "*"` satisfies the audience linkage check for any child issuer. This means a public credential can serve as a parent in a delegation chain -- any DID can issue a narrower child credential using the public credential as proof.
 
+### Security: `aud: "*"` + write = a world-writable bearer grant
+
+Because `aud: "*"` matches **any** operation signer, a public credential that grants a **write** action is a **bearer token anyone can present**. Any DID can attach the public credential inline as a content operation's `authorization` field and author writes to the covered chain(s) — the credential authorizes the bearer, not a named audience. A public `chain:*` write credential is effectively world-writable across every chain rooted at the issuer.
+
+Public credentials SHOULD therefore be **read-scoped**. Reserve `write` (and `chain:*`) for **private** credentials with a specific `aud`, where the relay also verifies that the operation signer matches the audience. If a public write credential is issued and later regretted, revocation is the remedy — but the exposure window is every relay that ingested it.
+
 ---
 
 ## Revocation
@@ -299,6 +314,8 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 ### Relay Enforcement
 
 Relays maintain a revocation set keyed by `(issuerDID, credentialCID)`. During credential verification, the relay checks whether the credential's CID appears in the revocation set for that credential's issuer. This scoping prevents a rogue DID from revoking credentials it did not issue. A revoked credential fails verification regardless of its expiry or signature validity.
+
+Revocation MUST be checked at **every level** of a presented credential — the **leaf** credential AND each **parent** in its delegation chain. Checking only parents is insufficient: a revoked leaf credential, if its leaf-level revocation is not checked, would still authorize access. This applies to **both** authorization surfaces: the **read/route** path (standing authorization and per-request credential checks) and the **write** path (the inline `authorization` on a delegated content operation, verified at ingest). Without an explicit leaf check on the write path, revocation is not a timely lever for the leaf case.
 
 ### Revocation Scope
 
