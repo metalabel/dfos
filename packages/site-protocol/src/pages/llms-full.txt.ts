@@ -11,6 +11,8 @@ export const GET: APIRoute = () => {
 
   // Specs — web relay
   const webRelay = fs.readFileSync('../../specs/WEB-RELAY.md', 'utf-8');
+  const credentials = fs.readFileSync('../../specs/CREDENTIALS.md', 'utf-8');
+  const siwd = fs.readFileSync('../../specs/SIWD.md', 'utf-8');
   const cli = fs.readFileSync('../dfos-cli/CLI.md', 'utf-8');
 
   // Site content — sourced from shared modules (same data renders the pages)
@@ -42,6 +44,14 @@ export const GET: APIRoute = () => {
     '---',
     '',
     webRelay,
+    '',
+    '---',
+    '',
+    credentials,
+    '',
+    '---',
+    '',
+    siwd,
     '',
     '---',
     '',

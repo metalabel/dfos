@@ -17,6 +17,8 @@ export const GET: APIRoute = () => {
     '- [Protocol Specification](https://protocol.dfos.com/spec): Core protocol — identity chains, content chains, beacons, credentials, countersignatures, verification rules, and test vectors',
     '- [DID Method](https://protocol.dfos.com/did-method): W3C DID method specification for did:dfos',
     '- [Content Model](https://protocol.dfos.com/content-model): Standard JSON Schema content types (post, profile, manifest)',
+    '- [Credentials](https://protocol.dfos.com/credentials): Authorization credentials, delegation chains, and revocation',
+    '- [Sign-In With DID](https://protocol.dfos.com/siwd): SIWD authentication flow for did:dfos',
     '',
     '## Implementation',
     '',

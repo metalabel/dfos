@@ -139,9 +139,14 @@ The JWS `typ` header uses protocol-specific values (not IANA media types):
 | `did:dfos:artifact`    | Standalone signed inline documents            |
 | `did:dfos:countersign` | Standalone witness attestations               |
 | `did:dfos:revocation`  | Credential revocation artifacts               |
+| `did:dfos:credential`  | DFOS authorization credentials                |
 | `JWT`                  | Auth tokens (DID-signed relay authentication) |
 
 Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for credential `typ` values and format.
+
+### Operation Versioning
+
+Every proof-plane operation payload (identity, content, beacon, artifact, countersign, revocation) carries a top-level integer `version` field. This document specifies version `1`; verifiers MUST reject any operation whose `version` is not exactly `1`. Both reference implementations pin `version: 1` and reject all other values. A future wire-incompatible revision of the operation format would increment this field, and implementations declare which versions they accept. The operation `version` is distinct from content-document `$schema` versioning (see [CONTENT-MODEL.md](https://protocol.dfos.com/content-model)), which versions application payloads independently and does not affect operation-level verification.
 
 ### Operation Field Limits
 
@@ -244,6 +249,14 @@ Why this matters: CBOR integer `1` encodes as a single byte `0x01`. CBOR float `
 **Common trap**: Languages that decode JSON into untyped maps (Go's `map[string]any`, Python's `dict`, etc.) typically represent all JSON numbers as floating-point. When this decoded value is then CBOR-encoded, it becomes a CBOR float instead of an integer. Implementations MUST normalize number types after JSON deserialization and before CBOR encoding.
 
 **Number bounds (normative)**: a canonicalizable number MUST be an integer in the range `[-(2^53 - 1), 2^53 - 1]` (JSON's safe-integer range). Implementations MUST reject — at CID derivation, before CBOR encoding — any payload containing a non-integer number, `NaN`, `±Infinity`, or an integer outside that range. Applications that need fractional or larger-magnitude values MUST encode them as strings. Bounding numbers to this single form is what makes the encoding deterministic across implementations: it eliminates both the shortest-float divergence (`1.5` encoded as `0xf9…` half-float by one library vs `0xfb…` double by another) and the integer-vs-`float64` split for values above `2^53`. The reference implementations enforce this in `dagCborCanonicalEncode` (TypeScript) and `DagCborEncode` (Go); a non-conforming number is a verification failure, not a silently-divergent CID.
+
+#### String Encoding (no Unicode normalization)
+
+String values are committed as their exact UTF-8 byte sequence. Implementations MUST NOT apply Unicode normalization (NFC, NFD, NFKC, NFKD) or any other transformation to string values before dag-cbor encoding or signing — the CID and signature commit to the bytes as received. Two strings that are Unicode-equivalent but byte-distinct (for example a precomposed `é` versus an `e` followed by a combining accent) produce different CIDs and are different protocol values. The reference implementations pass strings through verbatim (no `.normalize()` step); any normalization inserted by an implementation is a CID divergence, not an interoperable transformation.
+
+#### JSON Payload Canonicalization
+
+The signed JWS payload is decoded as JSON, then re-encoded as dag-cbor for CID derivation. Producers MUST emit canonical JSON: object keys unique within each object, no insignificant whitespace dependence (dag-cbor re-encodes from the decoded value, so whitespace and key order in the source JSON do not affect the CID). Producers MUST NOT emit duplicate object keys. Where duplicate keys are nonetheless present, both reference implementations decode via standard JSON parsers that retain the final occurrence (last value wins) before dag-cbor encoding — but this is a recovery behavior, not a guarantee: the signature commits to the raw payload bytes while the CID derives from the decoded value, so a duplicate-key payload can desync signature-input from CID across non-conforming parsers. Treat any payload containing duplicate keys as malformed.
 
 **Verification test vector** — encodes `{"version": 1, "type": "test"}`:
 
@@ -508,15 +521,17 @@ A beacon is a signed announcement referencing a manifest content chain — a per
 
 ```json
 {
+  "version": 1,
   "type": "beacon",
   "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "manifestContentId": "67t27rzc83v7c22n9t6z7c",
+  "manifestContentId": "a82z92a3hndk6c97thcrn8",
   "createdAt": "2026-03-07T00:05:00.000Z"
 }
 ```
 
 | Field               | Type   | Description                                          |
 | ------------------- | ------ | ---------------------------------------------------- |
+| `version`           | number | Literal `1`                                          |
 | `type`              | string | Literal `"beacon"`                                   |
 | `did`               | string | DID of the identity publishing the beacon            |
 | `manifestContentId` | string | Content ID of the manifest chain (22-char bare hash) |
@@ -529,7 +544,7 @@ A beacon is a signed announcement referencing a manifest content chain — a per
   "alg": "EdDSA",
   "typ": "did:dfos:beacon",
   "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8",
-  "cid": "bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu"
+  "cid": "bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4"
 }
 ```
 
@@ -540,7 +555,7 @@ Using the reference identity (`did:dfos:e3vvtck42d4eacdnzvtrn6`) and key 1 from 
 **Beacon CID** (dag-cbor canonical encode → CIDv1):
 
 ```
-bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu
+bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4
 ```
 
 **Controller JWS** (key 1 signs):
@@ -548,7 +563,7 @@ bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu
 ```
 kid:          did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8
 typ:          did:dfos:beacon
-cid:          bafyreihholuui7s7ns74iem6ahfxsb472hwogbqd32yrrp5fztc3kxa5qu
+cid:          bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4
 ```
 
 **Witness countersignature** (a separate identity countersigns the beacon by CID):
