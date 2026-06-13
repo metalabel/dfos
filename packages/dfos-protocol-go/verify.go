@@ -598,7 +598,10 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 
 	// walk the delegation chain — verify it roots at the creator DID, threading
 	// the revocation + isDeleted checks onto every parent hop.
-	childPrf := ParsePrf(vcPayload)
+	childPrf, err := ParsePrf(vcPayload)
+	if err != nil {
+		return fmt.Errorf("credential prf invalid: %v", err)
+	}
 	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, opts.isRevoked, opts.isDeleted, 0); err != nil {
 		return err
 	}

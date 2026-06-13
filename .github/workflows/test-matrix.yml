@@ -139,6 +139,43 @@ jobs:
         working-directory: packages/dfos-web-relay-go
         run: ./tests/run-conformance.sh
 
+  parity:
+    # WP-7 dual-relay parity harness: boots BOTH twins (TS in-memory + Go sqlite)
+    # from the SAME pinned identity fixture, replays a fixed-seed op set, and
+    # asserts byte-identical (canonicalized-JSON) proof-plane bodies on /log,
+    # /identities/{did}/log, /content/{id}/log, and /.well-known/dfos-relay.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-cli/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run dual-relay parity harness
+        working-directory: packages/relay-conformance
+        run: ./scripts/run-parity.sh
+
   verify-ts:
     runs-on: ubuntu-latest
     timeout-minutes: 5

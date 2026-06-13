@@ -67,13 +67,21 @@ export const createHttpPeerClient = (): PeerClient => {
 
     async submitOperations(peerUrl, operations) {
       try {
-        await fetch(new URL('/operations', peerUrl).toString(), {
+        const res = await fetch(new URL('/operations', peerUrl).toString(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ operations }),
         });
+        // Check the status: a non-2xx (e.g. the receiver 400s an over-100 batch)
+        // means the whole gossip push was dropped. Log it so a silent drop is
+        // observable — sync remains the consistency backstop, hence no throw.
+        if (!res.ok) {
+          console.warn(
+            `gossip submitOperations to ${peerUrl} returned ${res.status} (${operations.length} ops dropped)`,
+          );
+        }
       } catch {
-        // fire-and-forget — sync is the consistency backstop
+        // network throw — fire-and-forget; sync is the consistency backstop
       }
     },
   };

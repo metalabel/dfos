@@ -1,9 +1,11 @@
 package relay
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -361,5 +363,63 @@ func TestCORSHeadersOnProofPlane(t *testing.T) {
 	}
 	if got := preflight.Header.Get("Access-Control-Allow-Methods"); got != wantMethods {
 		t.Fatalf("preflight Allow-Methods = %q, want %q", got, wantMethods)
+	}
+}
+
+// ===================================================================
+// DoS: per-route request body cap
+// ===================================================================
+
+// TestPostOperationsRejectsOversizedBody verifies that POST /operations bounds
+// the request body at maxRequestBodyBytes (16MB). Without the MaxBytesReader the
+// decoder would buffer the whole payload before the .max(100) item check fires —
+// an unauthenticated OOM vector. The MaxBytesError surfaces as a decode error
+// through the existing 400 path.
+func TestPostOperationsRejectsOversizedBody(t *testing.T) {
+	relay, err := NewRelay(RelayOptions{Store: NewMemoryStore()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(relay.Handler())
+	defer srv.Close()
+
+	// Build a JSON body well over the 16MB cap: a single string padded past the
+	// limit. The cap fires before any item-count or per-op validation.
+	huge := strings.Repeat("a", maxRequestBodyBytes+1024)
+	body := `{"operations":["` + huge + `"]}`
+
+	resp, err := http.Post(srv.URL+"/operations", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("POST /operations: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// MaxBytesReader truncates the read → JSON decode fails → 400. (The exact
+	// status is the existing invalid-body path; the point is it is rejected, not
+	// fully buffered.)
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400 for oversized body, got %d", resp.StatusCode)
+	}
+}
+
+// TestPostOperationsAcceptsNormalBody is the over-eagerness guard: a normal,
+// well-formed batch is still accepted.
+func TestPostOperationsAcceptsNormalBody(t *testing.T) {
+	relay, err := NewRelay(RelayOptions{Store: NewMemoryStore()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(relay.Handler())
+	defer srv.Close()
+
+	id := createTestIdentity(t)
+	body := `{"operations":["` + id.token + `"]}`
+	resp, err := http.Post(srv.URL+"/operations", "application/json", bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("POST /operations: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 for normal body, got %d", resp.StatusCode)
 	}
 }

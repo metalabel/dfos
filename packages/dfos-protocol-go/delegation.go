@@ -33,19 +33,39 @@ func ParseAtt(payload map[string]any) []AttEntry {
 }
 
 // ParsePrf extracts the prf array from a raw credential payload.
-func ParsePrf(payload map[string]any) []string {
-	prfRaw, ok := payload["prf"].([]any)
+//
+// It HARD-REJECTS any prf element that is not a non-empty string, returning an
+// error rather than silently filtering. The TS twin rejects such a credential
+// at decode (the strictObject schema parses prf as z.array(z.string()) and
+// MAX_PRF=1 bounds the length), so a prf like ["<parent>", ""] is REJECTED by
+// TS. The previous Go implementation filtered the empty/non-string element,
+// dropping the array to length 1, which slipped past the multi-parent length
+// gate (delegation.go len(childPrf)>1, verify.go) and ACCEPTED a byte-identical
+// credential that TS rejects — a real twin divergence. Surfacing the error at
+// both call sites (parentPrf in this file, childPrf in verify.go) makes Go
+// reject in lockstep with TS: Go has no schema layer, so this validating decode
+// IS the gate.
+func ParsePrf(payload map[string]any) ([]string, error) {
+	prfRaw, ok := payload["prf"]
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	var result []string
-	for _, item := range prfRaw {
+	prfArr, ok := prfRaw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("credential prf must be an array")
+	}
+	result := make([]string, 0, len(prfArr))
+	for _, item := range prfArr {
 		s, ok := item.(string)
-		if ok && s != "" {
-			result = append(result, s)
+		if !ok {
+			return nil, fmt.Errorf("credential prf must contain only strings")
 		}
+		if s == "" {
+			return nil, fmt.Errorf("credential prf must not contain empty strings")
+		}
+		result = append(result, s)
 	}
-	return result
+	return result, nil
 }
 
 // ParseResource splits a resource string into type and id (e.g., "chain:abc" → "chain", "abc").
@@ -202,7 +222,10 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 
 	pAud, _ := pPayload["aud"].(string)
 	parentAtt := ParseAtt(pPayload)
-	parentPrf := ParsePrf(pPayload)
+	parentPrf, err := ParsePrf(pPayload)
+	if err != nil {
+		return fmt.Errorf("parent credential prf invalid: %v", err)
+	}
 
 	// child's issuer must be the parent's audience
 	if pAud != "*" && pAud != childVC.Iss {

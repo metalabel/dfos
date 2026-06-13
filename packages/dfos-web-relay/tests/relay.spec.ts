@@ -631,6 +631,76 @@ describe('web relay', () => {
       const beaconBody = await json(beaconRes);
       expect(beaconBody.manifestContentId).toBe('test_manifest_content_id_b');
     });
+
+    // Beacon resolution is CURRENT-STATE (WP-9): a beacon signed by a
+    // rotated-out controller key is rejected; the current key is accepted and
+    // becomes the head. Beacons replace-on-newer, so current-state is safe —
+    // a transient divergence self-heals when the legit holder publishes a
+    // fresher beacon. This is the FIRST beacon-rotation coverage in TS.
+    it('should reject a beacon signed with a rotated-out controller key and accept the current key', async () => {
+      const identity = await createIdentity();
+      await postOps([identity.jwsToken]);
+
+      // rotate the controller key (old controller key removed from current state)
+      const newController = makeKey();
+      const updateOp: IdentityOperation = {
+        version: 1,
+        type: 'update',
+        previousOperationCID: identity.operationCID,
+        authKeys: [identity.authKey.key],
+        assertKeys: [],
+        controllerKeys: [newController.key], // old controller rotated out
+        createdAt: ts(2),
+      };
+      const { jwsToken: updateToken } = await signIdentityOperation({
+        operation: updateOp,
+        signer: identity.controller.signer, // current controller signs its own rotation
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+      const updRes = await postOps([updateToken]);
+      expect((await json(updRes)).results[0].status).toBe('new');
+
+      // beacon signed with the OLD (rotated-out) controller key → REJECTED
+      const staleBeacon: BeaconPayload = {
+        version: 1,
+        type: 'beacon',
+        did: identity.did,
+        manifestContentId: 'stale_manifest',
+        createdAt: ts(3),
+      };
+      const { jwsToken: staleToken } = await signBeacon({
+        payload: staleBeacon,
+        signer: identity.controller.signer, // OLD controller key
+        kid: `${identity.did}#${identity.controller.keyId}`,
+      });
+      const staleRes = await postOps([staleToken]);
+      expect((await json(staleRes)).results[0].status).toBe('rejected');
+
+      // no beacon should have been recorded
+      const noBeacon = await req(`/beacons/${identity.did}`);
+      expect(noBeacon.status).toBe(404);
+
+      // beacon signed with the CURRENT (new) controller key → ACCEPTED + head
+      const freshBeacon: BeaconPayload = {
+        version: 1,
+        type: 'beacon',
+        did: identity.did,
+        manifestContentId: 'fresh_manifest',
+        createdAt: ts(4),
+      };
+      const { jwsToken: freshToken } = await signBeacon({
+        payload: freshBeacon,
+        signer: newController.signer, // CURRENT controller key
+        kid: `${identity.did}#${newController.keyId}`,
+      });
+      const freshRes = await postOps([freshToken]);
+      expect((await json(freshRes)).results[0].status).toBe('new');
+
+      const beaconRes = await req(`/beacons/${identity.did}`);
+      expect(beaconRes.status).toBe(200);
+      expect((await json(beaconRes)).manifestContentId).toBe('fresh_manifest');
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -1928,6 +1998,191 @@ describe('web relay', () => {
 
     it('should reject malformed JWS tokens', async () => {
       const res = await postOps(['not.a.valid.jws']);
+      const body = await json(res);
+      expect(body.results[0].status).toBe('rejected');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // DoS body caps (mirrors the Go twin's 16MB MaxBytesReader)
+  // ---------------------------------------------------------------------------
+
+  describe('request body caps', () => {
+    it('should reject POST /operations with an oversized Content-Length (413)', async () => {
+      const res = await req('/operations', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': String(17 * 1024 * 1024), // > 16MB cap
+        },
+        body: JSON.stringify({ operations: ['x'] }),
+      });
+      expect(res.status).toBe(413);
+    });
+
+    it('should reject PUT blob with an oversized Content-Length (413) before auth', async () => {
+      // No auth header — the 413 must fire BEFORE the 401, proving the cap is
+      // checked first (protects the pre-auth path).
+      const res = await req('/content/anychain/blob/anyop', {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/octet-stream',
+          'content-length': String(17 * 1024 * 1024),
+        },
+        body: new Uint8Array(8),
+      });
+      expect(res.status).toBe(413);
+    });
+
+    it('should accept a normal-sized POST /operations (cap not over-eager)', async () => {
+      const identity = await createIdentity();
+      const res = await req('/operations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ operations: [identity.jwsToken] }),
+      });
+      expect(res.status).toBe(200);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // gossip chunking (twin parity with Go's TestGossipChunksLargeBatches)
+  // ---------------------------------------------------------------------------
+
+  describe('gossip chunking', () => {
+    it('should chunk a gossip run into batches no larger than 100', async () => {
+      // A chunk-recording peer client: capture the size of each submitOperations
+      // batch. A >100 gossip run must be split (Go's maxGossipBatch=100) so the
+      // receiver's IngestBody.max(100) never 400s and silently drops the batch.
+      const batches: number[] = [];
+      const chunkRecorder: PeerClient = {
+        async getIdentityLog() {
+          return null;
+        },
+        async getContentLog() {
+          return null;
+        },
+        async getOperationLog() {
+          return null;
+        },
+        async submitOperations(_peerUrl, operations) {
+          batches.push(operations.length);
+        },
+      };
+
+      const gossipStore = new MemoryRelayStore();
+      const gossipIdentity = await bootstrapRelayIdentity(gossipStore);
+      const gossipApp = await createRelay({
+        store: gossipStore,
+        identity: gossipIdentity,
+        peers: [{ url: 'http://peer-a' }],
+        peerClient: chunkRecorder,
+      });
+
+      // Ingest 250 distinct identity ops in one batch is capped at 100, so drive
+      // the chunking directly: feed 250 tokens through three POSTs and let the
+      // sequencer gossip them. Simpler: ingest 250 ops across 3 batches and
+      // assert the aggregate gossip never exceeded 100 per call.
+      const tokens: string[] = [];
+      for (let i = 0; i < 250; i++) {
+        const id = await createIdentity();
+        tokens.push(id.jwsToken);
+      }
+      for (let i = 0; i < tokens.length; i += 100) {
+        await gossipApp.app.request('http://localhost/operations', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ operations: tokens.slice(i, i + 100) }),
+        });
+      }
+
+      expect(batches.length).toBeGreaterThan(0);
+      for (const n of batches) {
+        expect(n).toBeLessThanOrEqual(100);
+      }
+      // every op gossiped at least once
+      const totalGossiped = batches.reduce((a, b) => a + b, 0);
+      expect(totalGossiped).toBeGreaterThanOrEqual(250);
+    });
+
+    it('submitOperations logs a non-2xx response without throwing', async () => {
+      // The real HTTP peer client must observe a dropped batch (res.ok check)
+      // but never throw — sync is the consistency backstop.
+      const { createHttpPeerClient } = await import('../src');
+      const client = createHttpPeerClient();
+      const warnings: unknown[][] = [];
+      const origWarn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      try {
+        // a relay that 400s any over-100 batch — point at the in-process app via
+        // a tiny fetch shim is overkill; instead hit a URL that returns non-2xx.
+        // Use the app directly through a global fetch patch.
+        const origFetch = globalThis.fetch;
+        globalThis.fetch = (async () =>
+          new Response('bad', { status: 400 })) as typeof globalThis.fetch;
+        try {
+          await client.submitOperations('http://peer-a', ['op1']);
+        } finally {
+          globalThis.fetch = origFetch;
+        }
+      } finally {
+        console.warn = origWarn;
+      }
+      expect(warnings.length).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // twin-divergence: prf empty/non-string elements must be rejected (parity)
+  // ---------------------------------------------------------------------------
+
+  describe('prf hard-reject (twin parity)', () => {
+    it('should reject a public credential with an empty-string prf element', async () => {
+      // Build a credential whose prf is ["<parent>", ""]. TS rejects at decode
+      // (MAX_PRF=1 → length 2 > 1) and so must Go (ParsePrf hard-rejects the
+      // empty element). This is the cross-twin vector for the prf-empty-filter
+      // divergence: byte-identical credential, BOTH twins reject.
+      const issuer = await createIdentity();
+      await postOps([issuer.jwsToken]);
+
+      // a valid parent credential to put in prf[0]
+      const now = Math.floor(Date.now() / 1000);
+      const parent = await createDFOSCredential({
+        issuerDID: issuer.did,
+        audienceDID: '*',
+        att: [{ resource: 'chain:abc', action: 'read' }],
+        exp: now + 3600,
+        signer: issuer.authKey.signer,
+        keyId: issuer.authKey.keyId,
+        iat: now,
+      });
+
+      // hand-build a credential payload with prf:["<parent>", ""] and sign it.
+      const payload = {
+        version: 1,
+        type: 'DFOSCredential',
+        iss: issuer.did,
+        aud: '*',
+        att: [{ resource: 'chain:abc', action: 'read' }],
+        prf: [parent, ''],
+        exp: now + 1800,
+        iat: now,
+      };
+      const encoded = await dagCborCanonicalEncode(payload as unknown as Record<string, unknown>);
+      const cid = encoded.cid.toString();
+      const header = {
+        alg: 'EdDSA',
+        typ: 'did:dfos:credential',
+        kid: `${issuer.did}#${issuer.authKey.keyId}`,
+        cid,
+      };
+      const enc = (o: unknown) =>
+        Buffer.from(JSON.stringify(o)).toString('base64url').replace(/=+$/, '');
+      const signingInput = `${enc(header)}.${enc(payload)}`;
+      const sig = await issuer.authKey.signer(new TextEncoder().encode(signingInput));
+      const badCredential = `${signingInput}.${Buffer.from(sig).toString('base64url').replace(/=+$/, '')}`;
+
+      const res = await postOps([badCredential]);
       const body = await json(res);
       expect(body.results[0].status).toBe('rejected');
     });
