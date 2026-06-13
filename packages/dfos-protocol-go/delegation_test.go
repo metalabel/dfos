@@ -1,8 +1,29 @@
 package dfos
 
 import (
+	"crypto/ed25519"
+	"strings"
 	"testing"
 )
+
+// TestVerifyDelegationChainRejectsMultiParent verifies WP-8: delegation is
+// linear. A childPrf with more than one entry must be rejected before any
+// parent is walked — the old union-of-authority model let a self-issued
+// secondary parent smuggle in scope that was never rooted at rootDID.
+func TestVerifyDelegationChainRejectsMultiParent(t *testing.T) {
+	childVC := &VerifiedCredential{Iss: "did:dfos:attacker"}
+	childAtt := []AttEntry{{Resource: "chain:victim", Action: "write"}}
+	childPrf := []string{"parent-token-0", "parent-token-1"}
+	resolveKey := func(kid string) (ed25519.PublicKey, error) { return nil, nil }
+
+	err := verifyDelegationChain("child", childVC, childAtt, childPrf, resolveKey, "did:dfos:root", nil, 0)
+	if err == nil {
+		t.Fatal("expected multi-parent credential to be rejected, got nil")
+	}
+	if !strings.Contains(err.Error(), "multi-parent") {
+		t.Errorf("expected multi-parent rejection, got: %v", err)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // ParseResource
@@ -226,4 +247,3 @@ func TestIsAttenuatedChainXCannotCoverChainWildcard(t *testing.T) {
 		t.Fatal("chain:X should NOT cover chain:* (widening)")
 	}
 }
-

@@ -144,88 +144,68 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 		return nil
 	}
 
-	type verifiedParent struct {
-		jws      string
-		verified *VerifiedCredential
-		att      []AttEntry
-		prf      []string
-		aud      string
-		exp      int64
+	// DFOS delegation is LINEAR: exactly one parent per hop. Multi-parent
+	// proofs are rejected. A union-of-authority model (att taken from the union
+	// of all parents, but the root walk continuing only through the first
+	// parent) let a self-issued secondary parent contribute scope that was
+	// never rooted at rootDID — an authority-escalation. Linear delegation
+	// removes the class entirely.
+	if len(childPrf) > 1 {
+		return fmt.Errorf("delegation chain: multi-parent credentials are not supported (prf must have at most one entry)")
 	}
 
-	var parents []verifiedParent
-	for _, parentJws := range childPrf {
-		pHeader, pPayload, err := DecodeJWSUnsafe(parentJws)
-		if err != nil || pHeader == nil {
-			return fmt.Errorf("failed to decode parent credential in delegation chain")
-		}
+	// verify the single parent credential
+	parentJws := childPrf[0]
+	pHeader, pPayload, err := DecodeJWSUnsafe(parentJws)
+	if err != nil || pHeader == nil {
+		return fmt.Errorf("failed to decode parent credential in delegation chain")
+	}
 
-		pKid := pHeader.Kid
-		if pKid == "" || !strings.Contains(pKid, "#") {
-			return fmt.Errorf("parent credential kid must be a DID URL")
-		}
+	pKid := pHeader.Kid
+	if pKid == "" || !strings.Contains(pKid, "#") {
+		return fmt.Errorf("parent credential kid must be a DID URL")
+	}
 
-		pKey, err := resolveKey(pKid)
+	pKey, err := resolveKey(pKid)
+	if err != nil {
+		return fmt.Errorf("failed to resolve parent credential key: %v", err)
+	}
+
+	pVerified, err := VerifyCredential(parentJws, pKey, "", "")
+	if err != nil {
+		return fmt.Errorf("parent credential verification failed: %v", err)
+	}
+
+	// check revocation at every level
+	if isRevoked != nil {
+		revoked, err := isRevoked(pVerified.Iss, pVerified.CID)
 		if err != nil {
-			return fmt.Errorf("failed to resolve parent credential key: %v", err)
+			return fmt.Errorf("revocation check failed: %v", err)
 		}
-
-		pVerified, err := VerifyCredential(parentJws, pKey, "", "")
-		if err != nil {
-			return fmt.Errorf("parent credential verification failed: %v", err)
-		}
-
-		// check revocation at every level
-		if isRevoked != nil {
-			revoked, err := isRevoked(pVerified.Iss, pVerified.CID)
-			if err != nil {
-				return fmt.Errorf("revocation check failed: %v", err)
-			}
-			if revoked {
-				return fmt.Errorf("parent credential in delegation chain is revoked")
-			}
-		}
-
-		pAud, _ := pPayload["aud"].(string)
-		parents = append(parents, verifiedParent{
-			jws:      parentJws,
-			verified: pVerified,
-			att:      ParseAtt(pPayload),
-			prf:      ParsePrf(pPayload),
-			aud:      pAud,
-			exp:      pVerified.Exp,
-		})
-	}
-
-	// child's issuer must be the audience of at least one parent
-	hasMatchingParent := false
-	for _, p := range parents {
-		if p.aud == "*" || p.aud == childVC.Iss {
-			hasMatchingParent = true
-			break
-		}
-	}
-	if !hasMatchingParent {
-		return fmt.Errorf("delegation gap: no parent credential has audience matching child issuer %s", childVC.Iss)
-	}
-
-	// child's exp must not exceed any parent's exp
-	for _, p := range parents {
-		if childVC.Exp > p.exp {
-			return fmt.Errorf("delegation chain: child credential expiry exceeds parent expiry")
+		if revoked {
+			return fmt.Errorf("parent credential in delegation chain is revoked")
 		}
 	}
 
-	// child's att must be attenuated from the union of all parents' att
-	var parentAttUnion []AttEntry
-	for _, p := range parents {
-		parentAttUnion = append(parentAttUnion, p.att...)
+	pAud, _ := pPayload["aud"].(string)
+	parentAtt := ParseAtt(pPayload)
+	parentPrf := ParsePrf(pPayload)
+
+	// child's issuer must be the parent's audience
+	if pAud != "*" && pAud != childVC.Iss {
+		return fmt.Errorf("delegation gap: parent credential audience %s does not match child issuer %s", pAud, childVC.Iss)
 	}
-	if !IsAttenuated(parentAttUnion, childAtt) {
+
+	// child's exp must not exceed the parent's exp
+	if childVC.Exp > pVerified.Exp {
+		return fmt.Errorf("delegation chain: child credential expiry exceeds parent expiry")
+	}
+
+	// child's att must be attenuated from the parent's att
+	if !IsAttenuated(parentAtt, childAtt) {
 		return fmt.Errorf("delegation chain: child credential scope exceeds parent scope")
 	}
 
-	// recurse into the first parent (all parents verified above)
-	first := parents[0]
-	return verifyDelegationChain(first.jws, first.verified, first.att, first.prf, resolveKey, rootDID, isRevoked, depth+1)
+	// continue walking through the parent
+	return verifyDelegationChain(parentJws, pVerified, parentAtt, parentPrf, resolveKey, rootDID, isRevoked, depth+1)
 }

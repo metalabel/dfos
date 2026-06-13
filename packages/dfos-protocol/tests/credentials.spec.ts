@@ -431,6 +431,57 @@ describe('dfos credential', () => {
     expect(chain.chain).toHaveLength(3);
   });
 
+  it('should reject multi-parent credentials (WP-8: union-of-authority escalation)', async () => {
+    // The exploit linear delegation closes: an attacker holds a legit narrow
+    // parent rooted at the real creator, self-issues a second parent granting
+    // chain:* that roots only at themselves, and combines both under one leaf.
+    // The old union model accepted the leaf because the union of parent att
+    // covered the target while the root walk only followed the first parent —
+    // the self-issued parent's authority was never validated against rootDID.
+    const space = makeIdentity();
+    const attacker = makeIdentity();
+    identityMap.set(space.did, space.identity);
+    identityMap.set(attacker.did, attacker.identity);
+
+    // legit narrow parent: space -> attacker, scoped to content1 only
+    const legitParent = await createDFOSCredential({
+      issuerDID: space.did,
+      audienceDID: attacker.did,
+      att: [{ resource: 'chain:content1', action: 'write' }],
+      prf: [],
+      exp: futureUnix(120),
+      signer: space.signer,
+      keyId: space.keyId,
+    });
+
+    // self-issued broad parent: attacker -> attacker, chain:* write, no root
+    const selfParent = await createDFOSCredential({
+      issuerDID: attacker.did,
+      audienceDID: attacker.did,
+      att: [{ resource: 'chain:*', action: 'write' }],
+      prf: [],
+      exp: futureUnix(120),
+      signer: attacker.signer,
+      keyId: attacker.keyId,
+    });
+
+    // leaf combining both parents, claiming write on a chain it was never granted
+    const leafToken = await createDFOSCredential({
+      issuerDID: attacker.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:victim', action: 'write' }],
+      prf: [legitParent, selfParent],
+      exp: futureUnix(60),
+      signer: attacker.signer,
+      keyId: attacker.keyId,
+    });
+
+    const leaf = await verifyDFOSCredential(leafToken, { resolveIdentity });
+    await expect(
+      verifyDelegationChain(leaf, { resolveIdentity, rootDID: space.did }),
+    ).rejects.toThrow(/multi-parent/);
+  });
+
   // --- attenuation enforcement ---
 
   it('should accept child that narrows scope', () => {
