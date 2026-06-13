@@ -38,6 +38,13 @@ Schemas are versioned via the URI path (`/post/v1`, `/post/v2`). Evolution rules
 - **Breaking changes require a new version** — removing fields, changing types, or adding new required fields means a new version URI
 - **Implementations declare which versions they understand** — a registry or application can accept `post/v1` and `post/v2` simultaneously, or only `post/v1`
 
+Immutability here is twofold, and the two senses are deliberately distinct:
+
+1. **Document immutability** — every committed document is CID-addressed and byte-immutable. A specific document, once published, can never change; an edit is a new document with a new CID appended to the content chain.
+2. **Schema-version immutability** — a published schema version (e.g. `post/v1`) evolves only additively. Adding optional fields to `post/v1` never invalidates documents already committed against it. Removing or retyping a field is a new version (`post/v2`), never an in-place change.
+
+A document's own field _values_ (e.g. `format`) are fixed at the operation that set them — see the `format` field below.
+
 ---
 
 ## Standard Schemas
@@ -48,16 +55,16 @@ Schema files live in [`schemas/`](https://github.com/metalabel/dfos/tree/main/pa
 
 The primary content type. Covers short posts, long-form posts, comments, and replies via the `format` discriminator.
 
-| Field          | Type     | Required | Description                                                                        |
-| -------------- | -------- | -------- | ---------------------------------------------------------------------------------- |
-| `$schema`      | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                               |
-| `format`       | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — immutable, set at creation |
-| `title`        | string   | no       | Post title (typically for long-post format)                                        |
-| `body`         | string   | no       | Post body content                                                                  |
-| `cover`        | media    | no       | Cover image                                                                        |
-| `attachments`  | media[]  | no       | Attached media objects                                                             |
-| `topics`       | string[] | no       | Topic names (stored as names for portability)                                      |
-| `createdByDID` | string   | no       | DID of the content author — distinct from the chain operation signer               |
+| Field          | Type     | Required | Description                                                                                                       |
+| -------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `$schema`      | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                                                              |
+| `format`       | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — fixed at chain genesis and not changed by later revisions |
+| `title`        | string   | no       | Post title (typically for long-post format)                                                                       |
+| `body`         | string   | no       | Post body content                                                                                                 |
+| `cover`        | media    | no       | Cover image                                                                                                       |
+| `attachments`  | media[]  | no       | Attached media objects                                                                                            |
+| `topics`       | string[] | no       | Topic names (stored as names for portability)                                                                     |
+| `createdByDID` | string   | no       | DID of the content author — distinct from the chain operation signer                                              |
 
 `createdByDID` is a content-layer authorship convention, distinct from the operation signer. The `kid` DID in the JWS header identifies who cryptographically signed the operation — this is the protocol-level signer with key authority. `createdByDID` records who authored the content at the application layer. These often differ: an agent, bot, or delegate may sign the operation on behalf of a human author. The protocol verifies the signer; applications display `createdByDID`.
 
@@ -171,15 +178,15 @@ Use cases for `targetOperationCID`:
 
 ## Reference Content Stream Schema
 
-The content stream is the canonical example of the stream interpretation pattern. A stream chain accumulates discrete entries — each operation appends a new document to the sequence rather than replacing the previous one.
+The content stream is the canonical example of the stream interpretation pattern. A stream chain accumulates discrete entries — each operation appends a new document to the sequence rather than replacing the previous one. This is a **reference/example schema** — it illustrates the stream pattern and is not one of the hosted standard schemas. Its `$id` carries the `reference-content-stream/v1` URI to mark it as such; see [`schemas/reference-content-stream.v1.json`](https://github.com/metalabel/dfos/blob/main/schemas/reference-content-stream.v1.json) and the worked chain in [`examples/reference-content-stream/`](https://github.com/metalabel/dfos/tree/main/examples/reference-content-stream).
 
-### Content Stream (`https://schemas.dfos.com/content-stream/v1`)
+### Reference Content Stream (`https://schemas.dfos.com/reference-content-stream/v1`)
 
 A stream entry document. Each document in a content stream chain is a standalone entry in the sequence.
 
 | Field                | Type    | Required | Description                                                         |
 | -------------------- | ------- | -------- | ------------------------------------------------------------------- |
-| `$schema`            | string  | yes      | `"https://schemas.dfos.com/content-stream/v1"`                      |
+| `$schema`            | string  | yes      | `"https://schemas.dfos.com/reference-content-stream/v1"`            |
 | `body`               | string  | no       | Entry body content                                                  |
 | `attachments`        | media[] | no       | Attached media objects                                              |
 | `targetOperationCID` | string  | no       | CID of an operation this entry references (reply, annotation, etc.) |
@@ -187,7 +194,7 @@ A stream entry document. Each document in a content stream chain is a standalone
 
 ```json
 {
-  "$schema": "https://schemas.dfos.com/content-stream/v1",
+  "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
   "body": "This is a stream entry.",
   "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
 }

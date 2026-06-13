@@ -33,3 +33,15 @@
   Cache-Control: public, max-age=3600, must-revalidate
 /content-model/
   Cache-Control: public, max-age=3600, must-revalidate
+/cli/
+  Cache-Control: public, max-age=3600, must-revalidate
+/credentials/
+  Cache-Control: public, max-age=3600, must-revalidate
+/deploy/
+  Cache-Control: public, max-age=3600, must-revalidate
+/siwd/
+  Cache-Control: public, max-age=3600, must-revalidate
+/skill/
+  Cache-Control: public, max-age=3600, must-revalidate
+/web-relay/
+  Cache-Control: public, max-age=3600, must-revalidate

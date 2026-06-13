@@ -33,7 +33,7 @@ For full protocol details including cryptographic primitives, chain mechanics, a
 - **Self-certifying** — The DID is a deterministic derivation of the genesis content. No external authority is needed to verify the binding between identifier and chain.
 - **Transport-agnostic** — Resolution requires obtaining and verifying a chain, not querying a specific endpoint. Any system that stores and serves identity chains is a valid source.
 - **Key rotation** — Identity chains support full key rotation via signed update operations. Keys can be added, removed, and replaced without changing the DID.
-- **Deactivation** — Identities can be permanently deactivated via a signed delete operation.
+- **Deactivation** — Identities can be deactivated via a signed delete operation. The `delete` record is permanent, but deactivation itself is reversible only by the controller via fork (see §5.4).
 - **Minimal** — The method defines identifiers and verification. It deliberately does not define discovery, gossip, or consensus mechanisms.
 
 ---
@@ -124,6 +124,8 @@ Identity chain operations declare three key sets. These map to W3C verification 
 | `controllerKeys`       | `capabilityInvocation`        | Manage the DID itself (sign identity chain update/delete operations) |
 
 Each key in the identity chain state becomes a `verificationMethod` entry. The `id` is constructed as a DID URL: `did:dfos:<id>#<keyId>`. The `type` is `Multikey`. The `publicKeyMultibase` is the W3C Multikey encoding (multicodec `0xed01` prefix + base58btc + `z` multibase prefix).
+
+**Key-id uniqueness and cross-role keys.** Within a single key set (`authKeys`, `assertKeys`, or `controllerKeys`) on an `update` operation, key ids MUST be unique — the verifier rejects repeated ids in the same usage section. The _same_ key id MAY appear across different sets; this is the common case, where one key serves authentication, assertion, and control simultaneously (as in the reference document above, where one key id is referenced from `authentication`, `assertionMethod`, and `capabilityInvocation`). When building the DID Document, verification methods are keyed by their DID-URL `id`, so a key id appearing in multiple roles yields a single `verificationMethod` entry referenced from each relationship rather than three duplicate entries.
 
 ### 4.3 Controller
 

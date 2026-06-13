@@ -450,7 +450,13 @@ Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfo
 The relay uses two key resolution strategies:
 
 - **Historical resolver** (for chain re-verification): searches all keys that have ever appeared in an identity chain's log, including rotated-out keys. This is necessary because re-verifying a full content chain from genesis must resolve keys from operations signed before a key rotation.
-- **Current-state resolver** (for live authentication): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for auth tokens and credentials. This prevents a compromised rotated-out key from being used to authenticate new requests.
+- **Current-state resolver** (for live authentication and beacons): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for auth tokens and beacons. This prevents a compromised rotated-out key from being used to authenticate new requests or to hijack the beacon pointer.
+
+**Which primitive uses which resolver:**
+
+- **Current-state resolver** — auth tokens and beacons. A rotated-out key cannot mint an auth token or publish a beacon, preventing stale-key auth and pointer-hijack. Beacons are safe to resolve against current state because they are replace-on-newer: any transient sync divergence self-heals when the legitimate holder publishes a fresher beacon.
+- **Historical resolver** — identity and content chain re-verification, artifacts, revocations, and countersignatures. These are historical facts whose signing key may since have rotated out, so they must resolve against every key that ever appeared in the chain; re-verifying them under current state would break sync of honest operations after any rotation. Their invalidation mechanism is revocation or deletion, not key rotation.
+- **Credentials are the exception to the auth grouping.** Although a credential proves authorization, it uses the **historical** resolver and survives key rotation — a credential signed before a rotation remains valid afterward. Revocation (not key rotation) is the invalidation mechanism for credentials. See [CREDENTIALS.md](https://protocol.dfos.com/credentials).
 
 ---
 
