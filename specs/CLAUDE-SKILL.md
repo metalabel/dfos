@@ -5,6 +5,12 @@ description: Install, configure, and use the DFOS protocol CLI. Use when the use
 
 # DFOS CLI
 
+> **Three similarly-named things — don't conflate them:**
+>
+> - **`dfos`** (this skill) — the Go protocol CLI from the OSS repo (`~/projects/metalabel-dfos-open-source`), installed via the curl one-liner from `protocol.dfos.com` (or Homebrew). For _using_ the protocol: identities, content, credentials, relays.
+> - **`dfos-cli` skill** — for _developing_ that same Go CLI: the rebuild-from-source loop in the OSS repo (local relay, keychain cleanup, iterating on CLI source).
+> - **`dfos-dx`** — unrelated in-monorepo Node devops script (`./packages/tool-dfos-dx/bin/dfos-dx`) for deploys and migrations. Nothing to do with the protocol CLI.
+
 The `dfos` CLI is a local-first relay node for the DFOS protocol. It manages identities, content chains, beacons, and credentials. Your machine is a relay — all data is stored locally first, then optionally published to remote peers.
 
 ## Installation
@@ -405,9 +411,9 @@ dfos content publish <contentId> --peer prod
 
 ## Confirmation Behavior
 
-Destructive commands (delete, key rotation) prompt for confirmation. Pass `--yes` to auto-confirm in scripts:
+Destructive commands (`identity delete`, `content delete`, key rotation) execute **immediately and irreversibly** — there is no interactive confirmation prompt and no undo. A `delete` is signed and published the moment you run it. Identity deletion is a permanent, gossiped fact (a controller can later supersede it via a fork, but the `delete` never leaves the log), and **key loss is unrecoverable** — there is no backup or recovery flow. Double-check the target and `--peer` before running:
 
 ```bash
-dfos identity delete alice --yes
-dfos content delete <contentId> --yes --peer prod
+dfos identity delete alice
+dfos content delete <contentId> --peer prod
 ```
