@@ -228,7 +228,7 @@ If you create content with `--peer` but the identity hasn't been published to th
 
 ## Multi-Device Identities (1-of-N)
 
-An identity can hold up to 16 controller keys and 16 auth keys. **Any one current key in a role set can sign** — so the same identity can act from multiple devices, each holding its own key. This is *availability*, not key recovery: with a key on more than one device, losing a single device is not loss of the identity. A surviving device can keep publishing and can even rotate out the lost key.
+An identity can hold up to 16 controller keys and 16 auth keys. **Any one current key in a role set can sign** — so the same identity can act from multiple devices, each holding its own key. This is _availability_, not key recovery: with a key on more than one device, losing a single device is not loss of the identity. A surviving device can keep publishing and can even rotate out the lost key.
 
 The handoff never moves a private key. A new device generates its own keypair locally; only its **public** key crosses to a device holding a controller key, which adds it to the chain.
 
@@ -264,7 +264,7 @@ Notes:
 
 - **`device-pubkey` defaults to the auth role**, which is sufficient for publishing content, credentials, and beacons. Pass `--controller` only to print a controller-role hint; granting a controller key is a higher-trust act (a controller can rotate, delete, and add further keys), and the role is ultimately decided by A's `add-key` flags (`--auth-key` vs `--controller-key`), not by B.
 - **B must re-fetch after A's `add-key` propagates.** Between `device-pubkey` and that re-fetch, B holds a private key that is not yet in the published set, so a publish attempt will report "no held auth key" until B syncs.
-- This is set up *in advance*. There is no way to add a key after every device key is lost — `add-key` itself must be signed by a held controller key.
+- This is set up _in advance_. There is no way to add a key after every device key is lost — `add-key` itself must be signed by a held controller key.
 
 ## Local Relay
 

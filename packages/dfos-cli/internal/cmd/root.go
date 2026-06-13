@@ -331,15 +331,6 @@ func selectHeldKey(did string, set []protocol.MultikeyPublicKey, role string) (s
 	return "", fmt.Errorf("no held %s key for %s on this device (holds none of %d published %s key(s))", role, did, len(set), role)
 }
 
-// keyIDFromKid extracts the bare keyID from a kid string (did:dfos:abc#key_123 → key_123).
-// Returns the full kid if no '#' separator is found.
-func keyIDFromKid(kid string) string {
-	if idx := strings.Index(kid, "#"); idx >= 0 {
-		return kid[idx+1:]
-	}
-	return kid
-}
-
 func joinComma(ss []string) string {
 	result := ""
 	for i, s := range ss {

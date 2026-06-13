@@ -253,6 +253,31 @@ func TestMultiDevice_NonMemberRejected(t *testing.T) {
 	}
 }
 
+// TestMultiDevice_RejectsMalformedPubkey proves add-key validates the length of
+// a human-supplied --pubkey: DecodeMultikey only checks the multicodec prefix,
+// so a prefix-valid but wrong-length key must still be rejected before it can be
+// appended to the published set.
+func TestMultiDevice_RejectsMalformedPubkey(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	createIdentity(t, "alice", storeA) // storeA holds alice's controller key
+
+	// prefix-valid (0xed01) but only 16 bytes of key material
+	malformed := protocol.EncodeMultikey(make([]byte, 16))
+
+	keys = storeA
+	ak := newIdentityAddKeyCmd()
+	mustSetFlag(t, ak, "auth-key", "true")
+	mustSetFlag(t, ak, "id", protocol.GenerateKeyID())
+	mustSetFlag(t, ak, "pubkey", malformed)
+	err := ak.RunE(ak, nil)
+	if err == nil {
+		t.Fatalf("add-key with a 16-byte --pubkey should fail")
+	}
+	if !strings.Contains(err.Error(), "ed25519 key") {
+		t.Fatalf("expected an ed25519 key-length error, got: %v", err)
+	}
+}
+
 func hasKeyID(set []protocol.MultikeyPublicKey, id string) bool {
 	for _, k := range set {
 		if k.ID == id {

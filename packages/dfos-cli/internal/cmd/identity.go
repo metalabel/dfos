@@ -425,10 +425,17 @@ func newIdentityAddKeyCmd() *cobra.Command {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
 
-			// validate the supplied public key and normalize its encoding
+			// validate the supplied public key and normalize its encoding.
+			// DecodeMultikey only checks the multicodec prefix, not the key
+			// length — guard it here since --pubkey is human-supplied (copy/
+			// paste/QR) and a malformed key would otherwise be appended to the
+			// published set and silently fail every future signature check.
 			rawPub, err := protocol.DecodeMultikey(pubkeyFlag)
 			if err != nil {
 				return fmt.Errorf("invalid --pubkey: %w", err)
+			}
+			if len(rawPub) != ed25519.PublicKeySize {
+				return fmt.Errorf("invalid --pubkey: expected a %d-byte ed25519 key, got %d bytes", ed25519.PublicKeySize, len(rawPub))
 			}
 			newKey := protocol.NewMultikeyPublicKey(idFlag, ed25519.PublicKey(rawPub))
 
