@@ -427,6 +427,49 @@ Where `idEncode` is the 19-char alphabet encoding described above.
 
 ---
 
+## Signature Verification Profile
+
+DFOS pins a deliberately narrow profile of the JOSE/JWS surface so that **all conformant verifiers accept and reject the same signatures byte-for-byte**. The rules below are normative and apply to **every** verification path: identity-op JWS, content-op JWS, beacons, artifacts, countersignatures, DFOS credentials, credential revocations, and auth-token JWTs. A verifier MUST apply §1–§3 to the protected header **before** performing any signature computation, and MUST apply §4 as part of (or before) the signature check. A token that violates any rule MUST be rejected regardless of whether its signature would otherwise verify.
+
+There is no algorithm agility: the verifier never branches on `alg` to select a primitive. Ed25519 (`EdDSA`) is the only signature algorithm.
+
+### 1. Algorithm pinning (`alg`)
+
+The protected header `alg` member MUST equal the exact string `"EdDSA"`. Any other value MUST be rejected before any signature check, including (non-exhaustively) `"none"`, `"HS256"`, `"RS256"`, `"ES256"`, the lowercase `"eddsa"`, or an absent `alg`. Verifiers MUST NOT use `alg` to choose a verification primitive; it is checked only for exact equality.
+
+### 2. `crit` rejection
+
+The protected header MUST NOT contain a `crit` member. DFOS emits no critical header parameters, so any token whose protected header carries `crit` (with any value) MUST be rejected. Verifiers MUST observe the member's presence directly — decoding into a fixed header shape that silently discards unknown members is not sufficient.
+
+### 3. No header-key-trust
+
+The verifier MUST NOT read key material from the protected header. The signing key is resolved exclusively from `kid` against the signer's identity chain (current state). A protected header that carries an embedded key — `jwk`, `x5c`, or any other key-bearing member — MUST be rejected. A header-supplied key is never trusted, even if it happens to match the resolved key.
+
+### 4. Canonical signature scalar (`S < L`)
+
+An Ed25519 signature is `R || S` (64 bytes). The scalar `S` (the trailing 32 bytes, little-endian) MUST be canonical: strictly less than the group order
+
+```
+L = 2^252 + 27742317777372353535851937790883648493
+  = 0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed
+```
+
+A signature whose `S >= L` MUST be rejected (classic Ed25519 malleability). A signature that does not decode to exactly 64 bytes MUST also be rejected. Most Ed25519 libraries enforce `S < L` already; implementations on libraries that do not (notably `ed25519-dalek`, where even `verify_strict` accepts non-canonical `S`) MUST add an explicit constant-time `S < L` gate.
+
+### Reserved for a future revision
+
+The following hardening axes are intentionally **deferred** to a later profile revision and are NOT part of v1. v1 verifiers inherit whatever behavior their Ed25519 library provides on these axes:
+
+- **Cofactorless verification equation pinning** — requiring the specific `[S]B == R + [k]A` (cofactorless) equation rather than the batch/cofactored form.
+- **Full-order public key check** — the out-of-band `[L]A == identity` torsion test confirming `A` is a full-order point.
+- **Canonical point encoding (`y < p`)** — rejecting non-canonical `y`-coordinate encodings of `R` and `A`.
+- **Small-order public key rejection** — beyond whatever the underlying library already rejects.
+- **Strict base64url tightening** — rejecting non-canonical base64url padding/alphabet beyond what the decoder already enforces.
+
+These axes only matter for adversarially-constructed keys. Honest DFOS keys are full-order and canonically encoded, and honest signers produce canonical `S`, so honest participants are unaffected by the deferral. Any residual cross-implementation divergence on these axes is reachable only with adversarial keys and is addressed when this profile is next revised.
+
+---
+
 ## Credentials
 
 Credentials handle authentication and authorization for relay access and content chain delegation. The full credential format, verification rules, and revocation mechanism are specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials).
@@ -600,6 +643,8 @@ Relay-level semantic checks (target exists, witness ≠ author, deduplication) a
 ---
 
 ## Verification
+
+Every signature check below is performed under the [Signature Verification Profile](#signature-verification-profile): `alg` is pinned to `"EdDSA"`, a `crit` member or any embedded header key (`jwk`/`x5c`) causes rejection before the signature is checked, and signatures with a non-canonical scalar (`S >= L`) or a non-64-byte length are rejected.
 
 ### Identity Chain
 

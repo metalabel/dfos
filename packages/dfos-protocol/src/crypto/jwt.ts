@@ -8,6 +8,7 @@
 
 import { base64urlDecode, base64urlEncode } from './base64url';
 import { isValidEd25519Signature } from './ed25519';
+import { assertJwsProfile } from './jws-profile';
 
 // -----------------------------------------------------------------------------
 // types
@@ -127,14 +128,17 @@ export const verifyJwt = (options: JwtVerifyOptions): { header: JwtHeader; paylo
     throw new JwtVerificationError('Failed to decode token');
   }
 
+  // apply the DFOS signature verification profile (alg pin, crit, no
+  // header-key-trust) BEFORE any signature check
+  assertJwsProfile(
+    header as unknown as Record<string, unknown>,
+    (m) => new JwtVerificationError(m),
+  );
+
   // Verify signature
   const signingInput = `${headerB64}.${payloadB64}`;
   const signingInputBytes = new TextEncoder().encode(signingInput);
   const signatureBytes = base64urlDecode(signatureB64);
-
-  if (header.alg !== 'EdDSA') {
-    throw new JwtVerificationError(`Unsupported algorithm: ${header.alg}`);
-  }
 
   const isValid = isValidEd25519Signature(signingInputBytes, signatureBytes, options.publicKey);
   if (!isValid) throw new JwtVerificationError('Invalid signature');

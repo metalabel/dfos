@@ -100,27 +100,101 @@ mod tests {
         buf
     }
 
+    // Ed25519 group order L (little-endian 32 bytes) — the canonical S < L bound.
+    // ed25519-dalek's verify (even verify_strict) does NOT reject non-canonical S,
+    // so this gate is mandatory for the DFOS profile and is the whole reason the
+    // Rust suite carries an explicit scalar check.
+    const ED25519_L: [u8; 32] = [
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
+        0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x10,
+    ];
+
+    /// Constant-time-ish little-endian compare: returns true iff s < L.
+    fn scalar_is_canonical(s: &[u8]) -> bool {
+        if s.len() != 32 {
+            return false;
+        }
+        for i in (0..32).rev() {
+            if s[i] < ED25519_L[i] {
+                return true;
+            }
+            if s[i] > ED25519_L[i] {
+                return false;
+            }
+        }
+        false // s == L is non-canonical
+    }
+
+    /// DFOS Signature Verification Profile (pragmatic v1) header gates — applied
+    /// BEFORE any signature check. Returns Err on any violation.
+    fn assert_jws_profile(header: &serde_json::Value) -> Result<(), String> {
+        if header["alg"] != "EdDSA" {
+            return Err(format!("unsupported algorithm: {}", header["alg"]));
+        }
+        if !header["crit"].is_null() {
+            return Err("crit header is not supported".to_string());
+        }
+        if !header["jwk"].is_null() {
+            return Err("jwk header is not allowed".to_string());
+        }
+        if !header["x5c"].is_null() {
+            return Err("x5c header is not allowed".to_string());
+        }
+        Ok(())
+    }
+
+    /// Profile-aware JWS verification returning Result so the reject corpus can
+    /// assert rejection. Applies alg pin, crit, no header-key-trust, 64-byte
+    /// length, and the canonical S < L gate BEFORE the signature check.
+    fn verify_jws_profiled(
+        token: &str,
+        pub_key: &VerifyingKey,
+    ) -> Result<(serde_json::Value, serde_json::Value), String> {
+        let parts: Vec<&str> = token.split('.').collect();
+        if parts.len() != 3 {
+            return Err("invalid JWS format".to_string());
+        }
+
+        let header_bytes = URL_SAFE_NO_PAD
+            .decode(parts[0])
+            .map_err(|_| "decode header".to_string())?;
+        let header: serde_json::Value =
+            serde_json::from_slice(&header_bytes).map_err(|_| "parse header".to_string())?;
+
+        // profile gates run before any signature work
+        assert_jws_profile(&header)?;
+
+        let signing_input = format!("{}.{}", parts[0], parts[1]);
+        let sig_bytes = URL_SAFE_NO_PAD
+            .decode(parts[2])
+            .map_err(|_| "decode signature".to_string())?;
+
+        // length + canonical-scalar (S < L) gates
+        if sig_bytes.len() != 64 {
+            return Err(format!("signature must be 64 bytes, got {}", sig_bytes.len()));
+        }
+        if !scalar_is_canonical(&sig_bytes[32..64]) {
+            return Err("non-canonical signature scalar (S >= L)".to_string());
+        }
+
+        let signature =
+            Signature::from_slice(&sig_bytes).map_err(|_| "bad signature bytes".to_string())?;
+        pub_key
+            .verify(signing_input.as_bytes(), &signature)
+            .map_err(|_| "signature verification failed".to_string())?;
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+
+        Ok((header, payload))
+    }
+
     fn verify_jws(
         token: &str,
         pub_key: &VerifyingKey,
     ) -> (serde_json::Value, serde_json::Value) {
-        let parts: Vec<&str> = token.split('.').collect();
-        assert_eq!(parts.len(), 3, "invalid JWS format");
-
-        let signing_input = format!("{}.{}", parts[0], parts[1]);
-        let sig_bytes = URL_SAFE_NO_PAD.decode(parts[2]).unwrap();
-        let signature = Signature::from_slice(&sig_bytes).unwrap();
-
-        pub_key
-            .verify(signing_input.as_bytes(), &signature)
-            .expect("signature verification failed");
-
-        let header: serde_json::Value =
-            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
-        let payload: serde_json::Value =
-            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
-
-        (header, payload)
+        verify_jws_profiled(token, pub_key).expect("verification failed")
     }
 
     // =========================================================================
@@ -441,5 +515,103 @@ mod tests {
 
         assert_eq!(cid_str, wrong_cid, "float 1.0 should produce the known-wrong CID");
         assert_ne!(cid_str, correct_cid, "float 1.0 must NOT produce the correct integer CID");
+    }
+
+    // =========================================================================
+    // Reject corpus — every conformant verifier MUST reject all of these.
+    // Byte-identical inputs across all five language suites. The S < L gate
+    // above is what makes RV-S-NONCANON-* fail under dalek.
+    // =========================================================================
+
+    const REJECT_PUB1_HEX: &str =
+        "ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32";
+
+    const REJECT_VECTORS: &[(&str, &str)] = &[
+        ("RV-LEN-SHORT", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2"),
+        ("RV-LEN-LONG", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQA"),
+        ("RV-S-NONCANON-PLUSL", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAFq4vaNrS7wPMIBVCWm3qp0JC5obhbU0QOP589IkS2GQ"),
+        ("RV-S-NONCANON-FF", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAD__________________________________________w"),
+        ("RV-ALG-NONE", "eyJhbGciOiJub25lIiwidHlwIjoiZGlkOmRmb3M6cmVqZWN0LXZlY3RvciIsImtpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4In0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
+        ("RV-ALG-CASE", "eyJhbGciOiJlZGRzYSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
+        ("RV-CRIT-PRESENT", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNyaXQiOlsiZXhwIl19.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
+        ("RV-HEADER-KEY-TRUST", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IkFBQUEifX0.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CQ"),
+        ("RV-SIG-BITFLIP", "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlamVjdC12ZWN0b3IiLCJraWQiOiJrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCJ9.eyJ2IjoxfQ.nfzkdNEd-E3btZXK6c-xvLcJoZAm0XEWobzsB7-9lAAY15V9HFGpaB1sDa23oZuU0JC5obhbU0QOP589IkS2CA"),
+    ];
+
+    #[test]
+    fn test_reject_corpus() {
+        let pub_bytes: [u8; 32] = hex::decode(REJECT_PUB1_HEX).unwrap().try_into().unwrap();
+        let pub_key = VerifyingKey::from_bytes(&pub_bytes).unwrap();
+        for (name, token) in REJECT_VECTORS {
+            assert!(
+                verify_jws_profiled(token, &pub_key).is_err(),
+                "{name}: expected rejection, got accept"
+            );
+        }
+    }
+
+    // =========================================================================
+    // WP-0 number-policy vectors. CIDs are byte-identical across all five suites.
+    // =========================================================================
+
+    const MAX_SAFE_CANONICAL_INTEGER: i64 = 9007199254740991; // 2^53 - 1
+
+    /// Reject NaN, ±Inf, non-integers, and integers outside ±(2^53-1).
+    fn assert_canonical_number_f64(val: f64) -> Result<(), String> {
+        if !val.is_finite() {
+            return Err("non-finite".to_string());
+        }
+        if val.fract() != 0.0 {
+            return Err("non-integer".to_string());
+        }
+        if val > MAX_SAFE_CANONICAL_INTEGER as f64 || val < -(MAX_SAFE_CANONICAL_INTEGER as f64) {
+            return Err("out of safe range".to_string());
+        }
+        Ok(())
+    }
+
+    fn make_cid_string(cbor_bytes: &[u8]) -> String {
+        cid_to_base32(&make_cid_bytes(cbor_bytes))
+    }
+
+    #[test]
+    fn test_number_policy_accept_max_safe() {
+        // { "n": 2^53-1 } — accepted, encodes to the reference CID
+        assert!(assert_canonical_number_f64(MAX_SAFE_CANONICAL_INTEGER as f64).is_ok());
+        let cbor = dag_cbor_encode_map(vec![(
+            "n",
+            Value::Integer(MAX_SAFE_CANONICAL_INTEGER.into()),
+        )]);
+        assert_eq!(
+            make_cid_string(&cbor),
+            "bafyreieak45zq2337oaadtvk2vwtdqfvfg26hd7olnf275qiv5hrh3vywq",
+            "max-safe CID mismatch"
+        );
+    }
+
+    #[test]
+    fn test_number_policy_rejects() {
+        // 2^53, 1.5, NaN, +Inf, -Inf must all be rejected
+        assert!(assert_canonical_number_f64(9007199254740992.0).is_err(), "2^53");
+        assert!(assert_canonical_number_f64(1.5).is_err(), "1.5");
+        assert!(assert_canonical_number_f64(f64::NAN).is_err(), "NaN");
+        assert!(assert_canonical_number_f64(f64::INFINITY).is_err(), "+Inf");
+        assert!(assert_canonical_number_f64(f64::NEG_INFINITY).is_err(), "-Inf");
+    }
+
+    #[test]
+    fn test_number_policy_null_vector() {
+        // { "documentCID": null, "note": null, "prf": [] }
+        // dag-cbor key order: "prf" (3), "note" (4), "documentCID" (11)
+        let cbor = dag_cbor_encode_map(vec![
+            ("prf", Value::Array(vec![])),
+            ("note", Value::Null),
+            ("documentCID", Value::Null),
+        ]);
+        assert_eq!(
+            make_cid_string(&cbor),
+            "bafyreign22f4jiww2ywlssx7r2l76z32suj5ufvwl354hsp4xrm26cw7ue",
+            "null vector CID mismatch"
+        );
     }
 }

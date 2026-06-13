@@ -8,6 +8,7 @@
 
 import { base64urlDecode, base64urlEncode } from './base64url';
 import { isValidEd25519Signature } from './ed25519';
+import { assertJwsProfile } from './jws-profile';
 
 // -----------------------------------------------------------------------------
 // types
@@ -73,9 +74,12 @@ export const verifyJws = (options: {
     throw new JwsVerificationError('Failed to decode token');
   }
 
-  if (header.alg !== 'EdDSA') {
-    throw new JwsVerificationError(`Unsupported algorithm: ${header.alg}`);
-  }
+  // apply the DFOS signature verification profile (alg pin, crit, no
+  // header-key-trust) BEFORE any signature check
+  assertJwsProfile(
+    header as unknown as Record<string, unknown>,
+    (m) => new JwsVerificationError(m),
+  );
 
   const signingInput = `${headerB64}.${payloadB64}`;
   const signingInputBytes = new TextEncoder().encode(signingInput);

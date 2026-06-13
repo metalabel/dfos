@@ -343,4 +343,125 @@ describe('canonical number policy (WP-0)', () => {
     const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
     await expect(dagCborCanonicalEncode({ a: { b: [1, 2, 0.5] } })).rejects.toThrow();
   });
+
+  it('rejects a fraction materialized by a toJSON() hook', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    // the original value is an object with a toJSON that yields a fraction —
+    // the pre-serialization walk never sees the number, so the guard must also
+    // cover the post-serialization (JSON round-tripped) shape
+    const sneaky = { amount: { toJSON: () => 1.5 } };
+    await expect(dagCborCanonicalEncode(sneaky)).rejects.toThrow(/non-integer/);
+  });
+
+  it('rejects an out-of-range integer materialized by a toJSON() hook', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    const sneaky = { big: { toJSON: () => 9007199254740992 } };
+    await expect(dagCborCanonicalEncode(sneaky)).rejects.toThrow(/safe range/);
+  });
+
+  it('remains CID-preserving for a valid toJSON() hook', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    // a toJSON returning a plain valid object must encode identically to the
+    // object itself — the extra guard walk must not alter valid encodings
+    const viaHook = await dagCborCanonicalEncode({ x: { toJSON: () => ({ a: 1 }) } });
+    const direct = await dagCborCanonicalEncode({ x: { a: 1 } });
+    expect(viaHook.cid.toString()).toBe(direct.cid.toString());
+  });
+});
+
+describe('signature verification profile (pragmatic v1)', () => {
+  const createTestSigner = (privateKey: Uint8Array) => {
+    return async (message: Uint8Array) => signPayloadEd25519(message, privateKey);
+  };
+
+  const b64url = (obj: unknown) =>
+    btoa(JSON.stringify(obj))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+  // build a JWS whose header is exactly `header` and whose signature is a real
+  // Ed25519 signature over the (header.payload) signing input — so the only
+  // thing that can reject it is a profile gate, not a bad signature
+  const signWithHeader = (header: Record<string, unknown>, privateKey: Uint8Array) => {
+    const headerB64 = b64url(header);
+    const payloadB64 = b64url({ data: 'hello' });
+    const signingInput = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+    const sig = signPayloadEd25519(signingInput, privateKey);
+    const sigB64 = btoa(String.fromCharCode(...sig))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    return `${headerB64}.${payloadB64}.${sigB64}`;
+  };
+
+  it('accepts an in-profile EdDSA JWS', async () => {
+    const keypair = createNewEd25519Keypair();
+    const token = await createJws({
+      header: { alg: 'EdDSA', typ: 'test', kid: 'key1' },
+      payload: { data: 'hello' },
+      sign: createTestSigner(keypair.privateKey),
+    });
+    expect(() => verifyJws({ token, publicKey: keypair.publicKey })).not.toThrow();
+  });
+
+  it('rejects alg "none"', () => {
+    const keypair = createNewEd25519Keypair();
+    const token = signWithHeader(
+      { alg: 'none', typ: 'test', kid: 'key1' },
+      keypair.privateKey,
+    );
+    expect(() => verifyJws({ token, publicKey: keypair.publicKey })).toThrow(
+      'Unsupported algorithm',
+    );
+  });
+
+  it('rejects lowercase alg "eddsa"', () => {
+    const keypair = createNewEd25519Keypair();
+    const token = signWithHeader(
+      { alg: 'eddsa', typ: 'test', kid: 'key1' },
+      keypair.privateKey,
+    );
+    expect(() => verifyJws({ token, publicKey: keypair.publicKey })).toThrow(
+      'Unsupported algorithm',
+    );
+  });
+
+  it('rejects a header with a crit member', () => {
+    const keypair = createNewEd25519Keypair();
+    const token = signWithHeader(
+      { alg: 'EdDSA', typ: 'test', kid: 'key1', crit: ['exp'] },
+      keypair.privateKey,
+    );
+    expect(() => verifyJws({ token, publicKey: keypair.publicKey })).toThrow('crit');
+  });
+
+  it('rejects a header carrying jwk', () => {
+    const keypair = createNewEd25519Keypair();
+    const token = signWithHeader(
+      { alg: 'EdDSA', typ: 'test', kid: 'key1', jwk: { kty: 'OKP' } },
+      keypair.privateKey,
+    );
+    expect(() => verifyJws({ token, publicKey: keypair.publicKey })).toThrow('jwk');
+  });
+
+  it('rejects a header carrying x5c', () => {
+    const keypair = createNewEd25519Keypair();
+    const token = signWithHeader(
+      { alg: 'EdDSA', typ: 'test', kid: 'key1', x5c: ['MIIB'] },
+      keypair.privateKey,
+    );
+    expect(() => verifyJws({ token, publicKey: keypair.publicKey })).toThrow('x5c');
+  });
+
+  it('rejects an out-of-profile header BEFORE checking the signature', () => {
+    // signature is garbage; profile gate must fire first
+    const keypair = createNewEd25519Keypair();
+    const headerB64 = b64url({ alg: 'none', typ: 'test', kid: 'key1' });
+    const payloadB64 = b64url({ data: 'hello' });
+    const token = `${headerB64}.${payloadB64}.AAAA`;
+    expect(() => verifyJws({ token, publicKey: keypair.publicKey })).toThrow(
+      'Unsupported algorithm',
+    );
+  });
 });

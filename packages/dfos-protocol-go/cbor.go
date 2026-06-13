@@ -5,6 +5,7 @@ import (
 	"encoding/base32"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 
 	"github.com/fxamacker/cbor/v2"
@@ -35,24 +36,75 @@ func AssertCanonicalNumbers(v any) error {
 				return err
 			}
 		}
+	case float32:
+		return assertCanonicalFloat(float64(val))
 	case float64:
-		if math.IsNaN(val) || math.IsInf(val, 0) {
-			return fmt.Errorf("non-finite number is not canonicalizable: %v", val)
-		}
-		if val != math.Trunc(val) {
-			return fmt.Errorf("non-integer number is not canonicalizable: %v (encode it as a string)", val)
-		}
-		if val > maxSafeInteger || val < -maxSafeInteger {
-			return fmt.Errorf("integer out of safe range is not canonicalizable: %v (encode it as a string)", val)
-		}
-	case int64:
-		if val > maxSafeInteger || val < -maxSafeInteger {
-			return fmt.Errorf("integer out of safe range is not canonicalizable: %d (encode it as a string)", val)
-		}
+		return assertCanonicalFloat(val)
 	case int:
-		if int64(val) > maxSafeInteger || int64(val) < -maxSafeInteger {
-			return fmt.Errorf("integer out of safe range is not canonicalizable: %d (encode it as a string)", val)
+		return assertCanonicalInt(int64(val))
+	case int8:
+		return assertCanonicalInt(int64(val))
+	case int16:
+		return assertCanonicalInt(int64(val))
+	case int32:
+		return assertCanonicalInt(int64(val))
+	case int64:
+		return assertCanonicalInt(val)
+	case uint:
+		return assertCanonicalUint(uint64(val))
+	case uint8:
+		return assertCanonicalUint(uint64(val))
+	case uint16:
+		return assertCanonicalUint(uint64(val))
+	case uint32:
+		return assertCanonicalUint(uint64(val))
+	case uint64:
+		return assertCanonicalUint(val)
+	default:
+		// reflect-based catch-all so no numeric kind silently slips through and
+		// produces a CID that diverges from the TS reference. Non-numeric kinds
+		// (string, bool, nil, etc.) are accepted.
+		switch reflect.ValueOf(v).Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return assertCanonicalInt(reflect.ValueOf(v).Int())
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return assertCanonicalUint(reflect.ValueOf(v).Uint())
+		case reflect.Float32, reflect.Float64:
+			return assertCanonicalFloat(reflect.ValueOf(v).Float())
+		case reflect.Complex64, reflect.Complex128:
+			return fmt.Errorf("complex number is not canonicalizable")
 		}
+	}
+	return nil
+}
+
+// assertCanonicalFloat rejects NaN, ±Inf, non-integers, and integers outside
+// ±(2^53-1). A whole, in-range float is accepted (it normalizes to int).
+func assertCanonicalFloat(val float64) error {
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return fmt.Errorf("non-finite number is not canonicalizable: %v", val)
+	}
+	if val != math.Trunc(val) {
+		return fmt.Errorf("non-integer number is not canonicalizable: %v (encode it as a string)", val)
+	}
+	if val > maxSafeInteger || val < -maxSafeInteger {
+		return fmt.Errorf("integer out of safe range is not canonicalizable: %v (encode it as a string)", val)
+	}
+	return nil
+}
+
+// assertCanonicalInt rejects signed integers outside ±(2^53-1).
+func assertCanonicalInt(val int64) error {
+	if val > maxSafeInteger || val < -maxSafeInteger {
+		return fmt.Errorf("integer out of safe range is not canonicalizable: %d (encode it as a string)", val)
+	}
+	return nil
+}
+
+// assertCanonicalUint rejects unsigned integers above 2^53-1.
+func assertCanonicalUint(val uint64) error {
+	if val > maxSafeInteger {
+		return fmt.Errorf("integer out of safe range is not canonicalizable: %d (encode it as a string)", val)
 	}
 	return nil
 }
