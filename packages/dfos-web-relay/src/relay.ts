@@ -56,6 +56,20 @@ const IngestBody = z.object({
  */
 const MAX_GOSSIP_BATCH = MAX_OPERATIONS_PER_BATCH;
 
+/**
+ * Split items into batches of at most `size`, preserving order with no loss.
+ * gossip() uses this to stay within the receiver's per-batch cap; exported so
+ * the split behavior is directly testable (mirrors Go's maxGossipBatch chunking,
+ * whose TestGossipChunksLargeBatches drives the split directly).
+ */
+export const chunkOps = <T>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let start = 0; start < items.length; start += size) {
+    chunks.push(items.slice(start, start + size));
+  }
+  return chunks;
+};
+
 /** Max request body size for POST /operations and PUT blob — mirrors the Go twin's 16MB cap. */
 const MAX_BODY_BYTES = 16 << 20;
 
@@ -137,8 +151,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const gossip = (ops: string[]) => {
     if (ops.length === 0 || gossipPeers.length === 0 || !peerClient) return;
     for (const peer of gossipPeers) {
-      for (let start = 0; start < ops.length; start += MAX_GOSSIP_BATCH) {
-        const chunk = ops.slice(start, start + MAX_GOSSIP_BATCH);
+      for (const chunk of chunkOps(ops, MAX_GOSSIP_BATCH)) {
         peerClient.submitOperations(peer.url, chunk).catch(() => {});
       }
     }

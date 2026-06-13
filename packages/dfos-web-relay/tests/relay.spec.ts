@@ -27,7 +27,13 @@ import {
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { bootstrapRelayIdentity, createRelay, ingestOperations, MemoryRelayStore } from '../src';
+import {
+  bootstrapRelayIdentity,
+  chunkOps,
+  createRelay,
+  ingestOperations,
+  MemoryRelayStore,
+} from '../src';
 import type { PeerClient, PeerLogEntry, RelayIdentity } from '../src';
 
 // =============================================================================
@@ -2050,7 +2056,20 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('gossip chunking', () => {
-    it('should chunk a gossip run into batches no larger than 100', async () => {
+    it('chunkOps splits a run into batches no larger than the cap (the real split guard)', () => {
+      // Directly exercise the split gossip() applies. The HTTP /operations cap
+      // (100) means a single gossip() call never receives >100 ops, so the
+      // integration test below can't force the split branch; this does, and
+      // mirrors Go's TestGossipChunksLargeBatches which calls gossipOps directly.
+      const ops = Array.from({ length: 250 }, (_, i) => `op-${i}`);
+      const chunks = chunkOps(ops, 100);
+      expect(chunks.map((c) => c.length)).toEqual([100, 100, 50]);
+      expect(chunks.flat()).toEqual(ops); // no loss, no reorder
+      expect(chunkOps([], 100)).toEqual([]);
+      expect(chunkOps(['a', 'b'], 2).map((c) => c.length)).toEqual([2]);
+    });
+
+    it('gossip submits chunked batches (each <= cap) covering every op', async () => {
       // A chunk-recording peer client: capture the size of each submitOperations
       // batch. A >100 gossip run must be split (Go's maxGossipBatch=100) so the
       // receiver's IngestBody.max(100) never 400s and silently drops the batch.
@@ -2079,10 +2098,9 @@ describe('web relay', () => {
         peerClient: chunkRecorder,
       });
 
-      // Ingest 250 distinct identity ops in one batch is capped at 100, so drive
-      // the chunking directly: feed 250 tokens through three POSTs and let the
-      // sequencer gossip them. Simpler: ingest 250 ops across 3 batches and
-      // assert the aggregate gossip never exceeded 100 per call.
+      // Wiring + coverage check (the chunkOps test above guards the split): feed
+      // 250 tokens through three ≤100-op POSTs and assert gossip actually submits,
+      // every submitted batch is <= the cap, and all ops are gossiped at least once.
       const tokens: string[] = [];
       for (let i = 0; i < 250; i++) {
         const id = await createIdentity();

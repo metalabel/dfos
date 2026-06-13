@@ -4,7 +4,8 @@
 #
 # Boots BOTH relays from the SAME pinned identity fixture, replays a fixed-seed
 # op set into each, and asserts byte-identical (canonicalized-JSON) proof-plane
-# bodies. Also runs the two-relay convergence tests that live alongside it.
+# bodies. (The two-relay convergence tests run in-package under the Go relay
+# `-race` CI job, not here.)
 #
 # Usage:
 #   cd packages/relay-conformance && ./scripts/run-parity.sh

@@ -1,6 +1,6 @@
 export { bootstrapRelayIdentity, bootstrapRelayIdentityFromKey } from './bootstrap';
 export { createHttpPeerClient } from './peer-client';
-export { createRelay, type CreatedRelay } from './relay';
+export { createRelay, chunkOps, type CreatedRelay } from './relay';
 export { MemoryRelayStore } from './store';
 export {
   ingestOperations,

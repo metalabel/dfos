@@ -857,8 +857,9 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 
 	// bound prf to a single parent (spec MUST-rejects prf>1; defense-in-depth so
 	// standalone ingest matches construction/decode — TS bounds this in the zod
-	// schema). Count the RAW array length, NOT ParsePrf (which silently filters
-	// empty/non-string elements and would undercount vs TS's pre-filter length).
+	// schema). Count the RAW array length here for a direct, decode-independent
+	// bound; ParsePrf (which hard-rejects empty/non-string elements) runs later in
+	// the delegation walk.
 	if prfRaw, ok := payload["prf"].([]any); ok && len(prfRaw) > 1 {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "multi-parent credentials are not supported (prf must have at most one entry)"}
 	}
