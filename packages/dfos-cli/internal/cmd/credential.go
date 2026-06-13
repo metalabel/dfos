@@ -53,12 +53,11 @@ func newCredentialGrantCmd() *cobra.Command {
 				return fmt.Errorf("invalid --ttl %q: %w (use Go duration units like 5m, 1h, 24h — note day units like \"1d\" are not supported)", ttl, err)
 			}
 
-			if len(chain.State.AuthKeys) == 0 {
-				return fmt.Errorf("identity has no auth keys")
+			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			if err != nil {
+				return err
 			}
-			authKeyID := chain.State.AuthKeys[0].ID
-			kid := chain.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
+			privKey, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
@@ -119,12 +118,11 @@ func newCredentialRevokeCmd() *cobra.Command {
 				return err
 			}
 
-			if len(chain.State.AuthKeys) == 0 {
-				return fmt.Errorf("identity has no auth keys")
+			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			if err != nil {
+				return err
 			}
-			authKeyID := chain.State.AuthKeys[0].ID
-			kid := chain.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
+			privKey, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}

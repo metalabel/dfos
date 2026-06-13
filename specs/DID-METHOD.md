@@ -240,6 +240,8 @@ This is a deliberate consequence of the fork-convergence model: a controller can
 
 If a controller key is compromised, the legitimate holder should immediately sign a key rotation (`update`) operation removing the compromised key. The protocol does not support key pre-rotation — there is no mechanism to pre-commit to a future key. The window of vulnerability exists between compromise and rotation.
 
+Because each role set holds up to 16 keys and any one current key in a set can authorize an operation, an identity can hold controller and auth keys on multiple devices (1-of-N availability). Any one held key can independently act, so a single lost or destroyed device key is not loss of the identity — a key on a surviving device can still rotate out the lost one. This is availability, not recovery: it requires registering additional keys in advance, while a controller key is still held. Note that 1-of-N availability is symmetric with the compromise surface — any held key in a set can authorize, so each additional device key is also an additional thing to keep safe.
+
 ### 6.3 Equivocation
 
 Because `did:dfos` has no global consensus layer, an identity holder could theoretically sign two different operations at the same chain position (same `previousOperationCID`, different payloads). This creates a **fork** — two valid chain branches.

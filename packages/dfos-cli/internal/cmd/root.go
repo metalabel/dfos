@@ -10,6 +10,7 @@ import (
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
+	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
@@ -20,7 +21,6 @@ var (
 	identityFlag string
 	peerFlag     string
 	jsonFlag     bool
-	yesFlag      bool
 
 	// shared state
 	cfg     *config.Config
@@ -58,7 +58,6 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&identityFlag, "identity", "", "Identity name override")
 	root.PersistentFlags().StringVar(&peerFlag, "peer", "", "Peer name override")
 	root.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output as JSON")
-	root.PersistentFlags().BoolVar(&yesFlag, "yes", false, "Auto-confirm prompts")
 
 	// command groups
 	identityGroup := &cobra.Group{ID: "identity", Title: "Identity Commands"}
@@ -314,6 +313,22 @@ func countKeysInChain(chain *relay.StoredIdentityChain) int {
 		}
 	}
 	return count
+}
+
+// selectHeldKey returns the kid (DID#keyID) of the first key in set whose
+// private material this device holds locally. This is the spine of multi-device
+// 1-of-N availability: any one held key in a role set is enough to act, so the
+// signer side iterates the published set and picks the first one this device
+// actually has. role is used only for the error message. Returns an error
+// (never panics) when the set is empty or this device holds none of the keys.
+func selectHeldKey(did string, set []protocol.MultikeyPublicKey, role string) (string, error) {
+	for _, k := range set {
+		candidate := did + "#" + k.ID
+		if keys.HasKey(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no held %s key for %s on this device (holds none of %d published %s key(s))", role, did, len(set), role)
 }
 
 func joinComma(ss []string) string {

@@ -40,12 +40,11 @@ func newBeaconAnnounceCmd() *cobra.Command {
 				return err
 			}
 
-			if len(chain.State.ControllerKeys) == 0 {
-				return fmt.Errorf("identity has no controller keys")
+			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			if err != nil {
+				return err
 			}
-			controllerKeyID := chain.State.ControllerKeys[0].ID
-			kid := chain.DID + "#" + controllerKeyID
-			privKey, err := keys.GetPrivateKey(chain.DID + "#" + controllerKeyID)
+			privKey, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return err
 			}
@@ -208,12 +207,11 @@ func newBeaconCountersignCmd() *cobra.Command {
 				return fmt.Errorf("beacon not found for %s", targetDID)
 			}
 
-			if len(chain.State.AuthKeys) == 0 {
-				return fmt.Errorf("identity has no auth keys")
+			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			if err != nil {
+				return err
 			}
-			authKeyID := chain.State.AuthKeys[0].ID
-			kid := chain.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
+			privKey, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return err
 			}

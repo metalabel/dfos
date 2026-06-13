@@ -222,9 +222,49 @@ dfos content create post.json --peer local
 
 ### Smart Dependency Resolution
 
-If you create content with `--peer` but the identity hasn't been published to that relay, the CLI detects the dependency and either prompts or auto-publishes (with `--yes`).
+If you create content with `--peer` but the identity hasn't been published to that relay, the CLI detects the dependency and auto-publishes the identity chain before submitting the content.
 
 ---
+
+## Multi-Device Identities (1-of-N)
+
+An identity can hold up to 16 controller keys and 16 auth keys. **Any one current key in a role set can sign** — so the same identity can act from multiple devices, each holding its own key. This is _availability_, not key recovery: with a key on more than one device, losing a single device is not loss of the identity. A surviving device can keep publishing and can even rotate out the lost key.
+
+The handoff never moves a private key. A new device generates its own keypair locally; only its **public** key crosses to a device holding a controller key, which adds it to the chain.
+
+End-to-end, adding device **B** to an identity already controlled by device **A**:
+
+```bash
+# 1. On A: create the identity (already has controller + auth keys).
+dfos identity create --name alice --peer prod
+
+# 2. On B: get the chain locally.
+dfos identity fetch alice --peer prod --name alice
+
+# 3. On B: generate a device key. Prints {id, publicKeyMultibase}.
+#    The private seed stays on B; nothing secret is printed.
+dfos identity device-pubkey
+#   ID:         key_...
+#   Public key: z6Mk...
+
+# 4. Hand the id + public key to A (copy/paste, QR, air-gap — public only).
+
+# 5. On A: add B's public key, signed with A's held controller key.
+dfos identity add-key --auth-key --id key_... --pubkey z6Mk... --peer prod
+
+# 6. On B: re-fetch so B sees its now-in-chain key.
+dfos identity fetch alice --peer prod
+
+# B can now publish content / credentials / beacons independently, signing
+# with its own key.
+dfos content create post.json --peer prod
+```
+
+Notes:
+
+- **`device-pubkey` defaults to the auth role**, which is sufficient for publishing content, credentials, and beacons. Pass `--controller` only to print a controller-role hint; granting a controller key is a higher-trust act (a controller can rotate, delete, and add further keys), and the role is ultimately decided by A's `add-key` flags (`--auth-key` vs `--controller-key`), not by B.
+- **B must re-fetch after A's `add-key` propagates.** Between `device-pubkey` and that re-fetch, B holds a private key that is not yet in the published set, so a publish attempt will report "no held auth key" until B syncs.
+- This is set up _in advance_. There is no way to add a key after every device key is lost — `add-key` itself must be signed by a held controller key.
 
 ## Local Relay
 
@@ -371,6 +411,8 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `GET`  | `identity keys [name\|did]`      | Show key state + keychain availability      |
 | `POST` | `identity create --name`         | Generate keys + sign genesis                |
 | `POST` | `identity update`                | Rotate keys (sign update operation)         |
+| `POST` | `identity device-pubkey`         | Generate a device keypair, print its pubkey |
+| `POST` | `identity add-key`               | Add another device's pubkey (1-of-N)        |
 | `POST` | `identity delete`                | Permanently delete identity                 |
 | `POST` | `identity publish [name]`        | Submit identity chain to a relay            |
 | `GET`  | `identity fetch <did>`           | Download identity chain from relay          |
