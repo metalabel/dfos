@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
@@ -145,6 +146,9 @@ func newIdentityCreateCmd() *cobra.Command {
 				} else {
 					fmt.Printf("  Status:         local only. Use 'dfos identity publish' to push to a peer.\n")
 				}
+				fmt.Fprintf(os.Stderr, "\nWarning: key loss is unrecoverable. There is no seed phrase, backup, or recovery flow.\n")
+				fmt.Fprintf(os.Stderr, "         If you lose these keys (%s), control of this identity is gone for good.\n", keys.Backend())
+				fmt.Fprintf(os.Stderr, "         Availability is a multi-key story, not a recovery one: register additional keys (e.g. on another device) while you still hold a controller key, so no single key loss is fatal.\n")
 			}
 			return nil
 		},

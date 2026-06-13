@@ -660,6 +660,9 @@ func newContentUpdateCmd() *cobra.Command {
 				return err
 			}
 
+			if len(idChain.State.AuthKeys) == 0 {
+				return fmt.Errorf("identity has no auth keys")
+			}
 			authKeyID := idChain.State.AuthKeys[0].ID
 			kid := idChain.DID + "#" + authKeyID
 			privKey, err := keys.GetPrivateKey(idChain.DID + "#" + authKeyID)

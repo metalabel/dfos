@@ -24,17 +24,18 @@ make build
 # add a relay
 dfos relay add local http://localhost:4444
 
-# create an identity (generates ed25519 keys, stores in keychain)
-dfos identity create --name alice --relay local
+# create an identity (generates ed25519 keys; stored in the OS keychain,
+# or unencrypted in ~/.dfos/keys/ when no keychain is available)
+dfos identity create --name alice --peer local
 
 # set active context
 dfos use alice@local
 
 # create content from a file
-dfos content create post.json --relay local
+dfos content create post.json --peer local
 
 # create content from stdin
-echo '{"$schema":"https://schemas.dfos.com/post/v1","body":"hello"}' | dfos content create - --relay local
+echo '{"$schema":"https://schemas.dfos.com/post/v1","body":"hello"}' | dfos content create - --peer local
 
 # show content chain
 dfos content show <contentId>
@@ -56,12 +57,12 @@ dfos api GET /content/abc123/blob --auth
 dfos relay add local http://localhost:4444
 
 # create three identities
-dfos identity create --name alice --relay local
-dfos identity create --name bob --relay local
-dfos identity create --name witness --relay local
+dfos identity create --name alice --peer local
+dfos identity create --name bob --peer local
+dfos identity create --name witness --peer local
 
 # alice creates content
-CONTENT=$(dfos --ctx alice@local content create - --relay local --json <<'EOF' | jq -r .contentId
+CONTENT=$(dfos --ctx alice@local content create - --peer local --json <<'EOF' | jq -r .contentId
 {"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"private message"}
 EOF
 )
@@ -71,15 +72,15 @@ BOB=$(dfos identity show bob --json | jq -r .did)
 CRED=$(dfos --ctx alice@local credential grant "$CONTENT" "$BOB" --read --json | jq -r .credential)
 
 # bob downloads with credential
-dfos --ctx bob@local content download "$CONTENT" --credential "$CRED" --relay local
+dfos --ctx bob@local content download "$CONTENT" --credential "$CRED" --peer local
 
 # witness countersigns
 CID=$(dfos content show "$CONTENT" --json | jq -r .genesisCID)
-dfos --ctx witness@local witness "$CID" --relay local
+dfos --ctx witness@local witness "$CID" --peer local
 
 # beacon
-dfos --ctx alice@local beacon announce "$CONTENT" --relay local
-dfos --ctx witness@local beacon countersign alice --relay local
+dfos --ctx alice@local beacon announce "$CONTENT" --peer local
+dfos --ctx witness@local beacon countersign alice --peer local
 
 # verify
 dfos content verify "$CONTENT"
@@ -101,19 +102,19 @@ DFOS_CONTEXT       Override active context
 DFOS_IDENTITY      Override identity name
 DFOS_RELAY         Override relay name
 DFOS_CONFIG        Config file path (default: ~/.dfos/config.toml)
-DFOS_NO_KEYCHAIN   In-memory keys only (CI/testing)
+DFOS_NO_KEYCHAIN   Skip OS keychain; use file store ~/.dfos/keys/ (unencrypted, 0600)
 DFOS_DEBUG         Debug logging
 ```
 
 ## Local-First
 
-Operations are stored locally by default. Use `--relay` on create commands to publish immediately, or publish later:
+Operations are stored locally by default. Use `--peer` on create commands to publish immediately, or publish later:
 
 ```bash
 dfos identity create --name alice       # local only
 dfos content create post.json           # local only
-dfos identity publish alice --relay prod # submit when ready
-dfos content publish <id> --relay prod   # submit when ready
+dfos identity publish alice --peer prod # submit when ready
+dfos content publish <id> --peer prod   # submit when ready
 ```
 
 ## Commands
