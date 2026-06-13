@@ -1,0 +1,227 @@
+name: Test Matrix
+
+# Single source of truth for the full correctness matrix: the TS twin, the Go
+# twin, both conformance harnesses, and all five protocol-verify languages.
+# Called by CI (on push/PR) and by Release (gating every publish job against the
+# tagged commit). Keeping one definition makes it structurally impossible for the
+# release gate to drift into a subset of CI.
+on:
+  workflow_call:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm turbo typecheck --force
+
+      - name: Test
+        run: pnpm test
+
+  dfos-cli:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-cli/go.sum
+
+      - name: Test dfos-protocol-go
+        working-directory: packages/dfos-protocol-go
+        run: go test ./...
+
+      - name: Build dfos-cli
+        working-directory: packages/dfos-cli
+        run: go build ./cmd/dfos
+
+      - name: Test dfos-cli
+        working-directory: packages/dfos-cli
+        run: go test ./...
+
+  dfos-web-relay-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-web-relay-go/go.sum
+
+      - name: Test dfos-web-relay-go (race)
+        working-directory: packages/dfos-web-relay-go
+        run: go test -race ./...
+
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-cli/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Go conformance tests against TS relay
+        working-directory: packages/relay-conformance
+        run: ./scripts/run-conformance.sh
+
+  conformance-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-cli/go.sum
+
+      - name: Run Go conformance tests against dfos serve
+        working-directory: packages/dfos-web-relay-go
+        run: ./tests/run-conformance.sh
+
+  verify-ts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Install dependencies
+        working-directory: packages/protocol-verify/ts
+        run: npm install
+
+      - name: Run TypeScript verification
+        working-directory: packages/protocol-verify/ts
+        run: npx tsx verify.ts
+
+  verify-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: packages/protocol-verify/go/go.sum
+
+      - name: Run Go verification
+        working-directory: packages/protocol-verify/go
+        run: go test -v
+
+  verify-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: pip install pynacl dag-cbor base58
+
+      - name: Run Python verification
+        run: python packages/protocol-verify/python/verify_protocol.py
+
+  verify-rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Rust verification
+        working-directory: packages/protocol-verify/rust
+        run: cargo test --verbose
+
+  verify-swift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.0'
+
+      - name: Run Swift verification
+        working-directory: packages/protocol-verify/swift
+        run: swift test

@@ -30,57 +30,13 @@ jobs:
             exit 1
           fi
 
-  # Re-run the core test matrix against the tagged commit. CI only runs on
-  # branch pushes and PRs, not on tag pushes, so we cannot rely on a prior CI
-  # run having gated this exact commit. Gate every publish/deploy job on this.
+  # Re-run the FULL correctness matrix against the tagged commit. CI only runs on
+  # branch pushes and PRs, not on tag pushes, so we cannot rely on a prior CI run
+  # having gated this exact commit. This calls the same reusable workflow as CI,
+  # so the release gate can never drift into a subset of the matrix. Gate every
+  # publish/deploy job on this.
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: '.nvmrc'
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: packages/dfos-cli/go.mod
-          cache-dependency-path: packages/dfos-cli/go.sum
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Build
-        run: pnpm build
-
-      - name: Typecheck
-        run: pnpm turbo typecheck --force
-
-      - name: Test (TS)
-        run: pnpm test
-
-      - name: Test dfos-protocol-go
-        working-directory: packages/dfos-protocol-go
-        run: go test ./...
-
-      - name: Test dfos-cli
-        working-directory: packages/dfos-cli
-        run: go test ./...
+    uses: ./.github/workflows/test-matrix.yml
 
   release-npm:
     needs: [validate, test]

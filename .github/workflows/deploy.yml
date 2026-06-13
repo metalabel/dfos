@@ -27,6 +27,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Deploy the exact commit CI gated, not whatever main HEAD is now —
+          # workflow_run fires asynchronously and a newer (ungated) commit may
+          # have landed. Falls back to the dispatched ref for manual runs.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -64,6 +69,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Deploy the exact commit CI gated, not whatever main HEAD is now —
+          # workflow_run fires asynchronously and a newer (ungated) commit may
+          # have landed. Falls back to the dispatched ref for manual runs.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
