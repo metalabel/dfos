@@ -838,15 +838,21 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
 	}
 
+	// the header CID keys the raw op in the store; carry it on every rejection
+	// below so a decodable-but-invalid credential is durably rejected rather than
+	// re-verified every sequencer tick (WP-3(a) — matches the TS twin). An empty
+	// header CID is genuinely unkeyable and is handled explicitly further down.
+	cid := header.CID
+
 	// verify it's a credential
 	if header.Typ != "did:dfos:credential" {
-		return IngestionResult{Status: "rejected", Error: "invalid typ for credential"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "invalid typ for credential"}
 	}
 
 	// must be public (aud: "*")
 	aud, _ := payload["aud"].(string)
 	if aud != "*" {
-		return IngestionResult{Status: "rejected", Error: "only public credentials (aud: *) are ingested"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "only public credentials (aud: *) are ingested"}
 	}
 
 	// bound prf to a single parent (spec MUST-rejects prf>1; defense-in-depth so
@@ -854,17 +860,16 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 	// schema). Count the RAW array length, NOT ParsePrf (which silently filters
 	// empty/non-string elements and would undercount vs TS's pre-filter length).
 	if prfRaw, ok := payload["prf"].([]any); ok && len(prfRaw) > 1 {
-		return IngestionResult{Status: "rejected", Error: "multi-parent credentials are not supported (prf must have at most one entry)"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "multi-parent credentials are not supported (prf must have at most one entry)"}
 	}
 
 	// parse issuer from kid
 	kid := header.Kid
 	if kid == "" || !strings.Contains(kid, "#") {
-		return IngestionResult{Status: "rejected", Error: "kid must be a DID URL"}
+		return IngestionResult{CID: cid, Status: "rejected", Error: "kid must be a DID URL"}
 	}
 	kidDID := kid[:strings.Index(kid, "#")]
 
-	cid := header.CID
 	if cid == "" {
 		return IngestionResult{Status: "rejected", Error: "missing cid in credential header"}
 	}
