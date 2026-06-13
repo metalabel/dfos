@@ -445,7 +445,11 @@ const ingestIdentityOp = async (
   // load state at fork point and verify extension against it
   const forkState = await store.getIdentityStateAtCID(did, previousCID);
   if (!forkState) {
-    return { cid, status: 'rejected', error: 'failed to compute state at fork point' };
+    return {
+      cid,
+      status: 'rejected',
+      error: `failed to compute state at fork point: ${previousCID}`,
+    };
   }
 
   const extResult = await verifyIdentityExtensionFromTrustedState({
@@ -612,7 +616,11 @@ const ingestContentOp = async (
   // load state at fork point and verify extension against it
   const forkState = await store.getContentStateAtCID(chain.contentId, previousCID);
   if (!forkState) {
-    return { cid, status: 'rejected', error: 'failed to compute state at fork point' };
+    return {
+      cid,
+      status: 'rejected',
+      error: `failed to compute state at fork point: ${previousCID}`,
+    };
   }
 
   const extResult = await verifyContentExtensionFromTrustedState({
