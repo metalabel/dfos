@@ -776,11 +776,15 @@ func (s *SQLiteStore) GetUnsequencedOps(limit int) ([]string, error) {
 	return tokens, rows.Err()
 }
 
-// MarkOpsSequenced marks the given CIDs as successfully sequenced.
+// MarkOpsSequenced marks the given CIDs as successfully sequenced. Propagates
+// the first Exec error so callers can avoid gossiping ops whose sequenced
+// status was never persisted.
 func (s *SQLiteStore) MarkOpsSequenced(cids []string) error {
 	w := s.writerDB()
 	for _, cid := range cids {
-		w.Exec("UPDATE raw_ops SET status = 'sequenced' WHERE cid = ?", cid)
+		if _, err := w.Exec("UPDATE raw_ops SET status = 'sequenced' WHERE cid = ?", cid); err != nil {
+			return err
+		}
 	}
 	return nil
 }

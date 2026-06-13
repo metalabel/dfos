@@ -58,7 +58,8 @@ func AuthenticateRequest(authHeader string, relayDID string, store Store) *dfos.
 func (r *Relay) hasPublicStandingAuth(contentID string, action string) bool {
 	resource := "chain:" + contentID
 	publicCreds, _ := r.readStore.GetPublicCredentials(resource)
-	resolveKey := CreateKeyResolver(r.store)
+	// readStore: key resolution runs on the HTTP read path, never races on tx.
+	resolveKey := CreateKeyResolver(r.readStore)
 
 	chain, _ := r.readStore.GetContentChain(contentID)
 	if chain == nil {
@@ -90,7 +91,8 @@ func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requ
 		return ""
 	}
 
-	resolveKey := CreateKeyResolver(r.store)
+	// readStore: key resolution runs on the HTTP read path, never races on tx.
+	resolveKey := CreateKeyResolver(r.readStore)
 
 	// 2. check stored public credentials
 	publicCreds, _ := r.readStore.GetPublicCredentials(requestedResource)
@@ -336,4 +338,3 @@ func (r *Relay) matchesResource(att []dfos.AttEntry, resource string, action str
 
 	return false
 }
-

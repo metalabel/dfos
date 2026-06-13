@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -106,5 +107,11 @@ func (c *HttpPeerClient) SubmitOperations(peerURL string, operations []string) e
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Drain a bounded amount of the body so the error is actionable without
+		// risking an unbounded read from a misbehaving peer.
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("peer %s rejected gossip: %d %s", peerURL, resp.StatusCode, string(snippet))
+	}
 	return nil
 }
