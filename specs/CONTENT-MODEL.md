@@ -2,7 +2,7 @@
 
 Standard content schemas for documents committed to DFOS content chains. JSON Schema (draft 2020-12) definitions for content objects committed by CID.
 
-The protocol commits to content by hash — it never inspects what's inside. Any valid JSON object with a `$schema` field can be committed. These schemas define the vocabulary DFOS uses internally and serve as the starting vocabulary for applications built on the protocol.
+The protocol commits to content by hash — it never inspects what's inside, beyond one canonicalization constraint. Any JSON object with a `$schema` field can be committed, with a single rule on numbers: every number MUST be an integer in JSON's safe range (`[-(2^53 - 1), 2^53 - 1]`) — no fractions, `NaN`, or `±Infinity`. Encode fractional or larger-magnitude values as strings. This keeps the content CID byte-identical across implementations (see Number Encoding in the [protocol spec](https://protocol.dfos.com/spec)). These schemas define the vocabulary DFOS uses internally and serve as the starting vocabulary for applications built on the protocol.
 
 [Protocol Specification](https://protocol.dfos.com/spec) · [schemas.dfos.com](https://schemas.dfos.com) · [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/schemas)
 
