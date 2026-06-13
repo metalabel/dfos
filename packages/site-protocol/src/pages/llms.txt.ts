@@ -5,7 +5,7 @@ export const GET: APIRoute = () => {
     '# DFOS Protocol',
     '',
     '> An open protocol for cryptographic identity and verifiable content.',
-    '> The proof is public. The content is private.',
+    '> The proof is public; the content is access-controlled. The protocol commits to content hashes, never plaintext — it does not encrypt, and confidentiality is enforced at the application layer (no end-to-end encryption).',
     '',
     '## About',
     '',

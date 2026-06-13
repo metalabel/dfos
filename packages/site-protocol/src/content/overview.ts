@@ -8,15 +8,19 @@ The DFOS Protocol inverts this. Identity derives from cryptographic keys you con
 
 The internet is not a public square. The most meaningful creative and social coordination happens in private groups, closed communities, invite-only spaces. This is where real work gets done, real relationships form, real culture develops. The topology is private-first.
 
-Every existing protocol collapses proof and content into the same surface. If you can access the content, you can verify it. If you can't access the content, you can't verify anything about it. The proof and the content are the same artifact, served from the same place, gated by the same access control.
+The major social protocols (AT Protocol, nostr, Farcaster) are public-by-default: posts and profiles are public documents, and to verify a piece of content you generally have to be able to read it. The proof and the content travel together.
 
 DFOS separates them.
 
-The proof surface is public — signed chains of cryptographic commitments, verifiable by anyone with a public key and any standard Ed25519 library, offline, in any language. The content surface is private — documents live in member-governed spaces, visible only to participants. The protocol defines the proof surface. It sees hashes, never documents.
+The proof surface is public — signed chains of cryptographic commitments, verifiable by anyone with a public key and any standard Ed25519 library, offline, in any language. The content surface is access-controlled — documents live in member-governed spaces, undisclosed by default and served only to participants. The protocol defines the proof surface. It commits to content hashes, never the documents themselves.
 
-**You can prove you authored something without revealing what it is.**
+**For high-entropy content, you can prove you authored something without revealing what it is** — the public chain carries only the CID, and the CID is the only thing the protocol exposes.
 
 This separation is architectural, not a privacy setting. It is an engineering response to the structural condition of where the internet actually lives.
+
+### Privacy Considerations
+
+The protocol commits to content via an unsalted \`dag-cbor\` → SHA-256 CID — it does not encrypt documents and does not hide low-entropy content. Anyone who can guess the document can recompute its CID and confirm the match, so the "prove without revealing" property holds only for content with enough entropy to be unguessable. Confidentiality of the underlying documents is enforced at the application layer by whoever serves the space: a relay operator can read what it stores, and there is no end-to-end encryption. The proof surface is undisclosed-by-default access control, not cryptographic secrecy.
 
 ## What the Protocol Is
 
