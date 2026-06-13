@@ -243,7 +243,7 @@ Why this matters: CBOR integer `1` encodes as a single byte `0x01`. CBOR float `
 
 **Common trap**: Languages that decode JSON into untyped maps (Go's `map[string]any`, Python's `dict`, etc.) typically represent all JSON numbers as floating-point. When this decoded value is then CBOR-encoded, it becomes a CBOR float instead of an integer. Implementations MUST normalize number types after JSON deserialization and before CBOR encoding.
 
-**Integer bounds**: dag-cbor integers are limited to the range `[-(2^64), 2^64 - 1]`. All integer fields in the current protocol (`version: 1`) are small positive values. Future protocol extensions SHOULD NOT introduce integer fields that exceed JSON's safe integer range (`2^53 - 1`), as JSON serialization would lose precision.
+**Number bounds (normative)**: a canonicalizable number MUST be an integer in the range `[-(2^53 - 1), 2^53 - 1]` (JSON's safe-integer range). Implementations MUST reject — at CID derivation, before CBOR encoding — any payload containing a non-integer number, `NaN`, `±Infinity`, or an integer outside that range. Applications that need fractional or larger-magnitude values MUST encode them as strings. Bounding numbers to this single form is what makes the encoding deterministic across implementations: it eliminates both the shortest-float divergence (`1.5` encoded as `0xf9…` half-float by one library vs `0xfb…` double by another) and the integer-vs-`float64` split for values above `2^53`. The reference implementations enforce this in `dagCborCanonicalEncode` (TypeScript) and `DagCborEncode` (Go); a non-conforming number is a verification failure, not a silently-divergent CID.
 
 **Verification test vector** — encodes `{"version": 1, "type": "test"}`:
 

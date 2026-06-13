@@ -314,3 +314,33 @@ describe('number encoding determinism', () => {
     expect(result1.cid.toString()).toBe(result2.cid.toString());
   });
 });
+
+describe('canonical number policy (WP-0)', () => {
+  it('accepts integers in the safe range', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    await expect(
+      dagCborCanonicalEncode({ version: 1, n: 9007199254740991, neg: -9007199254740991 }),
+    ).resolves.toBeDefined();
+  });
+
+  it('rejects non-integer numbers', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    await expect(dagCborCanonicalEncode({ x: 1.5 })).rejects.toThrow(/non-integer/);
+  });
+
+  it('rejects NaN and Infinity', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    await expect(dagCborCanonicalEncode({ x: NaN })).rejects.toThrow(/non-finite/);
+    await expect(dagCborCanonicalEncode({ x: Infinity })).rejects.toThrow(/non-finite/);
+  });
+
+  it('rejects integers beyond 2^53-1', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    await expect(dagCborCanonicalEncode({ x: 9007199254740992 })).rejects.toThrow(/safe range/);
+  });
+
+  it('rejects bad numbers nested deep in the payload', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    await expect(dagCborCanonicalEncode({ a: { b: [1, 2, 0.5] } })).rejects.toThrow();
+  });
+});
