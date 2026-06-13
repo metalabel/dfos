@@ -2,7 +2,9 @@
 
 Your identity and content are rented back to you by the platforms that own it. The DFOS Protocol gives you back the keys.
 
-An open protocol for cryptographic identity and verifiable content. Identity derives from Ed25519 signed operations, not platform accounts. Proofs verify offline, in any language, from any source. The proof is public. The content is private.
+An open protocol for cryptographic identity and verifiable content. Identity derives from Ed25519 signed operations, not platform accounts. Proofs verify offline, in any language, from any source. The proof is public; the content is access-controlled. The protocol commits to content hashes, never plaintext — it does not encrypt, and document confidentiality is enforced at the application layer (the relay operator that serves a space can read it; there is no end-to-end encryption).
+
+The first thing it cleanly solves: a portable, rotation-capable signing identity for AI agents and devices — a `did:dfos` derives from a genesis operation and needs no external directory to resolve.
 
 This repository contains the protocol specification, reference implementations in TypeScript and Go, cross-language verification suites, and the CLI.
 
