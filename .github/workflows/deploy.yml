@@ -1,7 +1,12 @@
 name: Deploy
 
+# Deploy only after CI succeeds on main. The "CI" workflow runs on push to main;
+# this workflow waits for that run to complete and gates each job on its success
+# (see the `if:` guards below). workflow_dispatch allows manual redeploys.
 on:
-  push:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -13,6 +18,8 @@ jobs:
   deploy-protocol:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # On workflow_run, only deploy if CI passed. Manual dispatch always proceeds.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read
       deployments: write
@@ -48,6 +55,8 @@ jobs:
   deploy-schemas:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # On workflow_run, only deploy if CI passed. Manual dispatch always proceeds.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read
       deployments: write

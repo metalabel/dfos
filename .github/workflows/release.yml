@@ -30,10 +30,66 @@ jobs:
             exit 1
           fi
 
+  # Re-run the core test matrix against the tagged commit. CI only runs on
+  # branch pushes and PRs, not on tag pushes, so we cannot rely on a prior CI
+  # run having gated this exact commit. Gate every publish/deploy job on this.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-cli/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm turbo typecheck --force
+
+      - name: Test (TS)
+        run: pnpm test
+
+      - name: Test dfos-protocol-go
+        working-directory: packages/dfos-protocol-go
+        run: go test ./...
+
+      - name: Test dfos-cli
+        working-directory: packages/dfos-cli
+        run: go test ./...
+
   release-npm:
-    needs: [validate]
+    needs: [validate, test]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # required for npm provenance (--provenance signs via the GitHub OIDC token)
+      id-token: write
 
     steps:
       - name: Checkout code
@@ -59,17 +115,17 @@ jobs:
         run: pnpm build
 
       - name: Publish @metalabel/dfos-protocol
-        run: pnpm --filter @metalabel/dfos-protocol publish --no-git-checks --access public
+        run: pnpm --filter @metalabel/dfos-protocol publish --no-git-checks --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @metalabel/dfos-web-relay
-        run: pnpm --filter @metalabel/dfos-web-relay publish --no-git-checks --access public
+        run: pnpm --filter @metalabel/dfos-web-relay publish --no-git-checks --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release-goreleaser:
-    needs: [validate]
+    needs: [validate, test]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

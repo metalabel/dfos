@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DFOS Web Relay
-  version: 0.1.0
+  version: 0.9.0
   description: |
     HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves
     identity chains, content chains, beacons, countersignatures, and content blobs.
@@ -415,6 +415,70 @@ paths:
           $ref: '#/components/responses/NotFound'
         '501':
           description: Documents capability not enabled
+
+  /log:
+    get:
+      operationId: getLog
+      summary: Paginated global log of all accepted operations
+      description: |
+        Returns every operation the relay has accepted — across all identity and
+        content chains, plus beacons and countersignatures — in acceptance order.
+        Cursor-based pagination. Used by peer relays to background-sync. Available
+        only when the relay advertises the `log` capability; otherwise returns 501.
+      tags: [Proof Plane]
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CID cursor — start after this operation CID
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+      responses:
+        '200':
+          description: Global log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries, cursor]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, jwsToken, kind, chainId]
+                      properties:
+                        cid:
+                          type: string
+                        jwsToken:
+                          type: string
+                        kind:
+                          type: string
+                          enum:
+                            [
+                              identity-op,
+                              content-op,
+                              beacon,
+                              artifact,
+                              countersign,
+                              revocation,
+                              credential,
+                            ]
+                        chainId:
+                          type: string
+                          description: Chain identifier (DID or contentId)
+                  cursor:
+                    type: string
+                    nullable: true
+        '501':
+          description: Global log capability not enabled
 
   /identities/{did}/log:
     get:

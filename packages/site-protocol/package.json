@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "sync-install": "cp ../../scripts/install.sh public/install.sh",
+    "predev": "pnpm sync-install",
     "dev": "astro dev",
+    "prebuild": "pnpm sync-install",
     "build": "astro build",
     "preview": "astro preview",
     "deploy": "wrangler pages deploy dist",
