@@ -92,12 +92,11 @@ func newContentCreateCmd() *cobra.Command {
 				return fmt.Errorf("compute document CID: %w", err)
 			}
 
-			if len(chain.State.AuthKeys) == 0 {
-				return fmt.Errorf("identity has no auth keys")
+			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			if err != nil {
+				return err
 			}
-			authKeyID := chain.State.AuthKeys[0].ID
-			kid := chain.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
+			privKey, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
@@ -330,12 +329,11 @@ func newContentDownloadCmd() *cobra.Command {
 				return err
 			}
 
-			if len(chain.State.AuthKeys) == 0 {
-				return fmt.Errorf("identity has no auth keys")
+			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			if err != nil {
+				return err
 			}
-			authKeyID := chain.State.AuthKeys[0].ID
-			kid := chain.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
+			privKey, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
@@ -420,12 +418,14 @@ func newContentPublishCmd() *cobra.Command {
 					CreatorDID:  contentChain.State.CreatorDID,
 					DocumentCID: *contentChain.State.CurrentDocumentCID,
 				})
-				if blob != nil && len(idChain.State.AuthKeys) > 0 {
-					authKeyID := idChain.State.AuthKeys[0].ID
-					kid := idChain.DID + "#" + authKeyID
-					privKey, _ := keys.GetPrivateKey(kid)
-					if privKey == nil {
-						return fmt.Errorf("auth key not in keychain for blob upload")
+				if blob != nil {
+					kid, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
+					if err != nil {
+						return err
+					}
+					privKey, err := keys.GetPrivateKey(kid)
+					if err != nil {
+						return fmt.Errorf("auth key not in keychain for blob upload: %w", err)
 					}
 					info, err := c.GetRelayInfo()
 					if err != nil {
@@ -660,12 +660,11 @@ func newContentUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			if len(idChain.State.AuthKeys) == 0 {
-				return fmt.Errorf("identity has no auth keys")
+			kid, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
+			if err != nil {
+				return err
 			}
-			authKeyID := idChain.State.AuthKeys[0].ID
-			kid := idChain.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(idChain.DID + "#" + authKeyID)
+			privKey, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return err
 			}
@@ -763,12 +762,11 @@ func newContentDeleteCmd() *cobra.Command {
 				return err
 			}
 
-			if len(idChain.State.AuthKeys) == 0 {
-				return fmt.Errorf("identity has no auth keys")
+			kid, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
+			if err != nil {
+				return err
 			}
-			authKeyID := idChain.State.AuthKeys[0].ID
-			kid := idChain.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(idChain.DID + "#" + authKeyID)
+			privKey, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}

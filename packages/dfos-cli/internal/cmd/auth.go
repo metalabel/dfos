@@ -36,12 +36,11 @@ func newAuthTokenCmd() *cobra.Command {
 				return fmt.Errorf("no peer configured for auth token audience")
 			}
 
-			if len(chain.State.AuthKeys) == 0 {
-				return fmt.Errorf("identity has no auth keys")
+			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+			if err != nil {
+				return err
 			}
-			authKeyID := chain.State.AuthKeys[0].ID
-			kid := chain.DID + "#" + authKeyID
-			privKey, err := keys.GetPrivateKey(chain.DID + "#" + authKeyID)
+			privKey, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return err
 			}

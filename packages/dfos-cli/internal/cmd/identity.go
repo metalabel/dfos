@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"crypto/ed25519"
 	"fmt"
 	"os"
 	"strings"
@@ -24,6 +25,8 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityShowCmd())
 	cmd.AddCommand(newIdentityKeysCmd())
 	cmd.AddCommand(newIdentityUpdateCmd())
+	cmd.AddCommand(newIdentityAddKeyCmd())
+	cmd.AddCommand(newIdentityDevicePubkeyCmd())
 	cmd.AddCommand(newIdentityDeleteCmd())
 	cmd.AddCommand(newIdentityPublishCmd())
 	cmd.AddCommand(newIdentityFetchCmd())
@@ -148,7 +151,7 @@ func newIdentityCreateCmd() *cobra.Command {
 				}
 				fmt.Fprintf(os.Stderr, "\nWarning: key loss is unrecoverable. There is no seed phrase, backup, or recovery flow.\n")
 				fmt.Fprintf(os.Stderr, "         If you lose these keys (%s), control of this identity is gone for good.\n", keys.Backend())
-				fmt.Fprintf(os.Stderr, "         Availability is a multi-key story, not a recovery one: register additional keys (e.g. on another device) while you still hold a controller key, so no single key loss is fatal.\n")
+				fmt.Fprintf(os.Stderr, "         Availability is a multi-key story, not a recovery one: register additional keys (e.g. on another device) with 'dfos identity add-key' while you still hold a controller key, so no single key loss is fatal.\n")
 			}
 			return nil
 		},
@@ -182,11 +185,11 @@ func newIdentityUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			if len(chain.State.ControllerKeys) == 0 {
-				return fmt.Errorf("identity has no controller keys")
+			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			if err != nil {
+				return err
 			}
-			controllerKeyID := chain.State.ControllerKeys[0].ID
-			controllerPriv, err := keys.GetPrivateKey(chain.DID + "#" + controllerKeyID)
+			controllerPriv, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
@@ -224,7 +227,6 @@ func newIdentityUpdateCmd() *cobra.Command {
 				rotatedKeys = append(rotatedKeys, "controller:"+newControllerKeyID)
 			}
 
-			kid := chain.DID + "#" + controllerKeyID
 			jwsToken, opCID, err := protocol.SignIdentityUpdate(
 				previousCID,
 				newControllerKeys, newAuthKeys, newAssertKeys,
@@ -284,6 +286,242 @@ func newIdentityUpdateCmd() *cobra.Command {
 	return cmd
 }
 
+// roleKeyCap is the maximum number of keys a single role set may hold. The
+// protocol caps each role (auth/assert/controller) at 16 items (PROTOCOL.md
+// "Identity Operation Field Limits"). The Go verifier does not currently
+// enforce this — the TS Zod schemas do — so the CLI guards against producing
+// an operation a conformant relay would reject.
+const roleKeyCap = 16
+
+// appendKeyGuarded returns a copy of set with newKey appended, after enforcing
+// the per-role cap and rejecting a duplicate key id. It copies the input slice
+// rather than appending in place so the caller never mutates the chain-state
+// slice's backing array. Pure (no I/O) so it is unit-testable without a relay.
+func appendKeyGuarded(set []protocol.MultikeyPublicKey, newKey protocol.MultikeyPublicKey) ([]protocol.MultikeyPublicKey, error) {
+	for _, k := range set {
+		if k.ID == newKey.ID {
+			return nil, fmt.Errorf("key id %q is already present in this role set", newKey.ID)
+		}
+	}
+	if len(set)+1 > roleKeyCap {
+		return nil, fmt.Errorf("role set already holds %d keys (max %d per role)", len(set), roleKeyCap)
+	}
+	out := append([]protocol.MultikeyPublicKey{}, set...)
+	out = append(out, newKey)
+	return out, nil
+}
+
+// newIdentityDevicePubkeyCmd is the B-side of the multi-device handoff. It
+// generates a fresh keypair on THIS device, stores the private seed locally
+// under did#keyID, and prints ONLY the public Multikey for transport to a
+// device holding a controller key. No secret material ever leaves this device:
+// the public key is added to the chain by `dfos identity add-key` run on the
+// controller-holding device. This is 1-of-N availability, not key recovery.
+func newIdentityDevicePubkeyCmd() *cobra.Command {
+	var controller bool
+
+	cmd := &cobra.Command{
+		Use:     "device-pubkey",
+		Aliases: []string{"device-key"},
+		Short:   "Generate a device keypair and print its public key for add-key on another device",
+		Long: "Generate a fresh keypair on this device for multi-device 1-of-N availability. " +
+			"The private seed stays here; the printed public Multikey is handed to a device holding a " +
+			"controller key, which adds it to the chain with 'dfos identity add-key'. No secret material leaves this device.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, chain, err := requireIdentity()
+			if err != nil {
+				return err
+			}
+
+			// The DID already exists locally (this device fetched the chain),
+			// so store directly under did#keyID — no pending-then-rename dance.
+			keyID := protocol.GenerateKeyID()
+			_, pub, err := keys.GenerateKey(chain.DID + "#" + keyID)
+			if err != nil {
+				return fmt.Errorf("generate device key: %w", err)
+			}
+			mk := protocol.NewMultikeyPublicKey(keyID, pub)
+
+			role := "auth"
+			if controller {
+				role = "controller"
+			}
+
+			if jsonFlag {
+				outputJSON(map[string]any{
+					"id":                 mk.ID,
+					"type":               mk.Type,
+					"publicKeyMultibase": mk.PublicKeyMultibase,
+					"role":               role,
+					"did":                chain.DID,
+				})
+			} else {
+				fmt.Printf("Device key generated (private seed stored on this device only):\n")
+				fmt.Printf("  ID:                 %s\n", mk.ID)
+				fmt.Printf("  Public key:         %s\n", mk.PublicKeyMultibase)
+				fmt.Printf("  Suggested role:     %s\n", role)
+				fmt.Printf("\nGive the public key to a device holding a controller key and run there:\n")
+				fmt.Printf("  dfos identity add-key --%s-key --id %s --pubkey %s\n", role, mk.ID, mk.PublicKeyMultibase)
+				fmt.Printf("\nAfter that update propagates, re-run 'dfos identity fetch' here so this\n")
+				fmt.Printf("device sees the in-chain key and can sign independently.\n")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&controller, "controller", false, "Suggest a controller role in the printed add-key hint (auth is the default)")
+	return cmd
+}
+
+// newIdentityAddKeyCmd is the A-side of the multi-device handoff. It appends an
+// externally-supplied PUBLIC key (generated on another device via
+// `dfos identity device-pubkey`) to a role set and signs the identity update
+// with a controller key THIS device holds. It generates and stores no private
+// key — the structural difference from `update`, which rotates by generating
+// fresh local keys. The protocol layer is unchanged: SignIdentityUpdate already
+// accepts N-key role slices, so "append" is expressed here by passing
+// currentSet + newKey.
+func newIdentityAddKeyCmd() *cobra.Command {
+	var peerName string
+	var authKey bool
+	var controllerKey bool
+	var idFlag string
+	var pubkeyFlag string
+
+	cmd := &cobra.Command{
+		Use:   "add-key",
+		Short: "Add a device's public key to a role set (multi-device 1-of-N availability)",
+		Long: "Append a public key generated on another device (via 'dfos identity device-pubkey') to this " +
+			"identity's auth or controller key set, signed with a controller key this device holds. The added " +
+			"device can then publish independently once it fetches the update. This grants availability (any one " +
+			"held key can act), not recovery.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !authKey && !controllerKey {
+				return fmt.Errorf("specify --auth-key and/or --controller-key")
+			}
+			if idFlag == "" {
+				return fmt.Errorf("--id is required (the key id printed by 'dfos identity device-pubkey')")
+			}
+			if pubkeyFlag == "" {
+				return fmt.Errorf("--pubkey is required (the public Multikey printed by 'dfos identity device-pubkey')")
+			}
+
+			_, chain, err := requireIdentity()
+			if err != nil {
+				return err
+			}
+
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			// sign with whatever controller key this device actually holds
+			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			if err != nil {
+				return err
+			}
+			controllerPriv, err := keys.GetPrivateKey(kid)
+			if err != nil {
+				return fmt.Errorf("controller key not in keychain: %w", err)
+			}
+
+			// validate the supplied public key and normalize its encoding
+			rawPub, err := protocol.DecodeMultikey(pubkeyFlag)
+			if err != nil {
+				return fmt.Errorf("invalid --pubkey: %w", err)
+			}
+			newKey := protocol.NewMultikeyPublicKey(idFlag, ed25519.PublicKey(rawPub))
+
+			// determine head CID
+			lastToken := chain.Log[len(chain.Log)-1]
+			h, _, err := protocol.DecodeJWSUnsafe(lastToken)
+			if err != nil {
+				return fmt.Errorf("decode last operation: %w", err)
+			}
+			previousCID := h.CID
+
+			// seed all three sets from current state, then append into targets
+			newAuthKeys := chain.State.AuthKeys
+			newControllerKeys := chain.State.ControllerKeys
+			newAssertKeys := chain.State.AssertKeys
+			var addedKeys []string
+
+			if authKey {
+				newAuthKeys, err = appendKeyGuarded(chain.State.AuthKeys, newKey)
+				if err != nil {
+					return fmt.Errorf("auth key set: %w", err)
+				}
+				addedKeys = append(addedKeys, "auth:"+newKey.ID)
+			}
+			if controllerKey {
+				newControllerKeys, err = appendKeyGuarded(chain.State.ControllerKeys, newKey)
+				if err != nil {
+					return fmt.Errorf("controller key set: %w", err)
+				}
+				addedKeys = append(addedKeys, "controller:"+newKey.ID)
+			}
+
+			jwsToken, opCID, err := protocol.SignIdentityUpdate(
+				previousCID,
+				newControllerKeys, newAuthKeys, newAssertKeys,
+				kid, controllerPriv,
+			)
+			if err != nil {
+				return fmt.Errorf("sign update: %w", err)
+			}
+
+			// ingest into local relay
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
+			}
+
+			// push to peer if specified
+			rn := peerName
+			if rn == "" {
+				rn = peerFlag
+			}
+			if rn != "" {
+				c, _, err := getPeerClient(rn)
+				if err != nil {
+					return err
+				}
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
+				if err != nil {
+					return fmt.Errorf("submit: %w", err)
+				}
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
+				}
+			}
+
+			if jsonFlag {
+				outputJSON(map[string]any{
+					"did":          chain.DID,
+					"operationCID": opCID,
+					"addedKeys":    addedKeys,
+				})
+			} else {
+				fmt.Printf("Identity updated:\n")
+				fmt.Printf("  DID:            %s\n", chain.DID)
+				fmt.Printf("  Operation CID:  %s\n", opCID)
+				fmt.Printf("  Operations:     %d\n", len(chain.Log)+1)
+				for _, ak := range addedKeys {
+					fmt.Printf("  Added key:      %s\n", ak)
+				}
+				fmt.Printf("  The device holding the private key for %s can sign once it fetches this update.\n", newKey.ID)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
+	cmd.Flags().BoolVar(&authKey, "auth-key", false, "Add the key to the auth set (content/credential/beacon publishing)")
+	cmd.Flags().BoolVar(&controllerKey, "controller-key", false, "Add the key to the controller set (higher trust: rotate/delete/add)")
+	cmd.Flags().StringVar(&idFlag, "id", "", "Key id from 'dfos identity device-pubkey' (required)")
+	cmd.Flags().StringVar(&pubkeyFlag, "pubkey", "", "Public Multikey from 'dfos identity device-pubkey' (required)")
+	return cmd
+}
+
 func newIdentityDeleteCmd() *cobra.Command {
 	var peerName string
 
@@ -312,11 +550,11 @@ func newIdentityDeleteCmd() *cobra.Command {
 				chain = chain2
 			}
 
-			if len(chain.State.ControllerKeys) == 0 {
-				return fmt.Errorf("identity has no controller keys")
+			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			if err != nil {
+				return err
 			}
-			controllerKeyID := chain.State.ControllerKeys[0].ID
-			controllerPriv, err := keys.GetPrivateKey(chain.DID + "#" + controllerKeyID)
+			controllerPriv, err := keys.GetPrivateKey(kid)
 			if err != nil {
 				return fmt.Errorf("controller key not in keychain: %w", err)
 			}
@@ -327,7 +565,6 @@ func newIdentityDeleteCmd() *cobra.Command {
 				return fmt.Errorf("decode last operation: %w", err)
 			}
 
-			kid := chain.DID + "#" + controllerKeyID
 			jwsToken, opCID, err := protocol.SignIdentityDelete(h.CID, kid, controllerPriv)
 			if err != nil {
 				return fmt.Errorf("sign delete: %w", err)
