@@ -375,10 +375,7 @@ describe('signature verification profile (pragmatic v1)', () => {
   };
 
   const b64url = (obj: unknown) =>
-    btoa(JSON.stringify(obj))
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+    btoa(JSON.stringify(obj)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
   // build a JWS whose header is exactly `header` and whose signature is a real
   // Ed25519 signature over the (header.payload) signing input — so the only
@@ -407,10 +404,7 @@ describe('signature verification profile (pragmatic v1)', () => {
 
   it('rejects alg "none"', () => {
     const keypair = createNewEd25519Keypair();
-    const token = signWithHeader(
-      { alg: 'none', typ: 'test', kid: 'key1' },
-      keypair.privateKey,
-    );
+    const token = signWithHeader({ alg: 'none', typ: 'test', kid: 'key1' }, keypair.privateKey);
     expect(() => verifyJws({ token, publicKey: keypair.publicKey })).toThrow(
       'Unsupported algorithm',
     );
@@ -418,10 +412,7 @@ describe('signature verification profile (pragmatic v1)', () => {
 
   it('rejects lowercase alg "eddsa"', () => {
     const keypair = createNewEd25519Keypair();
-    const token = signWithHeader(
-      { alg: 'eddsa', typ: 'test', kid: 'key1' },
-      keypair.privateKey,
-    );
+    const token = signWithHeader({ alg: 'eddsa', typ: 'test', kid: 'key1' }, keypair.privateKey);
     expect(() => verifyJws({ token, publicKey: keypair.publicKey })).toThrow(
       'Unsupported algorithm',
     );

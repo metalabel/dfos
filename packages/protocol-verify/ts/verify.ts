@@ -151,8 +151,10 @@ function verifyJws(
   const signature = b64urlDecode(sigB64);
 
   // length + canonical-scalar (S < L) gates
-  if (signature.length !== 64) throw new Error(`signature must be 64 bytes, got ${signature.length}`);
-  if (!scalarIsCanonical(signature.slice(32, 64))) throw new Error('non-canonical signature scalar (S >= L)');
+  if (signature.length !== 64)
+    throw new Error(`signature must be 64 bytes, got ${signature.length}`);
+  if (!scalarIsCanonical(signature.slice(32, 64)))
+    throw new Error('non-canonical signature scalar (S >= L)');
 
   const valid = ed25519.verify(signature, signingInput, pubKeyBytes);
   if (!valid) throw new Error('signature verification failed');
