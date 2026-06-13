@@ -18,3 +18,8 @@ target
 .wrangler
 *.local.md
 dist/goreleaser
+
+# conformance / parity harness build artifacts (scripts build into tempdirs,
+# but a manual `go build` can leave these in-tree)
+packages/dfos-web-relay-go/dfos-test
+packages/dfos-web-relay-go/parity-serve

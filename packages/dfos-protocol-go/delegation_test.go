@@ -140,7 +140,10 @@ func TestParsePrf(t *testing.T) {
 		"prf": []any{"token1", "token2"},
 	}
 
-	prf := ParsePrf(payload)
+	prf, err := ParsePrf(payload)
+	if err != nil {
+		t.Fatalf("ParsePrf: unexpected error: %v", err)
+	}
 	if len(prf) != 2 {
 		t.Fatalf("ParsePrf: got %d entries, want 2", len(prf))
 	}
@@ -150,20 +153,49 @@ func TestParsePrf(t *testing.T) {
 }
 
 func TestParsePrfEmpty(t *testing.T) {
-	prf := ParsePrf(map[string]any{})
+	prf, err := ParsePrf(map[string]any{})
+	if err != nil {
+		t.Fatalf("ParsePrf(empty): unexpected error: %v", err)
+	}
 	if prf != nil {
 		t.Errorf("ParsePrf(empty): got %v, want nil", prf)
 	}
 }
 
-func TestParsePrfSkipsNonStrings(t *testing.T) {
+// TestParsePrfRejectsEmptyString is the TWIN-DIVERGENCE guard: a prf element
+// that is an empty string must be HARD-REJECTED, not silently filtered. The
+// previous behavior filtered the "" element, dropping prf:["<parent>",""] to
+// length 1 so it slipped past the multi-parent length gate and was ACCEPTED —
+// while TS rejects the byte-identical credential at decode. ParsePrf must now
+// return an error so the credential is rejected in lockstep with TS.
+func TestParsePrfRejectsEmptyString(t *testing.T) {
 	payload := map[string]any{
-		"prf": []any{"valid", 42, "", "also-valid"},
+		"prf": []any{"valid-parent", ""},
 	}
+	if _, err := ParsePrf(payload); err == nil {
+		t.Fatal("expected ParsePrf to REJECT an empty-string prf element, got nil (silent filter)")
+	}
+}
 
-	prf := ParsePrf(payload)
-	if len(prf) != 2 {
-		t.Fatalf("ParsePrf: got %d, want 2", len(prf))
+// TestParsePrfRejectsNonStrings verifies a non-string prf element is rejected
+// rather than skipped. Inverts the old TestParsePrfSkipsNonStrings.
+func TestParsePrfRejectsNonStrings(t *testing.T) {
+	payload := map[string]any{
+		"prf": []any{"valid", 42, "also-valid"},
+	}
+	if _, err := ParsePrf(payload); err == nil {
+		t.Fatal("expected ParsePrf to REJECT a non-string prf element, got nil (silent filter)")
+	}
+}
+
+// TestParsePrfRejectsNonArray verifies a prf that is present but not an array
+// is rejected.
+func TestParsePrfRejectsNonArray(t *testing.T) {
+	payload := map[string]any{
+		"prf": "not-an-array",
+	}
+	if _, err := ParsePrf(payload); err == nil {
+		t.Fatal("expected ParsePrf to REJECT a non-array prf, got nil")
 	}
 }
 

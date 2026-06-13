@@ -41,9 +41,49 @@ export interface CreatedRelay {
 // request schemas
 // -----------------------------------------------------------------------------
 
+/** Max operations per /operations POST. The receiver 400s any larger batch. */
+const MAX_OPERATIONS_PER_BATCH = 100;
+
 const IngestBody = z.object({
-  operations: z.array(z.string()).min(1).max(100),
+  operations: z.array(z.string()).min(1).max(MAX_OPERATIONS_PER_BATCH),
 });
+
+/**
+ * Max ops per gossip POST. The receiver's /operations endpoint rejects any
+ * batch over MAX_OPERATIONS_PER_BATCH items, so larger gossip runs must be
+ * chunked or the whole push is silently 400'd and dropped. Mirrors the Go
+ * twin's maxGossipBatch (sequencer.go).
+ */
+const MAX_GOSSIP_BATCH = MAX_OPERATIONS_PER_BATCH;
+
+/**
+ * Split items into batches of at most `size`, preserving order with no loss.
+ * gossip() uses this to stay within the receiver's per-batch cap; exported so
+ * the split behavior is directly testable (mirrors Go's maxGossipBatch chunking,
+ * whose TestGossipChunksLargeBatches drives the split directly).
+ */
+export const chunkOps = <T>(items: T[], size: number): T[][] => {
+  const chunks: T[][] = [];
+  for (let start = 0; start < items.length; start += size) {
+    chunks.push(items.slice(start, start + size));
+  }
+  return chunks;
+};
+
+/** Max request body size for POST /operations and PUT blob — mirrors the Go twin's 16MB cap. */
+const MAX_BODY_BYTES = 16 << 20;
+
+/**
+ * Returns true if a Content-Length header is present and exceeds the 16MB body
+ * cap. A missing/unparseable header returns false — the streamed length is
+ * bounded separately (PUT blob re-checks the materialized size; serve.ts caps
+ * the unauthenticated streaming path above this route cap).
+ */
+const exceedsBodyCap = (contentLength: string | undefined): boolean => {
+  if (!contentLength) return false;
+  const n = Number(contentLength);
+  return Number.isFinite(n) && n > MAX_BODY_BYTES;
+};
 
 // -----------------------------------------------------------------------------
 // query helpers
@@ -104,11 +144,16 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const relayDID = identity.did;
   const profileArtifactJws = identity.profileArtifactJws;
 
-  // gossip helper
+  // gossip helper — chunk to <= MAX_GOSSIP_BATCH so the receiver's /operations
+  // endpoint (which 400s any batch over MAX_OPERATIONS_PER_BATCH items) never
+  // silently drops the whole gossip run. Mirrors the Go twin's maxGossipBatch
+  // chunking in sequencer.go.
   const gossip = (ops: string[]) => {
     if (ops.length === 0 || gossipPeers.length === 0 || !peerClient) return;
     for (const peer of gossipPeers) {
-      peerClient.submitOperations(peer.url, ops).catch(() => {});
+      for (const chunk of chunkOps(ops, MAX_GOSSIP_BATCH)) {
+        peerClient.submitOperations(peer.url, chunk).catch(() => {});
+      }
     }
   };
 
@@ -196,6 +241,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
   /** Submit operations for ingestion */
   app.post('/operations', async (c) => {
+    // Per-route DoS cap: reject an oversized body before buffering it. Mirrors
+    // the Go twin's 16MB MaxBytesReader on the blob route. The Content-Length
+    // header (when present) is the cheap pre-read check; serve.ts streams a
+    // hard cap above this for the Content-Length-absent (chunked) case.
+    if (exceedsBodyCap(c.req.header('content-length'))) {
+      return c.json({ error: 'request body too large' }, 413);
+    }
+
     let body: unknown;
     try {
       body = await c.req.json();
@@ -451,6 +504,12 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const contentId = c.req.param('contentId');
     const operationCID = c.req.param('operationCID');
 
+    // Per-route DoS cap (16MB, mirrors the Go twin's MaxBytesReader on this
+    // route). Reject by Content-Length before authenticating or buffering.
+    if (exceedsBodyCap(c.req.header('content-length'))) {
+      return c.json({ error: 'request body too large' }, 413);
+    }
+
     // authenticate
     const auth = await authenticateRequest(c.req.header('authorization'), relayDID, store);
     if (!auth) return c.json({ error: 'authentication required' }, 401);
@@ -481,8 +540,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'not authorized — must be chain creator or operation signer' }, 403);
     }
 
-    // read blob bytes and verify they match the documentCID from the operation
+    // read blob bytes and verify they match the documentCID from the operation.
+    // Bound the post-read size too: a Content-Length-absent (chunked) body
+    // bypasses the header check above, so re-check the materialized length.
     const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (bytes.byteLength > MAX_BODY_BYTES) {
+      return c.json({ error: 'request body too large' }, 413);
+    }
     try {
       const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
       const encoded = await dagCborCanonicalEncode(parsed);

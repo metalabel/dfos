@@ -17,6 +17,7 @@ import {
 import {
   createNewEd25519Keypair,
   generateId,
+  importEd25519Keypair,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { ingestOperations } from './ingest';
@@ -33,8 +34,60 @@ import type { RelayIdentity, RelayStore } from './types';
 export const bootstrapRelayIdentity = async (store: RelayStore): Promise<RelayIdentity> => {
   const keypair = createNewEd25519Keypair();
   const keyId = generateId('key');
-  const multibase = encodeEd25519Multikey(keypair.publicKey);
-  const signer = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair.privateKey);
+  return bootstrapWithKeyMaterial(store, {
+    privateKey: keypair.privateKey,
+    publicKey: keypair.publicKey,
+    keyId,
+  });
+};
+
+/**
+ * Bootstrap a relay identity from an EXISTING key + key ID, with optional pinned
+ * timestamps and profile name. Used for deterministic bootstrap — e.g. the
+ * dual-relay parity harness pins one key + one createdAt across both twins so
+ * the relay's own genesis + profile log entries are byte-identical, and durable
+ * relays that reload their key from storage. Mirrors the Go twin's
+ * BootstrapRelayIdentityFromKey.
+ */
+export const bootstrapRelayIdentityFromKey = async (
+  store: RelayStore,
+  params: {
+    privateKey: Uint8Array;
+    keyId: string;
+    name?: string;
+    createdAt?: string;
+  },
+): Promise<RelayIdentity> => {
+  const { publicKey } = importEd25519Keypair(params.privateKey);
+  return bootstrapWithKeyMaterial(store, {
+    privateKey: params.privateKey,
+    publicKey,
+    keyId: params.keyId,
+    ...(params.name !== undefined ? { name: params.name } : {}),
+    ...(params.createdAt !== undefined ? { createdAt: params.createdAt } : {}),
+  });
+};
+
+/**
+ * Shared bootstrap core: sign + ingest the identity genesis and profile
+ * artifact for the given key material. The JIT path passes a random key and
+ * lets createdAt default to now; the from-key path pins both.
+ */
+const bootstrapWithKeyMaterial = async (
+  store: RelayStore,
+  params: {
+    privateKey: Uint8Array;
+    publicKey: Uint8Array;
+    keyId: string;
+    name?: string;
+    createdAt?: string;
+  },
+): Promise<RelayIdentity> => {
+  const { privateKey, publicKey, keyId } = params;
+  const name = params.name ?? 'DFOS Relay';
+  const createdAt = params.createdAt ?? new Date().toISOString();
+  const multibase = encodeEd25519Multikey(publicKey);
+  const signer = async (msg: Uint8Array) => signPayloadEd25519(msg, privateKey);
 
   const key = { id: keyId, type: 'Multikey' as const, publicKeyMultibase: multibase };
 
@@ -46,7 +99,7 @@ export const bootstrapRelayIdentity = async (store: RelayStore): Promise<RelayId
     authKeys: [key],
     assertKeys: [key],
     controllerKeys: [key],
-    createdAt: new Date().toISOString(),
+    createdAt,
   };
 
   const { jwsToken: identityJws } = await signIdentityOperation({
@@ -70,9 +123,9 @@ export const bootstrapRelayIdentity = async (store: RelayStore): Promise<RelayId
     did,
     content: {
       $schema: 'https://schemas.dfos.com/profile/v1',
-      name: 'DFOS Relay',
+      name,
     },
-    createdAt: new Date().toISOString(),
+    createdAt,
   };
 
   const kid = `${did}#${keyId}`;

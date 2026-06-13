@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
 
@@ -163,6 +163,13 @@ All flags support environment variable fallbacks for container deployment:
 			srv := &http.Server{
 				Addr:    ":" + port,
 				Handler: lr.Relay.Handler(),
+				// Slowloris guard: bound how long a client may take to send the
+				// request headers, and how long an idle keep-alive connection
+				// may linger. NOT setting ReadTimeout/WriteTimeout — large blob
+				// uploads and long /log reads are legitimately slow, and a tight
+				// write deadline would truncate them.
+				ReadHeaderTimeout: 10 * time.Second,
+				IdleTimeout:       120 * time.Second,
 			}
 
 			go func() {

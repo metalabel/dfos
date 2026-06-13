@@ -176,7 +176,10 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 	}
 
 	// verify delegation chain
-	prf := dfos.ParsePrf(payload)
+	prf, err := dfos.ParsePrf(payload)
+	if err != nil {
+		return fmt.Errorf("credential prf invalid: %v", err)
+	}
 	if err := r.verifyDelegationChain(credJws, prf, att, verified, resolveKey, creatorDID, 0); err != nil {
 		return err
 	}
@@ -250,11 +253,15 @@ func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []
 		}
 
 		pAud, _ := pPayload["aud"].(string)
+		pPrf, err := dfos.ParsePrf(pPayload)
+		if err != nil {
+			return fmt.Errorf("parent credential prf invalid: %v", err)
+		}
 		parents = append(parents, verifiedParent{
 			jws:      parentJws,
 			verified: pVerified,
 			att:      dfos.ParseAtt(pPayload),
-			prf:      dfos.ParsePrf(pPayload),
+			prf:      pPrf,
 			aud:      pAud,
 			exp:      pVerified.Exp,
 		})

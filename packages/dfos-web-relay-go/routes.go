@@ -9,6 +9,13 @@ import (
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
+// maxRequestBodyBytes caps the size of request bodies that buffer the whole
+// payload in memory (POST /operations, PUT blob). Defined once and shared by
+// both routes. The .max(100) item check and the documentCID match fire only
+// AFTER a full decode/read, so without this cap the bytes are unbounded — an
+// unauthenticated client could OOM the relay with one huge POST.
+const maxRequestBodyBytes = 16 << 20 // 16 MB
+
 func newRouter(r *Relay) http.Handler {
 	mux := http.NewServeMux()
 
@@ -99,6 +106,9 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (r *Relay) handlePostOperations(w http.ResponseWriter, req *http.Request) {
+	// DoS cap: bound the body before decoding. A MaxBytesError surfaces as a
+	// decode error and flows through the existing 400 path.
+	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
 	var body struct {
 		Operations []string `json:"operations"`
 	}
@@ -530,9 +540,9 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// read blob bytes (capped at 16 MB) and verify they match documentCID
-	const maxBlobSize = 16 << 20 // 16 MB
-	req.Body = http.MaxBytesReader(w, req.Body, maxBlobSize)
+	// read blob bytes (capped at 16 MB, shared with POST /operations) and verify
+	// they match documentCID
+	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
 	bytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		writeError(w, 400, "failed to read body")
