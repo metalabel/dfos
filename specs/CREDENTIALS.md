@@ -14,7 +14,7 @@ DFOS credentials are signed authorization tokens. They answer the question: "doe
 
 Two mechanisms from UCAN make credentials composable:
 
-1. **Delegation chains** — a credential can embed its parent credential(s) in a `prf` (proof) field, forming a verifiable chain of authority from a root issuer down to the leaf holder.
+1. **Delegation chains** — a credential can embed its parent credential in a `prf` (proof) field, forming a verifiable linear chain of authority from a root issuer down to the leaf holder.
 2. **Monotonic attenuation** — each hop in a delegation chain can only narrow scope, never widen it. Fewer resources, fewer actions, shorter expiry.
 
 Credentials are content-addressed via CID (same `dagCborCanonicalEncode` + SHA-256 scheme as all protocol objects). The CID appears in the JWS header, making each credential a stable, revocable artifact.
@@ -40,16 +40,16 @@ The credential payload is validated by a strict Zod schema. No extra fields are 
 }
 ```
 
-| Field     | Type               | Description                                        |
-| --------- | ------------------ | -------------------------------------------------- |
-| `version` | `1`                | Schema version (literal `1`)                       |
-| `type`    | `"DFOSCredential"` | Literal discriminator                              |
-| `iss`     | string             | Issuer DID — the authority granting permission     |
-| `aud`     | string             | Audience DID, or `"*"` for public credentials      |
-| `att`     | Attenuation[]      | Resource + action pairs (min 1, max 32)            |
-| `prf`     | string[]           | Parent credential JWS tokens (max 8, default `[]`) |
-| `exp`     | number             | Expiration — unix seconds (positive integer)       |
-| `iat`     | number             | Issued-at — unix seconds (positive integer)        |
+| Field     | Type               | Description                                                               |
+| --------- | ------------------ | ------------------------------------------------------------------------- |
+| `version` | `1`                | Schema version (literal `1`)                                              |
+| `type`    | `"DFOSCredential"` | Literal discriminator                                                     |
+| `iss`     | string             | Issuer DID — the authority granting permission                            |
+| `aud`     | string             | Audience DID, or `"*"` for public credentials                             |
+| `att`     | Attenuation[]      | Resource + action pairs (min 1, max 32)                                   |
+| `prf`     | string[]           | Parent credential JWS token — at most 1 (linear delegation), default `[]` |
+| `exp`     | number             | Expiration — unix seconds (positive integer)                              |
+| `iat`     | number             | Issued-at — unix seconds (positive integer)                               |
 
 ### Attenuation Entry
 
@@ -73,7 +73,7 @@ Each attenuation entry is a strict object with two fields:
 | `resource` | 512 chars | Resource type + content ID         |
 | `action`   | 64 chars  | Comma-separated action names       |
 | `att`      | 32 items  | Generous for multi-resource grants |
-| `prf`      | 8 items   | Multi-parent delegation support    |
+| `prf`      | 1 item    | Single-parent (linear) delegation  |
 
 ### CID Derivation
 
@@ -128,23 +128,23 @@ Delegation chains enable transitive authorization. A root authority issues a cre
 The `prf` field contains an array of full JWS compact tokens — the complete parent credentials, not references or CIDs. This makes each credential self-contained: a verifier can walk the entire chain without external lookups (beyond identity resolution).
 
 - `prf: []` — root credential. The issuer is the original authority.
-- `prf: ["<parent JWS>"]` — delegated credential. The parent credential proves the issuer was authorized.
-- `prf: ["<parent1>", "<parent2>"]` — multi-parent. The child's attenuations are checked against the union of all parents' attenuations.
+- `prf: ["<parent JWS>"]` — delegated credential. The single parent credential proves the issuer was authorized.
+
+**Delegation is linear (single-parent).** A credential's `prf` MUST contain at most one entry. Verifiers MUST reject any credential whose `prf` has more than one element. (A prior union-of-authority model — attenuating the child against the _union_ of multiple parents while rooting the walk through only the first — allowed a self-issued secondary parent to contribute authority that was never rooted at the expected creator, an authority-escalation. Linear delegation removes the class entirely.)
 
 ### Verification Walk
 
 Chain verification proceeds from the leaf credential upward:
 
 1. **Verify the leaf credential** — signature, schema, expiry, CID integrity.
-2. **Verify each parent in `prf`** — same checks, recursively.
-3. **Audience linkage** — the child's `iss` MUST match at least one parent's `aud` (or the parent's `aud` MUST be `"*"`). This prevents a DID from using a credential not addressed to it.
-4. **Expiry narrowing** — the child's `exp` MUST NOT exceed any parent's `exp`.
-5. **Attenuation check** — the child's `att` MUST be a valid attenuation of the union of all parents' `att` (see [Attenuation Rules](#attenuation-rules)).
-6. **Root check** — when a credential has `prf: []`, its `iss` MUST equal the expected root DID (e.g., the content chain creator).
+2. **Reject multi-parent** — if `prf` has more than one entry, reject.
+3. **Verify the parent in `prf`** — same checks, recursively.
+4. **Audience linkage** — the child's `iss` MUST match the parent's `aud` (or the parent's `aud` MUST be `"*"`). This prevents a DID from using a credential not addressed to it.
+5. **Expiry narrowing** — the child's `exp` MUST NOT exceed the parent's `exp`.
+6. **Attenuation check** — the child's `att` MUST be a valid attenuation of the parent's `att` (see [Attenuation Rules](#attenuation-rules)).
+7. **Root check** — when a credential has `prf: []`, its `iss` MUST equal the expected root DID (e.g., the content chain creator).
 
 **Depth limit:** Maximum 16 hops. Chains deeper than 16 are rejected.
-
-**Linear walk:** For multi-parent credentials, all parents are verified, but the chain walk continues through the first parent. All parents contribute to the attenuation union.
 
 **Revocation at every level:** Relays SHOULD check revocation at every level of the delegation chain, not just the leaf credential. A revoked intermediate credential invalidates all downstream delegations rooted through it.
 
@@ -156,7 +156,7 @@ Every delegation hop enforces monotonic attenuation. The child credential's scop
 
 ### Scope Narrowing
 
-Every entry in the child's `att` array must be covered by at least one entry in the parent's `att` array (or the union of all parents' `att` arrays for multi-parent chains).
+Every entry in the child's `att` array must be covered by at least one entry in the parent's `att` array.
 
 Valid narrowing examples:
 

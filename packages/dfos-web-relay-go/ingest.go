@@ -534,7 +534,11 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 }
 
 func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult {
-	resolveKey := CreateKeyResolver(store)
+	// Beacons resolve against CURRENT identity state (D3): a rotated-out key must
+	// not be able to hijack the beacon pointer. Beacons are replace-on-newer, so
+	// the legit holder's next beacon supersedes any transient sync divergence.
+	// (Revocation deliberately stays on the historical resolver — see OQ5.)
+	resolveKey := CreateCurrentKeyResolver(store)
 
 	result, err := dfos.VerifyBeacon(jwsToken, resolveKey)
 	if err != nil {
@@ -1092,4 +1096,3 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 	}
 	return out
 }
-

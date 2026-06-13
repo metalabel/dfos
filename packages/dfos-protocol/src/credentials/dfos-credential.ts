@@ -276,55 +276,56 @@ export const verifyDelegationChain = async (
       return { credential, chain, rootDID: options.rootDID };
     }
 
-    // verify all parent credentials
-    const parents: VerifiedDFOSCredential[] = [];
-    for (const parentJws of current.prf) {
-      const parent = await verifyDFOSCredential(parentJws, {
-        resolveIdentity: options.resolveIdentity,
-        ...(options.now !== undefined ? { now: options.now } : {}),
-      });
-
-      // check revocation at every level of the chain
-      if (options.isRevoked) {
-        const revoked = await options.isRevoked(parent.iss, parent.credentialCID);
-        if (revoked) {
-          throw new CredentialVerificationError('parent credential in delegation chain is revoked');
-        }
-      }
-
-      parents.push(parent);
-    }
-
-    // the child's issuer must be the audience of at least one parent
-    const matchingParent = parents.find((p) => p.aud === '*' || p.aud === current.iss);
-    if (!matchingParent) {
+    // DFOS delegation is LINEAR: exactly one parent per hop. Multi-parent
+    // proofs are rejected. A union-of-authority model (att taken from the
+    // union of all parents, but the root walk continuing only through the
+    // first parent) let a self-issued secondary parent contribute scope that
+    // was never rooted at rootDID — an authority-escalation. Linear delegation
+    // removes the class entirely.
+    if (current.prf.length > 1) {
       throw new CredentialVerificationError(
-        `delegation gap: no parent credential has audience matching child issuer ${current.iss}`,
+        'delegation chain: multi-parent credentials are not supported (prf must have at most one entry)',
       );
     }
 
-    // child's exp must not exceed any parent's exp
-    for (const parent of parents) {
-      if (current.exp > parent.exp) {
-        throw new CredentialVerificationError(
-          'delegation chain: child credential expiry exceeds parent expiry',
-        );
+    // verify the single parent credential
+    const parent = await verifyDFOSCredential(current.prf[0]!, {
+      resolveIdentity: options.resolveIdentity,
+      ...(options.now !== undefined ? { now: options.now } : {}),
+    });
+
+    // check revocation at every level of the chain
+    if (options.isRevoked) {
+      const revoked = await options.isRevoked(parent.iss, parent.credentialCID);
+      if (revoked) {
+        throw new CredentialVerificationError('parent credential in delegation chain is revoked');
       }
     }
 
-    // child's att must be attenuated from the union of all parents' att
-    const parentAttUnion = parents.flatMap((p) => p.att);
-    if (!isAttenuated(parentAttUnion, current.att)) {
+    // the child's issuer must be the parent's audience
+    if (parent.aud !== '*' && parent.aud !== current.iss) {
+      throw new CredentialVerificationError(
+        `delegation gap: parent credential audience ${parent.aud} does not match child issuer ${current.iss}`,
+      );
+    }
+
+    // child's exp must not exceed the parent's exp
+    if (current.exp > parent.exp) {
+      throw new CredentialVerificationError(
+        'delegation chain: child credential expiry exceeds parent expiry',
+      );
+    }
+
+    // child's att must be attenuated from the parent's att
+    if (!isAttenuated(parent.att, current.att)) {
       throw new CredentialVerificationError(
         'delegation chain: child credential scope exceeds parent scope',
       );
     }
 
-    // add parents to chain and continue walking from the first parent
-    // (multi-parent chains: we follow the first parent for the linear walk,
-    // but all parents have been verified above)
-    chain.push(...parents);
-    current = parents[0]!;
+    // add parent to chain and continue walking
+    chain.push(parent);
+    current = parent;
   }
 
   throw new CredentialVerificationError('delegation chain too deep (max 16 hops)');
