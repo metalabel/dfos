@@ -120,6 +120,29 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const app = new Hono();
 
   // -------------------------------------------------------------------------
+  // CORS — allow browser clients to read the proof plane
+  // -------------------------------------------------------------------------
+
+  // Policy matches the Go relay byte-for-byte. Applied to every route so
+  // browser-based proof-plane reads (and writes) succeed cross-origin.
+  app.use('*', async (c, next) => {
+    // preflight: answer directly with 204 and the CORS headers
+    if (c.req.method === 'OPTIONS') {
+      return c.body(null, 204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      });
+    }
+    await next();
+    // set headers on the final response (survives handler-created responses)
+    c.res.headers.set('Access-Control-Allow-Origin', '*');
+    c.res.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+    c.res.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return;
+  });
+
+  // -------------------------------------------------------------------------
   // well-known
   // -------------------------------------------------------------------------
 

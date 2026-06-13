@@ -281,6 +281,34 @@ describe('web relay', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // CORS — parity with the Go relay (byte-for-byte header values)
+  // ---------------------------------------------------------------------------
+
+  describe('CORS', () => {
+    it('should emit the CORS policy headers on proof-plane GET responses', async () => {
+      const res = await req('/.well-known/dfos-relay');
+      expect(res.status).toBe(200);
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, OPTIONS');
+      expect(res.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization');
+    });
+
+    it('should answer OPTIONS preflight with 204 and the CORS headers', async () => {
+      const res = await req('/identities/did:dfos:example/log', { method: 'OPTIONS' });
+      expect(res.status).toBe(204);
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+      expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, OPTIONS');
+      expect(res.headers.get('access-control-allow-headers')).toBe('Content-Type, Authorization');
+    });
+
+    it('should emit CORS headers even on 404 proof-plane reads', async () => {
+      const res = await req('/identities/did:dfos:doesnotexist');
+      expect(res.status).toBe(404);
+      expect(res.headers.get('access-control-allow-origin')).toBe('*');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // identity chain lifecycle
   // ---------------------------------------------------------------------------
 
