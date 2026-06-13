@@ -169,6 +169,14 @@ type IngestionResult struct {
 	Error   string `json:"error,omitempty"`
 	Kind    string `json:"kind,omitempty"`
 	ChainID string `json:"chainId,omitempty"`
+
+	// DependencyMissing is the structured dependency-failure signal. When true,
+	// the rejection is due to a missing dependency that may arrive later via
+	// sync or gossip, so the sequencer keeps the op pending (retryable) rather
+	// than durably reject it. The sequencer branches on this flag — NOT on
+	// substring matching of the human-readable Error string. Mirrors the TS
+	// twin's IngestionResult.dependencyMissing.
+	DependencyMissing bool `json:"dependencyMissing,omitempty"`
 }
 
 // Store is the storage backend for a DFOS web relay.

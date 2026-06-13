@@ -12,8 +12,14 @@ const MAX_RESOURCE = 512;
 const MAX_ACTION = 64;
 /** Max number of attenuation entries per credential */
 const MAX_ATT = 32;
-/** Max number of parent credential JWS tokens in prf */
-const MAX_PRF = 8;
+/**
+ * Max number of parent credential JWS tokens in prf. DFOS delegation is LINEAR
+ * (single-parent) — the spec MUST-rejects prf.length > 1 (multi-parent
+ * authority-union was an escalation class, dropped in WP-8). Bounding the schema
+ * at 1 makes standalone construction and schema-validated decode match the spec
+ * (defense-in-depth; the delegation walk already rejects prf>1 at authz).
+ */
+const MAX_PRF = 1;
 
 // --- DFOS credential ---
 

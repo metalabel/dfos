@@ -337,4 +337,12 @@ export interface IngestionResult {
   kind?: OperationKind;
   /** Chain identifier if applicable */
   chainId?: string;
+  /**
+   * Structured dependency-failure signal. When true, the rejection is due to a
+   * missing dependency that may arrive later via sync or gossip, so the
+   * sequencer must keep the op pending (retryable) rather than durably reject
+   * it. This is the discriminator the sequencer branches on — NOT substring
+   * matching of the human-readable `error` string.
+   */
+  dependencyMissing?: boolean;
 }

@@ -137,7 +137,7 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 				r.logger.Error("ingest: failed to mark duplicate op sequenced", "cid", res.CID, "error", err)
 			}
 			dupCount++
-		case res.Status == "rejected" && isPermanentRejection(res.Error):
+		case res.Status == "rejected" && isPermanentRejection(res):
 			r.store.MarkOpRejected(res.CID, res.Error)
 			rejCount++
 		}
@@ -204,6 +204,7 @@ func (r *Relay) SyncFromPeers() error {
 			// which aliases the active batch transaction. Hold ingestMu so these
 			// writes don't race on s.tx with a concurrent ingest/sequencer batch.
 			r.ingestMu.Lock()
+			pageStoreFailed := false
 			for _, e := range page.Entries {
 				// Compute the CID LOCALLY from the token — never trust the
 				// peer-claimed CID. A mismatched cid would key the raw_ops row
@@ -220,12 +221,25 @@ func (r *Relay) SyncFromPeers() error {
 					continue
 				}
 				if err := r.store.PutRawOp(cid, e.JWSToken); err != nil {
-					r.logger.Error("peer sync: failed to store raw op",
+					// Durability discipline (mirrors Ingest's "never advance past
+					// unpersisted work"): on a transient store failure, do NOT
+					// advance the peer cursor — otherwise the next cycle resumes
+					// AFTER the dropped op and it is permanently lost. Stop the
+					// page and re-fetch this same page next cycle.
+					r.logger.Error("peer sync: failed to store raw op — not advancing cursor",
 						"peer", peer.URL,
 						"cid", cid,
 						"error", err,
 					)
+					pageStoreFailed = true
+					break
 				}
+			}
+			if pageStoreFailed {
+				// leave the cursor untouched and stop the fetch loop for this
+				// peer; the same page is re-fetched on the next cycle.
+				r.ingestMu.Unlock()
+				break
 			}
 			fetched += len(page.Entries)
 			if page.Cursor != nil {
@@ -233,7 +247,18 @@ func (r *Relay) SyncFromPeers() error {
 			} else {
 				cursor = page.Entries[len(page.Entries)-1].CID
 			}
-			r.store.SetPeerCursor(peer.URL, cursor)
+			// Check the SetPeerCursor return — a silent failure here would also
+			// let the high-water mark drift. On failure, stop without persisting
+			// further progress; the same page is re-fetched next cycle.
+			if err := r.store.SetPeerCursor(peer.URL, cursor); err != nil {
+				r.logger.Error("peer sync: failed to persist peer cursor — backing off",
+					"peer", peer.URL,
+					"cursor", cursor,
+					"error", err,
+				)
+				r.ingestMu.Unlock()
+				break
+			}
 			r.ingestMu.Unlock()
 			if page.Cursor == nil {
 				break

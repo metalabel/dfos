@@ -128,10 +128,11 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 // signature, audience linkage, expiry bounds, and monotonic attenuation.
 // The chain must root at rootDID.
 //
-// The optional isRevoked callback checks revocation at each level. Pass nil
-// to skip revocation checks (useful at the protocol layer where revocation
-// state may not be available).
-func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked func(issuerDID, credentialCID string) (bool, error), depth int) error {
+// The optional isRevoked callback checks revocation at each parent level, and
+// the optional isDeleted callback gates each parent's issuer identity. Pass nil
+// for either to skip that check (the protocol layer is store-agnostic; the
+// relay supplies these closures at the call boundary).
+func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, depth int) error {
 	if depth > 16 {
 		return fmt.Errorf("delegation chain too deep (max 16 hops)")
 	}
@@ -164,6 +165,18 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 	pKid := pHeader.Kid
 	if pKid == "" || !strings.Contains(pKid, "#") {
 		return fmt.Errorf("parent credential kid must be a DID URL")
+	}
+
+	// parent issuer-isDeleted gate (mirrors read-path auth.go:231-234)
+	parentIssuerDID := pKid[:strings.Index(pKid, "#")]
+	if isDeleted != nil {
+		deleted, err := isDeleted(parentIssuerDID)
+		if err != nil {
+			return fmt.Errorf("parent issuer delete-check failed: %v", err)
+		}
+		if deleted {
+			return fmt.Errorf("parent credential issuer identity is deleted")
+		}
 	}
 
 	pKey, err := resolveKey(pKid)
@@ -207,5 +220,5 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 	}
 
 	// continue walking through the parent
-	return verifyDelegationChain(parentJws, pVerified, parentAtt, parentPrf, resolveKey, rootDID, isRevoked, depth+1)
+	return verifyDelegationChain(parentJws, pVerified, parentAtt, parentPrf, resolveKey, rootDID, isRevoked, isDeleted, depth+1)
 }

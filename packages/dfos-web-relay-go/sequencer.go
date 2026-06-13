@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"strings"
 	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
@@ -56,7 +55,7 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 			case res.Status == "duplicate":
 				sequencedCIDs = append(sequencedCIDs, res.CID)
 				progress = true
-			case res.Status == "rejected" && isPermanentRejection(res.Error):
+			case res.Status == "rejected" && isPermanentRejection(res):
 				r.store.MarkOpRejected(res.CID, res.Error)
 				result.Rejected++
 				progress = true
@@ -156,37 +155,46 @@ func computeOpCID(jwsToken string) string {
 // never written.
 const persistErrorPrefix = "persistence failed: "
 
+// ForkPointStateErrorPrefix is the human-readable prefix for a fork-point
+// state-computation failure. Declared as ONE shared constant so the producer
+// (the ingest rejection sites) and any string classifier reference the same
+// literal — eliminating the #56 colon-mismatch drift. Mirrors the TS twin's
+// FORK_POINT_STATE_ERROR_PREFIX in ingest.ts.
+//
+// Classification no longer depends on this string — the sequencer branches on
+// the structured IngestionResult.DependencyMissing flag — but the constant
+// keeps the two twins byte-identical for the human-readable error.
+const ForkPointStateErrorPrefix = "failed to compute state at fork point: "
+
 // persistError wraps a store write error in a retryable rejection result. The
-// caller's CID is preserved so the op can be located in the raw store. Returns
-// nil if err is nil (no persistence failure).
+// caller's CID is preserved so the op can be located in the raw store, and the
+// structured DependencyMissing flag is set so the sequencer keeps it pending
+// (the transient-store-retry path is Go-only — TS's in-memory store has no
+// analogue — and is flag-gated, NOT a string pattern the TS classifier must
+// mirror). Returns nil if err is nil (no persistence failure).
 func persistError(cid string, err error) *IngestionResult {
 	if err == nil {
 		return nil
 	}
-	return &IngestionResult{CID: cid, Status: "rejected", Error: persistErrorPrefix + err.Error()}
+	return &IngestionResult{
+		CID:               cid,
+		Status:            "rejected",
+		Error:             persistErrorPrefix + err.Error(),
+		DependencyMissing: true,
+	}
 }
 
-// isDependencyFailure returns true if the rejection is due to a missing
+// isDependencyFailure returns true if a rejection is retryable — a missing
 // dependency that may arrive later via sync or gossip, OR a transient storage
-// write failure. These are retryable — everything else is treated as permanent.
-func isDependencyFailure(errMsg string) bool {
-	dependencyPatterns := []string{
-		"unknown previous operation",             // previousCID not in store or not in chain log
-		"unknown identity:",                      // identity chain not synced yet (key resolution)
-		"content chain not found:",               // content chain genesis not synced yet
-		"failed to compute state at fork point:", // fork state replay failed (dep missing)
-		persistErrorPrefix,                       // transient store write failure — retry
-	}
-	for _, p := range dependencyPatterns {
-		if strings.Contains(errMsg, p) {
-			return true
-		}
-	}
-	return false
+// write failure. Branches on the STRUCTURED DependencyMissing flag set by the
+// ingest producer, not on substring matching of the Error string. Mirrors the
+// TS twin's structured discriminator.
+func isDependencyFailure(res IngestionResult) bool {
+	return res.DependencyMissing
 }
 
-// isPermanentRejection returns true if the rejection is permanent and should
-// not be retried. This is the inverse of isDependencyFailure.
-func isPermanentRejection(errMsg string) bool {
-	return !isDependencyFailure(errMsg)
+// isPermanentRejection returns true if a rejection is permanent and should not
+// be retried. The inverse of isDependencyFailure.
+func isPermanentRejection(res IngestionResult) bool {
+	return !res.DependencyMissing
 }
