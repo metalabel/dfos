@@ -290,10 +290,16 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 			LastCreatedAt: createdAt,
 			State:         result.State,
 		}
-		store.PutIdentityChain(chain)
-		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: result.State.DID})
+		if perr := persistError(cid, store.PutIdentityChain(chain)); perr != nil {
+			return *perr
+		}
+		if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: result.State.DID})); perr != nil {
+			return *perr
+		}
 		if logEnabled {
-			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})
+			if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})); perr != nil {
+				return *perr
+			}
 		}
 		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: result.State.DID}
 	}
@@ -327,10 +333,16 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 			LastCreatedAt: extResult.LastCreatedAt,
 			State:         extResult.State,
 		}
-		store.PutIdentityChain(updated)
-		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})
+		if perr := persistError(cid, store.PutIdentityChain(updated)); perr != nil {
+			return *perr
+		}
+		if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})); perr != nil {
+			return *perr
+		}
 		if logEnabled {
-			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
+			if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})); perr != nil {
+				return *perr
+			}
 		}
 		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
 	}
@@ -376,10 +388,16 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 		LastCreatedAt: headLastCreatedAt,
 		State:         headState,
 	}
-	store.PutIdentityChain(updated)
-	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})
+	if perr := persistError(cid, store.PutIdentityChain(updated)); perr != nil {
+		return *perr
+	}
+	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})); perr != nil {
+		return *perr
+	}
 	if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})
+		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})); perr != nil {
+			return *perr
+		}
 	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
 }
@@ -435,10 +453,16 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 			LastCreatedAt: createdAt,
 			State:         result.State,
 		}
-		store.PutContentChain(chain)
-		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: result.State.ContentID})
+		if perr := persistError(cid, store.PutContentChain(chain)); perr != nil {
+			return *perr
+		}
+		if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: result.State.ContentID})); perr != nil {
+			return *perr
+		}
 		if logEnabled {
-			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})
+			if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})); perr != nil {
+				return *perr
+			}
 		}
 		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: result.State.ContentID}
 	}
@@ -481,10 +505,16 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 			LastCreatedAt: extResult.LastCreatedAt,
 			State:         extResult.State,
 		}
-		store.PutContentChain(updated)
-		store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})
+		if perr := persistError(cid, store.PutContentChain(updated)); perr != nil {
+			return *perr
+		}
+		if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})); perr != nil {
+			return *perr
+		}
 		if logEnabled {
-			store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
+			if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})); perr != nil {
+				return *perr
+			}
 		}
 		return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
 	}
@@ -525,10 +555,16 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 		LastCreatedAt: headLastCreatedAt,
 		State:         headState,
 	}
-	store.PutContentChain(updated)
-	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})
+	if perr := persistError(cid, store.PutContentChain(updated)); perr != nil {
+		return *perr
+	}
+	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "content", ChainID: chain.ContentID})); perr != nil {
+		return *perr
+	}
 	if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})
+		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})); perr != nil {
+			return *perr
+		}
 	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
 }
@@ -576,10 +612,16 @@ func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult
 			CreatedAt:         result.CreatedAt,
 		},
 	}
-	store.PutBeacon(beacon)
-	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "beacon", ChainID: did})
+	if perr := persistError(cid, store.PutBeacon(beacon)); perr != nil {
+		return *perr
+	}
+	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "beacon", ChainID: did})); perr != nil {
+		return *perr
+	}
 	if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "beacon", ChainID: did})
+		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "beacon", ChainID: did})); perr != nil {
+			return *perr
+		}
 	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "beacon", ChainID: did}
 }
@@ -646,10 +688,16 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool) IngestionR
 		}
 	}
 
-	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "countersign", ChainID: targetCID})
-	store.AddCountersignature(targetCID, jwsToken)
+	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "countersign", ChainID: targetCID})); perr != nil {
+		return *perr
+	}
+	if perr := persistError(cid, store.AddCountersignature(targetCID, jwsToken)); perr != nil {
+		return *perr
+	}
 	if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "countersign", ChainID: targetCID})
+		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "countersign", ChainID: targetCID})); perr != nil {
+			return *perr
+		}
 	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "countersign", ChainID: targetCID}
 }
@@ -680,9 +728,13 @@ func ingestArtifact(jwsToken string, store Store, logEnabled bool) IngestionResu
 		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
 	}
 
-	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "artifact", ChainID: did})
+	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "artifact", ChainID: did})); perr != nil {
+		return *perr
+	}
 	if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "artifact", ChainID: did})
+		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "artifact", ChainID: did})); perr != nil {
+			return *perr
+		}
 	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "artifact", ChainID: did}
 }
@@ -714,19 +766,27 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 	}
 
 	// store revocation
-	store.AddRevocation(StoredRevocation{
+	if perr := persistError(cid, store.AddRevocation(StoredRevocation{
 		CID:           cid,
 		IssuerDID:     did,
 		CredentialCID: result.CredentialCID,
 		JWSToken:      jwsToken,
-	})
+	})); perr != nil {
+		return *perr
+	}
 
 	// revoke any standing public credential
-	store.RemovePublicCredential(result.CredentialCID)
+	if perr := persistError(cid, store.RemovePublicCredential(result.CredentialCID)); perr != nil {
+		return *perr
+	}
 
-	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "revocation", ChainID: did})
+	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "revocation", ChainID: did})); perr != nil {
+		return *perr
+	}
 	if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "revocation", ChainID: did})
+		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "revocation", ChainID: did})); perr != nil {
+			return *perr
+		}
 	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "revocation", ChainID: did}
 }
@@ -800,17 +860,23 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 		att = append(att, AttenuationPair{Resource: resource, Action: action})
 	}
 
-	store.AddPublicCredential(StoredPublicCredential{
+	if perr := persistError(cid, store.AddPublicCredential(StoredPublicCredential{
 		CID:       cid,
 		IssuerDID: credential.Iss,
 		Att:       att,
 		Exp:       credential.Exp,
 		JWSToken:  jwsToken,
-	})
+	})); perr != nil {
+		return *perr
+	}
 
-	store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "credential", ChainID: kidDID})
+	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "credential", ChainID: kidDID})); perr != nil {
+		return *perr
+	}
 	if logEnabled {
-		store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "credential", ChainID: kidDID})
+		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "credential", ChainID: kidDID})); perr != nil {
+			return *perr
+		}
 	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "credential", ChainID: kidDID}
 }

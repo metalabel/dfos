@@ -24,10 +24,10 @@ type Relay struct {
 	profileArtifactJWS string
 	contentEnabled     bool
 	logEnabled         bool
-	logger     *slog.Logger
-	peers      []PeerConfig
-	peerClient PeerClient
-	ingestMu   sync.Mutex // serializes all chain-state mutations (ingest + sequencer)
+	logger             *slog.Logger
+	peers              []PeerConfig
+	peerClient         PeerClient
+	ingestMu           sync.Mutex // serializes all chain-state mutations (ingest + sequencer)
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT
@@ -69,9 +69,9 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		profileArtifactJWS: identity.ProfileArtifactJWS,
 		contentEnabled:     contentEnabled,
 		logEnabled:         logEnabled,
-		logger:     logger,
-		peers:      opts.Peers,
-		peerClient: opts.PeerClient,
+		logger:             logger,
+		peers:              opts.Peers,
+		peerClient:         opts.PeerClient,
 	}, nil
 }
 
@@ -85,6 +85,12 @@ func (r *Relay) ProfileArtifactJWS() string { return r.profileArtifactJWS }
 func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	start := time.Now()
 
+	// process immediately — mutex serializes all chain-state mutations.
+	// Raw-op writes go through writerDB(), which aliases the active batch
+	// transaction, so they must also be serialized under ingestMu — otherwise
+	// a concurrent sequencer batch races on s.tx.
+	r.ingestMu.Lock()
+
 	// store all raw ops first — they can never be lost
 	for _, token := range tokens {
 		cid := computeOpCID(token)
@@ -92,9 +98,6 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 			r.store.PutRawOp(cid, token)
 		}
 	}
-
-	// process immediately — mutex serializes all chain-state mutations
-	r.ingestMu.Lock()
 
 	// wrap in a transaction if the store supports it
 	batchable, hasBatch := r.store.(BatchableStore)
@@ -120,11 +123,19 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 		}
 		switch {
 		case res.Status == "new":
-			r.store.MarkOpsSequenced([]string{res.CID})
-			newOps = append(newOps, tokens[i])
-			newCount++
+			// Only gossip if the sequenced status was actually persisted —
+			// otherwise local state and what we'd advertise diverge. On failure
+			// the op stays pending and the sequencer retries it.
+			if err := r.store.MarkOpsSequenced([]string{res.CID}); err != nil {
+				r.logger.Error("ingest: failed to mark op sequenced — skipping gossip", "cid", res.CID, "error", err)
+			} else {
+				newOps = append(newOps, tokens[i])
+				newCount++
+			}
 		case res.Status == "duplicate":
-			r.store.MarkOpsSequenced([]string{res.CID})
+			if err := r.store.MarkOpsSequenced([]string{res.CID}); err != nil {
+				r.logger.Error("ingest: failed to mark duplicate op sequenced", "cid", res.CID, "error", err)
+			}
 			dupCount++
 		case res.Status == "rejected" && isPermanentRejection(res.Error):
 			r.store.MarkOpRejected(res.CID, res.Error)
@@ -176,7 +187,8 @@ func (r *Relay) SyncFromPeers() error {
 		if peer.Sync != nil && !*peer.Sync {
 			continue
 		}
-		cursor, _ := r.store.GetPeerCursor(peer.URL)
+		// readStore for the cursor read — never races on the ingestion tx.
+		cursor, _ := r.readStore.GetPeerCursor(peer.URL)
 		fetched := 0
 		caughtUp := true
 		for fetched < maxOpsPerSyncCycle {
@@ -188,8 +200,32 @@ func (r *Relay) SyncFromPeers() error {
 			if page == nil || len(page.Entries) == 0 {
 				break
 			}
+			// Raw-op + cursor writes go through the ingestion store's writerDB(),
+			// which aliases the active batch transaction. Hold ingestMu so these
+			// writes don't race on s.tx with a concurrent ingest/sequencer batch.
+			r.ingestMu.Lock()
 			for _, e := range page.Entries {
-				r.store.PutRawOp(e.CID, e.JWSToken)
+				// Compute the CID LOCALLY from the token — never trust the
+				// peer-claimed CID. A mismatched cid would key the raw_ops row
+				// by a bogus CID; the sequencer's MarkOpsSequenced(realCID)
+				// would then match no row and loop forever holding ingestMu.
+				// Undecodable tokens are skipped (computeOpCID returns "")
+				// rather than stored under an empty key.
+				cid := computeOpCID(e.JWSToken)
+				if cid == "" {
+					r.logger.Warn("peer sync: skipping undecodable op",
+						"peer", peer.URL,
+						"claimedCID", e.CID,
+					)
+					continue
+				}
+				if err := r.store.PutRawOp(cid, e.JWSToken); err != nil {
+					r.logger.Error("peer sync: failed to store raw op",
+						"peer", peer.URL,
+						"cid", cid,
+						"error", err,
+					)
+				}
 			}
 			fetched += len(page.Entries)
 			if page.Cursor != nil {
@@ -198,6 +234,7 @@ func (r *Relay) SyncFromPeers() error {
 				cursor = page.Entries[len(page.Entries)-1].CID
 			}
 			r.store.SetPeerCursor(peer.URL, cursor)
+			r.ingestMu.Unlock()
 			if page.Cursor == nil {
 				break
 			}
@@ -245,8 +282,10 @@ func (r *Relay) GetBeacon(did string) (*StoredBeacon, error) {
 }
 
 // Handler returns an http.Handler implementing the DFOS web relay HTTP API.
+// CORS is outermost so OPTIONS preflight is answered before routing and CORS
+// headers are present on every response, including errors.
 func (r *Relay) Handler() http.Handler {
-	return r.withRequestLogging(newRouter(r))
+	return withCORS(r.withRequestLogging(newRouter(r)))
 }
 
 func (r *Relay) withRequestLogging(next http.Handler) http.Handler {

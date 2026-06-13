@@ -34,6 +34,24 @@ func newRouter(r *Relay) http.Handler {
 	return mux
 }
 
+// withCORS wraps a handler with a permissive CORS policy so browser clients can
+// read the public proof plane cross-origin. The policy is kept byte-for-byte in
+// sync with the TS relay: Allow-Origin *, Allow-Methods GET, POST, PUT, OPTIONS,
+// Allow-Headers Content-Type, Authorization, and 204 on preflight.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		h := w.Header()
+		h.Set("Access-Control-Allow-Origin", "*")
+		h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if req.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -65,7 +83,7 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"did":      r.did,
 		"protocol": "dfos-web-relay",
-		"version": Version,
+		"version":  Version,
 		"capabilities": map[string]any{
 			"proof":     true,
 			"content":   r.contentEnabled,
@@ -466,8 +484,9 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 	contentID := req.PathValue("contentId")
 	operationCID := req.PathValue("operationCID")
 
-	// authenticate
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
+	// authenticate — use readStore so the auth read never races on the
+	// ingestion store's active write transaction (tx aliasing).
+	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore)
 	if auth == nil {
 		writeError(w, 401, "authentication required")
 		return
@@ -531,7 +550,16 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	r.store.PutBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: documentCID}, bytes)
+	// Hold ingestMu for the write: the ingestion store's writerDB() aliases the
+	// active batch transaction, which ingest/sequencer mutate under ingestMu.
+	// Writing here without the lock races on s.tx. Propagate the error instead
+	// of discarding it and returning an unconditional 200.
+	r.ingestMu.Lock()
+	putErr := r.store.PutBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: documentCID}, bytes)
+	r.ingestMu.Unlock()
+	if storeErr(w, putErr) {
+		return
+	}
 
 	writeJSON(w, 200, map[string]any{
 		"status":       "stored",
@@ -564,7 +592,7 @@ func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentI
 	if r.hasPublicStandingAuth(contentID, "read") {
 		return true
 	}
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.store)
+	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore)
 	if auth == nil {
 		writeError(w, 401, "authentication required")
 		return false
@@ -697,4 +725,3 @@ func parseLimit(req *http.Request, defaultLimit, maxLimit int) int {
 	}
 	return limit
 }
-

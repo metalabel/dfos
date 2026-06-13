@@ -71,6 +71,24 @@ jobs:
         working-directory: packages/dfos-cli
         run: go test ./...
 
+  dfos-web-relay-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-web-relay-go/go.sum
+
+      - name: Test dfos-web-relay-go (race)
+        working-directory: packages/dfos-web-relay-go
+        run: go test -race ./...
+
   conformance:
     runs-on: ubuntu-latest
     timeout-minutes: 10
