@@ -129,7 +129,7 @@ Deletion means the identity stops being an active participant. Historical operat
 
 Specifically:
 
-- **Identity operations after deletion**: Rejected. A deleted identity chain is sealed.
+- **Identity operations after deletion (linear extension)**: Rejected. A `delete` seals the head against forward (linear) extension — appending a new operation from the deleted head is refused. This is the _linear_ path only: a current controller MAY still fork from a pre-delete operation with a higher `createdAt` to supersede the delete (see _Fork Acceptance → Undeletion_ above), in which case the resolved head reports `deactivated: false`. The `delete` remains permanently in the log on a non-head branch.
 - **Content operations after deletion**: Rejected. Both paths are checked: (a) the signer's identity is deleted — no operations from that DID are accepted, and (b) the content chain's creator identity is deleted — the chain is sealed regardless of who signs.
 - **Beacons from deleted identities**: Rejected. A deleted identity MUST NOT publish new beacons.
 - **Artifacts from deleted identities**: Rejected. A deleted identity MUST NOT publish new artifacts.

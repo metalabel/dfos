@@ -220,11 +220,13 @@ Deactivating a `did:dfos` DID means appending a signed `delete` operation to the
 
 After deactivation:
 
-- The chain is in a **terminal state**. No further operations can be appended.
-- Resolution MUST return a DID Document with `deactivated: true` in the resolution metadata.
-- The DID Document SHOULD contain an empty set of verification methods, as the identity no longer has active keys.
+- The resolved head reports the identity as deactivated. Resolution MUST return a DID Document with `deactivated: true` in the resolution metadata, and the DID Document SHOULD contain an empty set of verification methods, as the identity no longer has active keys.
+- The `delete` operation is a **permanent, auditable fact** in the chain log — it is gossiped and retained like any other operation and never removed.
+- **Linear** extension is sealed: appending a new operation from the deleted head is rejected.
 
-Deactivation is **permanent and irreversible**. The DID cannot be reactivated.
+Deactivation is **reversible by the controller, and only by the controller**. Because the web relay accepts forks (see WEB-RELAY.md, _Fork Acceptance_), a current controller MAY supersede a delete by forking from a pre-delete operation with a higher `createdAt`; deterministic head selection then makes the non-deleted branch the head and resolution reports `deactivated: false`. The original `delete` remains permanently in the log on a non-head branch.
+
+This is a deliberate consequence of the fork-convergence model: a controller cannot permanently brick an identity it controls by a mistaken delete, while **no external party can ever reactivate (or extend) an identity** — every operation, `delete` and undelete alike, must be signed by a current controller key (Section 6.3). Treating deactivation as a true protocol-level seal against the holder's own forks — and the adversarial cases that motivates — is out of scope for this revision and deferred to future work.
 
 ---
 
