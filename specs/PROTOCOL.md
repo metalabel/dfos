@@ -50,9 +50,9 @@ Both chains are signed linked lists of state commitments. Identity chains embed 
 
 Three addressing modes, self-describing by format:
 
-| Thing                 | Form                     | Example                           |
-| --------------------- | ------------------------ | --------------------------------- |
-| Operation or document | CID (dag-cbor + SHA-256) | `bafyrei...` (base32lower)        |
+| Thing                 | Form                     | Example                                    |
+| --------------------- | ------------------------ | ------------------------------------------ |
+| Operation or document | CID (dag-cbor + SHA-256) | `bafyrei...` (base32lower)                 |
 | Content chain         | contentId (31-char hash) | `cv7n8vkvr64cctf3294h9k4eanhff8z`          |
 | Identity chain        | DID                      | `did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr` |
 
@@ -389,11 +389,11 @@ token = signingInput + "." + base64url(signature)
 
 ### kid Rules
 
-| Context                   | kid format  | Example                      |
-| ------------------------- | ----------- | ---------------------------- |
+| Context                   | kid format  | Example                               |
+| ------------------------- | ----------- | ------------------------------------- |
 | Identity create (genesis) | Bare key ID | `key_r9ev34fvc23z999veaaft83nn29zvhe` |
-| Identity update/delete    | DID URL     | See below                    |
-| All content ops           | DID URL     | See below                    |
+| Identity update/delete    | DID URL     | See below                             |
+| All content ops           | DID URL     | See below                             |
 
 DID URL examples:
 

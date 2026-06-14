@@ -299,7 +299,10 @@ console.log('\n8. JWS Verification: Content Create (key 2)');
 result = verifyJws(CONTENT_CREATE_JWS, pub2);
 check('Content create signature valid', true);
 check('Content create typ', result.header.typ === 'did:dfos:content-op');
-check('Content create kid', result.header.kid === `${EXPECTED_DID}#key_ez9a874tckr3dv933d3ckdn7z6zrct8`);
+check(
+  'Content create kid',
+  result.header.kid === `${EXPECTED_DID}#key_ez9a874tckr3dv933d3ckdn7z6zrct8`,
+);
 check(
   'Content create header cid',
   result.header.cid === 'bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y',
@@ -338,7 +341,10 @@ console.log('\n11. Beacon JWS Verification (key 1)');
 result = verifyJws(BEACON_JWS, pub1);
 check('Beacon signature valid', true);
 check('Beacon header typ', result.header.typ === 'did:dfos:beacon');
-check('Beacon header kid', result.header.kid === `${EXPECTED_DID}#key_r9ev34fvc23z999veaaft83nn29zvhe`);
+check(
+  'Beacon header kid',
+  result.header.kid === `${EXPECTED_DID}#key_r9ev34fvc23z999veaaft83nn29zvhe`,
+);
 check('Beacon header cid', result.header.cid === EXPECTED_BEACON_CID);
 check('Beacon payload type', result.payload.type === 'beacon');
 check(
@@ -351,7 +357,10 @@ console.log("\n12. Beacon Countersignature Verification (key 2 witnesses key 1's
 result = verifyJws(BEACON_WITNESS_JWS, pub2);
 check('Beacon countersig valid', true);
 check('Beacon countersig typ', result.header.typ === 'did:dfos:beacon');
-check('Beacon countersig kid', result.header.kid === `${EXPECTED_DID}#key_ez9a874tckr3dv933d3ckdn7z6zrct8`);
+check(
+  'Beacon countersig kid',
+  result.header.kid === `${EXPECTED_DID}#key_ez9a874tckr3dv933d3ckdn7z6zrct8`,
+);
 check('Beacon countersig same CID', result.header.cid === EXPECTED_BEACON_CID);
 check(
   'Beacon countersig same manifestContentId',
@@ -373,7 +382,10 @@ check(
 );
 check('Write credential payload type', result.payload.type === 'DFOSCredential');
 check('Write credential payload iss', result.payload.iss === EXPECTED_DID);
-check('Write credential payload aud', result.payload.aud === 'did:dfos:94ah7963n223k8c9884hh27ekh42nea');
+check(
+  'Write credential payload aud',
+  result.payload.aud === 'did:dfos:94ah7963n223k8c9884hh27ekh42nea',
+);
 check('Write credential att resource', (result.payload.att as any[])[0].resource === 'chain:*');
 check('Write credential att action', (result.payload.att as any[])[0].action === 'write');
 
