@@ -848,12 +848,16 @@ const ingestBeacon = async (
     return { cid, status: 'rejected', error: 'identity is deleted' };
   }
 
-  // replace-on-newer: only store if this beacon is more recent
+  // replace-on-newer, with a deterministic CID tiebreak so equal-createdAt
+  // beacons converge across relays regardless of arrival order: the
+  // lexicographically higher CID wins (mirrors chain head selection). Without it,
+  // two relays seeing the same equal-timestamp pair in different orders would each
+  // keep whichever arrived first — a divergence.
   const existing = await store.getBeacon(did);
   if (existing) {
     const existingTime = new Date(existing.state.createdAt).getTime();
     const newTime = new Date(verified.createdAt).getTime();
-    if (newTime <= existingTime) {
+    if (newTime < existingTime || (newTime === existingTime && cid <= existing.beaconCID)) {
       return { cid, status: 'duplicate', kind: 'beacon', chainId: did };
     }
   }

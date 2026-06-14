@@ -403,12 +403,11 @@ func (s *MemoryStore) MarkOpsSequenced(cids []string) error {
 }
 
 func (s *MemoryStore) MarkOpRejected(cid string, reason string) error {
+	// Permanently drop the raw op — see SQLiteStore.MarkOpRejected. Rejected ops
+	// have no recovery value and keeping them is an unbounded-growth vector.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if entry, ok := s.rawOps[cid]; ok {
-		entry.status = "rejected"
-		s.rawOps[cid] = entry
-	}
+	delete(s.rawOps, cid)
 	return nil
 }
 

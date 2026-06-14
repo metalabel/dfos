@@ -386,8 +386,12 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async markOpRejected(cid: string, _reason: string): Promise<void> {
-    const entry = this.rawOps.get(cid);
-    if (entry) entry.status = 'rejected';
+    // Permanently drop the raw op. A permanent rejection is deterministic and
+    // never retried, so the row has no recovery value; keeping it let an
+    // unauthenticated submitter grow the raw store without bound by mutating one
+    // byte per op to mint a fresh CID. Dependency-pending ops are not routed here
+    // (the sequencer gates on permanence), so retries are unaffected.
+    this.rawOps.delete(cid);
   }
 
   async countUnsequenced(): Promise<number> {

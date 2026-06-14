@@ -631,12 +631,17 @@ func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult
 		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
 	}
 
-	// replace-on-newer: only store if this beacon is more recent
+	// replace-on-newer, with a deterministic CID tiebreak so equal-createdAt
+	// beacons converge across relays regardless of arrival order: the
+	// lexicographically higher CID wins (mirrors chain head selection,
+	// PROTOCOL.md). Without the tiebreak, two relays seeing the same pair of
+	// equal-timestamp beacons in different orders would each keep whichever
+	// arrived first — a divergence.
 	existing, _ := store.GetBeacon(did)
 	if existing != nil {
 		existingTime, _ := time.Parse(time.RFC3339Nano, existing.Payload.CreatedAt)
 		newTime, _ := time.Parse(time.RFC3339Nano, result.CreatedAt)
-		if !newTime.After(existingTime) {
+		if newTime.Before(existingTime) || (newTime.Equal(existingTime) && cid <= existing.BeaconCID) {
 			return IngestionResult{CID: cid, Status: "duplicate", Kind: "beacon", ChainID: did}
 		}
 	}
