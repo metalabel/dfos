@@ -95,7 +95,7 @@ Entry keys: lowercase alphanumeric with dots, underscores, hyphens, forward slas
 
 Entry values are protocol object references, self-describing by format:
 
-- **contentId** (22-char bare hash) — references a living content chain
+- **contentId** (31-char bare hash) — references a living content chain
 - **DID** (`did:dfos:...`) — references an identity
 - **CID** (`bafyrei...`) — references a specific immutable document snapshot
 
@@ -105,8 +105,8 @@ Entry values are protocol object references, self-describing by format:
   "entries": {
     "profile": "67t27rzc83v7c22n9t6z7c",
     "posts": "a4b8c2d3e5f6g7h8i9j0k1",
-    "dark-publisher": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-    "pinned-charter": "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy"
+    "dark-publisher": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+    "pinned-charter": "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
   }
 }
 ```
@@ -196,7 +196,7 @@ A stream entry document. Each document in a content stream chain is a standalone
 {
   "$schema": "https://schemas.dfos.com/reference-content-stream/v1",
   "body": "This is a stream entry.",
-  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
+  "createdByDID": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
 }
 ```
 

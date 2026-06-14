@@ -40,7 +40,7 @@ func TestBeaconReplacement(t *testing.T) {
 	postOperations(t, base, []string{tok1}).Body.Close()
 
 	// second beacon with different manifest content ID
-	manifest2 := "extra22charcontent0000"
+	manifest2 := "extramanifesttwo2contentid9c4n7"
 	tok2, beaconCID2, err := dfos.SignBeacon(id.did, manifest2, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)

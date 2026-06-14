@@ -46,19 +46,19 @@ The method name is `dfos`. A DID using this method MUST begin with the prefix `d
 
 ## 3. Method-Specific Identifier
 
-The method-specific identifier is a 22-character string derived from the genesis operation CID of an identity chain.
+The method-specific identifier is a 31-character string derived from the genesis operation CID of an identity chain.
 
 ### 3.1 ABNF
 
 ```abnf
 dfos-did       = "did:dfos:" dfos-id
-dfos-id        = 22dfos-char
+dfos-id        = 31dfos-char
 dfos-char      = "2" / "3" / "4" / "6" / "7" / "8" / "9" /
                  "a" / "c" / "d" / "e" / "f" / "h" / "k" /
                  "n" / "r" / "t" / "v" / "z"
 ```
 
-The alphabet is 19 characters: `2346789acdefhknrtvz`. The identifier is exactly 22 characters, providing ~93.4 bits of entropy.
+The alphabet is 19 characters: `2346789acdefhknrtvz`. The identifier is exactly 31 characters, providing ~131.6 bits of entropy.
 
 ### 3.2 Derivation
 
@@ -70,18 +70,18 @@ The method-specific identifier is derived deterministically from the genesis ide
 3. Hash: SHA-256(CBOR bytes) → 32-byte digest
 4. Construct CIDv1: [0x01, 0x71, 0x12, 0x20, ...32 digest bytes] → CID bytes
 5. Hash the CID: SHA-256(CID bytes) → 32-byte digest
-6. Encode: for each of the first 22 bytes → alphabet[byte % 19]
+6. Encode: for each of the first 31 bytes → alphabet[byte % 19]
 ```
 
-The resulting 22-character string is the method-specific identifier. The full DID is `did:dfos:` prepended to this string.
+The resulting 31-character string is the method-specific identifier. The full DID is `did:dfos:` prepended to this string.
 
 ### 3.3 Example
 
 ```
-Genesis CID bytes (hex): 01711220206a5e6140a5114f1e49f3ca4b339fb2cb8e70bbb34968b23156fd0e3237b486
-SHA-256 of CID bytes:    4360cfbcbbb3f1614c8e02dbfe8d55935e1195cd2129820ab8aef94bde12ea8a
-First 22 bytes encoded:  e3vvtck42d4eacdnzvtrn6
-DID:                     did:dfos:e3vvtck42d4eacdnzvtrn6
+Genesis CID bytes (hex): 017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69
+SHA-256 of CID bytes:    c66d21f27dceea0b05534c225ad7018ac7d4dfded0609dcd18022a3739a5488c
+First 31 bytes encoded:  cnnnft9f8a2rn938d6nkz38r847v2kr
+DID:                     did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
 ```
 
 See the [DFOS Protocol Specification](https://protocol.dfos.com/spec) for the complete worked example with key material, CBOR encoding, and CID construction.
@@ -97,19 +97,25 @@ A resolved `did:dfos` DID Document is constructed from the current state of the 
 ```json
 {
   "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
-  "id": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "controller": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "id": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+  "controller": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
   "verificationMethod": [
     {
-      "id": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8",
+      "id": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
       "type": "Multikey",
-      "controller": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+      "controller": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
       "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
     }
   ],
-  "authentication": ["did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"],
-  "assertionMethod": ["did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"],
-  "capabilityInvocation": ["did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8"]
+  "authentication": [
+    "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe"
+  ],
+  "assertionMethod": [
+    "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe"
+  ],
+  "capabilityInvocation": [
+    "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe"
+  ]
 }
 ```
 
@@ -237,6 +243,13 @@ This is a deliberate consequence of the fork-convergence model: a controller can
 ### 6.1 Self-Certifying Identifiers
 
 `did:dfos` identifiers are derived from a cryptographic hash of the genesis operation content. This binding is verified during resolution (Section 5.2.1, step 2d). An attacker cannot present a forged chain for a given DID — the genesis content would hash to a different identifier.
+
+The identifier is 31 characters over a 19-symbol alphabet, so the encoded identifier space is `19^31 ≈ 2^131.6`. The relevant attack costs are:
+
+- **Birthday collision** (two genesis chains that derive the same identifier): `≈ 2^65.8` work.
+- **Targeted second-preimage** (forge a chain that derives a _specific_ victim identifier): `≈ 2^131` work, bounded by the identifier space rather than the full 256-bit SHA-256 output.
+
+Both costs sit comfortably above the 128-bit security floor, so the self-certification binding is not the weakest link relative to the Ed25519 signatures (≈128-bit) or SHA-256 (256-bit) primitives it composes.
 
 ### 6.2 Key Compromise
 

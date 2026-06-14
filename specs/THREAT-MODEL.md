@@ -116,27 +116,28 @@ key to keep safe. Total loss of every key in a role set is unrecoverable.
 
 ## Self-Certification Binding Strength
 
-`did:dfos` identifiers and content IDs are 22-character strings over a 19-symbol
+`did:dfos` identifiers and content IDs are 31-character strings over a 19-symbol
 alphabet (`2346789acdefhknrtvz`), derived as `customAlpha(SHA-256(genesis CID bytes))`
 (PROTOCOL.md "ID Alphabet" / "Addressing", `specs/PROTOCOL.md:186`, `specs/PROTOCOL.md:61`;
 DID-METHOD.md §3.1–§3.2, `specs/DID-METHOD.md:51`).
 
 ```
-Identifier space:        19^22 ≈ 2^93.4 bits
-Birthday collision:      ≈ 2^46.7
-Targeted second-preimage ≈ 2^93
+Identifier space:        19^31 ≈ 2^131.6 bits
+Birthday collision:      ≈ 2^65.8
+Targeted second-preimage ≈ 2^131.6
 ```
 
 This is the binding strength **of the identifier**, which is below SHA-256's full
 256-bit strength: the identifier truncates and re-encodes the hash. The full 32-byte
 genesis CID and the operation signatures are unaffected — this parameter bounds only
-how hard it is to find a _second_ chain that encodes to the same 22-character DID/content
+how hard it is to find a _second_ chain that encodes to the same 31-character DID/content
 ID, or two chains that collide.
 
-This parameter (alphabet size × length) is **under active review for v1** — it is an open
-security parameter, not a settled decision. See PROTOCOL.md "ID Alphabet"
-(`specs/PROTOCOL.md:186`) and DID-METHOD.md §3.1 (`specs/DID-METHOD.md:61`). This document
-does not assert a final value; it records the current parameter and flags it as open.
+This parameter (alphabet size × length) was **widened to 31 characters for v1** — the
+targeted second-preimage cost (≈ 2^131.6) now sits above the 128-bit floor, and the
+birthday-collision cost rises to ≈ 2^65.8. This is a settled decision for v1, not an open
+parameter. See PROTOCOL.md "ID Alphabet" (`specs/PROTOCOL.md:186`) and DID-METHOD.md §3.1
+(`specs/DID-METHOD.md:61`).
 
 ---
 

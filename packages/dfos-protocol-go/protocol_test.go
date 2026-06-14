@@ -20,12 +20,12 @@ import (
 
 const (
 	expectedMultikey1 = "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
-	expectedGenCID    = "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy"
-	expectedDID       = "did:dfos:e3vvtck42d4eacdnzvtrn6"
-	expectedCBORHex   = "a66474797065666372656174656776657273696f6e0168617574684b65797381a3626964781a6b65795f72396576333466766332337a393939766561616674386474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a3626964781a6b65795f72396576333466766332337a393939766561616674386474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a3626964781a6b65795f72396576333466766332337a393939766561616674386474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62"
-	expectedCIDHex    = "01711220206a5e6140a5114f1e49f3ca4b339fb2cb8e70bbb34968b23156fd0e3237b486"
+	expectedGenCID    = "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
+	expectedDID       = "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
+	expectedCBORHex   = "a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62"
+	expectedCIDHex    = "017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69"
 
-	genesisJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.EDryDK1uvtix-17cHun9t6MacFIx2rMmMF1QLzfD5TFlSsOvMcue97pCgGn3CXeLVFtVxgpCoh0kGSXioKKzAw"
+	genesisJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg"
 
 	// Number encoding test vectors
 	numberTestCID      = "bafyreihp6omsp6icc6ee63ox2ovsaxm6s7ikd2a7k5eh2qz2qd5soh5bsa"
@@ -143,7 +143,7 @@ func TestMultikeyRoundTrip(t *testing.T) {
 
 func TestDagCborCIDReference(t *testing.T) {
 	key := map[string]any{
-		"id":                 "key_r9ev34fvc23z999veaaft8",
+		"id":                 "key_r9ev34fvc23z999veaaft83nn29zvhe",
 		"type":               "Multikey",
 		"publicKeyMultibase": expectedMultikey1,
 	}
@@ -199,8 +199,8 @@ func TestContentIDDerivation(t *testing.T) {
 	cidBytes, _ := hex.DecodeString(expectedCIDHex)
 	contentID := DeriveContentID(cidBytes)
 
-	if len(contentID) != 22 {
-		t.Fatalf("content ID length: got %d, want 22", len(contentID))
+	if len(contentID) != 31 {
+		t.Fatalf("content ID length: got %d, want 31", len(contentID))
 	}
 
 	for _, c := range contentID {
@@ -217,8 +217,8 @@ func TestContentIDDerivation(t *testing.T) {
 func TestGenerateKeyID(t *testing.T) {
 	kid := GenerateKeyID()
 
-	if len(kid) != 26 {
-		t.Fatalf("key ID length: got %d, want 26", len(kid))
+	if len(kid) != 35 {
+		t.Fatalf("key ID length: got %d, want 35", len(kid))
 	}
 	if kid[:4] != "key_" {
 		t.Fatalf("key ID prefix: got %q, want \"key_\"", kid[:4])
@@ -300,7 +300,7 @@ func TestJWSVerifyReference(t *testing.T) {
 	if h.Typ != "did:dfos:identity-op" {
 		t.Fatalf("wrong typ: %s", h.Typ)
 	}
-	if h.Kid != "key_r9ev34fvc23z999veaaft8" {
+	if h.Kid != "key_r9ev34fvc23z999veaaft83nn29zvhe" {
 		t.Fatalf("wrong kid: %s", h.Kid)
 	}
 	if h.CID != expectedGenCID {
@@ -342,7 +342,7 @@ func TestJWSDecodeUnsafe(t *testing.T) {
 	if h.Typ != "did:dfos:identity-op" {
 		t.Fatalf("wrong typ: %s", h.Typ)
 	}
-	if h.Kid != "key_r9ev34fvc23z999veaaft8" {
+	if h.Kid != "key_r9ev34fvc23z999veaaft83nn29zvhe" {
 		t.Fatalf("wrong kid: %s", h.Kid)
 	}
 	if h.CID != expectedGenCID {
@@ -430,7 +430,7 @@ func TestCreateCredential(t *testing.T) {
 	priv1, pub1 := refKey1()
 	iss := expectedDID
 	sub := expectedDID
-	kid := "key_r9ev34fvc23z999veaaft8"
+	kid := "key_r9ev34fvc23z999veaaft83nn29zvhe"
 	ttl := 24 * time.Hour
 	contentID := "abc123"
 
@@ -490,7 +490,7 @@ func TestCreateCredential(t *testing.T) {
 
 func TestSignIdentityCreate(t *testing.T) {
 	priv1, pub1 := refKey1()
-	kid := "key_r9ev34fvc23z999veaaft8"
+	kid := "key_r9ev34fvc23z999veaaft83nn29zvhe"
 
 	mk := NewMultikeyPublicKey(kid, pub1)
 
@@ -534,8 +534,8 @@ func TestSignIdentityCreate(t *testing.T) {
 		t.Fatalf("DID prefix: %s", did)
 	}
 	suffix := strings.TrimPrefix(did, "did:dfos:")
-	if len(suffix) != 22 {
-		t.Fatalf("DID suffix length: got %d, want 22", len(suffix))
+	if len(suffix) != 31 {
+		t.Fatalf("DID suffix length: got %d, want 31", len(suffix))
 	}
 
 	// CID should start with "b" (base32lower multibase)
@@ -571,7 +571,7 @@ func TestSignIdentityCreate(t *testing.T) {
 func TestSignContentCreate(t *testing.T) {
 	priv2, pub2 := refKey2()
 	did := expectedDID
-	kid := "key_ez9a874tckr3dv933d3ckd"
+	kid := "key_ez9a874tckr3dv933d3ckdn7z6zrct8"
 	docCID := "bafyreihzwuoupfg3dxip6xmgzmxsywyi2jeoxxzbgx3zxm2in7knoi3g4"
 
 	token, contentID, cidStr, err := SignContentCreate(did, docCID, kid, "", priv2)
@@ -606,8 +606,8 @@ func TestSignContentCreate(t *testing.T) {
 	}
 
 	// Content ID format
-	if len(contentID) != 22 {
-		t.Fatalf("content ID length: got %d, want 22", len(contentID))
+	if len(contentID) != 31 {
+		t.Fatalf("content ID length: got %d, want 31", len(contentID))
 	}
 	for _, c := range contentID {
 		if !strings.ContainsRune(idAlphabet, c) {
@@ -729,7 +729,7 @@ func TestNormalizeJSONNumbers(t *testing.T) {
 func TestSignIdentityUpdate(t *testing.T) {
 	priv1, pub1 := refKey1()
 	_, pub2 := refKey2()
-	kid1 := "key_r9ev34fvc23z999veaaft8"
+	kid1 := "key_r9ev34fvc23z999veaaft83nn29zvhe"
 
 	mk1 := NewMultikeyPublicKey(kid1, pub1)
 
@@ -794,7 +794,7 @@ func TestSignIdentityUpdate(t *testing.T) {
 
 func TestSignIdentityDelete(t *testing.T) {
 	priv1, pub1 := refKey1()
-	kid := "key_r9ev34fvc23z999veaaft8"
+	kid := "key_r9ev34fvc23z999veaaft83nn29zvhe"
 	mk := NewMultikeyPublicKey(kid, pub1)
 
 	_, did, genCID, err := SignIdentityCreate(
@@ -1035,7 +1035,7 @@ func TestSignCountersign(t *testing.T) {
 func TestSignArtifact(t *testing.T) {
 	priv1, pub1 := refKey1()
 	did := expectedDID
-	kid := did + "#key_r9ev34fvc23z999veaaft8"
+	kid := did + "#key_r9ev34fvc23z999veaaft83nn29zvhe"
 
 	content := map[string]any{
 		"$schema":  "test/v1",
@@ -1147,8 +1147,8 @@ func TestDeriveID(t *testing.T) {
 	if id1 == id3 {
 		t.Fatal("different seeds should produce different IDs")
 	}
-	if len(id1) != 22 {
-		t.Fatalf("ID length: got %d, want 22", len(id1))
+	if len(id1) != 31 {
+		t.Fatalf("ID length: got %d, want 31", len(id1))
 	}
 }
 

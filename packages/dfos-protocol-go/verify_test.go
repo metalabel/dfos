@@ -995,7 +995,7 @@ func TestVerifyAuthToken_WrongKey(t *testing.T) {
 // Verify that a chain built with the reference key verifies correctly
 func TestVerifyIdentityChain_FullRoundTrip(t *testing.T) {
 	priv, pub := refKey1()
-	keyID := "key_r9ev34fvc23z999veaaft8"
+	keyID := "key_r9ev34fvc23z999veaaft83nn29zvhe"
 	mk := NewMultikeyPublicKey(keyID, pub)
 
 	// sign genesis with controlled timestamp

@@ -451,15 +451,15 @@ describe('protocol reference artifacts', () => {
     // generator both changed) still trips the guard.
     expect(a.multikey1).toBe('z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb');
     expect(a.multikey2).toBe('z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK');
-    expect(a.keyId1).toBe('key_r9ev34fvc23z999veaaft8');
-    expect(a.keyId2).toBe('key_ez9a874tckr3dv933d3ckd');
+    expect(a.keyId1).toBe('key_r9ev34fvc23z999veaaft83nn29zvhe');
+    expect(a.keyId2).toBe('key_ez9a874tckr3dv933d3ckdn7z6zrct8');
     expect(a.privateKey1Hex).toBe(
       '132d4bebdb6e62359afb930fe15d756a92ad96e6b0d47619988f5a1a55272aac',
     );
     expect(a.privateKey2Hex).toBe(
       '384f5626906db84f6a773ec46475ff2d4458e92dd4dd13fe03dbb7510f4ca2a8',
     );
-    expect(a.did).toBe('did:dfos:e3vvtck42d4eacdnzvtrn6');
+    expect(a.did).toBe('did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr');
 
     // --- identity chain: the inlined JWS tokens + their CIDs + signatures ---
     // The genesis JWS is the exact token #57 corrupted (one base64url char). This
@@ -474,24 +474,13 @@ describe('protocol reference artifacts', () => {
     expectInSpec('rotation CID', a.updateCID);
     expectInSpec('rotation signature (hex)', a.updateSignatureHex);
 
-    expect(a.genesisCID).toBe('bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy');
-    expect(a.updateCID).toBe('bafyreicym4cyiednld73smbx32szaei7xdulqn4g3ste5e2w2ulajr3oqm');
-    // The 441-byte CBOR blob is line-wrapped in PROTOCOL.md (so not substring-
+    expect(a.genesisCID).toBe('bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne');
+    expect(a.updateCID).toBe('bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei');
+    // The 468-byte CBOR blob is line-wrapped in PROTOCOL.md (so not substring-
     // checkable as one contiguous string); pin it as a literal instead so a
     // generator-side change to canonical encoding still trips the guard.
     expect(a.genesisCborHex).toBe(
-      'a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478' +
-        '1a6b65795f72396576333466766332337a393939766561616674386474797065684d756c74' +
-        '696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a' +
-        '5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a6269' +
-        '6372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a61' +
-        '73736572744b65797381a3626964781a6b65795f72396576333466766332337a3939397665' +
-        '61616674386474797065684d756c74696b6579727075626c69634b65794d756c7469626173' +
-        '6578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b' +
-        '6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a3626964781a6b' +
-        '65795f72396576333466766332337a393939766561616674386474797065684d756c74696b' +
-        '6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356' +
-        '345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62',
+      'a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62',
     );
 
     // --- content chain: document CIDs, content-op JWS + CIDs, content id ---
@@ -503,11 +492,11 @@ describe('protocol reference artifacts', () => {
     expectInSpec('content update CID', a.contentUpdateCID);
     expectInSpec('content id', a.contentId);
 
-    expect(a.documentCID).toBe('bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4');
-    expect(a.documentCID2).toBe('bafyreidh7e36cvwy3uw5ypitcqk7uoktbkkkj7e6hxhky4o75rxn7kxilu');
-    expect(a.contentCreateCID).toBe('bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu');
-    expect(a.contentUpdateCID).toBe('bafyreih6e5cbjitpozhzhgmfktmiohmxyn3ucwhqd3mjixizvwmlhv7hm4');
-    expect(a.contentId).toBe('a82z92a3hndk6c97thcrn8');
+    expect(a.documentCID).toBe('bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy');
+    expect(a.documentCID2).toBe('bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy');
+    expect(a.contentCreateCID).toBe('bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y');
+    expect(a.contentUpdateCID).toBe('bafyreibpx4cgb4j6n3mz764pylrdg6q7a46njnhx6p4cq2rlgeue3s3evq');
+    expect(a.contentId).toBe('cv7n8vkvr64cctf3294h9k4eanhff8z');
 
     // --- cross-check the examples/ fixtures (a second golden source) ---
     // identity-genesis.json: chain[0] is the genesis JWS, expected pins DID/keys.

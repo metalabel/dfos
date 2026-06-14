@@ -15,7 +15,10 @@ export type PrefixedID<T extends string> = `${T}_${string}`;
 // Alphabet sorted in lexicographic order (digits before letters)
 // Removed visually ambiguous: 0, 1, 5, g, o, b, s, x
 const alphabet = '2346789acdefhknrtvz';
-const idLength = 22;
+// 31 chars over the 19-symbol alphabet ≈ 2^131.6 — targeted-second-preimage
+// strength comfortably above the 128-bit floor for this registry-free,
+// self-certifying, no-rotation identifier. (Was 22 ≈ 2^93.4 pre-v1.)
+const idLength = 31;
 
 /**
  * Generate cryptographically secure random bytes
