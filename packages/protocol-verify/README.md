@@ -4,9 +4,9 @@ Cross-language verification of the [DFOS protocol](https://protocol.dfos.com/spe
 
 Each suite is **standalone**: it uses only its language's native Ed25519, dag-cbor, and SHA-256 implementations. None import from `@metalabel/dfos-protocol`, `dfos-protocol-go`, or any other DFOS library. The claim is about the _protocol_, not any particular library.
 
-## Reference Fixtures
+## Reference Constants
 
-All suites read deterministic test vectors from [`../dfos-protocol/examples/`](../dfos-protocol/examples/). These fixtures are generated from fixed seeds (`dfos-protocol-reference-key-1`, `dfos-protocol-reference-key-2`) so every value is reproducible.
+Each suite **hardcodes the reference constants inline** — there is no shared fixture file. The JWS tokens, expected CIDs, DIDs, multikeys, and other vectors are pasted directly into each language's source, and they are the same deterministic values published in the [protocol spec](https://protocol.dfos.com/spec). Those values are generated from fixed seeds (`dfos-protocol-reference-key-1`, `dfos-protocol-reference-key-2`) so every one is reproducible. Because nothing is read from an external fixture, a third party can verify each suite standalone — no DFOS library and no shared fixture file required.
 
 ## Suites
 
