@@ -591,17 +591,25 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // sync-in: pull from peer logs
   // -------------------------------------------------------------------------
 
+  // maxOpsPerSyncCycle caps how many ops are fetched from a single peer in one
+  // sync cycle (parity with the Go relay). A peer with a large backlog would
+  // otherwise block the relay for the whole catch-up inside one cycle; the cursor
+  // is persisted each page, so catch-up resumes from where it left off next cycle.
+  const maxOpsPerSyncCycle = 5000;
+
   const syncFromPeers = async (): Promise<void> => {
     if (!peerClient) return;
     for (const peer of syncPeers) {
       let cursor = await store.getPeerCursor(peer.url);
-      while (true) {
+      let fetched = 0;
+      while (fetched < maxOpsPerSyncCycle) {
         const page = await peerClient.getOperationLog(peer.url, {
           ...(cursor ? { after: cursor } : {}),
           limit: 1000,
         });
         if (!page || page.entries.length === 0) break;
         await ingestWithGossip(page.entries.map((e) => e.jwsToken));
+        fetched += page.entries.length;
         cursor = page.cursor ?? page.entries[page.entries.length - 1]!.cid;
         await store.setPeerCursor(peer.url, cursor);
         if (!page.cursor) break;

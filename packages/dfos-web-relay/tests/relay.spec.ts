@@ -638,6 +638,56 @@ describe('web relay', () => {
       expect(beaconBody.manifestContentId).toBe('test_manifest_content_id_b');
     });
 
+    // Equal-createdAt tiebreak: two beacons for one DID with identical createdAt
+    // but distinct CIDs must converge to the lexicographically-higher CID
+    // regardless of arrival order. Without the tiebreak, low-then-high replaces
+    // while high-then-low does not — a cross-relay divergence.
+    it('beacon equal-timestamp tiebreak: higher CID wins regardless of arrival order', async () => {
+      const sameTs = ts(2);
+
+      const buildPair = async (identity: Awaited<ReturnType<typeof createIdentity>>) => {
+        const kid = `${identity.did}#${identity.controller.keyId}`;
+        const mk = async (manifestContentId: string) => {
+          const payload: BeaconPayload = {
+            version: 1,
+            type: 'beacon',
+            did: identity.did,
+            manifestContentId,
+            createdAt: sameTs,
+          };
+          const { jwsToken, beaconCID } = await signBeacon({
+            payload,
+            signer: identity.controller.signer,
+            kid,
+          });
+          return { jwsToken, beaconCID, manifestContentId };
+        };
+        const a = await mk('manifest_tiebreak_a');
+        const b = await mk('manifest_tiebreak_b');
+        return a.beaconCID < b.beaconCID ? { lower: a, higher: b } : { lower: b, higher: a };
+      };
+
+      // order 1: lower then higher → higher REPLACES
+      const id1 = await createIdentity();
+      await postOps([id1.jwsToken]);
+      const p1 = await buildPair(id1);
+      expect((await json(await postOps([p1.lower.jwsToken]))).results[0].status).toBe('new');
+      expect((await json(await postOps([p1.higher.jwsToken]))).results[0].status).toBe('new');
+      expect((await json(await req(`/beacons/${id1.did}`))).manifestContentId).toBe(
+        p1.higher.manifestContentId,
+      );
+
+      // order 2: higher then lower → lower is DUPLICATE, higher stays
+      const id2 = await createIdentity();
+      await postOps([id2.jwsToken]);
+      const p2 = await buildPair(id2);
+      expect((await json(await postOps([p2.higher.jwsToken]))).results[0].status).toBe('new');
+      expect((await json(await postOps([p2.lower.jwsToken]))).results[0].status).toBe('duplicate');
+      expect((await json(await req(`/beacons/${id2.did}`))).manifestContentId).toBe(
+        p2.higher.manifestContentId,
+      );
+    });
+
     // Beacon resolution is CURRENT-STATE (WP-9): a beacon signed by a
     // rotated-out controller key is rejected; the current key is accepted and
     // becomes the head. Beacons replace-on-newer, so current-state is safe —

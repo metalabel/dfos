@@ -789,12 +789,17 @@ func (s *SQLiteStore) MarkOpsSequenced(cids []string) error {
 	return nil
 }
 
-// MarkOpRejected marks a CID as permanently rejected with a reason.
+// MarkOpRejected permanently drops a raw op that failed verification.
+//
+// A permanent rejection is deterministic — the op re-verifies the same way — so
+// the row has no recovery value. Keeping it let an unauthenticated submitter grow
+// raw_ops without bound by mutating one byte per op to mint a fresh CID (the
+// store is content-addressed, so distinct bytes are distinct rows). Deleting caps
+// that durable-growth vector while leaving accepted/sequenced and dependency-
+// pending ops (store-first crash safety) untouched — callers route only permanent
+// rejections here (isPermanentRejection), never dependency-pending ops.
 func (s *SQLiteStore) MarkOpRejected(cid string, reason string) error {
-	_, err := s.writerDB().Exec(
-		"UPDATE raw_ops SET status = 'rejected', error = ? WHERE cid = ?",
-		reason, cid,
-	)
+	_, err := s.writerDB().Exec("DELETE FROM raw_ops WHERE cid = ?", cid)
 	return err
 }
 
