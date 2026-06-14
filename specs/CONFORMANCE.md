@@ -1,6 +1,6 @@
 # DFOS Conformance
 
-What it means to be a *conformant* DFOS implementation, by tier, and how to prove it
+What it means to be a _conformant_ DFOS implementation, by tier, and how to prove it
 against the existing proving corpora. This document defines no new protocol rules — it
 points at the normative MUST sets already specified in
 [PROTOCOL.md](https://protocol.dfos.com/spec),
@@ -90,12 +90,12 @@ all content-plane routes return 501 (WEB-RELAY.md "Well-Known Endpoint",
 Each tier maps to an existing test suite. The mapping is deliberately honest about what
 each suite actually exercises.
 
-| Tier | Corpus | What it proves |
-| --- | --- | --- |
-| Verifier / Signer | `packages/protocol-verify` (5 languages) | Single-JWS primitives: signature, field equality, derivation |
-| Verifier / Signer | `packages/dfos-protocol/tests` (TS) | Full chain/authz semantics |
-| Verifier / Signer | PROTOCOL.md "Deterministic Reference Artifacts" | Reproducible reference vectors from fixed seeds |
-| Relay | `packages/relay-conformance` (Go) | HTTP integration against any live relay |
+| Tier              | Corpus                                          | What it proves                                               |
+| ----------------- | ----------------------------------------------- | ------------------------------------------------------------ |
+| Verifier / Signer | `packages/protocol-verify` (5 languages)        | Single-JWS primitives: signature, field equality, derivation |
+| Verifier / Signer | `packages/dfos-protocol/tests` (TS)             | Full chain/authz semantics                                   |
+| Verifier / Signer | PROTOCOL.md "Deterministic Reference Artifacts" | Reproducible reference vectors from fixed seeds              |
+| Relay             | `packages/relay-conformance` (Go)               | HTTP integration against any live relay                      |
 
 ### Verifier / signer corpora
 

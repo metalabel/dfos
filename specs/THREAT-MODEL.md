@@ -22,7 +22,7 @@ The crypto core is the trust boundary (PROTOCOL.md "Protocol Overview", `specs/P
 Identity chains, content chains, beacons, artifacts, countersignatures, credentials,
 and revocations are all signed, content-addressed objects that anyone can verify with
 a public key and any standard EdDSA + dag-cbor library. There is no privileged registry,
-blockchain, or consensus layer; the identifier *is* the trust anchor (DID-METHOD.md
+blockchain, or consensus layer; the identifier _is_ the trust anchor (DID-METHOD.md
 "Abstract", `specs/DID-METHOD.md:13`). Verification is against the chain, not the source
 — a `did:dfos` is verified by re-deriving it from the genesis CID (DID-METHOD.md §5.2.3,
 `specs/DID-METHOD.md:187`). All proof-plane relay routes are unauthenticated; the
@@ -33,11 +33,11 @@ to be trusted to verify a proof.
 
 ### Content plane — honest-host, undisclosed-by-default
 
-The protocol commits to content *hashes*, not plaintext — it does not encrypt
+The protocol commits to content _hashes_, not plaintext — it does not encrypt
 (README.md, `README.md:5`; PROTOCOL.md "Philosophy", `specs/PROTOCOL.md:13`).
 Confidentiality of the underlying documents is enforced at the application layer by
 whoever serves them. **The relay operator can read what it stores.** This is
-undisclosed-by-default, *not* end-to-end encrypted. The content plane never gossips;
+undisclosed-by-default, _not_ end-to-end encrypted. The content plane never gossips;
 blobs are stored by the relay that received them and served only to authorized readers
 (WEB-RELAY.md "Content Plane", `specs/WEB-RELAY.md:30`). Content-plane access is
 gated by an auth token plus (for non-creators) a read credential (WEB-RELAY.md
@@ -50,13 +50,13 @@ operator that holds it.
 
 ## Adversary Classes
 
-| Adversary | Can | Cannot | Pointer |
-| --- | --- | --- | --- |
-| Malicious/Byzantine relay | Withhold, reorder, equivocate, censor, serve stale state, read stored content-plane blobs | Forge a chain or operation | DID-METHOD.md §6.4 `specs/DID-METHOD.md:257` |
-| Malicious peer | Push invalid/spam operations to peers | Have invalid operations accepted (each peer re-verifies, no trust) | WEB-RELAY.md "Peering" `specs/WEB-RELAY.md:572` |
-| Unauthenticated submitter | POST arbitrary JWS to `/operations`; impose CPU + storage cost | Have malformed/unsigned ops accepted | WEB-RELAY.md "Operation Ingestion" `specs/WEB-RELAY.md:46` |
-| Compromised custody/KMS key | Full, indistinguishable impersonation of the user | Be detected on-chain (signature is valid Ed25519) | SIWD.md "Managed Signing Path" `specs/SIWD.md:106` |
-| Lost key | — | — (1-of-N availability vs. total loss) | DID-METHOD.md §6.2 `specs/DID-METHOD.md:242` |
+| Adversary                   | Can                                                                                       | Cannot                                                             | Pointer                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| Malicious/Byzantine relay   | Withhold, reorder, equivocate, censor, serve stale state, read stored content-plane blobs | Forge a chain or operation                                         | DID-METHOD.md §6.4 `specs/DID-METHOD.md:257`               |
+| Malicious peer              | Push invalid/spam operations to peers                                                     | Have invalid operations accepted (each peer re-verifies, no trust) | WEB-RELAY.md "Peering" `specs/WEB-RELAY.md:572`            |
+| Unauthenticated submitter   | POST arbitrary JWS to `/operations`; impose CPU + storage cost                            | Have malformed/unsigned ops accepted                               | WEB-RELAY.md "Operation Ingestion" `specs/WEB-RELAY.md:46` |
+| Compromised custody/KMS key | Full, indistinguishable impersonation of the user                                         | Be detected on-chain (signature is valid Ed25519)                  | SIWD.md "Managed Signing Path" `specs/SIWD.md:106`         |
+| Lost key                    | —                                                                                         | — (1-of-N availability vs. total loss)                             | DID-METHOD.md §6.2 `specs/DID-METHOD.md:242`               |
 
 ### Malicious / Byzantine relay
 
@@ -108,7 +108,7 @@ There is no key pre-rotation and no recovery mechanism (DID-METHOD.md §6.2,
 holds up to 16 keys, and any one current key can authorize an operation, so an identity
 can spread controller/auth keys across devices and rotate out a lost one from a survivor
 (DID-METHOD.md §6.2, `specs/DID-METHOD.md:245`). This is availability, not recovery — it
-requires registering additional keys *in advance* while a controller key is still held.
+requires registering additional keys _in advance_ while a controller key is still held.
 It is symmetric with the compromise surface: every additional device key is also another
 key to keep safe. Total loss of every key in a role set is unrecoverable.
 
@@ -130,7 +130,7 @@ Targeted second-preimage ≈ 2^93
 This is the binding strength **of the identifier**, which is below SHA-256's full
 256-bit strength: the identifier truncates and re-encodes the hash. The full 32-byte
 genesis CID and the operation signatures are unaffected — this parameter bounds only
-how hard it is to find a *second* chain that encodes to the same 22-character DID/content
+how hard it is to find a _second_ chain that encodes to the same 22-character DID/content
 ID, or two chains that collide.
 
 This parameter (alphabet size × length) is **under active review for v1** — it is an open
@@ -175,7 +175,7 @@ These are known and deliberately accepted for v1.
   pushed to the deployment layer (WEB-RELAY.md "What's Deferred", `specs/WEB-RELAY.md:698`).
   Blob size limits are likewise unenforced by the protocol (`specs/WEB-RELAY.md:699`).
 - **Public (`aud: "*"`) write credential is a world-writable bearer.** Because `aud: "*"`
-  matches any signer, a public credential granting `write` authorizes the *bearer*, not a
+  matches any signer, a public credential granting `write` authorizes the _bearer_, not a
   named audience — anyone can attach it inline and write to the covered chains. Public
   credentials SHOULD be read-scoped (CREDENTIALS.md "Security: `aud: "*"` + write",
   `specs/CREDENTIALS.md:262`).
@@ -197,8 +197,8 @@ These are known and deliberately accepted for v1.
 Mirroring [SECURITY.md](../SECURITY.md) "Scope": out of scope are vulnerabilities in
 third-party dependencies (report upstream), and any issue that requires a compromised
 host or a user's own private keys (`SECURITY.md` "Scope"). A compromised custody/KMS
-key and a lost key are *modeled* above as adversary classes for completeness, but their
-*remediation* (key hygiene, custody choice) is outside the protocol's integrity
+key and a lost key are _modeled_ above as adversary classes for completeness, but their
+_remediation_ (key hygiene, custody choice) is outside the protocol's integrity
 guarantees. In scope for security reporting is anything that breaks integrity,
 authenticity, or authorization — signing, JWS construction/verification, dag-cbor
 canonical encoding, CID derivation, chain state-machine transitions, credential
