@@ -175,129 +175,31 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 		}
 	}
 
-	// verify delegation chain
+	// verify delegation chain — shared with the write path via the protocol
+	// library's linear (single-parent) walk. The relay no longer maintains its
+	// own copy: the previous copy unioned the att of ALL parents and recursed
+	// only through parents[0], which let a self-issued secondary parent contribute
+	// scope never rooted at the creator (a multi-parent authority-escalation the
+	// library walk and the TS stack reject). Closures bind the read-store
+	// revocation + issuer-deletion checks; leaf revocation/deletion is checked
+	// above (the walk covers parents only).
 	prf, err := dfos.ParsePrf(payload)
 	if err != nil {
 		return fmt.Errorf("credential prf invalid: %v", err)
 	}
-	if err := r.verifyDelegationChain(credJws, prf, att, verified, resolveKey, creatorDID, 0); err != nil {
+	isRevoked := func(issuerDID, credentialCID string) (bool, error) {
+		revoked, _ := r.readStore.IsCredentialRevoked(issuerDID, credentialCID)
+		return revoked, nil
+	}
+	isDeleted := func(did string) (bool, error) {
+		idc, _ := r.readStore.GetIdentityChain(did)
+		return idc != nil && idc.State.IsDeleted, nil
+	}
+	if err := dfos.VerifyDelegationChain(credJws, verified, att, prf, resolveKey, creatorDID, isRevoked, isDeleted); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// delegation chain
-// ---------------------------------------------------------------------------
-
-// verifyDelegationChain walks the prf array recursively, verifying each parent
-// credential's signature, revocation status, audience linkage, monotonic
-// attenuation, and expiry bounds. The chain must root at creatorDID.
-func (r *Relay) verifyDelegationChain(childJws string, prf []string, childAtt []dfos.AttEntry, child *dfos.VerifiedCredential, resolveKey dfos.KeyResolver, creatorDID string, depth int) error {
-	if depth > 16 {
-		return fmt.Errorf("delegation chain too deep (max 16 hops)")
-	}
-
-	// no parents — this is the root credential, issuer must be creator
-	if len(prf) == 0 {
-		if child.Iss != creatorDID {
-			return fmt.Errorf("delegation chain root issuer %s does not match expected root %s", child.Iss, creatorDID)
-		}
-		return nil
-	}
-
-	type verifiedParent struct {
-		jws      string
-		verified *dfos.VerifiedCredential
-		att      []dfos.AttEntry
-		prf      []string
-		aud      string
-		exp      int64
-	}
-
-	var parents []verifiedParent
-	for _, parentJws := range prf {
-		pHeader, pPayload, err := dfos.DecodeJWSUnsafe(parentJws)
-		if err != nil || pHeader == nil {
-			return fmt.Errorf("failed to decode parent credential in delegation chain")
-		}
-
-		pKid := pHeader.Kid
-		if pKid == "" || !strings.Contains(pKid, "#") {
-			return fmt.Errorf("parent credential kid must be a DID URL")
-		}
-
-		parentIssuerDID := pKid[:strings.Index(pKid, "#")]
-
-		// check parent issuer identity is not deleted
-		parentIdentity, _ := r.readStore.GetIdentityChain(parentIssuerDID)
-		if parentIdentity != nil && parentIdentity.State.IsDeleted {
-			return fmt.Errorf("parent credential issuer identity is deleted")
-		}
-
-		pKey, err := resolveKey(pKid)
-		if err != nil {
-			return fmt.Errorf("failed to resolve parent credential key: %v", err)
-		}
-
-		pVerified, err := dfos.VerifyCredential(parentJws, pKey, "", "")
-		if err != nil {
-			return fmt.Errorf("parent credential verification failed: %v", err)
-		}
-
-		// check revocation at every level
-		prevoked, _ := r.readStore.IsCredentialRevoked(pVerified.Iss, pVerified.CID)
-		if prevoked {
-			return fmt.Errorf("parent credential in delegation chain is revoked")
-		}
-
-		pAud, _ := pPayload["aud"].(string)
-		pPrf, err := dfos.ParsePrf(pPayload)
-		if err != nil {
-			return fmt.Errorf("parent credential prf invalid: %v", err)
-		}
-		parents = append(parents, verifiedParent{
-			jws:      parentJws,
-			verified: pVerified,
-			att:      dfos.ParseAtt(pPayload),
-			prf:      pPrf,
-			aud:      pAud,
-			exp:      pVerified.Exp,
-		})
-	}
-
-	// child's issuer must be the audience of at least one parent
-	hasMatchingParent := false
-	for _, p := range parents {
-		if p.aud == "*" || p.aud == child.Iss {
-			hasMatchingParent = true
-			break
-		}
-	}
-	if !hasMatchingParent {
-		return fmt.Errorf("delegation gap: no parent credential has audience matching child issuer %s", child.Iss)
-	}
-
-	// child's exp must not exceed any parent's exp
-	for _, p := range parents {
-		if child.Exp > p.exp {
-			return fmt.Errorf("delegation chain: child credential expiry exceeds parent expiry")
-		}
-	}
-
-	// child's att must be attenuated from the union of all parents' att
-	var parentAttUnion []dfos.AttEntry
-	for _, p := range parents {
-		parentAttUnion = append(parentAttUnion, p.att...)
-	}
-	if !dfos.IsAttenuated(parentAttUnion, childAtt) {
-		return fmt.Errorf("delegation chain: child credential scope exceeds parent scope")
-	}
-
-	// recurse into the first parent (all parents verified above)
-	first := parents[0]
-	return r.verifyDelegationChain(first.jws, first.prf, first.att, first.verified, resolveKey, creatorDID, depth+1)
 }
 
 // ---------------------------------------------------------------------------

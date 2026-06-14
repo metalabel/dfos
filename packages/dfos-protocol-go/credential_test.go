@@ -148,8 +148,37 @@ func TestVerifyCredentialWrongAction(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for wrong action, got nil")
 	}
-	expected := "action mismatch: expected write, got read"
+	expected := `action mismatch: expected write, not granted by att ("read")`
 	if err.Error() != expected {
 		t.Errorf("expected %q, got %q", expected, err.Error())
+	}
+}
+
+func TestVerifyCredentialCombinedAction(t *testing.T) {
+	// A single att entry granting the canonical combined "read,write" action must
+	// verify (and satisfy an expectedAction of either "read" or "write"). The old
+	// exact-match allowlist hard-rejected this spec-valid grant; the TS reference
+	// applies no action allowlist.
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	iss := "did:dfos:abc123"
+	aud := "did:dfos:reader456"
+	kid := iss + "#key_auth_0"
+
+	token, err := CreateCredential(iss, aud, kid, "chain:x", "read,write", 1*time.Hour, priv)
+	if err != nil {
+		t.Fatalf("CreateCredential: %v", err)
+	}
+
+	for _, expectAction := range []string{"", "read", "write"} {
+		vc, err := VerifyCredential(token, pub, aud, expectAction)
+		if err != nil {
+			t.Fatalf("combined read,write credential rejected for expectedAction=%q: %v", expectAction, err)
+		}
+		if vc.Action != "read,write" {
+			t.Errorf("expectedAction=%q: convenience Action = %q, want %q", expectAction, vc.Action, "read,write")
+		}
+		if vc.ContentID != "x" {
+			t.Errorf("expectedAction=%q: ContentID = %q, want %q", expectAction, vc.ContentID, "x")
+		}
 	}
 }
