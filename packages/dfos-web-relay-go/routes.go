@@ -496,7 +496,7 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 
 	// authenticate — use readStore so the auth read never races on the
 	// ingestion store's active write transaction (tx aliasing).
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore)
+	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore, r.maxAuthTokenTTL)
 	if auth == nil {
 		writeError(w, 401, "authentication required")
 		return
@@ -602,7 +602,7 @@ func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentI
 	if r.hasPublicStandingAuth(contentID, "read") {
 		return true
 	}
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore)
+	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore, r.maxAuthTokenTTL)
 	if auth == nil {
 		writeError(w, 401, "authentication required")
 		return false

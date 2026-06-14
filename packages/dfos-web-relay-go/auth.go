@@ -3,17 +3,28 @@ package relay
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
+
+// DefaultMaxAuthTokenTTL bounds the lifetime (exp-iat) the relay honors on a
+// self-signed auth token. Auth tokens are ephemeral (the spec describes them as
+// "minutes"); this ceiling caps a buggy or malicious signer minting an
+// effectively-permanent bearer token. It applies ONLY to auth tokens — DFOS
+// credentials (read/write/standing) are verified on a separate path
+// (verifyCredentialForAccess) and never reach AuthenticateRequest, so their
+// hours-to-months lifetimes are unaffected. A value <= 0 disables the ceiling.
+const DefaultMaxAuthTokenTTL = 24 * time.Hour
 
 // AuthenticateRequest extracts a Bearer token from the Authorization header,
 // resolves the signing key from stored identity chains, and verifies the token
 // against the relay's DID as audience.
 //
-// Uses current-state key resolution only — rotated-out keys are rejected.
-// Returns nil if authentication fails for any reason.
-func AuthenticateRequest(authHeader string, relayDID string, store Store) *dfos.VerifiedAuthToken {
+// Uses current-state key resolution only — rotated-out keys are rejected. The
+// token's declared lifetime (exp-iat) must not exceed maxAuthTokenTTL (pass <= 0
+// to disable). Returns nil if authentication fails for any reason.
+func AuthenticateRequest(authHeader string, relayDID string, store Store, maxAuthTokenTTL time.Duration) *dfos.VerifiedAuthToken {
 	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 		return nil
 	}
@@ -43,6 +54,12 @@ func AuthenticateRequest(authHeader string, relayDID string, store Store) *dfos.
 
 	result, err := dfos.VerifyAuthToken(token, publicKey, relayDID)
 	if err != nil {
+		return nil
+	}
+
+	// enforce the auth-token lifetime ceiling (auth tokens only — credentials are
+	// verified on a different path and never reach here).
+	if maxAuthTokenTTL > 0 && result.Exp-result.Iat > int64(maxAuthTokenTTL.Seconds()) {
 		return nil
 	}
 

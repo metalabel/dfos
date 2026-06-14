@@ -37,6 +37,12 @@ export interface RelayOptions {
   peers?: PeerConfig[];
   /** Injected peer client — if omitted, a default HTTP implementation is used */
   peerClient?: PeerClient;
+  /**
+   * Max lifetime (exp-iat, seconds) honored on a self-signed auth token.
+   * Default 86400 (24h); a value <= 0 disables the ceiling. Applies only to auth
+   * tokens, never to DFOS credentials.
+   */
+  maxAuthTokenTTLSeconds?: number;
 }
 
 // -----------------------------------------------------------------------------
