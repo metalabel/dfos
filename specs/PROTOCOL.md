@@ -53,12 +53,12 @@ Three addressing modes, self-describing by format:
 | Thing                 | Form                     | Example                           |
 | --------------------- | ------------------------ | --------------------------------- |
 | Operation or document | CID (dag-cbor + SHA-256) | `bafyrei...` (base32lower)        |
-| Content chain         | contentId (22-char hash) | `a82z92a3hndk6c97thcrn8`          |
-| Identity chain        | DID                      | `did:dfos:e3vvtck42d4eacdnzvtrn6` |
+| Content chain         | contentId (31-char hash) | `cv7n8vkvr64cctf3294h9k4eanhff8z`          |
+| Identity chain        | DID                      | `did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr` |
 
-CIDs are specific immutable artifacts — a pointer to an exact operation or document. Content IDs are living content chain entities — the 22-char bare hash derived from the genesis CID. DIDs are living identity chain entities.
+CIDs are specific immutable artifacts — a pointer to an exact operation or document. Content IDs are living content chain entities — the 31-char bare hash derived from the genesis CID. DIDs are living identity chain entities.
 
-Operations and documents are CIDs — standard IPLD content addresses. Content chains and identity chains use derived identifiers — `customAlpha(SHA-256(genesis CID bytes))`. Same derivation for both. Identity chains prepend `did:dfos:` (W3C DID spec). Content identifiers are bare — just the 22-char hash, no prefix.
+Operations and documents are CIDs — standard IPLD content addresses. Content chains and identity chains use derived identifiers — `customAlpha(SHA-256(genesis CID bytes))`. Same derivation for both. Identity chains prepend `did:dfos:` (W3C DID spec). Content identifiers are bare — just the 31-char hash, no prefix.
 
 Application code may add prefixes for routing (e.g., `post_xxxx`) — these are strippable semantic sugar, not part of the protocol identifier.
 
@@ -154,8 +154,8 @@ The protocol defines maximum sizes for all operation fields as abuse-prevention 
 
 | Field                                        | Max       | Rationale                              |
 | -------------------------------------------- | --------- | -------------------------------------- |
-| `did`                                        | 256 chars | ~8× typical `did:dfos:` (~31 chars)    |
-| `key.id`                                     | 64 chars  | ~3× typical key ID (`key_` + 22 chars) |
+| `did`                                        | 256 chars | ~6× typical `did:dfos:` (~41 chars)    |
+| `key.id`                                     | 64 chars  | ~2× typical key ID (`key_` + 31 chars) |
 | `key.publicKeyMultibase`                     | 128 chars | ~2× Ed25519 multikey (~50 chars)       |
 | `authKeys` / `assertKeys` / `controllerKeys` | 16 items  | Generous for key rotation              |
 | `previousOperationCID`                       | 256 chars | ~4× typical CIDv1 (~60 chars)          |
@@ -181,20 +181,20 @@ The protocol does NOT limit:
 | Key encoding        | W3C Multikey (multicodec `0xed01` + base58btc multibase)                   |
 | Signed envelopes    | JWS Compact Serialization (RFC 7515) with `alg: "EdDSA"`                   |
 | Content addressing  | CIDv1 with dag-cbor codec (`0x71`) + SHA-256 multihash (`0x12`)            |
-| ID encoding         | SHA-256 → custom 19-char alphabet, 22 characters                           |
+| ID encoding         | SHA-256 → custom 19-char alphabet, 31 characters                           |
 
 ### ID Alphabet
 
 ```
 Alphabet: 2346789acdefhknrtvz  (19 characters)
-Length:   22 characters
-Entropy:  ~93.4 bits (19^22)
+Length:   31 characters
+Entropy:  ~131.6 bits (19^31)
 ```
 
-Process: `SHA-256(input) → for each of first 22 bytes: alphabet[byte % 19]`. The modulo introduces a ~0.3% bias (256 is not evenly divisible by 19) — not security-relevant for identifiers.
+Process: `SHA-256(input) → for each of first 31 bytes: alphabet[byte % 19]`. The modulo introduces a ~0.3% bias (256 is not evenly divisible by 19) — not security-relevant for identifiers.
 
-DIDs: `did:dfos:` + 22-char ID derived from `SHA-256(genesis CID raw bytes)`
-Key IDs: `key_` + 22-char ID. Convention: derive from public key hash (`key_` + `customAlpha(SHA-256(publicKey))`), making key IDs deterministic and verifiable. Not a protocol requirement — key IDs can be any string.
+DIDs: `did:dfos:` + 31-char ID derived from `SHA-256(genesis CID raw bytes)`
+Key IDs: `key_` + 31-char ID. Convention: derive from public key hash (`key_` + `customAlpha(SHA-256(publicKey))`), making key IDs deterministic and verifiable. Not a protocol requirement — key IDs can be any string.
 
 ### Multikey Encoding (W3C Multikey for Ed25519)
 
@@ -275,38 +275,38 @@ If your implementation produces the float CID, your number encoding is incorrect
 **Worked example (genesis identity operation):**
 
 ```
-CBOR bytes (441 bytes, hex):
-a66474797065666372656174656776657273696f6e0168617574684b65797381a3626964781a6b
-65795f72396576333466766332337a393939766561616674386474797065684d756c74696b6579
-727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a535634503359
-6363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441
-747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381
-a3626964781a6b65795f72396576333466766332337a393939766561616674386474797065684d
-756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f
-4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e63
-6f6e74726f6c6c65724b65797381a3626964781a6b65795f72396576333466766332337a393939
-766561616674386474797065684d756c74696b6579727075626c69634b65794d756c7469626173
-6578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c
-6561444c55714c7541536a62
+CBOR bytes (468 bytes, hex):
+a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b
+65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065
+684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e
+776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62
+696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173
+736572744b65797381a362696478236b65795f72396576333466766332337a3939397665616166
+7438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74
+696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c7467
+4d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b
+65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065
+684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e
+776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62
 
-CID bytes (hex): 01711220206a5e6140a5114f1e49f3ca4b339fb2cb8e70bbb34968b23156fd0e3237b486
-CID string:      bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
+CID bytes (hex): 017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69
+CID string:      bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne
 ```
 
 ### DID Derivation (worked example)
 
 ```
-Input:  CID bytes (hex) = 01711220206a5e6140a5114f1e49f3ca4b339fb2cb8e70bbb34968b23156fd0e3237b486
-Step 1: SHA-256(CID bytes) = 4360cfbcbbb3f1614c8e02dbfe8d55935e1195cd2129820ab8aef94bde12ea8a
-Step 2: Take first 22 bytes: 43 60 cf bc bb b3 f1 61 4c 8e 02 db fe 8d 55 93 5e 11 95 cd 21 29
+Input:  CID bytes (hex) = 017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69
+Step 1: SHA-256(CID bytes) = c66d21f27dceea0b05534c225ad7018ac7d4dfded0609dcd18022a3739a5488c
+Step 2: Take first 31 bytes: c6 6d 21 f2 7d ce ea 0b 05 53 4c 22 5a d7 01 8a c7 d4 df de d0 60 9d cd 18 02 2a 37 39 a5 48
 Step 3: For each byte, alphabet[byte % 19]:
-        43=67  → 67%19=10  → 'e'
-        60=96  → 96%19=1   → '3'
-        cf=207 → 207%19=17 → 'v'
-        bc=188 → 188%19=17 → 'v'
+        c6=198 → 198%19=8  → 'c'
+        6d=109 → 109%19=14 → 'n'
+        21=33  → 33%19=14  → 'n'
+        f2=242 → 242%19=14 → 'n'
         ...
-Result: e3vvtck42d4eacdnzvtrn6
-DID:    did:dfos:e3vvtck42d4eacdnzvtrn6
+Result: cnnnft9f8a2rn938d6nkz38r847v2kr
+DID:    did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
 ```
 
 ---
@@ -370,7 +370,7 @@ DID:    did:dfos:e3vvtck42d4eacdnzvtrn6
 ### MultikeyPublicKey
 
 ```typescript
-{ id: string,                             // e.g. "key_r9ev34fvc23z999veaaft8"
+{ id: string,                             // e.g. "key_r9ev34fvc23z999veaaft83nn29zvhe"
   type: "Multikey",                       // literal discriminator
   publicKeyMultibase: string }            // e.g. "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
 ```
@@ -391,15 +391,15 @@ token = signingInput + "." + base64url(signature)
 
 | Context                   | kid format  | Example                      |
 | ------------------------- | ----------- | ---------------------------- |
-| Identity create (genesis) | Bare key ID | `key_r9ev34fvc23z999veaaft8` |
+| Identity create (genesis) | Bare key ID | `key_r9ev34fvc23z999veaaft83nn29zvhe` |
 | Identity update/delete    | DID URL     | See below                    |
 | All content ops           | DID URL     | See below                    |
 
 DID URL examples:
 
 ```
-did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8
-did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd
+did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe
+did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8
 ```
 
 ### `cid` Header
@@ -523,8 +523,8 @@ A beacon is a signed announcement referencing a manifest content chain — a per
 {
   "version": 1,
   "type": "beacon",
-  "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "manifestContentId": "a82z92a3hndk6c97thcrn8",
+  "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+  "manifestContentId": "cv7n8vkvr64cctf3294h9k4eanhff8z",
   "createdAt": "2026-03-07T00:05:00.000Z"
 }
 ```
@@ -534,7 +534,7 @@ A beacon is a signed announcement referencing a manifest content chain — a per
 | `version`           | number | Literal `1`                                          |
 | `type`              | string | Literal `"beacon"`                                   |
 | `did`               | string | DID of the identity publishing the beacon            |
-| `manifestContentId` | string | Content ID of the manifest chain (22-char bare hash) |
+| `manifestContentId` | string | Content ID of the manifest chain (31-char bare hash) |
 | `createdAt`         | string | ISO 8601 timestamp                                   |
 
 ### Beacon JWS Header
@@ -543,27 +543,27 @@ A beacon is a signed announcement referencing a manifest content chain — a per
 {
   "alg": "EdDSA",
   "typ": "did:dfos:beacon",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8",
-  "cid": "bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4"
+  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
+  "cid": "bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq"
 }
 ```
 
 ### Worked Example: Beacon
 
-Using the reference identity (`did:dfos:e3vvtck42d4eacdnzvtrn6`) and key 1 from the identity chain examples. The beacon references a manifest content chain.
+Using the reference identity (`did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`) and key 1 from the identity chain examples. The beacon references a manifest content chain.
 
 **Beacon CID** (dag-cbor canonical encode → CIDv1):
 
 ```
-bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4
+bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq
 ```
 
 **Controller JWS** (key 1 signs):
 
 ```
-kid:          did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8
+kid:          did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe
 typ:          did:dfos:beacon
-cid:          bafyreic2mux4pli5qfd5sbp2yxy2gjm54fg5gci6m6bpevoiuwfdg6pou4
+cid:          bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq
 ```
 
 **Witness countersignature** (a separate identity countersigns the beacon by CID):
@@ -578,7 +578,7 @@ Beacons are not chained — there is no `previousOperationCID`. For a given DID,
 
 **Clock skew tolerance**: Implementations MUST reject beacons with a `createdAt` more than 5 minutes in the future relative to the verifier's clock. This prevents pre-dating attacks while accommodating reasonable clock drift.
 
-**manifestContentId**: A 22-char content ID referencing the manifest content chain that indexes this identity's content set. The manifest itself is a living document on a content chain — see the [Content Model](https://protocol.dfos.com/content-model) for the manifest schema. The beacon points to the manifest chain, not to a specific snapshot — consumers resolve the manifest chain's current head to get the latest content index.
+**manifestContentId**: A 31-char content ID referencing the manifest content chain that indexes this identity's content set. The manifest itself is a living document on a content chain — see the [Content Model](https://protocol.dfos.com/content-model) for the manifest schema. The beacon points to the manifest chain, not to a specific snapshot — consumers resolve the manifest chain's current head to get the latest content index.
 
 ---
 
@@ -700,7 +700,7 @@ Seed:        SHA-256("dfos-protocol-reference-key-1")
 Private key: 132d4bebdb6e62359afb930fe15d756a92ad96e6b0d47619988f5a1a55272aac
 Public key:  ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32
 Multikey:    z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb
-Key ID:      key_r9ev34fvc23z999veaaft8
+Key ID:      key_r9ev34fvc23z999veaaft83nn29zvhe
 ```
 
 ### Key 2 (Rotated Controller)
@@ -710,7 +710,7 @@ Seed:        SHA-256("dfos-protocol-reference-key-2")
 Private key: 384f5626906db84f6a773ec46475ff2d4458e92dd4dd13fe03dbb7510f4ca2a8
 Public key:  0f350f994f94d675f04a325bd316ebedd740ca206eaaf609bdb641b5faa0f78c
 Multikey:    z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK
-Key ID:      key_ez9a874tckr3dv933d3ckd
+Key ID:      key_ez9a874tckr3dv933d3ckdn7z6zrct8
 ```
 
 ### Identity Chain: Create (Genesis)
@@ -723,21 +723,21 @@ Operation:
   "type": "create",
   "authKeys": [
     {
-      "id": "key_r9ev34fvc23z999veaaft8",
+      "id": "key_r9ev34fvc23z999veaaft83nn29zvhe",
       "type": "Multikey",
       "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
     }
   ],
   "assertKeys": [
     {
-      "id": "key_r9ev34fvc23z999veaaft8",
+      "id": "key_r9ev34fvc23z999veaaft83nn29zvhe",
       "type": "Multikey",
       "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
     }
   ],
   "controllerKeys": [
     {
-      "id": "key_r9ev34fvc23z999veaaft8",
+      "id": "key_r9ev34fvc23z999veaaft83nn29zvhe",
       "type": "Multikey",
       "publicKeyMultibase": "z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb"
     }
@@ -752,30 +752,30 @@ JWS Header:
 {
   "alg": "EdDSA",
   "typ": "did:dfos:identity-op",
-  "kid": "key_r9ev34fvc23z999veaaft8",
-  "cid": "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy"
+  "kid": "key_r9ev34fvc23z999veaaft83nn29zvhe",
+  "cid": "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
 }
 ```
 
 JWS Signature (hex):
 
 ```
-103af20cad6ebed8b1fb5edc1ee9fdb7a31a705231dab326305d502f37c3e531654ac3af31cb9ef7ba428069f709778b545b55c60a42a21d241925e2a0a2b303
+4dece71e7cebb4a3864ebd05ce40cbdb3fa5b8c5a701b297ae60db8be131830ff130f0a7630187391323c3e04cdbc7f44684e2ac801e0fb776d16e514ae1ae06
 ```
 
 JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJjaWQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.EDryDK1uvtix-17cHun9t6MacFIx2rMmMF1QLzfD5TFlSsOvMcue97pCgGn3CXeLVFtVxgpCoh0kGSXioKKzAw
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAwOjAwLjAwMFoifQ.TeznHnzrtKOGTr0FzkDL2z-luMWnAbKXrmDbi-Exgw_xMPCnYwGHORMjw-BM28f0RoTirIAeD7d20W5RSuGuBg
 ```
 
 Operation CID:
 
 ```
-bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
+bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne
 ```
 
-**Derived DID: `did:dfos:e3vvtck42d4eacdnzvtrn6`**
+**Derived DID: `did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`**
 
 ### Identity Chain: Update (Key Rotation)
 
@@ -785,8 +785,8 @@ JWS Header:
 {
   "alg": "EdDSA",
   "typ": "did:dfos:identity-op",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8",
-  "cid": "bafyreicym4cyiednld73smbx32szaei7xdulqn4g3ste5e2w2ulajr3oqm"
+  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
+  "cid": "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei"
 }
 ```
 
@@ -796,24 +796,24 @@ Operation:
 {
   "version": 1,
   "type": "update",
-  "previousOperationCID": "bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy",
+  "previousOperationCID": "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne",
   "authKeys": [
     {
-      "id": "key_ez9a874tckr3dv933d3ckd",
+      "id": "key_ez9a874tckr3dv933d3ckdn7z6zrct8",
       "type": "Multikey",
       "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
     }
   ],
   "assertKeys": [
     {
-      "id": "key_ez9a874tckr3dv933d3ckd",
+      "id": "key_ez9a874tckr3dv933d3ckdn7z6zrct8",
       "type": "Multikey",
       "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
     }
   ],
   "controllerKeys": [
     {
-      "id": "key_ez9a874tckr3dv933d3ckd",
+      "id": "key_ez9a874tckr3dv933d3ckdn7z6zrct8",
       "type": "Multikey",
       "publicKeyMultibase": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK"
     }
@@ -825,22 +825,22 @@ Operation:
 JWS Signature (hex):
 
 ```
-31272ea0196038ade3e505fdb45730d68bb4a382e0273886244b19e69bea881af549a800c80bf987ec1a8d086d83c20fedd2e533453895e5b6891adaf78e5c0e
+edfaaf586115616f5ab40d6eaa9a7b94850e5a9e1d0132e92e33a6156cc937ef204cbf909d70c27b219c06ee405e11f33b9d9f6aec146af8752ab07ac0162e0b
 ```
 
 JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0OCIsImNpZCI6ImJhZnlyZWljeW00Y3lpZWRubGQ3M3NtYngzMnN6YWVpN3hkdWxxbjRnM3N0ZTVlMncydWxhanIzb3FtIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmFuanBnY3FmZmNmaHI0c3B0empmdGhoNXN6b2hoYm81dGpmdWxlbWt3N3VoZGVuNXVxeSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.MScuoBlgOK3j5QX9tFcw1ou0o4LgJziGJEsZ5pvqiBr1SagAyAv5h-wajQhtg8IP7dLlM0U4leW2iRra945cDg
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfcjlldjM0ZnZjMjN6OTk5dmVhYWZ0ODNubjI5enZoZSIsImNpZCI6ImJhZnlyZWliZnVoNjN1djMzaTJpNWVvb2UzYm9pdDJydXlqZWh1YnNyeWVtdXV6Nm1ydGxlajI2cmVpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpY29naHZqem52bGl1bG94eG1iZjU0dHB6cXdhaG5xcGlsazduY3hlcGppbmVkcGtnYTNuZSIsImF1dGhLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJhc3NlcnRLZXlzIjpbeyJpZCI6ImtleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa2ZVZDY1SnJBaGZkZ0Z1TUNjY1U5VGhRdmpCMmZKQU1VSGt1dWFqRjk5MmdLIn1dLCJjb250cm9sbGVyS2V5cyI6W3siaWQiOiJrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsInR5cGUiOiJNdWx0aWtleSIsInB1YmxpY0tleU11bHRpYmFzZSI6Ino2TWtmVWQ2NUpyQWhmZGdGdU1DY2NVOVRoUXZqQjJmSkFNVUhrdXVhakY5OTJnSyJ9XSwiY3JlYXRlZEF0IjoiMjAyNi0wMy0wN1QwMDowMTowMC4wMDBaIn0.7fqvWGEVYW9atA1uqpp7lIUOWp4dATLpLjOmFWzJN-8gTL-QnXDCeyGcBu5AXhHzO52fauwUavh1KrB6wBYuCw
 ```
 
 Operation CID:
 
 ```
-bafyreicym4cyiednld73smbx32szaei7xdulqn4g3ste5e2w2ulajr3oqm
+bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei
 ```
 
-Post-rotation: DID unchanged (`did:dfos:e3vvtck42d4eacdnzvtrn6`), controller rotated to `key_ez9a874tckr3dv933d3ckd`.
+Post-rotation: DID unchanged (`did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`), controller rotated to `key_ez9a874tckr3dv933d3ckdn7z6zrct8`.
 
 ### Content Chain: Document + Create
 
@@ -852,14 +852,14 @@ Document (flat content object):
   "format": "short-post",
   "title": "Hello World",
   "body": "First post on the protocol.",
-  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
+  "createdByDID": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
 }
 ```
 
 Document CID:
 
 ```
-bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4
+bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy
 ```
 
 Content Create JWS Header:
@@ -868,8 +868,8 @@ Content Create JWS Header:
 {
   "alg": "EdDSA",
   "typ": "did:dfos:content-op",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd",
-  "cid": "bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu"
+  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
+  "cid": "bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y"
 }
 ```
 
@@ -879,8 +879,8 @@ Content Create Payload:
 {
   "version": 1,
   "type": "create",
-  "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "documentCID": "bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4",
+  "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+  "documentCID": "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy",
   "baseDocumentCID": null,
   "createdAt": "2026-03-07T00:02:00.000Z",
   "note": null
@@ -890,19 +890,19 @@ Content Create Payload:
 Content Create JWS Signature (hex):
 
 ```
-46feaf973e4c7ebc2a0d4ad25481ace197de05b91051205c5e1c7067a85fb9d4abe4cc61625d3c853a8b0ce0345b534c8cdd07b34216f635d3c0bc0fd5d30306
+3ce4dcbd16d86f9aff3fa669251340b9f0a410799f79b5327358dbfd44a0ef1746f1bc2ae76d0732c83ac168dfae153c63eefff3a21c2f0a65743d37fcbd3e02
 ```
 
 Content Create JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczplM3Z2dGNrNDJkNGVhY2RuenZ0cm42I2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkIiwiY2lkIjoiYmFmeXJlaWFlZGhqcTY0YWFqcHdvY2lhaGw1dzM3ajZ1b3hyNW1vam9xNWRuYWg2ZnB2eHI1ZDRseHUifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6ZTN2dnRjazQyZDRlYWNkbnp2dHJuNiIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWh6d3VvdXBmZzNkeGlwNnhtZ3pteHN5d3lpaTJqZW94eHpiZ3gzenhtMmluN2tub2kzZzQiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.Rv6vlz5MfrwqDUrSVIGs4ZfeBbkQUSBcXhxwZ6hfudSr5MxhYl08hTqLDOA0W1NMjN0Hs0IW9jXTwLwP1dMDBg
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWFxYXRnZGd3Z2d1Zmd5NHRzejZldXJ3dWR0ZHh5Z3V6dHQ3bnE1d2dkN3FpNDQ1bnY1NnkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.POTcvRbYb5r_P6ZpJRNAufCkEHmfebUyc1jb_USg7xdG8bwq520HMsg6wWjfrhU8Y-7_86IcLwpldD03_L0-Ag
 ```
 
 Content Operation CID:
 
 ```
-bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu
+bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y
 ```
 
 ### Content Chain: Update
@@ -913,10 +913,10 @@ Content Update Payload:
 {
   "version": 1,
   "type": "update",
-  "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
-  "previousOperationCID": "bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu",
-  "documentCID": "bafyreidh7e36cvwy3uw5ypitcqk7uoktbkkkj7e6hxhky4o75rxn7kxilu",
-  "baseDocumentCID": "bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4",
+  "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+  "previousOperationCID": "bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y",
+  "documentCID": "bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy",
+  "baseDocumentCID": "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy",
   "createdAt": "2026-03-07T00:03:00.000Z",
   "note": "edited title and body"
 }
@@ -930,28 +930,28 @@ Updated document (flat content object):
   "format": "short-post",
   "title": "Hello World (edited)",
   "body": "Updated content.",
-  "createdByDID": "did:dfos:e3vvtck42d4eacdnzvtrn6"
+  "createdByDID": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
 }
 ```
 
 Document CID (edited):
 
 ```
-bafyreidh7e36cvwy3uw5ypitcqk7uoktbkkkj7e6hxhky4o75rxn7kxilu
+bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy
 ```
 
 Content Update CID:
 
 ```
-bafyreih6e5cbjitpozhzhgmfktmiohmxyn3ucwhqd3mjixizvwmlhv7hm4
+bafyreibpx4cgb4j6n3mz764pylrdg6q7a46njnhx6p4cq2rlgeue3s3evq
 ```
 
 ### Content Chain Verified State
 
 ```
-Content ID:   a82z92a3hndk6c97thcrn8
-Genesis CID:  bafyreiaedhjq64aajpwociahl5w37j6uoxr5mojoq5dnah6fpvxr5d4lxu
-Head CID:     bafyreih6e5cbjitpozhzhgmfktmiohmxyn3ucwhqd3mjixizvwmlhv7hm4
+Content ID:   cv7n8vkvr64cctf3294h9k4eanhff8z
+Genesis CID:  bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y
+Head CID:     bafyreibpx4cgb4j6n3mz764pylrdg6q7a46njnhx6p4cq2rlgeue3s3evq
 ```
 
 ---
@@ -972,29 +972,29 @@ Given the artifacts above, verify:
 3. **Genesis CID**: base64url-decode JWS payload → parse JSON → dag-cbor canonical encode → SHA-256 → CIDv1 → should be:
 
    ```
-   bafyreibanjpgcqffcfhr4sptzjfthh5szohhbo5tjfulemkw7uhden5uqy
+   bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne
    ```
 
 4. **CID header**: Verify each operation JWS header contains `cid` matching the derived operation CID
 
-5. **DID derivation**: take raw CID bytes of genesis CID → SHA-256 → first 22 bytes → `byte % 19` → alphabet lookup → should be `e3vvtck42d4eacdnzvtrn6` → DID = `did:dfos:e3vvtck42d4eacdnzvtrn6`
+5. **DID derivation**: take raw CID bytes of genesis CID → SHA-256 → first 31 bytes → `byte % 19` → alphabet lookup → should be `cnnnft9f8a2rn938d6nkz38r847v2kr` → DID = `did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`
 
 6. **Rotation JWS**: signed by OLD controller key (key 1). Verify with key 1's public key. kid:
 
    ```
-   did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8
+   did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe
    ```
 
 7. **Content create JWS**: signed by NEW controller key (key 2, post-rotation). Verify with key 2's public key. kid:
 
    ```
-   did:dfos:e3vvtck42d4eacdnzvtrn6#key_ez9a874tckr3dv933d3ckd
+   did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8
    ```
 
 8. **Document CID**: dag-cbor canonical encode the flat content object → SHA-256 → CIDv1 → should be:
 
    ```
-   bafyreihzwuoupfg3dxip6xmgzmxsywyii2jeoxxzbgx3zxm2in7knoi3g4
+   bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy
    ```
 
 9. **Content operation `did` field**: verify the `did` field in each content operation matches the `kid` DID in the JWS header

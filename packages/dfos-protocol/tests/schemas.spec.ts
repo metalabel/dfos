@@ -246,7 +246,7 @@ describe('manifest schema validation', () => {
       validate({
         $schema: 'https://schemas.dfos.com/manifest/v1',
         entries: {
-          'dark-publisher': 'did:dfos:e3vvtck42d4eacdnzvtrn6',
+          'dark-publisher': 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr',
         },
       }),
     ).toBe(true);
@@ -269,7 +269,7 @@ describe('manifest schema validation', () => {
         $schema: 'https://schemas.dfos.com/manifest/v1',
         entries: {
           'drafts/post-1': '67t27rzc83v7c22n9t6z7c',
-          'collaborators/vinny': 'did:dfos:e3vvtck42d4eacdnzvtrn6',
+          'collaborators/vinny': 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr',
           'v1.0/release-notes': 'a4b8c2d3e5f6g7h8i9j0k1',
           'my_content.main': '67t27rzc83v7c22n9t6z7c',
         },

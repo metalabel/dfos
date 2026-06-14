@@ -47,7 +47,7 @@ func WithIdentityDeletedChecker(fn IdentityDeletedChecker) ContentVerifyOption {
 // protocolTimeFormat is declared in timestamp.go
 
 // contentIDLength is the expected length of a DFOS content ID.
-const contentIDLength = 22
+const contentIDLength = 31
 
 // -----------------------------------------------------------------------------
 // Result types
@@ -968,7 +968,7 @@ func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*Ve
 	}
 	manifestContentId := payloadString(payload, "manifestContentId")
 	if len(manifestContentId) != contentIDLength {
-		return nil, fmt.Errorf("invalid beacon payload: manifestContentId must be a 22-character content ID")
+		return nil, fmt.Errorf("invalid beacon payload: manifestContentId must be a 31-character content ID")
 	}
 	createdAt := payloadString(payload, "createdAt")
 	if err := validateCreatedAt(createdAt); err != nil {

@@ -5,7 +5,7 @@ export type Signer = (message: Uint8Array) => Promise<Uint8Array>;
 
 // --- protocol limits ---
 
-/** Max length for key ID strings (e.g., "key_r9ev34fvc23z999veaaft8") */
+/** Max length for key ID strings (e.g., "key_r9ev34fvc23z999veaaft83nn29zvhe") */
 const MAX_KEY_ID = 64;
 /** Max length for multibase-encoded public keys */
 const MAX_PUBLIC_KEY_MULTIBASE = 128;

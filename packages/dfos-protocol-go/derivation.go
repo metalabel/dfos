@@ -7,10 +7,13 @@ import (
 
 const (
 	idAlphabet = "2346789acdefhknrtvz"
-	idLength   = 22
+	// 31 chars over the 19-symbol alphabet ≈ 2^131.6 targeted second-preimage —
+	// above the 128-bit floor for this registry-free self-certifying identifier.
+	// (Was 22 ≈ 2^93.4 pre-v1.)
+	idLength = 31
 )
 
-// DeriveID derives a 22-char identifier from raw bytes using sha256 + modular alphabet encoding.
+// DeriveID derives a 31-char identifier from raw bytes using sha256 + modular alphabet encoding.
 func DeriveID(seed []byte) string {
 	hash := sha256.Sum256(seed)
 	result := make([]byte, idLength)

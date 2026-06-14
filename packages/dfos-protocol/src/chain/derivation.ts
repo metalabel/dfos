@@ -6,7 +6,7 @@
   algorithm.
 
     Identity chains: did:dfos:<hash>   (DID spec conformant)
-    Content chains:  <hash>            (bare 22-char identifier, no prefix)
+    Content chains:  <hash>            (bare 31-char identifier, no prefix)
 
 */
 
@@ -25,7 +25,7 @@ export const deriveChainIdentifier = (cidBytes: Uint8Array, prefix: string): str
 /**
  * Derive a bare content identifier from CID bytes
  *
- * Returns the raw 22-char hash with no prefix. Applications may add
+ * Returns the raw 31-char hash with no prefix. Applications may add
  * their own prefix for routing (e.g., post_xxxx) — that's semantic sugar.
  */
 export const deriveContentId = (cidBytes: Uint8Array): string => {

@@ -93,9 +93,9 @@ func TestBeaconRejectsRotatedOutKeyAcceptsCurrent(t *testing.T) {
 	}
 }
 
-// 22-character content IDs (the Go VerifyBeacon validates manifestContentId
-// length == 22). Content of the string is unchecked; only the length matters.
+// 31-character content IDs (the Go VerifyBeacon validates manifestContentId
+// length == 31). Content of the string is unchecked; only the length matters.
 const (
-	staleManifestID = "aaaaaaaaaaaaaaaaaaaaaa"
-	freshManifestID = "bbbbbbbbbbbbbbbbbbbbbb"
+	staleManifestID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	freshManifestID = "ccccccccccccccccccccccccccccccc"
 )

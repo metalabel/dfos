@@ -33,7 +33,7 @@ import type { Signer, VerifiedIdentity } from './schemas';
 // -----------------------------------------------------------------------------
 
 export interface VerifiedContentChain {
-  /** Content identifier — bare 22-char hash derived from genesis CID */
+  /** Content identifier — bare 31-char hash derived from genesis CID */
   contentId: string;
   /** CID of the genesis operation */
   genesisCID: string;

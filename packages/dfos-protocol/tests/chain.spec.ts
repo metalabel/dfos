@@ -110,7 +110,7 @@ describe('identity chain', () => {
 
   it('should create and verify identity from genesis', async () => {
     const { identity } = await createGenesis();
-    expect(identity.did).toMatch(/^did:dfos:[2346789acdefhknrtvz]{22}$/);
+    expect(identity.did).toMatch(/^did:dfos:[2346789acdefhknrtvz]{31}$/);
 
     expect(identity.isDeleted).toBe(false);
     expect(identity.controllerKeys).toHaveLength(1);
@@ -533,7 +533,7 @@ describe('content chain', () => {
       resolveKey: id.resolveKey,
     });
 
-    expect(result.contentId).toMatch(/^[2346789acdefhknrtvz]{22}$/);
+    expect(result.contentId).toMatch(/^[2346789acdefhknrtvz]{31}$/);
     expect(result.genesisCID).toBeTruthy();
     expect(result.headCID).toBe(result.genesisCID);
     expect(result.currentDocumentCID).toBe(docCID);

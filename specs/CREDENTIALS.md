@@ -31,9 +31,9 @@ The credential payload is validated by a strict Zod schema. No extra fields are 
 {
   "version": 1,
   "type": "DFOSCredential",
-  "iss": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "iss": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
   "aud": "did:dfos:nzkf838efr424433rn2rzk",
-  "att": [{ "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "write" }],
+  "att": [{ "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "write" }],
   "prf": [],
   "exp": 1798761600,
   "iat": 1772841600
@@ -56,7 +56,7 @@ The credential payload is validated by a strict Zod schema. No extra fields are 
 Each attenuation entry is a strict object with two fields:
 
 ```json
-{ "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "write" }
+{ "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "write" }
 ```
 
 | Field      | Type   | Max | Description                            |
@@ -99,7 +99,7 @@ The credential is signed as a JWS Compact Serialization token (`header.payload.s
 {
   "alg": "EdDSA",
   "typ": "did:dfos:credential",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8",
+  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
   "cid": "bafyrei..."
 }
 ```
@@ -195,10 +195,10 @@ Two resource forms are defined. Both use the `chain:` prefix.
 
 ### `chain:<contentId>` -- Exact Match
 
-Grants access to a specific content chain identified by its 22-character content ID.
+Grants access to a specific content chain identified by its 31-character content ID.
 
 ```json
-{ "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "write" }
+{ "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "write" }
 ```
 
 Matching: `chain:X` matches only `chain:X`. Exact content ID comparison.
@@ -238,9 +238,9 @@ A credential with `aud` set to `"*"` is a **public credential**. It is not addre
 {
   "version": 1,
   "type": "DFOSCredential",
-  "iss": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "iss": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
   "aud": "*",
-  "att": [{ "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "read" }],
+  "att": [{ "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "read" }],
   "prf": [],
   "exp": 1798761600,
   "iat": 1772841600
@@ -279,7 +279,7 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 {
   "alg": "EdDSA",
   "typ": "did:dfos:revocation",
-  "kid": "did:dfos:e3vvtck42d4eacdnzvtrn6#key_r9ev34fvc23z999veaaft8",
+  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
   "cid": "bafyrei..."
 }
 ```
@@ -290,7 +290,7 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 {
   "version": 1,
   "type": "revocation",
-  "did": "did:dfos:e3vvtck42d4eacdnzvtrn6",
+  "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
   "credentialCID": "bafyrei...",
   "createdAt": "2026-03-07T00:00:00.000Z"
 }
@@ -372,7 +372,7 @@ Alice (`did:dfos:alice...`) grants Bob (`did:dfos:bob...`) write access to a con
   "iss": "did:dfos:alice...",
   "aud": "did:dfos:bob...",
   "att": [
-    { "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "write" }
+    { "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "write" }
   ],
   "prf": [],
   "exp": 1798761600,
@@ -380,7 +380,7 @@ Alice (`did:dfos:alice...`) grants Bob (`did:dfos:bob...`) write access to a con
 }
 ```
 
-Alice is the root authority (`prf: []`). Bob presents this credential to a relay when writing to content chain `a82z92a3hndk6c97thcrn8`. The relay verifies Alice's signature, confirms the credential is not expired or revoked, and checks that the requested resource and action match an `att` entry.
+Alice is the root authority (`prf: []`). Bob presents this credential to a relay when writing to content chain `cv7n8vkvr64cctf3294h9k4eanhff8z`. The relay verifies Alice's signature, confirms the credential is not expired or revoked, and checks that the requested resource and action match an `att` entry.
 
 ### 2-Hop Delegation
 
@@ -439,13 +439,13 @@ A space DID issues a public read credential for a content chain. Any DID can rea
   "type": "DFOSCredential",
   "iss": "did:dfos:space...",
   "aud": "*",
-  "att": [{ "resource": "chain:a82z92a3hndk6c97thcrn8", "action": "read" }],
+  "att": [{ "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "read" }],
   "prf": [],
   "exp": 1798761600,
   "iat": 1772841600
 }
 ```
 
-This credential is ingested by the relay as a standing authorization. When any caller requests read access to `chain:a82z92a3hndk6c97thcrn8`, the relay matches it against stored public credentials — no auth token or per-request credential needed.
+This credential is ingested by the relay as a standing authorization. When any caller requests read access to `chain:cv7n8vkvr64cctf3294h9k4eanhff8z`, the relay matches it against stored public credentials — no auth token or per-request credential needed.
 
 Because `aud` is `"*"`, any DID can also use this credential as a parent in a delegation chain -- e.g., to issue a narrower credential to a specific collaborator with a shorter expiry.
