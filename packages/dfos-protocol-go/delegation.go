@@ -143,6 +143,18 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 	return true
 }
 
+// VerifyDelegationChain is the exported entrypoint for verifying a credential's
+// delegation chain. The relay read / per-request-credential path calls this
+// directly; the write path reaches the same walk via content authorization. Both
+// relay surfaces therefore share ONE implementation instead of maintaining
+// divergent copies (a divergent relay copy is exactly how a multi-parent
+// authority-escalation slipped past one surface but not the other).
+//
+// Pass nil for isRevoked or isDeleted to skip that store-backed check.
+func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker) error {
+	return verifyDelegationChain(childToken, childVC, childAtt, childPrf, resolveKey, rootDID, isRevoked, isDeleted, 0)
+}
+
 // verifyDelegationChain verifies a DFOS credential's delegation chain.
 // Walks the prf array recursively, verifying each parent credential's
 // signature, audience linkage, expiry bounds, and monotonic attenuation.

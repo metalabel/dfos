@@ -18,8 +18,10 @@ type VerifiedCredential struct {
 	Kid string
 	CID string // credential CID from header
 
-	// Convenience fields derived from the first att entry.
-	Action    string // "read" or "write"
+	// Convenience fields derived from the first att entry granting a recognized
+	// action. Action is the raw att action string and may be a combined grant
+	// (e.g. "read,write"); callers needing set semantics should ParseActions it.
+	Action    string
 	ContentID string // resource ID (without "chain:" prefix)
 }
 
@@ -241,16 +243,23 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		att = append(att, AttEntry{Resource: a.Resource, Action: a.Action})
 	}
 
-	// derive convenience fields from the first recognized att entry
+	// Derive convenience fields from the first att entry that grants a recognized
+	// action. Actions are comma-separated strings ("read", "write", "read,write")
+	// split with ParseActions, matching IsAttenuated / matchesResource semantics.
+	// These fields are best-effort metadata: the authoritative resource+action
+	// check is the caller's (the relay's matchesResource), and the TS reference
+	// applies no action allowlist. A credential whose att grants only unrecognized
+	// actions leaves these fields empty rather than being rejected here — the
+	// previous exact-match allowlist hard-rejected the spec-valid combined
+	// "read,write" grant, diverging from TS.
 	var action string
 	var contentID string
 	for _, a := range claims.Att {
-		switch a.Action {
-		case "write", "read":
-			action = a.Action
-		default:
+		acts := ParseActions(a.Action)
+		if !acts["read"] && !acts["write"] {
 			continue
 		}
+		action = a.Action
 		if a.Resource != "" {
 			r := a.Resource
 			if strings.HasPrefix(r, "chain:") {
@@ -260,13 +269,11 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 		}
 		break
 	}
-	if action == "" {
-		return nil, fmt.Errorf("no recognized action in att")
-	}
 
-	// verify action if specified
-	if expectedAction != "" && action != expectedAction {
-		return nil, fmt.Errorf("action mismatch: expected %s, got %s", expectedAction, action)
+	// verify action if specified — membership test, so a combined "read,write"
+	// grant satisfies an expectedAction of "read" or "write".
+	if expectedAction != "" && !ParseActions(action)[expectedAction] {
+		return nil, fmt.Errorf("action mismatch: expected %s, not granted by att (%q)", expectedAction, action)
 	}
 
 	return &VerifiedCredential{
