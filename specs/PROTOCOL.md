@@ -91,7 +91,7 @@ This is deterministic: any implementation with the same operations computes the 
 
 **Timestamp ordering**: `createdAt` MUST be strictly greater than the `createdAt` of the parent operation (the operation referenced by `previousOperationCID`). This is enforced per-branch, not globally — a fork branch's timestamps are validated against its own parent, not the other branch's operations.
 
-**Future timestamp bound**: Implementations MUST reject identity and content operations with a `createdAt` more than 24 hours in the future relative to the verifier's clock. Since deterministic head selection favors the highest `createdAt`, a far-future timestamp would permanently dominate head selection — this guard prevents temporal denial-of-service.
+**Future timestamp bound**: Relays, and any component that performs deterministic head selection, MUST reject identity and content operations with a `createdAt` more than 24 hours in the future relative to the verifier's clock. Since deterministic head selection favors the highest `createdAt`, a far-future timestamp would otherwise permanently dominate head selection — this guard prevents temporal denial-of-service. Bare linear chain verification (`verifyIdentityChain` / `verifyContentChain`) does not select a head and does not enforce this bound; it validates only that each operation's `createdAt` is strictly greater than its parent's (below). The reference relays enforce the 24-hour bound at ingest.
 
 ### Identity Chain Signer Validity
 
@@ -121,7 +121,7 @@ Content chain verification requires a **valid EdDSA signature** and delegates ke
 
 ### Terminal States and Special Operations
 
-**`delete` is the only terminal state.** No valid operations may follow a delete. An implementation MUST reject any operation after a delete. Delete prevents future operations but does NOT remove data — the complete chain remains intact for verification. Data removal is an application concern.
+**`delete` is the only terminal state.** No valid operations may follow a delete. An implementation MUST reject any operation after a delete. This is enforced per-branch: a delete seals further linear extension of its own branch, but forks rooted at a pre-delete operation remain valid, and deterministic head selection may make a non-deleted branch the head — see the `did:dfos` DID Method specification, Deactivation. Delete prevents future operations but does NOT remove data — the complete chain remains intact for verification. Data removal is an application concern.
 
 **Controller key requirement:** `update` operations on identity chains MUST include at least one controller key. If decommissioning is intended, `delete` is the correct terminal operation.
 
@@ -456,7 +456,7 @@ The protected header MUST NOT contain a `crit` member. DFOS emits no critical he
 
 ### 3. No header-key-trust
 
-The verifier MUST NOT read key material from the protected header. The signing key is resolved exclusively from `kid` against the signer's identity chain (current state). A protected header that carries an embedded key — `jwk`, `x5c`, or any other key-bearing member — MUST be rejected. A header-supplied key is never trusted, even if it happens to match the resolved key.
+The verifier MUST NOT read key material from the protected header. The signing key is resolved exclusively from `kid` against the signer's identity chain (current state). A protected header that carries an embedded public key — specifically a `jwk` or `x5c` member — MUST be rejected. (DFOS emits neither; the resolved key from `kid` is the only trusted key material.) A header-supplied key is never trusted, even if it happens to match the resolved key.
 
 ### 4. Canonical signature scalar (`S < L`)
 
@@ -668,7 +668,7 @@ Every signature check below is performed under the [Signature Verification Profi
    - The controller keys declared in the genesis payload are trusted because the identity does not exist before this operation. There is no prior state to verify against.
    - The signing key (resolved from `kid`) MUST be one of the controller keys declared in this same operation. The genesis simultaneously introduces and authorizes its own keys.
    - Derive the operation CID via dag-cbor canonical encoding. Verify `header.cid` matches the derived CID. Derive the DID from the CID.
-3. For each subsequent op: verify `previousOperationCID` matches previous op's derived CID. Verify `createdAt` is strictly increasing (SHOULD — see Protocol Rules).
+3. For each subsequent op: verify `previousOperationCID` matches previous op's derived CID. Verify `createdAt` is strictly greater than the parent operation's `createdAt` (MUST — see Chain Validity).
 4. Verify the chain is not in a terminal state (deleted) before applying any operation.
 5. Resolve `kid` — genesis uses bare key ID, non-genesis uses DID URL (extract DID, verify it matches the derived DID; extract key ID).
 6. Find controller key matching key ID **in the current state** (i.e., the state after all preceding operations). Decode multikey → raw Ed25519 public key.
@@ -679,7 +679,7 @@ Every signature check below is performed under the [Signature Verification Profi
 
 1. Decode each JWS, parse payload as ContentOperation
 2. First op must be `type: "create"` — the signer is the chain creator
-3. For each subsequent op: verify `previousOperationCID` matches, verify `createdAt` increasing
+3. For each subsequent op: verify `previousOperationCID` matches, verify `createdAt` is strictly greater than the parent operation's `createdAt` (MUST)
 4. Derive the operation CID via dag-cbor canonical encoding. Verify `header.cid` matches the derived CID.
 5. Verify the `kid` DID matches the payload `did` field
 6. Resolve `kid` via external key resolver (caller provides)
