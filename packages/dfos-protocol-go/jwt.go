@@ -294,6 +294,8 @@ type VerifiedAuthToken struct {
 	Iss string
 	Sub string
 	Kid string
+	Exp int64 // expiration (unix seconds)
+	Iat int64 // issued-at (unix seconds)
 }
 
 // VerifyAuthToken verifies a DID auth token JWT for relay authentication.
@@ -394,6 +396,8 @@ func verifyAuthTokenCore(token string, publicKey ed25519.PublicKey, audience str
 		Iss: claims.Iss,
 		Sub: claims.Sub,
 		Kid: kid,
+		Exp: claims.Exp,
+		Iat: claims.Iat,
 	}, nil
 }
 

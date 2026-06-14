@@ -1981,6 +1981,43 @@ describe('web relay', () => {
       });
       expect(res.status).toBe(401);
     });
+
+    it('should reject an auth token whose lifetime exceeds the ceiling, accept one within', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      await postOps([identity.jwsToken, content.jwsToken]);
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+
+      // upload the blob with a valid short token so the creator can read it back
+      const uploadToken = await createTestAuthToken(identity);
+      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      await putBlob(contentId, content.operationCID, uploadToken, docBytes);
+
+      const now = Math.floor(Date.now() / 1000);
+      const mk = (ttlSec: number) =>
+        createAuthToken({
+          iss: identity.did,
+          aud: RELAY_DID,
+          exp: now + ttlSec,
+          kid: `${identity.did}#${identity.authKey.keyId}`,
+          iat: now,
+          sign: identity.authKey.signer,
+        });
+
+      // within the default 24h ceiling → authenticates; creator reads own blob → 200
+      const okRes = await req(`/content/${contentId}/blob`, {
+        headers: { authorization: `Bearer ${await mk(3600)}` },
+      });
+      expect(okRes.status).toBe(200);
+
+      // exceeds the 24h ceiling → rejected at the auth layer → 401. (The ceiling
+      // is auth-token-only; standing/DFOS credentials are verified elsewhere.)
+      const longRes = await req(`/content/${contentId}/blob`, {
+        headers: { authorization: `Bearer ${await mk(25 * 3600)}` },
+      });
+      expect(longRes.status).toBe(401);
+    });
   });
 
   // ---------------------------------------------------------------------------

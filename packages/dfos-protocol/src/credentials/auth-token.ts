@@ -47,6 +47,8 @@ export interface VerifiedAuthToken {
   aud: string;
   /** Token expiration (unix seconds) */
   exp: number;
+  /** Token issued-at (unix seconds) */
+  iat: number;
   /** kid from the JWT header */
   kid: string;
 }
@@ -131,6 +133,7 @@ export const verifyAuthToken = (options: AuthTokenVerifyOptions): VerifiedAuthTo
     iss: result.data.iss,
     aud: result.data.aud,
     exp: result.data.exp,
+    iat: result.data.iat,
     kid,
   };
 };

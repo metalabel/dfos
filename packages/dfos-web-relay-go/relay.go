@@ -27,7 +27,8 @@ type Relay struct {
 	logger             *slog.Logger
 	peers              []PeerConfig
 	peerClient         PeerClient
-	ingestMu           sync.Mutex // serializes all chain-state mutations (ingest + sequencer)
+	maxAuthTokenTTL    time.Duration // ceiling on self-signed auth-token lifetime (exp-iat)
+	ingestMu           sync.Mutex    // serializes all chain-state mutations (ingest + sequencer)
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT
@@ -62,6 +63,11 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		readStore = sqlStore.ReadStore()
 	}
 
+	maxAuthTokenTTL := opts.MaxAuthTokenTTL
+	if maxAuthTokenTTL == 0 {
+		maxAuthTokenTTL = DefaultMaxAuthTokenTTL
+	}
+
 	return &Relay{
 		store:              opts.Store,
 		readStore:          readStore,
@@ -72,6 +78,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		logger:             logger,
 		peers:              opts.Peers,
 		peerClient:         opts.PeerClient,
+		maxAuthTokenTTL:    maxAuthTokenTTL,
 	}, nil
 }
 

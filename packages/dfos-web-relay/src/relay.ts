@@ -15,7 +15,12 @@ import type { VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { authenticateRequest, hasPublicStandingAuth, verifyContentAccess } from './auth';
+import {
+  authenticateRequest,
+  DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS,
+  hasPublicStandingAuth,
+  verifyContentAccess,
+} from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { ingestOperations } from './ingest';
 import { computeOpCID, sequenceOps } from './sequencer';
@@ -131,6 +136,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const { store } = options;
   const contentEnabled = options.content !== false;
   const logEnabled = options.log !== false;
+  const maxAuthTokenTTLSeconds =
+    options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS;
 
   // peer configuration
   const peers = options.peers ?? [];
@@ -376,7 +383,12 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const publicAccess = await hasPublicStandingAuth(contentId, 'read', store);
     if (!publicAccess) {
       // require auth token
-      const auth = await authenticateRequest(c.req.header('authorization'), relayDID, store);
+      const auth = await authenticateRequest(
+        c.req.header('authorization'),
+        relayDID,
+        store,
+        maxAuthTokenTTLSeconds,
+      );
       if (!auth) return c.json({ error: 'authentication required' }, 401);
 
       // verify read access
@@ -511,7 +523,12 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
 
     // authenticate
-    const auth = await authenticateRequest(c.req.header('authorization'), relayDID, store);
+    const auth = await authenticateRequest(
+      c.req.header('authorization'),
+      relayDID,
+      store,
+      maxAuthTokenTTLSeconds,
+    );
     if (!auth) return c.json({ error: 'authentication required' }, 401);
 
     // verify chain exists
@@ -572,6 +589,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       credHeader: c.req.header('x-credential'),
       relayDID,
       store,
+      maxAuthTokenTTLSeconds,
     });
   });
 
@@ -584,6 +602,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       credHeader: c.req.header('x-credential'),
       relayDID,
       store,
+      maxAuthTokenTTLSeconds,
     });
   });
 
@@ -637,8 +656,10 @@ const readBlob = async (params: {
   credHeader: string | undefined;
   relayDID: string;
   store: RelayStore;
+  maxAuthTokenTTLSeconds: number;
 }): Promise<Response> => {
-  const { contentId, ref, authHeader, credHeader, relayDID, store } = params;
+  const { contentId, ref, authHeader, credHeader, relayDID, store, maxAuthTokenTTLSeconds } =
+    params;
 
   // look up chain
   const chain = await store.getContentChain(contentId);
@@ -648,7 +669,7 @@ const readBlob = async (params: {
   const publicAccess = await hasPublicStandingAuth(contentId, 'read', store);
   if (!publicAccess) {
     // require auth token
-    const auth = await authenticateRequest(authHeader, relayDID, store);
+    const auth = await authenticateRequest(authHeader, relayDID, store, maxAuthTokenTTLSeconds);
     if (!auth) return jsonResponse({ error: 'authentication required' }, 401);
 
     // verify read credential — unless the caller is the chain creator

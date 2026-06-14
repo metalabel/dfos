@@ -29,10 +29,21 @@ import type { RelayStore } from './types';
  *
  * Returns the verified auth token or null if authentication fails.
  */
+/**
+ * Default ceiling on a self-signed auth token's lifetime (exp-iat, seconds): 24h.
+ * Auth tokens are ephemeral (the spec describes them as "minutes"); this bounds a
+ * buggy/malicious signer minting an effectively-permanent bearer token. It
+ * applies ONLY to auth tokens — DFOS credentials (read/write/standing) are
+ * verified on a separate path (verifyContentAccess) and are unaffected. A value
+ * <= 0 disables the ceiling.
+ */
+export const DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS = 86400;
+
 export const authenticateRequest = async (
   authHeader: string | undefined,
   relayDID: string,
   store: RelayStore,
+  maxAuthTokenTTLSeconds: number = DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS,
 ): Promise<VerifiedAuthToken | null> => {
   if (!authHeader) return null;
   if (!authHeader.startsWith('Bearer ')) return null;
@@ -58,7 +69,13 @@ export const authenticateRequest = async (
   }
 
   try {
-    return verifyAuthToken({ token, publicKey, audience: relayDID });
+    const verified = verifyAuthToken({ token, publicKey, audience: relayDID });
+    // enforce the auth-token lifetime ceiling (auth tokens only — credentials are
+    // verified on a different path and never reach here).
+    if (maxAuthTokenTTLSeconds > 0 && verified.exp - verified.iat > maxAuthTokenTTLSeconds) {
+      return null;
+    }
+    return verified;
   } catch {
     return null;
   }

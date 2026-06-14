@@ -3,6 +3,7 @@ package relay
 import (
 	"crypto/ed25519"
 	"log/slog"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -28,6 +29,10 @@ type RelayOptions struct {
 	Peers      []PeerConfig
 	PeerClient   PeerClient // injected peer transport (nil = no peering)
 	ResyncOnBoot bool       // if true, reset peer cursors + sequencer on startup
+	// MaxAuthTokenTTL caps the lifetime (exp-iat) honored on a self-signed auth
+	// token. Zero = default (24h); a negative value disables the ceiling. Applies
+	// only to auth tokens, never to DFOS credentials.
+	MaxAuthTokenTTL time.Duration
 }
 
 // PeerConfig configures a single peer relay.
