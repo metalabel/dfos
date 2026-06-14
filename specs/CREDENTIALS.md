@@ -146,7 +146,7 @@ Chain verification proceeds from the leaf credential upward:
 
 **Depth limit:** Maximum 16 hops. Chains deeper than 16 are rejected.
 
-**Revocation at every level:** Relays SHOULD check revocation at every level of the delegation chain, not just the leaf credential. A revoked intermediate credential invalidates all downstream delegations rooted through it.
+**Revocation at every level:** Revocation is checked at every level of the delegation chain — the leaf credential AND each parent — not just the leaf (MUST — see Revocation / Relay Enforcement).
 
 ---
 
