@@ -37,7 +37,7 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   `enforceAuthorization` is enabled (PROTOCOL.md "Verification → Content Chain",
   `specs/PROTOCOL.md:678`; "Content Chain Signer Model", `specs/PROTOCOL.md:102`).
 - **Derivation** — DID/CID/multikey: dag-cbor canonical encoding with integer (not float)
-  number encoding, CIDv1 construction, the 19-char/22-length ID alphabet, W3C Multikey
+  number encoding, CIDv1 construction, the 19-char/31-length ID alphabet, W3C Multikey
   (PROTOCOL.md "CID Construction", `specs/PROTOCOL.md:226`; "Number Encoding",
   `specs/PROTOCOL.md:241`; "ID Alphabet", `specs/PROTOCOL.md:186`; "Multikey Encoding",
   `specs/PROTOCOL.md:199`).

@@ -185,7 +185,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Content identifier (22-char hash)
+          description: Content identifier (31-char hash)
       responses:
         '200':
           description: Content chain state and log
@@ -547,7 +547,7 @@ paths:
           required: true
           schema:
             type: string
-          description: Content identifier (22-char hash)
+          description: Content identifier (31-char hash)
         - name: after
           in: query
           required: false
