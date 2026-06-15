@@ -54,7 +54,7 @@ export const generateIdNoPrefix = (options?: { seed?: Uint8Array }): string => {
 /**
  * Generate a prefixed ID
  *
- * Without options: generates random 22-char ID
+ * Without options: generates random 31-char ID
  * With { seed }: generates deterministic ID from seed (for external ID mapping)
  *
  * @example
@@ -74,7 +74,7 @@ export const generateId = <T extends string>(
  *
  * @param prefix - Expected prefix (e.g., 'msg', 'post')
  * @param id - ID to validate
- * @returns true if ID has correct prefix and length (prefix + _ + 22 chars)
+ * @returns true if ID has correct prefix and length (prefix + _ + 31 chars)
  *
  * @example
  * isValidId('msg', 'msg_abc123...') // true
@@ -82,7 +82,7 @@ export const generateId = <T extends string>(
  * isValidId('msg', 'msg_short') // false (wrong length)
  */
 export const isValidId = (prefix: string, id: string): boolean => {
-  const expectedLength = prefix.length + 1 + idLength; // prefix + '_' + 22 chars
+  const expectedLength = prefix.length + 1 + idLength; // prefix + '_' + 31 chars
   return id.startsWith(`${prefix}_`) && id.length === expectedLength;
 };
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.dfos.com/manifest/v1",
   "title": "Manifest",
-  "description": "A manifest — a named map of protocol object references for semantic navigation. Keys are path-like labels. Values are protocol references: content chain identifiers (22-char bare hash), DIDs (did:dfos:...), or CIDs (bafyrei...). The document layer of the dark forest. Discovery is social or out-of-band.",
+  "description": "A manifest — a named map of protocol object references for semantic navigation. Keys are path-like labels. Values are protocol references: content chain identifiers (31-char bare hash), DIDs (did:dfos:...), or CIDs (bafyrei...). The document layer of the dark forest. Discovery is social or out-of-band.",
   "type": "object",
   "required": ["$schema", "entries"],
   "properties": {

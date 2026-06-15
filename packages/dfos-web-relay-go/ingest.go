@@ -639,8 +639,14 @@ func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult
 	// arrived first — a divergence.
 	existing, _ := store.GetBeacon(did)
 	if existing != nil {
-		existingTime, _ := time.Parse(time.RFC3339Nano, existing.Payload.CreatedAt)
-		newTime, _ := time.Parse(time.RFC3339Nano, result.CreatedAt)
+		// createdAt here is canonical millisecond-precision RFC3339: VerifyBeacon
+		// already ran validateCreatedAt (verify.go), which rejects any fraction
+		// that is not exactly 3 digits (see timestampGrammarVectors). Parsing with
+		// the strict protocol format — not RFC3339Nano — keeps this comparison at
+		// millisecond granularity, identical to the TS twin's Date.getTime(); there
+		// is no sub-millisecond component for the two relays to diverge on.
+		existingTime, _ := time.Parse("2006-01-02T15:04:05.000Z", existing.Payload.CreatedAt)
+		newTime, _ := time.Parse("2006-01-02T15:04:05.000Z", result.CreatedAt)
 		if newTime.Before(existingTime) || (newTime.Equal(existingTime) && cid <= existing.BeaconCID) {
 			return IngestionResult{CID: cid, Status: "duplicate", Kind: "beacon", ChainID: did}
 		}

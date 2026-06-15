@@ -853,6 +853,10 @@ const ingestBeacon = async (
   // lexicographically higher CID wins (mirrors chain head selection). Without it,
   // two relays seeing the same equal-timestamp pair in different orders would each
   // keep whichever arrived first — a divergence.
+  //
+  // createdAt is canonical millisecond-precision RFC3339 (the grammar gate rejects
+  // any fraction other than exactly 3 digits — see timestamp-grammar.spec.ts), so
+  // getTime() is exact and matches the Go twin's millisecond comparison.
   const existing = await store.getBeacon(did);
   if (existing) {
     const existingTime = new Date(existing.state.createdAt).getTime();
