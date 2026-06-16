@@ -1,0 +1,13 @@
+---
+import fs from 'node:fs';
+import SpecPage from '../layouts/SpecPage.astro';
+
+const source = fs.readFileSync('../../specs/CONFORMANCE.md', 'utf-8');
+---
+
+<SpecPage
+  title="Conformance"
+  description="DFOS Protocol conformance — what it means to be a conformant signer, verifier, or relay, the normative MUST sets per tier, and the deterministic test vectors that prove it."
+  path="/conformance"
+  source={source}
+/>

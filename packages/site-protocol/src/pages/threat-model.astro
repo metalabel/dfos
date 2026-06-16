@@ -1,0 +1,13 @@
+---
+import fs from 'node:fs';
+import SpecPage from '../layouts/SpecPage.astro';
+
+const source = fs.readFileSync('../../specs/THREAT-MODEL.md', 'utf-8');
+---
+
+<SpecPage
+  title="Threat Model"
+  description="DFOS Protocol threat model — adversaries, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol does and does not defend against."
+  path="/threat-model"
+  source={source}
+/>

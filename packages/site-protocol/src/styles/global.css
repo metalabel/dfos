@@ -1113,6 +1113,97 @@ a.card:hover {
   margin-bottom: 2rem;
 }
 
+/* ═══ Shiki Code Highlighting ═══ */
+/* Shiki sets token colors via inline styles (the harmonized dfos theme); the
+   box (border, padding, radius) still comes from the `pre` rules above. */
+.spec .code-wrap pre.shiki {
+  background: var(--bg-deep) !important;
+}
+
+.spec .code-wrap pre.shiki code {
+  display: block;
+  font-size: inherit;
+}
+
+/* ═══ Spec Layout + Table of Contents ═══ */
+
+.spec-layout {
+  display: block;
+}
+
+.spec-toc {
+  display: none;
+}
+
+@media (min-width: 1100px) {
+  .page-content.spec-width.has-toc {
+    max-width: 1240px;
+  }
+
+  .has-toc .spec-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 220px;
+    gap: 3.5rem;
+    align-items: start;
+  }
+
+  /* The article's code/table breakout (negative margins) would collide with
+     the TOC rail — keep them inside the column when the TOC is present. */
+  .has-toc .spec .code-wrap,
+  .has-toc .spec .table-wrap {
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .spec-toc {
+    display: block;
+    position: sticky;
+    top: 2rem;
+    max-height: calc(100vh - 4rem);
+    overflow-y: auto;
+  }
+
+  .spec-toc-label {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--teal-dim);
+    margin-bottom: 0.75rem;
+  }
+
+  .spec-toc nav {
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--surface-border);
+  }
+
+  .spec-toc-link {
+    color: var(--teal);
+    text-decoration: none;
+    font-size: 0.8rem;
+    line-height: 1.35;
+    padding: 0.3rem 0 0.3rem 0.9rem;
+    margin-left: -1px;
+    border-left: 1px solid transparent;
+    transition:
+      color 0.15s,
+      border-color 0.15s;
+  }
+
+  .spec-toc-link:hover {
+    color: var(--green);
+    border-left-color: var(--green);
+  }
+
+  .spec-toc-link.lvl-3 {
+    padding-left: 1.8rem;
+    font-size: 0.75rem;
+    color: var(--teal-dim);
+  }
+}
+
 /* ═══ FAQ ═══ */
 
 .faq-item {
