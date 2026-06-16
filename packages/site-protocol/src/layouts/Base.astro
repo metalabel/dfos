@@ -17,6 +17,13 @@ const fullTitle = path
   ? `${title} — DFOS Protocol`
   : 'DFOS Protocol — Cryptographic Identity and Content Verification';
 
+const organization = {
+  '@type': 'Organization',
+  name: 'DFOS',
+  url: 'https://dfos.com',
+  logo: 'https://protocol.dfos.com/icon.png',
+};
+
 const defaultSchema = path
   ? [
       {
@@ -30,6 +37,7 @@ const defaultSchema = path
           name: 'DFOS Protocol',
           url: 'https://protocol.dfos.com',
         },
+        publisher: organization,
       },
       {
         '@context': 'https://schema.org',
@@ -57,6 +65,7 @@ const defaultSchema = path
       url: 'https://protocol.dfos.com',
       description:
         'Cryptographic identity and content verification — Ed25519 signed chains, content-addressed proofs, W3C DIDs.',
+      publisher: organization,
     };
 
 const jsonLd = schema ?? defaultSchema;
