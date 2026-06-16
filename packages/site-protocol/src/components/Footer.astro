@@ -1,0 +1,31 @@
+---
+// Shared site footer. One nav for every doc/spec page.
+const links: Array<[string, string]> = [
+  ['/', 'Home'],
+  ['/overview', 'Why'],
+  ['/spec', 'Specification'],
+  ['/did-method', 'DID Method'],
+  ['/content-model', 'Content Model'],
+  ['/credentials', 'Credentials'],
+  ['/siwd', 'Sign In With DFOS'],
+  ['/web-relay', 'Web Relay'],
+  ['/cli', 'CLI'],
+  ['/deploy', 'Deploy'],
+  ['/skill', 'Skill'],
+  ['/threat-model', 'Threat Model'],
+  ['/conformance', 'Conformance'],
+  ['/faq', 'FAQ'],
+  ['https://github.com/metalabel/dfos', 'GitHub'],
+  ['https://dfos.com', 'dfos.com'],
+];
+---
+
+<footer class="site-footer">
+  <img src="/key-icon-green.svg" alt="" class="footer-key" />
+  <nav>
+    {links.map(([href, label]) => <a href={href}>{label}</a>)}
+  </nav>
+  <p class="credits">
+    <a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT License</a> &middot; 2026
+  </p>
+</footer>

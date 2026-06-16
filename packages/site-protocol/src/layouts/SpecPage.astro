@@ -1,0 +1,96 @@
+---
+import Footer from '../components/Footer.astro';
+import { renderSpec } from '../lib/renderSpec';
+import Base from './Base.astro';
+
+interface Props {
+  title: string;
+  description: string;
+  path: string;
+  /** Full raw markdown — used verbatim for the "copy as md" button. */
+  source: string;
+  /** Markdown actually rendered (defaults to source; the skill page strips frontmatter). */
+  body?: string;
+  copyLabel?: string;
+  copyTitle?: string;
+  /** Override the default JSON-LD (forwarded to Base). */
+  schema?: object | object[];
+}
+
+const {
+  title,
+  description,
+  path,
+  source,
+  body = source,
+  copyLabel = 'copy as md',
+  copyTitle = 'Copy as Markdown',
+  schema,
+} = Astro.props;
+
+const { html, toc } = await renderSpec(body);
+const tocEntries = toc.filter((e) => e.level === 2 || e.level === 3);
+const showToc = tocEntries.length >= 4;
+---
+
+<Base title={title} description={description} path={path} schema={schema}>
+  <div class:list={['page-content', 'spec-width', { 'has-toc': showToc }]}>
+    <nav class="site-nav">
+      <a href="/">DFOS Protocol</a>
+      <button class="copy-md" id="copy-md" title={copyTitle}>{copyLabel}</button>
+    </nav>
+
+    <slot name="intro" />
+
+    <div class="spec-layout">
+      <article class="spec" set:html={html} />
+      {
+        showToc && (
+          <aside class="spec-toc" aria-label="On this page">
+            <p class="spec-toc-label">On this page</p>
+            <nav>
+              {tocEntries.map((e) => (
+                <a href={`#${e.id}`} class:list={['spec-toc-link', `lvl-${e.level}`]}>
+                  {e.text}
+                </a>
+              ))}
+            </nav>
+          </aside>
+        )
+      }
+    </div>
+  </div>
+
+  <Footer />
+
+  <template id="raw-md">{source}</template>
+  <script is:inline>
+    (function () {
+      var copyMd = document.getElementById('copy-md');
+      if (copyMd) {
+        copyMd.addEventListener('click', function () {
+          var md = document.getElementById('raw-md').content.textContent;
+          navigator.clipboard.writeText(md).then(function () {
+            var prev = copyMd.textContent;
+            copyMd.textContent = 'copied';
+            setTimeout(function () {
+              copyMd.textContent = prev;
+            }, 1500);
+          });
+        });
+      }
+      document.querySelectorAll('.code-copy').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var code = btn.parentElement.querySelector('code').textContent;
+          navigator.clipboard.writeText(code).then(function () {
+            var prev = btn.textContent;
+            btn.textContent = 'copied';
+            setTimeout(function () {
+              btn.textContent = prev;
+            }, 1500);
+          });
+        });
+      });
+    })();
+  </script>
+</Base>

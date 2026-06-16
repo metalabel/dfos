@@ -1,4 +1,5 @@
 ---
+import Footer from '../components/Footer.astro';
 import Base from '../layouts/Base.astro';
 import { faqs, faqsToMarkdown } from '../content/faq';
 
@@ -67,24 +68,7 @@ const schema = [
     </article>
   </div>
 
-  <footer class="site-footer">
-    <img src="/key-icon-green.svg" alt="" class="footer-key" />
-    <nav>
-      <a href="/">Home</a>
-      <a href="/overview">Why</a>
-      <a href="/spec">Specification</a>
-      <a href="/did-method">DID Method</a>
-      <a href="/content-model">Content Model</a>
-      <a href="/credentials">Credentials</a>
-      <a href="/web-relay">Web Relay</a>
-      <a href="/cli">CLI</a>
-      <a href="/deploy">Deploy</a>
-      <a href="/faq">FAQ</a>
-      <a href="https://github.com/metalabel/dfos">GitHub</a>
-      <a href="https://dfos.com">dfos.com</a>
-    </nav>
-    <p class="credits"><a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT License</a> &middot; 2026</p>
-  </footer>
+  <Footer />
 
   <template id="raw-md">{faqMarkdown}</template>
   <script is:inline>
