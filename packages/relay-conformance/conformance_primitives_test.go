@@ -419,10 +419,20 @@ func TestLogContainsAllKinds(t *testing.T) {
 	postOperations(t, base, []string{csToken})
 
 	// fetch the global log — paginate to find all kinds (relay may have
-	// pre-existing data from prior tests or load testing)
+	// pre-existing data from prior tests or load testing).
+	//
+	// A conforming relay's cursor advances monotonically over an append-only
+	// log: each full page ends on a distinct CID, and the walk terminates on
+	// the first short page. If the relay instead orders by a non-unique key
+	// (e.g. timestamp), pages overlap and the page-boundary cursor repeats —
+	// a client paginating to completion then loops forever. Guard the walk so
+	// a non-convergent cursor fails fast with a clear diagnostic instead of
+	// hanging until the test timeout.
 	kinds := map[string]bool{}
 	cursor := ""
-	for {
+	seen := map[string]bool{} // page-boundary cursors already followed
+	const maxLogPages = 10000 // backstop: 1M entries at limit=100
+	for pages := 0; ; pages++ {
 		url := base + "/log?limit=100"
 		if cursor != "" {
 			url += "&after=" + cursor
@@ -439,7 +449,20 @@ func TestLogContainsAllKinds(t *testing.T) {
 			cursor = e.CID
 		}
 		if len(logResp.Entries) < 100 {
-			break
+			break // a short page is the only valid terminus
+		}
+		// full page — the cursor must advance to a CID we have not already
+		// followed, else the relay's /log pagination does not converge.
+		if seen[cursor] {
+			t.Fatalf("global /log cursor did not converge: page-boundary CID %s "+
+				"repeated after %d pages — relay /log pagination cycles "+
+				"(order the log by a unique monotonic key)", cursor, pages+1)
+		}
+		seen[cursor] = true
+		if pages+1 >= maxLogPages {
+			t.Fatalf("global /log did not terminate after %d full pages (%d+ entries) "+
+				"without repeating a cursor — relay /log pagination does not converge",
+				maxLogPages, maxLogPages*100)
 		}
 	}
 
