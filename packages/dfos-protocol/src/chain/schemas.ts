@@ -17,6 +17,16 @@ const MAX_NOTE = 256;
 const MAX_KEYS_PER_ROLE = 16;
 /** Max length for DID strings (did:dfos:xxx ~31 chars typical) */
 const MAX_DID = 256;
+/** Max length for a service entry id (did-core fragment, e.g. "profile") */
+const MAX_SERVICE_ID = 64;
+/** Max length for a service entry type string (recognized or open-namespace) */
+const MAX_SERVICE_TYPE = 64;
+/** Max length for a service entry value string (endpoint, label, anchor) */
+const MAX_SERVICE_STRING = 512;
+/** Max number of service entries in an identity's services state */
+export const MAX_SERVICES_ENTRIES = 16;
+/** Max CBOR-encoded size of the services array (bytes) — protocol constant */
+export const MAX_SERVICES_PAYLOAD_SIZE = 8192;
 
 // ---
 
@@ -26,6 +36,77 @@ export const MultikeyPublicKey = z.strictObject({
   publicKeyMultibase: z.string().max(MAX_PUBLIC_KEY_MULTIBASE),
 });
 export type MultikeyPublicKey = z.infer<typeof MultikeyPublicKey>;
+
+// ---
+
+/**
+ * Anchor target shapes — a ContentAnchor references a STABLE content
+ * identifier, dispatched by structural form:
+ *   - 31-char contentId (content chain) → mutable, gateable
+ *   - CIDv1 base32 (artifact)           → immutable, public
+ * Both are stable; a chain HEAD CID (also base32 but resolves to a non-artifact
+ * op) is rejected by the shape-dispatch + resolution type check, never anchored.
+ */
+export const CONTENT_ID_ANCHOR_RE = /^[2346789acdefhknrtvz]{31}$/;
+export const ARTIFACT_CID_ANCHOR_RE = /^baf[a-z2-7]{20,}$/;
+
+/**
+ * Service entry — discovery vocabulary in identity-chain state.
+ *
+ * Open namespace: `type` is an arbitrary bounded string. Recognized types
+ * (`DfosRelay`, `ContentAnchor`) are structurally validated; UNRECOGNIZED types
+ * are preserved verbatim and ignored (MUST-ignore-unknown) — only the common
+ * envelope (id + type) and the byte cap apply. New service types therefore
+ * never require a protocol/cross-language change.
+ */
+export const ServiceEntry = z
+  .object({
+    id: z.string().min(1).max(MAX_SERVICE_ID),
+    type: z.string().min(1).max(MAX_SERVICE_TYPE),
+  })
+  .catchall(z.unknown())
+  .superRefine((entry, ctx) => {
+    if (entry.type === 'DfosRelay') {
+      const endpoint = (entry as Record<string, unknown>)['endpoint'];
+      if (
+        typeof endpoint !== 'string' ||
+        endpoint.length < 1 ||
+        endpoint.length > MAX_SERVICE_STRING
+      ) {
+        ctx.addIssue({ code: 'custom', message: 'DfosRelay requires a non-empty endpoint string' });
+      }
+    } else if (entry.type === 'ContentAnchor') {
+      const label = (entry as Record<string, unknown>)['label'];
+      const anchor = (entry as Record<string, unknown>)['anchor'];
+      if (typeof label !== 'string' || label.length < 1 || label.length > MAX_SERVICE_STRING) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'ContentAnchor requires a non-empty label string',
+        });
+      }
+      if (
+        typeof anchor !== 'string' ||
+        !(CONTENT_ID_ANCHOR_RE.test(anchor) || ARTIFACT_CID_ANCHOR_RE.test(anchor))
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'ContentAnchor anchor must be a 31-char contentId or a CIDv1 artifact CID',
+        });
+      }
+    }
+    // unrecognized types: envelope + byte cap only (MUST-ignore-unknown)
+  });
+export type ServiceEntry = z.infer<typeof ServiceEntry>;
+
+/** Identity services state — full-state, bounded, unique entry ids */
+export const ServicesArray = z
+  .array(ServiceEntry)
+  .max(MAX_SERVICES_ENTRIES)
+  .refine(
+    (arr) => new Set(arr.map((e) => e.id)).size === arr.length,
+    'service entry ids must be unique',
+  );
+export type ServicesArray = z.infer<typeof ServicesArray>;
 
 // ---
 
@@ -39,6 +120,9 @@ const IdentityCreate = z.strictObject({
   authKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
   assertKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
   controllerKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
+  // Full-state discovery vocabulary. Optional so ops without services encode
+  // identically (undefined strips under canonical CBOR — CID-neutral).
+  services: ServicesArray.optional(),
   createdAt: Iso8601,
 });
 
@@ -53,6 +137,8 @@ const IdentityUpdate = z.strictObject({
     .array(MultikeyPublicKey)
     .min(1, 'update must have at least one controller key')
     .max(MAX_KEYS_PER_ROLE),
+  // Full-state: an update REPLACES the entire services set (omit to clear).
+  services: ServicesArray.optional(),
   createdAt: Iso8601,
 });
 
@@ -79,6 +165,8 @@ export const VerifiedIdentity = z.strictObject({
   authKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
   assertKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
   controllerKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
+  /** Resolved discovery vocabulary — projection of the winning head's services */
+  services: ServicesArray,
 });
 export type VerifiedIdentity = z.infer<typeof VerifiedIdentity>;
 

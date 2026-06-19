@@ -589,6 +589,7 @@ describe('verifyContentExtensionFromTrustedState', () => {
       ],
       assertKeys: [],
       controllerKeys: [],
+      services: [],
     };
     const delegateVerifiedIdentity: VerifiedIdentity = {
       did: delegate.identity.did,
@@ -602,6 +603,7 @@ describe('verifyContentExtensionFromTrustedState', () => {
       ],
       assertKeys: [],
       controllerKeys: [],
+      services: [],
     };
     const identityMap = new Map<string, VerifiedIdentity>();
     identityMap.set(creator.identity.did, creatorVerifiedIdentity);

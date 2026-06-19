@@ -13,8 +13,14 @@
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { deriveChainIdentifier } from './derivation';
 import { decodeMultikey } from './multikey';
-import { IdentityOperation, type MultikeyPublicKey, type VerifiedIdentity } from './schemas';
+import {
+  IdentityOperation,
+  type MultikeyPublicKey,
+  type ServiceEntry,
+  type VerifiedIdentity,
+} from './schemas';
 import type { Signer } from './schemas';
+import { assertServicesWithinCap } from './services';
 
 // -----------------------------------------------------------------------------
 // signing
@@ -69,6 +75,7 @@ export const verifyIdentityChain = async (input: {
     authKeys: [] as MultikeyPublicKey[],
     assertKeys: [] as MultikeyPublicKey[],
     controllerKeys: [] as MultikeyPublicKey[],
+    services: [] as ServiceEntry[],
     seenKeys: new Map<string, MultikeyPublicKey>(),
   };
 
@@ -109,6 +116,7 @@ export const verifyIdentityChain = async (input: {
       state.authKeys = op.authKeys;
       state.assertKeys = op.assertKeys;
       state.controllerKeys = op.controllerKeys;
+      state.services = op.services ?? [];
     }
 
     // chain integrity for non-genesis ops
@@ -145,6 +153,15 @@ export const verifyIdentityChain = async (input: {
           throw new Error(`log[${idx}]: cannot repeat key ids in same usage`);
         }
       });
+
+      // enforce services byte cap (full-state services travel on create/update)
+      if (op.services) {
+        try {
+          await assertServicesWithinCap(op.services);
+        } catch (e) {
+          throw new Error(`log[${idx}]: ${(e as Error).message}`);
+        }
+      }
     }
 
     // derive operation CID from payload
@@ -217,6 +234,8 @@ export const verifyIdentityChain = async (input: {
         state.authKeys = op.authKeys;
         state.assertKeys = op.assertKeys;
         state.controllerKeys = op.controllerKeys;
+        // full-state: update replaces the entire services set (omit to clear)
+        state.services = op.services ?? [];
         break;
       case 'delete':
         state.isDeleted = true;
@@ -232,6 +251,7 @@ export const verifyIdentityChain = async (input: {
     authKeys: state.authKeys,
     assertKeys: state.assertKeys,
     controllerKeys: state.controllerKeys,
+    services: state.services,
   };
 };
 
@@ -344,6 +364,7 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
         throw new Error('cannot repeat key ids in same usage');
       }
     });
+    if (op.services) await assertServicesWithinCap(op.services);
   }
 
   // compute new state
@@ -355,6 +376,7 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
           authKeys: op.authKeys,
           assertKeys: op.assertKeys,
           controllerKeys: op.controllerKeys,
+          services: op.services ?? [],
         }
       : {
           did: currentState.did,
@@ -362,6 +384,7 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
           authKeys: currentState.authKeys,
           assertKeys: currentState.assertKeys,
           controllerKeys: currentState.controllerKeys,
+          services: currentState.services,
         };
 
   return { state: newState, operationCID, createdAt: op.createdAt };

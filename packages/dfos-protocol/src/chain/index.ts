@@ -2,6 +2,7 @@ export * from './schemas';
 export * from './multikey';
 export * from './derivation';
 export * from './identity-chain';
+export * from './services';
 export * from './content-chain';
 export * from './beacon';
 export * from './countersign';
