@@ -33,6 +33,7 @@ const makeIdentity = () => {
     ],
     assertKeys: [],
     controllerKeys: [],
+    services: [],
   };
   return { keypair, keyId, did, kid, signer, identity };
 };
@@ -296,6 +297,7 @@ describe('dfos credential', () => {
       ],
       assertKeys: [],
       controllerKeys: [],
+      services: [],
     });
 
     const token = await createDFOSCredential({
@@ -686,6 +688,7 @@ describe('dfos credential', () => {
       ],
       assertKeys: [],
       controllerKeys: [],
+      services: [],
     });
 
     const token = await createDFOSCredential({

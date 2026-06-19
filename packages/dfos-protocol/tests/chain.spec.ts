@@ -1134,6 +1134,7 @@ describe('delegated content chain', () => {
       ],
       assertKeys: [],
       controllerKeys: [],
+      services: [],
     };
     return { keypair, keyId, did, kid, signer, identity };
   };

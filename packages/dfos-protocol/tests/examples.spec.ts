@@ -120,6 +120,7 @@ describe('example fixtures', () => {
           controllerKeys: [
             { id: creatorKeyId, type: 'Multikey', publicKeyMultibase: creatorMultikey },
           ],
+          services: [],
         };
       };
 
@@ -163,6 +164,7 @@ describe('example fixtures', () => {
           authKeys: [{ id: keyId, type: 'Multikey', publicKeyMultibase: multikey }],
           assertKeys: [{ id: keyId, type: 'Multikey', publicKeyMultibase: multikey }],
           controllerKeys: [{ id: keyId, type: 'Multikey', publicKeyMultibase: multikey }],
+          services: [],
         };
       };
     };
