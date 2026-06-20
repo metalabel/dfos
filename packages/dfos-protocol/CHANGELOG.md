@@ -11,6 +11,8 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
+## [0.11.0]
+
 ### Added
 
 - Identity-chain `services` discovery vocabulary — an optional, controller-signed
@@ -40,6 +42,7 @@ describes the protocol-package surface of that release.
 Baseline of this changelog. Earlier history predates the changelog and is
 recorded in the git log and GitHub releases.
 
-[Unreleased]: https://github.com/metalabel/dfos/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/metalabel/dfos/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/metalabel/dfos/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/metalabel/dfos/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/metalabel/dfos/releases/tag/v0.9.0
