@@ -357,7 +357,11 @@ check('Services genesis payload type', result.payload.type === 'create');
 const servicesCborBytes = dagCbor.encode(result.payload);
 const servicesCidBytes = makeCidBytes(servicesCborBytes);
 const servicesCid = cidToBase32(servicesCidBytes);
-check('Services genesis recomputed CID', servicesCid === EXPECTED_SERVICES_CID, `got ${servicesCid}`);
+check(
+  'Services genesis recomputed CID',
+  servicesCid === EXPECTED_SERVICES_CID,
+  `got ${servicesCid}`,
+);
 
 // derive the DID from the operation CID bytes
 const servicesDidSuffix = encodeId(sha256(servicesCidBytes));

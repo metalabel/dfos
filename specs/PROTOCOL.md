@@ -559,10 +559,10 @@ cross-language change.
 A `ContentAnchor`'s `anchor` references a **stable** content identifier,
 dispatched by structural form:
 
-| Anchor shape                       | Resolves to                       |
-| ---------------------------------- | --------------------------------- |
-| `^[2346789acdefhknrtvz]{31}$`      | content chain (mutable, gateable) |
-| `^baf[a-z2-7]{20,}$`               | artifact (immutable, public)      |
+| Anchor shape                  | Resolves to                       |
+| ----------------------------- | --------------------------------- |
+| `^[2346789acdefhknrtvz]{31}$` | content chain (mutable, gateable) |
+| `^baf[a-z2-7]{20,}$`          | artifact (immutable, public)      |
 
 The `label` is an opaque client-semantic key (e.g. `"profile"`, `"avatar"`) —
 the protocol assigns it no meaning, leaving applications free to define their own

@@ -462,14 +462,7 @@ paths:
                         kind:
                           type: string
                           enum:
-                            [
-                              identity-op,
-                              content-op,
-                              artifact,
-                              countersign,
-                              revocation,
-                              credential,
-                            ]
+                            [identity-op, content-op, artifact, countersign, revocation, credential]
                         chainId:
                           type: string
                           description: Chain identifier (DID or contentId)

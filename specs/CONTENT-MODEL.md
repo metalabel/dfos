@@ -123,8 +123,8 @@ Unlike a living document (where the head document is the state) or a stream (whe
 
 Each schema implies a default projection — how applications derive resolved state from the chain:
 
-| Schema        | Projection                                                                      |
-| ------------- | ------------------------------------------------------------------------------- |
+| Schema       | Projection                                                                      |
+| ------------ | ------------------------------------------------------------------------------- |
 | `post/v1`    | Living document — head `documentCID` is the current post. History is edit trail |
 | `profile/v1` | Living document — head `documentCID` is the current profile                     |
 

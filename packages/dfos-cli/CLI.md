@@ -458,42 +458,42 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 
 ## Commands
 
-| Method | Command                          | Description                                 |
-| ------ | -------------------------------- | ------------------------------------------- |
-| `GET`  | `identity list`                  | List all known identities (owned + fetched) |
-| `GET`  | `identity show [name\|did]`      | Show identity state                         |
-| `GET`  | `identity keys [name\|did]`      | Show key state + keychain availability      |
-| `GET`  | `identity services [name\|did]`  | Show resolved discovery services            |
-| `POST` | `identity create --name`         | Generate keys + sign genesis (`--service`)  |
-| `POST` | `identity update`                | Rotate keys / set services (`--service`)    |
-| `POST` | `identity device-pubkey`         | Generate a device keypair, print its pubkey |
-| `POST` | `identity add-key`               | Add another device's pubkey (1-of-N)        |
-| `POST` | `identity delete`                | Permanently delete identity                 |
-| `POST` | `identity publish [name]`        | Submit identity chain to a relay            |
-| `GET`  | `identity fetch <did>`           | Download identity chain from relay          |
-| `GET`  | `content show <id>`              | Show content chain state                    |
-| `GET`  | `content log <id>`               | Show operation history                      |
-| `GET`  | `content download <id>`          | Download blob (stdout or file)              |
-| `POST` | `content create <file\|->`       | Create content chain                        |
-| `POST` | `content update <id> <file\|->`  | Update content chain (supports delegation)  |
-| `POST` | `content delete <id>`            | Permanently delete content chain            |
-| `POST` | `content publish <id>`           | Submit content chain + blob to a relay      |
-| `GET`  | `content fetch <id>`             | Download content chain from relay           |
-| `POST` | `credential grant <id> <did>`    | Issue read/write credential                 |
-| `POST` | `credential revoke <cid>`        | Revoke a credential                         |
-| `GET`  | `content verify <id>`            | Re-verify chain integrity locally           |
-| `POST` | `witness <cid>`                  | Countersign an operation (`--relation`)     |
-| `GET`  | `countersigs <cid>`              | Show countersignatures for an operation     |
-| `GET`  | `auth token`                     | Mint short-lived auth token (stdout)        |
-| `GET`  | `auth status`                    | Show current auth state                     |
-| `*`    | `api <METHOD> <path>`            | Raw HTTP to relay with optional `--auth`    |
-| `GET`  | `relay list`                     | List configured relays                      |
-| `GET`  | `relay info [name]`              | Show relay metadata                         |
-| `POST` | `relay add <name> <url>`         | Register a named relay                      |
-| `DEL`  | `relay remove <name>`            | Unregister a relay                          |
-| `SET`  | `use <context>`                  | Set active context                          |
-| `GET`  | `config list`                    | Show full configuration                     |
-| `GET`  | `status`                         | At-a-glance overview                        |
+| Method | Command                         | Description                                 |
+| ------ | ------------------------------- | ------------------------------------------- |
+| `GET`  | `identity list`                 | List all known identities (owned + fetched) |
+| `GET`  | `identity show [name\|did]`     | Show identity state                         |
+| `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability      |
+| `GET`  | `identity services [name\|did]` | Show resolved discovery services            |
+| `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)  |
+| `POST` | `identity update`               | Rotate keys / set services (`--service`)    |
+| `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey |
+| `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)        |
+| `POST` | `identity delete`               | Permanently delete identity                 |
+| `POST` | `identity publish [name]`       | Submit identity chain to a relay            |
+| `GET`  | `identity fetch <did>`          | Download identity chain from relay          |
+| `GET`  | `content show <id>`             | Show content chain state                    |
+| `GET`  | `content log <id>`              | Show operation history                      |
+| `GET`  | `content download <id>`         | Download blob (stdout or file)              |
+| `POST` | `content create <file\|->`      | Create content chain                        |
+| `POST` | `content update <id> <file\|->` | Update content chain (supports delegation)  |
+| `POST` | `content delete <id>`           | Permanently delete content chain            |
+| `POST` | `content publish <id>`          | Submit content chain + blob to a relay      |
+| `GET`  | `content fetch <id>`            | Download content chain from relay           |
+| `POST` | `credential grant <id> <did>`   | Issue read/write credential                 |
+| `POST` | `credential revoke <cid>`       | Revoke a credential                         |
+| `GET`  | `content verify <id>`           | Re-verify chain integrity locally           |
+| `POST` | `witness <cid>`                 | Countersign an operation (`--relation`)     |
+| `GET`  | `countersigs <cid>`             | Show countersignatures for an operation     |
+| `GET`  | `auth token`                    | Mint short-lived auth token (stdout)        |
+| `GET`  | `auth status`                   | Show current auth state                     |
+| `*`    | `api <METHOD> <path>`           | Raw HTTP to relay with optional `--auth`    |
+| `GET`  | `relay list`                    | List configured relays                      |
+| `GET`  | `relay info [name]`             | Show relay metadata                         |
+| `POST` | `relay add <name> <url>`        | Register a named relay                      |
+| `DEL`  | `relay remove <name>`           | Unregister a relay                          |
+| `SET`  | `use <context>`                 | Set active context                          |
+| `GET`  | `config list`                   | Show full configuration                     |
+| `GET`  | `status`                        | At-a-glance overview                        |
 
 ---
 

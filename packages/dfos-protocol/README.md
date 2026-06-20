@@ -21,11 +21,11 @@ import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-pr
 
 ## Subpath Exports
 
-| Export                                 | Description                                                             |
-| -------------------------------------- | ----------------------------------------------------------------------- |
+| Export                                 | Description                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------- |
 | `@metalabel/dfos-protocol/chain`       | Identity & content chains, services, artifacts, countersigns, revocations |
-| `@metalabel/dfos-protocol/credentials` | Auth tokens (DID-signed JWT) and DFOS credentials for authorization     |
-| `@metalabel/dfos-protocol/crypto`      | Ed25519, JWS, JWT, dag-cbor, base64url, ID generation                   |
+| `@metalabel/dfos-protocol/credentials` | Auth tokens (DID-signed JWT) and DFOS credentials for authorization       |
+| `@metalabel/dfos-protocol/crypto`      | Ed25519, JWS, JWT, dag-cbor, base64url, ID generation                     |
 
 ## Specifications
 

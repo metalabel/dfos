@@ -156,10 +156,10 @@ the common envelope `{ id, type }`; the entry `id` becomes the DID-URL fragment
 validated; the namespace is open, and unrecognized types are preserved verbatim
 and ignored.
 
-| Service `type`  | Fields                | DID Document mapping                                       |
-| --------------- | --------------------- | --------------------------------------------------------- |
-| `DfosRelay`     | `endpoint` (URL)      | `serviceEndpoint` = the relay URL                         |
-| `ContentAnchor` | `label`, `anchor`     | `serviceEndpoint` = the anchor; `label` retained as a property |
+| Service `type`  | Fields            | DID Document mapping                                           |
+| --------------- | ----------------- | -------------------------------------------------------------- |
+| `DfosRelay`     | `endpoint` (URL)  | `serviceEndpoint` = the relay URL                              |
+| `ContentAnchor` | `label`, `anchor` | `serviceEndpoint` = the anchor; `label` retained as a property |
 
 A `ContentAnchor`'s `anchor` is a **stable** content identifier dispatched by
 shape: a 31-character contentId resolves to a content chain; a `baf…` CIDv1

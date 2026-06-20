@@ -214,5 +214,4 @@ describe('example fixtures', () => {
       expect(result.aud).toBe(fixture.expected.aud);
     });
   });
-
 });
