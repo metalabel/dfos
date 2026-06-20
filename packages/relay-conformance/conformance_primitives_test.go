@@ -392,14 +392,6 @@ func TestLogContainsAllKinds(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	// create a beacon
-	beaconKid := id.did + "#" + id.controller.keyID
-	beaconToken, _, err := dfos.SignBeacon(id.did, cc.contentID, beaconKid, id.controller.priv)
-	if err != nil {
-		t.Fatalf("SignBeacon: %v", err)
-	}
-	postOperations(t, base, []string{beaconToken})
-
 	// create an artifact
 	artKid := id.did + "#" + id.auth.keyID
 	artContent := map[string]any{"$schema": "test/v1", "title": "log test"}
@@ -466,7 +458,7 @@ func TestLogContainsAllKinds(t *testing.T) {
 		}
 	}
 
-	for _, expected := range []string{"identity-op", "content-op", "beacon", "artifact", "countersign"} {
+	for _, expected := range []string{"identity-op", "content-op", "artifact", "countersign"} {
 		if !kinds[expected] {
 			t.Errorf("expected kind %q in global log, not found", expected)
 		}

@@ -26,11 +26,11 @@ The DFOS protocol has six components:
 | --------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links                                     |
 | **Credentials**       | Auth tokens and DFOS credentials for authorization — see [CREDENTIALS.md](https://protocol.dfos.com/credentials) |
-| **Beacons**           | Signed manifest pointer announcements — content set discovery via manifest content ID                            |
+| **Services**          | Identity discovery vocabulary — controller-signed relay locators and stable content anchors                      |
 | **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data                                  |
 | **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op                                     |
 
-> **Note:** The credential format (auth tokens, read/write credentials, revocation) is specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials). This document covers the crypto core, chain primitives, beacons, artifacts, and countersignatures.
+> **Note:** The credential format (auth tokens, read/write credentials, revocation) is specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials). This document covers the crypto core, chain primitives, services, artifacts, and countersignatures.
 
 The crypto core is the trust boundary — everything below it is cryptographically verified. Documents are flat content objects, content-addressed directly: `documentCID = CID(dagCborCanonicalEncode(contentObject))`. What goes inside the content object is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
 
@@ -135,7 +135,6 @@ The JWS `typ` header uses protocol-specific values (not IANA media types):
 | ---------------------- | --------------------------------------------- |
 | `did:dfos:identity-op` | Identity chain operations                     |
 | `did:dfos:content-op`  | Content chain operations                      |
-| `did:dfos:beacon`      | Beacon announcements                          |
 | `did:dfos:artifact`    | Standalone signed inline documents            |
 | `did:dfos:countersign` | Standalone witness attestations               |
 | `did:dfos:revocation`  | Credential revocation artifacts               |
@@ -146,7 +145,7 @@ Protocol-specific `typ` values are non-standard per JOSE convention, documented 
 
 ### Operation Versioning
 
-Every proof-plane operation payload (identity, content, beacon, artifact, countersign, revocation) carries a top-level integer `version` field. This document specifies version `1`; verifiers MUST reject any operation whose `version` is not exactly `1`. Both reference implementations pin `version: 1` and reject all other values. A future wire-incompatible revision of the operation format would increment this field, and implementations declare which versions they accept. The operation `version` is distinct from content-document `$schema` versioning (see [CONTENT-MODEL.md](https://protocol.dfos.com/content-model)), which versions application payloads independently and does not affect operation-level verification.
+Every proof-plane operation payload (identity, content, artifact, countersign, revocation) carries a top-level integer `version` field. This document specifies version `1`; verifiers MUST reject any operation whose `version` is not exactly `1`. Both reference implementations pin `version: 1` and reject all other values. A future wire-incompatible revision of the operation format would increment this field, and implementations declare which versions they accept. The operation `version` is distinct from content-document `$schema` versioning (see [CONTENT-MODEL.md](https://protocol.dfos.com/content-model)), which versions application payloads independently and does not affect operation-level verification.
 
 ### Operation Field Limits
 
@@ -321,6 +320,7 @@ DID:    did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
   authKeys: MultikeyPublicKey[],
   assertKeys: MultikeyPublicKey[],
   controllerKeys: MultikeyPublicKey[],   // must have at least one
+  services?: ServiceEntry[],              // discovery vocabulary (optional)
   createdAt: string }                     // ISO 8601, ms precision, UTC
 
 // Key rotation / modification
@@ -329,6 +329,7 @@ DID:    did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
   authKeys: MultikeyPublicKey[],
   assertKeys: MultikeyPublicKey[],
   controllerKeys: MultikeyPublicKey[],   // must have at least one
+  services?: ServiceEntry[],              // full-state — REPLACES the prior set
   createdAt: string }
 
 // Permanent destruction
@@ -336,6 +337,11 @@ DID:    did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
   previousOperationCID: string,
   createdAt: string }
 ```
+
+The optional `services` array is full-state discovery vocabulary projected into
+verified identity state — see [Services](#services). Omitting it encodes
+identically to a service-less operation (CID-neutral); an `update` carrying it
+REPLACES the entire prior set; a `delete` carries the last set unchanged.
 
 ### Content Operations
 
@@ -420,7 +426,7 @@ Every operation JWS (identity-op and content-op) includes a `cid` field in the p
 
 A CID mismatch between header and derived value immediately surfaces dag-cbor encoding disagreements across implementations.
 
-Note: JWT auth tokens do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). This field is present on operation JWS tokens, beacons, credentials, and revocations.
+Note: JWT auth tokens do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). This field is present on operation JWS tokens, artifacts, countersignatures, credentials, and revocations.
 
 ### CID Derivation
 
@@ -442,7 +448,7 @@ Where `idEncode` is the 19-char alphabet encoding described above.
 
 ## Signature Verification Profile
 
-DFOS pins a deliberately narrow profile of the JOSE/JWS surface so that **all conformant verifiers accept and reject the same signatures byte-for-byte**. The rules below are normative and apply to **every** verification path: identity-op JWS, content-op JWS, beacons, artifacts, countersignatures, DFOS credentials, credential revocations, and auth-token JWTs. A verifier MUST apply §1–§3 to the protected header **before** performing any signature computation, and MUST apply §4 as part of (or before) the signature check. A token that violates any rule MUST be rejected regardless of whether its signature would otherwise verify.
+DFOS pins a deliberately narrow profile of the JOSE/JWS surface so that **all conformant verifiers accept and reject the same signatures byte-for-byte**. The rules below are normative and apply to **every** verification path: identity-op JWS, content-op JWS, artifacts, countersignatures, DFOS credentials, credential revocations, and auth-token JWTs. A verifier MUST apply §1–§3 to the protected header **before** performing any signature computation, and MUST apply §4 as part of (or before) the signature check. A token that violates any rule MUST be rejected regardless of whether its signature would otherwise verify.
 
 There is no algorithm agility: the verifier never branches on `alg` to select a primitive. Ed25519 (`EdDSA`) is the only signature algorithm.
 
@@ -513,72 +519,91 @@ Credentials can be revoked by publishing a **revocation artifact** — a signed 
 
 ---
 
-## Beacons
+## Services
 
-A beacon is a signed announcement referencing a manifest content chain — a periodic commitment over an identity's content set. Beacons are floating signed artifacts, not chained. They provide a compact, verifiable pointer to the identity's current manifest at a point in time.
+`services` is an identity's **discovery vocabulary** — a controller-signed,
+full-state array carried in identity-chain `create`/`update` operations and
+projected into verified identity state. It answers "given a DID, where do I
+reach this identity, and what stable content does it publish?" Services are not a
+standalone primitive: they live inside identity operations, inherit the chain's
+signer rules (only a current controller key may change them), and inherit the
+chain's equivocation resolution (services are a pure projection of the winning
+head, so a forked log resolves to exactly one services set via the same
+deterministic head selection used for keys).
 
-### Beacon Payload
+### Service Entry
 
-```json
-{
-  "version": 1,
-  "type": "beacon",
-  "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
-  "manifestContentId": "cv7n8vkvr64cctf3294h9k4eanhff8z",
-  "createdAt": "2026-03-07T00:05:00.000Z"
+```typescript
+{ id: string,        // did-core fragment, unique within the set (deref did:dfos:xxx#<id>)
+  type: string,      // open namespace — recognized types are structurally validated
+  ...                // type-specific fields (see below)
 }
 ```
 
-| Field               | Type   | Description                                          |
-| ------------------- | ------ | ---------------------------------------------------- |
-| `version`           | number | Literal `1`                                          |
-| `type`              | string | Literal `"beacon"`                                   |
-| `did`               | string | DID of the identity publishing the beacon            |
-| `manifestContentId` | string | Content ID of the manifest chain (31-char bare hash) |
-| `createdAt`         | string | ISO 8601 timestamp                                   |
+Every entry carries the common envelope `{ id, type }`. The namespace is **open**:
+two types are recognized and structurally validated; any other `type` is an
+opaque extension that verifiers MUST preserve verbatim and otherwise ignore
+(MUST-ignore-unknown). New service types therefore never require a protocol or
+cross-language change.
 
-### Beacon JWS Header
+**Recognized types:**
 
-```json
-{
-  "alg": "EdDSA",
-  "typ": "did:dfos:beacon",
-  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe",
-  "cid": "bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq"
-}
+```typescript
+// Transport locator — where to reach a relay serving this identity
+{ id: string, type: "DfosRelay", endpoint: string }   // endpoint: bare URL string
+
+// Stable content reference under a client-defined semantic label
+{ id: string, type: "ContentAnchor", label: string, anchor: string }
 ```
 
-### Worked Example: Beacon
+A `ContentAnchor`'s `anchor` references a **stable** content identifier,
+dispatched by structural form:
 
-Using the reference identity (`did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`) and key 1 from the identity chain examples. The beacon references a manifest content chain.
+| Anchor shape                  | Resolves to                       |
+| ----------------------------- | --------------------------------- |
+| `^[2346789acdefhknrtvz]{31}$` | content chain (mutable, gateable) |
+| `^baf[a-z2-7]{20,}$`          | artifact (immutable, public)      |
 
-**Beacon CID** (dag-cbor canonical encode → CIDv1):
+The `label` is an opaque client-semantic key (e.g. `"profile"`, `"avatar"`) —
+the protocol assigns it no meaning, leaving applications free to define their own
+namespaces while still resolving anchors uniformly. A chain HEAD CID is also
+`baf…`-shaped, so it dispatches to "artifact" and then fails the resolution-time
+`type: "artifact"` check — "never anchor a head CID" holds without a mode flag.
+
+### Bounds
+
+- ≤ 16 entries per identity; entry `id`s MUST be unique within the set
+- `id` and `type`: 1–64 characters; recognized string fields (`endpoint`,
+  `label`, `anchor`): 1–512 characters
+- The CBOR-encoded `services` array MUST NOT exceed **8192 bytes**. Verifiers
+  enforce this over the same canonical encoding used on the wire, so the bound is
+  identical across implementations
+- An entry whose **recognized** type is structurally malformed (e.g. a
+  `DfosRelay` without an `endpoint`) MUST be rejected at verification. A malformed
+  **unrecognized** type is preserved and ignored (envelope + byte cap only)
+
+### Full-state semantics
+
+`services` is full-state, not a delta. A `create` sets the initial set; an
+`update` REPLACES the entire set (omit the field to clear it); a `delete` carries
+the last set unchanged into terminal state. Omitting `services` encodes
+identically to a service-less operation (CID-neutral).
+
+### Worked Example: Services
+
+`examples/identity-services.json` is a genesis publishing a relay locator and two
+content anchors (one content-chain, one artifact). Signed by reference key 1:
 
 ```
-bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq
+did:          did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar
+typ:          did:dfos:identity-op
+cid:          bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze
+services:     [ { id: "relay",   type: "DfosRelay",     endpoint: "https://relay.dfos.com" },
+                { id: "profile", type: "ContentAnchor", label: "profile", anchor: "cv7n8vkvr64cctf3294h9k4eanhff8z" },
+                { id: "avatar",  type: "ContentAnchor", label: "avatar",  anchor: "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy" } ]
 ```
 
-**Controller JWS** (key 1 signs):
-
-```
-kid:          did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_r9ev34fvc23z999veaaft83nn29zvhe
-typ:          did:dfos:beacon
-cid:          bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq
-```
-
-**Witness countersignature** (a separate identity countersigns the beacon by CID):
-
-A countersignature is a standalone operation with its own CID and `typ: did:dfos:countersign`. See the [Countersignatures](#countersignatures) section below.
-
-Full JWS tokens are in [`examples/beacon.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/beacon.json).
-
-### Beacon Semantics
-
-Beacons are not chained — there is no `previousOperationCID`. For a given DID, the latest beacon with a strictly-greater `createdAt` timestamp wins. Beacons replace, not accumulate.
-
-**Clock skew tolerance**: Implementations MUST reject beacons with a `createdAt` more than 5 minutes in the future relative to the verifier's clock. This prevents pre-dating attacks while accommodating reasonable clock drift.
-
-**manifestContentId**: A 31-char content ID referencing the manifest content chain that indexes this identity's content set. The manifest itself is a living document on a content chain — see the [Content Model](https://protocol.dfos.com/content-model) for the manifest schema. The beacon points to the manifest chain, not to a specific snapshot — consumers resolve the manifest chain's current head to get the latest content index.
+The full JWS token is in [`examples/identity-services.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/identity-services.json).
 
 ---
 
@@ -623,6 +648,13 @@ The `content` object MUST include a `$schema` string that identifies the artifac
 
 A countersignature is a standalone witness attestation — a signed statement that references a target operation by CID. Each countersignature has its own `typ` header (`did:dfos:countersign`), its own payload, and its own CID distinct from the target.
 
+It is the protocol's only **inter-subjective** primitive. Every other operation
+is monadic — a self-sovereign identity acting on its own chain. A countersignature
+is the signed trace of one subject witnessing another: an endorsement, a
+co-authorship, a solemnization. Where an artifact is the work, countersignatures
+are the collective attesting "we made this" — authorship rendered as a social act
+rather than a private claim.
+
 ### Payload
 
 ```json
@@ -631,29 +663,41 @@ A countersignature is a standalone witness attestation — a signed statement th
   "type": "countersign",
   "did": "did:dfos:witness...",
   "targetCID": "bafy...",
+  "relation": "endorses",
   "createdAt": "2026-03-25T00:00:00.000Z"
 }
 ```
 
-The `did` field is the witness identity — the DID signing the attestation. The `targetCID` references the operation being attested to.
+The `did` field is the witness identity — the DID signing the attestation. The `targetCID` references the operation being attested to. The optional `relation` field names the nature of the attestation.
+
+**`relation`** is an OPEN-namespace tag — an arbitrary 1–64 character string. A
+handful of values carry conventional social meaning (`endorses`, `coauthors`,
+`witnessed`, `holds`, `received`), but the namespace is unbounded: recognized
+values inform clients, unrecognized values MUST be preserved and ignored
+(MUST-ignore-unknown). The field is optional, so a bare witness attestation (no
+relation) encodes identically to one before this revision (CID-neutral). When
+present, `relation` is part of the canonical payload and therefore changes the
+countersignature's CID.
 
 ### Properties
 
 - **JWS `typ` header**: `did:dfos:countersign`
 - **Own CID**: Each countersignature has its own CID derived from its own payload, distinct from the target. This avoids the ambiguity of multiple JWS tokens sharing the same CID
 - **Stateless verification**: Signature + CID integrity + payload schema. No chain state required to verify the cryptographic validity of a countersignature
-- **Composable**: The `targetCID` can reference any CID-addressable operation — content ops, beacons, artifacts, identity ops, even other countersignatures
-- **Immutable**: Once published, a countersignature is permanent
+- **Composable**: The `targetCID` can reference any CID-addressable operation — content ops, artifacts, identity ops, even other countersignatures
+- **Immutable**: Once published, a countersignature is permanent. There is no withdrawal primitive; consumers weight recency and may honor a newer attestation that supersedes an older relation
 
 ### Verification
 
 1. Decode JWS, verify `typ` is `did:dfos:countersign`
-2. Parse and validate countersign payload (`version`, `type: "countersign"`, `did`, `targetCID`, `createdAt`)
+2. Parse and validate countersign payload (`version`, `type: "countersign"`, `did`, `targetCID`, optional `relation` (1–64 chars when present), `createdAt`)
 3. Verify the `kid` DID matches the payload `did` (the witness must sign with their own key)
 4. CID integrity — `header.cid` matches the CID computed from dag-cbor canonical encoding the raw payload
 5. Verify EdDSA JWS signature against the witness's public key
 
 Relay-level semantic checks (target exists, witness ≠ author, deduplication) are enforcement concerns, not protocol verification.
+
+Countersignatures live on the **proof plane** (public, gossiped). A countersignature is therefore unsuitable for crossing a public/private boundary: witnessing a target permanently and publicly links the witness DID to it.
 
 ---
 
@@ -1030,7 +1074,7 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/identity-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/identity-chain.ts) — `signIdentityOperation`, `verifyIdentityChain`, `verifyIdentityExtensionFromTrustedState`
 - [`chain/content-chain`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/content-chain.ts) — `signContentOperation`, `verifyContentChain`, `verifyContentExtensionFromTrustedState`
 - [`chain/derivation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/derivation.ts) — `deriveChainIdentifier`, `deriveContentId`
-- [`chain/beacon`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/beacon.ts) — `signBeacon`, `verifyBeacon`
+- [`chain/services`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/services.ts) — `classifyAnchor`, `relayEndpoints`, `anchorsByLabel`
 - [`chain/artifact`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/artifact.ts) — `signArtifact`, `verifyArtifact`
 - [`chain/countersign`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/countersign.ts) — `signCountersignature`, `verifyCountersignature`
 - [`credentials/auth-token`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/auth-token.ts) — `createAuthToken`, `verifyAuthToken`

@@ -21,11 +21,11 @@ import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-pr
 
 ## Subpath Exports
 
-| Export                                 | Description                                                             |
-| -------------------------------------- | ----------------------------------------------------------------------- |
-| `@metalabel/dfos-protocol/chain`       | Identity and content chain signing, verification, beacons, countersigns |
-| `@metalabel/dfos-protocol/credentials` | Auth tokens (DID-signed JWT) and DFOS credentials for authorization     |
-| `@metalabel/dfos-protocol/crypto`      | Ed25519, JWS, JWT, dag-cbor, base64url, ID generation                   |
+| Export                                 | Description                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| `@metalabel/dfos-protocol/chain`       | Identity & content chains, services, artifacts, countersigns, revocations |
+| `@metalabel/dfos-protocol/credentials` | Auth tokens (DID-signed JWT) and DFOS credentials for authorization       |
+| `@metalabel/dfos-protocol/crypto`      | Ed25519, JWS, JWT, dag-cbor, base64url, ID generation                     |
 
 ## Specifications
 
@@ -33,7 +33,7 @@ import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-pr
 | ------------------------------------------------ | -------------------------------------------------------------- |
 | [PROTOCOL.md](../../specs/PROTOCOL.md)           | Core protocol — chains, signatures, verification, test vectors |
 | [DID-METHOD.md](../../specs/DID-METHOD.md)       | W3C DID method specification for `did:dfos`                    |
-| [CONTENT-MODEL.md](../../specs/CONTENT-MODEL.md) | Standard content schemas (post, profile, manifest)             |
+| [CONTENT-MODEL.md](../../specs/CONTENT-MODEL.md) | Standard content schemas (post, profile)                       |
 
 ## Examples
 
@@ -47,7 +47,7 @@ The `examples/` directory contains deterministic reference fixtures that can be 
 - `content-delegated.json` — creator genesis + delegated update with DFOS write credential
 - `credential-write.json` — DFOS write credential (broad + content-narrowed)
 - `credential-read.json` — DFOS read credential
-- `beacon.json` — signed manifest pointer announcement with witness countersignature
+- `identity-services.json` — genesis publishing a services set (relay locator + content/artifact anchors)
 
 ## License
 

@@ -34,13 +34,6 @@ CREATE TABLE IF NOT EXISTS content_chains (
 	state JSON NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS beacons (
-	did TEXT PRIMARY KEY,
-	jws_token TEXT NOT NULL,
-	beacon_cid TEXT NOT NULL,
-	payload JSON NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS countersignatures (
 	operation_cid TEXT NOT NULL,
 	jws_token TEXT NOT NULL,
@@ -353,39 +346,6 @@ func (s *SQLiteStore) PutContentChain(chain StoredContentChain) error {
 }
 
 // ---------------------------------------------------------------------------
-// beacons
-// ---------------------------------------------------------------------------
-
-func (s *SQLiteStore) GetBeacon(did string) (*StoredBeacon, error) {
-	row := s.readerDB().QueryRow("SELECT did, jws_token, beacon_cid, payload FROM beacons WHERE did = ?", did)
-	var beacon StoredBeacon
-	var payloadJSON []byte
-	err := row.Scan(&beacon.DID, &beacon.JWSToken, &beacon.BeaconCID, &payloadJSON)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(payloadJSON, &beacon.Payload); err != nil {
-		return nil, fmt.Errorf("unmarshal beacon payload: %w", err)
-	}
-	return &beacon, nil
-}
-
-func (s *SQLiteStore) PutBeacon(beacon StoredBeacon) error {
-	payloadJSON, err := json.Marshal(beacon.Payload)
-	if err != nil {
-		return err
-	}
-	_, err = s.writerDB().Exec(
-		"INSERT OR REPLACE INTO beacons (did, jws_token, beacon_cid, payload) VALUES (?, ?, ?, ?)",
-		beacon.DID, beacon.JWSToken, beacon.BeaconCID, payloadJSON,
-	)
-	return err
-}
-
-// ---------------------------------------------------------------------------
 // listing
 // ---------------------------------------------------------------------------
 
@@ -441,30 +401,6 @@ func (s *SQLiteStore) ListContentChains() ([]StoredContentChain, error) {
 		chains = []StoredContentChain{}
 	}
 	return chains, rows.Err()
-}
-
-func (s *SQLiteStore) ListBeacons() ([]StoredBeacon, error) {
-	rows, err := s.readerDB().Query("SELECT did, jws_token, beacon_cid, payload FROM beacons")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var beacons []StoredBeacon
-	for rows.Next() {
-		var beacon StoredBeacon
-		var payloadJSON []byte
-		if err := rows.Scan(&beacon.DID, &beacon.JWSToken, &beacon.BeaconCID, &payloadJSON); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(payloadJSON, &beacon.Payload); err != nil {
-			return nil, err
-		}
-		beacons = append(beacons, beacon)
-	}
-	if beacons == nil {
-		beacons = []StoredBeacon{}
-	}
-	return beacons, rows.Err()
 }
 
 // ---------------------------------------------------------------------------

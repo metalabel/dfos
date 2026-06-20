@@ -66,15 +66,6 @@ type VerifiedContentResult struct {
 	LastCreatedAt string
 }
 
-// VerifiedBeaconResult is the result of beacon verification.
-type VerifiedBeaconResult struct {
-	Version           int
-	BeaconCID         string
-	DID               string
-	ManifestContentId string
-	CreatedAt         string
-}
-
 // VerifiedArtifactResult is the result of artifact verification.
 type VerifiedArtifactResult struct {
 	ArtifactCID string
@@ -88,6 +79,8 @@ type VerifiedCountersignResult struct {
 	CountersignCID string
 	WitnessDID     string
 	TargetCID      string
+	// Relation is the open-namespace relation tag, empty when absent.
+	Relation string
 }
 
 // -----------------------------------------------------------------------------
@@ -170,6 +163,7 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		authKeys       []MultikeyPublicKey
 		assertKeys     []MultikeyPublicKey
 		controllerKeys []MultikeyPublicKey
+		services       []ServiceEntry
 		seenKeys       = make(map[string]MultikeyPublicKey)
 	)
 
@@ -229,11 +223,21 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 			}
 		}
 
+		// parse services (discovery vocabulary) for create/update — full-state
+		var opServices []ServiceEntry
+		if opType == "create" || opType == "update" {
+			opServices, err = parseServices(payload)
+			if err != nil {
+				return nil, fmt.Errorf("log[%d]: %w", idx, err)
+			}
+		}
+
 		// initialize key state from genesis
 		if opType == "create" {
 			authKeys = opAuthKeys
 			assertKeys = opAssertKeys
 			controllerKeys = opControllerKeys
+			services = opServices
 		}
 
 		// chain integrity for non-genesis
@@ -354,6 +358,7 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 			authKeys = opAuthKeys
 			assertKeys = opAssertKeys
 			controllerKeys = opControllerKeys
+			services = opServices
 		case "delete":
 			isDeleted = true
 		}
@@ -370,6 +375,7 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 			AuthKeys:       authKeys,
 			AssertKeys:     assertKeys,
 			ControllerKeys: controllerKeys,
+			Services:       normalizeServices(services),
 		},
 		HeadCID:       previousCID,
 		LastCreatedAt: lastCreatedAt,
@@ -489,6 +495,12 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 			}
 		}
 
+		// update REPLACES the full services state
+		opServices, err := parseServices(payload)
+		if err != nil {
+			return nil, err
+		}
+
 		return &VerifiedIdentityResult{
 			State: IdentityState{
 				DID:            currentState.DID,
@@ -496,13 +508,14 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 				AuthKeys:       opAuthKeys,
 				AssertKeys:     opAssertKeys,
 				ControllerKeys: opControllerKeys,
+				Services:       normalizeServices(opServices),
 			},
 			HeadCID:       operationCID,
 			LastCreatedAt: createdAt,
 		}, nil
 	}
 
-	// delete
+	// delete — carry the last services state
 	return &VerifiedIdentityResult{
 		State: IdentityState{
 			DID:            currentState.DID,
@@ -510,6 +523,7 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 			AuthKeys:       currentState.AuthKeys,
 			AssertKeys:     currentState.AssertKeys,
 			ControllerKeys: currentState.ControllerKeys,
+			Services:       normalizeServices(currentState.Services),
 		},
 		HeadCID:       operationCID,
 		LastCreatedAt: createdAt,
@@ -937,100 +951,6 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 }
 
 // -----------------------------------------------------------------------------
-// Beacon verification
-// -----------------------------------------------------------------------------
-
-const maxBeaconFuture = 5 * time.Minute
-
-// VerifyBeacon verifies a beacon JWS — signature, CID, payload schema,
-// clock skew.
-func VerifyBeacon(jwsToken string, resolveKey KeyResolver) (*VerifiedBeaconResult, error) {
-	return VerifyBeaconAt(jwsToken, resolveKey, time.Now())
-}
-
-// VerifyBeaconAt is like VerifyBeacon but accepts a custom current time for testing.
-func VerifyBeaconAt(jwsToken string, resolveKey KeyResolver, now time.Time) (*VerifiedBeaconResult, error) {
-	header, payload, err := DecodeJWSUnsafe(jwsToken)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode beacon JWS")
-	}
-
-	// validate payload
-	if v, ok := payload["version"].(int64); !ok || v != 1 {
-		return nil, fmt.Errorf("invalid beacon payload: invalid or missing version")
-	}
-	if payloadString(payload, "type") != "beacon" {
-		return nil, fmt.Errorf("invalid beacon payload: wrong type")
-	}
-	beaconDID := payloadString(payload, "did")
-	if beaconDID == "" {
-		return nil, fmt.Errorf("invalid beacon payload: missing did")
-	}
-	manifestContentId := payloadString(payload, "manifestContentId")
-	if len(manifestContentId) != contentIDLength {
-		return nil, fmt.Errorf("invalid beacon payload: manifestContentId must be a 31-character content ID")
-	}
-	createdAt := payloadString(payload, "createdAt")
-	if err := validateCreatedAt(createdAt); err != nil {
-		return nil, fmt.Errorf("invalid beacon payload: %w", err)
-	}
-
-	// verify typ
-	if header.Typ != "did:dfos:beacon" {
-		return nil, fmt.Errorf("invalid beacon typ: %s", header.Typ)
-	}
-
-	// verify kid DID matches payload did
-	kid := header.Kid
-	hashIdx := strings.Index(kid, "#")
-	if hashIdx < 0 {
-		return nil, fmt.Errorf("beacon kid must be a DID URL")
-	}
-	kidDid := kid[:hashIdx]
-	if kidDid != beaconDID {
-		return nil, fmt.Errorf("beacon kid DID does not match payload did")
-	}
-
-	// verify signature
-	publicKey, err := resolveKey(kid)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve beacon key: %w", err)
-	}
-	if _, _, err := VerifyJWS(jwsToken, publicKey); err != nil {
-		return nil, fmt.Errorf("invalid beacon signature")
-	}
-
-	// verify CID
-	_, _, beaconCID, err := DagCborCID(payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to derive beacon CID: %w", err)
-	}
-	if header.CID == "" {
-		return nil, fmt.Errorf("missing cid in beacon header")
-	}
-	if header.CID != beaconCID {
-		return nil, fmt.Errorf("beacon cid mismatch")
-	}
-
-	// clock skew check
-	beaconTime, err := time.Parse(protocolTimeFormat, createdAt)
-	if err != nil {
-		return nil, fmt.Errorf("invalid beacon createdAt: %w", err)
-	}
-	if beaconTime.After(now.Add(maxBeaconFuture)) {
-		return nil, fmt.Errorf("beacon createdAt is too far in the future")
-	}
-
-	return &VerifiedBeaconResult{
-		Version:           1,
-		BeaconCID:         beaconCID,
-		DID:               beaconDID,
-		ManifestContentId: manifestContentId,
-		CreatedAt:         createdAt,
-	}, nil
-}
-
-// -----------------------------------------------------------------------------
 // Artifact verification
 // -----------------------------------------------------------------------------
 
@@ -1155,6 +1075,15 @@ func VerifyCountersignature(jwsToken string, resolveKey KeyResolver) (*VerifiedC
 	if targetCID == "" {
 		return nil, fmt.Errorf("invalid countersignature payload: missing targetCID")
 	}
+	// optional open-namespace relation tag — present → must be a 1..N string
+	relation := ""
+	if rv, ok := payload["relation"]; ok {
+		rs, ok := rv.(string)
+		if !ok || len(rs) < 1 || len(rs) > maxRelation {
+			return nil, fmt.Errorf("invalid countersignature payload: relation must be a non-empty string (1..%d chars)", maxRelation)
+		}
+		relation = rs
+	}
 
 	// verify kid DID matches payload did
 	kid := header.Kid
@@ -1192,5 +1121,6 @@ func VerifyCountersignature(jwsToken string, resolveKey KeyResolver) (*VerifiedC
 		CountersignCID: countersignCID,
 		WitnessDID:     witnessDID,
 		TargetCID:      targetCID,
+		Relation:       relation,
 	}, nil
 }

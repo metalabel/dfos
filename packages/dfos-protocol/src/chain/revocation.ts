@@ -3,7 +3,7 @@
   REVOCATION
 
   Signed revocation artifact for DFOS credentials. Gossiped across the relay
-  network like beacons. Permanent — no un-revoke, issue a new credential
+  network on the proof plane. Permanent — no un-revoke, issue a new credential
   instead.
 
   Only the credential's issuer DID can revoke it. Relay maintains a revocation

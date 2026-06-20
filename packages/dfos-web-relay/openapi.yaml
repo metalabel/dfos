@@ -4,10 +4,10 @@ info:
   version: 0.9.0
   description: |
     HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves
-    identity chains, content chains, beacons, countersignatures, and content blobs.
+    identity chains, content chains, countersignatures, and content blobs.
 
     Two data planes:
-    - **Proof plane** (public): signed chain operations, beacons, countersignatures
+    - **Proof plane** (public): signed chain operations, countersignatures
     - **Content plane** (authenticated): raw content blobs gated by DID auth tokens and DFOS credentials
 
 servers:
@@ -66,7 +66,7 @@ paths:
       summary: Submit operations for ingestion
       description: |
         Accept a batch of JWS tokens — identity operations, content operations,
-        beacons, and countersignatures. The relay classifies, dependency-sorts,
+        and countersignatures. The relay classifies, dependency-sorts,
         verifies, and stores each token.
       tags: [Proof Plane]
       requestBody:
@@ -422,7 +422,7 @@ paths:
       summary: Paginated global log of all accepted operations
       description: |
         Returns every operation the relay has accepted — across all identity and
-        content chains, plus beacons and countersignatures — in acceptance order.
+        content chains, plus countersignatures — in acceptance order.
         Cursor-based pagination. Used by peer relays to background-sync. Available
         only when the relay advertises the `log` capability; otherwise returns 501.
       tags: [Proof Plane]
@@ -462,15 +462,7 @@ paths:
                         kind:
                           type: string
                           enum:
-                            [
-                              identity-op,
-                              content-op,
-                              beacon,
-                              artifact,
-                              countersign,
-                              revocation,
-                              credential,
-                            ]
+                            [identity-op, content-op, artifact, countersign, revocation, credential]
                         chainId:
                           type: string
                           description: Chain identifier (DID or contentId)
@@ -589,7 +581,7 @@ paths:
   /countersignatures/{cid}:
     get:
       operationId: getCountersignaturesByCID
-      summary: Get countersignatures for any CID (operation or beacon)
+      summary: Get countersignatures for an operation CID
       tags: [Proof Plane]
       parameters:
         - name: cid
@@ -597,7 +589,7 @@ paths:
           required: true
           schema:
             type: string
-          description: CIDv1 of the operation or beacon
+          description: CIDv1 of the operation
       responses:
         '200':
           description: Countersignatures
@@ -614,27 +606,6 @@ paths:
                     items:
                       type: string
                       description: JWS compact serialization (witness signature)
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /beacons/{did}:
-    get:
-      operationId: getBeacon
-      summary: Get the latest beacon for a DID
-      tags: [Proof Plane]
-      parameters:
-        - name: did
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Latest beacon
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BeaconResponse'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -661,7 +632,7 @@ components:
           description: Error message if rejected
         kind:
           type: string
-          enum: [identity-op, content-op, beacon, artifact, countersign, revocation, credential]
+          enum: [identity-op, content-op, artifact, countersign, revocation, credential]
         chainId:
           type: string
           description: Chain identifier (DID or contentId)
@@ -676,7 +647,7 @@ components:
           type: string
         chainType:
           type: string
-          enum: [identity, content, artifact, beacon, countersign, revocation, credential]
+          enum: [identity, content, artifact, countersign, revocation, credential]
         chainId:
           type: string
 
@@ -691,7 +662,7 @@ components:
           description: CID of the current head operation
         state:
           type: object
-          required: [did, isDeleted, authKeys, assertKeys, controllerKeys]
+          required: [did, isDeleted, authKeys, assertKeys, controllerKeys, services]
           properties:
             did:
               type: string
@@ -709,6 +680,22 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/MultikeyPublicKey'
+            services:
+              type: array
+              description: >-
+                Resolved discovery vocabulary (controller-signed). Each entry has
+                a common envelope {id, type}; recognized types DfosRelay and
+                ContentAnchor carry type-specific fields. The namespace is open —
+                unrecognized types are preserved verbatim.
+              items:
+                type: object
+                required: [id, type]
+                properties:
+                  id:
+                    type: string
+                  type:
+                    type: string
+                additionalProperties: true
 
     ContentChainResponse:
       type: object
@@ -742,23 +729,6 @@ components:
               type: integer
             creatorDID:
               type: string
-
-    BeaconResponse:
-      type: object
-      required: [did, jwsToken, beaconCID, manifestContentId, createdAt]
-      properties:
-        did:
-          type: string
-        jwsToken:
-          type: string
-        beaconCID:
-          type: string
-        manifestContentId:
-          type: string
-          description: Content ID of the manifest chain
-        createdAt:
-          type: string
-          format: date-time
 
     MultikeyPublicKey:
       type: object
@@ -809,6 +779,6 @@ tags:
   - name: Meta
     description: Relay metadata and discovery
   - name: Proof Plane
-    description: Public routes for signed chain operations, beacons, and countersignatures
+    description: Public routes for signed chain operations and countersignatures
   - name: Content Plane
     description: Authenticated routes for content blob storage and retrieval

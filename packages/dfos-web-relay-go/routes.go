@@ -35,7 +35,6 @@ func newRouter(r *Relay) http.Handler {
 	mux.HandleFunc("PUT /content/{contentId}/blob/{operationCID}", r.handlePutBlob)
 	mux.HandleFunc("GET /content/{contentId}", r.handleGetContent)
 	mux.HandleFunc("GET /countersignatures/{cid}", r.handleGetCountersignatures)
-	mux.HandleFunc("GET /beacons/{did...}", r.handleGetBeacon)
 	mux.HandleFunc("GET /log", r.handleGetLog)
 
 	return mux
@@ -424,29 +423,6 @@ func (r *Relay) handleOperationCountersignatures(w http.ResponseWriter, req *htt
 	writeJSON(w, 200, map[string]any{
 		"operationCID":      cid,
 		"countersignatures": cs,
-	})
-}
-
-// ---------------------------------------------------------------------------
-// beacons
-// ---------------------------------------------------------------------------
-
-func (r *Relay) handleGetBeacon(w http.ResponseWriter, req *http.Request) {
-	did := req.PathValue("did")
-	beacon, err := r.readStore.GetBeacon(did)
-	if storeErr(w, err) {
-		return
-	}
-	if beacon == nil {
-		writeError(w, 404, "not found")
-		return
-	}
-	writeJSON(w, 200, map[string]any{
-		"did":               beacon.DID,
-		"jwsToken":          beacon.JWSToken,
-		"beaconCID":         beacon.BeaconCID,
-		"manifestContentId": beacon.Payload.ManifestContentId,
-		"createdAt":         beacon.Payload.CreatedAt,
 	})
 }
 

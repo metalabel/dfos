@@ -6,9 +6,20 @@ import (
 	"fmt"
 )
 
+// maxRelation bounds the open-namespace countersignature relation tag.
+const maxRelation = 64
+
 // SignCountersign signs a standalone countersignature attesting to a target operation by CID.
 // Returns the JWS token and the countersign's own CID (distinct from the target).
 func SignCountersign(witnessDID, targetCID, kid string, privateKey ed25519.PrivateKey) (jwsToken string, countersignCID string, err error) {
+	return SignCountersignWithRelation(witnessDID, targetCID, "", kid, privateKey)
+}
+
+// SignCountersignWithRelation is SignCountersign plus an open-namespace relation
+// tag naming the nature of the attestation (e.g. "endorses", "coauthors"). An
+// empty relation is omitted from the payload, encoding identically to a bare
+// countersignature (CID-neutral).
+func SignCountersignWithRelation(witnessDID, targetCID, relation, kid string, privateKey ed25519.PrivateKey) (jwsToken string, countersignCID string, err error) {
 	now := protocolTimestamp()
 
 	payload := map[string]any{
@@ -17,6 +28,9 @@ func SignCountersign(witnessDID, targetCID, kid string, privateKey ed25519.Priva
 		"did":       witnessDID,
 		"targetCID": targetCID,
 		"createdAt": now.Format("2006-01-02T15:04:05.000Z"),
+	}
+	if relation != "" {
+		payload["relation"] = relation
 	}
 
 	_, _, cidStr, err := DagCborCID(payload)

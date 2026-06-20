@@ -4,7 +4,6 @@
 //   - Signature verification (tampered, wrong key)
 //   - Batch semantics (mixed valid/invalid, multi-chain)
 //   - Credential type enforcement (write-for-read, read-for-write)
-//   - Beacon edge cases (unknown identity, deleted identity)
 //   - Blob edge cases (idempotent upload, non-existent content)
 //   - Countersignature edge cases (non-existent operation, self-countersign)
 //   - Chain integrity (multiple chains, long chains)
@@ -259,69 +258,6 @@ func TestReadCredentialCannotWrite(t *testing.T) {
 	json.Unmarshal(body, &results)
 	if len(results.Results) > 0 && results.Results[0].Error == "" {
 		t.Fatal("read credential should not grant write access")
-	}
-}
-
-// ===================================================================
-// beacon edge cases
-// ===================================================================
-
-// TestBeaconFromUnknownIdentity verifies the relay rejects beacons
-// signed by an identity that hasn't been registered.
-func TestBeaconFromUnknownIdentity(t *testing.T) {
-	base := relayURL(t)
-
-	kp := newKeypair()
-	fakeDID := "did:dfos:unknownbeacontest00000"
-	kid := fakeDID + "#" + kp.keyID
-
-	token, _, err := dfos.SignBeacon(fakeDID, "someunknownbeaconcontentid31chr", kid, kp.priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res := postOperations(t, base, []string{token})
-	body := readBody(t, res)
-	var results struct {
-		Results []struct {
-			Error string `json:"error"`
-		} `json:"results"`
-	}
-	json.Unmarshal(body, &results)
-	if len(results.Results) > 0 && results.Results[0].Error == "" {
-		t.Fatal("expected rejection for beacon from unknown identity")
-	}
-}
-
-// TestBeaconFromDeletedIdentity verifies the relay rejects beacons from
-// deleted identities. Deletion means the identity stops being an active
-// participant — no new beacons, even though keys persist in state.
-func TestBeaconFromDeletedIdentity(t *testing.T) {
-	base := relayURL(t)
-	id := createIdentity(t, base)
-
-	// delete identity
-	ctrlKid := id.did + "#" + id.controller.keyID
-	delToken, _, _ := dfos.SignIdentityDelete(id.genCID, ctrlKid, id.controller.priv)
-	postOperations(t, base, []string{delToken}).Body.Close()
-
-	// beacon from deleted identity — should be rejected
-	authKid := id.did + "#" + id.auth.keyID
-	beaconToken, _, err := dfos.SignBeacon(id.did, "someunknownbeaconcontentid31chr", authKid, id.auth.priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res := postOperations(t, base, []string{beaconToken})
-	body := readBody(t, res)
-	var results struct {
-		Results []struct {
-			Error string `json:"error"`
-		} `json:"results"`
-	}
-	json.Unmarshal(body, &results)
-	if len(results.Results) == 0 || results.Results[0].Error == "" {
-		t.Fatal("expected rejection for beacon from deleted identity")
 	}
 }
 

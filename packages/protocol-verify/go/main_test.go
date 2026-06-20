@@ -388,55 +388,84 @@ func hexDecode(s string) ([]byte, error) {
 }
 
 // =============================================================================
-// Beacon and countersignature tests
+// Services-genesis and credential tests
 // =============================================================================
 
 const (
-	beaconJWS         = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.exr0Dfb_asVXeMpnUOaql9ppeO2pifzEdId8ocXHQ6-v_XUwccQdJaL4MhKzJGUbRAa0hfRVSFRndhjJ4NN1DA"
-	expectedBeaconCID = "bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq"
-	beaconWitnessJWS  = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2RuN3o2enJjdDgiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.-49R4npkmKMJtnK4sVS_x7MFOgB1RhjkZAzwycLp80g_o6y0gV0JjnUAj12as8NglccBXEk_5DdZTFs17ygKCA"
-	broadWriteVC      = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg"
+	// servicesGenesisJWS is the canonical services-genesis identity-op: a create
+	// op carrying a full-state services array (relay locator + content/artifact
+	// anchors). Signed by reference key 1. Sourced from
+	// packages/dfos-protocol/examples/identity-services.json chain[0].
+	servicesGenesisJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpZGkzcXBzM3F0dHFwMjJtM3kzM2JkYmYyaXlrYnE1cjQ1ampod2EzN21nZXNvdjdzZGd6ZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.HCzVJXcUzL62lxtC8omBlit1JNSWk4b4kQKjjjWT00honzZ9-k3dKusIRuhTV6gjT1M74bLVZYUxPb8kJvhHAw"
+	expectedServicesGenCID = "bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze"
+	expectedServicesDID    = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
+	broadWriteVC           = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg"
 	readVC            = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWN0aGNiaXp4dmdlbXN4djdrc2NvbzdhcGllYWFsM2Z5ZTM3bzQ1Zmt5a25lN2I0aG9icmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.UvTItuWFriA39FZIdB5TuXa_b07eyNLc-iR0cej2litSkjBYAZaLlDJUmyDQ-3dB7TmNVXDbB3SMbpvLnWW9Dw"
 )
 
-func TestBeaconJWSVerification(t *testing.T) {
-	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
-	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
-
-	header, payload := verifyJWS(beaconJWS, pub1)
-	if header["typ"] != "did:dfos:beacon" {
-		t.Fatal("wrong typ")
-	}
-	if header["kid"] != expectedDID+"#key_r9ev34fvc23z999veaaft83nn29zvhe" {
-		t.Fatal("wrong kid")
-	}
-	if header["cid"] != expectedBeaconCID {
-		t.Fatalf("wrong cid: %s", header["cid"])
-	}
-	if payload["type"] != "beacon" {
-		t.Fatal("wrong payload type")
-	}
-	if payload["manifestContentId"] != "cv7n8vkvr64cctf3294h9k4eanhff8z" {
-		t.Fatalf("wrong manifestContentId: %s", payload["manifestContentId"])
+// normalizeNumbers recursively converts whole float64 values (as produced by
+// json.Unmarshal) to int64 so the canonical CBOR encoding uses integer major
+// types. Matches the production number-normalization step before CID derivation.
+func normalizeNumbers(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		for k, vv := range val {
+			val[k] = normalizeNumbers(vv)
+		}
+		return val
+	case []any:
+		for i, vv := range val {
+			val[i] = normalizeNumbers(vv)
+		}
+		return val
+	case float64:
+		if val == float64(int64(val)) {
+			return int64(val)
+		}
+		return val
+	default:
+		return val
 	}
 }
 
-func TestBeaconCountersignatureVerification(t *testing.T) {
-	seed2 := sha256.Sum256([]byte("dfos-protocol-reference-key-2"))
-	pub2 := ed25519.NewKeyFromSeed(seed2[:]).Public().(ed25519.PublicKey)
+// TestServicesGenesisVerification verifies the canonical services-genesis
+// identity-op: signature check with reference key 1, then an independent
+// recomputation of the operation CID over the decoded payload (services fields
+// ride along in the payload map — no services-validation logic required here),
+// asserting it equals the JWS header cid and that the derived DID matches.
+func TestServicesGenesisVerification(t *testing.T) {
+	seed1 := sha256.Sum256([]byte("dfos-protocol-reference-key-1"))
+	pub1 := ed25519.NewKeyFromSeed(seed1[:]).Public().(ed25519.PublicKey)
 
-	header, payload := verifyJWS(beaconWitnessJWS, pub2)
-	if header["typ"] != "did:dfos:beacon" {
-		t.Fatal("wrong typ")
+	header, payload := verifyJWS(servicesGenesisJWS, pub1)
+	if header["typ"] != "did:dfos:identity-op" {
+		t.Fatalf("wrong typ: %s", header["typ"])
 	}
-	if header["kid"] != expectedDID+"#key_ez9a874tckr3dv933d3ckdn7z6zrct8" {
-		t.Fatal("wrong kid")
+	if header["kid"] != "key_r9ev34fvc23z999veaaft83nn29zvhe" {
+		t.Fatalf("wrong kid: %s", header["kid"])
 	}
-	if header["cid"] != expectedBeaconCID {
-		t.Fatal("countersignature CID should match original beacon CID")
+	if header["cid"] != expectedServicesGenCID {
+		t.Fatalf("wrong cid: %s", header["cid"])
 	}
-	if payload["manifestContentId"] != "cv7n8vkvr64cctf3294h9k4eanhff8z" {
-		t.Fatal("countersignature manifestContentId should match original")
+	if payload["type"] != "create" {
+		t.Fatalf("wrong payload type: %s", payload["type"])
+	}
+
+	// Recompute the operation CID over the decoded payload and assert it matches
+	// the value committed in the JWS header.
+	normalizeNumbers(payload)
+	cborBytes := dagCborEncodeJSON(payload)
+	cidStr := cidToBase32(makeCIDBytes(cborBytes))
+	if cidStr != expectedServicesGenCID {
+		t.Fatalf("recomputed CID mismatch: got %s, want %s", cidStr, expectedServicesGenCID)
+	}
+
+	// Derive the DID from the operation CID bytes and assert it matches.
+	cidBytes := makeCIDBytes(cborBytes)
+	didHash := sha256.Sum256(cidBytes)
+	did := "did:dfos:" + encodeID(didHash[:])
+	if did != expectedServicesDID {
+		t.Fatalf("DID mismatch: got %s, want %s", did, expectedServicesDID)
 	}
 }
 

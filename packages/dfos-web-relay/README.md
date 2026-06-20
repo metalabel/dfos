@@ -38,19 +38,18 @@ serve({ port: 4444 });
 
 ## Routes
 
-| Method | Path                                     | Description                                                      |
-| ------ | ---------------------------------------- | ---------------------------------------------------------------- |
-| `GET`  | `/.well-known/dfos-relay`                | Relay metadata (DID, protocol version)                           |
-| `POST` | `/operations`                            | Submit signed operations (identity, content, beacon, countersig) |
-| `GET`  | `/identities/:did`                       | Get identity chain state and operation log                       |
-| `GET`  | `/content/:contentId`                    | Get content chain state and operation log                        |
-| `GET`  | `/operations/:cid`                       | Get a single operation by CID                                    |
-| `GET`  | `/beacons/:did`                          | Get beacon for an identity                                       |
-| `GET`  | `/countersignatures/:cid`                | Get countersignatures for an operation                           |
-| `GET`  | `/operations/:cid/countersignatures`     | Same as above (alias)                                            |
-| `PUT`  | `/content/:contentId/blob/:operationCID` | Upload blob (auth required)                                      |
-| `GET`  | `/content/:contentId/blob`               | Download blob at head (standing auth, or auth + credential)      |
-| `GET`  | `/content/:contentId/blob/:ref`          | Download blob at specific operation ref                          |
+| Method | Path                                     | Description                                                 |
+| ------ | ---------------------------------------- | ----------------------------------------------------------- |
+| `GET`  | `/.well-known/dfos-relay`                | Relay metadata (DID, protocol version)                      |
+| `POST` | `/operations`                            | Submit signed operations (identity, content, countersig)    |
+| `GET`  | `/identities/:did`                       | Get identity chain state and operation log                  |
+| `GET`  | `/content/:contentId`                    | Get content chain state and operation log                   |
+| `GET`  | `/operations/:cid`                       | Get a single operation by CID                               |
+| `GET`  | `/countersignatures/:cid`                | Get countersignatures for an operation                      |
+| `GET`  | `/operations/:cid/countersignatures`     | Same as above (alias)                                       |
+| `PUT`  | `/content/:contentId/blob/:operationCID` | Upload blob (auth required)                                 |
+| `GET`  | `/content/:contentId/blob`               | Download blob at head (standing auth, or auth + credential) |
+| `GET`  | `/content/:contentId/blob/:ref`          | Download blob at specific operation ref                     |
 
 ## Blob Authorization
 

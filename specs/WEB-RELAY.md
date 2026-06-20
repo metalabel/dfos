@@ -1,6 +1,6 @@
 # DFOS Web Relay
 
-An HTTP relay for the DFOS protocol — receives, verifies, stores, and serves identity chains, content chains, artifacts, beacons, countersignatures, and content blobs.
+An HTTP relay for the DFOS protocol — receives, verifies, stores, and serves identity chains, content chains, artifacts, countersignatures, and content blobs.
 
 This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
@@ -22,7 +22,7 @@ The relay serves two distinct planes of data with different access models:
 
 ### Proof Plane (public)
 
-Signed chain operations, artifacts, beacons, and countersignatures. These are cryptographic proofs — anyone can verify them with a public key. The proof plane gossips freely: relays push operations to peers, peers verify and store independently.
+Signed chain operations, artifacts, and countersignatures. These are cryptographic proofs — anyone can verify them with a public key. The proof plane gossips freely: relays push operations to peers, peers verify and store independently.
 
 All proof plane routes are unauthenticated. The operations themselves carry their own authentication (Ed25519 signatures).
 
@@ -43,7 +43,7 @@ Content plane support is optional per relay. When disabled (`content: false` in 
 
 ## Operation Ingestion
 
-All proof plane operations enter through a single endpoint: `POST /operations`. The request body is an array of JWS tokens — identity operations, content operations, artifacts, beacons, and countersignatures can be mixed freely in the same batch.
+All proof plane operations enter through a single endpoint: `POST /operations`. The request body is an array of JWS tokens — identity operations, content operations, artifacts, and countersignatures can be mixed freely in the same batch.
 
 ### Classification
 
@@ -53,7 +53,6 @@ Each token is classified by its JWS `typ` header:
 | ---------------------- | ------------------------ |
 | `did:dfos:identity-op` | Identity chain operation |
 | `did:dfos:content-op`  | Content chain operation  |
-| `did:dfos:beacon`      | Beacon announcement      |
 | `did:dfos:artifact`    | Artifact                 |
 | `did:dfos:countersign` | Countersignature         |
 | `did:dfos:credential`  | DFOS credential          |
@@ -66,7 +65,7 @@ Each operation type has its own `typ` header. Classification is unambiguous — 
 Within a batch, operations are sorted by dependency priority before processing:
 
 1. **Identity operations** — must be processed first so their keys are available
-2. **Beacons and artifacts** — reference identity keys for signature verification
+2. **Artifacts** — reference identity keys for signature verification
 3. **Content operations** — reference identity keys, may have chain dependencies
 4. **Countersignatures** — reference identity keys and existing operations (target must exist)
 
@@ -80,7 +79,6 @@ Each operation is verified against the relay's stored state:
 - **Content operations**: Extension operations are verified against trusted state with `enforceAuthorization: true`. Non-creator signers must include a DFOS credential with `action: "write"` attenuations. The relay uses `verifyContentChain()` / `verifyContentExtensionFromTrustedState()` from the protocol library
 - **Revocations**: Signature is verified against the revoking DID's current identity state. The revocation payload must reference a valid credential CID. Once ingested, the revoked credential is no longer honored for authorization or content plane access
 - **Artifacts**: Signature is verified against the signing DID's current identity state. CID integrity is checked. Payload must conform to the declared `$schema`. CBOR-encoded payload must not exceed 16384 bytes
-- **Beacons**: Signature, CID integrity, and clock skew are verified. Replace-on-newer: only the most recent beacon per DID is retained
 - **Countersignatures**: Two-phase verification. Protocol-level (stateless): signature, CID integrity, payload schema. Relay-level (stateful): target CID must exist in the relay, witness DID must differ from the target's author DID, one countersign per witness per target
 
 ### Chain Resolution
@@ -105,7 +103,7 @@ Forks are accepted. If an incoming operation's `previousOperationCID` references
 
 **Undeletion**: falls naturally from the fork model. An identity holder can fork from before a delete with a higher `createdAt`. The fork becomes the head. The delete remains visible in the log (auditable, gossiped) but is on a non-head branch.
 
-**Future timestamp guard**: Identity and content operations with a `createdAt` more than 24 hours in the future are rejected. Since head selection favors the highest timestamp, a far-future `createdAt` would permanently dominate head selection — a temporal denial-of-service. The 24-hour window accommodates clock drift while preventing abuse. Beacons enforce a stricter 5-minute bound at the protocol level.
+**Future timestamp guard**: Identity and content operations with a `createdAt` more than 24 hours in the future are rejected. Since head selection favors the highest timestamp, a far-future `createdAt` would permanently dominate head selection — a temporal denial-of-service. The 24-hour window accommodates clock drift while preventing abuse.
 
 ### Ingestion Statuses
 
@@ -119,8 +117,6 @@ Three distinct outcomes from ingestion:
 
 For chain operations, `duplicate` means the exact same CID and JWS token was already stored — a true idempotent resubmission. Submissions with the same CID but a different JWS token are rejected — since Ed25519 is deterministic, a different token for the same payload means a different signing key.
 
-For beacons, `duplicate` means "no state change resulted" — a beacon with `createdAt` less than or equal to the stored beacon's `createdAt` returns `duplicate` even if the CID differs. This is replace-on-newer semantics: only a strictly newer beacon updates the stored state.
-
 Duplicate countersignatures (same witness DID, same target CID) MUST be deduplicated — one countersign per witness per target. The relay MUST NOT store multiple attestations from the same witness for the same target. Resubmission SHOULD return `duplicate` (idempotent).
 
 ### Deletion Semantics
@@ -131,7 +127,6 @@ Specifically:
 
 - **Identity operations after deletion (linear extension)**: Rejected. A `delete` seals the head against forward (linear) extension — appending a new operation from the deleted head is refused. This is the _linear_ path only: a current controller MAY still fork from a pre-delete operation with a higher `createdAt` to supersede the delete (see _Fork Acceptance → Undeletion_ above), in which case the resolved head reports `deactivated: false`. The `delete` remains permanently in the log on a non-head branch.
 - **Content operations after deletion**: Rejected. Both paths are checked: (a) the signer's identity is deleted — no operations from that DID are accepted, and (b) the content chain's creator identity is deleted — the chain is sealed regardless of who signs.
-- **Beacons from deleted identities**: Rejected. A deleted identity MUST NOT publish new beacons.
 - **Artifacts from deleted identities**: Rejected. A deleted identity MUST NOT publish new artifacts.
 - **Credentials from deleted issuers**: Rejected. Identity deletion revokes all authority, including outstanding DFOS credentials issued by the deleted identity. Credentials that were valid at time of issuance cease to be honored once the issuer is deleted.
 - **Countersignatures from deleted witnesses**: Rejected. A deleted identity MUST NOT publish new countersignatures. Countersignatures on operations by deleted authors are still accepted — deletion of the target's author does not prevent other identities from attesting.
@@ -203,7 +198,7 @@ A countersignature is a standalone witness attestation — a signed statement th
 - **JWS `typ` header**: `did:dfos:countersign`
 - **Own CID**: Each countersign has its own CID, distinct from the target. This avoids the ambiguity of multiple JWS tokens sharing the same CID
 - **Stateless verification**: Signature + CID integrity + payload schema. No relay state required to verify the cryptographic validity of a countersign
-- **Composable**: The `targetCID` can reference any CID-addressable operation — content ops, beacons, artifacts, identity ops, even other countersigns
+- **Composable**: The `targetCID` can reference any CID-addressable operation — content ops, artifacts, identity ops, even other countersigns
 - **Immutable**: Once published, a countersign is permanent
 
 ### Relay-Level Checks
@@ -219,7 +214,7 @@ The relay enforces semantic rules beyond cryptographic validity:
 
 Two routes serve countersignature data:
 
-- **`GET /countersignatures/:cid`** — Primary lookup. Returns all countersignatures for the given CID. Works for any CID-addressable target (operations, beacons, artifacts). Returns `{ cid, countersignatures: string[] }` where each entry is a compact JWS token. Returns 404 if no countersignatures exist for the CID.
+- **`GET /countersignatures/:cid`** — Primary lookup. Returns all countersignatures for the given CID. Works for any CID-addressable target (operations, artifacts). Returns `{ cid, countersignatures: string[] }` where each entry is a compact JWS token. Returns 404 if no countersignatures exist for the CID.
 - **`GET /operations/:cid/countersignatures`** — Operation-scoped lookup. Returns countersignatures only if `:cid` is a known operation. Returns `{ operationCID, countersignatures: string[] }`. Returns 404 if the operation doesn't exist.
 
 ---
@@ -286,7 +281,7 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 
 ## Operation Log
 
-The relay maintains a global append-only operation log. Every successfully ingested operation (identity ops, content ops, artifacts, beacons, countersignatures) is appended to the log in ingestion order.
+The relay maintains a global append-only operation log. Every successfully ingested operation (identity ops, content ops, artifacts, countersignatures) is appended to the log in ingestion order.
 
 ### Global Log (`GET /log?after={cid}&limit=N`)
 
@@ -312,13 +307,13 @@ Returns log entries starting after the given CID cursor.
 }
 ```
 
-| Field                | Type         | Description                                                                                                  |
-| -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------ |
-| `entries[].cid`      | string       | Operation CID                                                                                                |
-| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync                                           |
-| `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `beacon`, `artifact`, `countersign`, `revocation`, `credential` |
-| `entries[].chainId`  | string       | DID (identity/beacon/artifact), contentId (content), or targetCID (countersign)                              |
-| `cursor`             | string\|null | CID to pass as `after` for the next page. `null` means caught up                                             |
+| Field                | Type         | Description                                                                                        |
+| -------------------- | ------------ | -------------------------------------------------------------------------------------------------- |
+| `entries[].cid`      | string       | Operation CID                                                                                      |
+| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync                                 |
+| `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `artifact`, `countersign`, `revocation`, `credential` |
+| `entries[].chainId`  | string       | DID (identity/artifact), contentId (content), or targetCID (countersign)                           |
+| `cursor`             | string\|null | CID to pass as `after` for the next page. `null` means caught up                                   |
 
 Parameters:
 
@@ -353,10 +348,13 @@ State endpoints return projected state — the computed result of replaying the 
     "isDeleted": false,
     "authKeys": [...],
     "assertKeys": [...],
-    "controllerKeys": [...]
+    "controllerKeys": [...],
+    "services": [...]
   }
 }
 ```
+
+Resolved identity state includes the identity's `services` — the controller-signed discovery vocabulary (relay locators and stable content anchors) projected from the winning head. See [Services](https://protocol.dfos.com/#services) in the protocol spec. Read-through and sync replicate the underlying identity operations, so a peer that fetches an identity chain recomputes the same `services` set deterministically.
 
 ### Content State (`GET /content/:contentId`)
 
@@ -450,11 +448,11 @@ Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfo
 The relay uses two key resolution strategies:
 
 - **Historical resolver** (for chain re-verification): searches all keys that have ever appeared in an identity chain's log, including rotated-out keys. This is necessary because re-verifying a full content chain from genesis must resolve keys from operations signed before a key rotation.
-- **Current-state resolver** (for live authentication and beacons): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for auth tokens and beacons. This prevents a compromised rotated-out key from being used to authenticate new requests or to hijack the beacon pointer.
+- **Current-state resolver** (for live authentication): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for auth tokens. This prevents a compromised rotated-out key from being used to authenticate new requests.
 
 **Which primitive uses which resolver:**
 
-- **Current-state resolver** — auth tokens and beacons. A rotated-out key cannot mint an auth token or publish a beacon, preventing stale-key auth and pointer-hijack. Beacons are safe to resolve against current state because they are replace-on-newer: any transient sync divergence self-heals when the legitimate holder publishes a fresher beacon.
+- **Current-state resolver** — auth tokens. A rotated-out key cannot mint an auth token, preventing stale-key auth.
 - **Historical resolver** — identity and content chain re-verification, artifacts, revocations, and countersignatures. These are historical facts whose signing key may since have rotated out, so they must resolve against every key that ever appeared in the chain; re-verifying them under current state would break sync of honest operations after any rotation. Their invalidation mechanism is revocation or deletion, not key rotation.
 - **Credentials are the exception to the auth grouping.** Although a credential proves authorization, it uses the **historical** resolver and survives key rotation — a credential signed before a rotation remains valid afterward. Revocation (not key rotation) is the invalidation mechanism for credentials. See [CREDENTIALS.md](https://protocol.dfos.com/credentials).
 
@@ -474,9 +472,6 @@ interface RelayStore {
 
   getContentChain(contentId: string): Promise<StoredContentChain | undefined>;
   putContentChain(chain: StoredContentChain): Promise<void>;
-
-  getBeacon(did: string): Promise<StoredBeacon | undefined>;
-  putBeacon(beacon: StoredBeacon): Promise<void>;
 
   getBlob(key: BlobKey): Promise<Uint8Array | undefined>;
   putBlob(key: BlobKey, data: Uint8Array): Promise<void>;
@@ -550,7 +545,6 @@ The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFrom
 | `GET`  | `/content/:contentId`                | proof   | none                                      |
 | `GET`  | `/content/:contentId/log`            | proof   | none                                      |
 | `GET`  | `/content/:contentId/documents`      | content | standing auth, or auth token + credential |
-| `GET`  | `/beacons/:did`                      | proof   | none                                      |
 | `GET`  | `/log`                               | proof   | none                                      |
 | `PUT`  | `/content/:contentId/blob/:opCID`    | content | auth token                                |
 | `GET`  | `/content/:contentId/blob[/:ref]`    | content | standing auth, or auth token + credential |
@@ -569,7 +563,7 @@ Relay-to-relay peering enables data replication across the network. The relay ex
 | **Read-through** | Local 404 on GET | Fetch from peers with `readThrough: true`  |
 | **Sync-in**      | Scheduled poll   | Pull from peers with `sync: true` via /log |
 
-Gossip fires on `new` status only — `duplicate` results are not re-gossiped, preventing gossip storms. Read-through applies to **identity chains** and **content chains** only — beacons, operations, and countersignatures are not read-through targets. When triggered, the relay fetches the full chain log from a peer and ingests locally (full verification, no trust). Sync-in uses cursor-based pagination against the peer's global log.
+Gossip fires on `new` status only — `duplicate` results are not re-gossiped, preventing gossip storms. Read-through applies to **identity chains** and **content chains** only — operations and countersignatures are not read-through targets. When triggered, the relay fetches the full chain log from a peer and ingests locally (full verification, no trust). Sync-in uses cursor-based pagination against the peer's global log.
 
 ### Peer Configuration
 
@@ -629,7 +623,6 @@ An operation's causal dependencies are the minimum state required for verificati
 | Identity extension | Previous identity operation (by `previousOperationCID`) |
 | Content genesis    | Creator's identity chain (for key resolution)           |
 | Content extension  | Previous content operation + creator's identity chain   |
-| Beacon             | Signer's identity chain                                 |
 | Artifact           | Signer's identity chain                                 |
 | Countersignature   | Signer's identity chain + target operation              |
 

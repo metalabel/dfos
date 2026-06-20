@@ -703,41 +703,6 @@ func TestOperationNotFound(t *testing.T) {
 }
 
 // ===================================================================
-// beacons
-// ===================================================================
-
-func TestBeaconCreate(t *testing.T) {
-	base := relayURL(t)
-	id := createIdentity(t, base)
-	cc := createContent(t, base, id)
-
-	kid := id.did + "#" + id.auth.keyID
-	token, beaconCID, err := dfos.SignBeacon(id.did, cc.contentID, kid, id.auth.priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	res := postOperations(t, base, []string{token})
-	if res.StatusCode != 200 {
-		body, _ := io.ReadAll(res.Body)
-		t.Fatalf("beacon: status %d, body: %s", res.StatusCode, body)
-	}
-	res.Body.Close()
-
-	// verify beacon is retrievable
-	var beacon struct {
-		BeaconCID string `json:"beaconCID"`
-	}
-	resp := getJSON(t, base+"/beacons/"+id.did, &beacon)
-	if resp.StatusCode != 200 {
-		t.Fatalf("GET beacon: status %d", resp.StatusCode)
-	}
-	if beacon.BeaconCID != beaconCID {
-		t.Fatalf("beacon CID: got %s, want %s", beacon.BeaconCID, beaconCID)
-	}
-}
-
-// ===================================================================
 // countersignatures
 // ===================================================================
 

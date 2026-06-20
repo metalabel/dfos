@@ -100,6 +100,57 @@ mod tests {
         buf
     }
 
+    /// Recursively convert a decoded JSON value into a ciborium value in dag-cbor
+    /// canonical form. Map keys are sorted length-first, then lexicographic (the
+    /// dag-cbor rule), and whole-number floats are normalized to integers so the
+    /// CBOR uses integer major types. Used to recompute an operation CID over a
+    /// decoded JWS payload (e.g. the services-genesis op, whose services fields
+    /// ride along in the payload map).
+    fn json_to_dag_cbor(json: &serde_json::Value) -> Value {
+        match json {
+            serde_json::Value::Null => Value::Null,
+            serde_json::Value::Bool(b) => Value::Bool(*b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Value::Integer(i.into())
+                } else if let Some(u) = n.as_u64() {
+                    Value::Integer(u.into())
+                } else {
+                    let f = n.as_f64().unwrap();
+                    if f.fract() == 0.0
+                        && f >= -(MAX_SAFE_CANONICAL_INTEGER as f64)
+                        && f <= MAX_SAFE_CANONICAL_INTEGER as f64
+                    {
+                        Value::Integer((f as i64).into())
+                    } else {
+                        Value::Float(f)
+                    }
+                }
+            }
+            serde_json::Value::String(s) => Value::Text(s.clone()),
+            serde_json::Value::Array(arr) => {
+                Value::Array(arr.iter().map(json_to_dag_cbor).collect())
+            }
+            serde_json::Value::Object(obj) => {
+                // dag-cbor key order: length-first, then lexicographic.
+                let mut keys: Vec<&String> = obj.keys().collect();
+                keys.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+                let entries: Vec<(Value, Value)> = keys
+                    .into_iter()
+                    .map(|k| (Value::Text(k.clone()), json_to_dag_cbor(&obj[k])))
+                    .collect();
+                Value::Map(entries)
+            }
+        }
+    }
+
+    fn dag_cbor_encode_json(json: &serde_json::Value) -> Vec<u8> {
+        let value = json_to_dag_cbor(json);
+        let mut buf = Vec::new();
+        ciborium::into_writer(&value, &mut buf).unwrap();
+        buf
+    }
+
     // Ed25519 group order L (little-endian 32 bytes) — the canonical S < L bound.
     // ed25519-dalek's verify (even verify_strict) does NOT reject non-canonical S,
     // so this gate is mandatory for the DFOS profile and is the whole reason the
@@ -361,15 +412,20 @@ mod tests {
     }
 
     // =========================================================================
-    // Beacon and credential tests
+    // Services-genesis and credential tests
     // =========================================================================
 
-    const BEACON_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.exr0Dfb_asVXeMpnUOaql9ppeO2pifzEdId8ocXHQ6-v_XUwccQdJaL4MhKzJGUbRAa0hfRVSFRndhjJ4NN1DA";
+    // Canonical services-genesis identity-op: a create op carrying a full-state
+    // services array (relay locator + content/artifact anchors), signed by
+    // reference key 1. Sourced from
+    // packages/dfos-protocol/examples/identity-services.json chain[0]. The
+    // services fields ride along in the payload map, so recomputing the operation
+    // CID over the decoded payload requires no services-validation logic here.
+    const SERVICES_GENESIS_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpZGkzcXBzM3F0dHFwMjJtM3kzM2JkYmYyaXlrYnE1cjQ1ampod2EzN21nZXNvdjdzZGd6ZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.HCzVJXcUzL62lxtC8omBlit1JNSWk4b4kQKjjjWT00honzZ9-k3dKusIRuhTV6gjT1M74bLVZYUxPb8kJvhHAw";
 
-    const EXPECTED_BEACON_CID: &str =
-        "bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq";
-
-    const BEACON_WITNESS_JWS: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2RuN3o2enJjdDgiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.-49R4npkmKMJtnK4sVS_x7MFOgB1RhjkZAzwycLp80g_o6y0gV0JjnUAj12as8NglccBXEk_5DdZTFs17ygKCA";
+    const EXPECTED_SERVICES_GEN_CID: &str =
+        "bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze";
+    const EXPECTED_SERVICES_DID: &str = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar";
 
     const BROAD_WRITE_VC: &str = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg";
 
@@ -378,34 +434,34 @@ mod tests {
     const EXPECTED_CREDENTIAL_AUDIENCE: &str = "did:dfos:94ah7963n223k8c9884hh27ekh42nea";
 
     #[test]
-    fn test_beacon_jws_verification() {
+    fn test_services_genesis_verification() {
+        // Verify the canonical services-genesis identity-op: signature check with
+        // reference key 1, then an independent recomputation of the operation CID
+        // over the decoded payload (services fields ride along in the payload map —
+        // no services-validation logic required here), asserting it equals the JWS
+        // header cid and that the derived DID matches.
         let (_, pub1) = derive_public_key(b"dfos-protocol-reference-key-1");
-        let (header, payload) = verify_jws(BEACON_JWS, &pub1);
+        let (header, payload) = verify_jws(SERVICES_GENESIS_JWS, &pub1);
 
-        assert_eq!(header["typ"], "did:dfos:beacon", "wrong typ");
-        let expected_kid = format!("{}#key_r9ev34fvc23z999veaaft83nn29zvhe", EXPECTED_DID);
-        assert_eq!(header["kid"], expected_kid, "wrong kid");
-        assert_eq!(header["cid"], EXPECTED_BEACON_CID, "wrong cid");
-        assert_eq!(payload["type"], "beacon", "wrong payload type");
-        assert_eq!(payload["manifestContentId"], "cv7n8vkvr64cctf3294h9k4eanhff8z", "wrong manifestContentId");
-    }
+        assert_eq!(header["typ"], "did:dfos:identity-op", "wrong typ");
+        assert_eq!(header["kid"], "key_r9ev34fvc23z999veaaft83nn29zvhe", "wrong kid");
+        assert_eq!(header["cid"], EXPECTED_SERVICES_GEN_CID, "wrong cid");
+        assert_eq!(payload["type"], "create", "wrong payload type");
 
-    #[test]
-    fn test_beacon_countersignature_verification() {
-        let (_, pub2) = derive_public_key(b"dfos-protocol-reference-key-2");
-        let (header, payload) = verify_jws(BEACON_WITNESS_JWS, &pub2);
-
-        assert_eq!(header["typ"], "did:dfos:beacon", "wrong typ");
-        let expected_kid = format!("{}#key_ez9a874tckr3dv933d3ckdn7z6zrct8", EXPECTED_DID);
-        assert_eq!(header["kid"], expected_kid, "wrong kid");
+        // Recompute the operation CID over the decoded payload and assert it
+        // matches the value committed in the JWS header.
+        let cbor_bytes = dag_cbor_encode_json(&payload);
+        let cid_str = cid_to_base32(&make_cid_bytes(&cbor_bytes));
         assert_eq!(
-            header["cid"], EXPECTED_BEACON_CID,
-            "countersignature CID should match original beacon CID"
+            cid_str, EXPECTED_SERVICES_GEN_CID,
+            "recomputed CID mismatch"
         );
-        assert_eq!(
-            payload["manifestContentId"], "cv7n8vkvr64cctf3294h9k4eanhff8z",
-            "countersignature payload should match original"
-        );
+
+        // Derive the DID from the operation CID bytes and assert it matches.
+        let cid_bytes = make_cid_bytes(&cbor_bytes);
+        let did_hash: [u8; 32] = Sha256::digest(&cid_bytes).into();
+        let did = format!("did:dfos:{}", encode_id(&did_hash));
+        assert_eq!(did, EXPECTED_SERVICES_DID, "DID mismatch");
     }
 
     #[test]

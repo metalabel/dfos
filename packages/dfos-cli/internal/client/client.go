@@ -171,17 +171,12 @@ func (c *Client) GetContent(contentID string) (map[string]any, error) {
 	return c.getJSON("/content/" + contentID)
 }
 
-// GetBeacon fetches the latest beacon for a DID.
-func (c *Client) GetBeacon(did string) (map[string]any, error) {
-	return c.getJSON("/beacons/" + did)
-}
-
 // GetOperation fetches an operation by CID.
 func (c *Client) GetOperation(cid string) (map[string]any, error) {
 	return c.getJSON("/operations/" + cid)
 }
 
-// GetCountersignatures fetches countersignatures for a CID (operation or beacon).
+// GetCountersignatures fetches countersignatures for an operation CID.
 func (c *Client) GetCountersignatures(cid string) (map[string]any, error) {
 	return c.getJSON("/countersignatures/" + cid)
 }

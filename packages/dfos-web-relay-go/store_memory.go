@@ -14,7 +14,6 @@ type MemoryStore struct {
 	operations        map[string]StoredOperation
 	identityChains    map[string]StoredIdentityChain
 	contentChains     map[string]StoredContentChain
-	beacons           map[string]StoredBeacon
 	blobs             map[string][]byte
 	countersignatures map[string][]string
 	operationLog      []LogEntry
@@ -35,7 +34,6 @@ func NewMemoryStore() *MemoryStore {
 		operations:        make(map[string]StoredOperation),
 		identityChains:    make(map[string]StoredIdentityChain),
 		contentChains:     make(map[string]StoredContentChain),
-		beacons:           make(map[string]StoredBeacon),
 		blobs:             make(map[string][]byte),
 		countersignatures: make(map[string][]string),
 		peerCursors:       make(map[string]string),
@@ -100,23 +98,6 @@ func (s *MemoryStore) PutContentChain(chain StoredContentChain) error {
 	return nil
 }
 
-func (s *MemoryStore) GetBeacon(did string) (*StoredBeacon, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	beacon, ok := s.beacons[did]
-	if !ok {
-		return nil, nil
-	}
-	return &beacon, nil
-}
-
-func (s *MemoryStore) PutBeacon(beacon StoredBeacon) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.beacons[beacon.DID] = beacon
-	return nil
-}
-
 func (s *MemoryStore) ListIdentityChains() ([]StoredIdentityChain, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -135,16 +116,6 @@ func (s *MemoryStore) ListContentChains() ([]StoredContentChain, error) {
 		chains = append(chains, chain)
 	}
 	return chains, nil
-}
-
-func (s *MemoryStore) ListBeacons() ([]StoredBeacon, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	beacons := make([]StoredBeacon, 0, len(s.beacons))
-	for _, beacon := range s.beacons {
-		beacons = append(beacons, beacon)
-	}
-	return beacons, nil
 }
 
 func (s *MemoryStore) GetBlob(key BlobKey) ([]byte, error) {

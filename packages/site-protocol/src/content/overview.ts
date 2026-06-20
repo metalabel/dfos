@@ -26,6 +26,8 @@ The protocol commits to content via an unsalted \`dag-cbor\` → SHA-256 CID —
 
 The DFOS Protocol specifies how [Ed25519 signed chains](https://protocol.dfos.com/spec) establish identity, commit content, and produce proofs. It defines [self-certifying identifiers](https://protocol.dfos.com/did-method) (\`did:dfos\`) derived from genesis operations, [content-addressed commitments](https://protocol.dfos.com/content-model) via CID, and a [relay network](https://protocol.dfos.com/web-relay) of verifying HTTP endpoints that distribute proofs without trusting each other.
 
+Identity chains carry an optional discovery vocabulary — controller-signed \`services\` that say where to reach an identity and what stable content it anchors, projected into verified identity state alongside its keys. Witnesses can attach a standalone countersignature to any CID-addressable operation, carrying an optional open-namespace \`relation\` tag (\`endorses\`, \`coauthors\`, \`witnessed\`) that names the nature of the attestation.
+
 Verification is a pure function. Given a chain and a public key, any Ed25519 implementation returns valid or invalid. The chain carries everything needed — public keys, signatures, content-addressed hashes. There is no registry to query, no blockchain to sync. A proof exported today is verifiable by code that doesn't exist yet.
 
 The reference implementation is in [TypeScript](https://www.npmjs.com/package/@metalabel/dfos-protocol). Cross-language verification exists in Go, Python, Rust, and Swift — all running against the same [deterministic test vectors](https://protocol.dfos.com/spec#deterministic-reference-artifacts) from the specification.
@@ -43,7 +45,7 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 - **DAG-native.** Chains are directed acyclic graphs. Forks are valid. Convergence is deterministic without consensus. Given the same set of operations, any relay computes the same head regardless of ingestion order.
 - **Transport-agnostic.** No privileged registry, blockchain, or API. A proof obtained from an API, a USB drive, or a peer-to-peer exchange verifies the same way.
 - **Offline-first.** Verification requires no network. The chain carries everything needed.
-- **Protocol-only.** Signed chains, CID derivation, [DID resolution](https://protocol.dfos.com/did-method), credentials, beacons. Application semantics are a [separate concern](https://protocol.dfos.com/content-model).
+- **Protocol-only.** Signed chains, CID derivation, [DID resolution](https://protocol.dfos.com/did-method), credentials, countersignatures. Application semantics are a [separate concern](https://protocol.dfos.com/content-model).
 
 ## Status
 

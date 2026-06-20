@@ -1,7 +1,6 @@
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import manifest from '../../dfos-protocol/schemas/manifest.v1.json';
 import post from '../../dfos-protocol/schemas/post.v1.json';
 import profile from '../../dfos-protocol/schemas/profile.v1.json';
 
@@ -10,7 +9,6 @@ const app = new Hono();
 // ── Schema Routes ──────────────────────────────────────────────────────────────
 
 const schemas: Record<string, object> = {
-  '/manifest/v1': manifest,
   '/post/v1': post,
   '/profile/v1': profile,
 };
@@ -29,12 +27,10 @@ function serveSchema(c: Context) {
   });
 }
 
-app.get('/manifest/v1', serveSchema);
 app.get('/post/v1', serveSchema);
 app.get('/profile/v1', serveSchema);
 
 // CORS preflight for schema routes
-app.options('/manifest/v1', cors());
 app.options('/post/v1', cors());
 app.options('/profile/v1', cors());
 
@@ -47,7 +43,7 @@ app.get('/robots.txt', (c) => {
 });
 
 app.get('/sitemap.xml', (c) => {
-  const urls = ['/', '/manifest/v1', '/post/v1', '/profile/v1'];
+  const urls = ['/', '/post/v1', '/profile/v1'];
   const xml = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
@@ -69,7 +65,6 @@ app.get('/llms.txt', (c) => {
       '',
       '## Schemas',
       '',
-      '- [manifest/v1](https://schemas.dfos.com/manifest/v1): Named map of protocol object references',
       '- [post/v1](https://schemas.dfos.com/post/v1): Posts, comments, and replies',
       '- [profile/v1](https://schemas.dfos.com/profile/v1): Identity profiles',
       '',
@@ -91,7 +86,7 @@ app.get('/', (c) => {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DFOS Content Schemas</title>
-<meta name="description" content="JSON Schema definitions for DFOS protocol content types. Manifests, posts, profiles.">
+<meta name="description" content="JSON Schema definitions for DFOS protocol content types. Posts, profiles.">
 <meta name="robots" content="index, follow, max-snippet:-1">
 <link rel="canonical" href="https://schemas.dfos.com/">
 <link rel="icon" type="image/png" href="https://protocol.dfos.com/icon.png">
@@ -131,7 +126,6 @@ small a { color: #666; }
 <h1>DFOS Content Schemas</h1>
 <p>JSON Schema definitions for <a href="https://protocol.dfos.com">DFOS protocol</a> content types.</p>
 <ul>
-<li><a href="/manifest/v1">manifest/v1</a> &mdash; named map of protocol object references</li>
 <li><a href="/post/v1">post/v1</a> &mdash; posts, comments, and replies</li>
 <li><a href="/profile/v1">profile/v1</a> &mdash; identity profiles</li>
 </ul>

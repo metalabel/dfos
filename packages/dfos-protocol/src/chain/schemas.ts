@@ -23,6 +23,8 @@ const MAX_SERVICE_ID = 64;
 const MAX_SERVICE_TYPE = 64;
 /** Max length for a service entry value string (endpoint, label, anchor) */
 const MAX_SERVICE_STRING = 512;
+/** Max length for a countersignature relation tag (open-namespace string) */
+const MAX_RELATION = 64;
 /** Max number of service entries in an identity's services state */
 export const MAX_SERVICES_ENTRIES = 16;
 /** Max CBOR-encoded size of the services array (bytes) — protocol constant */
@@ -218,18 +220,6 @@ export type ContentOperation = z.infer<typeof ContentOperation>;
 
 // ---
 
-/** Beacon: floating signed manifest pointer announcement */
-export const BeaconPayload = z.strictObject({
-  version: z.literal(1),
-  type: z.literal('beacon'),
-  did: z.string().max(MAX_DID),
-  manifestContentId: z.string().max(MAX_CID),
-  createdAt: Iso8601,
-});
-export type BeaconPayload = z.infer<typeof BeaconPayload>;
-
-// ---
-
 /** Max length for artifact $schema strings */
 const MAX_SCHEMA = 256;
 /** Max CBOR-encoded payload size for artifacts (bytes) — protocol constant */
@@ -250,19 +240,28 @@ export type ArtifactPayload = z.infer<typeof ArtifactPayload>;
 
 // ---
 
-/** Countersign: standalone witness attestation referencing a target operation by CID */
+/**
+ * Countersign: standalone witness attestation referencing a target operation by CID.
+ *
+ * `relation` is an OPEN-namespace tag naming the nature of the attestation
+ * (e.g. `coauthors`, `endorses`, `witnessed`, `holds`, `received`). It is an
+ * arbitrary bounded string — recognized values carry social meaning to clients,
+ * unrecognized values MUST be preserved and ignored. Optional, so a bare witness
+ * attestation (no relation) encodes identically (CID-neutral).
+ */
 export const CountersignPayload = z.strictObject({
   version: z.literal(1),
   type: z.literal('countersign'),
   did: z.string().max(MAX_DID),
   targetCID: CIDString,
+  relation: z.string().min(1).max(MAX_RELATION).optional(),
   createdAt: Iso8601,
 });
 export type CountersignPayload = z.infer<typeof CountersignPayload>;
 
 // ---
 
-/** Revocation: signed credential revocation artifact, gossiped like beacons */
+/** Revocation: signed credential revocation artifact, gossiped on the proof plane */
 export const RevocationPayload = z.strictObject({
   version: z.literal(1),
   type: z.literal('revocation'),

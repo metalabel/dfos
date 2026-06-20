@@ -334,40 +334,47 @@ func verifyJWS(_ token: String, pubKey: Curve25519.Signing.PublicKey) -> (header
 }
 
 // =========================================================================
-// Beacon and credential tests
+// Services-genesis and credential tests
 // =========================================================================
 
-let beaconJWSToken = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.exr0Dfb_asVXeMpnUOaql9ppeO2pifzEdId8ocXHQ6-v_XUwccQdJaL4MhKzJGUbRAa0hfRVSFRndhjJ4NN1DA"
+/// servicesGenesisJWS is the canonical services-genesis identity-op: a create
+/// op carrying a full-state services array (relay locator + content/artifact
+/// anchors). Signed by reference key 1. Sourced from
+/// packages/dfos-protocol/examples/identity-services.json chain[0].
+let servicesGenesisJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpZGkzcXBzM3F0dHFwMjJtM3kzM2JkYmYyaXlrYnE1cjQ1ampod2EzN21nZXNvdjdzZGd6ZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.HCzVJXcUzL62lxtC8omBlit1JNSWk4b4kQKjjjWT00honzZ9-k3dKusIRuhTV6gjT1M74bLVZYUxPb8kJvhHAw"
 
-let expectedBeaconCID = "bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq"
-
-let beaconWitnessJWSToken = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2RuN3o2enJjdDgiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.-49R4npkmKMJtnK4sVS_x7MFOgB1RhjkZAzwycLp80g_o6y0gV0JjnUAj12as8NglccBXEk_5DdZTFs17ygKCA"
+let expectedServicesGenCID = "bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze"
+let expectedServicesDID = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
 
 let broadWriteVC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWZ5aW5ieGhicml0NTZtM2FhdjY2bXc0eGQ2YWRxamFzdmNmaG11NjZnNnRudXFncnljbG0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoid3JpdGUifV0sInByZiI6W10sImV4cCI6MTc5ODc2MTYwMCwiaWF0IjoxNzcyODQxNjAwfQ.A-EygURAN2bALVwI2AZKFEuy30ZnWJFBaD4jCTf1d7A90rYELStjTWJ1iI7OulihTCfaVtlvj5HtX6Dwv1VxAg"
 
 let readVC = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWN0aGNiaXp4dmdlbXN4djdrc2NvbzdhcGllYWFsM2Z5ZTM3bzQ1Zmt5a25lN2I0aG9icmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.UvTItuWFriA39FZIdB5TuXa_b07eyNLc-iR0cej2litSkjBYAZaLlDJUmyDQ-3dB7TmNVXDbB3SMbpvLnWW9Dw"
 
-@Test func beaconJWSVerification() {
+/// Verify the canonical services-genesis identity-op: signature check with
+/// reference key 1, then an independent recomputation of the operation CID over
+/// the decoded payload (services fields ride along in the payload map — no
+/// services-validation logic required here), asserting it equals the JWS header
+/// cid and that the derived DID matches.
+@Test func servicesGenesisVerification() {
     let seed1 = Array(SHA256.hash(data: Data("dfos-protocol-reference-key-1".utf8)))
     let priv1 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed1)
 
-    let (header, payload) = verifyJWS(beaconJWSToken, pubKey: priv1.publicKey)
-    #expect(header["typ"] as? String == "did:dfos:beacon")
-    #expect(header["kid"] as? String == "\(expectedDID)#key_r9ev34fvc23z999veaaft83nn29zvhe")
-    #expect(header["cid"] as? String == expectedBeaconCID)
-    #expect(payload["type"] as? String == "beacon")
-    #expect(payload["manifestContentId"] as? String == "cv7n8vkvr64cctf3294h9k4eanhff8z")
-}
+    let (header, payload) = verifyJWS(servicesGenesisJWS, pubKey: priv1.publicKey)
+    #expect(header["typ"] as? String == "did:dfos:identity-op")
+    #expect(header["kid"] as? String == "key_r9ev34fvc23z999veaaft83nn29zvhe")
+    #expect(header["cid"] as? String == expectedServicesGenCID)
+    #expect(payload["type"] as? String == "create")
 
-@Test func beaconCountersignatureVerification() {
-    let seed2 = Array(SHA256.hash(data: Data("dfos-protocol-reference-key-2".utf8)))
-    let priv2 = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed2)
+    // Recompute the operation CID over the decoded payload and assert it matches
+    // the value committed in the JWS header.
+    let cborBytes = encodeCBOR(payload)
+    let cidBytes = makeCIDBytes(cborBytes)
+    #expect(cidToBase32(cidBytes) == expectedServicesGenCID)
 
-    let (header, payload) = verifyJWS(beaconWitnessJWSToken, pubKey: priv2.publicKey)
-    #expect(header["typ"] as? String == "did:dfos:beacon")
-    #expect(header["kid"] as? String == "\(expectedDID)#key_ez9a874tckr3dv933d3ckdn7z6zrct8")
-    #expect(header["cid"] as? String == expectedBeaconCID)
-    #expect(payload["manifestContentId"] as? String == "cv7n8vkvr64cctf3294h9k4eanhff8z")
+    // Derive the DID from the operation CID bytes and assert it matches.
+    let didHash = Array(SHA256.hash(data: Data(cidBytes)))
+    let did = "did:dfos:\(encodeID(didHash))"
+    #expect(did == expectedServicesDID)
 }
 
 @Test func writeCredentialVerification() {
@@ -423,7 +430,8 @@ func encodeCBOR(_ value: Any) -> [UInt8] {
         return result
     case let s as String:
         let bytes = Array(s.utf8)
-        return [UInt8(0x60 | bytes.count)] + bytes
+        // major type 3 (text), canonical length head — handles strings ≥ 24 bytes
+        return cborHead(major: 3, length: UInt64(bytes.count)) + bytes
     case let u as UInt64:
         return encodeCBORUInt(u)
     case let i as Int:
@@ -476,6 +484,16 @@ func encodeCBORUInt(_ u: UInt64) -> [UInt8] {
         for shift in stride(from: 56, through: 0, by: -8) { out.append(UInt8((u >> shift) & 0xff)) }
         return out
     }
+}
+
+/// Emit a CBOR head byte (and any trailing length bytes) for the given major
+/// type and argument, using the shortest canonical length encoding per RFC 8949
+/// deterministic rules. Reuses encodeCBORUInt's length-byte logic, OR-ing the
+/// major type into the leading byte.
+func cborHead(major: UInt8, length: UInt64) -> [UInt8] {
+    var head = encodeCBORUInt(length)
+    head[0] |= (major << 5)
+    return head
 }
 
 // MARK: - Number encoding determinism tests

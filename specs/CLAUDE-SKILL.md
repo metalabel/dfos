@@ -1,6 +1,6 @@
 ---
 name: dfos
-description: Install, configure, and use the DFOS protocol CLI. Use when the user wants to create identities, publish content, issue credentials, manage relays, or interact with the DFOS protocol. Triggers on mentions of DFOS, dfos CLI, DIDs, content chains, beacons, relays, or protocol operations.
+description: Install, configure, and use the DFOS protocol CLI. Use when the user wants to create identities, publish content, issue credentials, manage relays, or interact with the DFOS protocol. Triggers on mentions of DFOS, dfos CLI, DIDs, content chains, services, relays, or protocol operations.
 ---
 
 # DFOS CLI
@@ -11,7 +11,7 @@ description: Install, configure, and use the DFOS protocol CLI. Use when the use
 > - **`dfos-cli` skill** — for _developing_ that same Go CLI: the rebuild-from-source loop in the OSS repo (local relay, keychain cleanup, iterating on CLI source).
 > - **`dfos-dx`** — unrelated in-monorepo Node devops script (`./packages/tool-dfos-dx/bin/dfos-dx`) for deploys and migrations. Nothing to do with the protocol CLI.
 
-The `dfos` CLI is a local-first relay node for the DFOS protocol. It manages identities, content chains, beacons, and credentials. Your machine is a relay — all data is stored locally first, then optionally published to remote peers.
+The `dfos` CLI is a local-first relay node for the DFOS protocol. It manages identities, content chains, and credentials. Your machine is a relay — all data is stored locally first, then optionally published to remote peers.
 
 ## Installation
 
@@ -59,7 +59,7 @@ The CLI checks for updates automatically on each run (non-blocking, cached 24h).
 
 - **Identity**: An Ed25519 keypair with a DID (`did:dfos:...`). Keys are stored in the OS keychain (macOS Keychain, Linux secret-service) with automatic file-based fallback at `~/.dfos/keys/`.
 - **Content chain**: An append-only chain of signed operations over a document (arbitrary JSON). Each operation has a CID (IPFS CIDv1, `bafyrei...`). Content IDs are base36 strings (e.g., `kv67tf3n97324dc24an266`). The document blob is stored separately.
-- **Beacon**: A signed manifest pointer — a periodic announcement of an identity's current manifest content chain.
+- **Services**: An identity's discovery vocabulary — a controller-signed, full-state set of relay locators and stable content anchors carried in the identity chain. Answers "given a DID, where do I reach it and what stable content does it publish?"
 - **Credential**: A DFOS credential (UCAN-style JWS) granting scoped read or write access to content.
 - **Relay/Peer**: A node that stores and syncs protocol operations. The CLI itself embeds a local relay backed by `~/.dfos/store/` — all operations work offline. Remote peers are HTTP relays you can publish to and fetch from. `dfos serve` exposes your local relay over HTTP so others can peer with you.
 - **Context**: A (identity, relay) pair. Most commands need both — set a default with `dfos use alice@prod` or override per-command with `--ctx alice@prod`.
@@ -115,7 +115,7 @@ Add any of these with `dfos peer add <name> <url>`. Use `dfos peer info <name>` 
 
 ## Local-First by Default
 
-The CLI **is** a local relay. All data lives in `~/.dfos/store/` — no remote peer or HTTP server needed for local operations. Creating identities, content, credentials, and beacons all work offline.
+The CLI **is** a local relay. All data lives in `~/.dfos/store/` — no remote peer or HTTP server needed for local operations. Creating identities, content, and credentials all work offline.
 
 For local-only work, set the active identity with `dfos use <name>` (no `@relay`), pass `--identity <name>` on each command, or set the `DFOS_IDENTITY=<name>` env var:
 
@@ -261,20 +261,29 @@ dfos --ctx bob@prod content update <contentId> new.json --authorization <credent
 # --authorization = presenting a WRITE credential (mutations)
 ```
 
-### Beacons
+### Services (discovery vocabulary)
+
+Services are full-state discovery entries carried in the identity chain — relay locators (`DfosRelay`) and stable content anchors (`ContentAnchor`). They are set as a complete set on `identity create`/`update` via repeatable `--service` flags; the new set replaces the prior set in full (omit the flag on an update to clear it).
 
 ```bash
-dfos beacon announce <contentId> [--peer <relay>]      # sign manifest pointer, optionally submit to relay
-dfos beacon show [name|did]                            # show latest beacon
-dfos beacon countersign <name|did> --peer <relay>      # countersign someone's beacon
+dfos identity services <name|did>          # show resolved services for an identity
+
+# Set the full services set on create or update (repeat --service per entry):
+dfos identity update <name> \
+  --service id=relay,type=DfosRelay,endpoint=https://relay.dfos.com \
+  --service id=profile,type=ContentAnchor,label=profile,anchor=<contentId|baf...>
 ```
+
+Each `--service` spec is a comma-separated `key=value` list requiring `id` and `type`; recognized types (`DfosRelay`, `ContentAnchor`) carry their own fields, and the namespace is open (unknown types pass through verbatim). An `anchor` is a stable content identifier: a 31-char content ID (mutable content chain) or a `baf...` artifact CID (immutable). The `label` is a free client-semantic key (e.g. `profile`, `avatar`).
 
 ### Witness / Countersignatures
 
 ```bash
-dfos witness <operationCID> --peer <relay>             # countersign an operation
-dfos countersigs <cid> --peer <relay>                  # list countersignatures
+dfos witness <operationCID> [--relation <tag>] --peer <relay>   # countersign an operation
+dfos countersigs <cid> --peer <relay>                           # list countersignatures
 ```
+
+A countersignature is a public witness attestation — the protocol's inter-subjective primitive (endorsement, co-authorship, solemnization). The optional `--relation` tag (open namespace: `endorses`, `coauthors`, `witnessed`, …) names the nature of the attestation.
 
 ### Auth Tokens
 
@@ -374,14 +383,16 @@ CRED=$(dfos credential grant "$CONTENT" "$BOB_DID" --read --json | jq -r .creden
 dfos --ctx bob@prod content download "$CONTENT" --credential "$CRED"
 ```
 
-### Beacon + witness
+### Publish discovery + witness
 
 ```bash
-# Announce beacon over content
-dfos beacon announce "$CONTENT" --peer prod
+# Anchor the content under a semantic label in alice's discovery vocabulary
+dfos identity update alice \
+  --service id=profile,type=ContentAnchor,label=profile,anchor="$CONTENT" --peer prod
 
-# A witness countersigns
-dfos --ctx witness@prod beacon countersign alice --peer prod
+# A witness countersigns the content's genesis operation (an act of solemnization)
+GENESIS=$(dfos content show "$CONTENT" --json | jq -r .genesisCID)
+dfos --ctx witness@prod witness "$GENESIS" --relation witnessed --peer prod
 ```
 
 ### Local-first (create offline, publish later)

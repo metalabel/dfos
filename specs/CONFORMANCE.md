@@ -36,6 +36,12 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   CID integrity, chain linkage, terminal state, and creator-sovereignty authorization when
   `enforceAuthorization` is enabled (PROTOCOL.md "Verification → Content Chain",
   `specs/PROTOCOL.md:678`; "Content Chain Signer Model", `specs/PROTOCOL.md:102`).
+- **Services projection** — project the identity-chain `services` array into verified
+  identity state as full-state discovery vocabulary: enforce ≤ 16 entries, `id`s unique
+  within the set, the 8192-byte CBOR-encoded cap, and recognized-type structure
+  (`DfosRelay` requires `endpoint`, `ContentAnchor` requires `label` + `anchor`); preserve
+  but ignore unrecognized `type`s (MUST-ignore-unknown) (PROTOCOL.md "Services",
+  `specs/PROTOCOL.md:522`).
 - **Derivation** — DID/CID/multikey: dag-cbor canonical encoding with integer (not float)
   number encoding, CIDv1 construction, the 19-char/31-length ID alphabet, W3C Multikey
   (PROTOCOL.md "CID Construction", `specs/PROTOCOL.md:226`; "Number Encoding",
@@ -56,8 +62,9 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
   `specs/PROTOCOL.md:380`, `specs/PROTOCOL.md:405`).
 - **`kid` rules** — bare key ID for identity genesis, DID URL otherwise; content ops always
   DID URL (PROTOCOL.md "kid Rules", `specs/PROTOCOL.md:390`).
-- **`cid` header** — present on every operation JWS, beacons, credentials, revocations;
-  absent on auth-token JWTs (PROTOCOL.md "`cid` Header", `specs/PROTOCOL.md:405`).
+- **`cid` header** — present on every operation JWS, artifacts, countersignatures,
+  credentials, revocations; absent on auth-token JWTs (PROTOCOL.md "`cid` Header",
+  `specs/PROTOCOL.md:405`).
 - **Canonicalization discipline** — integer number bounds, no Unicode normalization, no
   duplicate keys (PROTOCOL.md "Number Encoding" / "String Encoding" / "JSON Payload
   Canonicalization", `specs/PROTOCOL.md:241`, `specs/PROTOCOL.md:253`, `specs/PROTOCOL.md:257`).
@@ -111,8 +118,8 @@ each suite actually exercises.
 
 **Honest coverage statement.** The cross-language `protocol-verify` suites prove
 **single-JWS primitives** — signature verification, field equality, and derivation
-(key, multikey, CID, DID, document CID, beacon, credential structure, number-encoding
-determinism — the 11 sections in `packages/protocol-verify/README.md`). They do **not**
+(key, multikey, CID, DID, document CID, credential structure, number-encoding
+determinism — the sections in `packages/protocol-verify/README.md`). They do **not**
 all exercise the stateful chain semantics. Per the cross-language table in PROTOCOL.md
 (`specs/PROTOCOL.md:1050`), TypeScript and Go carry the deep suites (224 + 63 TS, 18 Go),
 while Python and Swift run only the primitive checks (3 each). **Chain linking,

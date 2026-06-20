@@ -255,29 +255,30 @@ doc_cid_bytes = make_cid_bytes(doc_cbor)
 doc_cid = cid_to_base32(doc_cid_bytes)
 check("Document CID", doc_cid == "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy", f"got {doc_cid}")
 
-# --- 11. Beacon JWS verification ---
-print("\n11. Beacon JWS Verification (key 1)")
-BEACON_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.exr0Dfb_asVXeMpnUOaql9ppeO2pifzEdId8ocXHQ6-v_XUwccQdJaL4MhKzJGUbRAa0hfRVSFRndhjJ4NN1DA"
-EXPECTED_BEACON_CID = "bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq"
+# --- 11. Services-genesis JWS verification ---
+# Identity genesis carrying a services discovery set (relay locator + content/
+# artifact anchors). Signed by reference key 1 — the same key as the genesis
+# vector. The services fields ride along in the payload map, so recomputing the
+# operation CID over the decoded payload yields the published CID unchanged.
+print("\n11. Services-Genesis JWS Verification (key 1)")
+SERVICES_GENESIS_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpZGkzcXBzM3F0dHFwMjJtM3kzM2JkYmYyaXlrYnE1cjQ1ampod2EzN21nZXNvdjdzZGd6ZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.HCzVJXcUzL62lxtC8omBlit1JNSWk4b4kQKjjjWT00honzZ9-k3dKusIRuhTV6gjT1M74bLVZYUxPb8kJvhHAw"
+EXPECTED_SERVICES_CID = "bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze"
+EXPECTED_SERVICES_DID = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
 
-result = verify_jws(BEACON_JWS, pub1)
-check("Beacon signature valid", True)
-check("Beacon header typ", result["header"]["typ"] == "did:dfos:beacon")
-check("Beacon header kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_r9ev34fvc23z999veaaft83nn29zvhe")
-check("Beacon header cid", result["header"]["cid"] == EXPECTED_BEACON_CID)
-check("Beacon payload type", result["payload"]["type"] == "beacon")
-check("Beacon payload manifestContentId", result["payload"]["manifestContentId"] == "cv7n8vkvr64cctf3294h9k4eanhff8z")
+result = verify_jws(SERVICES_GENESIS_JWS, pub1)
+check("Services-genesis signature valid", True)
+check("Services-genesis header typ", result["header"]["typ"] == "did:dfos:identity-op")
+check("Services-genesis header kid", result["header"]["kid"] == "key_r9ev34fvc23z999veaaft83nn29zvhe")
+check("Services-genesis header cid", result["header"]["cid"] == EXPECTED_SERVICES_CID)
+check("Services-genesis payload type", result["payload"]["type"] == "create")
 
-# --- 12. Beacon countersignature verification ---
-print("\n12. Beacon Countersignature Verification (key 2 witnesses key 1's beacon)")
-BEACON_WITNESS_JWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2RuN3o2enJjdDgiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.-49R4npkmKMJtnK4sVS_x7MFOgB1RhjkZAzwycLp80g_o6y0gV0JjnUAj12as8NglccBXEk_5DdZTFs17ygKCA"
-
-result = verify_jws(BEACON_WITNESS_JWS, pub2)
-check("Beacon countersig valid", True)
-check("Beacon countersig typ", result["header"]["typ"] == "did:dfos:beacon")
-check("Beacon countersig kid", result["header"]["kid"] == f"{EXPECTED_DID}#key_ez9a874tckr3dv933d3ckdn7z6zrct8")
-check("Beacon countersig same CID", result["header"]["cid"] == EXPECTED_BEACON_CID)
-check("Beacon countersig same payload", result["payload"]["manifestContentId"] == "cv7n8vkvr64cctf3294h9k4eanhff8z")
+# Recompute the operation CID over the decoded payload (services fields ride
+# along in the payload map) and assert it equals the published CID + DID.
+services_cbor = dag_cbor.encode(result["payload"])
+services_cid = cid_to_base32(make_cid_bytes(services_cbor))
+check("Services-genesis recomputed CID", services_cid == EXPECTED_SERVICES_CID, f"got {services_cid}")
+services_did = f"did:dfos:{encode_id(hashlib.sha256(make_cid_bytes(services_cbor)).digest())}"
+check("Services-genesis derived DID", services_did == EXPECTED_SERVICES_DID, f"got {services_did}")
 
 # --- 13. DFOS Credential Verification ---
 print("\n13. DFOS Credential Verification (key 1)")

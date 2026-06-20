@@ -19,7 +19,7 @@ DFOS has two planes with fundamentally different trust models.
 ### Proof plane — self-authenticating, trustless
 
 The crypto core is the trust boundary (PROTOCOL.md "Protocol Overview", `specs/PROTOCOL.md:35`).
-Identity chains, content chains, beacons, artifacts, countersignatures, credentials,
+Identity chains, content chains, artifacts, countersignatures, credentials,
 and revocations are all signed, content-addressed objects that anyone can verify with
 a public key and any standard EdDSA + dag-cbor library. There is no privileged registry,
 blockchain, or consensus layer; the identifier _is_ the trust anchor (DID-METHOD.md
@@ -45,6 +45,16 @@ gated by an auth token plus (for non-creators) a read credential (WEB-RELAY.md
 
 The security posture of a document is therefore the security posture of the relay
 operator that holds it.
+
+### Countersignatures live on the public proof plane
+
+A countersignature is a proof-plane object (PROTOCOL.md "Countersignatures",
+`specs/PROTOCOL.md:647`). Publishing one permanently and publicly links the witness
+DID to its target: anyone can see that this identity attested to that operation. A
+countersignature therefore MUST NOT be used to cross a public/private boundary —
+witnessing a target that is meant to stay confined to a private context leaks the
+witness↔target association onto the public plane, where it is immutable and gossiped.
+If the fact of the attestation is itself sensitive, do not countersign.
 
 ---
 

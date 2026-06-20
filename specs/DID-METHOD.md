@@ -143,7 +143,43 @@ When an identity chain includes `update` operations that change the key sets, th
 
 ### 4.5 Services
 
-The core `did:dfos` method does not define any `service` entries in the DID Document. Applications MAY extend the DID Document with service endpoints through application-layer conventions.
+Identity chain `create`/`update` operations MAY carry a controller-signed
+`services` array — the identity's discovery vocabulary. It is full-state (an
+`update` replaces the entire set), bounded (≤16 entries, unique ids, an
+8192-byte cap on the canonical encoding), and projected into verified identity
+state alongside the key sets. The complete normative definition is in
+[PROTOCOL.md → Services](https://protocol.dfos.com/#services).
+
+Each entry projects into the DID Document `service` array. Every entry carries
+the common envelope `{ id, type }`; the entry `id` becomes the DID-URL fragment
+(`did:dfos:<id>#<entry-id>`). Two service types are recognized and structurally
+validated; the namespace is open, and unrecognized types are preserved verbatim
+and ignored.
+
+| Service `type`  | Fields            | DID Document mapping                                           |
+| --------------- | ----------------- | -------------------------------------------------------------- |
+| `DfosRelay`     | `endpoint` (URL)  | `serviceEndpoint` = the relay URL                              |
+| `ContentAnchor` | `label`, `anchor` | `serviceEndpoint` = the anchor; `label` retained as a property |
+
+A `ContentAnchor`'s `anchor` is a **stable** content identifier dispatched by
+shape: a 31-character contentId resolves to a content chain; a `baf…` CIDv1
+resolves to an artifact.
+
+```json
+"service": [
+  {
+    "id": "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar#relay",
+    "type": "DfosRelay",
+    "serviceEndpoint": "https://relay.dfos.com"
+  },
+  {
+    "id": "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar#profile",
+    "type": "ContentAnchor",
+    "label": "profile",
+    "serviceEndpoint": "cv7n8vkvr64cctf3294h9k4eanhff8z"
+  }
+]
+```
 
 ---
 

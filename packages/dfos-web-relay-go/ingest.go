@@ -59,10 +59,10 @@ func isFutureTimestamp(createdAt string) bool {
 
 type classifiedOp struct {
 	jwsToken      string
-	kind          string // identity-op, content-op, beacon, countersign, artifact, unknown
+	kind          string // identity-op, content-op, countersign, artifact, unknown
 	referencedDID string // DID referenced in the operation
 	signerDID     string // for content ops: payload.did
-	priority      int    // sort bucket: identity=0, beacon/artifact=1, content=2, countersign=3
+	priority      int    // sort bucket: identity=0, artifact=1, content=2, countersign=3
 	operationCID  string // from JWS header
 	previousCID   string // previousOperationCID if present
 	originalIndex int    // submission order
@@ -116,15 +116,6 @@ func classify(jwsToken string) classifiedOp {
 		}
 		return base
 
-	case "did:dfos:beacon":
-		base.kind = "beacon"
-		base.priority = 1
-		base.previousCID = "" // beacons have no chaining
-		if did, ok := payload["did"].(string); ok {
-			base.referencedDID = did
-		}
-		return base
-
 	case "did:dfos:countersign":
 		base.kind = "countersign"
 		base.priority = 3
@@ -136,7 +127,7 @@ func classify(jwsToken string) classifiedOp {
 
 	case "did:dfos:artifact":
 		base.kind = "artifact"
-		base.priority = 1     // same as beacons
+		base.priority = 1     // resolves against identity keys, like revocations/credentials
 		base.previousCID = "" // artifacts have no chaining
 		if did, ok := payload["did"].(string); ok {
 			base.referencedDID = did
@@ -145,7 +136,7 @@ func classify(jwsToken string) classifiedOp {
 
 	case "did:dfos:revocation":
 		base.kind = "revocation"
-		base.priority = 1 // same as beacons — needs identity keys to verify
+		base.priority = 1 // needs identity keys to verify
 		base.previousCID = ""
 		if did, ok := payload["did"].(string); ok {
 			base.referencedDID = did
@@ -606,76 +597,6 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 		}
 	}
 	return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
-}
-
-func ingestBeacon(jwsToken string, store Store, logEnabled bool) IngestionResult {
-	// Beacons resolve against CURRENT identity state (D3): a rotated-out key must
-	// not be able to hijack the beacon pointer. Beacons are replace-on-newer, so
-	// the legit holder's next beacon supersedes any transient sync divergence.
-	// (Revocation deliberately stays on the historical resolver — see OQ5.)
-	resolveKey := CreateCurrentKeyResolver(store)
-
-	result, err := dfos.VerifyBeacon(jwsToken, resolveKey)
-	if err != nil {
-		// Compute the CID so the rejection is keyed and durably rejectable,
-		// unless the failure is a missing dependency (unsynced identity key).
-		return IngestionResult{CID: computeOpCID(jwsToken), Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
-	}
-
-	did := result.DID
-	cid := result.BeaconCID
-
-	// reject beacons from deleted identities
-	identity, _ := store.GetIdentityChain(did)
-	if identity != nil && identity.State.IsDeleted {
-		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
-	}
-
-	// replace-on-newer, with a deterministic CID tiebreak so equal-createdAt
-	// beacons converge across relays regardless of arrival order: the
-	// lexicographically higher CID wins (mirrors chain head selection,
-	// PROTOCOL.md). Without the tiebreak, two relays seeing the same pair of
-	// equal-timestamp beacons in different orders would each keep whichever
-	// arrived first — a divergence.
-	existing, _ := store.GetBeacon(did)
-	if existing != nil {
-		// createdAt here is canonical millisecond-precision RFC3339: VerifyBeacon
-		// already ran validateCreatedAt (verify.go), which rejects any fraction
-		// that is not exactly 3 digits (see timestampGrammarVectors). Parsing with
-		// the strict protocol format — not RFC3339Nano — keeps this comparison at
-		// millisecond granularity, identical to the TS twin's Date.getTime(); there
-		// is no sub-millisecond component for the two relays to diverge on.
-		existingTime, _ := time.Parse("2006-01-02T15:04:05.000Z", existing.Payload.CreatedAt)
-		newTime, _ := time.Parse("2006-01-02T15:04:05.000Z", result.CreatedAt)
-		if newTime.Before(existingTime) || (newTime.Equal(existingTime) && cid <= existing.BeaconCID) {
-			return IngestionResult{CID: cid, Status: "duplicate", Kind: "beacon", ChainID: did}
-		}
-	}
-
-	beacon := StoredBeacon{
-		DID:       did,
-		JWSToken:  jwsToken,
-		BeaconCID: cid,
-		Payload: BeaconPayload{
-			Version:           result.Version,
-			Type:              "beacon",
-			DID:               did,
-			ManifestContentId: result.ManifestContentId,
-			CreatedAt:         result.CreatedAt,
-		},
-	}
-	if perr := persistError(cid, store.PutBeacon(beacon)); perr != nil {
-		return *perr
-	}
-	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "beacon", ChainID: did})); perr != nil {
-		return *perr
-	}
-	if logEnabled {
-		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "beacon", ChainID: did})); perr != nil {
-			return *perr
-		}
-	}
-	return IngestionResult{CID: cid, Status: "new", Kind: "beacon", ChainID: did}
 }
 
 func ingestCountersign(jwsToken string, store Store, logEnabled bool) IngestionResult {
@@ -1168,8 +1089,6 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 				result = ingestIdentityOp(op.jwsToken, store, cfg.logEnabled)
 			case "content-op":
 				result = ingestContentOp(op.jwsToken, store, cfg.logEnabled)
-			case "beacon":
-				result = ingestBeacon(op.jwsToken, store, cfg.logEnabled)
 			case "countersign":
 				result = ingestCountersign(op.jwsToken, store, cfg.logEnabled)
 			case "artifact":

@@ -451,14 +451,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     });
   });
 
-  /** Get countersignatures for an operation or beacon CID */
+  /** Get countersignatures for an operation CID */
   app.get('/countersignatures/:cid', async (c) => {
     const cid = c.req.param('cid');
 
-    // check if it's a known operation or beacon CID
+    // check if it's a known operation CID
     const op = await store.getOperation(cid);
     if (!op) {
-      // not an operation — check if any beacon has this CID
+      // not a known operation — fall back to any countersignatures stored for this CID
       const countersigs = await store.getCountersignatures(cid);
       if (countersigs.length === 0) return c.json({ error: 'not found' }, 404);
       return c.json({ cid, countersignatures: countersigs });
@@ -476,21 +476,6 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
     const countersigs = await store.getCountersignatures(cid);
     return c.json({ operationCID: cid, countersignatures: countersigs });
-  });
-
-  /** Get the latest beacon for a DID */
-  app.get('/beacons/:did{.+}', async (c) => {
-    const did = c.req.param('did');
-    const beacon = await store.getBeacon(did);
-    if (!beacon) return c.json({ error: 'not found' }, 404);
-
-    return c.json({
-      did: beacon.did,
-      jwsToken: beacon.jwsToken,
-      beaconCID: beacon.beaconCID,
-      manifestContentId: beacon.state.manifestContentId,
-      createdAt: beacon.state.createdAt,
-    });
   });
 
   // -------------------------------------------------------------------------

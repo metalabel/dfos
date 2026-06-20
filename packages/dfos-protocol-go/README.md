@@ -47,7 +47,6 @@ All protocol operations are covered:
 | `SignContentCreate`  | Sign a content chain genesis             |
 | `SignContentUpdate`  | Sign a content chain update              |
 | `SignContentDelete`  | Sign a content chain deletion            |
-| `SignBeacon`         | Sign a manifest beacon                   |
 | `SignArtifact`       | Sign a standalone inline document        |
 | `SignCountersign`    | Countersign a target operation by CID    |
 | `CreateAuthToken`    | Create a relay-scoped JWT auth token     |

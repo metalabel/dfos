@@ -135,7 +135,7 @@ describe('revocation', () => {
     const jwsToken = await createJws({
       header: {
         alg: 'EdDSA',
-        typ: 'did:dfos:beacon',
+        typ: 'did:dfos:artifact',
         kid: issuer.kid,
         cid: encoded.cid.toString(),
       },
