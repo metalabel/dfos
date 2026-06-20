@@ -57,6 +57,37 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # Cloudflare's CDN does not purge cached HTML when a new Pages deployment
+      # goes live, so changed pages can serve stale until their TTL expires.
+      # Purge the site's page URLs (derived from the build output) on every
+      # deploy. Scoped to protocol.dfos.com pages only — never the whole zone.
+      # No-ops with a warning until CLOUDFLARE_ZONE_ID + a cache-purge-scoped
+      # token are set; reuses CLOUDFLARE_API_TOKEN if no dedicated purge token.
+      - name: Purge Cloudflare CDN cache
+        env:
+          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CF_PURGE_TOKEN: ${{ secrets.CLOUDFLARE_PURGE_TOKEN }}
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          token="${CF_PURGE_TOKEN:-$CF_API_TOKEN}"
+          if [ -z "${CF_ZONE_ID}" ] || [ -z "${token}" ]; then
+            echo "::warning::CLOUDFLARE_ZONE_ID (or a purge token) not set — skipping CDN cache purge"
+            exit 0
+          fi
+          base="https://protocol.dfos.com"
+          urls=$(cd packages/site-protocol/dist && find . -name '*.html' \
+            | sed -e 's|^\.||' -e 's|/index\.html$|/|' -e 's|\.html$|/|' \
+            | sed -e "s|^|$base|" | sort -u)
+          echo "Purging $(printf '%s\n' "$urls" | grep -c .) URLs:"
+          printf '  %s\n' $urls
+          payload=$(printf '%s\n' "$urls" | jq -R . | jq -s '{files: .}')
+          curl -fsS -X POST \
+            "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            --data "$payload" | jq -e '.success == true' >/dev/null \
+            && echo "Cache purged." || { echo "::error::Cloudflare purge failed"; exit 1; }
+
   deploy-schemas:
     runs-on: ubuntu-latest
     timeout-minutes: 10
