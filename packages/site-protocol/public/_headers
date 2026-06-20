@@ -20,28 +20,39 @@
   Cache-Control: public, max-age=3600, must-revalidate
 
 # HTML pages — Cloudflare Pages serves clean URLs (/overview/, /faq/, etc.)
-# so /*.html won't match. Specific route patterns cover the actual pages.
+# so /*.html won't match; each route is listed explicitly.
+#
+# These use max-age=0, must-revalidate (NOT a long max-age). Cloudflare's CDN
+# does not purge cached HTML when a new Pages deployment goes live, so a long
+# max-age serves stale pages after a deploy until the TTL expires. max-age=0 +
+# must-revalidate keeps CDN offload (conditional GETs return 304 when
+# unchanged) while guaranteeing the latest deployment is always served.
+# deploy.yml also purges these URLs on every deploy as a backstop.
 /
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /overview/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /faq/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /spec/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /did-method/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /content-model/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /cli/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /credentials/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /deploy/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /siwd/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /skill/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
 /web-relay/
-  Cache-Control: public, max-age=3600, must-revalidate
+  Cache-Control: public, max-age=0, must-revalidate
+/conformance/
+  Cache-Control: public, max-age=0, must-revalidate
+/threat-model/
+  Cache-Control: public, max-age=0, must-revalidate
