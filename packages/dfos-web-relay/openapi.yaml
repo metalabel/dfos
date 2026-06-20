@@ -669,7 +669,7 @@ components:
           description: CID of the current head operation
         state:
           type: object
-          required: [did, isDeleted, authKeys, assertKeys, controllerKeys]
+          required: [did, isDeleted, authKeys, assertKeys, controllerKeys, services]
           properties:
             did:
               type: string
@@ -687,6 +687,22 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/MultikeyPublicKey'
+            services:
+              type: array
+              description: >-
+                Resolved discovery vocabulary (controller-signed). Each entry has
+                a common envelope {id, type}; recognized types DfosRelay and
+                ContentAnchor carry type-specific fields. The namespace is open —
+                unrecognized types are preserved verbatim.
+              items:
+                type: object
+                required: [id, type]
+                properties:
+                  id:
+                    type: string
+                  type:
+                    type: string
+                additionalProperties: true
 
     ContentChainResponse:
       type: object
