@@ -82,37 +82,6 @@ The displayable identity for any agent, person, group, or space.
 | `background`   | media  | no       | Background image                        |
 | `createdByDID` | string | no       | DID of the identity subject             |
 
-### Manifest (`https://schemas.dfos.com/manifest/v1`)
-
-A semantic index mapping path-like labels to protocol object references. The navigation layer for a DID's content.
-
-| Field     | Type   | Required | Description                                         |
-| --------- | ------ | -------- | --------------------------------------------------- |
-| `$schema` | string | yes      | `"https://schemas.dfos.com/manifest/v1"`            |
-| `entries` | object | yes      | Map of path-like keys to protocol object references |
-
-Entry keys: lowercase alphanumeric with dots, underscores, hyphens, forward slashes. 2–128 chars. Must start and end with alphanumeric. Examples: `profile`, `posts`, `drafts/post-1`, `v1.0/release-notes`.
-
-Entry values are protocol object references, self-describing by format:
-
-- **contentId** (31-char bare hash) — references a living content chain
-- **DID** (`did:dfos:...`) — references an identity
-- **CID** (`bafyrei...`) — references a specific immutable document snapshot
-
-```json
-{
-  "$schema": "https://schemas.dfos.com/manifest/v1",
-  "entries": {
-    "profile": "67t27rzc83v7c22n9t6z7c",
-    "posts": "a4b8c2d3e5f6g7h8i9j0k1",
-    "dark-publisher": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
-    "pinned-charter": "bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne"
-  }
-}
-```
-
-Manifests are content chains — same signing, same verification, same CIDs. A manifest's contentId appears in the DID's content set like any other chain. The semantic index (the document) is dark forest content — requires authorization to read. The operation chain (proof substrate) is public.
-
 ### Media Object
 
 Several schemas reference media objects. The standard representation:
@@ -156,9 +125,8 @@ Each schema implies a default projection — how applications derive resolved st
 
 | Schema        | Projection                                                                      |
 | ------------- | ------------------------------------------------------------------------------- |
-| `post/v1`     | Living document — head `documentCID` is the current post. History is edit trail |
-| `profile/v1`  | Living document — head `documentCID` is the current profile                     |
-| `manifest/v1` | Living document — head `documentCID` is the current manifest index              |
+| `post/v1`    | Living document — head `documentCID` is the current post. History is edit trail |
+| `profile/v1` | Living document — head `documentCID` is the current profile                     |
 
 Stream and event fold schemas define their own projection rules in their schema documentation. The protocol does not enforce projections — these are reading conventions that applications agree on.
 

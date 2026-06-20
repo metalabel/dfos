@@ -309,7 +309,7 @@ A revocation is a standalone signed artifact that permanently invalidates a cred
 - **Issuer-only.** Only the credential's issuer DID can revoke it. The `kid` DID in the JWS header MUST match the `did` field in the payload.
 - **Permanent.** There is no un-revoke operation. To restore access, issue a new credential.
 - **CID-addressed.** The revocation artifact itself has a CID (derived from the payload, embedded in the header), making it a content-addressable artifact.
-- **Gossiped.** Revocations are propagated across the relay network like beacons.
+- **Gossiped.** Revocations are propagated across the relay network on the proof plane like any other signed operation.
 
 ### Relay Enforcement
 
