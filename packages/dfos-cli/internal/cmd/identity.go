@@ -24,6 +24,7 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityListCmd())
 	cmd.AddCommand(newIdentityShowCmd())
 	cmd.AddCommand(newIdentityKeysCmd())
+	cmd.AddCommand(newIdentityServicesCmd())
 	cmd.AddCommand(newIdentityUpdateCmd())
 	cmd.AddCommand(newIdentityAddKeyCmd())
 	cmd.AddCommand(newIdentityDevicePubkeyCmd())
@@ -37,6 +38,7 @@ func newIdentityCmd() *cobra.Command {
 func newIdentityCreateCmd() *cobra.Command {
 	var name string
 	var peerName string
+	var serviceSpecs []string
 
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -44,6 +46,11 @@ func newIdentityCreateCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
+			}
+
+			services, err := parseServiceFlags(serviceSpecs)
+			if err != nil {
+				return err
 			}
 
 			// check name isn't taken in config
@@ -72,11 +79,12 @@ func newIdentityCreateCmd() *cobra.Command {
 			}
 			authMK := protocol.NewMultikeyPublicKey(authKeyID, authPub)
 
-			// sign genesis
-			jwsToken, did, opCID, err := protocol.SignIdentityCreate(
+			// sign genesis (services omitted entirely when none given — CID-neutral)
+			jwsToken, did, opCID, err := protocol.SignIdentityCreateWithServices(
 				[]protocol.MultikeyPublicKey{controllerMK},
 				[]protocol.MultikeyPublicKey{authMK},
 				nil,
+				services,
 				controllerKeyID,
 				controllerPriv,
 			)
@@ -136,6 +144,7 @@ func newIdentityCreateCmd() *cobra.Command {
 					"operationCID":  opCID,
 					"controllerKey": controllerKeyID,
 					"authKey":       authKeyID,
+					"services":      len(services),
 					"publishedTo":   publishedTo,
 				})
 			} else {
@@ -144,6 +153,9 @@ func newIdentityCreateCmd() *cobra.Command {
 				fmt.Printf("  DID:            %s\n", did)
 				fmt.Printf("  Controller key: %s  (%s)\n", controllerKeyID, keys.Backend())
 				fmt.Printf("  Auth key:       %s  (%s)\n", authKeyID, keys.Backend())
+				if len(services) > 0 {
+					fmt.Printf("  Services:       %d\n", len(services))
+				}
 				if len(publishedTo) > 0 {
 					fmt.Printf("  Published to:   %s\n", joinComma(publishedTo))
 				} else {
@@ -158,6 +170,7 @@ func newIdentityCreateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Human-readable name for this identity (required)")
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
+	cmd.Flags().StringArrayVar(&serviceSpecs, "service", nil, "Discovery service entry as key=value list (repeatable), e.g. id=relay,type=DfosRelay,endpoint=https://relay.dfos.com")
 	return cmd
 }
 
@@ -165,14 +178,27 @@ func newIdentityUpdateCmd() *cobra.Command {
 	var peerName string
 	var rotateAuth bool
 	var rotateController bool
+	var serviceSpecs []string
+	var clearServices bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update identity (rotate keys)",
-		Long:  "Sign an identity update operation. Use --rotate-auth or --rotate-controller to generate new keys and rotate out the old ones.",
+		Short: "Update identity (rotate keys, set discovery services)",
+		Long: "Sign an identity update operation. Use --rotate-auth or --rotate-controller to generate new keys " +
+			"and rotate out the old ones. Use --service (repeatable) to REPLACE the discovery services set, or " +
+			"--clear-services to empty it. Services left unspecified are carried forward unchanged.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !rotateAuth && !rotateController {
-				return fmt.Errorf("specify --rotate-auth and/or --rotate-controller")
+			settingServices := len(serviceSpecs) > 0 || clearServices
+			if !rotateAuth && !rotateController && !settingServices {
+				return fmt.Errorf("specify --rotate-auth, --rotate-controller, --service, and/or --clear-services")
+			}
+			if len(serviceSpecs) > 0 && clearServices {
+				return fmt.Errorf("--service and --clear-services are mutually exclusive")
+			}
+
+			newServices, err := parseServiceFlags(serviceSpecs)
+			if err != nil {
+				return err
 			}
 
 			_, chain, err := requireIdentity()
@@ -207,6 +233,18 @@ func newIdentityUpdateCmd() *cobra.Command {
 			newAssertKeys := chain.State.AssertKeys
 			var rotatedKeys []string
 
+			// An update REPLACES the full services state. Carry the current set
+			// forward unless --service replaces it or --clear-services empties it.
+			services := chain.State.Services
+			servicesChanged := false
+			if len(serviceSpecs) > 0 {
+				services = newServices
+				servicesChanged = true
+			} else if clearServices {
+				services = nil
+				servicesChanged = true
+			}
+
 			if rotateAuth {
 				newAuthKeyID := protocol.GenerateKeyID()
 				_, newAuthPub, err := keys.GenerateKey(chain.DID + "#" + newAuthKeyID)
@@ -227,9 +265,10 @@ func newIdentityUpdateCmd() *cobra.Command {
 				rotatedKeys = append(rotatedKeys, "controller:"+newControllerKeyID)
 			}
 
-			jwsToken, opCID, err := protocol.SignIdentityUpdate(
+			jwsToken, opCID, err := protocol.SignIdentityUpdateWithServices(
 				previousCID,
 				newControllerKeys, newAuthKeys, newAssertKeys,
+				services,
 				kid, controllerPriv,
 			)
 			if err != nil {
@@ -262,11 +301,15 @@ func newIdentityUpdateCmd() *cobra.Command {
 			}
 
 			if jsonFlag {
-				outputJSON(map[string]any{
+				out := map[string]any{
 					"did":          chain.DID,
 					"operationCID": opCID,
 					"rotatedKeys":  rotatedKeys,
-				})
+				}
+				if servicesChanged {
+					out["services"] = len(services)
+				}
+				outputJSON(out)
 			} else {
 				fmt.Printf("Identity updated:\n")
 				fmt.Printf("  DID:            %s\n", chain.DID)
@@ -275,7 +318,12 @@ func newIdentityUpdateCmd() *cobra.Command {
 				for _, rk := range rotatedKeys {
 					fmt.Printf("  New key:        %s\n", rk)
 				}
-				fmt.Printf("  Old keys remain in keychain for chain re-verification.\n")
+				if servicesChanged {
+					fmt.Printf("  Services:       %d (replaced)\n", len(services))
+				}
+				if len(rotatedKeys) > 0 {
+					fmt.Printf("  Old keys remain in keychain for chain re-verification.\n")
+				}
 			}
 			return nil
 		},
@@ -283,6 +331,8 @@ func newIdentityUpdateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().BoolVar(&rotateAuth, "rotate-auth", false, "Generate new auth key and rotate out old one(s)")
 	cmd.Flags().BoolVar(&rotateController, "rotate-controller", false, "Generate new controller key and rotate out old one(s)")
+	cmd.Flags().StringArrayVar(&serviceSpecs, "service", nil, "Discovery service entry as key=value list (repeatable); REPLACES the entire services set")
+	cmd.Flags().BoolVar(&clearServices, "clear-services", false, "Empty the discovery services set")
 	return cmd
 }
 
@@ -522,7 +572,7 @@ func newIdentityAddKeyCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
-	cmd.Flags().BoolVar(&authKey, "auth-key", false, "Add the key to the auth set (content/credential/beacon publishing)")
+	cmd.Flags().BoolVar(&authKey, "auth-key", false, "Add the key to the auth set (content/credential publishing)")
 	cmd.Flags().BoolVar(&controllerKey, "controller-key", false, "Add the key to the controller set (higher trust: rotate/delete/add)")
 	cmd.Flags().StringVar(&idFlag, "id", "", "Key id from 'dfos identity device-pubkey' (required)")
 	cmd.Flags().StringVar(&pubkeyFlag, "pubkey", "", "Public Multikey from 'dfos identity device-pubkey' (required)")
@@ -709,6 +759,7 @@ func newIdentityShowCmd() *cobra.Command {
 			totalKeys := len(chain.State.AuthKeys) + len(chain.State.ControllerKeys) + len(chain.State.AssertKeys)
 			haveKeys := countKeysInChain(chain)
 			fmt.Printf("Keys:        %d/%d (%s)\n", haveKeys, totalKeys, keys.Backend())
+			fmt.Printf("Services:    %d\n", len(chain.State.Services))
 			fmt.Printf("Operations:  %d\n", len(chain.Log))
 			fmt.Printf("Deleted:     %v\n", chain.State.IsDeleted)
 			return nil
@@ -778,6 +829,86 @@ func newIdentityKeysCmd() *cobra.Command {
 			printKeys(chain.State.ControllerKeys, "controller")
 			printKeys(chain.State.AuthKeys, "auth")
 			printKeys(chain.State.AssertKeys, "assert")
+			return nil
+		},
+	}
+}
+
+// newIdentityServicesCmd prints the resolved discovery services for an identity.
+// Services are full-state on each create/update op and projected into verified
+// chain state; this just renders that state. The namespace is open, so unknown
+// types are shown verbatim alongside the recognized DfosRelay/ContentAnchor ones.
+func newIdentityServicesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "services [name|did]",
+		Short: "Show resolved discovery services for an identity",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			var chain *relay.StoredIdentityChain
+			if len(args) > 0 {
+				did := resolveIdentityDID(args[0])
+				chain, _ = lr.Relay.GetIdentity(did)
+			} else {
+				_, chain2, _ := requireIdentity()
+				chain = chain2
+			}
+			if chain == nil {
+				return fmt.Errorf("identity not found")
+			}
+
+			services := chain.State.Services
+			if jsonFlag {
+				if services == nil {
+					services = []protocol.ServiceEntry{}
+				}
+				outputJSON(services)
+				return nil
+			}
+
+			name := config.FindIdentityName(cfg, chain.DID)
+			label := chain.DID
+			if name != "" {
+				label = chain.DID + " (" + name + ")"
+			}
+			fmt.Printf("Identity: %s\n\n", label)
+			if len(services) == 0 {
+				fmt.Println("No services.")
+				return nil
+			}
+			for _, e := range services {
+				id, _ := e["id"].(string)
+				typ, _ := e["type"].(string)
+				recognized := ""
+				if !protocol.IsRecognizedServiceType(typ) {
+					recognized = "  (open)"
+				}
+				fmt.Printf("- %s  [%s]%s\n", id, typ, recognized)
+				switch typ {
+				case "DfosRelay":
+					if ep, ok := e["endpoint"].(string); ok {
+						fmt.Printf("    endpoint: %s\n", ep)
+					}
+				case "ContentAnchor":
+					if lbl, ok := e["label"].(string); ok {
+						fmt.Printf("    label:  %s\n", lbl)
+					}
+					if anchor, ok := e["anchor"].(string); ok {
+						fmt.Printf("    anchor: %s  (%s)\n", anchor, protocol.ClassifyAnchor(anchor))
+					}
+				default:
+					for k, v := range e {
+						if k == "id" || k == "type" {
+							continue
+						}
+						fmt.Printf("    %s: %v\n", k, v)
+					}
+				}
+			}
 			return nil
 		},
 	}
@@ -986,8 +1117,8 @@ func toStringSlice(v any) ([]string, bool) {
 }
 
 // publishIdentityIfNeeded ensures the identity's chain is on the peer before
-// publishing content or beacons. Submits the full identity log — duplicates
-// are idempotent on the peer side.
+// publishing content. Submits the full identity log — duplicates are idempotent
+// on the peer side.
 func publishIdentityIfNeeded(chain *relay.StoredIdentityChain, peerName string, c *client.Client) error {
 	results, err := c.SubmitOperations(chain.Log)
 	if err != nil {

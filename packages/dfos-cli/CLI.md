@@ -60,7 +60,7 @@ dfos serve
 
 ## Philosophy
 
-The DFOS protocol defines signed chain primitives — identity and content chains, beacons, credentials — but says nothing about how a user manages keys or communicates with relays. The CLI is the user-side agent that bridges this gap.
+The DFOS protocol defines signed chain primitives — identity and content chains, credentials, countersignatures — but says nothing about how a user manages keys or communicates with relays. The CLI is the user-side agent that bridges this gap.
 
 Relays are dumb pipes that verify and store. The CLI is the sovereign actor: it generates keys, signs operations, decides what to publish and when, and independently verifies what relays serve back. Private key material never leaves the local machine.
 
@@ -94,7 +94,7 @@ The CLI embeds a full relay locally — the same SQLite-backed relay that runs a
 The CLI has three layers of state:
 
 - **OS Keychain**: private key material only. One entry per Ed25519 key, keyed by `dfos` service + `did:dfos:xxx#key_yyy` account. Hex-encoded 32-byte seed. Never written to disk.
-- **Local relay** (`~/.dfos/relay.db`): SQLite database storing identity chains, content chains, operations, beacons, countersignatures, and blobs. Both chains you own (have private keys for) and chains you've fetched from relays.
+- **Local relay** (`~/.dfos/relay.db`): SQLite database storing identity chains, content chains, operations, countersignatures, and blobs. Both chains you own (have private keys for) and chains you've fetched from relays.
 - **Config** (`~/.dfos/config.toml`): relay URLs, identity names, active context, defaults.
 
 ---
@@ -255,14 +255,14 @@ dfos identity add-key --auth-key --id key_... --pubkey z6Mk... --peer prod
 # 6. On B: re-fetch so B sees its now-in-chain key.
 dfos identity fetch alice --peer prod
 
-# B can now publish content / credentials / beacons independently, signing
-# with its own key.
+# B can now publish content / credentials independently, signing with its
+# own key.
 dfos content create post.json --peer prod
 ```
 
 Notes:
 
-- **`device-pubkey` defaults to the auth role**, which is sufficient for publishing content, credentials, and beacons. Pass `--controller` only to print a controller-role hint; granting a controller key is a higher-trust act (a controller can rotate, delete, and add further keys), and the role is ultimately decided by A's `add-key` flags (`--auth-key` vs `--controller-key`), not by B.
+- **`device-pubkey` defaults to the auth role**, which is sufficient for publishing content and credentials. Pass `--controller` only to print a controller-role hint; granting a controller key is a higher-trust act (a controller can rotate, delete, and add further keys), and the role is ultimately decided by A's `add-key` flags (`--auth-key` vs `--controller-key`), not by B.
 - **B must re-fetch after A's `add-key` propagates.** Between `device-pubkey` and that re-fetch, B holds a private key that is not yet in the published set, so a publish attempt will report "no held auth key" until B syncs.
 - This is set up _in advance_. There is no way to add a key after every device key is lost — `add-key` itself must be signed by a held controller key.
 
@@ -270,7 +270,7 @@ Notes:
 
 The CLI stores all chain data in a SQLite database at `~/.dfos/relay.db`. This is the same relay implementation that powers network relays via `dfos serve` — the CLI just runs it embedded, without HTTP.
 
-Identity chains, content chains, operations, beacons, countersignatures, and blobs all live in this single database. Local metadata (identity names, publish state) is tracked in `config.toml`.
+Identity chains, content chains, operations, countersignatures, and blobs all live in this single database. Local metadata (identity names, publish state) is tracked in `config.toml`.
 
 ### Fetching Remote Chains
 
@@ -350,6 +350,60 @@ Credential transport is out-of-band — the CLI mints and consumes them, but doe
 
 ---
 
+## Discovery Services
+
+An identity can publish a **services** set — an additive discovery vocabulary carried in its chain state. Services are full-state on every `identity create` / `identity update`: an update **replaces** the entire set, and an unspecified set is carried forward unchanged. Each entry has a common `{id, type}` envelope; the namespace is **open**, so unrecognized types are preserved verbatim and ignored by the core.
+
+Two types are structurally recognized:
+
+- **`DfosRelay`** — `{id, type, endpoint}`, a transport endpoint where this identity's chains can be fetched.
+- **`ContentAnchor`** — `{id, type, label, anchor}`, a stable pointer to a content chain (31-char content id) or an artifact (CIDv1 `baf…`), addressable by `label` (e.g. `profile`, `avatar`).
+
+Bounds (enforced at sign time by the protocol layer): at most 16 entries, unique ids, `id`/`type` each 1..64 chars, and an 8192-byte cap on the encoded services array.
+
+```bash
+# attach services at genesis
+dfos identity create --name alice \
+  --service id=relay,type=DfosRelay,endpoint=https://relay.dfos.com \
+  --service id=profile,type=ContentAnchor,label=profile,anchor=cv7n8vkvr64cctf3294h9k4eanhff8z
+
+# replace the entire set on update (also rotate keys in the same op if you like)
+dfos identity update \
+  --service id=relay,type=DfosRelay,endpoint=https://relay.dfos.com
+
+# open namespace: any type, carried through verbatim
+dfos identity update --service id=site,type=Website,url=https://alice.example
+
+# empty the set
+dfos identity update --clear-services
+
+# view the resolved set
+dfos identity services alice
+dfos identity services alice --json
+```
+
+Each `--service` spec is a comma-separated `key=value` list; `id` and `type` are required, every value is a string.
+
+---
+
+## Solemnization (Witness)
+
+`witness` countersigns an operation by CID — a collective endorsement that solemnizes it. This is the protocol's only inter-subjective primitive: a separate identity attesting to someone else's operation. An optional `--relation` tags the nature of the endorsement (open namespace, 1..64 chars). There is no withdrawal primitive — a countersignature is a standing attestation.
+
+```bash
+# plain endorsement
+dfos witness <operationCID> --peer prod
+
+# tagged with a relation
+dfos witness <operationCID> --relation endorses --peer prod
+dfos witness <operationCID> --relation coauthors --peer prod
+
+# inspect countersignatures on an operation
+dfos countersigs <operationCID>
+```
+
+---
+
 ## Verification
 
 `content verify` re-verifies a chain's integrity locally — re-derives all CIDs, re-checks all Ed25519 signatures, and optionally verifies blob integrity. Zero trust in the relay.
@@ -409,8 +463,9 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `GET`  | `identity list`                  | List all known identities (owned + fetched) |
 | `GET`  | `identity show [name\|did]`      | Show identity state                         |
 | `GET`  | `identity keys [name\|did]`      | Show key state + keychain availability      |
-| `POST` | `identity create --name`         | Generate keys + sign genesis                |
-| `POST` | `identity update`                | Rotate keys (sign update operation)         |
+| `GET`  | `identity services [name\|did]`  | Show resolved discovery services            |
+| `POST` | `identity create --name`         | Generate keys + sign genesis (`--service`)  |
+| `POST` | `identity update`                | Rotate keys / set services (`--service`)    |
 | `POST` | `identity device-pubkey`         | Generate a device keypair, print its pubkey |
 | `POST` | `identity add-key`               | Add another device's pubkey (1-of-N)        |
 | `POST` | `identity delete`                | Permanently delete identity                 |
@@ -427,11 +482,8 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `credential grant <id> <did>`    | Issue read/write credential                 |
 | `POST` | `credential revoke <cid>`        | Revoke a credential                         |
 | `GET`  | `content verify <id>`            | Re-verify chain integrity locally           |
-| `GET`  | `beacon show [did\|name]`        | Show latest beacon                          |
-| `POST` | `beacon announce <contentId>`    | Sign manifest pointer, submit               |
-| `POST` | `beacon countersign <did\|name>` | Countersign someone's beacon                |
-| `POST` | `witness <cid>`                  | Countersign an operation                    |
-| `GET`  | `countersigs <cid>`              | Show countersignatures for operation/beacon |
+| `POST` | `witness <cid>`                  | Countersign an operation (`--relation`)     |
+| `GET`  | `countersigs <cid>`              | Show countersignatures for an operation     |
 | `GET`  | `auth token`                     | Mint short-lived auth token (stdout)        |
 | `GET`  | `auth status`                    | Show current auth state                     |
 | `*`    | `api <METHOD> <path>`            | Raw HTTP to relay with optional `--auth`    |

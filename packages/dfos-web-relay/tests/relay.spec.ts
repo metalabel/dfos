@@ -2,13 +2,11 @@ import {
   encodeEd25519Multikey,
   MAX_ARTIFACT_PAYLOAD_SIZE,
   signArtifact,
-  signBeacon,
   signContentOperation,
   signCountersignature,
   signIdentityOperation,
   signRevocation,
   type ArtifactPayload,
-  type BeaconPayload,
   type ContentOperation,
   type CountersignPayload,
   type IdentityOperation,
@@ -563,203 +561,6 @@ describe('web relay', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // beacon lifecycle
-  // ---------------------------------------------------------------------------
-
-  describe('beacon ingestion', () => {
-    it('should accept a beacon from a known identity', async () => {
-      const identity = await createIdentity();
-      await postOps([identity.jwsToken]);
-
-      const beaconPayload: BeaconPayload = {
-        version: 1,
-        type: 'beacon',
-        did: identity.did,
-        manifestContentId: 'test_manifest_content_id',
-        createdAt: ts(2),
-      };
-
-      const kid = `${identity.did}#${identity.controller.keyId}`;
-      const { jwsToken: beaconToken } = await signBeacon({
-        payload: beaconPayload,
-        signer: identity.controller.signer,
-        kid,
-      });
-
-      const res = await postOps([beaconToken]);
-      const body = await json(res);
-      expect(body.results[0].status).toBe('new');
-      expect(body.results[0].kind).toBe('beacon');
-
-      // query the beacon
-      const beaconRes = await req(`/beacons/${identity.did}`);
-      expect(beaconRes.status).toBe(200);
-      const beaconBody = await json(beaconRes);
-      expect(beaconBody.manifestContentId).toBe('test_manifest_content_id');
-    });
-
-    it('should replace beacon with newer one', async () => {
-      const identity = await createIdentity();
-      await postOps([identity.jwsToken]);
-
-      const kid = `${identity.did}#${identity.controller.keyId}`;
-
-      const beacon1: BeaconPayload = {
-        version: 1,
-        type: 'beacon',
-        did: identity.did,
-        manifestContentId: 'test_manifest_content_id_a',
-        createdAt: ts(2),
-      };
-      const { jwsToken: token1 } = await signBeacon({
-        payload: beacon1,
-        signer: identity.controller.signer,
-        kid,
-      });
-
-      const beacon2: BeaconPayload = {
-        version: 1,
-        type: 'beacon',
-        did: identity.did,
-        manifestContentId: 'test_manifest_content_id_b',
-        createdAt: ts(3),
-      };
-      const { jwsToken: token2 } = await signBeacon({
-        payload: beacon2,
-        signer: identity.controller.signer,
-        kid,
-      });
-
-      await postOps([token1]);
-      await postOps([token2]);
-
-      const beaconRes = await req(`/beacons/${identity.did}`);
-      const beaconBody = await json(beaconRes);
-      expect(beaconBody.manifestContentId).toBe('test_manifest_content_id_b');
-    });
-
-    // Equal-createdAt tiebreak: two beacons for one DID with identical createdAt
-    // but distinct CIDs must converge to the lexicographically-higher CID
-    // regardless of arrival order. Without the tiebreak, low-then-high replaces
-    // while high-then-low does not — a cross-relay divergence.
-    it('beacon equal-timestamp tiebreak: higher CID wins regardless of arrival order', async () => {
-      const sameTs = ts(2);
-
-      const buildPair = async (identity: Awaited<ReturnType<typeof createIdentity>>) => {
-        const kid = `${identity.did}#${identity.controller.keyId}`;
-        const mk = async (manifestContentId: string) => {
-          const payload: BeaconPayload = {
-            version: 1,
-            type: 'beacon',
-            did: identity.did,
-            manifestContentId,
-            createdAt: sameTs,
-          };
-          const { jwsToken, beaconCID } = await signBeacon({
-            payload,
-            signer: identity.controller.signer,
-            kid,
-          });
-          return { jwsToken, beaconCID, manifestContentId };
-        };
-        const a = await mk('manifest_tiebreak_a');
-        const b = await mk('manifest_tiebreak_b');
-        return a.beaconCID < b.beaconCID ? { lower: a, higher: b } : { lower: b, higher: a };
-      };
-
-      // order 1: lower then higher → higher REPLACES
-      const id1 = await createIdentity();
-      await postOps([id1.jwsToken]);
-      const p1 = await buildPair(id1);
-      expect((await json(await postOps([p1.lower.jwsToken]))).results[0].status).toBe('new');
-      expect((await json(await postOps([p1.higher.jwsToken]))).results[0].status).toBe('new');
-      expect((await json(await req(`/beacons/${id1.did}`))).manifestContentId).toBe(
-        p1.higher.manifestContentId,
-      );
-
-      // order 2: higher then lower → lower is DUPLICATE, higher stays
-      const id2 = await createIdentity();
-      await postOps([id2.jwsToken]);
-      const p2 = await buildPair(id2);
-      expect((await json(await postOps([p2.higher.jwsToken]))).results[0].status).toBe('new');
-      expect((await json(await postOps([p2.lower.jwsToken]))).results[0].status).toBe('duplicate');
-      expect((await json(await req(`/beacons/${id2.did}`))).manifestContentId).toBe(
-        p2.higher.manifestContentId,
-      );
-    });
-
-    // Beacon resolution is CURRENT-STATE (WP-9): a beacon signed by a
-    // rotated-out controller key is rejected; the current key is accepted and
-    // becomes the head. Beacons replace-on-newer, so current-state is safe —
-    // a transient divergence self-heals when the legit holder publishes a
-    // fresher beacon. This is the FIRST beacon-rotation coverage in TS.
-    it('should reject a beacon signed with a rotated-out controller key and accept the current key', async () => {
-      const identity = await createIdentity();
-      await postOps([identity.jwsToken]);
-
-      // rotate the controller key (old controller key removed from current state)
-      const newController = makeKey();
-      const updateOp: IdentityOperation = {
-        version: 1,
-        type: 'update',
-        previousOperationCID: identity.operationCID,
-        authKeys: [identity.authKey.key],
-        assertKeys: [],
-        controllerKeys: [newController.key], // old controller rotated out
-        createdAt: ts(2),
-      };
-      const { jwsToken: updateToken } = await signIdentityOperation({
-        operation: updateOp,
-        signer: identity.controller.signer, // current controller signs its own rotation
-        keyId: identity.controller.keyId,
-        identityDID: identity.did,
-      });
-      const updRes = await postOps([updateToken]);
-      expect((await json(updRes)).results[0].status).toBe('new');
-
-      // beacon signed with the OLD (rotated-out) controller key → REJECTED
-      const staleBeacon: BeaconPayload = {
-        version: 1,
-        type: 'beacon',
-        did: identity.did,
-        manifestContentId: 'stale_manifest',
-        createdAt: ts(3),
-      };
-      const { jwsToken: staleToken } = await signBeacon({
-        payload: staleBeacon,
-        signer: identity.controller.signer, // OLD controller key
-        kid: `${identity.did}#${identity.controller.keyId}`,
-      });
-      const staleRes = await postOps([staleToken]);
-      expect((await json(staleRes)).results[0].status).toBe('rejected');
-
-      // no beacon should have been recorded
-      const noBeacon = await req(`/beacons/${identity.did}`);
-      expect(noBeacon.status).toBe(404);
-
-      // beacon signed with the CURRENT (new) controller key → ACCEPTED + head
-      const freshBeacon: BeaconPayload = {
-        version: 1,
-        type: 'beacon',
-        did: identity.did,
-        manifestContentId: 'fresh_manifest',
-        createdAt: ts(4),
-      };
-      const { jwsToken: freshToken } = await signBeacon({
-        payload: freshBeacon,
-        signer: newController.signer, // CURRENT controller key
-        kid: `${identity.did}#${newController.keyId}`,
-      });
-      const freshRes = await postOps([freshToken]);
-      expect((await json(freshRes)).results[0].status).toBe('new');
-
-      const beaconRes = await req(`/beacons/${identity.did}`);
-      expect(beaconRes.status).toBe(200);
-      expect((await json(beaconRes)).manifestContentId).toBe('fresh_manifest');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // countersignature lifecycle
   // ---------------------------------------------------------------------------
 
@@ -878,50 +679,33 @@ describe('web relay', () => {
       expect(csBody2.countersignatures).toHaveLength(2);
     });
 
-    it('should accept a beacon countersignature from a witness', async () => {
-      const controller = await createIdentity();
+    it('should accept a countersignature targeting an identity operation CID', async () => {
+      const subject = await createIdentity();
       const witness = await createIdentity();
-      await postOps([controller.jwsToken, witness.jwsToken]);
+      await postOps([subject.jwsToken, witness.jwsToken]);
 
-      // create and ingest a beacon
-      const beaconPayload: BeaconPayload = {
-        version: 1,
-        type: 'beacon',
-        did: controller.did,
-        manifestContentId: 'test_manifest_content_id',
-        createdAt: ts(2),
-      };
-
-      const controllerKid = `${controller.did}#${controller.controller.keyId}`;
-      const { jwsToken: beaconToken, beaconCID } = await signBeacon({
-        payload: beaconPayload,
-        signer: controller.controller.signer,
-        kid: controllerKid,
-      });
-      await postOps([beaconToken]);
-
-      // witness creates a countersign targeting the beacon CID
+      // witness creates a countersign targeting the subject's genesis identity CID
       const witnessKid = `${witness.did}#${witness.authKey.keyId}`;
-      const { jwsToken: beaconCsToken } = await signCountersignature({
+      const { jwsToken: idCsToken } = await signCountersignature({
         payload: {
           version: 1,
           type: 'countersign',
           did: witness.did,
-          targetCID: beaconCID,
+          targetCID: subject.operationCID,
           createdAt: ts(3),
         },
         signer: witness.authKey.signer,
         kid: witnessKid,
       });
 
-      const res = await postOps([beaconCsToken]);
+      const res = await postOps([idCsToken]);
       const body = await json(res);
       expect(body.results[0].status).toBe('new');
       expect(body.results[0].kind).toBe('countersign');
-      expect(body.results[0].chainId).toBe(beaconCID);
+      expect(body.results[0].chainId).toBe(subject.operationCID);
 
-      // query beacon countersignatures via the general countersig route
-      const csRes = await req(`/countersignatures/${beaconCID}`);
+      // query countersignatures via the general countersig route
+      const csRes = await req(`/countersignatures/${subject.operationCID}`);
       expect(csRes.status).toBe(200);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(1);
@@ -2466,29 +2250,12 @@ describe('web relay', () => {
       const content = await createContentOp(identity);
       await postOps([identity.jwsToken, content.jwsToken]);
 
-      // ingest a beacon
-      const beaconPayload: BeaconPayload = {
-        version: 1,
-        type: 'beacon',
-        did: identity.did,
-        manifestContentId: 'test_manifest_content_id',
-        createdAt: ts(2),
-      };
-      const kid = `${identity.did}#${identity.controller.keyId}`;
-      const { jwsToken: beaconToken } = await signBeacon({
-        payload: beaconPayload,
-        signer: identity.controller.signer,
-        kid,
-      });
-      await postOps([beaconToken]);
-
       // read only entries after the bootstrap
       const res = await req(`/log?after=${bootstrapCursor}`);
       const body = await json(res);
-      expect(body.entries.length).toBe(3);
+      expect(body.entries.length).toBe(2);
       expect(body.entries[0].kind).toBe('identity-op');
       expect(body.entries[1].kind).toBe('content-op');
-      expect(body.entries[2].kind).toBe('beacon');
     });
 
     it('should paginate with cursor', async () => {

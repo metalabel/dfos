@@ -4,7 +4,7 @@
 
   Classify, dependency-sort, and verify incoming JWS operations.
 
-  All proof plane artifacts — identity ops, content ops, beacons, and
+  All proof plane artifacts — identity ops, content ops, and
   countersignatures — enter through the same pipeline. The relay classifies
   each token by its JWS `typ` header, dependency-sorts so identity chains
   are processed before content chains that reference them, then verifies
@@ -20,14 +20,12 @@
 import {
   decodeMultikey,
   verifyArtifact,
-  verifyBeacon,
   verifyContentChain,
   verifyContentExtensionFromTrustedState,
   verifyCountersignature,
   verifyIdentityChain,
   verifyIdentityExtensionFromTrustedState,
   verifyRevocation,
-  type VerifiedBeacon,
   type VerifiedCountersignature,
   type VerifiedRevocation,
 } from '@metalabel/dfos-protocol/chain';
@@ -116,7 +114,6 @@ const isFutureTimestamp = (createdAt: string): boolean => {
 type ClassificationKind =
   | 'identity-op'
   | 'content-op'
-  | 'beacon'
   | 'countersign'
   | 'artifact'
   | 'revocation'
@@ -130,7 +127,7 @@ interface ClassifiedOperation {
   referencedDID: string | null;
   /** For content ops — the DID from the payload that signs the operation */
   signerDID: string | null;
-  /** Sort priority: identity ops first, then beacons, then content ops, then countersigs */
+  /** Sort priority: identity ops first, then content ops, then countersigs */
   priority: number;
   /** Operation CID from the JWS header — used for intra-kind topological sorting */
   operationCID: string | null;
@@ -177,18 +174,6 @@ const classify = (jwsToken: string): ClassifiedOperation => {
     return { ...base, kind: 'content-op', referencedDID: null, signerDID: opDID, priority: 2 };
   }
 
-  if (typ === 'did:dfos:beacon') {
-    const beaconDID = typeof payload['did'] === 'string' ? payload['did'] : null;
-    return {
-      ...base,
-      kind: 'beacon',
-      referencedDID: beaconDID,
-      signerDID: null,
-      priority: 1,
-      previousCID: null,
-    };
-  }
-
   if (typ === 'did:dfos:countersign') {
     const witnessDID = typeof payload['did'] === 'string' ? payload['did'] : null;
     return {
@@ -208,7 +193,7 @@ const classify = (jwsToken: string): ClassifiedOperation => {
       kind: 'artifact',
       referencedDID: artifactDID,
       signerDID: null,
-      priority: 1, // same as beacons — needs identity keys resolved first
+      priority: 1, // needs identity keys resolved first
       previousCID: null,
     };
   }
@@ -220,7 +205,7 @@ const classify = (jwsToken: string): ClassifiedOperation => {
       kind: 'revocation',
       referencedDID: revocationDID,
       signerDID: null,
-      priority: 1, // same as beacons — needs identity keys to verify
+      priority: 1, // needs identity keys to verify
       previousCID: null,
     };
   }
@@ -813,67 +798,6 @@ const ingestContentOp = async (
   return { cid, status: 'new', kind: 'content-op', chainId: chain.contentId };
 };
 
-const ingestBeacon = async (
-  jwsToken: string,
-  store: RelayStore,
-  logEnabled: boolean,
-): Promise<IngestionResult> => {
-  // Beacons resolve against CURRENT identity state (D3): a rotated-out key must
-  // not be able to hijack the beacon pointer. Beacons are replace-on-newer, so
-  // the legit holder's next beacon supersedes any transient sync divergence.
-  // (Revocation deliberately stays on the historical resolver — see OQ5.)
-  const resolveKey = createCurrentKeyResolver(store);
-
-  let verified: VerifiedBeacon;
-  try {
-    verified = await verifyBeacon({ jwsToken, resolveKey });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'verification failed';
-    // Compute the CID so the rejection is keyed and durably rejectable, unless
-    // the failure is a missing dependency (unsynced identity key).
-    return {
-      cid: await computeOpCID(jwsToken),
-      status: 'rejected',
-      error: message,
-      dependencyMissing: isKeyResolutionFailure(message),
-    };
-  }
-
-  const did = verified.did;
-  const cid = verified.beaconCID;
-
-  // reject beacons from deleted identities
-  const identity = await store.getIdentityChain(did);
-  if (identity?.state.isDeleted) {
-    return { cid, status: 'rejected', error: 'identity is deleted' };
-  }
-
-  // replace-on-newer, with a deterministic CID tiebreak so equal-createdAt
-  // beacons converge across relays regardless of arrival order: the
-  // lexicographically higher CID wins (mirrors chain head selection). Without it,
-  // two relays seeing the same equal-timestamp pair in different orders would each
-  // keep whichever arrived first — a divergence.
-  //
-  // createdAt is canonical millisecond-precision RFC3339 (the grammar gate rejects
-  // any fraction other than exactly 3 digits — see timestamp-grammar.spec.ts), so
-  // getTime() is exact and matches the Go twin's millisecond comparison.
-  const existing = await store.getBeacon(did);
-  if (existing) {
-    const existingTime = new Date(existing.state.createdAt).getTime();
-    const newTime = new Date(verified.createdAt).getTime();
-    if (newTime < existingTime || (newTime === existingTime && cid <= existing.beaconCID)) {
-      return { cid, status: 'duplicate', kind: 'beacon', chainId: did };
-    }
-  }
-
-  await store.putBeacon({ did, jwsToken, beaconCID: cid, state: verified });
-  await store.putOperation({ cid, jwsToken, chainType: 'beacon', chainId: did });
-  if (logEnabled) {
-    await store.appendToLog({ cid, jwsToken, kind: 'beacon', chainId: did });
-  }
-  return { cid, status: 'new', kind: 'beacon', chainId: did };
-};
-
 const ingestCountersign = async (
   jwsToken: string,
   store: RelayStore,
@@ -1138,8 +1062,8 @@ const ingestPublicCredential = async (
 // -----------------------------------------------------------------------------
 
 /**
- * Sort classified operations: first by kind priority (identity → beacon →
- * content → countersig), then topologically within each kind so that
+ * Sort classified operations: first by kind priority (identity → content →
+ * countersig), then topologically within each kind so that
  * dependent operations (e.g. identity create before update, content create
  * before update) are processed in the correct order.
  *
@@ -1296,7 +1220,7 @@ const selectDeterministicHead = (log: string[]): { cid: string; createdAt: strin
  * Ingest a batch of JWS operations
  *
  * Classifies, dependency-sorts, and processes each token. Identity operations
- * are processed first so content chains and beacons can resolve their keys.
+ * are processed first so content chains can resolve their keys.
  * Within each kind, genesis operations are processed before extensions.
  */
 export const ingestOperations = async (
@@ -1309,7 +1233,7 @@ export const ingestOperations = async (
   // classify all tokens, preserving submission order
   const classified = tokens.map((token, i) => ({ ...classify(token), originalIndex: i }));
 
-  // dependency sort: identity ops → beacons → content ops → countersigs
+  // dependency sort: identity ops → content ops → countersigs
   // with intra-kind topological ordering
   const sorted = dependencySort(classified);
 
@@ -1325,9 +1249,6 @@ export const ingestOperations = async (
           break;
         case 'content-op':
           result = await ingestContentOp(op.jwsToken, store, logEnabled);
-          break;
-        case 'beacon':
-          result = await ingestBeacon(op.jwsToken, store, logEnabled);
           break;
         case 'countersign':
           result = await ingestCountersign(op.jwsToken, store, logEnabled);

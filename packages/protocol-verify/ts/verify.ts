@@ -39,19 +39,22 @@ const BROAD_WRITE_VC =
 const READ_VC =
   'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNyZWRlbnRpYWwiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwiY2lkIjoiYmFmeXJlaWN0aGNiaXp4dmdlbXN4djdrc2NvbzdhcGllYWFsM2Z5ZTM3bzQ1Zmt5a25lN2I0aG9icmEifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiREZPU0NyZWRlbnRpYWwiLCJpc3MiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyIiwiYXVkIjoiZGlkOmRmb3M6OTRhaDc5NjNuMjIzazhjOTg4NGhoMjdla2g0Mm5lYSIsImF0dCI6W3sicmVzb3VyY2UiOiJjaGFpbjoqIiwiYWN0aW9uIjoicmVhZCJ9XSwicHJmIjpbXSwiZXhwIjoxNzk4NzYxNjAwLCJpYXQiOjE3NzI4NDE2MDB9.UvTItuWFriA39FZIdB5TuXa_b07eyNLc-iR0cej2litSkjBYAZaLlDJUmyDQ-3dB7TmNVXDbB3SMbpvLnWW9Dw';
 
-const BEACON_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.exr0Dfb_asVXeMpnUOaql9ppeO2pifzEdId8ocXHQ6-v_XUwccQdJaL4MhKzJGUbRAa0hfRVSFRndhjJ4NN1DA';
-
-const BEACON_WITNESS_JWS =
-  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmJlYWNvbiIsImtpZCI6ImRpZDpkZm9zOmNubm5mdDlmOGEycm45MzhkNm5rejM4cjg0N3Yya3Ija2V5X2V6OWE4NzR0Y2tyM2R2OTMzZDNja2RuN3o2enJjdDgiLCJjaWQiOiJiYWZ5cmVpYjR3MnAydTZ0bHc3N3NidGtwdnc3ZnF2d3ZrNnJ3MzdweWFtM29zb2JvNXhwM29vZWt1cSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiYmVhY29uIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsIm1hbmlmZXN0Q29udGVudElkIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.-49R4npkmKMJtnK4sVS_x7MFOgB1RhjkZAzwycLp80g_o6y0gV0JjnUAj12as8NglccBXEk_5DdZTFs17ygKCA';
+// Services genesis: an identity create whose payload carries a full-state
+// services discovery array (relay locator + content/artifact anchors). The
+// services fields ride along in the payload map — no services-validation logic
+// is required here; the verifier re-derives the operation CID over the decoded
+// payload and the services entries participate automatically.
+const SERVICES_GENESIS_JWS =
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJjaWQiOiJiYWZ5cmVpZGkzcXBzM3F0dHFwMjJtM3kzM2JkYmYyaXlrYnE1cjQ1ampod2EzN21nZXNvdjdzZGd6ZSJ9.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiYXV0aEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImFzc2VydEtleXMiOlt7ImlkIjoia2V5X3I5ZXYzNGZ2YzIzejk5OXZlYWFmdDgzbm4yOXp2aGUiLCJ0eXBlIjoiTXVsdGlrZXkiLCJwdWJsaWNLZXlNdWx0aWJhc2UiOiJ6Nk1rcnpMTU53b0pTVjRQM1ljY1djYnRrOHZkOUx0Z01LbkxlYURMVXFMdUFTamIifV0sImNvbnRyb2xsZXJLZXlzIjpbeyJpZCI6ImtleV9yOWV2MzRmdmMyM3o5OTl2ZWFhZnQ4M25uMjl6dmhlIiwidHlwZSI6Ik11bHRpa2V5IiwicHVibGljS2V5TXVsdGliYXNlIjoiejZNa3J6TE1Od29KU1Y0UDNZY2NXY2J0azh2ZDlMdGdNS25MZWFETFVxTHVBU2piIn1dLCJzZXJ2aWNlcyI6W3siaWQiOiJyZWxheSIsInR5cGUiOiJEZm9zUmVsYXkiLCJlbmRwb2ludCI6Imh0dHBzOi8vcmVsYXkuZGZvcy5jb20ifSx7ImlkIjoicHJvZmlsZSIsInR5cGUiOiJDb250ZW50QW5jaG9yIiwibGFiZWwiOiJwcm9maWxlIiwiYW5jaG9yIjoiY3Y3bjh2a3ZyNjRjY3RmMzI5NGg5azRlYW5oZmY4eiJ9LHsiaWQiOiJhdmF0YXIiLCJ0eXBlIjoiQ29udGVudEFuY2hvciIsImxhYmVsIjoiYXZhdGFyIiwiYW5jaG9yIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkifV0sImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDU6MDAuMDAwWiJ9.HCzVJXcUzL62lxtC8omBlit1JNSWk4b4kQKjjjWT00honzZ9-k3dKusIRuhTV6gjT1M74bLVZYUxPb8kJvhHAw';
 
 const EXPECTED_GENESIS_CID = 'bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne';
+const EXPECTED_SERVICES_CID = 'bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze';
+const EXPECTED_SERVICES_DID = 'did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar';
 const EXPECTED_DID = 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr';
 const EXPECTED_MULTIKEY1 = 'z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb';
 const EXPECTED_CBOR_HEX =
   'a66474797065666372656174656776657273696f6e0168617574684b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62696372656174656441747818323032362d30332d30375430303a30303a30302e3030305a6a6173736572744b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a626e636f6e74726f6c6c65724b65797381a362696478236b65795f72396576333466766332337a39393976656161667438336e6e32397a7668656474797065684d756c74696b6579727075626c69634b65794d756c74696261736578307a364d6b727a4c4d4e776f4a5356345033596363576362746b387664394c74674d4b6e4c6561444c55714c7541536a62';
 const EXPECTED_CID_HEX = '017112204e31ea9cb6ab4516ebdd812f7937e61601db07a16afb45723d286906f5181b69';
-const EXPECTED_BEACON_CID = 'bafyreib4w2p2u6tlw77sbtkpvw7fqvwvk6rw37pyam3osobo5xp3ooekuq';
 
 // =============================================================================
 // Helpers
@@ -336,39 +339,36 @@ check(
   `got ${docCid}`,
 );
 
-// --- 11. Beacon JWS verification ---
-console.log('\n11. Beacon JWS Verification (key 1)');
-result = verifyJws(BEACON_JWS, pub1);
-check('Beacon signature valid', true);
-check('Beacon header typ', result.header.typ === 'did:dfos:beacon');
+// --- 11. Services genesis JWS verification ---
+// An identity create whose payload carries a full-state services discovery
+// array. The signature verifies under key 1, and re-encoding the decoded
+// payload re-derives the operation CID (services entries ride along in the
+// payload map) and the derived DID.
+console.log('\n11. Services Genesis JWS Verification (key 1)');
+result = verifyJws(SERVICES_GENESIS_JWS, pub1);
+check('Services genesis signature valid', true);
+check('Services genesis header typ', result.header.typ === 'did:dfos:identity-op');
+check('Services genesis header kid', result.header.kid === 'key_r9ev34fvc23z999veaaft83nn29zvhe');
+check('Services genesis header cid', result.header.cid === EXPECTED_SERVICES_CID);
+check('Services genesis payload type', result.payload.type === 'create');
+
+// recompute the operation CID over the decoded payload — the services array is
+// part of the canonical CBOR, so a correct re-derivation depends on it.
+const servicesCborBytes = dagCbor.encode(result.payload);
+const servicesCidBytes = makeCidBytes(servicesCborBytes);
+const servicesCid = cidToBase32(servicesCidBytes);
+check('Services genesis recomputed CID', servicesCid === EXPECTED_SERVICES_CID, `got ${servicesCid}`);
+
+// derive the DID from the operation CID bytes
+const servicesDidSuffix = encodeId(sha256(servicesCidBytes));
 check(
-  'Beacon header kid',
-  result.header.kid === `${EXPECTED_DID}#key_r9ev34fvc23z999veaaft83nn29zvhe`,
-);
-check('Beacon header cid', result.header.cid === EXPECTED_BEACON_CID);
-check('Beacon payload type', result.payload.type === 'beacon');
-check(
-  'Beacon payload manifestContentId',
-  result.payload.manifestContentId === 'cv7n8vkvr64cctf3294h9k4eanhff8z',
+  'Services genesis derived DID',
+  `did:dfos:${servicesDidSuffix}` === EXPECTED_SERVICES_DID,
+  `got did:dfos:${servicesDidSuffix}`,
 );
 
-// --- 12. Beacon countersignature verification ---
-console.log("\n12. Beacon Countersignature Verification (key 2 witnesses key 1's beacon)");
-result = verifyJws(BEACON_WITNESS_JWS, pub2);
-check('Beacon countersig valid', true);
-check('Beacon countersig typ', result.header.typ === 'did:dfos:beacon');
-check(
-  'Beacon countersig kid',
-  result.header.kid === `${EXPECTED_DID}#key_ez9a874tckr3dv933d3ckdn7z6zrct8`,
-);
-check('Beacon countersig same CID', result.header.cid === EXPECTED_BEACON_CID);
-check(
-  'Beacon countersig same manifestContentId',
-  result.payload.manifestContentId === 'cv7n8vkvr64cctf3294h9k4eanhff8z',
-);
-
-// --- 13. DFOS Credential Verification ---
-console.log('\n13. DFOS Credential Verification (key 1)');
+// --- 12. DFOS Credential Verification ---
+console.log('\n12. DFOS Credential Verification (key 1)');
 result = verifyJws(BROAD_WRITE_VC, pub1);
 check('Write credential signature valid', true);
 check('Write credential header typ', result.header.typ === 'did:dfos:credential');
@@ -393,8 +393,8 @@ result = verifyJws(READ_VC, pub1);
 check('Read credential signature valid', true);
 check('Read credential att action', (result.payload.att as any[])[0].action === 'read');
 
-// --- 14. Number encoding determinism ---
-console.log('\n14. Number Encoding Determinism');
+// --- 13. Number encoding determinism ---
+console.log('\n13. Number Encoding Determinism');
 
 // Integer encoding
 const intPayload = { version: 1, type: 'test' };
@@ -427,10 +427,10 @@ check(
   `got ${floatCid}`,
 );
 
-// --- 15. Reject corpus (profile + signature gates) ---
+// --- 14. Reject corpus (profile + signature gates) ---
 // Every conformant verifier MUST reject all of these. Byte-identical inputs
 // across all five language suites. Reference key 1 signs the base vector.
-console.log('\n15. Reject Corpus (all MUST be rejected)');
+console.log('\n14. Reject Corpus (all MUST be rejected)');
 
 const REJECT_PUB1_HEX = 'ba421e272fad4f941c221e47f87d9253bdc04f7d4ad2625ae667ab9f0688ce32';
 const rejectPub = hexDecode(REJECT_PUB1_HEX);
@@ -466,10 +466,10 @@ for (const [name, token] of Object.entries(REJECT_VECTORS)) {
   check(`${name} rejected`, rejected, 'was accepted');
 }
 
-// --- 16. WP-0 number-policy vectors ---
+// --- 15. WP-0 number-policy vectors ---
 // dag-cbor number policy: integers must be exact and within ±(2^53-1);
 // fractions and non-finite values are non-canonicalizable.
-console.log('\n16. WP-0 Number Policy');
+console.log('\n15. WP-0 Number Policy');
 
 const MAX_SAFE = 9007199254740991; // 2^53 - 1
 

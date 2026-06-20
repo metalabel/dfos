@@ -308,11 +308,6 @@ func (r *Relay) GetOperation(cid string) (*StoredOperation, error) {
 	return r.store.GetOperation(cid)
 }
 
-// GetBeacon returns the latest beacon for a DID, or nil.
-func (r *Relay) GetBeacon(did string) (*StoredBeacon, error) {
-	return r.store.GetBeacon(did)
-}
-
 // Handler returns an http.Handler implementing the DFOS web relay HTTP API.
 // CORS is outermost so OPTIONS preflight is answered before routing and CORS
 // headers are present on every response, including errors.

@@ -21,7 +21,6 @@ Tests covering:
 - Content lifecycle (create, update, delete, fork acceptance, DAG logs, deterministic head selection, post-delete rejection, notes, long chains)
 - Content update after auth key rotation, multiple independent chains
 - Operations by CID, operation log pagination
-- Beacons (create, replacement, not-found, unknown/deleted identity)
 - Countersignatures (dedup, empty result, multi-witness, self-countersign, non-existent operation)
 - Blob upload/download (CID verification, auth, credential-based access, multi-version, idempotent upload)
 - Delegated content operations (write credentials, delegated blob upload, delegated delete)

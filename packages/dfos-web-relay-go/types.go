@@ -96,23 +96,6 @@ type StoredContentChain struct {
 	State         dfos.ContentState `json:"state"`
 }
 
-// BeaconPayload is the decoded beacon payload for JSON serialization.
-type BeaconPayload struct {
-	Version           int    `json:"version"`
-	Type              string `json:"type"`
-	DID               string `json:"did"`
-	ManifestContentId string `json:"manifestContentId"`
-	CreatedAt         string `json:"createdAt"`
-}
-
-// StoredBeacon is the relay's representation of a beacon.
-type StoredBeacon struct {
-	DID       string        `json:"did"`
-	JWSToken  string        `json:"jwsToken"`
-	BeaconCID string        `json:"beaconCID"`
-	Payload   BeaconPayload `json:"payload"`
-}
-
 // StoredOperation is a single stored operation with its chain metadata.
 type StoredOperation struct {
 	CID       string `json:"cid"`
@@ -198,10 +181,6 @@ type Store interface {
 	GetContentChain(contentID string) (*StoredContentChain, error)
 	PutContentChain(chain StoredContentChain) error
 
-	// beacons
-	GetBeacon(did string) (*StoredBeacon, error)
-	PutBeacon(beacon StoredBeacon) error
-
 	// blobs (content plane)
 	GetBlob(key BlobKey) ([]byte, error)
 	PutBlob(key BlobKey, data []byte) error
@@ -242,10 +221,9 @@ type Store interface {
 	// documents
 	GetDocuments(contentID string, after string, limit int) ([]StoredDocument, string, error)
 
-	// listing — enumerate all chains/beacons in the store
+	// listing — enumerate all chains in the store
 	ListIdentityChains() ([]StoredIdentityChain, error)
 	ListContentChains() ([]StoredContentChain, error)
-	ListBeacons() ([]StoredBeacon, error)
 
 	// admin
 	ResetPeerCursors() error

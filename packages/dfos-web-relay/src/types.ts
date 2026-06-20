@@ -6,11 +6,7 @@
 
 */
 
-import type {
-  VerifiedBeacon,
-  VerifiedContentChain,
-  VerifiedIdentity,
-} from '@metalabel/dfos-protocol/chain';
+import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 
 // -----------------------------------------------------------------------------
@@ -116,26 +112,12 @@ export interface StoredContentChain {
   state: VerifiedContentChain;
 }
 
-export interface StoredBeacon {
-  did: string;
-  jwsToken: string;
-  beaconCID: string;
-  state: VerifiedBeacon;
-}
-
 export interface StoredOperation {
   cid: string;
   jwsToken: string;
   /** Which chain type this operation belongs to */
-  chainType:
-    | 'identity'
-    | 'content'
-    | 'artifact'
-    | 'beacon'
-    | 'countersign'
-    | 'revocation'
-    | 'credential';
-  /** The chain identifier — DID for identity/beacon/artifact, contentId for content, targetCID for countersign */
+  chainType: 'identity' | 'content' | 'artifact' | 'countersign' | 'revocation' | 'credential';
+  /** The chain identifier — DID for identity/artifact, contentId for content, targetCID for countersign */
   chainId: string;
 }
 
@@ -161,7 +143,6 @@ export interface LogEntry {
 export type OperationKind =
   | 'identity-op'
   | 'content-op'
-  | 'beacon'
   | 'artifact'
   | 'countersign'
   | 'revocation'
@@ -224,11 +205,6 @@ export interface RelayStore {
 
   getContentChain(contentId: string): Promise<StoredContentChain | undefined>;
   putContentChain(chain: StoredContentChain): Promise<void>;
-
-  // --- beacons ---
-
-  getBeacon(did: string): Promise<StoredBeacon | undefined>;
-  putBeacon(beacon: StoredBeacon): Promise<void>;
 
   // --- blobs (content plane) ---
 

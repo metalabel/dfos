@@ -1,7 +1,6 @@
 // Extended conformance tests for additional relay surface area.
 //
 // These supplement the core conformance_test.go with coverage for:
-//   - beacon replacement and not-found
 //   - content post-delete rejection and notes
 //   - controller key rotation
 //   - content update after auth key rotation
@@ -20,57 +19,6 @@ import (
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
-
-// ===================================================================
-// beacon: replacement and not-found
-// ===================================================================
-
-func TestBeaconReplacement(t *testing.T) {
-	base := relayURL(t)
-	id := createIdentity(t, base)
-	cc := createContent(t, base, id)
-
-	kid := id.did + "#" + id.auth.keyID
-
-	// first beacon
-	tok1, _, err := dfos.SignBeacon(id.did, cc.contentID, kid, id.auth.priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postOperations(t, base, []string{tok1}).Body.Close()
-
-	// second beacon with different manifest content ID
-	manifest2 := "extramanifesttwo2contentid9c4n7"
-	tok2, beaconCID2, err := dfos.SignBeacon(id.did, manifest2, kid, id.auth.priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postOperations(t, base, []string{tok2}).Body.Close()
-
-	// relay should serve only the latest beacon
-	var beacon struct {
-		BeaconCID         string `json:"beaconCID"`
-		ManifestContentId string `json:"manifestContentId"`
-	}
-	resp := getJSON(t, base+"/beacons/"+id.did, &beacon)
-	if resp.StatusCode != 200 {
-		t.Fatalf("GET beacon: status %d", resp.StatusCode)
-	}
-	if beacon.BeaconCID != beaconCID2 {
-		t.Fatalf("beacon should be replaced: got CID %s, want %s", beacon.BeaconCID, beaconCID2)
-	}
-	if beacon.ManifestContentId != manifest2 {
-		t.Fatalf("manifestContentId: got %s, want %s", beacon.ManifestContentId, manifest2)
-	}
-}
-
-func TestBeaconNotFound(t *testing.T) {
-	base := relayURL(t)
-	resp := getJSON(t, base+"/beacons/did:dfos:nonexistent000000000", nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
-}
 
 // ===================================================================
 // content: post-delete rejection, notes, update after key rotation

@@ -15,7 +15,6 @@ export type {
   RelayStore,
   StoredIdentityChain,
   StoredContentChain,
-  StoredBeacon,
   StoredOperation,
   BlobKey,
   LogEntry,

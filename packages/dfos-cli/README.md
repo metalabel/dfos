@@ -74,16 +74,30 @@ CRED=$(dfos --ctx alice@local credential grant "$CONTENT" "$BOB" --read --json |
 # bob downloads with credential
 dfos --ctx bob@local content download "$CONTENT" --credential "$CRED" --peer local
 
-# witness countersigns
+# witness countersigns (solemnizes) the genesis operation, optionally tagged
 CID=$(dfos content show "$CONTENT" --json | jq -r .genesisCID)
-dfos --ctx witness@local witness "$CID" --peer local
-
-# beacon
-dfos --ctx alice@local beacon announce "$CONTENT" --peer local
-dfos --ctx witness@local beacon countersign alice --peer local
+dfos --ctx witness@local witness "$CID" --relation endorses --peer local
 
 # verify
 dfos content verify "$CONTENT"
+```
+
+## Discovery Services
+
+An identity can publish an additive **services** set — relay endpoints and content anchors — carried in its chain state. Services are full-state on each create/update (an update replaces the set), and the type namespace is open.
+
+```bash
+# attach services at genesis
+dfos identity create --name alice \
+  --service id=relay,type=DfosRelay,endpoint=https://relay.dfos.com \
+  --service id=profile,type=ContentAnchor,label=profile,anchor=cv7n8vkvr64cctf3294h9k4eanhff8z
+
+# replace the set on update, or clear it
+dfos identity update --service id=relay,type=DfosRelay,endpoint=https://relay.dfos.com
+dfos identity update --clear-services
+
+# view the resolved set
+dfos identity services alice
 ```
 
 ## Context Model
@@ -125,6 +139,7 @@ dfos content publish <id> --peer prod   # submit when ready
 | `identity list`              | List all known identities              |
 | `identity show`              | Show identity state                    |
 | `identity keys`              | Show key state + keychain availability |
+| `identity services`          | Show resolved discovery services       |
 | `identity publish`           | Submit to a relay                      |
 | `identity fetch`             | Download from a relay                  |
 | `content create`             | Create content chain                   |
@@ -137,10 +152,7 @@ dfos content publish <id> --peer prod   # submit when ready
 | `credential grant`           | Issue read/write credential            |
 | `credential revoke`          | Revoke a credential                    |
 | `content verify`             | Re-verify chain integrity              |
-| `beacon announce`            | Announce manifest content ID           |
-| `beacon show`                | Show latest beacon                     |
-| `beacon countersign`         | Countersign someone's beacon           |
-| `witness`                    | Countersign an operation               |
+| `witness`                    | Countersign (solemnize) an operation   |
 | `auth token`                 | Mint auth token (stdout)               |
 | `auth status`                | Show auth state                        |
 | `api`                        | Raw HTTP to relay                      |

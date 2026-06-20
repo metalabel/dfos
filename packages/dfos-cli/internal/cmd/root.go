@@ -35,7 +35,7 @@ func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "dfos",
 		Short: "DFOS CLI — local-first relay node for the DFOS protocol",
-		Long:  "Command-line interface for the DFOS protocol. Your machine is a relay. Manage identities, content chains, beacons, and credentials. Sync with peers.",
+		Long:  "Command-line interface for the DFOS protocol. Your machine is a relay. Manage identities, content chains, and credentials. Sync with peers.",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			var err error
 			cfg, err = config.Load()
@@ -62,12 +62,11 @@ func NewRootCmd() *cobra.Command {
 	// command groups
 	identityGroup := &cobra.Group{ID: "identity", Title: "Identity Commands"}
 	contentGroup := &cobra.Group{ID: "content", Title: "Content Commands"}
-	beaconGroup := &cobra.Group{ID: "beacon", Title: "Beacon Commands"}
 	authGroup := &cobra.Group{ID: "auth", Title: "Auth Commands"}
 	peerGroup := &cobra.Group{ID: "peer", Title: "Peer Commands"}
 	configGroup := &cobra.Group{ID: "config", Title: "Config Commands"}
 
-	root.AddGroup(identityGroup, contentGroup, beaconGroup, authGroup, peerGroup, configGroup)
+	root.AddGroup(identityGroup, contentGroup, authGroup, peerGroup, configGroup)
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newStatusCmd())
@@ -75,7 +74,6 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newIdentityCmd())
 	root.AddCommand(newContentCmd())
 	root.AddCommand(newCredentialCmd())
-	root.AddCommand(newBeaconCmd())
 	root.AddCommand(newWitnessCmd())
 	root.AddCommand(newCountersigsCmd())
 	root.AddCommand(newAuthCmd())

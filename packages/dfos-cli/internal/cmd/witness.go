@@ -10,9 +10,10 @@ import (
 
 func newWitnessCmd() *cobra.Command {
 	var peerName string
+	var relation string
 	cmd := &cobra.Command{
 		Use:   "witness <operationCID>",
-		Short: "Countersign an operation",
+		Short: "Countersign an operation (solemnize it with a collective endorsement)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			operationCID := args[0]
@@ -36,7 +37,7 @@ func newWitnessCmd() *cobra.Command {
 				return err
 			}
 
-			csToken, _, err := protocol.SignCountersign(chain.DID, operationCID, kid, privKey)
+			csToken, _, err := protocol.SignCountersignWithRelation(chain.DID, operationCID, relation, kid, privKey)
 			if err != nil {
 				return err
 			}
@@ -71,14 +72,23 @@ func newWitnessCmd() *cobra.Command {
 			lr.Relay.Ingest([]string{csToken})
 
 			if jsonFlag {
-				outputJSON(map[string]any{"status": "countersigned", "operationCID": operationCID, "witnessDID": chain.DID})
+				out := map[string]any{"status": "countersigned", "operationCID": operationCID, "witnessDID": chain.DID}
+				if relation != "" {
+					out["relation"] = relation
+				}
+				outputJSON(out)
 			} else {
-				fmt.Printf("Operation %s countersigned by %s\n", operationCID, chain.DID)
+				if relation != "" {
+					fmt.Printf("Operation %s countersigned by %s (relation: %s)\n", operationCID, chain.DID, relation)
+				} else {
+					fmt.Printf("Operation %s countersigned by %s\n", operationCID, chain.DID)
+				}
 			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push countersignature to peer")
+	cmd.Flags().StringVar(&relation, "relation", "", "Open-namespace relation tag naming the nature of the endorsement (e.g. endorses, coauthors); 1..64 chars")
 	return cmd
 }
 
@@ -86,7 +96,7 @@ func newCountersigsCmd() *cobra.Command {
 	var peerName string
 	cmd := &cobra.Command{
 		Use:   "countersigs <cid>",
-		Short: "Show countersignatures for an operation or beacon CID",
+		Short: "Show countersignatures for an operation CID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cid := args[0]
