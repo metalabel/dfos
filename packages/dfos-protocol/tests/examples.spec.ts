@@ -11,7 +11,6 @@ import { describe, expect, it } from 'vitest';
 import {
   decodeMultikey,
   encodeEd25519Multikey,
-  verifyBeacon,
   verifyContentChain,
   verifyIdentityChain,
 } from '../src/chain';
@@ -33,7 +32,6 @@ const fixtures = readdirSync(examplesDir)
 describe('example fixtures', () => {
   it('has all expected fixture files', () => {
     expect(fixtures).toEqual([
-      'beacon.json',
       'content-delegated.json',
       'content-delete.json',
       'content-lifecycle.json',
@@ -42,6 +40,7 @@ describe('example fixtures', () => {
       'identity-delete.json',
       'identity-genesis.json',
       'identity-rotation.json',
+      'identity-services.json',
     ]);
   });
 
@@ -62,6 +61,10 @@ describe('example fixtures', () => {
         expect(result.did).toBe(fixture.expected.did);
         expect(result.isDeleted).toBe(fixture.expected.isDeleted);
         expect(result.controllerKeys).toEqual(fixture.expected.controllerKeys);
+        // services fixtures pin the projected discovery vocabulary
+        if (fixture.expected.services) {
+          expect(result.services).toEqual(fixture.expected.services);
+        }
       });
     }
   });
@@ -212,20 +215,4 @@ describe('example fixtures', () => {
     });
   });
 
-  describe('beacon', () => {
-    it('verifies beacon.json controller JWS', async () => {
-      const fixture = loadFixture('beacon.json');
-      expect(fixture.type).toBe('beacon');
-
-      const { keyBytes } = decodeMultikey(fixture.controllerPublicKey);
-      const result = await verifyBeacon({
-        jwsToken: fixture.controllerJws,
-        resolveKey: async () => keyBytes,
-      });
-
-      expect(result.beaconCID).toBe(fixture.expected.beaconCID);
-      expect(result.did).toBe(fixture.expected.did);
-      expect(result.createdAt).toBe(fixture.expected.createdAt);
-    });
-  });
 });

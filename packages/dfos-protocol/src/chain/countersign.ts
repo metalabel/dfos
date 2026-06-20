@@ -10,8 +10,11 @@
   sufficient. The relay adds semantic checks (target exists, witness !=
   author, dedup) at the ingestion layer.
 
-  Composable with any CID-addressable operation: content ops, beacons,
-  artifacts, identity ops, even other countersigns.
+  Composable with any CID-addressable operation: content ops, artifacts,
+  identity ops, even other countersigns. The DFOS-distinctive primitive —
+  the only INTER-SUBJECTIVE one: a signed trace of one subject witnessing
+  another. An optional `relation` tag names the act (endorses, coauthors,
+  witnessed, …) so collective authorship can be solemnized in the protocol.
 
 */
 
@@ -30,6 +33,8 @@ export interface VerifiedCountersignature {
   witnessDID: string;
   /** The CID being attested to */
   targetCID: string;
+  /** Open-namespace relation tag, if present (e.g. "endorses", "coauthors") */
+  relation?: string;
 }
 
 // -----------------------------------------------------------------------------
@@ -114,5 +119,6 @@ export const verifyCountersignature = async (input: {
     countersignCID,
     witnessDID: payload.did,
     targetCID: payload.targetCID,
+    ...(payload.relation !== undefined ? { relation: payload.relation } : {}),
   };
 };

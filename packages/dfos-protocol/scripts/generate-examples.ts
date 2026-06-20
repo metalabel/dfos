@@ -12,18 +12,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   encodeEd25519Multikey,
-  signBeacon,
   signContentOperation,
   signIdentityOperation,
   verifyContentChain,
   verifyIdentityChain,
 } from '../src/chain';
-import type {
-  BeaconPayload,
-  ContentOperation,
-  IdentityOperation,
-  MultikeyPublicKey,
-} from '../src/chain';
+import type { ContentOperation, IdentityOperation, MultikeyPublicKey } from '../src/chain';
 import { createDFOSCredential } from '../src/credentials';
 import {
   dagCborCanonicalEncode,
@@ -210,30 +204,35 @@ const main = async () => {
   });
 
   // ================================================================
-  // BEACON FIXTURE
+  // SERVICES FIXTURE — identity genesis carrying discovery vocabulary
   // ================================================================
 
-  // Sign a beacon with key1 (controller)
   const kid1 = `${identity.did}#${keyId1}`;
-  const beaconPayload: BeaconPayload = {
+
+  // A genesis that publishes a services set: a relay transport locator plus two
+  // content anchors — one resolving to a content chain (31-char contentId), one
+  // artifact-shaped (CIDv1). This is the canonical cross-language services vector.
+  const servicesGenesisOp: IdentityOperation = {
     version: 1,
-    type: 'beacon',
-    did: identity.did,
-    manifestContentId: contentChain.contentId,
+    type: 'create',
+    authKeys: [key1],
+    assertKeys: [key1],
+    controllerKeys: [key1],
+    services: [
+      { id: 'relay', type: 'DfosRelay', endpoint: 'https://relay.dfos.com' },
+      { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: contentChain.contentId },
+      { id: 'avatar', type: 'ContentAnchor', label: 'avatar', anchor: documentCID1 },
+    ],
     createdAt: '2026-03-07T00:05:00.000Z',
   };
-  const { jwsToken: beaconJws, beaconCID } = await signBeacon({
-    payload: beaconPayload,
+  const { jwsToken: servicesGenesisJws } = await signIdentityOperation({
+    operation: servicesGenesisOp,
     signer: signer1,
-    kid: kid1,
+    keyId: keyId1,
   });
-
-  // Witness countersignature with key2
-  const kid2Beacon = `${identity.did}#${keyId2}`;
-  const { jwsToken: beaconWitnessJws } = await signBeacon({
-    payload: beaconPayload,
-    signer: signer2,
-    kid: kid2Beacon,
+  const identityServices = await verifyIdentityChain({
+    didPrefix: 'did:dfos',
+    log: [servicesGenesisJws],
   });
 
   // ================================================================
@@ -485,18 +484,17 @@ const main = async () => {
     },
   });
 
-  write('beacon', {
-    description: 'Beacon: signed manifest content ID announcement with witness countersignature',
-    type: 'beacon',
-    controllerJws: beaconJws,
-    witnessJws: beaconWitnessJws,
+  write('identity-services', {
+    description:
+      'Identity chain: genesis publishing a services set (relay locator + content/artifact anchors)',
+    type: 'identity',
+    chain: [servicesGenesisJws],
     controllerPublicKey: multikey1,
-    witnessPublicKey: multikey2,
     expected: {
-      beaconCID,
-      did: identity.did,
-      manifestContentId: beaconPayload.manifestContentId,
-      createdAt: beaconPayload.createdAt,
+      did: identityServices.did,
+      isDeleted: false,
+      controllerKeys: identityServices.controllerKeys,
+      services: identityServices.services,
     },
   });
 

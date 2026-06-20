@@ -1,17 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   signArtifact,
-  signBeacon,
   signContentOperation,
   signCountersignature,
   verifyCountersignature,
 } from '../src/chain';
-import type {
-  ArtifactPayload,
-  BeaconPayload,
-  ContentOperation,
-  CountersignPayload,
-} from '../src/chain';
+import type { ArtifactPayload, ContentOperation, CountersignPayload } from '../src/chain';
 import {
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
@@ -232,44 +226,58 @@ describe('countersignature', () => {
     }
   });
 
-  // --- countersign a beacon ---
+  // --- relation tag (open namespace) ---
 
-  it('should countersign a beacon', async () => {
-    const controller = makeIdentity();
+  it('carries an open-namespace relation tag through verification', async () => {
+    const { operationCID } = await createTarget();
     const witness = makeIdentity();
 
-    const beaconPayload: BeaconPayload = {
-      version: 1,
-      type: 'beacon',
-      did: controller.did,
-      manifestContentId: 'test_manifest_content_id',
-      createdAt: ts(),
-    };
-    const { beaconCID } = await signBeacon({
-      payload: beaconPayload,
-      signer: controller.signer,
-      kid: controller.kid,
-    });
-
-    const csPayload: CountersignPayload = {
+    const payload: CountersignPayload = {
       version: 1,
       type: 'countersign',
       did: witness.did,
-      targetCID: beaconCID,
+      targetCID: operationCID,
+      relation: 'endorses',
       createdAt: ts(1),
     };
     const { jwsToken } = await signCountersignature({
-      payload: csPayload,
+      payload,
       signer: witness.signer,
       kid: witness.kid,
     });
 
-    const result = await verifyCountersignature({
-      jwsToken,
+    const result = await verifyCountersignature({ jwsToken, resolveKey: witness.resolveKey });
+    expect(result.relation).toBe('endorses');
+  });
+
+  it('omits relation by default; presence changes the CID', async () => {
+    const witness = makeIdentity();
+    const base: CountersignPayload = {
+      version: 1,
+      type: 'countersign',
+      did: witness.did,
+      targetCID: 'bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenera6h5y',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    };
+    const bare = await signCountersignature({
+      payload: base,
+      signer: witness.signer,
+      kid: witness.kid,
+    });
+    const tagged = await signCountersignature({
+      payload: { ...base, relation: 'coauthors' },
+      signer: witness.signer,
+      kid: witness.kid,
+    });
+
+    // relation is part of the canonical payload — present → distinct CID
+    expect(tagged.countersignCID).not.toBe(bare.countersignCID);
+    // absent → no relation projected (CID-neutral envelope)
+    const bareVerified = await verifyCountersignature({
+      jwsToken: bare.jwsToken,
       resolveKey: witness.resolveKey,
     });
-    expect(result.targetCID).toBe(beaconCID);
-    expect(result.witnessDID).toBe(witness.did);
+    expect(bareVerified.relation).toBeUndefined();
   });
 
   // --- countersign an artifact ---

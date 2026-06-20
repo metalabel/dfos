@@ -2,7 +2,7 @@
   "name": "@metalabel/dfos-protocol",
   "version": "0.10.0",
   "type": "module",
-  "description": "DFOS Protocol — Ed25519 signed chain primitives, beacons, credentials, and verification",
+  "description": "DFOS Protocol — Ed25519 signed chain primitives, services, credentials, and verification",
   "license": "MIT",
   "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
   "repository": {

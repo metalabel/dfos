@@ -5,9 +5,9 @@
   Standalone signed inline document. Proof plane only.
 
   An artifact is a JWS-signed structured document published by a DID,
-  addressed by CID, and immutable once published. Unlike beacons (which
-  reference content by CID), artifacts carry their content inline with a
-  $schema discriminator.
+  addressed by CID, and immutable once published. Unlike a content chain
+  (which references documents by CID), an artifact carries its content
+  inline with a $schema discriminator.
 
   Artifacts are bounded by MAX_ARTIFACT_PAYLOAD_SIZE (CBOR-encoded). Content
   that exceeds this limit belongs on the content plane via content chains.
