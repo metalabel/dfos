@@ -58,10 +58,10 @@ The CLI checks for updates automatically on each run (non-blocking, cached 24h).
 ## Core Concepts
 
 - **Identity**: An Ed25519 keypair with a DID (`did:dfos:...`). Keys are stored in the OS keychain (macOS Keychain, Linux secret-service) with automatic file-based fallback at `~/.dfos/keys/`.
-- **Content chain**: An append-only chain of signed operations over a document (arbitrary JSON). Each operation has a CID (IPFS CIDv1, `bafyrei...`). Content IDs are base36 strings (e.g., `kv67tf3n97324dc24an266`). The document blob is stored separately.
+- **Content chain**: An append-only chain of signed operations over a document (arbitrary JSON). Each operation has a CID (IPFS CIDv1, `bafyrei...`). Content IDs are 31-char strings over a 19-symbol unambiguous alphabet (e.g., `cv7n8vkvr64cctf3294h9k4eanhff8z`). The document blob is stored separately.
 - **Services**: An identity's discovery vocabulary — a controller-signed, full-state set of relay locators and stable content anchors carried in the identity chain. Answers "given a DID, where do I reach it and what stable content does it publish?"
 - **Credential**: A DFOS credential (UCAN-style JWS) granting scoped read or write access to content.
-- **Relay/Peer**: A node that stores and syncs protocol operations. The CLI itself embeds a local relay backed by `~/.dfos/store/` — all operations work offline. Remote peers are HTTP relays you can publish to and fetch from. `dfos serve` exposes your local relay over HTTP so others can peer with you.
+- **Relay/Peer**: A node that stores and syncs protocol operations. The CLI itself embeds a local relay backed by `~/.dfos/relay.db` — all operations work offline. Remote peers are HTTP relays you can publish to and fetch from. `dfos serve` exposes your local relay over HTTP so others can peer with you.
 - **Context**: A (identity, relay) pair. Most commands need both — set a default with `dfos use alice@prod` or override per-command with `--ctx alice@prod`.
 
 ## Quick Start (Local-Only)
@@ -83,19 +83,19 @@ dfos content list
 dfos content verify <contentId>
 ```
 
-No relay needed — the CLI **is** a local relay. All data lives in `~/.dfos/store/`.
+No relay needed — the CLI **is** a local relay. All data lives in `~/.dfos/relay.db`.
 
 ## Quick Start (With Relay)
 
 ```bash
 # 1. Add a public relay
-dfos peer add nyc https://relay.nyc.lark717.xyz
+dfos peer add prod https://relay.dfos.com
 
 # 2. Create an identity and publish to the relay
-dfos identity create --name alice --peer nyc
+dfos identity create --name alice --peer prod
 
 # 3. Set as default context
-dfos use alice@nyc
+dfos use alice@prod
 
 # 4. Verify setup
 dfos status
@@ -103,19 +103,19 @@ dfos status
 
 Passing `--peer` on `identity create` auto-publishes the identity genesis operation to the relay after local creation.
 
-### Known Public Relays
+### Adding a Relay
 
-| Name  | URL                             | Region     |
-| ----- | ------------------------------- | ---------- |
-| `nyc` | `https://relay.nyc.lark717.xyz` | US East    |
-| `atx` | `https://relay.atx.lark717.xyz` | US Central |
-| `lis` | `https://relay.lis.lark717.xyz` | EU West    |
+A relay is any HTTP node speaking the DFOS relay protocol; the canonical public relay is `https://relay.dfos.com`:
 
-Add any of these with `dfos peer add <name> <url>`. Use `dfos peer info <name>` to verify connectivity.
+```bash
+dfos peer add prod https://relay.dfos.com
+```
+
+Use `dfos peer info <name>` to verify connectivity.
 
 ## Local-First by Default
 
-The CLI **is** a local relay. All data lives in `~/.dfos/store/` — no remote peer or HTTP server needed for local operations. Creating identities, content, and credentials all work offline.
+The CLI **is** a local relay. All data lives in `~/.dfos/relay.db` — no remote peer or HTTP server needed for local operations. Creating identities, content, and credentials all work offline.
 
 For local-only work, set the active identity with `dfos use <name>` (no `@relay`), pass `--identity <name>` on each command, or set the `DFOS_IDENTITY=<name>` env var:
 
@@ -148,7 +148,7 @@ In headless or CI environments, set `DFOS_NO_KEYCHAIN=1` to use file-based key s
 active_context = "alice@prod"
 
 [relays.prod]
-url = "https://relay.nyc.lark717.xyz"
+url = "https://relay.dfos.com"
 did = "did:dfos:..."
 
 [identities.alice]
@@ -293,7 +293,7 @@ dfos auth status                        # show current auth state
 
 # Use in scripts
 TOKEN=$(dfos auth token)
-curl -H "Authorization: Bearer $TOKEN" https://relay.nyc.lark717.xyz/content/abc/blob
+curl -H "Authorization: Bearer $TOKEN" https://relay.dfos.com/content/abc/blob
 ```
 
 ### Raw API Access
@@ -360,7 +360,7 @@ dfos peer list --json | jq '.[].url'
 ### Publish content end-to-end
 
 ```bash
-dfos peer add prod https://relay.nyc.lark717.xyz
+dfos peer add prod https://relay.dfos.com
 dfos identity create --name alice --peer prod
 dfos use alice@prod
 
@@ -402,7 +402,7 @@ dfos identity create --name alice           # local only, no relay
 dfos --identity alice content create post.json  # local only
 
 # later, when ready:
-dfos peer add prod https://relay.nyc.lark717.xyz
+dfos peer add prod https://relay.dfos.com
 dfos identity publish alice --peer prod
 dfos content publish <contentId> --peer prod
 ```

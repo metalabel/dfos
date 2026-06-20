@@ -27,7 +27,6 @@ This repository contains the protocol specification, reference implementations i
 - [Protocol specification](https://protocol.dfos.com/spec) — core protocol with worked examples and test vectors
 - [DID Method](https://protocol.dfos.com/did-method) — W3C DID method specification for `did:dfos`
 - [Content Model](https://protocol.dfos.com/content-model) — standard JSON Schema content types
-- [Architecture Poster](https://protocol.dfos.com/poster) — visual protocol architecture reference
 - [JSON Schemas](https://schemas.dfos.com) — hosted schema definitions for DFOS documents
 - [Chain verifier](https://verify.dfos.com) — browser-based chain verification tool
 - [DFOS app](https://app.dfos.com) — the platform

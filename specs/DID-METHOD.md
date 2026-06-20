@@ -148,7 +148,7 @@ Identity chain `create`/`update` operations MAY carry a controller-signed
 `update` replaces the entire set), bounded (≤16 entries, unique ids, an
 8192-byte cap on the canonical encoding), and projected into verified identity
 state alongside the key sets. The complete normative definition is in
-[PROTOCOL.md → Services](https://protocol.dfos.com/#services).
+[PROTOCOL.md → Services](https://protocol.dfos.com/spec#services).
 
 Each entry projects into the DID Document `service` array. Every entry carries
 the common envelope `{ id, type }`; the entry `id` becomes the DID-URL fragment
@@ -283,7 +283,7 @@ This is a deliberate consequence of the fork-convergence model: a controller can
 The identifier is 31 characters over a 19-symbol alphabet, so the encoded identifier space is `19^31 ≈ 2^131.6`. The relevant attack costs are:
 
 - **Birthday collision** (two genesis chains that derive the same identifier): `≈ 2^65.8` work.
-- **Targeted second-preimage** (forge a chain that derives a _specific_ victim identifier): `≈ 2^131` work, bounded by the identifier space rather than the full 256-bit SHA-256 output.
+- **Targeted second-preimage** (forge a chain that derives a _specific_ victim identifier): `≈ 2^131.6` work, bounded by the identifier space rather than the full 256-bit SHA-256 output.
 
 Both costs sit comfortably above the 128-bit security floor, so the self-certification binding is not the weakest link relative to the Ed25519 signatures (≈128-bit) or SHA-256 (256-bit) primitives it composes.
 
@@ -347,7 +347,7 @@ A complete reference implementation is available as the `@metalabel/dfos-protoco
 
 - **npm**: [@metalabel/dfos-protocol](https://www.npmjs.com/package/@metalabel/dfos-protocol)
 - **Source**: [github.com/metalabel/dfos](https://github.com/metalabel/dfos)
-- **Cross-language verification**: Go, Python, Rust, and Swift implementations verify the same deterministic test vectors
+- **Cross-language verification**: Go, TypeScript, Python, Rust, and Swift implementations verify the same deterministic test vectors
 
 ---
 

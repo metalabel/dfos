@@ -66,7 +66,7 @@ The platform (or local CLI) redirects to the `redirect_uri` with the signed chal
 ```
 https://3p.com/callback?
   jws=<signed challenge JWS>
-  &did=did:dfos:xxxxxxxxxxxxxxxxxxxx
+  &did=did:dfos:<id>
 ```
 
 If a credential was requested via `scope`, it is included as an additional parameter:
@@ -87,7 +87,7 @@ The challenge is a JSON object, base64url-encoded in the `challenge` query param
   "nonce": "a8f2e93b...",
   "timestamp": "2026-04-13T15:30:00.000Z",
   "statement": "Sign in to 3P App",
-  "did": "did:dfos:xxxxxxxxxxxxxxxxxxxx"
+  "did": "did:dfos:<id>"
 }
 ```
 
@@ -147,7 +147,7 @@ The platform MAY perform a preflight health check (`GET http://localhost:<port>/
 
 ## Third-Party Verification
 
-Verification is identical regardless of signing path. The JWS signature MUST be checked under the DFOS [Signature Verification Profile](https://protocol.dfos.com/protocol#signature-verification-profile) — the same profile every DFOS verifier applies — not unprofiled "standard Ed25519 verification":
+Verification is identical regardless of signing path. The JWS signature MUST be checked under the DFOS [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile) — the same profile every DFOS verifier applies — not unprofiled "standard Ed25519 verification":
 
 1. **Decode the JWS** — extract the challenge payload, `kid` header (DID URL of signing key), and signature. Before any signature work, apply the profile header gates: the protected header `alg` MUST equal the exact string `"EdDSA"`; a `crit` member MUST cause rejection; and an embedded header key (`jwk`, `x5c`, or any key-bearing member) MUST cause rejection. The key is never read from the header.
 2. **Resolve the DID** — fetch the identity chain from any DFOS relay and replay it to its **current state**. Extract the public key matching the `kid` from the current `authKeys`. Keys that have been rotated out, and identities that have been deleted or revoked, MUST NOT verify — a challenge signed by a key that is no longer current (or by a deleted/revoked identity) MUST be rejected.

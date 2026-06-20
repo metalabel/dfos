@@ -25,17 +25,17 @@ A verifier consumes signed objects and decides accept/reject. It implements:
 
 - **Signature Verification Profile** — `alg: "EdDSA"` exact-match, `crit` rejection,
   no header-key-trust (`jwk`/`x5c` rejected), canonical scalar `S < L`, 64-byte length
-  (PROTOCOL.md "Signature Verification Profile" §1–§4, `specs/PROTOCOL.md:443`). Applies
+  (PROTOCOL.md "Signature Verification Profile" §1–§4, `specs/PROTOCOL.md:449`). Applies
   to **every** verification path.
 - **Identity chain verification** — genesis bootstrap, signer-validity against prior
   controller state, `previousOperationCID` linkage, `createdAt` ordering, `header.cid`
   consistency, terminal-state enforcement (PROTOCOL.md "Verification → Identity Chain",
-  `specs/PROTOCOL.md:664`; "Identity Chain Signer Validity", `specs/PROTOCOL.md:96`;
-  DID-METHOD.md §5.2.1, `specs/DID-METHOD.md:162`).
+  `specs/PROTOCOL.md:708`; "Identity Chain Signer Validity", `specs/PROTOCOL.md:96`;
+  DID-METHOD.md §5.2.1, `specs/DID-METHOD.md:204`).
 - **Content chain verification** — valid EdDSA signature, `kid`-DID matches payload `did`,
   CID integrity, chain linkage, terminal state, and creator-sovereignty authorization when
   `enforceAuthorization` is enabled (PROTOCOL.md "Verification → Content Chain",
-  `specs/PROTOCOL.md:678`; "Content Chain Signer Model", `specs/PROTOCOL.md:102`).
+  `specs/PROTOCOL.md:722`; "Content Chain Signer Model", `specs/PROTOCOL.md:102`).
 - **Services projection** — project the identity-chain `services` array into verified
   identity state as full-state discovery vocabulary: enforce ≤ 16 entries, `id`s unique
   within the set, the 8192-byte CBOR-encoded cap, and recognized-type structure
@@ -44,13 +44,13 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   `specs/PROTOCOL.md:522`).
 - **Derivation** — DID/CID/multikey: dag-cbor canonical encoding with integer (not float)
   number encoding, CIDv1 construction, the 19-char/31-length ID alphabet, W3C Multikey
-  (PROTOCOL.md "CID Construction", `specs/PROTOCOL.md:226`; "Number Encoding",
-  `specs/PROTOCOL.md:241`; "ID Alphabet", `specs/PROTOCOL.md:186`; "Multikey Encoding",
-  `specs/PROTOCOL.md:199`).
+  (PROTOCOL.md "CID Construction", `specs/PROTOCOL.md:225`; "Number Encoding",
+  `specs/PROTOCOL.md:240`; "ID Alphabet", `specs/PROTOCOL.md:185`; "Multikey Encoding",
+  `specs/PROTOCOL.md:198`).
 - **Credential verification** (if it consumes credentials) — delegation walk, monotonic
   attenuation, linear (single-parent) `prf`, expiry narrowing against a deterministic time
   basis, depth limit, revocation at every level (CREDENTIALS.md "Verification Walk" /
-  "Attenuation Rules" / "Revocation", `specs/CREDENTIALS.md:136`, `specs/CREDENTIALS.md:154`,
+  "Attenuation Rules" / "Revocation", `specs/CREDENTIALS.md:135`, `specs/CREDENTIALS.md:153`,
   `specs/CREDENTIALS.md:270`).
 
 ### Tier 2 — Signer
@@ -59,15 +59,15 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
 
 - **JWS Envelope Format** — signing input construction, signing order (derive CID before
   signing, embed in protected header) (PROTOCOL.md "JWS Envelope Format" / "`cid` Header",
-  `specs/PROTOCOL.md:380`, `specs/PROTOCOL.md:405`).
+  `specs/PROTOCOL.md:386`, `specs/PROTOCOL.md:411`).
 - **`kid` rules** — bare key ID for identity genesis, DID URL otherwise; content ops always
-  DID URL (PROTOCOL.md "kid Rules", `specs/PROTOCOL.md:390`).
+  DID URL (PROTOCOL.md "kid Rules", `specs/PROTOCOL.md:396`).
 - **`cid` header** — present on every operation JWS, artifacts, countersignatures,
   credentials, revocations; absent on auth-token JWTs (PROTOCOL.md "`cid` Header",
-  `specs/PROTOCOL.md:405`).
+  `specs/PROTOCOL.md:411`).
 - **Canonicalization discipline** — integer number bounds, no Unicode normalization, no
   duplicate keys (PROTOCOL.md "Number Encoding" / "String Encoding" / "JSON Payload
-  Canonicalization", `specs/PROTOCOL.md:241`, `specs/PROTOCOL.md:253`, `specs/PROTOCOL.md:257`).
+  Canonicalization", `specs/PROTOCOL.md:240`, `specs/PROTOCOL.md:252`, `specs/PROTOCOL.md:256`).
 
 ### Tier 3 — Relay
 
@@ -112,8 +112,8 @@ each suite actually exercises.
   PROTOCOL.md). See `packages/protocol-verify/README.md`.
 - **`packages/dfos-protocol/tests`** — the TypeScript reference test suite.
 - **Deterministic reference artifacts** — PROTOCOL.md "Deterministic Reference Artifacts"
-  (`specs/PROTOCOL.md:692`) and the "Verification Checklist for Independent Implementers"
-  (`specs/PROTOCOL.md:959`) provide every value an implementer needs to self-check, derived
+  (`specs/PROTOCOL.md:736`) and the "Verification Checklist for Independent Implementers"
+  (`specs/PROTOCOL.md:1003`) provide every value an implementer needs to self-check, derived
   from `SHA-256("dfos-protocol-reference-key-N")`.
 
 **Honest coverage statement.** The cross-language `protocol-verify` suites prove
@@ -121,7 +121,7 @@ each suite actually exercises.
 (key, multikey, CID, DID, document CID, credential structure, number-encoding
 determinism — the sections in `packages/protocol-verify/README.md`). They do **not**
 all exercise the stateful chain semantics. Per the cross-language table in PROTOCOL.md
-(`specs/PROTOCOL.md:1050`), TypeScript and Go carry the deep suites (224 + 63 TS, 18 Go),
+(`specs/PROTOCOL.md:1094`), TypeScript and Go carry the deep suites (224 + 63 TS, 18 Go),
 while Python and Swift run only the primitive checks (3 each). **Chain linking,
 fork/head-selection, delete-terminality, and credential expiry/delegation are exercised
 in the TypeScript and Go suites, not in all five languages.** A claim of full chain-tier
@@ -145,7 +145,7 @@ mirroring the protocol's own trust model.
 
 1. **Verifier / signer.** Implement the Tier-1/Tier-2 MUST sets using your own crypto stack.
    Reproduce the deterministic reference artifacts (PROTOCOL.md "Verification Checklist",
-   `specs/PROTOCOL.md:959`) and, ideally, add a suite to `packages/protocol-verify`
+   `specs/PROTOCOL.md:1003`) and, ideally, add a suite to `packages/protocol-verify`
    following its "Adding a New Language" steps — hardcoding the same reference constants
    inline so the suite is standalone. Agreement across suites is the proof; divergence
    means the spec (or your implementation) is wrong.
