@@ -16,6 +16,7 @@ type IdentityState struct {
 	AuthKeys       []MultikeyPublicKey `json:"authKeys"`
 	AssertKeys     []MultikeyPublicKey `json:"assertKeys"`
 	ControllerKeys []MultikeyPublicKey `json:"controllerKeys"`
+	Services       []ServiceEntry      `json:"services"`
 }
 
 // NewMultikeyPublicKey creates a MultikeyPublicKey from an ed25519 public key.
@@ -30,6 +31,13 @@ func NewMultikeyPublicKey(keyID string, pubKey ed25519.PublicKey) MultikeyPublic
 // SignIdentityCreate signs an identity genesis (create) operation.
 // Returns the JWS token and derived DID.
 func SignIdentityCreate(controllerKeys, authKeys, assertKeys []MultikeyPublicKey, signerKeyID string, privateKey ed25519.PrivateKey) (jwsToken string, did string, operationCID string, err error) {
+	return SignIdentityCreateWithServices(controllerKeys, authKeys, assertKeys, nil, signerKeyID, privateKey)
+}
+
+// SignIdentityCreateWithServices is SignIdentityCreate plus a discovery-vocabulary
+// services set. A nil/empty services slice is omitted from the payload entirely,
+// so it encodes identically to a service-less genesis (CID-neutral).
+func SignIdentityCreateWithServices(controllerKeys, authKeys, assertKeys []MultikeyPublicKey, services []ServiceEntry, signerKeyID string, privateKey ed25519.PrivateKey) (jwsToken string, did string, operationCID string, err error) {
 	now := protocolTimestamp()
 
 	// ensure empty slices instead of nil (JSON null vs [])
@@ -50,6 +58,9 @@ func SignIdentityCreate(controllerKeys, authKeys, assertKeys []MultikeyPublicKey
 		"assertKeys":     assertKeys,
 		"controllerKeys": controllerKeys,
 		"createdAt":      now.Format("2006-01-02T15:04:05.000Z"),
+	}
+	if len(services) > 0 {
+		payload["services"] = services
 	}
 
 	_, cidBytes, cidStr, err := DagCborCID(payload)
@@ -77,6 +88,13 @@ func SignIdentityCreate(controllerKeys, authKeys, assertKeys []MultikeyPublicKey
 // The signer must use a current controller key. kid must be a DID URL
 // (e.g., "did:dfos:xxx#key_yyy").
 func SignIdentityUpdate(previousCID string, controllerKeys, authKeys, assertKeys []MultikeyPublicKey, kid string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
+	return SignIdentityUpdateWithServices(previousCID, controllerKeys, authKeys, assertKeys, nil, kid, privateKey)
+}
+
+// SignIdentityUpdateWithServices is SignIdentityUpdate plus a discovery-vocabulary
+// services set. An update REPLACES the entire services state; a nil/empty slice is
+// omitted from the payload (clears services, CID-neutral vs a service-less update).
+func SignIdentityUpdateWithServices(previousCID string, controllerKeys, authKeys, assertKeys []MultikeyPublicKey, services []ServiceEntry, kid string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
 	now := protocolTimestamp()
 
 	if authKeys == nil {
@@ -97,6 +115,9 @@ func SignIdentityUpdate(previousCID string, controllerKeys, authKeys, assertKeys
 		"assertKeys":           assertKeys,
 		"controllerKeys":       controllerKeys,
 		"createdAt":            now.Format("2006-01-02T15:04:05.000Z"),
+	}
+	if len(services) > 0 {
+		payload["services"] = services
 	}
 
 	_, _, cidStr, err := DagCborCID(payload)
