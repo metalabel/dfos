@@ -32,7 +32,7 @@ The credential payload is validated by a strict Zod schema. No extra fields are 
   "version": 1,
   "type": "DFOSCredential",
   "iss": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
-  "aud": "did:dfos:nzkf838efr424433rn2rzk",
+  "aud": "did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae",
   "att": [{ "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "write" }],
   "prf": [],
   "exp": 1798761600,

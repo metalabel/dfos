@@ -20,7 +20,7 @@ Any system implementing the same chain primitives produces interoperable, cross-
 
 ## Protocol Overview
 
-The DFOS protocol has six components:
+The DFOS protocol has five components:
 
 | Component             | Concern                                                                                                          |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------- |

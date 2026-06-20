@@ -49,10 +49,12 @@ All protocol operations are covered:
 | `SignContentDelete`  | Sign a content chain deletion            |
 | `SignArtifact`       | Sign a standalone inline document        |
 | `SignCountersign`    | Countersign a target operation by CID    |
+| `SignRevocation`     | Revoke a credential previously issued    |
 | `CreateAuthToken`    | Create a relay-scoped JWT auth token     |
 | `CreateCredential`   | Issue a DFOS credential (read/write)     |
 | `VerifyJWS`          | Verify an Ed25519 JWS token              |
 | `VerifyCredential`   | Verify a DFOS credential                 |
+| `VerifyRevocation`   | Verify a credential revocation           |
 | `DocumentCID`        | Canonical dag-cbor encode and CIDv1 hash |
 
 ## Tests

@@ -115,10 +115,10 @@ url = "http://localhost:4444"
 url = "https://relay.dfos.com"
 
 [identities.alice]
-did = "did:dfos:f2r3vt89fnh9ntkk7neffe"
+did = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
 
 [identities.bob]
-did = "did:dfos:a8c4rr6d29t2zehn2tc9hv"
+did = "did:dfos:cv7n8vkvr64cctf3294h9k4eanhff8z"
 
 [defaults]
 auth_token_ttl = "5m"
@@ -193,7 +193,7 @@ The CLI discovers which keys belong to which identity by querying the identity's
 
 ## Local-First Workflow
 
-The default mode is local. Operations are signed and stored in `~/.dfos/store/` without network access. Publishing to relays is explicit.
+The default mode is local. Operations are signed and stored in `~/.dfos/relay.db` without network access. Publishing to relays is explicit.
 
 ### Create-Then-Publish
 
@@ -487,10 +487,10 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `GET`  | `auth token`                    | Mint short-lived auth token (stdout)        |
 | `GET`  | `auth status`                   | Show current auth state                     |
 | `*`    | `api <METHOD> <path>`           | Raw HTTP to relay with optional `--auth`    |
-| `GET`  | `relay list`                    | List configured relays                      |
-| `GET`  | `relay info [name]`             | Show relay metadata                         |
-| `POST` | `relay add <name> <url>`        | Register a named relay                      |
-| `DEL`  | `relay remove <name>`           | Unregister a relay                          |
+| `GET`  | `peer list`                     | List configured relays (alias: `relay`)     |
+| `GET`  | `peer info [name]`              | Show relay metadata                         |
+| `POST` | `peer add <name> <url>`         | Register a named relay                      |
+| `DEL`  | `peer remove <name>`            | Unregister a relay                          |
 | `SET`  | `use <context>`                 | Set active context                          |
 | `GET`  | `config list`                   | Show full configuration                     |
 | `GET`  | `status`                        | At-a-glance overview                        |

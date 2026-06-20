@@ -133,30 +133,30 @@ dfos content publish <id> --peer prod   # submit when ready
 
 ## Commands
 
-| Command                      | Description                            |
-| ---------------------------- | -------------------------------------- |
-| `identity create`            | Generate keys + sign genesis           |
-| `identity list`              | List all known identities              |
-| `identity show`              | Show identity state                    |
-| `identity keys`              | Show key state + keychain availability |
-| `identity services`          | Show resolved discovery services       |
-| `identity publish`           | Submit to a relay                      |
-| `identity fetch`             | Download from a relay                  |
-| `content create`             | Create content chain                   |
-| `content show`               | Show content chain state               |
-| `content update`             | Update content chain                   |
-| `content download`           | Download blob                          |
-| `content publish`            | Submit to a relay                      |
-| `content fetch`              | Download from a relay                  |
-| `content log`                | Show operation history                 |
-| `credential grant`           | Issue read/write credential            |
-| `credential revoke`          | Revoke a credential                    |
-| `content verify`             | Re-verify chain integrity              |
-| `witness`                    | Countersign (solemnize) an operation   |
-| `auth token`                 | Mint auth token (stdout)               |
-| `auth status`                | Show auth state                        |
-| `api`                        | Raw HTTP to relay                      |
-| `relay add/remove/list/info` | Manage relays                          |
-| `use`                        | Set active context                     |
-| `config list/get/set`        | Manage configuration                   |
-| `status`                     | At-a-glance overview                   |
+| Command                     | Description                            |
+| --------------------------- | -------------------------------------- |
+| `identity create`           | Generate keys + sign genesis           |
+| `identity list`             | List all known identities              |
+| `identity show`             | Show identity state                    |
+| `identity keys`             | Show key state + keychain availability |
+| `identity services`         | Show resolved discovery services       |
+| `identity publish`          | Submit to a relay                      |
+| `identity fetch`            | Download from a relay                  |
+| `content create`            | Create content chain                   |
+| `content show`              | Show content chain state               |
+| `content update`            | Update content chain                   |
+| `content download`          | Download blob                          |
+| `content publish`           | Submit to a relay                      |
+| `content fetch`             | Download from a relay                  |
+| `content log`               | Show operation history                 |
+| `credential grant`          | Issue read/write credential            |
+| `credential revoke`         | Revoke a credential                    |
+| `content verify`            | Re-verify chain integrity              |
+| `witness`                   | Countersign (solemnize) an operation   |
+| `auth token`                | Mint auth token (stdout)               |
+| `auth status`               | Show auth state                        |
+| `api`                       | Raw HTTP to relay                      |
+| `peer add/remove/list/info` | Manage relays (alias: `relay`)         |
+| `use`                       | Set active context                     |
+| `config list/get/set`       | Manage configuration                   |
+| `status`                    | At-a-glance overview                   |

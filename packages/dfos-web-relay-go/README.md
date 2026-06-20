@@ -93,10 +93,10 @@ The [`dfos` CLI](../dfos-cli) can manage identities and content against a runnin
 dfos relay add local http://localhost:8080
 
 # create and publish an identity
-dfos identity create --name my-id --relay local
+dfos identity create --name my-id --peer local
 
 # create and publish content
-echo '{"type":"post","title":"hello"}' | dfos content create - --ctx my-id@local --relay local
+echo '{"type":"post","title":"hello"}' | dfos content create - --ctx my-id@local
 ```
 
 ## Library Usage

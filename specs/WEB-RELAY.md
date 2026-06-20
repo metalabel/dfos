@@ -189,9 +189,12 @@ A countersignature is a standalone witness attestation — a signed statement th
   "type": "countersign",
   "did": "did:dfos:witness...",
   "targetCID": "bafy...",
+  "relation": "endorses",
   "createdAt": "2026-03-25T00:00:00.000Z"
 }
 ```
+
+The optional `relation` field is an open-namespace tag (1–64 chars) naming the nature of the attestation (e.g. `coauthors`, `endorses`, `witnessed`, `holds`, `received`). Recognized values carry social meaning; unrecognized values MUST be preserved and ignored. Omitting `relation` is CID-neutral — a bare witness encodes identically to one signed before this field existed.
 
 ### Properties
 
@@ -354,7 +357,7 @@ State endpoints return projected state — the computed result of replaying the 
 }
 ```
 
-Resolved identity state includes the identity's `services` — the controller-signed discovery vocabulary (relay locators and stable content anchors) projected from the winning head. See [Services](https://protocol.dfos.com/#services) in the protocol spec. Read-through and sync replicate the underlying identity operations, so a peer that fetches an identity chain recomputes the same `services` set deterministically.
+Resolved identity state includes the identity's `services` — the controller-signed discovery vocabulary (relay locators and stable content anchors) projected from the winning head. See [Services](https://protocol.dfos.com/spec#services) in the protocol spec. Read-through and sync replicate the underlying identity operations, so a peer that fetches an identity chain recomputes the same `services` set deterministically.
 
 ### Content State (`GET /content/:contentId`)
 
