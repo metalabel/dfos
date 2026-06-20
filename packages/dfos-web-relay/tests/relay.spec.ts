@@ -11,6 +11,7 @@ import {
   type CountersignPayload,
   type IdentityOperation,
   type MultikeyPublicKey,
+  type ServiceEntry,
 } from '@metalabel/dfos-protocol/chain';
 import {
   createAuthToken,
@@ -478,6 +479,140 @@ describe('web relay', () => {
       const res = await postOps([identity.jwsToken]);
       const body = await json(res);
       expect(body.results[0].status).toBe('duplicate');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // services discovery vocabulary + countersign relation (0.11.0)
+  // ---------------------------------------------------------------------------
+
+  describe('services + countersign relation', () => {
+    const ANCHOR = 'cv7n8vkvr64cctf3294h9k4eanhff8z'; // 31-char content id
+
+    // mirror createIdentity() but carry a services set on the genesis op
+    const createIdentityWithServices = async (services: ServiceEntry[] | undefined) => {
+      const controller = makeKey();
+      const authKey = makeKey();
+      const createOp: IdentityOperation = {
+        version: 1,
+        type: 'create',
+        authKeys: [authKey.key],
+        assertKeys: [],
+        controllerKeys: [controller.key],
+        createdAt: ts(),
+        services,
+      };
+      const { jwsToken, operationCID } = await signIdentityOperation({
+        operation: createOp,
+        signer: controller.signer,
+        keyId: controller.keyId,
+      });
+      const encoded = await dagCborCanonicalEncode(createOp);
+      const { deriveChainIdentifier } = await import('@metalabel/dfos-protocol/chain');
+      const did = deriveChainIdentifier(encoded.cid.bytes, 'did:dfos');
+      return { did, controller, authKey, jwsToken, operationCID };
+    };
+
+    const signServicesUpdate = async (
+      identity: Awaited<ReturnType<typeof createIdentityWithServices>>,
+      previousOperationCID: string,
+      services: ServiceEntry[] | undefined,
+      offset: number,
+    ) => {
+      const updateOp: IdentityOperation = {
+        version: 1,
+        type: 'update',
+        previousOperationCID,
+        authKeys: [identity.authKey.key],
+        assertKeys: [],
+        controllerKeys: [identity.controller.key],
+        createdAt: ts(offset),
+        services,
+      };
+      return signIdentityOperation({
+        operation: updateOp,
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+    };
+
+    it('projects and serves a genesis services set', async () => {
+      const id = await createIdentityWithServices([
+        { id: 'relay', type: 'DfosRelay', endpoint: 'https://relay.dfos.com' },
+        { id: 'avatar', type: 'ContentAnchor', label: 'avatar', anchor: ANCHOR },
+      ]);
+      await postOps([id.jwsToken]);
+
+      const body = await json(await req(`/identities/${id.did}`));
+      expect(body.state.services).toHaveLength(2);
+      const relay = body.state.services.find((s: { id: string }) => s.id === 'relay');
+      expect(relay.type).toBe('DfosRelay');
+      expect(relay.endpoint).toBe('https://relay.dfos.com');
+      const anchor = body.state.services.find((s: { id: string }) => s.id === 'avatar');
+      expect(anchor.type).toBe('ContentAnchor');
+      expect(anchor.label).toBe('avatar');
+      expect(anchor.anchor).toBe(ANCHOR);
+    });
+
+    it('replaces the full set on update and clears it when omitted', async () => {
+      const id = await createIdentityWithServices([
+        { id: 'old', type: 'DfosRelay', endpoint: 'https://old.example.com' },
+      ]);
+      await postOps([id.jwsToken]);
+
+      // full-state replace — the old entry must disappear
+      const { jwsToken: replaceToken, operationCID: replaceCID } = await signServicesUpdate(
+        id,
+        id.operationCID,
+        [{ id: 'new', type: 'DfosRelay', endpoint: 'https://new.example.com' }],
+        2,
+      );
+      await postOps([replaceToken]);
+      let body = await json(await req(`/identities/${id.did}`));
+      expect(body.state.services).toHaveLength(1);
+      expect(body.state.services[0].id).toBe('new');
+
+      // service-less update clears the set entirely
+      const { jwsToken: clearToken } = await signServicesUpdate(id, replaceCID, undefined, 3);
+      await postOps([clearToken]);
+      body = await json(await req(`/identities/${id.did}`));
+      expect(body.state.services).toHaveLength(0);
+    });
+
+    it('rejects an invalid ContentAnchor entry (missing label)', async () => {
+      const id = await createIdentityWithServices([
+        { id: 'x', type: 'ContentAnchor', anchor: ANCHOR },
+      ]);
+      const body = await json(await postOps([id.jwsToken]));
+      expect(body.results[0].status).toBe('rejected');
+    });
+
+    it('round-trips a countersignature relation tag', async () => {
+      const author = await createIdentity();
+      await postOps([author.jwsToken]);
+      const witness = await createIdentity();
+      await postOps([witness.jwsToken]);
+
+      const payload: CountersignPayload = {
+        version: 1,
+        type: 'countersign',
+        did: witness.did,
+        targetCID: author.operationCID,
+        relation: 'endorses',
+        createdAt: ts(2),
+      };
+      const { jwsToken: csToken } = await signCountersignature({
+        payload,
+        signer: witness.authKey.signer,
+        kid: `${witness.did}#${witness.authKey.keyId}`,
+      });
+      await postOps([csToken]);
+
+      const body = await json(await req(`/countersignatures/${author.operationCID}`));
+      expect(body.countersignatures).toHaveLength(1);
+      const decoded = decodeJwsUnsafe(body.countersignatures[0]);
+      expect(decoded?.payload.relation).toBe('endorses');
     });
   });
 
