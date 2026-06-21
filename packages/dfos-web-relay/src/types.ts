@@ -39,6 +39,13 @@ export interface RelayOptions {
   content?: boolean;
   /** Whether the global operation log is enabled (default: true) */
   log?: boolean;
+  /**
+   * Whether this relay accepts writes (default: true). When false, it is a LITE
+   * pull-only proof node: POST /proof/v1/operations is rejected (501), so neither
+   * client writes nor peer gossip-in are accepted. The node still ingests by
+   * PULLING from peers (syncFromPeers polls their /log).
+   */
+  write?: boolean;
   /** Peer relay configurations */
   peers?: PeerConfig[];
   /** Injected peer client — if omitted, a default HTTP implementation is used */

@@ -120,6 +120,19 @@ dfos serve --port 8080 --name "My Relay" --peers "https://peer.example.com"
 Put it behind any reverse proxy (nginx, Caddy, Cloudflare Tunnel) for TLS
 termination.
 
+### Lite (pull-only) node
+
+To run the smallest, safest mesh citizen — a node that verifies, stores, and
+serves the proof plane but accepts **no writes** — add `--no-write`:
+
+```bash
+dfos serve --port 8080 --peers "https://peer.example.com" --no-write
+```
+
+It rejects `POST /proof/v1/operations` (so neither client writes nor peer
+gossip-in are accepted) and stays current by pulling from its peers. The
+well-known response advertises `capabilities.write: false`.
+
 ## Without TLS
 
 For local development or LAN use, run the container directly:

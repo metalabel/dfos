@@ -21,12 +21,17 @@ type RelayIdentity struct {
 
 // RelayOptions configures a new Relay instance.
 type RelayOptions struct {
-	Store      Store
-	Identity   *RelayIdentity
-	Content    *bool        // nil or true = enabled (default), false = disabled
-	Log        *bool        // nil or true = enabled (default), false = disabled
-	Logger     *slog.Logger // nil = slog.Default()
-	Peers      []PeerConfig
+	Store    Store
+	Identity *RelayIdentity
+	Content  *bool // nil or true = enabled (default), false = disabled
+	Log      *bool // nil or true = enabled (default), false = disabled
+	// Write, when false, makes this a LITE pull-only proof node: POST
+	// /proof/v1/operations is rejected (501), so neither client writes nor peer
+	// gossip-in are accepted. The node still ingests by PULLING from peers
+	// (SyncFromPeers polls their /log). nil or true = accept writes (default).
+	Write        *bool
+	Logger       *slog.Logger // nil = slog.Default()
+	Peers        []PeerConfig
 	PeerClient   PeerClient // injected peer transport (nil = no peering)
 	ResyncOnBoot bool       // if true, reset peer cursors + sequencer on startup
 	// MaxAuthTokenTTL caps the lifetime (exp-iat) honored on a self-signed auth

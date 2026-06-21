@@ -42,11 +42,14 @@ paths:
                     example: '0.8.0'
                   capabilities:
                     type: object
-                    required: [proof, content, documents, log]
+                    required: [proof, write, content, documents, log]
                     properties:
                       proof:
                         type: boolean
                         description: Always true — a relay without proof plane is not a relay
+                      write:
+                        type: boolean
+                        description: Whether the relay accepts writes via POST /proof/v1/operations (false = lite pull-only node)
                       content:
                         type: boolean
                         description: Whether the relay supports content plane (blob upload/download)
@@ -99,6 +102,8 @@ paths:
                       $ref: '#/components/schemas/IngestionResult'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '501':
+          description: Writes disabled — relay is a lite pull-only node (capabilities.write is false)
 
   /proof/v1/operations/{cid}:
     get:

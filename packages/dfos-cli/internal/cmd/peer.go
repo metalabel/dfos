@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
+	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/spf13/cobra"
 )
 
@@ -75,6 +75,7 @@ func newPeerAddCmd() *cobra.Command {
 					"profileName":  profileName,
 					"content":      info.Content,
 					"proof":        info.Proof,
+					"write":        info.Write,
 					"verified":     true,
 					"profileValid": profileValid,
 				})
@@ -90,6 +91,7 @@ func newPeerAddCmd() *cobra.Command {
 				}
 				fmt.Printf("  Content: %s\n", boolYesNo(info.Content))
 				fmt.Printf("  Proof:   %s\n", boolYesNo(info.Proof))
+				fmt.Printf("  Write:   %s\n", boolYesNo(info.Write))
 				if profileValid {
 					fmt.Printf("  Status:  verified (%s)\n", label)
 				} else if info.Profile != "" {
@@ -264,6 +266,7 @@ func newPeerInfoCmd() *cobra.Command {
 					"version":  info.Version,
 					"content":  info.Content,
 					"proof":    info.Proof,
+					"write":    info.Write,
 					"profile": map[string]any{
 						"present": info.Profile != "",
 						"name":    profileName,
@@ -305,6 +308,7 @@ func newPeerInfoCmd() *cobra.Command {
 			fmt.Println("Capabilities:")
 			fmt.Printf("  content: %s\n", boolYesNo(info.Content))
 			fmt.Printf("  proof:   %s\n", boolYesNo(info.Proof))
+			fmt.Printf("  write:   %s\n", boolYesNo(info.Write))
 			fmt.Println()
 
 			fmt.Println("Identity:")

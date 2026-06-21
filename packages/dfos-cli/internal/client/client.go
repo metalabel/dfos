@@ -39,14 +39,19 @@ type RelayInfo struct {
 	// Convenience accessors populated after unmarshal.
 	Proof   bool `json:"-"`
 	Content bool `json:"-"`
+	Write   bool `json:"-"`
 }
 
 // RelayCapabilities are the nested capability flags from the well-known response.
 type RelayCapabilities struct {
-	Proof     bool `json:"proof"`
-	Content   bool `json:"content"`
-	Log       bool `json:"log"`
-	Documents bool `json:"documents"`
+	Proof bool `json:"proof"`
+	// Write is false on a LITE pull-only node — POST /operations is rejected.
+	// Pointer so an older relay that omits the key reads as write-enabled
+	// (nil), not write-disabled (see GetRelayInfo).
+	Write     *bool `json:"write"`
+	Content   bool  `json:"content"`
+	Log       bool  `json:"log"`
+	Documents bool  `json:"documents"`
 }
 
 // IdentityResponse is the response from GET /proof/v1/identities/:did.
@@ -118,6 +123,7 @@ func (c *Client) GetRelayInfo() (*RelayInfo, error) {
 	}
 	info.Proof = info.Capabilities.Proof
 	info.Content = info.Capabilities.Content
+	info.Write = info.Capabilities.Write == nil || *info.Capabilities.Write
 	return &info, nil
 }
 

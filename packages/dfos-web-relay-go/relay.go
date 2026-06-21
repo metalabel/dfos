@@ -24,6 +24,7 @@ type Relay struct {
 	profileArtifactJWS string
 	contentEnabled     bool
 	logEnabled         bool
+	writeEnabled       bool // false = LITE pull-only node (POST /operations rejected)
 	logger             *slog.Logger
 	peers              []PeerConfig
 	peerClient         PeerClient
@@ -40,6 +41,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 
 	contentEnabled := opts.Content == nil || *opts.Content
 	logEnabled := opts.Log == nil || *opts.Log
+	writeEnabled := opts.Write == nil || *opts.Write
 
 	identity := opts.Identity
 	if identity == nil {
@@ -75,6 +77,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		profileArtifactJWS: identity.ProfileArtifactJWS,
 		contentEnabled:     contentEnabled,
 		logEnabled:         logEnabled,
+		writeEnabled:       writeEnabled,
 		logger:             logger,
 		peers:              opts.Peers,
 		peerClient:         opts.PeerClient,

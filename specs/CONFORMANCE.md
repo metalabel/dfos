@@ -90,6 +90,12 @@ A relay ingests, sequences, and serves. It implements:
 all content-plane routes return 501 (WEB-RELAY.md "Well-Known Endpoint",
 `specs/WEB-RELAY.md:306`). Proof-plane-only is a fully conformant relay.
 
+**Writes are OPTIONAL too.** A lite (pull-only) proof node MAY advertise
+`capabilities.write: false`, in which case `POST /proof/v1/operations` returns **501 Not
+Implemented** while all proof-plane read routes remain conformant; the node stays current
+by pulling peers' logs (WEB-RELAY.md "Lite (pull-only) node"). So a conformant proof node
+need not accept writes — only serve and verify them.
+
 ---
 
 ## Proving Corpora

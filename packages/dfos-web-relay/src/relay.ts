@@ -137,6 +137,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const { store } = options;
   const contentEnabled = options.content !== false;
   const logEnabled = options.log !== false;
+  const writeEnabled = options.write !== false;
   const maxAuthTokenTTLSeconds =
     options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS;
 
@@ -235,6 +236,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       version: RELAY_VERSION,
       capabilities: {
         proof: true,
+        write: writeEnabled,
         content: contentEnabled,
         documents: contentEnabled,
         log: logEnabled,
@@ -249,6 +251,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
   /** Submit operations for ingestion */
   app.post(`${PROOF_BASE_PATH}/operations`, async (c) => {
+    // LITE pull-only node: writes (and therefore peer gossip-in, which posts
+    // here too) are disabled by role. 501 matches the content-disabled
+    // convention — the well-known advertises write:false so clients/peers know
+    // in advance. Such a node still ingests by pulling from peers.
+    if (!writeEnabled) {
+      return c.json({ error: 'this relay is pull-only; writes are disabled' }, 501);
+    }
     // Per-route DoS cap: reject an oversized body before buffering it. Mirrors
     // the Go twin's 16MB MaxBytesReader on the blob route. The Content-Length
     // header (when present) is the cheap pre-read check; serve.ts streams a

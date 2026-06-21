@@ -283,6 +283,7 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
   "version": "0.0.0",
   "capabilities": {
     "proof": true,
+    "write": true,
     "content": true,
     "documents": true,
     "log": true
@@ -298,12 +299,19 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 | `version`                | string  | Relay protocol version (semver)                                            |
 | `capabilities`           | object  | Capability flags for optional features                                     |
 | `capabilities.proof`     | boolean | MUST be `true`. A relay without proof plane capability is not a relay      |
+| `capabilities.write`     | boolean | Whether the relay accepts writes via `POST /proof/v1/operations`           |
 | `capabilities.content`   | boolean | Whether the relay supports content plane (blob upload/download)            |
 | `capabilities.documents` | boolean | Whether the relay serves the documents endpoint                            |
 | `capabilities.log`       | boolean | Whether the global operation log is available (`GET /proof/v1/log`)        |
 | `profile`                | string  | The relay's profile artifact as a compact JWS token — self-proving payload |
 
 `capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
+
+### Lite (pull-only) node — `capabilities.write: false`
+
+A relay MAY run as a **lite pull-only proof node**: it verifies, stores, and serves the proof plane, but accepts **no writes**. When `capabilities.write: false`, `POST /proof/v1/operations` returns **501 Not Implemented**. Because that endpoint is _both_ the client-write and the peer-gossip-ingest path (a gossiping peer POSTs operations here, and nothing in the request distinguishes a first-party submission from a peer push), refusing it disables **gossip-in along with client writes**. Such a node stays current by **pulling**: `syncFromPeers` polls its peers' `/proof/v1/log` and ingests verified operations locally. This is the smallest, safest mesh citizen — a tiny attack surface (no untrusted write endpoint) that still contributes verification and availability. All read routes behave normally. `dfos serve --no-write` runs this mode.
+
+`capabilities.write` governs the **proof-plane** write endpoint (`POST /proof/v1/operations`) only. Content-plane writes (blob upload, `PUT /content/:contentId/blob/:operationCID`) are governed independently by `capabilities.content`, which enables or disables the content plane as a whole. A node that should accept no writes of any kind runs with both `write: false` and `content: false`.
 
 ---
 
