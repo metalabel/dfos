@@ -144,7 +144,7 @@ Chain verification proceeds from the leaf credential upward:
 6. **Attenuation check** — the child's `att` MUST be a valid attenuation of the parent's `att` (see [Attenuation Rules](#attenuation-rules)).
 7. **Root check** — when a credential has `prf: []`, its `iss` MUST equal the expected root DID (e.g., the content chain creator).
 
-**Depth limit:** Maximum 16 hops. Chains deeper than 16 are rejected.
+**Depth limit:** A delegation chain MUST contain at most **16 credentials**, counting the leaf and the root inclusive (i.e. at most 15 delegation hops). A verifier walks from the leaf (counted as the first credential) toward the root; the **17th credential is rejected** ("delegation chain too deep"). This boundary is exact and normative — verifiers MUST agree on it (a verifier that accepts a 17-credential chain forks authorization validity). Conformance: a 16-credential chain verifies; a 17-credential chain is rejected.
 
 **Revocation at every level:** Revocation is checked at every level of the delegation chain — the leaf credential AND each parent — not just the leaf (MUST — see Revocation / Relay Enforcement).
 

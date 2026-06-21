@@ -165,7 +165,12 @@ func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 // for either to skip that check (the protocol layer is store-agnostic; the
 // relay supplies these closures at the call boundary).
 func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, depth int) error {
-	if depth > 16 {
+	// A delegation chain MUST contain at most 16 credentials (leaf through root
+	// inclusive). The leaf is verified at depth 0 and each parent walk increments
+	// depth, so the root of an N-credential chain is reached at depth N-1; the
+	// 17th credential is reached at depth 16 and rejected. This boundary is
+	// canonical with the TS verifier (see CREDENTIALS.md "Delegation depth").
+	if depth >= 16 {
 		return fmt.Errorf("delegation chain too deep (max 16 hops)")
 	}
 
