@@ -73,22 +73,22 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
 
 A relay ingests, sequences, and serves. It implements:
 
-- **Ingestion** — single `POST /operations` endpoint, `typ`-based classification,
+- **Ingestion** — single `POST /proof/v1/operations` endpoint, `typ`-based classification,
   dependency sort, per-type verification, store-then-verify convergence (WEB-RELAY.md
-  "Operation Ingestion" / "Convergence", `specs/WEB-RELAY.md:46`, `specs/WEB-RELAY.md:618`).
+  "Operation Ingestion" / "Convergence", `specs/WEB-RELAY.md:69`, `specs/WEB-RELAY.md:640`).
 - **Sequencing & fork handling** — fork acceptance, deterministic head selection,
   ingestion statuses, deletion semantics (WEB-RELAY.md "Fork Acceptance" / "Ingestion
-  Statuses" / "Deletion Semantics", `specs/WEB-RELAY.md:98`, `specs/WEB-RELAY.md:110`,
-  `specs/WEB-RELAY.md:126`).
+  Statuses" / "Deletion Semantics", `specs/WEB-RELAY.md:121`, `specs/WEB-RELAY.md:133`,
+  `specs/WEB-RELAY.md:147`).
 - **Capability / feature flags + 501 semantics** — the well-known response advertises
   capabilities; unsupported optional features return **501 Not Implemented** (not 404)
-  (WEB-RELAY.md "Well-Known Endpoint", `specs/WEB-RELAY.md:252`; "Two Planes",
+  (WEB-RELAY.md "Well-Known Endpoint", `specs/WEB-RELAY.md:275`; "Two Planes",
   `specs/WEB-RELAY.md:40`).
 
 **The content plane is OPTIONAL.** A compliant relay **always** serves the proof plane
 (`capabilities.proof: false` is not a valid value); when `capabilities.content: false`,
 all content-plane routes return 501 (WEB-RELAY.md "Well-Known Endpoint",
-`specs/WEB-RELAY.md:283`). Proof-plane-only is a fully conformant relay.
+`specs/WEB-RELAY.md:306`). Proof-plane-only is a fully conformant relay.
 
 ---
 

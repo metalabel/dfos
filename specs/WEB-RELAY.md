@@ -41,9 +41,34 @@ Content plane support is optional per relay. When disabled (`content: false` in 
 
 ---
 
+## Route Namespacing
+
+Every proof plane route is namespaced under a single prefix, **`/proof/v1`**:
+
+```
+/proof/v1/operations
+/proof/v1/operations/:cid
+/proof/v1/operations/:cid/countersignatures
+/proof/v1/countersignatures/:cid
+/proof/v1/identities/:did
+/proof/v1/identities/:did/log
+/proof/v1/content/:contentId
+/proof/v1/content/:contentId/log
+/proof/v1/log
+```
+
+The prefix encodes the plane and its version (`{plane}/{version}`), so the proof plane's version clock is legible in the URL and the plane mounts or proxies as a unit by prefix. The proof routes are **frozen with protocol v1** — a relay MUST serve them at exactly these paths.
+
+Two route families deliberately stay at the root, on their own clocks:
+
+- **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and per-plane versions.
+- **Content plane routes** (`/content/:contentId/blob[/:ref]`, `/content/:contentId/documents`) — these belong to the **document gateway**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` until a future gateway version re-keys them on `documentCID`. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` and `/content/:contentId/documents` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
+
+---
+
 ## Operation Ingestion
 
-All proof plane operations enter through a single endpoint: `POST /operations`. The request body is an array of JWS tokens — identity operations, content operations, artifacts, and countersignatures can be mixed freely in the same batch.
+All proof plane operations enter through a single endpoint: `POST /proof/v1/operations`. The request body is an array of JWS tokens — identity operations, content operations, artifacts, and countersignatures can be mixed freely in the same batch.
 
 ### Classification
 
@@ -217,8 +242,8 @@ The relay enforces semantic rules beyond cryptographic validity:
 
 Two routes serve countersignature data:
 
-- **`GET /countersignatures/:cid`** — Primary lookup. Returns all countersignatures for the given CID. Works for any CID-addressable target (operations, artifacts). Returns `{ cid, countersignatures: string[] }` where each entry is a compact JWS token. Returns 404 if no countersignatures exist for the CID.
-- **`GET /operations/:cid/countersignatures`** — Operation-scoped lookup. Returns countersignatures only if `:cid` is a known operation. Returns `{ operationCID, countersignatures: string[] }`. Returns 404 if the operation doesn't exist.
+- **`GET /proof/v1/countersignatures/:cid`** — Primary lookup. Returns all countersignatures for the given CID. Works for any CID-addressable target (operations, artifacts). Returns `{ cid, countersignatures: string[] }` where each entry is a compact JWS token. Returns 404 if no countersignatures exist for the CID.
+- **`GET /proof/v1/operations/:cid/countersignatures`** — Operation-scoped lookup. Returns countersignatures only if `:cid` is a known operation. Returns `{ operationCID, countersignatures: string[] }`. Returns 404 if the operation doesn't exist.
 
 ---
 
@@ -275,10 +300,10 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 | `capabilities.proof`     | boolean | MUST be `true`. A relay without proof plane capability is not a relay      |
 | `capabilities.content`   | boolean | Whether the relay supports content plane (blob upload/download)            |
 | `capabilities.documents` | boolean | Whether the relay serves the documents endpoint                            |
-| `capabilities.log`       | boolean | Whether the global operation log is available (`GET /log`)                 |
+| `capabilities.log`       | boolean | Whether the global operation log is available (`GET /proof/v1/log`)        |
 | `profile`                | string  | The relay's profile artifact as a compact JWS token — self-proving payload |
 
-`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /operations` like all other operation types.
+`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
 
 ---
 
@@ -286,7 +311,7 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 
 The relay maintains a global append-only operation log. Every successfully ingested operation (identity ops, content ops, artifacts, countersignatures) is appended to the log in ingestion order.
 
-### Global Log (`GET /log?after={cid}&limit=N`)
+### Global Log (`GET /proof/v1/log?after={cid}&limit=N`)
 
 Returns log entries starting after the given CID cursor.
 
@@ -329,8 +354,8 @@ Pagination is forward-only. The log is ordered by ingestion time. JWS tokens are
 
 Identity and content chains expose their own log views with the same cursor-based pagination:
 
-- `GET /identities/:did/log?after={cid}&limit=N`
-- `GET /content/:contentId/log?after={cid}&limit=N`
+- `GET /proof/v1/identities/:did/log?after={cid}&limit=N`
+- `GET /proof/v1/content/:contentId/log?after={cid}&limit=N`
 
 Same cursor-based pagination parameters as the global log. Per-chain log entries include `{ cid, jwsToken }` — the chain-specific subset of the global log entry shape. Returns operations belonging to that chain in chain order.
 
@@ -340,7 +365,7 @@ Same cursor-based pagination parameters as the global log. Per-chain log entries
 
 State endpoints return projected state — the computed result of replaying the chain — without embedding the full operation log.
 
-### Identity State (`GET /identities/:did`)
+### Identity State (`GET /proof/v1/identities/:did`)
 
 ```json
 {
@@ -359,7 +384,7 @@ State endpoints return projected state — the computed result of replaying the 
 
 Resolved identity state includes the identity's `services` — the controller-signed discovery vocabulary (relay locators and stable content anchors) projected from the winning head. See [Services](https://protocol.dfos.com/spec#services) in the protocol spec. Read-through and sync replicate the underlying identity operations, so a peer that fetches an identity chain recomputes the same `services` set deterministically.
 
-### Content State (`GET /content/:contentId`)
+### Content State (`GET /proof/v1/content/:contentId`)
 
 ```json
 {
@@ -423,7 +448,7 @@ When `capabilities.documents: false` in the well-known response, this route retu
 
 Instead of presenting a read credential on every request, a DFOS credential with `aud: "*"` (public) can be ingested by the relay as a **standing authorization**. Once ingested, the relay stores the credential and automatically authorizes matching content plane requests without requiring the `X-Credential` header.
 
-Credential ingestion uses `POST /operations` — DFOS credentials are submitted as JWS tokens alongside other proof plane operations. The relay verifies the credential signature, temporal validity, and issuer identity state, then stores it as a standing authorization.
+Credential ingestion uses `POST /proof/v1/operations` — DFOS credentials are submitted as JWS tokens alongside other proof plane operations. The relay verifies the credential signature, temporal validity, and issuer identity state, then stores it as a standing authorization.
 
 Standing authorizations are checked during content plane access: if the relay has a valid public credential on file whose `att` covers the requested resource and action, access is granted without a per-request credential. The relay verifies the credential's delegation chain roots at the content creator and checks revocation status.
 
@@ -435,7 +460,7 @@ Standing authorizations are invalidated when:
 
 ### Revocation Ingestion
 
-Revocation artifacts (`typ: did:dfos:revocation`) are ingested via `POST /operations` alongside other proof plane operations. When a revocation is accepted:
+Revocation artifacts (`typ: did:dfos:revocation`) are ingested via `POST /proof/v1/operations` alongside other proof plane operations. When a revocation is accepted:
 
 1. The revoked credential's CID is recorded
 2. Any standing authorization backed by that credential is immediately invalidated
@@ -536,21 +561,21 @@ setInterval(() => relay.syncFromPeers(), 30_000);
 
 The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFromPeers` (async function). The Hono app exposes:
 
-| Method | Path                                 | Plane   | Auth                                      |
-| ------ | ------------------------------------ | ------- | ----------------------------------------- |
-| `GET`  | `/.well-known/dfos-relay`            | meta    | none                                      |
-| `POST` | `/operations`                        | proof   | none                                      |
-| `GET`  | `/operations/:cid`                   | proof   | none                                      |
-| `GET`  | `/operations/:cid/countersignatures` | proof   | none                                      |
-| `GET`  | `/countersignatures/:cid`            | proof   | none                                      |
-| `GET`  | `/identities/:did`                   | proof   | none                                      |
-| `GET`  | `/identities/:did/log`               | proof   | none                                      |
-| `GET`  | `/content/:contentId`                | proof   | none                                      |
-| `GET`  | `/content/:contentId/log`            | proof   | none                                      |
-| `GET`  | `/content/:contentId/documents`      | content | standing auth, or auth token + credential |
-| `GET`  | `/log`                               | proof   | none                                      |
-| `PUT`  | `/content/:contentId/blob/:opCID`    | content | auth token                                |
-| `GET`  | `/content/:contentId/blob[/:ref]`    | content | standing auth, or auth token + credential |
+| Method | Path                                          | Plane   | Auth                                      |
+| ------ | --------------------------------------------- | ------- | ----------------------------------------- |
+| `GET`  | `/.well-known/dfos-relay`                     | meta    | none                                      |
+| `POST` | `/proof/v1/operations`                        | proof   | none                                      |
+| `GET`  | `/proof/v1/operations/:cid`                   | proof   | none                                      |
+| `GET`  | `/proof/v1/operations/:cid/countersignatures` | proof   | none                                      |
+| `GET`  | `/proof/v1/countersignatures/:cid`            | proof   | none                                      |
+| `GET`  | `/proof/v1/identities/:did`                   | proof   | none                                      |
+| `GET`  | `/proof/v1/identities/:did/log`               | proof   | none                                      |
+| `GET`  | `/proof/v1/content/:contentId`                | proof   | none                                      |
+| `GET`  | `/proof/v1/content/:contentId/log`            | proof   | none                                      |
+| `GET`  | `/proof/v1/log`                               | proof   | none                                      |
+| `GET`  | `/content/:contentId/documents`               | content | standing auth, or auth token + credential |
+| `PUT`  | `/content/:contentId/blob/:opCID`             | content | auth token                                |
+| `GET`  | `/content/:contentId/blob[/:ref]`             | content | standing auth, or auth token + credential |
 
 ---
 
@@ -560,11 +585,11 @@ Relay-to-relay peering enables data replication across the network. The relay ex
 
 ### Three Behaviors
 
-| Behavior         | Trigger          | Mechanism                                  |
-| ---------------- | ---------------- | ------------------------------------------ |
-| **Gossip-out**   | New op ingested  | Push to peers with `gossip: true`          |
-| **Read-through** | Local 404 on GET | Fetch from peers with `readThrough: true`  |
-| **Sync-in**      | Scheduled poll   | Pull from peers with `sync: true` via /log |
+| Behavior         | Trigger          | Mechanism                                             |
+| ---------------- | ---------------- | ----------------------------------------------------- |
+| **Gossip-out**   | New op ingested  | Push to peers with `gossip: true`                     |
+| **Read-through** | Local 404 on GET | Fetch from peers with `readThrough: true`             |
+| **Sync-in**      | Scheduled poll   | Pull from peers with `sync: true` via `/proof/v1/log` |
 
 Gossip fires on `new` status only — `duplicate` results are not re-gossiped, preventing gossip storms. Read-through applies to **identity chains** and **content chains** only — operations and countersignatures are not read-through targets. When triggered, the relay fetches the full chain log from a peer and ingests locally (full verification, no trust). Sync-in uses cursor-based pagination against the peer's global log.
 
@@ -635,7 +660,7 @@ If all causal dependencies are present, the operation MUST be verifiable. If any
 
 A relay MUST NOT discard a structurally well-formed operation because its dependencies are temporarily unavailable. The implementation strategy is store-then-verify:
 
-1. **Store**: on receipt (via `POST /operations`, gossip, sync, or read-through), store the raw JWS token in a content-addressed buffer keyed by operation CID. This is idempotent — duplicate CIDs are ignored.
+1. **Store**: on receipt (via `POST /proof/v1/operations`, gossip, sync, or read-through), store the raw JWS token in a content-addressed buffer keyed by operation CID. This is idempotent — duplicate CIDs are ignored.
 
 2. **Verify**: attempt full verification against current state. Three outcomes:
    - **Sequenced** — verification succeeded, operation committed to chain state and global log
@@ -688,7 +713,7 @@ resetSequencer(): Promise<void>;
 ## What's Deferred
 
 - **Peer discovery**: Static configuration only — no dynamic discovery
-- **SSE/realtime push**: Polling `GET /log` for now, SSE in the future
+- **SSE/realtime push**: Polling `GET /proof/v1/log` for now, SSE in the future
 - **Fork visibility API**: Dedicated endpoint to list tips/branches
 - **Branch termination op**: Protocol-level operation to explicitly kill fork branches
 - **Rate limiting / anti-spam**: Operational concern, not protocol concern

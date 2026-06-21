@@ -24,6 +24,7 @@ import {
 import { bootstrapRelayIdentity } from './bootstrap';
 import { ingestOperations } from './ingest';
 import { computeOpCID, sequenceOps } from './sequencer';
+import { PROOF_BASE_PATH } from './types';
 import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
 
 const require = createRequire(import.meta.url);
@@ -247,7 +248,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // -------------------------------------------------------------------------
 
   /** Submit operations for ingestion */
-  app.post('/operations', async (c) => {
+  app.post(`${PROOF_BASE_PATH}/operations`, async (c) => {
     // Per-route DoS cap: reject an oversized body before buffering it. Mirrors
     // the Go twin's 16MB MaxBytesReader on the blob route. The Content-Length
     // header (when present) is the cheap pre-read check; serve.ts streams a
@@ -273,7 +274,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   /** Get an operation by CID */
-  app.get('/operations/:cid', async (c) => {
+  app.get(`${PROOF_BASE_PATH}/operations/:cid`, async (c) => {
     const cid = c.req.param('cid');
     const op = await store.getOperation(cid);
     if (!op) return c.json({ error: 'not found' }, 404);
@@ -287,7 +288,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   /** Get an identity chain by DID */
-  app.get('/identities/:did/log', async (c) => {
+  app.get(`${PROOF_BASE_PATH}/identities/:did/log`, async (c) => {
     const did = c.req.param('did');
     const chain = await store.getIdentityChain(did);
     if (!chain) return c.json({ error: 'not found' }, 404);
@@ -312,7 +313,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return c.json({ entries: page, cursor });
   });
 
-  app.get('/identities/:did{.+}', async (c) => {
+  app.get(`${PROOF_BASE_PATH}/identities/:did{.+}`, async (c) => {
     const did = c.req.param('did');
     let chain = await store.getIdentityChain(did);
 
@@ -345,7 +346,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   /** Get a content chain log */
-  app.get('/content/:contentId/log', async (c) => {
+  app.get(`${PROOF_BASE_PATH}/content/:contentId/log`, async (c) => {
     const contentId = c.req.param('contentId');
     const chain = await store.getContentChain(contentId);
     if (!chain) return c.json({ error: 'not found' }, 404);
@@ -418,7 +419,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   /** Get a content chain by content ID */
-  app.get('/content/:contentId', async (c) => {
+  app.get(`${PROOF_BASE_PATH}/content/:contentId`, async (c) => {
     const contentId = c.req.param('contentId');
     let chain = await store.getContentChain(contentId);
 
@@ -452,7 +453,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   /** Get countersignatures for an operation CID */
-  app.get('/countersignatures/:cid', async (c) => {
+  app.get(`${PROOF_BASE_PATH}/countersignatures/:cid`, async (c) => {
     const cid = c.req.param('cid');
 
     // check if it's a known operation CID
@@ -469,7 +470,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   /** Get countersignatures for an operation CID (legacy path) */
-  app.get('/operations/:cid/countersignatures', async (c) => {
+  app.get(`${PROOF_BASE_PATH}/operations/:cid/countersignatures`, async (c) => {
     const cid = c.req.param('cid');
     const op = await store.getOperation(cid);
     if (!op) return c.json({ error: 'not found' }, 404);
@@ -483,7 +484,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // -------------------------------------------------------------------------
 
   /** Read the global append-only operation log */
-  app.get('/log', async (c) => {
+  app.get(`${PROOF_BASE_PATH}/log`, async (c) => {
     if (!logEnabled) return c.json({ error: 'global log not available' }, 501);
     const afterParam = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);

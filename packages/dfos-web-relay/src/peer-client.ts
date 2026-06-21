@@ -8,6 +8,7 @@
 
 */
 
+import { PROOF_BASE_PATH } from './types';
 import type { PeerClient, PeerLogEntry } from './types';
 
 /**
@@ -30,7 +31,7 @@ export const createHttpPeerClient = (): PeerClient => {
 
   return {
     async getIdentityLog(peerUrl, did, params) {
-      const url = new URL(`/identities/${encodeURIComponent(did)}/log`, peerUrl);
+      const url = new URL(`${PROOF_BASE_PATH}/identities/${encodeURIComponent(did)}/log`, peerUrl);
       if (params?.after) url.searchParams.set('after', params.after);
       if (params?.limit) url.searchParams.set('limit', String(params.limit));
       const data = (await fetchJSON(url.toString())) as {
@@ -42,7 +43,10 @@ export const createHttpPeerClient = (): PeerClient => {
     },
 
     async getContentLog(peerUrl, contentId, params) {
-      const url = new URL(`/content/${encodeURIComponent(contentId)}/log`, peerUrl);
+      const url = new URL(
+        `${PROOF_BASE_PATH}/content/${encodeURIComponent(contentId)}/log`,
+        peerUrl,
+      );
       if (params?.after) url.searchParams.set('after', params.after);
       if (params?.limit) url.searchParams.set('limit', String(params.limit));
       const data = (await fetchJSON(url.toString())) as {
@@ -54,7 +58,7 @@ export const createHttpPeerClient = (): PeerClient => {
     },
 
     async getOperationLog(peerUrl, params) {
-      const url = new URL('/log', peerUrl);
+      const url = new URL(`${PROOF_BASE_PATH}/log`, peerUrl);
       if (params?.after) url.searchParams.set('after', params.after);
       if (params?.limit) url.searchParams.set('limit', String(params.limit));
       const data = (await fetchJSON(url.toString())) as {
@@ -67,7 +71,7 @@ export const createHttpPeerClient = (): PeerClient => {
 
     async submitOperations(peerUrl, operations) {
       try {
-        const res = await fetch(new URL('/operations', peerUrl).toString(), {
+        const res = await fetch(new URL(`${PROOF_BASE_PATH}/operations`, peerUrl).toString(), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ operations }),

@@ -63,8 +63,8 @@ If the fact of the attestation is itself sensitive, do not countersign.
 | Adversary                   | Can                                                                                       | Cannot                                                             | Pointer                                                    |
 | --------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
 | Malicious/Byzantine relay   | Withhold, reorder, equivocate, censor, serve stale state, read stored content-plane blobs | Forge a chain or operation                                         | DID-METHOD.md §6.4 `specs/DID-METHOD.md:257`               |
-| Malicious peer              | Push invalid/spam operations to peers                                                     | Have invalid operations accepted (each peer re-verifies, no trust) | WEB-RELAY.md "Peering" `specs/WEB-RELAY.md:572`            |
-| Unauthenticated submitter   | POST arbitrary JWS to `/operations`; impose CPU + storage cost                            | Have malformed/unsigned ops accepted                               | WEB-RELAY.md "Operation Ingestion" `specs/WEB-RELAY.md:46` |
+| Malicious peer              | Push invalid/spam operations to peers                                                     | Have invalid operations accepted (each peer re-verifies, no trust) | WEB-RELAY.md "Peering" `specs/WEB-RELAY.md:582`            |
+| Unauthenticated submitter   | POST arbitrary JWS to `/proof/v1/operations`; impose CPU + storage cost                   | Have malformed/unsigned ops accepted                               | WEB-RELAY.md "Operation Ingestion" `specs/WEB-RELAY.md:69` |
 | Compromised custody/KMS key | Full, indistinguishable impersonation of the user                                         | Be detected on-chain (signature is valid Ed25519)                  | SIWD.md "Managed Signing Path" `specs/SIWD.md:106`         |
 | Lost key                    | —                                                                                         | — (1-of-N availability vs. total loss)                             | DID-METHOD.md §6.2 `specs/DID-METHOD.md:242`               |
 
@@ -93,8 +93,8 @@ A malicious peer can therefore only impose cost and noise, not corrupt state.
 
 ### Malicious / unauthenticated submitter
 
-`POST /operations` is unauthenticated (WEB-RELAY.md "Quick Start" route table,
-`specs/WEB-RELAY.md:544`); operations self-authenticate. An attacker can submit
+`POST /proof/v1/operations` is unauthenticated (WEB-RELAY.md "Quick Start" route table,
+`specs/WEB-RELAY.md:567`); operations self-authenticate. An attacker can submit
 arbitrary JWS tokens, imposing CPU (verification) and storage (store-then-verify
 buffering, `specs/WEB-RELAY.md:640`) cost. Field-size ceilings bound per-operation
 abuse (PROTOCOL.md "Operation Field Limits", `specs/PROTOCOL.md:152`), but

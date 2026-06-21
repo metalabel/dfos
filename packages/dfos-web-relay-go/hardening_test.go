@@ -333,7 +333,7 @@ func TestCORSHeadersOnProofPlane(t *testing.T) {
 	)
 
 	// GET on a proof-plane route carries CORS headers.
-	resp, err := http.Get(srv.URL + "/identities/" + id.did)
+	resp, err := http.Get(srv.URL + "/proof/v1/identities/" + id.did)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func TestCORSHeadersOnProofPlane(t *testing.T) {
 	}
 
 	// OPTIONS preflight returns 204 with the same headers.
-	req, _ := http.NewRequest(http.MethodOptions, srv.URL+"/operations", nil)
+	req, _ := http.NewRequest(http.MethodOptions, srv.URL+"/proof/v1/operations", nil)
 	preflight, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +388,7 @@ func TestPostOperationsRejectsOversizedBody(t *testing.T) {
 	huge := strings.Repeat("a", maxRequestBodyBytes+1024)
 	body := `{"operations":["` + huge + `"]}`
 
-	resp, err := http.Post(srv.URL+"/operations", "application/json", bytes.NewReader([]byte(body)))
+	resp, err := http.Post(srv.URL+"/proof/v1/operations", "application/json", bytes.NewReader([]byte(body)))
 	if err != nil {
 		t.Fatalf("POST /operations: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestPostOperationsAcceptsNormalBody(t *testing.T) {
 
 	id := createTestIdentity(t)
 	body := `{"operations":["` + id.token + `"]}`
-	resp, err := http.Post(srv.URL+"/operations", "application/json", bytes.NewReader([]byte(body)))
+	resp, err := http.Post(srv.URL+"/proof/v1/operations", "application/json", bytes.NewReader([]byte(body)))
 	if err != nil {
 		t.Fatalf("POST /operations: %v", err)
 	}

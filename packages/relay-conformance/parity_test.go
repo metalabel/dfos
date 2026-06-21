@@ -126,14 +126,14 @@ func getBody(t *testing.T, url string) (int, []byte) {
 func postOps(t *testing.T, base string, ops []string) {
 	t.Helper()
 	payload, _ := json.Marshal(map[string]any{"operations": ops})
-	resp, err := http.Post(base+"/operations", "application/json", bytes.NewReader(payload))
+	resp, err := http.Post(base+"/proof/v1/operations", "application/json", bytes.NewReader(payload))
 	if err != nil {
-		t.Fatalf("POST %s/operations: %v", base, err)
+		t.Fatalf("POST %s/proof/v1/operations: %v", base, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("POST %s/operations: status %d, body %s", base, resp.StatusCode, b)
+		t.Fatalf("POST %s/proof/v1/operations: status %d, body %s", base, resp.StatusCode, b)
 	}
 }
 
@@ -141,7 +141,7 @@ func postOps(t *testing.T, base string, ops []string) {
 // for the Go relay's ticker-driven sequencer to drain before comparing.
 func logEntryCount(t *testing.T, base string) int {
 	t.Helper()
-	_, body := getBody(t, base+"/log?limit=1000")
+	_, body := getBody(t, base+"/proof/v1/log?limit=1000")
 	var parsed struct {
 		Entries []json.RawMessage `json:"entries"`
 	}
@@ -195,9 +195,9 @@ func TestDualRelayParity(t *testing.T) {
 	drainUntilStable(t, goURL, wantEntries)
 
 	routes := []string{
-		"/log?limit=1000",
-		"/identities/" + fix.QueryDID + "/log?limit=1000",
-		"/content/" + fix.QueryContentID + "/log?limit=1000",
+		"/proof/v1/log?limit=1000",
+		"/proof/v1/identities/" + fix.QueryDID + "/log?limit=1000",
+		"/proof/v1/content/" + fix.QueryContentID + "/log?limit=1000",
 		"/.well-known/dfos-relay",
 	}
 

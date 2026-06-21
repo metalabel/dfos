@@ -60,7 +60,7 @@ func TestCrossBatchContentBeforeIdentity(t *testing.T) {
 	}
 
 	// content chain should now exist (sequencer resolved it)
-	resp := getJSON(t, base+"/content/"+cc.contentID, nil)
+	resp := getJSON(t, base+"/proof/v1/content/"+cc.contentID, nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("content chain should exist after identity arrived: status %d", resp.StatusCode)
 	}
@@ -107,7 +107,7 @@ func TestCrossBatchExtensionBeforeGenesis(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	resp := getJSON(t, base+"/content/"+cc.contentID, &chain)
+	resp := getJSON(t, base+"/proof/v1/content/"+cc.contentID, &chain)
 	if resp.StatusCode != 200 {
 		t.Fatalf("content chain should exist after genesis arrived: status %d", resp.StatusCode)
 	}
@@ -119,7 +119,7 @@ func TestCrossBatchExtensionBeforeGenesis(t *testing.T) {
 			CID string `json:"cid"`
 		} `json:"entries"`
 	}
-	getJSON(t, base+"/content/"+cc.contentID+"/log", &log)
+	getJSON(t, base+"/proof/v1/content/"+cc.contentID+"/log", &log)
 	if len(log.Entries) != 2 {
 		t.Fatalf("expected 2 log entries (genesis + extension), got %d", len(log.Entries))
 	}
@@ -171,7 +171,7 @@ func TestCrossBatchForkBeforeAncestor(t *testing.T) {
 			CID string `json:"cid"`
 		} `json:"entries"`
 	}
-	getJSON(t, base+"/content/"+cc.contentID+"/log", &log)
+	getJSON(t, base+"/proof/v1/content/"+cc.contentID+"/log", &log)
 	if len(log.Entries) != 4 {
 		t.Fatalf("expected 4 log entries (genesis + A + B fork + C sequenced), got %d", len(log.Entries))
 	}

@@ -35,7 +35,7 @@ func (c *HttpPeerClient) fetchJSON(rawURL string, out any) error {
 }
 
 func (c *HttpPeerClient) GetIdentityLog(peerURL, did string, after string, limit int) (*PeerLogPage, error) {
-	u, err := url.Parse(peerURL + "/identities/" + url.PathEscape(did) + "/log")
+	u, err := url.Parse(peerURL + proofBasePath + "/identities/" + url.PathEscape(did) + "/log")
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func (c *HttpPeerClient) GetIdentityLog(peerURL, did string, after string, limit
 }
 
 func (c *HttpPeerClient) GetContentLog(peerURL, contentID string, after string, limit int) (*PeerLogPage, error) {
-	u, err := url.Parse(peerURL + "/content/" + url.PathEscape(contentID) + "/log")
+	u, err := url.Parse(peerURL + proofBasePath + "/content/" + url.PathEscape(contentID) + "/log")
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func (c *HttpPeerClient) GetContentLog(peerURL, contentID string, after string, 
 }
 
 func (c *HttpPeerClient) GetOperationLog(peerURL string, after string, limit int) (*PeerLogPage, error) {
-	u, err := url.Parse(peerURL + "/log")
+	u, err := url.Parse(peerURL + proofBasePath + "/log")
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func (c *HttpPeerClient) SubmitOperations(peerURL string, operations []string) e
 	if err != nil {
 		return err
 	}
-	resp, err := c.client.Post(peerURL+"/operations", "application/json", bytes.NewReader(body))
+	resp, err := c.client.Post(peerURL+proofBasePath+"/operations", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

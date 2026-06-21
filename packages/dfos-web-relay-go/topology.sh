@@ -227,7 +227,7 @@ smoke_test() {
     local pass=true
     for port in "${ports[@]:1}"; do
       local status
-      status=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:$port/identities/$relay01_did" 2>/dev/null || echo "000")
+      status=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:$port/proof/v1/identities/$relay01_did" 2>/dev/null || echo "000")
       if [ "$status" = "200" ]; then
         echo "  :$port → relay-01 identity found (read-through) ✓"
       else
@@ -246,7 +246,7 @@ smoke_test() {
 
       echo "Checking if relay-01 synced relay-02's identity..."
       local sync_status
-      sync_status=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:${ports[0]}/identities/$relay02_did" 2>/dev/null || echo "000")
+      sync_status=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:${ports[0]}/proof/v1/identities/$relay02_did" 2>/dev/null || echo "000")
       if [ "$sync_status" = "200" ]; then
         echo "  relay-01 has relay-02's identity via sync ✓"
       else

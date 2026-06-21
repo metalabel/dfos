@@ -60,7 +60,7 @@ func fetchServices(t *testing.T, base, did string) []map[string]any {
 			Services []map[string]any `json:"services"`
 		} `json:"state"`
 	}
-	resp := getJSON(t, base+"/identities/"+did, &chain)
+	resp := getJSON(t, base+"/proof/v1/identities/"+did, &chain)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /identities/%s: status %d", did, resp.StatusCode)
 	}
@@ -391,7 +391,7 @@ func TestCountersignRelationRoundTrip(t *testing.T) {
 	var csResult struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	resp := getJSON(t, base+"/countersignatures/"+cc.genCID, &csResult)
+	resp := getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /countersignatures/%s: status %d", cc.genCID, resp.StatusCode)
 	}

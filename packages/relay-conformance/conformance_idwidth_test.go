@@ -51,7 +51,7 @@ func TestIdentifierWidthConformance(t *testing.T) {
 	seen := map[string]bool{}
 	const maxLogPages = 10000 // backstop: 1M entries at limit=100
 	for pages := 0; ; pages++ {
-		url := base + "/log?limit=100"
+		url := base + "/proof/v1/log?limit=100"
 		if cursor != "" {
 			url += "&after=" + cursor
 		}

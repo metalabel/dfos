@@ -16,26 +16,37 @@ import (
 // unauthenticated client could OOM the relay with one huge POST.
 const maxRequestBodyBytes = 16 << 20 // 16 MB
 
+// proofBasePath namespaces every frozen proof-plane route under one prefix so the
+// three version clocks (proof v1 / document 0.x / media 0.x) are legible in the URL
+// and each plane mounts/proxies by prefix. Frozen with protocol v1; MUST stay in
+// byte-sync with the TS relay (PROOF_BASE_PATH in relay.ts) and the clients.
+const proofBasePath = "/proof/v1"
+
 func newRouter(r *Relay) http.Handler {
 	mux := http.NewServeMux()
 
-	// well-known
+	// well-known — stays at root (RFC 8615); announces the base + per-plane versions
 	mux.HandleFunc("GET /.well-known/dfos-relay", r.handleWellKnown)
 
-	// proof plane — public
-	mux.HandleFunc("POST /operations", r.handlePostOperations)
-	mux.HandleFunc("GET /operations/{cid}/countersignatures", r.handleOperationCountersignatures)
-	mux.HandleFunc("GET /operations/{cid}", r.handleGetOperation)
-	mux.HandleFunc("GET /identities/{did}/log", r.handleIdentityLog)
-	mux.HandleFunc("GET /identities/{did...}", r.handleGetIdentity)
+	// proof plane — public, frozen with protocol v1, namespaced under proofBasePath
+	mux.HandleFunc("POST "+proofBasePath+"/operations", r.handlePostOperations)
+	mux.HandleFunc("GET "+proofBasePath+"/operations/{cid}/countersignatures", r.handleOperationCountersignatures)
+	mux.HandleFunc("GET "+proofBasePath+"/operations/{cid}", r.handleGetOperation)
+	mux.HandleFunc("GET "+proofBasePath+"/identities/{did}/log", r.handleIdentityLog)
+	mux.HandleFunc("GET "+proofBasePath+"/identities/{did...}", r.handleGetIdentity)
+	mux.HandleFunc("GET "+proofBasePath+"/content/{contentId}/log", r.handleContentLog)
+	mux.HandleFunc("GET "+proofBasePath+"/content/{contentId}", r.handleGetContent)
+	mux.HandleFunc("GET "+proofBasePath+"/countersignatures/{cid}", r.handleGetCountersignatures)
+	mux.HandleFunc("GET "+proofBasePath+"/log", r.handleGetLog)
+
+	// document gateway — optional, 0.x (its own version clock); routes stay at root
+	// under /content/{id} until DocumentGateway 0.2 keys on documentCID. The proof
+	// node owns the bare /proof/v1/content/{id} chain paths; the gateway owns the
+	// /blob* + /documents sub-paths — distinct namespaces, fanned by prefix when split.
 	mux.HandleFunc("GET /content/{contentId}/documents", r.handleGetDocuments)
-	mux.HandleFunc("GET /content/{contentId}/log", r.handleContentLog)
 	mux.HandleFunc("GET /content/{contentId}/blob/{ref}", r.handleGetBlob)
 	mux.HandleFunc("GET /content/{contentId}/blob", r.handleGetBlobHead)
 	mux.HandleFunc("PUT /content/{contentId}/blob/{operationCID}", r.handlePutBlob)
-	mux.HandleFunc("GET /content/{contentId}", r.handleGetContent)
-	mux.HandleFunc("GET /countersignatures/{cid}", r.handleGetCountersignatures)
-	mux.HandleFunc("GET /log", r.handleGetLog)
 
 	return mux
 }

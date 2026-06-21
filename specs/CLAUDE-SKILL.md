@@ -302,9 +302,9 @@ For operations not covered by named commands:
 
 ```bash
 dfos api GET /.well-known/dfos-relay
-dfos api GET /identities/<did> --auth
-dfos api POST /operations --body '{"operations":["eyJ..."]}' --auth
-dfos api POST /operations --body-file ops.json --auth
+dfos api GET /proof/v1/identities/<did> --auth
+dfos api POST /proof/v1/operations --body '{"operations":["eyJ..."]}' --auth
+dfos api POST /proof/v1/operations --body-file ops.json --auth
 dfos api PUT /endpoint --auth -H "X-Custom: value" --body-file data.bin
 dfos api GET /endpoint -i    # include response headers
 ```

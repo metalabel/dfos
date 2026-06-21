@@ -185,10 +185,10 @@ func TestBatchMultiChain(t *testing.T) {
 	}
 
 	// both identities exist
-	if resp := getJSON(t, base+"/identities/"+did1, nil); resp.StatusCode != 200 {
+	if resp := getJSON(t, base+"/proof/v1/identities/"+did1, nil); resp.StatusCode != 200 {
 		t.Fatal("identity 1 not found")
 	}
-	if resp := getJSON(t, base+"/identities/"+did2, nil); resp.StatusCode != 200 {
+	if resp := getJSON(t, base+"/proof/v1/identities/"+did2, nil); resp.StatusCode != 200 {
 		t.Fatal("identity 2 not found")
 	}
 }
@@ -427,7 +427,7 @@ func TestMultipleContentChainsIndependent(t *testing.T) {
 	var chain1 struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/content/"+cc1.contentID, &chain1)
+	getJSON(t, base+"/proof/v1/content/"+cc1.contentID, &chain1)
 	if chain1.HeadCID == "" {
 		t.Fatal("chain 1: headCID is empty")
 	}
@@ -436,7 +436,7 @@ func TestMultipleContentChainsIndependent(t *testing.T) {
 	var chain2 struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/content/"+contentID2, &chain2)
+	getJSON(t, base+"/proof/v1/content/"+contentID2, &chain2)
 	if chain2.HeadCID == "" {
 		t.Fatal("chain 2: headCID is empty")
 	}
@@ -471,7 +471,7 @@ func TestLongContentChain(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/content/"+cc.contentID, &chain)
+	getJSON(t, base+"/proof/v1/content/"+cc.contentID, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty (1 create + 5 updates)")
 	}
@@ -598,7 +598,7 @@ func TestIdentityUndeletionViaFork(t *testing.T) {
 			IsDeleted bool `json:"isDeleted"`
 		} `json:"state"`
 	}
-	getJSON(t, base+"/identities/"+id.did, &chainDel)
+	getJSON(t, base+"/proof/v1/identities/"+id.did, &chainDel)
 	if !chainDel.State.IsDeleted {
 		t.Fatal("identity should be deleted before fork")
 	}
@@ -644,7 +644,7 @@ func TestIdentityUndeletionViaFork(t *testing.T) {
 			IsDeleted bool `json:"isDeleted"`
 		} `json:"state"`
 	}
-	getJSON(t, base+"/identities/"+id.did, &chainPost)
+	getJSON(t, base+"/proof/v1/identities/"+id.did, &chainPost)
 	if chainPost.State.IsDeleted {
 		t.Fatal("identity should be undeleted after fork with later createdAt")
 	}

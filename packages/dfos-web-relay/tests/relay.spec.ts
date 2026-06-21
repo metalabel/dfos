@@ -230,7 +230,7 @@ describe('web relay', () => {
   const json = async (res: Response): Promise<any> => res.json();
 
   const postOps = (operations: string[]) =>
-    req('/operations', {
+    req('/proof/v1/operations', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ operations }),
@@ -299,7 +299,7 @@ describe('web relay', () => {
     });
 
     it('should answer OPTIONS preflight with 204 and the CORS headers', async () => {
-      const res = await req('/identities/did:dfos:example/log', { method: 'OPTIONS' });
+      const res = await req('/proof/v1/identities/did:dfos:example/log', { method: 'OPTIONS' });
       expect(res.status).toBe(204);
       expect(res.headers.get('access-control-allow-origin')).toBe('*');
       expect(res.headers.get('access-control-allow-methods')).toBe('GET, POST, PUT, OPTIONS');
@@ -307,7 +307,7 @@ describe('web relay', () => {
     });
 
     it('should emit CORS headers even on 404 proof-plane reads', async () => {
-      const res = await req('/identities/did:dfos:doesnotexist');
+      const res = await req('/proof/v1/identities/did:dfos:doesnotexist');
       expect(res.status).toBe(404);
       expect(res.headers.get('access-control-allow-origin')).toBe('*');
     });
@@ -334,7 +334,7 @@ describe('web relay', () => {
       const identity = await createIdentity();
       await postOps([identity.jwsToken]);
 
-      const res = await req(`/identities/${identity.did}`);
+      const res = await req(`/proof/v1/identities/${identity.did}`);
       expect(res.status).toBe(200);
 
       const body = await json(res);
@@ -344,7 +344,7 @@ describe('web relay', () => {
     });
 
     it('should return 404 for unknown identity', async () => {
-      const res = await req('/identities/did:dfos:unknown000000000000');
+      const res = await req('/proof/v1/identities/did:dfos:unknown000000000000');
       expect(res.status).toBe(404);
     });
 
@@ -376,7 +376,7 @@ describe('web relay', () => {
       expect(body.results[0].status).toBe('new');
 
       // verify chain now has 2 ops
-      const chainRes = await req(`/identities/${identity.did}`);
+      const chainRes = await req(`/proof/v1/identities/${identity.did}`);
       const chainBody = await json(chainRes);
       expect(chainBody.headCID).toBeDefined();
     });
@@ -417,7 +417,7 @@ describe('web relay', () => {
       expect(body.results[0].cid).not.toBe(body.results[1].cid);
 
       // verify chain has both ops
-      const chainRes = await req(`/identities/${identity.did}`);
+      const chainRes = await req(`/proof/v1/identities/${identity.did}`);
       const chainBody = await json(chainRes);
       expect(chainBody.headCID).toBeDefined();
     });
@@ -468,7 +468,7 @@ describe('web relay', () => {
       expect(newResults).toHaveLength(3);
 
       // verify the chain has all 3 ops
-      const chainRes = await req(`/identities/${identity.did}`);
+      const chainRes = await req(`/proof/v1/identities/${identity.did}`);
       const chainBody = await json(chainRes);
       expect(chainBody.headCID).toBeDefined();
     });
@@ -544,7 +544,7 @@ describe('web relay', () => {
       ]);
       await postOps([id.jwsToken]);
 
-      const body = await json(await req(`/identities/${id.did}`));
+      const body = await json(await req(`/proof/v1/identities/${id.did}`));
       expect(body.state.services).toHaveLength(2);
       const relay = body.state.services.find((s: { id: string }) => s.id === 'relay');
       expect(relay.type).toBe('DfosRelay');
@@ -569,14 +569,14 @@ describe('web relay', () => {
         2,
       );
       await postOps([replaceToken]);
-      let body = await json(await req(`/identities/${id.did}`));
+      let body = await json(await req(`/proof/v1/identities/${id.did}`));
       expect(body.state.services).toHaveLength(1);
       expect(body.state.services[0].id).toBe('new');
 
       // service-less update clears the set entirely
       const { jwsToken: clearToken } = await signServicesUpdate(id, replaceCID, undefined, 3);
       await postOps([clearToken]);
-      body = await json(await req(`/identities/${id.did}`));
+      body = await json(await req(`/proof/v1/identities/${id.did}`));
       expect(body.state.services).toHaveLength(0);
     });
 
@@ -609,7 +609,7 @@ describe('web relay', () => {
       });
       await postOps([csToken]);
 
-      const body = await json(await req(`/countersignatures/${author.operationCID}`));
+      const body = await json(await req(`/proof/v1/countersignatures/${author.operationCID}`));
       expect(body.countersignatures).toHaveLength(1);
       const decoded = decodeJwsUnsafe(body.countersignatures[0]);
       expect(decoded?.payload.relation).toBe('endorses');
@@ -649,7 +649,7 @@ describe('web relay', () => {
       const ingestBody = await json(ingestRes);
       const contentId = ingestBody.results[0].chainId;
 
-      const res = await req(`/content/${contentId}`);
+      const res = await req(`/proof/v1/content/${contentId}`);
       expect(res.status).toBe(200);
 
       const body = await json(res);
@@ -678,7 +678,7 @@ describe('web relay', () => {
       const identity = await createIdentity();
       await postOps([identity.jwsToken]);
 
-      const res = await req(`/operations/${identity.operationCID}`);
+      const res = await req(`/proof/v1/operations/${identity.operationCID}`);
       expect(res.status).toBe(200);
 
       const body = await json(res);
@@ -689,7 +689,7 @@ describe('web relay', () => {
 
     it('should return 404 for unknown operation', async () => {
       const res = await req(
-        '/operations/bafyreibogus000000000000000000000000000000000000000000000',
+        '/proof/v1/operations/bafyreibogus000000000000000000000000000000000000000000000',
       );
       expect(res.status).toBe(404);
     });
@@ -729,7 +729,7 @@ describe('web relay', () => {
       expect(body.results[0].chainId).toBe(content.operationCID);
 
       // query countersignatures
-      const csRes = await req(`/operations/${content.operationCID}/countersignatures`);
+      const csRes = await req(`/proof/v1/operations/${content.operationCID}/countersignatures`);
       expect(csRes.status).toBe(200);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(1);
@@ -761,7 +761,7 @@ describe('web relay', () => {
       await postOps([csToken]);
 
       // should still only have one
-      const csRes = await req(`/operations/${content.operationCID}/countersignatures`);
+      const csRes = await req(`/proof/v1/operations/${content.operationCID}/countersignatures`);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(1);
     });
@@ -803,13 +803,13 @@ describe('web relay', () => {
       await postOps([cs1, cs2]);
 
       // should have exactly 2 distinct countersignatures
-      const csRes = await req(`/countersignatures/${content.operationCID}`);
+      const csRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(2);
 
       // resubmit both — count must not change
       await postOps([cs1, cs2]);
-      const csRes2 = await req(`/countersignatures/${content.operationCID}`);
+      const csRes2 = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       const csBody2 = await json(csRes2);
       expect(csBody2.countersignatures).toHaveLength(2);
     });
@@ -840,7 +840,7 @@ describe('web relay', () => {
       expect(body.results[0].chainId).toBe(subject.operationCID);
 
       // query countersignatures via the general countersig route
-      const csRes = await req(`/countersignatures/${subject.operationCID}`);
+      const csRes = await req(`/proof/v1/countersignatures/${subject.operationCID}`);
       expect(csRes.status).toBe(200);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(1);
@@ -873,12 +873,12 @@ describe('web relay', () => {
       await postOps([csToken]);
 
       // query via general path
-      const generalRes = await req(`/countersignatures/${content.operationCID}`);
+      const generalRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       expect(generalRes.status).toBe(200);
       const generalBody = await json(generalRes);
 
       // query via legacy per-operation path
-      const legacyRes = await req(`/operations/${content.operationCID}/countersignatures`);
+      const legacyRes = await req(`/proof/v1/operations/${content.operationCID}/countersignatures`);
       expect(legacyRes.status).toBe(200);
       const legacyBody = await json(legacyRes);
 
@@ -890,14 +890,14 @@ describe('web relay', () => {
 
     it('should return 404 for countersigs on unknown CID', async () => {
       const res = await req(
-        '/countersignatures/bafyreibogus000000000000000000000000000000000000000000000',
+        '/proof/v1/countersignatures/bafyreibogus000000000000000000000000000000000000000000000',
       );
       expect(res.status).toBe(404);
     });
 
     it('should return 404 for operation countersigs on unknown operation', async () => {
       const res = await req(
-        '/operations/bafyreibogus000000000000000000000000000000000000000000000/countersignatures',
+        '/proof/v1/operations/bafyreibogus000000000000000000000000000000000000000000000/countersignatures',
       );
       expect(res.status).toBe(404);
     });
@@ -907,7 +907,7 @@ describe('web relay', () => {
       await postOps([identity.jwsToken]);
 
       // query countersigs on the identity genesis op — nobody has countersigned it
-      const csRes = await req(`/countersignatures/${identity.operationCID}`);
+      const csRes = await req(`/proof/v1/countersignatures/${identity.operationCID}`);
       expect(csRes.status).toBe(200);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(0);
@@ -1223,7 +1223,7 @@ describe('web relay', () => {
       expect(body.results[0].status).toBe('new');
 
       // verify state shows deleted
-      const chainRes = await req(`/identities/${identity.did}`);
+      const chainRes = await req(`/proof/v1/identities/${identity.did}`);
       const chainBody = await json(chainRes);
       expect(chainBody.state.isDeleted).toBe(true);
       expect(chainBody.headCID).toBeDefined();
@@ -1306,7 +1306,7 @@ describe('web relay', () => {
       expect(body.results[0].status).toBe('new');
 
       // verify state shows deleted
-      const chainRes = await req(`/content/${contentId}`);
+      const chainRes = await req(`/proof/v1/content/${contentId}`);
       const chainBody = await json(chainRes);
       expect(chainBody.state.isDeleted).toBe(true);
       expect(chainBody.state.currentDocumentCID).toBeNull();
@@ -1461,12 +1461,12 @@ describe('web relay', () => {
       expect((await json(resB)).results[0].status).toBe('new');
 
       // head should be B (higher createdAt)
-      const chainRes = await req(`/content/${contentId}`);
+      const chainRes = await req(`/proof/v1/content/${contentId}`);
       const chain = await json(chainRes);
       expect(chain.state.currentDocumentCID).toBe(doc2Encoded.cid.toString());
 
       // chain log should contain all 3 operations (genesis + both fork branches)
-      const logRes = await req(`/content/${contentId}/log`);
+      const logRes = await req(`/proof/v1/content/${contentId}/log`);
       const logBody = await json(logRes);
       expect(logBody.entries).toHaveLength(3);
     });
@@ -1525,7 +1525,7 @@ describe('web relay', () => {
       await postOps([tokenB]);
 
       // head should be B (higher createdAt wins)
-      const chainRes = await req(`/content/${contentId}`);
+      const chainRes = await req(`/proof/v1/content/${contentId}`);
       const chain = await json(chainRes);
       expect(chain.state.currentDocumentCID).toBe(docBEncoded.cid.toString());
 
@@ -1535,7 +1535,7 @@ describe('web relay', () => {
       const req2 = (path: string, init?: RequestInit) =>
         relay2.app.request(`http://localhost${path}`, init);
       const postOps2 = (ops: string[]) =>
-        req2('/operations', {
+        req2('/proof/v1/operations', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ operations: ops }),
@@ -1547,7 +1547,7 @@ describe('web relay', () => {
       await postOps2([tokenA]);
 
       // same head regardless of ingestion order
-      const chainRes2 = await req2(`/content/${contentId}`);
+      const chainRes2 = await req2(`/proof/v1/content/${contentId}`);
       const chain2 = await json(chainRes2);
       expect(chain2.state.currentDocumentCID).toBe(docBEncoded.cid.toString());
     });
@@ -1589,7 +1589,7 @@ describe('web relay', () => {
       for (const f of forks) await postOps([f]);
 
       // chain log has genesis + 3 fork branches = 4 entries
-      const logRes = await req(`/content/${contentId}/log`);
+      const logRes = await req(`/proof/v1/content/${contentId}/log`);
       const logBody = await json(logRes);
       expect(logBody.entries).toHaveLength(4);
     });
@@ -1721,7 +1721,7 @@ describe('web relay', () => {
       expect(body.results[0].status).toBe('new');
 
       // chain should now have 2 ops
-      const chainRes = await req(`/content/${contentId}`);
+      const chainRes = await req(`/proof/v1/content/${contentId}`);
       const chainBody = await json(chainRes);
       expect(chainBody.headCID).toBeDefined();
     });
@@ -1991,7 +1991,7 @@ describe('web relay', () => {
 
   describe('error handling', () => {
     it('should reject invalid JSON body', async () => {
-      const res = await req('/operations', {
+      const res = await req('/proof/v1/operations', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: 'not json',
@@ -2000,7 +2000,7 @@ describe('web relay', () => {
     });
 
     it('should reject empty operations array', async () => {
-      const res = await req('/operations', {
+      const res = await req('/proof/v1/operations', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ operations: [] }),
@@ -2021,7 +2021,7 @@ describe('web relay', () => {
 
   describe('request body caps', () => {
     it('should reject POST /operations with an oversized Content-Length (413)', async () => {
-      const res = await req('/operations', {
+      const res = await req('/proof/v1/operations', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -2048,7 +2048,7 @@ describe('web relay', () => {
 
     it('should accept a normal-sized POST /operations (cap not over-eager)', async () => {
       const identity = await createIdentity();
-      const res = await req('/operations', {
+      const res = await req('/proof/v1/operations', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ operations: [identity.jwsToken] }),
@@ -2113,7 +2113,7 @@ describe('web relay', () => {
         tokens.push(id.jwsToken);
       }
       for (let i = 0; i < tokens.length; i += 100) {
-        await gossipApp.app.request('http://localhost/operations', {
+        await gossipApp.app.request('http://localhost/proof/v1/operations', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ operations: tokens.slice(i, i + 100) }),
@@ -2366,7 +2366,7 @@ describe('web relay', () => {
 
   describe('operation log', () => {
     it('should contain bootstrap entries initially', async () => {
-      const res = await req('/log');
+      const res = await req('/proof/v1/log');
       expect(res.status).toBe(200);
       const body = await json(res);
       // relay bootstrap ingests 2 operations: identity genesis + profile artifact
@@ -2377,7 +2377,7 @@ describe('web relay', () => {
 
     it('should return ingested operations in order', async () => {
       // snapshot the initial log cursor so we can paginate past bootstrap entries
-      const initialRes = await req('/log');
+      const initialRes = await req('/proof/v1/log');
       const initialBody = await json(initialRes);
       const bootstrapCursor = initialBody.entries[initialBody.entries.length - 1].cid;
 
@@ -2386,7 +2386,7 @@ describe('web relay', () => {
       await postOps([identity.jwsToken, content.jwsToken]);
 
       // read only entries after the bootstrap
-      const res = await req(`/log?after=${bootstrapCursor}`);
+      const res = await req(`/proof/v1/log?after=${bootstrapCursor}`);
       const body = await json(res);
       expect(body.entries.length).toBe(2);
       expect(body.entries[0].kind).toBe('identity-op');
@@ -2395,7 +2395,7 @@ describe('web relay', () => {
 
     it('should paginate with cursor', async () => {
       // snapshot the initial log cursor so we can paginate past bootstrap entries
-      const initialRes = await req('/log');
+      const initialRes = await req('/proof/v1/log');
       const initialBody = await json(initialRes);
       const bootstrapCursor = initialBody.entries[initialBody.entries.length - 1].cid;
 
@@ -2427,20 +2427,20 @@ describe('web relay', () => {
 
       // total non-bootstrap entries should be 3 (create + 2 updates)
       // read with limit=2, starting after bootstrap
-      const res1 = await req(`/log?after=${bootstrapCursor}&limit=2`);
+      const res1 = await req(`/proof/v1/log?after=${bootstrapCursor}&limit=2`);
       const body1 = await json(res1);
       expect(body1.entries).toHaveLength(2);
       expect(body1.cursor).not.toBeNull();
 
       // read with cursor
-      const res2 = await req(`/log?after=${body1.cursor}`);
+      const res2 = await req(`/proof/v1/log?after=${body1.cursor}`);
       const body2 = await json(res2);
       expect(body2.entries).toHaveLength(1);
       expect(body2.cursor).toBeNull();
     });
 
     it('should handle unknown cursor gracefully', async () => {
-      const res = await req('/log?after=nonexistent');
+      const res = await req('/proof/v1/log?after=nonexistent');
       const body = await json(res);
       expect(body.entries).toEqual([]);
       expect(body.cursor).toBeNull();
@@ -2464,7 +2464,7 @@ describe('web relay', () => {
       const ingestRes = await postOps([content.jwsToken]);
       const contentId = (await json(ingestRes)).results[0].chainId;
 
-      const res = await req(`/content/${contentId}/log`);
+      const res = await req(`/proof/v1/content/${contentId}/log`);
       expect(res.status).toBe(200);
       const body = await json(res);
       expect(body.entries).toHaveLength(1);
@@ -2500,7 +2500,7 @@ describe('web relay', () => {
       });
       await postOps([updateToken]);
 
-      const res = await req(`/content/${contentId}/log`);
+      const res = await req(`/proof/v1/content/${contentId}/log`);
       expect(res.status).toBe(200);
       const body = await json(res);
       expect(body.entries).toHaveLength(2);
@@ -2542,20 +2542,20 @@ describe('web relay', () => {
       }
 
       // paginate with limit=2
-      const res1 = await req(`/content/${contentId}/log?limit=2`);
+      const res1 = await req(`/proof/v1/content/${contentId}/log?limit=2`);
       const body1 = await json(res1);
       expect(body1.entries).toHaveLength(2);
       expect(body1.cursor).not.toBeNull();
 
       // read remainder
-      const res2 = await req(`/content/${contentId}/log?after=${body1.cursor}`);
+      const res2 = await req(`/proof/v1/content/${contentId}/log?after=${body1.cursor}`);
       const body2 = await json(res2);
       expect(body2.entries).toHaveLength(1);
       expect(body2.cursor).toBeNull();
     });
 
     it('should return 404 for unknown content log', async () => {
-      const res = await req('/content/unknown-content-id/log');
+      const res = await req('/proof/v1/content/unknown-content-id/log');
       expect(res.status).toBe(404);
     });
   });
@@ -2602,7 +2602,7 @@ describe('web relay', () => {
       const identity = await createIdentity();
       await postOps([identity.jwsToken]);
 
-      const res = await req(`/identities/${identity.did}`);
+      const res = await req(`/proof/v1/identities/${identity.did}`);
       expect(res.status).toBe(200);
       const body = await json(res);
       expect('log' in body).toBe(false);
@@ -2612,7 +2612,7 @@ describe('web relay', () => {
       const identity = await createIdentity();
       await postOps([identity.jwsToken]);
 
-      const res = await req(`/identities/${identity.did}`);
+      const res = await req(`/proof/v1/identities/${identity.did}`);
       const body = await json(res);
       expect(typeof body.headCID).toBe('string');
     });
@@ -2625,7 +2625,7 @@ describe('web relay', () => {
       const ingestRes = await postOps([content.jwsToken]);
       const contentId = (await json(ingestRes)).results[0].chainId;
 
-      const res = await req(`/content/${contentId}`);
+      const res = await req(`/proof/v1/content/${contentId}`);
       expect(res.status).toBe(200);
       const body = await json(res);
       expect('log' in body).toBe(false);
@@ -2639,7 +2639,7 @@ describe('web relay', () => {
       const ingestRes = await postOps([content.jwsToken]);
       const contentId = (await json(ingestRes)).results[0].chainId;
 
-      const res = await req(`/content/${contentId}`);
+      const res = await req(`/proof/v1/content/${contentId}`);
       const body = await json(res);
       expect(typeof body.headCID).toBe('string');
     });
@@ -2666,7 +2666,7 @@ describe('web relay', () => {
       const localReq = (path: string, init?: RequestInit) =>
         relay.app.request(`http://localhost${path}`, init);
       const localPostOps = (ops: string[]) =>
-        localReq('/operations', {
+        localReq('/proof/v1/operations', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ operations: ops }),
@@ -2758,7 +2758,7 @@ describe('web relay', () => {
           peers: [{ url: 'http://peer-a' }],
         });
 
-        const res = await localReq(`/identities/${identity.did}`);
+        const res = await localReq(`/proof/v1/identities/${identity.did}`);
         expect(res.status).toBe(200);
         const body = (await res.json()) as Record<string, unknown>;
         expect(body.did).toBe(identity.did);
@@ -2771,7 +2771,7 @@ describe('web relay', () => {
           peers: [{ url: 'http://peer-a' }],
         });
 
-        const res = await localReq('/identities/did:dfos:nonexistent');
+        const res = await localReq('/proof/v1/identities/did:dfos:nonexistent');
         expect(res.status).toBe(404);
       });
 
@@ -2806,7 +2806,7 @@ describe('web relay', () => {
           pageSize: 1,
         });
 
-        const res = await localReq(`/identities/${identity.did}`);
+        const res = await localReq(`/proof/v1/identities/${identity.did}`);
         expect(res.status).toBe(200);
 
         // verify the full chain was ingested (both ops in local store)
@@ -2834,7 +2834,7 @@ describe('web relay', () => {
         });
         await localPostOps([identity.jwsToken]);
 
-        const res = await localReq(`/content/${contentId}`);
+        const res = await localReq(`/proof/v1/content/${contentId}`);
         expect(res.status).toBe(200);
         const body = (await res.json()) as Record<string, unknown>;
         expect(body.contentId).toBe(contentId);
@@ -2888,7 +2888,7 @@ describe('web relay', () => {
         );
         const contentId = peerChain!.contentId;
 
-        const res = await localReq(`/content/${contentId}`);
+        const res = await localReq(`/proof/v1/content/${contentId}`);
         expect(res.status).toBe(200);
 
         // verify the full chain was ingested (both ops in local store)
@@ -2907,7 +2907,7 @@ describe('web relay', () => {
           peers: [{ url: 'http://peer-a', readThrough: false }],
         });
 
-        const res = await localReq(`/identities/${identity.did}`);
+        const res = await localReq(`/proof/v1/identities/${identity.did}`);
         expect(res.status).toBe(404);
       });
 
@@ -2942,7 +2942,7 @@ describe('web relay', () => {
           peerClient: mockPeerClient,
         });
 
-        const res = await relay.app.request(`http://localhost/identities/${identity.did}`);
+        const res = await relay.app.request(`http://localhost/proof/v1/identities/${identity.did}`);
         expect(res.status).toBe(200);
         const body = (await res.json()) as Record<string, unknown>;
         expect(body.did).toBe(identity.did);

@@ -47,7 +47,7 @@ dfos content download <contentId>
 dfos auth token
 
 # raw HTTP to the relay (with auto auth)
-dfos api GET /identities/did:dfos:xxx
+dfos api GET /proof/v1/identities/did:dfos:xxx
 dfos api GET /content/abc123/blob --auth
 ```
 

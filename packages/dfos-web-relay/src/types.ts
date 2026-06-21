@@ -9,6 +9,16 @@
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 
+/**
+ * Namespaces every frozen proof-plane route under one prefix so the three version
+ * clocks (proof v1 / document 0.x / media 0.x) are legible in the URL and each
+ * plane mounts/proxies by prefix. Frozen with protocol v1; MUST stay in byte-sync
+ * with the Go relay (proofBasePath in routes.go) and the clients. Document gateway
+ * routes (/content/{id}/blob*, /documents) and .well-known stay at root on their
+ * own clock.
+ */
+export const PROOF_BASE_PATH = '/proof/v1';
+
 // -----------------------------------------------------------------------------
 // relay options
 // -----------------------------------------------------------------------------
