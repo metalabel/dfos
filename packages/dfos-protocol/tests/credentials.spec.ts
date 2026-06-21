@@ -222,7 +222,8 @@ describe('auth token', () => {
 
   it('should throw AuthTokenVerificationError on invalid claims', async () => {
     const id = makeIdentity();
-    // manually create a JWT with bad payload (missing sub)
+    // manually create a JWT that passes the JWT temporal layer (future exp) but
+    // fails the AuthTokenClaims schema — a non-positive iat.
     const { createJwt } = await import('../src/crypto');
     const token = await createJwt({
       header: { alg: 'EdDSA', typ: 'JWT', kid: id.kid },
@@ -231,8 +232,7 @@ describe('auth token', () => {
         sub: id.did,
         aud: 'relay.example.com',
         exp: futureUnix(5),
-        iat: Math.floor(Date.now() / 1000),
-        extraField: 'not allowed',
+        iat: -5,
       },
       sign: id.signer,
     });
@@ -244,6 +244,33 @@ describe('auth token', () => {
         audience: 'relay.example.com',
       }),
     ).toThrow(AuthTokenVerificationError);
+  });
+
+  it('should ignore unknown claims (forward-compat, MUST-ignore-unknown)', async () => {
+    const id = makeIdentity();
+    // an unknown extra field is preserved-and-ignored, not rejected — the
+    // schemas are looseObject so old verifiers tolerate new fields.
+    const { createJwt } = await import('../src/crypto');
+    const token = await createJwt({
+      header: { alg: 'EdDSA', typ: 'JWT', kid: id.kid },
+      payload: {
+        iss: id.did,
+        sub: id.did,
+        aud: 'relay.example.com',
+        exp: futureUnix(5),
+        iat: Math.floor(Date.now() / 1000),
+        futureField: 'tolerated',
+      },
+      sign: id.signer,
+    });
+
+    const result = verifyAuthToken({
+      token,
+      publicKey: id.keypair.publicKey,
+      audience: 'relay.example.com',
+      currentTime: Math.floor(Date.now() / 1000),
+    });
+    expect(result.iss).toBe(id.did);
   });
 });
 
@@ -329,6 +356,15 @@ describe('dfos credential', () => {
     });
 
     await expect(verifyDFOSCredential(token, { resolveIdentity })).rejects.toThrow(/expired/i);
+  });
+
+  it('should reject an over-size credential token (DoS guard, before decode)', async () => {
+    // the leaf token embeds the whole nested delegation chain, so one size cap
+    // bounds the entire chain; the check fires before any decode.
+    const oversize = 'x'.repeat(262145);
+    await expect(verifyDFOSCredential(oversize, { resolveIdentity })).rejects.toThrow(
+      /exceeds max size/,
+    );
   });
 
   it('should reject credential not yet valid (iat in future)', async () => {

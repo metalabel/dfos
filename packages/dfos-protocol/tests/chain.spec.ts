@@ -600,10 +600,14 @@ describe('content chain', () => {
       createdAt: ts(),
       note: 'x'.repeat(70_000), // pushes the dag-cbor payload past the 64 KiB cap
     };
-    const { jwsToken } = await signContentOperation({ operation: op, signer: id.signer, kid: id.kid });
-    await expect(verifyContentChain({ log: [jwsToken], resolveKey: id.resolveKey })).rejects.toThrow(
-      /exceeds max size/,
-    );
+    const { jwsToken } = await signContentOperation({
+      operation: op,
+      signer: id.signer,
+      kid: id.kid,
+    });
+    await expect(
+      verifyContentChain({ log: [jwsToken], resolveKey: id.resolveKey }),
+    ).rejects.toThrow(/exceeds max size/);
   });
 
   it('accepts an operation near but under the max operation size', async () => {
@@ -618,7 +622,11 @@ describe('content chain', () => {
       createdAt: ts(),
       note: 'x'.repeat(60_000), // ~60 KB payload, under the 64 KiB cap
     };
-    const { jwsToken } = await signContentOperation({ operation: op, signer: id.signer, kid: id.kid });
+    const { jwsToken } = await signContentOperation({
+      operation: op,
+      signer: id.signer,
+      kid: id.kid,
+    });
     const result = await verifyContentChain({ log: [jwsToken], resolveKey: id.resolveKey });
     expect(result.length).toBe(1);
   });

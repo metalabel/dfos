@@ -17,22 +17,39 @@ import (
 // float64 split, and no shortest-float divergence — fractions are rejected).
 const maxSafeInteger = 9007199254740991
 
+// maxCanonicalDepth bounds the nesting depth walked when canonicalizing/encoding
+// a value. A DoS resource guard (not a chain-validity rule): a pathologically
+// nested payload would otherwise recurse here and in the dag-cbor encoder until
+// the stack overflows. Generous (1024) so it never binds a legitimate operation
+// — real DFOS payloads are a handful of levels deep. Matches the TS reference
+// (MAX_CANONICAL_DEPTH in crypto/multiformats.ts) and the dag-cbor/IPLD prior
+// art (go-ipld-prime caps at 1024).
+const maxCanonicalDepth = 1024
+
 // AssertCanonicalNumbers walks v and rejects any number that is not
 // canonicalizable under the DFOS policy: NaN, ±Inf, non-integers, and integers
 // outside ±(2^53-1). Applications must encode such values as strings. A
 // whole, in-range float64 is accepted (it normalizes to int64). This keeps the
-// dag-cbor number encoding deterministic and identical across languages.
+// dag-cbor number encoding deterministic and identical across languages. It also
+// enforces the maxCanonicalDepth nesting guard.
 func AssertCanonicalNumbers(v any) error {
+	return assertCanonicalNumbersDepth(v, 0)
+}
+
+func assertCanonicalNumbersDepth(v any, depth int) error {
+	if depth > maxCanonicalDepth {
+		return fmt.Errorf("value nesting exceeds max depth %d", maxCanonicalDepth)
+	}
 	switch val := v.(type) {
 	case map[string]any:
 		for _, vv := range val {
-			if err := AssertCanonicalNumbers(vv); err != nil {
+			if err := assertCanonicalNumbersDepth(vv, depth+1); err != nil {
 				return err
 			}
 		}
 	case []any:
 		for _, vv := range val {
-			if err := AssertCanonicalNumbers(vv); err != nil {
+			if err := assertCanonicalNumbersDepth(vv, depth+1); err != nil {
 				return err
 			}
 		}

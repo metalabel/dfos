@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+// maxCredentialSize bounds the byte length of a credential JWS token — the
+// credential's analog of maxOperationSize. Credentials are EXEMPT from the 64
+// KiB operation cap (a maximum-depth 16-hop delegation chain embeds each parent
+// in prf and legitimately exceeds it), so they carry their own larger ceiling.
+// VALIDITY-determining: MUST match the TS reference (MAX_CREDENTIAL_SIZE).
+const maxCredentialSize = 262144
+
+// maxAttEntries bounds the number of attenuation entries per credential. A
+// CARDINALITY cap (DoS pre-allocation guard), matching the TS reference
+// (MAX_ATT).
+const maxAttEntries = 32
+
 // VerifiedCredential represents a successfully verified DFOS credential.
 type VerifiedCredential struct {
 	Iss string
@@ -120,6 +132,14 @@ func VerifyCredentialAt(token string, publicKey ed25519.PublicKey, subject strin
 // verifyCredentialCore is the shared implementation for DFOS credential
 // verification.
 func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject string, expectedAction string, currentTime int64) (*VerifiedCredential, error) {
+	// bound credential size — the credential's analog of maxOperationSize. The
+	// leaf token embeds the entire nested delegation chain (each parent carried
+	// in prf), so this one cap bounds the whole chain. Checked before any decode
+	// or recursion as a DoS guard. Matches the TS reference (MAX_CREDENTIAL_SIZE).
+	if len(token) > maxCredentialSize {
+		return nil, fmt.Errorf("credential exceeds max size: %d > %d", len(token), maxCredentialSize)
+	}
+
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("invalid token format")
@@ -194,6 +214,13 @@ func verifyCredentialCore(token string, publicKey ed25519.PublicKey, subject str
 	}
 	if claims.Version != 1 {
 		return nil, fmt.Errorf("unsupported credential version: %d", claims.Version)
+	}
+
+	// att cardinality — a credential MUST carry 1..maxAttEntries attenuations.
+	// A zero-att credential grants nothing (malformed); the upper bound is a DoS
+	// pre-allocation guard. Enforced identically in the TS reference (MAX_ATT).
+	if len(claims.Att) < 1 || len(claims.Att) > maxAttEntries {
+		return nil, fmt.Errorf("credential att count out of bounds: %d (must be 1..%d)", len(claims.Att), maxAttEntries)
 	}
 
 	// verify CID integrity — re-derive from payload and compare to header

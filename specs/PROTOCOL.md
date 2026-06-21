@@ -153,20 +153,25 @@ The protocol bounds operations with **one aggregate size cap** plus a small set 
 
 **Aggregate operation size (size cap):**
 
-| Bound                          | Value           | Applies to                                  |
-| ------------------------------ | --------------- | ------------------------------------------- |
-| dag-cbor-encoded operation payload | **65536 bytes** (64 KiB) | identity operations, content operations     |
+| Bound                              | Value                    | Applies to                              |
+| ---------------------------------- | ------------------------ | --------------------------------------- |
+| dag-cbor-encoded operation payload | **65536 bytes** (64 KiB) | identity operations, content operations |
 
-Verifiers MUST reject an identity or content operation whose `dagCborCanonicalEncode(payload)` exceeds 65536 bytes. The cap is measured over the canonical CBOR bytes the operation CID commits to, so every implementation computes it identically (no Unicode/length-counting ambiguity). It is generous by design — a legitimate proof-layer operation is far smaller — and bounds decode/verify cost as a DoS guard. Credentials are NOT subject to this cap (their size is bounded by the delegation-depth and `att`/`prf` limits; a maximum-depth chain legitimately exceeds it — see [CREDENTIALS.md](https://protocol.dfos.com/credentials)). Artifacts keep their own 16384-byte cap (below); the `services` array keeps its 8192-byte cap (above).
+Verifiers MUST reject an identity or content operation whose `dagCborCanonicalEncode(payload)` exceeds 65536 bytes, **measured with any embedded `authorization` credential excluded** (see below). The cap is measured over the canonical CBOR bytes the operation CID commits to, so every implementation computes it identically (no Unicode/length-counting ambiguity). It is generous by design — a legitimate proof-layer operation is far smaller — and bounds decode/verify cost as a DoS guard. Credentials are NOT subject to this cap; they carry their own larger 262144-byte (256 KiB) ceiling (a maximum-depth delegation chain embeds each parent token in `prf` and legitimately exceeds 64 KiB — see [CREDENTIALS.md](https://protocol.dfos.com/credentials)). Artifacts keep their own 16384-byte cap (below); the `services` array keeps its 8192-byte cap (above).
+
+A delegated content `update`/`delete` carries its authorizing credential in the operation's `authorization` field, and that credential — itself bounded by the 262144-byte credential cap — can legitimately approach 256 KiB at maximum delegation depth. Counting it against the 64 KiB operation cap would conflate two independent limits and reject a valid deep-delegation write, so the operation-size cap is measured over the payload **with the `authorization` field removed**; the `authorization` credential is bounded separately by the credential cap. Total operation bytes are therefore bounded by the sum (≤ 64 KiB + 256 KiB). The operation CID still commits to the complete payload including `authorization`.
 
 **Cardinality caps (structure, not byte length):**
 
-| Field                                        | Max      | Rationale                 |
-| -------------------------------------------- | -------- | ------------------------- |
-| `authKeys` / `assertKeys` / `controllerKeys` | 16 items | Generous for key rotation |
-| `services` entries                           | 16 items | (see Services, above)     |
+| Field                                        | Max      | Rationale                               |
+| -------------------------------------------- | -------- | --------------------------------------- |
+| `authKeys` / `assertKeys` / `controllerKeys` | 16 items | Generous for key rotation               |
+| `services` entries                           | 16 items | (see Services, above)                   |
+| countersignature `relation`                  | 64 chars | Open-namespace tag (min 1 when present) |
 
 The protocol does NOT limit individual field string lengths, **document content size** (the protocol commits to a CID, not the document — large binary media is referenced, not inlined), **chain length**, or **number of chains per identity**. These are application/transport concerns.
+
+**Resource policy (non-validity, MAY differ per node).** Beyond the validity-determining bounds above, a node SHOULD apply a **decoder recursion-depth guard** when canonicalizing/encoding a payload, as a DoS protection against pathologically nested input. Both reference implementations cap nesting at 1024 levels — generous enough that it never binds a legitimate operation (real payloads are a handful of levels deep). This is a local resource guard, **not** a chain-validity rule: it bounds a node's own stack cost and never changes which operations are part of the canonical chain. Nodes MAY apply stricter local ingress limits (max bytes decoded off the wire, rate limits) provided they never accept an operation the validity rules reject, nor reject one they accept.
 
 ---
 

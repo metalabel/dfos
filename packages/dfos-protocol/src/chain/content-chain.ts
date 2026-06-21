@@ -23,10 +23,38 @@ import {
   verifyDelegationChain,
   verifyDFOSCredential,
 } from '../credentials';
+import { MAX_CREDENTIAL_SIZE } from '../credentials/schemas';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { deriveContentId } from './derivation';
 import { ContentOperation, MAX_OPERATION_SIZE } from './schemas';
 import type { Signer, VerifiedIdentity } from './schemas';
+
+/**
+ * Byte length of a content operation for the op-size cap, EXCLUDING any embedded
+ * `authorization` credential. The op-size cap bounds the operation's own payload;
+ * an `authorization` credential is a separately-bounded object
+ * (`MAX_CREDENTIAL_SIZE`), so counting it against the op cap would conflate two
+ * independent limits and reject a legitimate deep-delegation write (whose
+ * credential legitimately approaches its own, larger cap). The authorization is
+ * bounded here too, so excluding it cannot smuggle unbounded bytes past both
+ * limits — total operation bytes stay ≤ `MAX_OPERATION_SIZE` +
+ * `MAX_CREDENTIAL_SIZE`. MUST match the Go reference (`operationSizeForCap`).
+ */
+const operationSizeForCap = async (
+  op: Record<string, unknown>,
+  fullByteLength: number,
+): Promise<number> => {
+  const auth = op.authorization;
+  if (typeof auth !== 'string') return fullByteLength;
+  if (auth.length > MAX_CREDENTIAL_SIZE) {
+    throw new Error(
+      `authorization credential exceeds max size: ${auth.length} > ${MAX_CREDENTIAL_SIZE}`,
+    );
+  }
+  const { authorization: _omit, ...rest } = op;
+  const encoded = await dagCborCanonicalEncode(rest);
+  return encoded.bytes.length;
+};
 
 // -----------------------------------------------------------------------------
 // types
@@ -289,8 +317,9 @@ export const verifyContentChain = async (input: {
 
     // derive operation CID
     const encoded = await dagCborCanonicalEncode(op);
-    if (encoded.bytes.length > MAX_OPERATION_SIZE) {
-      throw new Error(`operation exceeds max size: ${encoded.bytes.length} > ${MAX_OPERATION_SIZE}`);
+    const opSize = await operationSizeForCap(op as Record<string, unknown>, encoded.bytes.length);
+    if (opSize > MAX_OPERATION_SIZE) {
+      throw new Error(`operation exceeds max size: ${opSize} > ${MAX_OPERATION_SIZE}`);
     }
     const operationCID = encoded.cid.toString();
 
@@ -451,8 +480,9 @@ export const verifyContentExtensionFromTrustedState = async (input: {
 
   // derive operation CID
   const encoded = await dagCborCanonicalEncode(op);
-  if (encoded.bytes.length > MAX_OPERATION_SIZE) {
-    throw new Error(`operation exceeds max size: ${encoded.bytes.length} > ${MAX_OPERATION_SIZE}`);
+  const opSize = await operationSizeForCap(op as Record<string, unknown>, encoded.bytes.length);
+  if (opSize > MAX_OPERATION_SIZE) {
+    throw new Error(`operation exceeds max size: ${opSize} > ${MAX_OPERATION_SIZE}`);
   }
   const operationCID = encoded.cid.toString();
 
