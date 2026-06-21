@@ -214,6 +214,166 @@ func TestServicesInvalidEntryRejected(t *testing.T) {
 	}
 }
 
+// repeatA returns a string of n 'a' bytes — used to build over-length field
+// values that pass every check except the one under test.
+func repeatA(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = 'a'
+	}
+	return string(b)
+}
+
+// assertServicesRejected signs a genesis carrying the given services set and
+// asserts the relay rejects it on ingest. The signing helper is permissive (it
+// encodes whatever it is handed); the bounds are a relay/verifier obligation, so
+// the malformed op reaches the wire and must come back `rejected`.
+func assertServicesRejected(t *testing.T, base, what string, services []dfos.ServiceEntry) {
+	t.Helper()
+	ctrl := newKeypair()
+	auth := newKeypair()
+	token, _, _, err := dfos.SignIdentityCreateWithServices(
+		[]dfos.MultikeyPublicKey{ctrl.mk},
+		[]dfos.MultikeyPublicKey{auth.mk},
+		[]dfos.MultikeyPublicKey{},
+		services,
+		ctrl.keyID,
+		ctrl.priv,
+	)
+	if err != nil {
+		t.Fatalf("%s: SignIdentityCreateWithServices: %v", what, err)
+	}
+	res := postOperations(t, base, []string{token})
+	var body struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	b := readBody(t, res)
+	if err := json.Unmarshal(b, &body); err != nil {
+		t.Fatalf("%s: decode /operations response: %v (body: %s)", what, err, b)
+	}
+	if len(body.Results) != 1 {
+		t.Fatalf("%s: expected 1 result, got %d (body: %s)", what, len(body.Results), b)
+	}
+	if body.Results[0].Status != "rejected" {
+		t.Fatalf("%s: expected rejected, got %q (body: %s)", what, body.Results[0].Status, b)
+	}
+}
+
+// TestServicesBoundsRejected drives every normative services bound (PROTOCOL.md
+// §Bounds, L573-583). Each case is constructed to pass every check except the one
+// under test, so a `rejected` result pins exactly that bound. These hold against
+// both the Go and TS relays — the limit constants are mirrored across impls.
+func TestServicesBoundsRejected(t *testing.T) {
+	base := relayURL(t)
+	const anchor = "cv7n8vkvr64cctf3294h9k4eanhff8z" // 31-char content id
+
+	t.Run("too many entries (>16)", func(t *testing.T) {
+		svcs := make([]dfos.ServiceEntry, 17)
+		for i := range svcs {
+			svcs[i] = relaySvc("relay-"+repeatA(2)+string(rune('a'+i)), "https://r.example.com")
+		}
+		assertServicesRejected(t, base, "17 entries", svcs)
+	})
+
+	t.Run("duplicate ids", func(t *testing.T) {
+		assertServicesRejected(t, base, "duplicate id", []dfos.ServiceEntry{
+			relaySvc("dup", "https://a.example.com"),
+			relaySvc("dup", "https://b.example.com"),
+		})
+	})
+
+	t.Run("empty id", func(t *testing.T) {
+		assertServicesRejected(t, base, "empty id", []dfos.ServiceEntry{
+			relaySvc("", "https://a.example.com"),
+		})
+	})
+
+	t.Run("over-length id (>64)", func(t *testing.T) {
+		assertServicesRejected(t, base, "65-char id", []dfos.ServiceEntry{
+			relaySvc(repeatA(65), "https://a.example.com"),
+		})
+	})
+
+	t.Run("over-length endpoint (>512)", func(t *testing.T) {
+		assertServicesRejected(t, base, "513-char endpoint", []dfos.ServiceEntry{
+			relaySvc("relay", "https://"+repeatA(513)),
+		})
+	})
+
+	t.Run("over-length label (>512)", func(t *testing.T) {
+		assertServicesRejected(t, base, "513-char label", []dfos.ServiceEntry{
+			anchorSvc("a", repeatA(513), anchor),
+		})
+	})
+
+	t.Run("oversized CBOR array (>8192 bytes)", func(t *testing.T) {
+		// 16 entries (== max count) each individually valid (id ≤64, endpoint
+		// ≤512) but collectively exceeding the 8192-byte CBOR cap (~9.7KB). The
+		// only bound that can reject this is the array byte cap.
+		svcs := make([]dfos.ServiceEntry, 16)
+		for i := range svcs {
+			id := repeatA(62) + string(rune('a'+i/26)) + string(rune('a'+i%26)) // unique, 64 chars
+			svcs[i] = relaySvc(id, "https://"+repeatA(504))                     // 512-char endpoint
+		}
+		assertServicesRejected(t, base, "oversized CBOR", svcs)
+	})
+}
+
+// TestServicesUnknownTypePreserved asserts an unrecognized service type is
+// accepted (open namespace) and round-trips verbatim — including its non-core
+// fields — through verified state. (PROTOCOL.md L583: preserve + ignore.)
+func TestServicesUnknownTypePreserved(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentityWithServices(t, base, []dfos.ServiceEntry{
+		{"id": "exp", "type": "ExperimentalService", "foo": "bar", "n": "42"},
+	})
+	svcs := fetchServices(t, base, id.did)
+	if len(svcs) != 1 {
+		t.Fatalf("expected 1 projected service, got %d: %+v", len(svcs), svcs)
+	}
+	e := findSvc(svcs, "exp")
+	if e == nil || svcField(e, "type") != "ExperimentalService" {
+		t.Fatalf("unknown-type entry not served: %+v", e)
+	}
+	if svcField(e, "foo") != "bar" || svcField(e, "n") != "42" {
+		t.Fatalf("unknown-type entry non-core fields not preserved verbatim: %+v", e)
+	}
+}
+
+// TestServicesDeleteCarriesForward asserts a delete carries the last services set
+// unchanged into terminal state — the set is not cleared by deletion.
+// (PROTOCOL.md L588-589.)
+func TestServicesDeleteCarriesForward(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentityWithServices(t, base, []dfos.ServiceEntry{
+		relaySvc("relay", "https://relay.dfos.com"),
+	})
+	if got := fetchServices(t, base, id.did); len(got) != 1 {
+		t.Fatalf("genesis services not as expected: %+v", got)
+	}
+
+	ctrlKid := id.did + "#" + id.controller.keyID
+	delToken, _, err := dfos.SignIdentityDelete(id.genCID, ctrlKid, id.controller.priv)
+	if err != nil {
+		t.Fatalf("SignIdentityDelete: %v", err)
+	}
+	if res := postOperations(t, base, []string{delToken}); res.StatusCode != 200 {
+		body := readBody(t, res)
+		t.Fatalf("delete identity: status %d, body: %s", res.StatusCode, body)
+	} else {
+		res.Body.Close()
+	}
+
+	// terminal state MUST still carry the pre-delete services set.
+	got := fetchServices(t, base, id.did)
+	if len(got) != 1 || findSvc(got, "relay") == nil {
+		t.Fatalf("delete did not carry services set forward: %+v", got)
+	}
+}
+
 func TestCountersignRelationRoundTrip(t *testing.T) {
 	base := relayURL(t)
 	author := createIdentity(t, base)
