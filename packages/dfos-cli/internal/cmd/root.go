@@ -243,7 +243,7 @@ func newStatusCmd() *cobra.Command {
 					if err == nil {
 						fmt.Printf("  DID:     %s\n", info.DID)
 						fmt.Printf("  Version: %s %s\n", info.Protocol, info.Version)
-						fmt.Printf("  Content: %s  Proof: %s\n", boolYesNo(info.Content), boolYesNo(info.Proof))
+						fmt.Printf("  Content: %s  Proof: %s  Write: %s\n", boolYesNo(info.Content), boolYesNo(info.Proof), boolYesNo(info.Write))
 					} else {
 						fmt.Printf("  Error:   %s\n", err)
 					}

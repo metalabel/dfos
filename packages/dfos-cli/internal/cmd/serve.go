@@ -24,6 +24,7 @@ func newServeCmd() *cobra.Command {
 	var relayName string
 	var peers string
 	var resync bool
+	var noWrite bool
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -87,6 +88,11 @@ All flags support environment variable fallbacks for container deployment:
 				DBPath:      dbPath,
 				ProfileName: relayName,
 				ExtraPeers:  extraPeers,
+			}
+			// LITE pull-only node: reject POST /operations, sync from peers only.
+			if noWrite {
+				writeDisabled := false
+				opts.Write = &writeDisabled
 			}
 
 			// close any existing lazy-opened relay (serve uses its own opts)
@@ -195,6 +201,7 @@ All flags support environment variable fallbacks for container deployment:
 	cmd.Flags().StringVar(&relayName, "name", "DFOS Relay", "Relay profile name (env: RELAY_NAME)")
 	cmd.Flags().StringVar(&peers, "peers", "", "Comma-separated peer URLs or JSON array (env: PEERS)")
 	cmd.Flags().BoolVar(&resync, "resync", false, "Reset peer cursors for full re-sync on boot (env: RESYNC)")
+	cmd.Flags().BoolVar(&noWrite, "no-write", false, "LITE pull-only node: reject POST /operations, sync from peers only")
 	return cmd
 }
 

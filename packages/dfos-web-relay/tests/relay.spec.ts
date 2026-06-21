@@ -263,9 +263,20 @@ describe('web relay', () => {
       const res = await req('/.well-known/dfos-relay');
       const body = await json(res);
       expect(body.capabilities.proof).toBe(true);
+      expect(body.capabilities.write).toBe(true);
       expect(body.capabilities.content).toBe(true);
       expect(body.capabilities.documents).toBe(true);
       expect(body.capabilities.log).toBe(true);
+    });
+
+    it('should advertise write: false when relay created with write: false', async () => {
+      const liteRelay = await createRelay({ store, identity: RELAY_IDENTITY, write: false });
+      const res = await liteRelay.app.request('http://localhost/.well-known/dfos-relay');
+      const body = (await res.json()) as Record<string, unknown>;
+      const caps = body.capabilities as Record<string, unknown>;
+      expect(caps.write).toBe(false);
+      // a lite node is still a full proof node for reads
+      expect(caps.proof).toBe(true);
     });
 
     it('should include content: false in capabilities when relay created with content: false', async () => {
@@ -282,6 +293,40 @@ describe('web relay', () => {
       const body = await json(res);
       expect(typeof body.profile).toBe('string');
       expect(body.profile).toBe(RELAY_IDENTITY.profileArtifactJws);
+    });
+  });
+
+  describe('lite pull-only node (write: false)', () => {
+    it('rejects POST /proof/v1/operations with 501', async () => {
+      const liteRelay = await createRelay({ store, identity: RELAY_IDENTITY, write: false });
+      const res = await liteRelay.app.request('http://localhost/proof/v1/operations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operations: ['anything'] }),
+      });
+      // the gate fires before body parsing — writes are disabled by role
+      expect(res.status).toBe(501);
+    });
+
+    it('still serves proof reads (it is a full proof node for reads)', async () => {
+      const liteRelay = await createRelay({ store, identity: RELAY_IDENTITY, write: false });
+      const wk = await liteRelay.app.request('http://localhost/.well-known/dfos-relay');
+      expect(wk.status).toBe(200);
+      const missing = await liteRelay.app.request(
+        'http://localhost/proof/v1/identities/did:dfos:unknown000000000000',
+      );
+      // a read route that exists but has no data returns 404 (not 501) — reads work
+      expect(missing.status).toBe(404);
+    });
+
+    it('a write-enabled relay does NOT 501 on POST', async () => {
+      const res = await req('/proof/v1/operations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operations: ['not-a-valid-jws'] }),
+      });
+      // reaches body/ingest handling — 400 (bad op), never 501
+      expect(res.status).not.toBe(501);
     });
   });
 

@@ -103,6 +103,7 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 		"version":  Version,
 		"capabilities": map[string]any{
 			"proof":     true,
+			"write":     r.writeEnabled,
 			"content":   r.contentEnabled,
 			"log":       r.logEnabled,
 			"documents": r.contentEnabled,
@@ -116,6 +117,14 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (r *Relay) handlePostOperations(w http.ResponseWriter, req *http.Request) {
+	// LITE pull-only node: writes (and therefore peer gossip-in, which posts
+	// here too) are disabled by role. 501 matches the content-disabled
+	// convention — the well-known advertises write:false so clients/peers know
+	// in advance. Such a node still ingests by pulling from peers.
+	if !r.writeEnabled {
+		writeError(w, 501, "this relay is pull-only; writes are disabled")
+		return
+	}
 	// DoS cap: bound the body before decoding. A MaxBytesError surfaces as a
 	// decode error and flows through the existing 400 path.
 	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)

@@ -21,9 +21,10 @@ type LocalRelay struct {
 // Options configures the local relay. All fields are optional — sensible
 // defaults are used when omitted.
 type Options struct {
-	DBPath      string       // override database path (default: ~/.dfos/relay.db)
-	ProfileName string       // relay profile name (default: "DFOS CLI")
-	ExtraPeers  []string     // additional peer URLs beyond config.toml
+	DBPath      string   // override database path (default: ~/.dfos/relay.db)
+	ProfileName string   // relay profile name (default: "DFOS CLI")
+	ExtraPeers  []string // additional peer URLs beyond config.toml
+	Write       *bool    // nil/true = accept writes; false = LITE pull-only node
 }
 
 // Open opens (or creates) the local relay database and bootstraps the relay
@@ -78,6 +79,7 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 		Identity:   identity,
 		Peers:      peers,
 		PeerClient: peerClient,
+		Write:      opts.Write,
 	})
 	if err != nil {
 		store.Close()
