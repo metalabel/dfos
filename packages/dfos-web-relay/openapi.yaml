@@ -55,12 +55,12 @@ paths:
                         description: Whether the relay serves the documents endpoint
                       log:
                         type: boolean
-                        description: Whether the global operation log is available (GET /log)
+                        description: Whether the global operation log is available (GET /proof/v1/log)
                   profile:
                     type: string
                     description: The relay's profile artifact as a compact JWS token
 
-  /operations:
+  /proof/v1/operations:
     post:
       operationId: ingestOperations
       summary: Submit operations for ingestion
@@ -100,7 +100,7 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
 
-  /operations/{cid}:
+  /proof/v1/operations/{cid}:
     get:
       operationId: getOperation
       summary: Get an operation by CID
@@ -122,7 +122,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /operations/{cid}/countersignatures:
+  /proof/v1/operations/{cid}/countersignatures:
     get:
       operationId: getCountersignatures
       summary: Get countersignatures for an operation
@@ -152,7 +152,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /identities/{did}:
+  /proof/v1/identities/{did}:
     get:
       operationId: getIdentityChain
       summary: Get an identity chain by DID
@@ -174,7 +174,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /content/{contentId}:
+  /proof/v1/content/{contentId}:
     get:
       operationId: getContentChain
       summary: Get a content chain by content ID
@@ -416,7 +416,7 @@ paths:
         '501':
           description: Documents capability not enabled
 
-  /log:
+  /proof/v1/log:
     get:
       operationId: getLog
       summary: Paginated global log of all accepted operations
@@ -472,7 +472,7 @@ paths:
         '501':
           description: Global log capability not enabled
 
-  /identities/{did}/log:
+  /proof/v1/identities/{did}/log:
     get:
       operationId: getIdentityLog
       summary: Paginated log of identity chain operations
@@ -525,7 +525,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /content/{contentId}/log:
+  /proof/v1/content/{contentId}/log:
     get:
       operationId: getContentLog
       summary: Paginated log of content chain operations
@@ -578,7 +578,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /countersignatures/{cid}:
+  /proof/v1/countersignatures/{cid}:
     get:
       operationId: getCountersignaturesByCID
       summary: Get countersignatures for an operation CID

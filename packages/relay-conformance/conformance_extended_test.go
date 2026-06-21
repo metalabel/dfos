@@ -99,7 +99,7 @@ func TestContentWithNote(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/content/"+contentID, &chain)
+	getJSON(t, base+"/proof/v1/content/"+contentID, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty")
 	}
@@ -145,7 +145,7 @@ func TestContentUpdateAfterKeyRotation(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/content/"+cc.contentID, &chain)
+	getJSON(t, base+"/proof/v1/content/"+cc.contentID, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty")
 	}
@@ -225,7 +225,7 @@ func TestControllerKeyRotation(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/identities/"+id.did, &chain)
+	getJSON(t, base+"/proof/v1/identities/"+id.did, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty")
 	}
@@ -243,7 +243,7 @@ func TestCountersignatureEmptyResult(t *testing.T) {
 	var csResult struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	resp := getJSON(t, base+"/countersignatures/"+id.genCID, &csResult)
+	resp := getJSON(t, base+"/proof/v1/countersignatures/"+id.genCID, &csResult)
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200 for empty countersigs, got %d", resp.StatusCode)
 	}
@@ -360,7 +360,7 @@ func TestDelegatedContentDelete(t *testing.T) {
 			IsDeleted bool `json:"isDeleted"`
 		} `json:"state"`
 	}
-	getJSON(t, base+"/content/"+cc.contentID, &chain)
+	getJSON(t, base+"/proof/v1/content/"+cc.contentID, &chain)
 	if !chain.State.IsDeleted {
 		t.Fatal("content should be deleted by delegate")
 	}
@@ -505,7 +505,7 @@ func TestBatchThreeStepIdentity(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/identities/"+did, &chain)
+	getJSON(t, base+"/proof/v1/identities/"+did, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty")
 	}
@@ -616,7 +616,7 @@ func TestBatchLarge(t *testing.T) {
 
 	// spot-check a few identities exist
 	for _, did := range dids[:3] {
-		resp := getJSON(t, base+"/identities/"+did, nil)
+		resp := getJSON(t, base+"/proof/v1/identities/"+did, nil)
 		if resp.StatusCode != 200 {
 			t.Fatalf("identity %s not found after batch create", did)
 		}
@@ -668,7 +668,7 @@ func TestBatchDuplicateOperations(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/identities/"+did, &chain)
+	getJSON(t, base+"/proof/v1/identities/"+did, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty (dedup)")
 	}

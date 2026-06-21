@@ -165,7 +165,7 @@ func TestIdentityHeadSelectionCIDTiebreak(t *testing.T) {
 			Services []map[string]any `json:"services"`
 		} `json:"state"`
 	}
-	if r := getJSON(t, base+"/identities/"+id.did, &resp); r.StatusCode != 200 {
+	if r := getJSON(t, base+"/proof/v1/identities/"+id.did, &resp); r.StatusCode != 200 {
 		t.Fatalf("GET /identities/%s: status %d", id.did, r.StatusCode)
 	}
 	if resp.HeadCID != winner {

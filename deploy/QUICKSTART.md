@@ -80,7 +80,7 @@ Confirm the relay is healthy:
 curl https://relay.yourdomain.com/.well-known/dfos-relay
 
 # Latest operations
-curl https://relay.yourdomain.com/log
+curl https://relay.yourdomain.com/proof/v1/log
 ```
 
 ## Container Images

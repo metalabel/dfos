@@ -354,7 +354,7 @@ func TestReadThroughIdentity(t *testing.T) {
 	defer srv.Close()
 
 	var body map[string]any
-	resp := getJSON(t, srv.URL+"/identities/"+id.did, &body)
+	resp := getJSON(t, srv.URL+"/proof/v1/identities/"+id.did, &body)
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -379,7 +379,7 @@ func TestReadThroughIdentity404(t *testing.T) {
 	srv := httptest.NewServer(relay.Handler())
 	defer srv.Close()
 
-	resp, _ := http.Get(srv.URL + "/identities/did:dfos:nonexistent")
+	resp, _ := http.Get(srv.URL + "/proof/v1/identities/did:dfos:nonexistent")
 	if resp.StatusCode != 404 {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
@@ -426,7 +426,7 @@ func TestReadThroughIdentityMultiPage(t *testing.T) {
 	defer srv.Close()
 
 	var body map[string]any
-	resp := getJSON(t, srv.URL+"/identities/"+id.did, &body)
+	resp := getJSON(t, srv.URL+"/proof/v1/identities/"+id.did, &body)
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -467,7 +467,7 @@ func TestReadThroughContent(t *testing.T) {
 	defer srv.Close()
 
 	var body map[string]any
-	resp := getJSON(t, srv.URL+"/content/"+contentID, &body)
+	resp := getJSON(t, srv.URL+"/proof/v1/content/"+contentID, &body)
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -495,7 +495,7 @@ func TestReadThroughDisabled(t *testing.T) {
 	srv := httptest.NewServer(relay.Handler())
 	defer srv.Close()
 
-	resp, _ := http.Get(srv.URL + "/identities/" + id.did)
+	resp, _ := http.Get(srv.URL + "/proof/v1/identities/" + id.did)
 	if resp.StatusCode != 404 {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
@@ -533,7 +533,7 @@ func TestReadThroughFallbackToSecondPeer(t *testing.T) {
 	defer srv.Close()
 
 	var body map[string]any
-	resp := getJSON(t, srv.URL+"/identities/"+id.did, &body)
+	resp := getJSON(t, srv.URL+"/proof/v1/identities/"+id.did, &body)
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}

@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// proofBasePath namespaces the frozen proof-plane routes (protocol v1). Document
+// gateway routes (blob*) and .well-known stay at root on their own clock. MUST
+// match the relay (proofBasePath in routes.go / PROOF_BASE_PATH in relay.ts).
+const proofBasePath = "/proof/v1"
+
 // Client is an HTTP client for a DFOS web relay.
 type Client struct {
 	BaseURL    string
@@ -44,7 +49,7 @@ type RelayCapabilities struct {
 	Documents bool `json:"documents"`
 }
 
-// IdentityResponse is the response from GET /identities/:did.
+// IdentityResponse is the response from GET /proof/v1/identities/:did.
 type IdentityResponse struct {
 	DID     string        `json:"did"`
 	HeadCID string        `json:"headCID"`
@@ -69,7 +74,7 @@ type IdentityKey struct {
 
 // GetIdentityState fetches a typed identity response from the relay.
 func (c *Client) GetIdentityState(did string) (*IdentityResponse, error) {
-	resp, err := c.HTTPClient.Get(c.BaseURL + "/identities/" + did)
+	resp, err := c.HTTPClient.Get(c.BaseURL + proofBasePath + "/identities/" + did)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +93,7 @@ func (c *Client) GetIdentityState(did string) (*IdentityResponse, error) {
 	return &result, nil
 }
 
-// IngestionResult is a single result from POST /operations.
+// IngestionResult is a single result from POST /proof/v1/operations.
 type IngestionResult struct {
 	CID     string `json:"cid"`
 	Status  string `json:"status"`
@@ -141,7 +146,7 @@ func (c *Client) SubmitOperations(operations []string) ([]IngestionResult, error
 
 func (c *Client) submitBatch(operations []string) ([]IngestionResult, error) {
 	body, _ := json.Marshal(map[string]any{"operations": operations})
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/operations", "application/json", bytes.NewReader(body))
+	resp, err := c.HTTPClient.Post(c.BaseURL+proofBasePath+"/operations", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -163,22 +168,22 @@ func (c *Client) submitBatch(operations []string) ([]IngestionResult, error) {
 
 // GetIdentity fetches an identity chain from the relay.
 func (c *Client) GetIdentity(did string) (map[string]any, error) {
-	return c.getJSON("/identities/" + did)
+	return c.getJSON(proofBasePath + "/identities/" + did)
 }
 
 // GetContent fetches a content chain from the relay.
 func (c *Client) GetContent(contentID string) (map[string]any, error) {
-	return c.getJSON("/content/" + contentID)
+	return c.getJSON(proofBasePath + "/content/" + contentID)
 }
 
 // GetOperation fetches an operation by CID.
 func (c *Client) GetOperation(cid string) (map[string]any, error) {
-	return c.getJSON("/operations/" + cid)
+	return c.getJSON(proofBasePath + "/operations/" + cid)
 }
 
 // GetCountersignatures fetches countersignatures for an operation CID.
 func (c *Client) GetCountersignatures(cid string) (map[string]any, error) {
-	return c.getJSON("/countersignatures/" + cid)
+	return c.getJSON(proofBasePath + "/countersignatures/" + cid)
 }
 
 // UploadBlob uploads a content blob, keyed by the operation CID that

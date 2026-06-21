@@ -79,7 +79,7 @@ func TestWellKnown(t *testing.T) {
 		} `json:"state"`
 		HeadCID string `json:"headCID"`
 	}
-	idResp := getJSON(t, base+"/identities/"+relayDID, &chain)
+	idResp := getJSON(t, base+"/proof/v1/identities/"+relayDID, &chain)
 	if idResp.StatusCode != 200 {
 		t.Fatalf("relay DID %s did not resolve: status %d", relayDID, idResp.StatusCode)
 	}
@@ -230,7 +230,7 @@ func TestIdentityCreate(t *testing.T) {
 		} `json:"state"`
 		HeadCID string `json:"headCID"`
 	}
-	resp := getJSON(t, base+"/identities/"+id.did, &chain)
+	resp := getJSON(t, base+"/proof/v1/identities/"+id.did, &chain)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET identity: status %d", resp.StatusCode)
 	}
@@ -247,7 +247,7 @@ func TestIdentityCreate(t *testing.T) {
 
 func TestIdentityNotFound(t *testing.T) {
 	base := relayURL(t)
-	resp := getJSON(t, base+"/identities/did:dfos:nonexistent000000000", nil)
+	resp := getJSON(t, base+"/proof/v1/identities/did:dfos:nonexistent000000000", nil)
 	if resp.StatusCode != 404 {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
@@ -283,7 +283,7 @@ func TestIdentityUpdate(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/identities/"+id.did, &chain)
+	getJSON(t, base+"/proof/v1/identities/"+id.did, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty")
 	}
@@ -345,7 +345,7 @@ func TestIdentityBatchCreate(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/identities/"+did, &chain)
+	getJSON(t, base+"/proof/v1/identities/"+did, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty")
 	}
@@ -383,7 +383,7 @@ func TestIdentityIdempotent(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/identities/"+did, &chain)
+	getJSON(t, base+"/proof/v1/identities/"+did, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty after idempotent resubmit")
 	}
@@ -412,7 +412,7 @@ func TestIdentityDelete(t *testing.T) {
 			IsDeleted bool `json:"isDeleted"`
 		} `json:"state"`
 	}
-	getJSON(t, base+"/identities/"+id.did, &chain)
+	getJSON(t, base+"/proof/v1/identities/"+id.did, &chain)
 	if !chain.State.IsDeleted {
 		t.Fatal("identity should be deleted")
 	}
@@ -477,7 +477,7 @@ func TestContentCreate(t *testing.T) {
 		} `json:"state"`
 		HeadCID string `json:"headCID"`
 	}
-	resp := getJSON(t, base+"/content/"+cc.contentID, &chain)
+	resp := getJSON(t, base+"/proof/v1/content/"+cc.contentID, &chain)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET content: status %d", resp.StatusCode)
 	}
@@ -539,7 +539,7 @@ func TestContentDelete(t *testing.T) {
 			IsDeleted bool `json:"isDeleted"`
 		} `json:"state"`
 	}
-	getJSON(t, base+"/content/"+cc.contentID, &chain)
+	getJSON(t, base+"/proof/v1/content/"+cc.contentID, &chain)
 	if !chain.State.IsDeleted {
 		t.Fatal("content should be deleted")
 	}
@@ -617,7 +617,7 @@ func TestContentForkDAGLog(t *testing.T) {
 			JWSToken string `json:"jwsToken"`
 		} `json:"entries"`
 	}
-	logRes := getJSON(t, base+"/content/"+cc.contentID+"/log", &logResp)
+	logRes := getJSON(t, base+"/proof/v1/content/"+cc.contentID+"/log", &logResp)
 	if logRes.StatusCode != 200 {
 		t.Fatalf("log: expected 200, got %d", logRes.StatusCode)
 	}
@@ -661,7 +661,7 @@ func TestContentForkDeterministicHead(t *testing.T) {
 			CurrentDocumentCID *string `json:"currentDocumentCID"`
 		} `json:"state"`
 	}
-	chainRes := getJSON(t, base+"/content/"+cc.contentID, &chain)
+	chainRes := getJSON(t, base+"/proof/v1/content/"+cc.contentID, &chain)
 	if chainRes.StatusCode != 200 {
 		t.Fatalf("content: expected 200, got %d", chainRes.StatusCode)
 	}
@@ -685,7 +685,7 @@ func TestOperationByCID(t *testing.T) {
 	var op struct {
 		CID string `json:"cid"`
 	}
-	resp := getJSON(t, base+"/operations/"+id.genCID, &op)
+	resp := getJSON(t, base+"/proof/v1/operations/"+id.genCID, &op)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET operation: status %d", resp.StatusCode)
 	}
@@ -696,7 +696,7 @@ func TestOperationByCID(t *testing.T) {
 
 func TestOperationNotFound(t *testing.T) {
 	base := relayURL(t)
-	resp := getJSON(t, base+"/operations/bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
+	resp := getJSON(t, base+"/proof/v1/operations/bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
 	if resp.StatusCode != 404 {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
@@ -732,7 +732,7 @@ func TestCountersignature(t *testing.T) {
 	var csResult struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	resp := getJSON(t, base+"/countersignatures/"+cc.genCID, &csResult)
+	resp := getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET countersigs: status %d", resp.StatusCode)
 	}
@@ -758,7 +758,7 @@ func TestCountersignatureIdempotent(t *testing.T) {
 	var csResult struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	getJSON(t, base+"/countersignatures/"+cc.genCID, &csResult)
+	getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if len(csResult.Countersignatures) != 1 {
 		t.Fatalf("expected 1 countersig after dedup, got %d", len(csResult.Countersignatures))
 	}
@@ -785,7 +785,7 @@ func TestCountersignatureResponseDedup(t *testing.T) {
 	var csResult struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	getJSON(t, base+"/countersignatures/"+cc.genCID, &csResult)
+	getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 
 	seen := map[string]int{}
 	for _, t := range csResult.Countersignatures {
@@ -817,7 +817,7 @@ func TestCountersignatureMultiWitness(t *testing.T) {
 	var csResult struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	getJSON(t, base+"/operations/"+cc.genCID+"/countersignatures", &csResult)
+	getJSON(t, base+"/proof/v1/operations/"+cc.genCID+"/countersignatures", &csResult)
 	if len(csResult.Countersignatures) != 2 {
 		t.Fatalf("expected 2 countersigs from different witnesses, got %d", len(csResult.Countersignatures))
 	}
@@ -841,8 +841,8 @@ func TestCountersignatureQueryPaths(t *testing.T) {
 	var r2 struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	getJSON(t, base+"/operations/"+cc.genCID+"/countersignatures", &r1)
-	getJSON(t, base+"/countersignatures/"+cc.genCID, &r2)
+	getJSON(t, base+"/proof/v1/operations/"+cc.genCID+"/countersignatures", &r1)
+	getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &r2)
 
 	if len(r1.Countersignatures) != len(r2.Countersignatures) {
 		t.Fatalf("query paths returned different counts: %d vs %d",
@@ -852,7 +852,7 @@ func TestCountersignatureQueryPaths(t *testing.T) {
 
 func TestCountersignatureNotFound(t *testing.T) {
 	base := relayURL(t)
-	resp := getJSON(t, base+"/countersignatures/bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
+	resp := getJSON(t, base+"/proof/v1/countersignatures/bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
 	if resp.StatusCode != 404 {
 		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
@@ -1048,7 +1048,7 @@ func TestDelegatedContentUpdate(t *testing.T) {
 	var chain struct {
 		HeadCID string `json:"headCID"`
 	}
-	getJSON(t, base+"/content/"+cc.contentID, &chain)
+	getJSON(t, base+"/proof/v1/content/"+cc.contentID, &chain)
 	if chain.HeadCID == "" {
 		t.Fatal("headCID is empty")
 	}
@@ -1286,7 +1286,7 @@ func TestBlobDownloadDeletedContent(t *testing.T) {
 
 func TestRejectInvalidJSON(t *testing.T) {
 	base := relayURL(t)
-	resp, err := http.Post(base+"/operations", "application/json", bytes.NewReader([]byte("not json")))
+	resp, err := http.Post(base+"/proof/v1/operations", "application/json", bytes.NewReader([]byte("not json")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1299,7 +1299,7 @@ func TestRejectInvalidJSON(t *testing.T) {
 func TestRejectEmptyOperations(t *testing.T) {
 	base := relayURL(t)
 	payload, _ := json.Marshal(map[string]any{"operations": []string{}})
-	resp, err := http.Post(base+"/operations", "application/json", bytes.NewReader(payload))
+	resp, err := http.Post(base+"/proof/v1/operations", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1531,7 +1531,7 @@ func TestIdentityLogPagination(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	resp := getJSON(t, base+"/identities/"+id.did+"/log", &fullLog)
+	resp := getJSON(t, base+"/proof/v1/identities/"+id.did+"/log", &fullLog)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET log: status %d", resp.StatusCode)
 	}
@@ -1549,7 +1549,7 @@ func TestIdentityLogPagination(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	getJSON(t, fmt.Sprintf("%s/identities/%s/log?limit=1", base, id.did), &page1)
+	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?limit=1", base, id.did), &page1)
 	if len(page1.Entries) != 1 {
 		t.Fatalf("page1: expected 1 entry, got %d", len(page1.Entries))
 	}
@@ -1564,7 +1564,7 @@ func TestIdentityLogPagination(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=%s&limit=1", base, id.did, *page1.Cursor), &page2)
+	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page1.Cursor), &page2)
 	if len(page2.Entries) != 1 {
 		t.Fatalf("page2: expected 1 entry, got %d", len(page2.Entries))
 	}
@@ -1579,7 +1579,7 @@ func TestIdentityLogPagination(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=%s&limit=1", base, id.did, *page2.Cursor), &page3)
+	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page2.Cursor), &page3)
 	if len(page3.Entries) != 1 {
 		t.Fatalf("page3: expected 1 entry, got %d", len(page3.Entries))
 	}
@@ -1589,7 +1589,7 @@ func TestIdentityLogPagination(t *testing.T) {
 		var page4 struct {
 			Entries []struct{} `json:"entries"`
 		}
-		getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=%s&limit=1", base, id.did, *page3.Cursor), &page4)
+		getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page3.Cursor), &page4)
 		if len(page4.Entries) != 0 {
 			t.Fatalf("page after final: expected 0 entries, got %d", len(page4.Entries))
 		}
@@ -1600,7 +1600,7 @@ func TestIdentityLogPagination(t *testing.T) {
 		Entries []struct{} `json:"entries"`
 		Cursor  *string    `json:"cursor"`
 	}
-	emptyResp := getJSON(t, fmt.Sprintf("%s/identities/%s/log?after=bafyunknown", base, id.did), &empty)
+	emptyResp := getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=bafyunknown", base, id.did), &empty)
 	if emptyResp.StatusCode != 200 {
 		t.Fatalf("unknown cursor: expected 200, got %d", emptyResp.StatusCode)
 	}
@@ -1613,7 +1613,7 @@ func TestIdentityLogPagination(t *testing.T) {
 		Entries []struct{} `json:"entries"`
 		Cursor  *string    `json:"cursor"`
 	}
-	getJSON(t, fmt.Sprintf("%s/identities/%s/log?limit=3", base, id.did), &exactPage)
+	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?limit=3", base, id.did), &exactPage)
 	if len(exactPage.Entries) != 3 {
 		t.Fatalf("exact boundary: expected 3 entries, got %d", len(exactPage.Entries))
 	}
@@ -1638,7 +1638,7 @@ func TestGlobalLogPagination(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	resp := getJSON(t, base+"/log?limit=1", &page1)
+	resp := getJSON(t, base+"/proof/v1/log?limit=1", &page1)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /log: status %d", resp.StatusCode)
 	}
@@ -1656,7 +1656,7 @@ func TestGlobalLogPagination(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	getJSON(t, fmt.Sprintf("%s/log?after=%s&limit=1", base, *page1.Cursor), &page2)
+	getJSON(t, fmt.Sprintf("%s/proof/v1/log?after=%s&limit=1", base, *page1.Cursor), &page2)
 	if len(page2.Entries) != 1 {
 		t.Fatalf("page2: expected 1 entry, got %d", len(page2.Entries))
 	}
@@ -1677,7 +1677,7 @@ func TestGlobalLogPagination(t *testing.T) {
 			} `json:"entries"`
 			Cursor *string `json:"cursor"`
 		}
-		getJSON(t, fmt.Sprintf("%s/log?after=%s&limit=1", base, *cursor), &page)
+		getJSON(t, fmt.Sprintf("%s/proof/v1/log?after=%s&limit=1", base, *cursor), &page)
 		totalEntries += len(page.Entries)
 		if len(page.Entries) == 0 {
 			// empty page means we're past the end — cursor should be nil
@@ -1698,7 +1698,7 @@ func TestGlobalLogPagination(t *testing.T) {
 		Entries []struct{} `json:"entries"`
 		Cursor  *string    `json:"cursor"`
 	}
-	emptyResp := getJSON(t, base+"/log?after=bafyunknown", &empty)
+	emptyResp := getJSON(t, base+"/proof/v1/log?after=bafyunknown", &empty)
 	if emptyResp.StatusCode != 200 {
 		t.Fatalf("unknown cursor: expected 200, got %d", emptyResp.StatusCode)
 	}

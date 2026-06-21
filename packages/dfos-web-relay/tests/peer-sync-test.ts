@@ -33,7 +33,7 @@ console.log(`  Done in ${Date.now() - start}ms`);
 let total = 0;
 let cursor: string | undefined;
 while (true) {
-  const url = cursor ? `/log?after=${cursor}&limit=1000` : '/log?limit=1000';
+  const url = cursor ? `/proof/v1/log?after=${cursor}&limit=1000` : '/proof/v1/log?limit=1000';
   const res = await relay.app.request(url);
   const data = (await res.json()) as { entries: { cid: string }[]; cursor: string | null };
   total += data.entries.length;

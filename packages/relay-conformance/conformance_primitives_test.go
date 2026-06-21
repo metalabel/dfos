@@ -51,7 +51,7 @@ func TestArtifactCreate(t *testing.T) {
 
 	// artifact should be retrievable via GET /operations/:cid
 	var op map[string]any
-	resp := getJSON(t, base+"/operations/"+artifactCID, &op)
+	resp := getJSON(t, base+"/proof/v1/operations/"+artifactCID, &op)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /operations/%s: status %d", artifactCID, resp.StatusCode)
 	}
@@ -177,7 +177,7 @@ func TestArtifactRetrieveByCID(t *testing.T) {
 
 	// retrieve by CID
 	var op map[string]any
-	resp := getJSON(t, base+"/operations/"+artifactCID, &op)
+	resp := getJSON(t, base+"/proof/v1/operations/"+artifactCID, &op)
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
@@ -257,7 +257,7 @@ func TestLogGlobal(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	resp := getJSON(t, base+"/log", &logResp)
+	resp := getJSON(t, base+"/proof/v1/log", &logResp)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /log: status %d", resp.StatusCode)
 	}
@@ -296,7 +296,7 @@ func TestLogPagination(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	resp := getJSON(t, base+"/log?limit=2", &page1)
+	resp := getJSON(t, base+"/proof/v1/log?limit=2", &page1)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /log?limit=2: status %d", resp.StatusCode)
 	}
@@ -315,7 +315,7 @@ func TestLogPagination(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	resp2 := getJSON(t, fmt.Sprintf("%s/log?limit=2&after=%s", base, *page1.Cursor), &page2)
+	resp2 := getJSON(t, fmt.Sprintf("%s/proof/v1/log?limit=2&after=%s", base, *page1.Cursor), &page2)
 	if resp2.StatusCode != 200 {
 		t.Fatalf("GET /log page 2: status %d", resp2.StatusCode)
 	}
@@ -341,7 +341,7 @@ func TestLogPerIdentity(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	resp := getJSON(t, base+"/identities/"+id.did+"/log", &logResp)
+	resp := getJSON(t, base+"/proof/v1/identities/"+id.did+"/log", &logResp)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /identities/%s/log: status %d", id.did, resp.StatusCode)
 	}
@@ -370,7 +370,7 @@ func TestLogPerContent(t *testing.T) {
 		} `json:"entries"`
 		Cursor *string `json:"cursor"`
 	}
-	resp := getJSON(t, base+"/content/"+cc.contentID+"/log", &logResp)
+	resp := getJSON(t, base+"/proof/v1/content/"+cc.contentID+"/log", &logResp)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /content/%s/log: status %d", cc.contentID, resp.StatusCode)
 	}
@@ -425,7 +425,7 @@ func TestLogContainsAllKinds(t *testing.T) {
 	seen := map[string]bool{} // page-boundary cursors already followed
 	const maxLogPages = 10000 // backstop: 1M entries at limit=100
 	for pages := 0; ; pages++ {
-		url := base + "/log?limit=100"
+		url := base + "/proof/v1/log?limit=100"
 		if cursor != "" {
 			url += "&after=" + cursor
 		}
@@ -467,7 +467,7 @@ func TestLogContainsAllKinds(t *testing.T) {
 
 func TestLogUnknownIdentity(t *testing.T) {
 	base := relayURL(t)
-	resp, err := http.Get(base + "/identities/did:dfos:nonexistent/log")
+	resp, err := http.Get(base + "/proof/v1/identities/did:dfos:nonexistent/log")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
@@ -479,7 +479,7 @@ func TestLogUnknownIdentity(t *testing.T) {
 
 func TestLogUnknownContent(t *testing.T) {
 	base := relayURL(t)
-	resp, err := http.Get(base + "/content/nonexistent/log")
+	resp, err := http.Get(base + "/proof/v1/content/nonexistent/log")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}

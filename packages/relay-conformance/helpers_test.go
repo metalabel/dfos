@@ -166,7 +166,7 @@ func getRelayDID(t *testing.T, base string) string {
 func postOperations(t *testing.T, base string, operations []string) *http.Response {
 	t.Helper()
 	payload, _ := json.Marshal(map[string]any{"operations": operations})
-	resp, err := http.Post(base+"/operations", "application/json", bytes.NewReader(payload))
+	resp, err := http.Post(base+"/proof/v1/operations", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("POST /operations: %v", err)
 	}

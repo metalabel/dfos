@@ -423,19 +423,19 @@ This catches relay corruption, data tampering, and implementation bugs (includin
 ```bash
 # unauthenticated
 dfos api GET /.well-known/dfos-relay
-dfos api GET /identities/did:dfos:xxx
+dfos api GET /proof/v1/identities/did:dfos:xxx
 
 # with auto auth (mints a fresh JWT, injects Authorization header)
 dfos api GET /content/abc123/blob --auth
 
 # POST with body
-dfos api POST /operations --body '{"operations":["eyJ..."]}'
+dfos api POST /proof/v1/operations --body '{"operations":["eyJ..."]}'
 
 # custom headers
 dfos api PUT /content/abc123/blob --auth -H "X-Document-CID: bafyrei..." --body-file doc.bin
 
 # response headers
-dfos api GET /identities/did:dfos:xxx -i
+dfos api GET /proof/v1/identities/did:dfos:xxx -i
 ```
 
 The `--auth` flag resolves the active identity, loads the auth key from the keychain, fetches the relay's DID from well-known, mints a short-lived JWT, and injects it. One flag replaces the entire auth token lifecycle.
