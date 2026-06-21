@@ -7,6 +7,55 @@ import (
 	"time"
 )
 
+// maxOperationSize is the max dag-cbor-encoded size (bytes) of a single identity
+// or content operation payload — the one aggregate validity bound on operation
+// size, measured over the exact bytes the CID commits to. Generously set (64 KiB)
+// so it never binds a legitimate proof-layer operation while bounding decode/
+// verify cost. VALIDITY-determining: MUST match the TS reference
+// (MAX_OPERATION_SIZE in chain/schemas.ts). Credentials are NOT subject to this
+// cap — their size is bounded by the delegation-depth and att/prf limits, and a
+// max-depth chain legitimately exceeds it.
+const maxOperationSize = 65536
+
+// maxKeysPerRole bounds the number of keys in any single role array (authKeys,
+// assertKeys, controllerKeys) on an identity operation. A CARDINALITY cap (DoS
+// pre-allocation guard, generous for key rotation), enforced identically in the
+// TS reference (MAX_KEYS_PER_ROLE in chain/schemas.ts).
+const maxKeysPerRole = 16
+
+// operationSizeForCap returns the dag-cbor-encoded byte length of an operation
+// payload for the purpose of the op-size cap, EXCLUDING any embedded
+// `authorization` credential. The op-size cap bounds the operation's own
+// payload; an `authorization` credential is a separately-bounded object
+// (maxCredentialSize), so counting it against the op cap would conflate two
+// independent limits and reject a legitimate deep-delegation write — whose
+// credential legitimately approaches its own (larger) cap. fullEncoded is the
+// already-derived encoding of the complete payload (the common no-authorization
+// case avoids a second encode). MUST match the TS reference (content-chain.ts).
+func operationSizeForCap(payload map[string]any, fullEncoded []byte) (int, error) {
+	auth, hasAuth := payload["authorization"].(string)
+	if !hasAuth {
+		return len(fullEncoded), nil
+	}
+	// the excluded authorization credential is independently bounded here, so
+	// excluding it cannot smuggle unbounded bytes past both limits — total
+	// operation bytes stay ≤ maxOperationSize + maxCredentialSize.
+	if len(auth) > maxCredentialSize {
+		return 0, fmt.Errorf("authorization credential exceeds max size: %d > %d", len(auth), maxCredentialSize)
+	}
+	rest := make(map[string]any, len(payload))
+	for k, v := range payload {
+		if k != "authorization" {
+			rest[k] = v
+		}
+	}
+	encoded, err := DagCborEncode(rest)
+	if err != nil {
+		return 0, err
+	}
+	return len(encoded), nil
+}
+
 // KeyResolver resolves a kid (DID URL: "did:dfos:xxx#key_yyy") to an Ed25519 public key.
 type KeyResolver func(kid string) (ed25519.PublicKey, error)
 
@@ -125,6 +174,9 @@ func payloadMultikeyArray(m map[string]any, key string) ([]MultikeyPublicKey, er
 	arr, ok := v.([]any)
 	if !ok {
 		return nil, fmt.Errorf("%s is not an array", key)
+	}
+	if len(arr) > maxKeysPerRole {
+		return nil, fmt.Errorf("%s exceeds max keys per role: %d > %d", key, len(arr), maxKeysPerRole)
 	}
 	result := make([]MultikeyPublicKey, len(arr))
 	for i, item := range arr {
@@ -286,9 +338,12 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		}
 
 		// derive operation CID from payload
-		_, cidBytes, operationCID, err := DagCborCID(payload)
+		cborBytes, cidBytes, operationCID, err := DagCborCID(payload)
 		if err != nil {
 			return nil, fmt.Errorf("log[%d]: failed to derive CID: %w", idx, err)
+		}
+		if len(cborBytes) > maxOperationSize {
+			return nil, fmt.Errorf("log[%d]: operation exceeds max size: %d > %d", idx, len(cborBytes), maxOperationSize)
 		}
 
 		// verify cid header
@@ -424,9 +479,12 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 	}
 
 	// derive CID
-	_, _, operationCID, err := DagCborCID(payload)
+	cborBytes, _, operationCID, err := DagCborCID(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive CID: %w", err)
+	}
+	if len(cborBytes) > maxOperationSize {
+		return nil, fmt.Errorf("operation exceeds max size: %d > %d", len(cborBytes), maxOperationSize)
 	}
 	if header.CID == "" {
 		return nil, fmt.Errorf("missing cid in protected header")
@@ -783,9 +841,16 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 		}
 
 		// derive operation CID
-		_, cidBytes, operationCID, err := DagCborCID(payload)
+		cborBytes, cidBytes, operationCID, err := DagCborCID(payload)
 		if err != nil {
 			return nil, fmt.Errorf("log[%d]: failed to derive CID: %w", idx, err)
+		}
+		opSize, err := operationSizeForCap(payload, cborBytes)
+		if err != nil {
+			return nil, fmt.Errorf("log[%d]: failed to size operation: %w", idx, err)
+		}
+		if opSize > maxOperationSize {
+			return nil, fmt.Errorf("log[%d]: operation exceeds max size: %d > %d", idx, opSize, maxOperationSize)
 		}
 		if header.CID == "" {
 			return nil, fmt.Errorf("log[%d]: missing cid in protected header", idx)
@@ -917,9 +982,16 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 	}
 
 	// derive CID
-	_, _, operationCID, err := DagCborCID(payload)
+	cborBytes, _, operationCID, err := DagCborCID(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive CID: %w", err)
+	}
+	opSize, err := operationSizeForCap(payload, cborBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to size operation: %w", err)
+	}
+	if opSize > maxOperationSize {
+		return nil, fmt.Errorf("operation exceeds max size: %d > %d", opSize, maxOperationSize)
 	}
 	if header.CID == "" {
 		return nil, fmt.Errorf("missing cid in protected header")

@@ -20,7 +20,7 @@
 import { decodeMultikey } from '../chain/multikey';
 import type { VerifiedIdentity } from '../chain/schemas';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
-import { DFOSCredentialPayload, type Attenuation } from './schemas';
+import { DFOSCredentialPayload, MAX_CREDENTIAL_SIZE, type Attenuation } from './schemas';
 
 // -----------------------------------------------------------------------------
 // types
@@ -157,6 +157,17 @@ export const verifyDFOSCredential = async (
     now?: number;
   },
 ): Promise<VerifiedDFOSCredential> => {
+  // bound credential size — the credential's analog of MAX_OPERATION_SIZE. The
+  // leaf token embeds the entire nested delegation chain (each parent is carried
+  // in `prf`), so this one cap bounds the whole chain. Checked before any decode
+  // or recursion as a DoS guard. (JWS tokens are base64url + dots = ASCII, so
+  // string length equals byte length.)
+  if (jwsToken.length > MAX_CREDENTIAL_SIZE) {
+    throw new CredentialVerificationError(
+      `credential exceeds max size: ${jwsToken.length} > ${MAX_CREDENTIAL_SIZE}`,
+    );
+  }
+
   // decode JWS
   const decoded = decodeJwsUnsafe(jwsToken);
   if (!decoded) throw new CredentialVerificationError('failed to decode credential JWS');

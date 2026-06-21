@@ -456,3 +456,19 @@ describe('signature verification profile (pragmatic v1)', () => {
     );
   });
 });
+
+describe('canonical encode depth guard', () => {
+  it('rejects a pathologically nested value (DoS resource guard)', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    // 1025 nested arrays — one past the generous depth cap.
+    let deep: unknown = 'x';
+    for (let i = 0; i < 1025; i++) deep = [deep];
+    await expect(dagCborCanonicalEncode(deep)).rejects.toThrow(/max depth/);
+  });
+
+  it('encodes a normally-shallow value without tripping the guard', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    const block = await dagCborCanonicalEncode({ a: [{ b: [{ c: 1 }] }] });
+    expect(block.cid.toString()).toMatch(/^b/);
+  });
+});

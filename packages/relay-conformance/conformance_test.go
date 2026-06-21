@@ -1669,7 +1669,7 @@ func TestGlobalLogPagination(t *testing.T) {
 	// 3. Drain all remaining pages — global log may have relay bootstrap entries
 	//    beyond our 3 identities. Verify pagination terminates correctly.
 	cursor := page2.Cursor
-	totalEntries := 2 // already consumed 2 entries from page1 + page2
+	totalEntries := 2                         // already consumed 2 entries from page1 + page2
 	for cursor != nil && totalEntries < 100 { // safety bound
 		var page struct {
 			Entries []struct {

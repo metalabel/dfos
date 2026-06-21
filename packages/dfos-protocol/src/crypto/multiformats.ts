@@ -46,11 +46,27 @@ export const dagCborCanonicalEncode = async (value: unknown) => {
 const MAX_SAFE_CANONICAL_INTEGER = 9007199254740991;
 
 /**
+ * Maximum nesting depth walked when canonicalizing/encoding a value. A DoS
+ * resource guard (not a chain-validity rule): a pathologically nested payload
+ * would otherwise recurse here and in the dag-cbor encoder until the stack
+ * overflows. Generous (1024) so it never binds a legitimate operation — real
+ * DFOS payloads are a handful of levels deep — while bounding stack cost. Per
+ * the dag-cbor/IPLD prior art (go-ipld-prime caps at 1024), every codec picks a
+ * local depth cap; this is DFOS's, applied identically in the Go reference
+ * (maxCanonicalDepth in cbor.go).
+ */
+const MAX_CANONICAL_DEPTH = 1024;
+
+/**
  * Walks a value and rejects any number that is not canonicalizable under the
  * DFOS number policy: NaN, ±Infinity, non-integers, and integers outside
- * ±(2^53-1). Applications must encode such values as strings.
+ * ±(2^53-1). Applications must encode such values as strings. Also enforces the
+ * MAX_CANONICAL_DEPTH nesting guard.
  */
-const assertCanonicalNumbers = (value: unknown): void => {
+const assertCanonicalNumbers = (value: unknown, depth = 0): void => {
+  if (depth > MAX_CANONICAL_DEPTH) {
+    throw new Error(`value nesting exceeds max depth ${MAX_CANONICAL_DEPTH}`);
+  }
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
       throw new Error(`non-finite number is not canonicalizable: ${value}`);
@@ -68,11 +84,11 @@ const assertCanonicalNumbers = (value: unknown): void => {
     return;
   }
   if (Array.isArray(value)) {
-    for (const entry of value) assertCanonicalNumbers(entry);
+    for (const entry of value) assertCanonicalNumbers(entry, depth + 1);
     return;
   }
   if (value !== null && typeof value === 'object') {
-    for (const entry of Object.values(value)) assertCanonicalNumbers(entry);
+    for (const entry of Object.values(value)) assertCanonicalNumbers(entry, depth + 1);
   }
 };
 

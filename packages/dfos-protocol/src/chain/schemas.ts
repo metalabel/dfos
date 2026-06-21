@@ -4,19 +4,26 @@ import { z } from 'zod';
 export type Signer = (message: Uint8Array) => Promise<Uint8Array>;
 
 // --- protocol limits ---
+//
+// Per-field STRING-LENGTH caps (did, key id, multibase, CID, note) were removed
+// in favor of one aggregate MAX_OPERATION_SIZE cap (below): the per-field limits
+// were a TS-only defensive zoo with no spec mandate and no Go parity, so they
+// forked validity across implementations. The genuine validity rules those
+// fields rely on (CID re-derivation, ed25519 key decode, ISO-8601 parsing) are
+// enforced directly and identically in both impls. CARDINALITY caps (keys per
+// role, services entries/bytes) remain — they bound structure, not byte length.
+//
+// Wire-payload schemas use z.looseObject (not z.strictObject): unknown keys are
+// preserved (not stripped) and ignored, honoring the protocol's MUST-ignore-
+// unknown forward-compat rule and matching the Go library (which decodes into
+// map[string]any and ignores extras). Preserving — not stripping — unknown keys
+// is required for CID integrity: the operation CID is re-derived from the parsed
+// object, so a stripped key would change the re-encoded bytes and fail the CID
+// match. VerifiedIdentity stays strict — it is the verifier's internal output,
+// never decoded from untrusted wire bytes.
 
-/** Max length for key ID strings (e.g., "key_r9ev34fvc23z999veaaft83nn29zvhe") */
-const MAX_KEY_ID = 64;
-/** Max length for multibase-encoded public keys */
-const MAX_PUBLIC_KEY_MULTIBASE = 128;
-/** Max length for CID strings (CIDv1 base32lower ~60 chars typical) */
-const MAX_CID = 256;
-/** Max length for operation note annotations */
-const MAX_NOTE = 256;
 /** Max number of keys per role (auth, assert, controller) */
 const MAX_KEYS_PER_ROLE = 16;
-/** Max length for DID strings (did:dfos:xxx ~31 chars typical) */
-const MAX_DID = 256;
 /** Max length for a service entry id (did-core fragment, e.g. "profile") */
 const MAX_SERVICE_ID = 64;
 /** Max length for a service entry type string (recognized or open-namespace) */
@@ -29,13 +36,23 @@ const MAX_RELATION = 64;
 export const MAX_SERVICES_ENTRIES = 16;
 /** Max CBOR-encoded size of the services array (bytes) — protocol constant */
 export const MAX_SERVICES_PAYLOAD_SIZE = 8192;
+/**
+ * Max dag-cbor-encoded size of a single protocol operation payload (bytes) — the
+ * one aggregate validity bound on operation size, measured over the exact bytes
+ * the CID commits to. Generously set (64 KiB) so it never binds a legitimate
+ * proof-layer operation while bounding decode/verify cost (a DoS + determinism
+ * invariant). This is a VALIDITY-determining cap: it MUST be identical across
+ * implementations. Large binary media does NOT travel in operation payloads —
+ * it is referenced, not inlined — so this bound is about proof-layer ops only.
+ */
+export const MAX_OPERATION_SIZE = 65536;
 
 // ---
 
-export const MultikeyPublicKey = z.strictObject({
-  id: z.string().max(MAX_KEY_ID),
+export const MultikeyPublicKey = z.looseObject({
+  id: z.string(),
   type: z.literal('Multikey'),
-  publicKeyMultibase: z.string().max(MAX_PUBLIC_KEY_MULTIBASE),
+  publicKeyMultibase: z.string(),
 });
 export type MultikeyPublicKey = z.infer<typeof MultikeyPublicKey>;
 
@@ -113,10 +130,10 @@ export type ServicesArray = z.infer<typeof ServicesArray>;
 // ---
 
 const Iso8601 = z.iso.datetime({ offset: false, precision: 3 });
-const CIDString = z.string().max(MAX_CID);
+const CIDString = z.string();
 
 /** Identity chain: create — genesis operation, starts the chain */
-const IdentityCreate = z.strictObject({
+const IdentityCreate = z.looseObject({
   version: z.literal(1),
   type: z.literal('create'),
   authKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
@@ -129,7 +146,7 @@ const IdentityCreate = z.strictObject({
 });
 
 /** Identity chain: update — key rotation or modification */
-const IdentityUpdate = z.strictObject({
+const IdentityUpdate = z.looseObject({
   version: z.literal(1),
   type: z.literal('update'),
   previousOperationCID: CIDString,
@@ -145,7 +162,7 @@ const IdentityUpdate = z.strictObject({
 });
 
 /** Identity chain: delete — permanently destroy identity */
-const IdentityDelete = z.strictObject({
+const IdentityDelete = z.looseObject({
   version: z.literal(1),
   type: z.literal('delete'),
   previousOperationCID: CIDString,
@@ -162,7 +179,7 @@ export type IdentityOperation = z.infer<typeof IdentityOperation>;
 // ---
 
 export const VerifiedIdentity = z.strictObject({
-  did: z.string().max(MAX_DID),
+  did: z.string(),
   isDeleted: z.boolean(),
   authKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
   assertKeys: z.array(MultikeyPublicKey).max(MAX_KEYS_PER_ROLE),
@@ -175,38 +192,38 @@ export type VerifiedIdentity = z.infer<typeof VerifiedIdentity>;
 // ---
 
 /** Content chain: create — genesis operation, commits initial document */
-const ContentCreate = z.strictObject({
+const ContentCreate = z.looseObject({
   version: z.literal(1),
   type: z.literal('create'),
-  did: z.string().max(MAX_DID),
+  did: z.string(),
   documentCID: CIDString,
   baseDocumentCID: CIDString.nullable(),
   createdAt: Iso8601,
-  note: z.string().max(MAX_NOTE).nullable(),
+  note: z.string().nullable(),
 });
 
 /** Content chain: update — commit new document (null documentCID = clear) */
-const ContentUpdate = z.strictObject({
+const ContentUpdate = z.looseObject({
   version: z.literal(1),
   type: z.literal('update'),
-  did: z.string().max(MAX_DID),
+  did: z.string(),
   previousOperationCID: CIDString,
   documentCID: CIDString.nullable(),
   baseDocumentCID: CIDString.nullable(),
   createdAt: Iso8601,
-  note: z.string().max(MAX_NOTE).nullable(),
+  note: z.string().nullable(),
   /** DFOS credential authorizing this operation when signer is not the chain creator */
   authorization: z.string().optional(),
 });
 
 /** Content chain: delete — permanently destroy content */
-const ContentDelete = z.strictObject({
+const ContentDelete = z.looseObject({
   version: z.literal(1),
   type: z.literal('delete'),
-  did: z.string().max(MAX_DID),
+  did: z.string(),
   previousOperationCID: CIDString,
   createdAt: Iso8601,
-  note: z.string().max(MAX_NOTE).nullable(),
+  note: z.string().nullable(),
   /** DFOS credential authorizing this operation when signer is not the chain creator */
   authorization: z.string().optional(),
 });
@@ -229,10 +246,10 @@ export const MAX_ARTIFACT_PAYLOAD_SIZE = 16384;
 const ArtifactContent = z.object({ $schema: z.string().max(MAX_SCHEMA) }).catchall(z.unknown());
 
 /** Artifact: standalone signed inline document, immutable, CID-addressable */
-export const ArtifactPayload = z.strictObject({
+export const ArtifactPayload = z.looseObject({
   version: z.literal(1),
   type: z.literal('artifact'),
-  did: z.string().max(MAX_DID),
+  did: z.string(),
   content: ArtifactContent,
   createdAt: Iso8601,
 });
@@ -249,10 +266,10 @@ export type ArtifactPayload = z.infer<typeof ArtifactPayload>;
  * unrecognized values MUST be preserved and ignored. Optional, so a bare witness
  * attestation (no relation) encodes identically (CID-neutral).
  */
-export const CountersignPayload = z.strictObject({
+export const CountersignPayload = z.looseObject({
   version: z.literal(1),
   type: z.literal('countersign'),
-  did: z.string().max(MAX_DID),
+  did: z.string(),
   targetCID: CIDString,
   relation: z.string().min(1).max(MAX_RELATION).optional(),
   createdAt: Iso8601,
@@ -262,10 +279,10 @@ export type CountersignPayload = z.infer<typeof CountersignPayload>;
 // ---
 
 /** Revocation: signed credential revocation artifact, gossiped on the proof plane */
-export const RevocationPayload = z.strictObject({
+export const RevocationPayload = z.looseObject({
   version: z.literal(1),
   type: z.literal('revocation'),
-  did: z.string().max(MAX_DID),
+  did: z.string(),
   credentialCID: CIDString,
   createdAt: Iso8601,
 });

@@ -25,7 +25,7 @@ Credentials are content-addressed via CID (same `dagCborCanonicalEncode` + SHA-2
 
 ### DFOSCredentialPayload
 
-The credential payload is validated by a strict Zod schema. No extra fields are permitted.
+The credential payload is validated against the schema below. Unknown top-level fields are preserved-and-ignored (forward-compat, per the protocol's MUST-ignore-unknown rule), not rejected; the CID still commits to the exact bytes.
 
 ```json
 {
@@ -53,27 +53,35 @@ The credential payload is validated by a strict Zod schema. No extra fields are 
 
 ### Attenuation Entry
 
-Each attenuation entry is a strict object with two fields:
+Each attenuation entry is an object with two non-empty string fields:
 
 ```json
 { "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "write" }
 ```
 
-| Field      | Type   | Max | Description                            |
-| ---------- | ------ | --- | -------------------------------------- |
-| `resource` | string | 512 | Resource identifier (`type:id` format) |
-| `action`   | string | 64  | Comma-separated action list            |
+| Field      | Type   | Description                            |
+| ---------- | ------ | -------------------------------------- |
+| `resource` | string | Resource identifier (`type:id` format) |
+| `action`   | string | Comma-separated action list            |
 
-### Field Limits
+### Size and Cardinality Limits
 
-| Field      | Limit     | Rationale                          |
-| ---------- | --------- | ---------------------------------- |
-| `iss`      | 256 chars | ~8x typical `did:dfos:` length     |
-| `aud`      | 512 chars | Relay hostnames or `"*"`           |
-| `resource` | 512 chars | Resource type + content ID         |
-| `action`   | 64 chars  | Comma-separated action names       |
-| `att`      | 32 items  | Generous for multi-resource grants |
-| `prf`      | 1 item    | Single-parent (linear) delegation  |
+A credential is bounded by **one aggregate size cap** plus a small set of **cardinality caps** — not a per-field string-length table. Per-field length caps (`iss`, `aud`, `resource`, `action`) were a TS-only defensive measure with no Go parity; they forked validity across implementations and are removed. The genuine validity rules those fields rely on (issuer-key resolution, `aud → iss` delegation linkage, attenuation subset coverage) are enforced directly and identically in both implementations.
+
+**Aggregate credential size:**
+
+| Bound                | Value                      | Applies to                |
+| -------------------- | -------------------------- | ------------------------- |
+| credential JWS token | **262144 bytes** (256 KiB) | the serialized credential |
+
+Verifiers MUST reject a credential whose serialized JWS token exceeds 262144 bytes, checked before any decode. The leaf token embeds the entire nested delegation chain (each parent is carried verbatim in `prf`), so this single cap bounds the whole chain. Credentials carry their own ceiling — larger than the 64 KiB operation cap ([PROTOCOL.md](https://protocol.dfos.com/protocol)) — precisely because a maximum-depth delegation chain legitimately exceeds 64 KiB; the credential is exempt from the operation cap and bounded by this one instead.
+
+**Cardinality caps:**
+
+| Field | Max      | Rationale                                                                          |
+| ----- | -------- | ---------------------------------------------------------------------------------- |
+| `att` | 32 items | Generous for multi-resource grants; min 1 (a zero-`att` credential grants nothing) |
+| `prf` | 1 item   | Single-parent (linear) delegation                                                  |
 
 ### CID Derivation
 
