@@ -7,6 +7,16 @@ import (
 	"time"
 )
 
+// maxOperationSize is the max dag-cbor-encoded size (bytes) of a single identity
+// or content operation payload — the one aggregate validity bound on operation
+// size, measured over the exact bytes the CID commits to. Generously set (64 KiB)
+// so it never binds a legitimate proof-layer operation while bounding decode/
+// verify cost. VALIDITY-determining: MUST match the TS reference
+// (MAX_OPERATION_SIZE in chain/schemas.ts). Credentials are NOT subject to this
+// cap — their size is bounded by the delegation-depth and att/prf limits, and a
+// max-depth chain legitimately exceeds it.
+const maxOperationSize = 65536
+
 // KeyResolver resolves a kid (DID URL: "did:dfos:xxx#key_yyy") to an Ed25519 public key.
 type KeyResolver func(kid string) (ed25519.PublicKey, error)
 
@@ -286,9 +296,12 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		}
 
 		// derive operation CID from payload
-		_, cidBytes, operationCID, err := DagCborCID(payload)
+		cborBytes, cidBytes, operationCID, err := DagCborCID(payload)
 		if err != nil {
 			return nil, fmt.Errorf("log[%d]: failed to derive CID: %w", idx, err)
+		}
+		if len(cborBytes) > maxOperationSize {
+			return nil, fmt.Errorf("log[%d]: operation exceeds max size: %d > %d", idx, len(cborBytes), maxOperationSize)
 		}
 
 		// verify cid header
@@ -424,9 +437,12 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 	}
 
 	// derive CID
-	_, _, operationCID, err := DagCborCID(payload)
+	cborBytes, _, operationCID, err := DagCborCID(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive CID: %w", err)
+	}
+	if len(cborBytes) > maxOperationSize {
+		return nil, fmt.Errorf("operation exceeds max size: %d > %d", len(cborBytes), maxOperationSize)
 	}
 	if header.CID == "" {
 		return nil, fmt.Errorf("missing cid in protected header")
@@ -783,9 +799,12 @@ func VerifyContentChain(log []string, resolveKey KeyResolver, enforceAuthorizati
 		}
 
 		// derive operation CID
-		_, cidBytes, operationCID, err := DagCborCID(payload)
+		cborBytes, cidBytes, operationCID, err := DagCborCID(payload)
 		if err != nil {
 			return nil, fmt.Errorf("log[%d]: failed to derive CID: %w", idx, err)
+		}
+		if len(cborBytes) > maxOperationSize {
+			return nil, fmt.Errorf("log[%d]: operation exceeds max size: %d > %d", idx, len(cborBytes), maxOperationSize)
 		}
 		if header.CID == "" {
 			return nil, fmt.Errorf("log[%d]: missing cid in protected header", idx)
@@ -917,9 +936,12 @@ func VerifyContentExtension(currentState ContentState, lastCreatedAt, newOp stri
 	}
 
 	// derive CID
-	_, _, operationCID, err := DagCborCID(payload)
+	cborBytes, _, operationCID, err := DagCborCID(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive CID: %w", err)
+	}
+	if len(cborBytes) > maxOperationSize {
+		return nil, fmt.Errorf("operation exceeds max size: %d > %d", len(cborBytes), maxOperationSize)
 	}
 	if header.CID == "" {
 		return nil, fmt.Errorf("missing cid in protected header")

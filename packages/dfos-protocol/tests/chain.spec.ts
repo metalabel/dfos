@@ -588,6 +588,41 @@ describe('content chain', () => {
     expect(result.isDeleted).toBe(false);
   });
 
+  it('rejects an operation exceeding the max operation size', async () => {
+    const id = makeIdentity();
+    const doc = await makeDocCID({ type: 'post', title: 'big' });
+    const op: ContentOperation = {
+      version: 1,
+      type: 'create',
+      did: id.did,
+      documentCID: doc,
+      baseDocumentCID: null,
+      createdAt: ts(),
+      note: 'x'.repeat(70_000), // pushes the dag-cbor payload past the 64 KiB cap
+    };
+    const { jwsToken } = await signContentOperation({ operation: op, signer: id.signer, kid: id.kid });
+    await expect(verifyContentChain({ log: [jwsToken], resolveKey: id.resolveKey })).rejects.toThrow(
+      /exceeds max size/,
+    );
+  });
+
+  it('accepts an operation near but under the max operation size', async () => {
+    const id = makeIdentity();
+    const doc = await makeDocCID({ type: 'post', title: 'big-but-ok' });
+    const op: ContentOperation = {
+      version: 1,
+      type: 'create',
+      did: id.did,
+      documentCID: doc,
+      baseDocumentCID: null,
+      createdAt: ts(),
+      note: 'x'.repeat(60_000), // ~60 KB payload, under the 64 KiB cap
+    };
+    const { jwsToken } = await signContentOperation({ operation: op, signer: id.signer, kid: id.kid });
+    const result = await verifyContentChain({ log: [jwsToken], resolveKey: id.resolveKey });
+    expect(result.length).toBe(1);
+  });
+
   it('should verify update with null documentCID (clear)', async () => {
     const id = makeIdentity();
     const doc1 = await makeDocCID({ type: 'post', title: 'v1' });
@@ -1639,28 +1674,19 @@ describe('operation field limits', () => {
     publicKeyMultibase: 'z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb',
   };
 
-  it('should reject key.id exceeding 64 chars', () => {
+  it('accepts long key.id / publicKeyMultibase at the schema layer — per-field caps removed', () => {
+    // key.id and publicKeyMultibase length caps were collapsed into the aggregate
+    // MAX_OPERATION_SIZE cap; the real validity rule (multikey decode) still
+    // enforces well-formedness at verification.
     const result = IdentityOperationSchema.safeParse({
       version: 1,
       type: 'create',
-      authKeys: [{ ...validKey, id: 'k'.repeat(65) }],
+      authKeys: [{ ...validKey, id: 'k'.repeat(200), publicKeyMultibase: 'z' + 'A'.repeat(200) }],
       assertKeys: [],
       controllerKeys: [validKey],
       createdAt: '2026-01-01T00:00:00.000Z',
     });
-    expect(result.success).toBe(false);
-  });
-
-  it('should reject publicKeyMultibase exceeding 128 chars', () => {
-    const result = IdentityOperationSchema.safeParse({
-      version: 1,
-      type: 'create',
-      authKeys: [{ ...validKey, publicKeyMultibase: 'z' + 'A'.repeat(128) }],
-      assertKeys: [],
-      controllerKeys: [validKey],
-      createdAt: '2026-01-01T00:00:00.000Z',
-    });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it('should reject more than 16 keys per role', () => {
@@ -1676,44 +1702,21 @@ describe('operation field limits', () => {
     expect(result.success).toBe(false);
   });
 
-  it('should reject did exceeding 256 chars', () => {
+  it('accepts long string fields at the schema layer — per-field length caps removed', () => {
+    // The per-field length caps (did/CID/note ≤ 256/512) were collapsed into a
+    // single aggregate MAX_OPERATION_SIZE cap enforced at verification. The schema
+    // no longer rejects long individual fields; oversized whole operations are
+    // caught by the op-size cap in verifyContentChain/verifyIdentityChain.
     const result = ContentOperationSchema.safeParse({
       version: 1,
       type: 'create',
-      did: 'did:dfos:' + 'x'.repeat(248),
-      documentCID: 'bafyreivalid',
+      did: 'did:dfos:' + 'x'.repeat(1000),
+      documentCID: 'b'.repeat(1000),
       baseDocumentCID: null,
       createdAt: '2026-01-01T00:00:00.000Z',
-      note: null,
+      note: 'x'.repeat(1000),
     });
-    expect(result.success).toBe(false);
-  });
-
-  it('should reject CID strings exceeding 256 chars', () => {
-    const result = ContentOperationSchema.safeParse({
-      version: 1,
-      type: 'update',
-      did: 'did:dfos:test',
-      previousOperationCID: 'b'.repeat(257),
-      documentCID: 'bafyreivalid',
-      baseDocumentCID: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      note: null,
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it('should reject note exceeding 256 chars', () => {
-    const result = ContentOperationSchema.safeParse({
-      version: 1,
-      type: 'create',
-      did: 'did:dfos:test',
-      documentCID: 'bafyreivalid',
-      baseDocumentCID: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      note: 'x'.repeat(257),
-    });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it('should accept values within limits', () => {

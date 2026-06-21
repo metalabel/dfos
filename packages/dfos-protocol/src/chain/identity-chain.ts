@@ -15,6 +15,7 @@ import { deriveChainIdentifier } from './derivation';
 import { decodeMultikey } from './multikey';
 import {
   IdentityOperation,
+  MAX_OPERATION_SIZE,
   type MultikeyPublicKey,
   type ServiceEntry,
   type VerifiedIdentity,
@@ -166,6 +167,11 @@ export const verifyIdentityChain = async (input: {
 
     // derive operation CID from payload
     const encoded = await dagCborCanonicalEncode(op);
+    if (encoded.bytes.length > MAX_OPERATION_SIZE) {
+      throw new Error(
+        `log[${idx}]: operation exceeds max size: ${encoded.bytes.length} > ${MAX_OPERATION_SIZE}`,
+      );
+    }
     const operationCID = encoded.cid.toString();
 
     // verify cid header — must be present and match derived CID
@@ -324,6 +330,9 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
 
   // derive operation CID
   const encoded = await dagCborCanonicalEncode(op);
+  if (encoded.bytes.length > MAX_OPERATION_SIZE) {
+    throw new Error(`operation exceeds max size: ${encoded.bytes.length} > ${MAX_OPERATION_SIZE}`);
+  }
   const operationCID = encoded.cid.toString();
 
   // verify cid header

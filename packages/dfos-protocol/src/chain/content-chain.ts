@@ -25,7 +25,7 @@ import {
 } from '../credentials';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
 import { deriveContentId } from './derivation';
-import { ContentOperation } from './schemas';
+import { ContentOperation, MAX_OPERATION_SIZE } from './schemas';
 import type { Signer, VerifiedIdentity } from './schemas';
 
 // -----------------------------------------------------------------------------
@@ -289,6 +289,9 @@ export const verifyContentChain = async (input: {
 
     // derive operation CID
     const encoded = await dagCborCanonicalEncode(op);
+    if (encoded.bytes.length > MAX_OPERATION_SIZE) {
+      throw new Error(`operation exceeds max size: ${encoded.bytes.length} > ${MAX_OPERATION_SIZE}`);
+    }
     const operationCID = encoded.cid.toString();
 
     // verify cid header — must be present and match derived CID
@@ -448,6 +451,9 @@ export const verifyContentExtensionFromTrustedState = async (input: {
 
   // derive operation CID
   const encoded = await dagCborCanonicalEncode(op);
+  if (encoded.bytes.length > MAX_OPERATION_SIZE) {
+    throw new Error(`operation exceeds max size: ${encoded.bytes.length} > ${MAX_OPERATION_SIZE}`);
+  }
   const operationCID = encoded.cid.toString();
 
   // verify cid header
