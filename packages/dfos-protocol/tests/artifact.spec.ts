@@ -65,6 +65,26 @@ describe('artifact', () => {
     expect(result.artifactCID).toBe(artifactCID);
   });
 
+  it('accepts a $schema longer than 256 chars (no per-field cap — TS/Go parity)', async () => {
+    // Regression guard: a former TS-only 256-char $schema cap forked artifact
+    // validity from Go (which never capped it). Artifacts are bounded solely by
+    // the aggregate MAX_ARTIFACT_PAYLOAD_SIZE, so a long $schema that keeps the
+    // payload under the byte cap MUST verify — identically in both impls.
+    const id = makeIdentity();
+    const longSchema = 'dfos:' + 'a'.repeat(400); // 405 chars, well over the old 256
+    const payload: ArtifactPayload = {
+      version: 1,
+      type: 'artifact',
+      did: id.did,
+      content: { $schema: longSchema, name: 'Long Schema' },
+      createdAt: ts(),
+    };
+
+    const { jwsToken } = await signArtifact({ payload, signer: id.signer, kid: id.kid });
+    const result = await verifyArtifact({ jwsToken, resolveKey: id.resolveKey });
+    expect(result.payload.content.$schema).toBe(longSchema);
+  });
+
   // --- CID determinism ---
 
   it('should produce deterministic CID for same payload', async () => {
