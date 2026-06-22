@@ -33,7 +33,7 @@ paths:
                   did:
                     type: string
                     description: The relay's DID
-                    example: 'did:dfos:e3vvtck42d4eacdnzvtrn6'
+                    example: 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr'
                   protocol:
                     type: string
                     enum: [dfos-web-relay]
@@ -168,7 +168,7 @@ paths:
           required: true
           schema:
             type: string
-          description: 'DID of the identity (e.g., did:dfos:e3vvtck42d4eacdnzvtrn6)'
+          description: 'DID of the identity (e.g., did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr)'
       responses:
         '200':
           description: Identity chain state and log
@@ -419,7 +419,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '501':
-          description: Documents capability not enabled
+          description: Content plane not enabled (the documents endpoint is part of the content plane)
 
   /proof/v1/log:
     get:

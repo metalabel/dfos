@@ -126,9 +126,11 @@ each suite actually exercises.
 **single-JWS primitives** — signature verification, field equality, and derivation
 (key, multikey, CID, DID, document CID, credential structure, number-encoding
 determinism — the sections in `packages/protocol-verify/README.md`). They do **not**
-all exercise the stateful chain semantics. Per the cross-language table in PROTOCOL.md
-(`specs/PROTOCOL.md:1094`), TypeScript and Go carry the deep suites (224 + 63 TS, 18 Go),
-while Python and Swift run only the primitive checks (3 each). **Chain linking,
+all exercise the stateful chain semantics. Per the cross-language table in PROTOCOL.md,
+the five `protocol-verify` suites all run the same primitive set (TypeScript 73, Go 19,
+Rust 19, Python 63, Swift 18); the deep stateful chain-tier coverage lives separately in
+the TypeScript reference suite (`dfos-protocol/tests`, 246) and the Go library suite.
+**Chain linking,
 fork/head-selection, delete-terminality, and credential expiry/delegation are exercised
 in the TypeScript and Go suites, not in all five languages.** A claim of full chain-tier
 conformance rests on the TS + Go corpora; the five-language suite proves the cryptographic

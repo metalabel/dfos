@@ -74,7 +74,7 @@ A credential is bounded by **one aggregate size cap** plus a small set of **card
 | -------------------- | -------------------------- | ------------------------- |
 | credential JWS token | **262144 bytes** (256 KiB) | the serialized credential |
 
-Verifiers MUST reject a credential whose serialized JWS token exceeds 262144 bytes, checked before any decode. The leaf token embeds the entire nested delegation chain (each parent is carried verbatim in `prf`), so this single cap bounds the whole chain. Credentials carry their own ceiling — larger than the 64 KiB operation cap ([PROTOCOL.md](https://protocol.dfos.com/protocol)) — precisely because a maximum-depth delegation chain legitimately exceeds 64 KiB; the credential is exempt from the operation cap and bounded by this one instead.
+Verifiers MUST reject a credential whose serialized JWS token exceeds 262144 bytes, checked before any decode. The leaf token embeds the entire nested delegation chain (each parent is carried verbatim in `prf`), so this single cap bounds the whole chain. Credentials carry their own ceiling — larger than the 64 KiB operation cap ([PROTOCOL.md](https://protocol.dfos.com/spec)) — precisely because a maximum-depth delegation chain legitimately exceeds 64 KiB; the credential is exempt from the operation cap and bounded by this one instead.
 
 **Cardinality caps:**
 
