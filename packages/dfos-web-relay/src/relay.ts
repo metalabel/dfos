@@ -18,6 +18,7 @@ import { z } from 'zod';
 import {
   authenticateRequest,
   DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS,
+  derivePublicGrants,
   hasPublicStandingAuth,
   verifyContentAccess,
 } from './auth';
@@ -458,6 +459,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       genesisCID: chain.genesisCID,
       headCID: chain.state.headCID,
       state: chain.state,
+      publicGrants: await derivePublicGrants(contentId, chain.state.creatorDID, store),
     });
   });
 

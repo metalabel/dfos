@@ -2,6 +2,7 @@ package relay
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,6 +90,30 @@ func (r *Relay) hasPublicStandingAuth(contentID string, action string) bool {
 		}
 	}
 	return false
+}
+
+// derivePublicGrants returns the public (aud:"*") credential JWS tokens that
+// currently authorize `read` on the given content chain — each re-verified live
+// against the proof plane (signature, expiry, revocation, delegation rooted at
+// the creator) through the same verifier the read path uses. This is the
+// document gateway's enriched-resolve material: the proof node hands the gateway
+// the credentials themselves, not a pre-chewed "publicly readable" boolean, so a
+// split gateway or a zero-trust caller can independently re-verify them. The
+// result is sorted lexicographically so the field is deterministic across
+// relays and store backends.
+func (r *Relay) derivePublicGrants(contentID string, creatorDID string) []string {
+	resource := "chain:" + contentID
+	publicCreds, _ := r.readStore.GetPublicCredentials(resource)
+	resolveKey := CreateKeyResolver(r.readStore)
+
+	grants := make([]string, 0, len(publicCreds))
+	for _, credJws := range publicCreds {
+		if err := r.verifyCredentialForAccess(credJws, resolveKey, resource, "read", creatorDID, ""); err == nil {
+			grants = append(grants, credJws)
+		}
+	}
+	sort.Strings(grants)
+	return grants
 }
 
 // ---------------------------------------------------------------------------

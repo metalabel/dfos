@@ -409,9 +409,12 @@ Resolved identity state includes the identity's `services` — the controller-si
     "currentDocumentCID": "bafy...",
     "length": 1,
     "creatorDID": "did:dfos:..."
-  }
+  },
+  "publicGrants": ["eyJhbGciOiJFZERTQSIs...", "..."]
 }
 ```
+
+`publicGrants` is the document gateway's enriched-resolve material: the public (`aud: "*"`) credentials that **currently authorize `read`** on this chain, each re-verified live (signature, expiry, revocation, delegation rooted at the creator) before it is surfaced, and sorted deterministically. A revoked or expired grant drops out. The field is additive and backward-compatible (consumers that don't know it ignore it); the grants are public, so surfacing them discloses nothing private. It lets a document gateway split across origins — or a zero-trust caller — discover and independently re-verify public read grants over HTTP. See [DOCUMENT-GATEWAY.md → Enriched resolve](https://protocol.dfos.com/document-gateway#enriched-resolve-proof-plane-support).
 
 Chain history is available via the per-chain log routes described above.
 
@@ -462,26 +465,26 @@ The documents endpoint is part of the content plane: when `capabilities.content:
 
 ### Standing Authorization
 
-Instead of presenting a read credential on every request, a DFOS credential with `aud: "*"` (public) can be ingested by the relay as a **standing authorization**. Once ingested, the relay stores the credential and automatically authorizes matching content plane requests without requiring the `X-Credential` header.
+Instead of presenting a read credential on every request, a DFOS credential with `aud: "*"` (public) can be ingested by the relay as a **standing authorization** — once ingested, matching content plane requests are authorized without an `X-Credential` header. Credential ingestion uses `POST /proof/v1/operations`: DFOS credentials are submitted as JWS tokens alongside other proof plane operations and stored in the op log like any other operation (addressable by CID, carried in the global log as `kind: "credential"`).
 
-> The 0.1 document gateway replaces this stored standing-authorization table with **stateless derivation**: it surfaces public grants live from the proof plane and re-verifies them per request, through the same verifier the delegated path uses. The authorization _outcome_ is identical; only the mechanism changes. See [DOCUMENT-GATEWAY.md → The unified verifier](https://protocol.dfos.com/document-gateway#the-unified-verifier).
+**Authority is re-derived live, not read from a stored flag.** On every content plane access the relay re-verifies the standing credential against current proof-plane state — signature, issuer-key resolution, temporal validity, **revocation**, and a delegation chain rooted at the content creator — through the **same verifier the per-request (`X-Credential`) path uses**. The two paths differ only in where the credential came from and an audience check that public (`aud: "*"`) credentials skip; revocation is checked **symmetrically** on both, at every link of the delegation chain. See [DOCUMENT-GATEWAY.md → The unified verifier](https://protocol.dfos.com/document-gateway#the-unified-verifier).
 
-Credential ingestion uses `POST /proof/v1/operations` — DFOS credentials are submitted as JWS tokens alongside other proof plane operations. The relay verifies the credential signature, temporal validity, and issuer identity state, then stores it as a standing authorization.
+A relay MAY keep a materialized index of ingested public credentials (resource → candidate credentials) to make standing-auth lookup O(1). **That index is a performance optimization, not authority** — every candidate it yields is re-verified live before it can authorize, so a stale or revoked entry cannot grant access. It is a re-verified, non-authoritative cache over the op log, fully re-derivable from it.
 
-Standing authorizations are checked during content plane access: if the relay has a valid public credential on file whose `att` covers the requested resource and action, access is granted without a per-request credential. The relay verifies the credential's delegation chain roots at the content creator and checks revocation status.
-
-Standing authorizations are invalidated when:
+A standing authorization stops granting access the moment any live check fails:
 
 - The credential expires (temporal validity)
-- The credential is revoked via a revocation artifact
-- The issuer's identity is deleted
+- The credential — or any parent in its delegation chain — is revoked
+- The issuer's identity (or any delegating identity) is deleted
+
+These are evaluated live per request, so the effect is immediate; no cache invalidation is required for correctness.
 
 ### Revocation Ingestion
 
 Revocation artifacts (`typ: did:dfos:revocation`) are ingested via `POST /proof/v1/operations` alongside other proof plane operations. When a revocation is accepted:
 
-1. The revoked credential's CID is recorded
-2. Any standing authorization backed by that credential is immediately invalidated
+1. The revoked credential's CID is recorded against its issuer
+2. Standing authorization backed by that credential stops granting — the live per-request revocation check denies it on the next read (a relay that keeps a candidate index MAY also evict the entry eagerly, but the live check is what guarantees immediacy)
 3. Future content chain operations embedding the revoked credential as `authorization` are rejected
 4. Future content plane requests presenting the revoked credential are rejected
 

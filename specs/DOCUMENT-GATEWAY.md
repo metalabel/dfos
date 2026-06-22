@@ -42,11 +42,13 @@ A relay's content plane **is** a document gateway. The two terms name the same s
 
 ## Statelessness
 
-The gateway holds **no authorization state and no proof-plane replica**. "Stateless" here means _stateless over the proof plane_: the gateway reads the proof plane live on every authorization decision, and stores nothing it could serve stale.
+The gateway holds **no _authoritative_ authorization state and no proof-plane replica**. "Stateless" here means _stateless over the proof plane_: every authorization decision is re-derived live from the proof plane, and nothing the gateway stores is ever trusted as authority — so nothing it stores can be served stale.
+
+A relay MAY keep a materialized index of ingested public grants (a resource → candidate-credential map) as a **performance optimization** — it makes "which grants might cover this chain?" an O(1) lookup instead of an op-log scan. That index is **not authority**: every candidate it yields is re-verified live (signature, issuer-key resolution, expiry, revocation, delegation rooted at the creator) before it can authorize anything. A stale or revoked entry in the index cannot grant access, because the live re-verify rejects it. The index is a cache over the proof-plane op log, fully re-derivable from it — never a source of truth. (This is the same "re-verified, non-authoritative cache" the split-deployment TTL cache is; see [Deployment locality](#deployment-locality).)
 
 This is not the same as offline. Verifying any signature requires the issuer's keys, which live in a **mutable, revocable** identity chain. "Is this grant valid right now?" is a question about _current_ proof-plane state — a key may have rotated, a credential may have been revoked, an identity may have been deleted. There is no correct offline answer. A live read is the honest price of verifying against live, revocable truth.
 
-What the gateway gains by holding no copy: it can never serve a stale authorization. It is coupled to _truth_ and holds no replica to drift. See [Coupling](#coupling-why-tight-is-correct), which separates the three couplings that "stateful/stateless" usually smears together.
+What the gateway gains by holding no authority: it can never serve a stale authorization. It is coupled to _truth_ and holds no authoritative replica to drift. See [Coupling](#coupling-why-tight-is-correct), which separates the three couplings that "stateful/stateless" usually smears together.
 
 ---
 
@@ -217,7 +219,9 @@ The gateway's own `0.x` clock advances independently. New gateway capability arr
 
 The gateway needs the proof plane to surface, alongside a chain's head state, the **public grant credentials** covering that chain — so the gateway can re-verify them rather than consult a stored table.
 
-`GET /proof/v1/content/:contentId` (already called for the head `documentCID`) is **enriched** with a `publicGrants` field: an array of compact credential JWS tokens (`aud: "*"`) whose attenuations cover this chain (`chain:<contentId>` or `chain:*`). The field sits as a top-level sibling to `state`, not inside it — `state` remains the pure replayed chain projection; `publicGrants` is derived authorization data.
+`GET /proof/v1/content/:contentId` (already called for the head `documentCID`) is **enriched** with a `publicGrants` field: an array of compact credential JWS tokens (`aud: "*"`) that **currently authorize `read`** on this chain (`chain:<contentId>` or `chain:*`). Each is **re-verified live** before it is surfaced — signature, issuer-key resolution, expiry, revocation, and delegation rooted at the creator — so the field reflects grants that actually grant, not raw candidates. A revoked or expired grant drops out. The field sits as a top-level sibling to `state`, not inside it — `state` remains the pure replayed chain projection; `publicGrants` is derived authorization data. It is sorted deterministically (lexicographically by token) so it is byte-identical across relays and store backends.
+
+Surfacing the re-verified _credentials themselves_ (not a `publiclyReadable: true` boolean) keeps the node honest: it provides data a zero-trust caller or a split gateway re-verifies independently and arrives at the same answer. The node's filtering is a convenience; the caller's re-verify is the backstop.
 
 ```json
 {
