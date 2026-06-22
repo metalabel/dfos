@@ -165,6 +165,12 @@ A `ContentAnchor`'s `anchor` is a **stable** content identifier dispatched by
 shape: a 31-character contentId resolves to a content chain; a `baf…` CIDv1
 resolves to an artifact.
 
+Because the namespace is open, services beyond the proof plane define their own
+types additively. The document gateway adds `DfosDocumentGateway` (a gateway
+endpoint) and `DfosProfile` (a contentId-or-CID profile anchor); a relay that
+does not recognize them preserves and ignores them. See
+[DOCUMENT-GATEWAY.md → Discovery](https://protocol.dfos.com/document-gateway#discovery).
+
 ```json
 "service": [
   {

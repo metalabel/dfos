@@ -11,6 +11,7 @@ export const GET: APIRoute = () => {
 
   // Specs — web relay
   const webRelay = fs.readFileSync('../../specs/WEB-RELAY.md', 'utf-8');
+  const documentGateway = fs.readFileSync('../../specs/DOCUMENT-GATEWAY.md', 'utf-8');
   const credentials = fs.readFileSync('../../specs/CREDENTIALS.md', 'utf-8');
   const siwd = fs.readFileSync('../../specs/SIWD.md', 'utf-8');
   const threatModel = fs.readFileSync('../../specs/THREAT-MODEL.md', 'utf-8');
@@ -46,6 +47,10 @@ export const GET: APIRoute = () => {
     '---',
     '',
     webRelay,
+    '',
+    '---',
+    '',
+    documentGateway,
     '',
     '---',
     '',
