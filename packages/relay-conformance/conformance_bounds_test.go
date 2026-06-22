@@ -12,16 +12,17 @@ import (
 // relays (validity-determining), and each rejection is paired with a POSITIVE
 // CONTROL just under the bound so the rejection is provably the rule under test.
 
-// keys-per-role: an identity operation MUST carry at most 16 keys in any single
-// role array (authKeys/assertKeys/controllerKeys). A cardinality cap, enforced
-// in the TS schema (.max(MAX_KEYS_PER_ROLE)) and the Go library
-// (payloadMultikeyArray); previously TS-only.
+// keys-per-role: an identity operation MUST carry at most 256 keys in any single
+// role array (authKeys/assertKeys/controllerKeys). A generous cardinality cap,
+// enforced in the TS schema (.max(MAX_KEYS_PER_ROLE)) and the Go library
+// (payloadMultikeyArray). The op-size cap is the real byte arbiter; this cap
+// rarely binds in practice.
 func TestKeysPerRoleCap(t *testing.T) {
 	base := relayURL(t)
 
-	// 17 auth keys → over the cap → rejected.
+	// 257 auth keys → over the cap → rejected.
 	ctrlOver := newKeypair()
-	over := make([]dfos.MultikeyPublicKey, 17)
+	over := make([]dfos.MultikeyPublicKey, 257)
 	for i := range over {
 		over[i] = newKeypair().mk
 	}
@@ -33,12 +34,12 @@ func TestKeysPerRoleCap(t *testing.T) {
 		t.Fatalf("SignIdentityCreate (over): %v", err)
 	}
 	if st, _ := postStatus(t, base, overTok); st != "rejected" {
-		t.Fatalf("17 authKeys should be rejected, got status %q", st)
+		t.Fatalf("257 authKeys should be rejected, got status %q", st)
 	}
 
-	// 16 auth keys → at the cap → accepted (positive control).
+	// 256 auth keys → at the cap → accepted (positive control).
 	ctrlUnder := newKeypair()
-	under := make([]dfos.MultikeyPublicKey, 16)
+	under := make([]dfos.MultikeyPublicKey, 256)
 	for i := range under {
 		under[i] = newKeypair().mk
 	}
@@ -50,7 +51,7 @@ func TestKeysPerRoleCap(t *testing.T) {
 		t.Fatalf("SignIdentityCreate (under): %v", err)
 	}
 	if st, _ := postStatus(t, base, underTok); st != "new" {
-		t.Fatalf("16 authKeys should be accepted, got status %q", st)
+		t.Fatalf("256 authKeys should be accepted, got status %q", st)
 	}
 }
 

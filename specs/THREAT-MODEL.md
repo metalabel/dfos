@@ -115,7 +115,7 @@ letting the platform touch the key (SIWD.md "Sovereign Signing Path", `specs/SIW
 
 There is no key pre-rotation and no recovery mechanism (DID-METHOD.md §6.2,
 `specs/DID-METHOD.md:243`). The mitigation is **1-of-N availability**: each role set
-holds up to 16 keys, and any one current key can authorize an operation, so an identity
+holds up to 256 keys per role, and any one current key can authorize an operation, so an identity
 can spread controller/auth keys across devices and rotate out a lost one from a survivor
 (DID-METHOD.md §6.2, `specs/DID-METHOD.md:245`). This is availability, not recovery — it
 requires registering additional keys _in advance_ while a controller key is still held.

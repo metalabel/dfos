@@ -22,20 +22,29 @@ export type Signer = (message: Uint8Array) => Promise<Uint8Array>;
 // match. VerifiedIdentity stays strict — it is the verifier's internal output,
 // never decoded from untrusted wire bytes.
 
-/** Max number of keys per role (auth, assert, controller) */
-const MAX_KEYS_PER_ROLE = 16;
-/** Max length for a service entry id (did-core fragment, e.g. "profile") */
-const MAX_SERVICE_ID = 64;
-/** Max length for a service entry type string (recognized or open-namespace) */
-const MAX_SERVICE_TYPE = 64;
-/** Max length for a service entry value string (endpoint, label, anchor) */
-const MAX_SERVICE_STRING = 512;
+/**
+ * Max number of keys per role (auth, assert, controller) — a generous cardinality
+ * ceiling on key fan-out. The operation-size cap is the real byte arbiter; a role
+ * never approaches this in practice.
+ */
+const MAX_KEYS_PER_ROLE = 256;
 /** Max length for a countersignature relation tag (open-namespace string) */
 const MAX_RELATION = 64;
-/** Max number of service entries in an identity's services state */
-export const MAX_SERVICES_ENTRIES = 16;
-/** Max CBOR-encoded size of the services array (bytes) — protocol constant */
-export const MAX_SERVICES_PAYLOAD_SIZE = 8192;
+/**
+ * Max number of service entries in an identity's services state — a generous
+ * cardinality ceiling on resolution fan-out. Individual entry fields are NOT
+ * separately length-capped (no per-field length zoo): the aggregate byte cap
+ * below, plus the operation-size cap, bound entry size. The op-size cap is the
+ * real arbiter when services and keys are both large.
+ */
+export const MAX_SERVICES_ENTRIES = 256;
+/**
+ * Max CBOR-encoded size of the services array (bytes) — the SINGLE aggregate that
+ * bounds the services manifest, replacing the former per-field length caps (the
+ * same collapse the op-size cap applied at the operation level). Sized so the
+ * 256-entry ceiling is genuinely reachable with realistic entries.
+ */
+export const MAX_SERVICES_PAYLOAD_SIZE = 32768;
 /**
  * Max dag-cbor-encoded size of a single protocol operation payload (bytes) — the
  * one aggregate validity bound on operation size, measured over the exact bytes
@@ -80,24 +89,20 @@ export const ARTIFACT_CID_ANCHOR_RE = /^baf[a-z2-7]{20,}$/;
  */
 export const ServiceEntry = z
   .object({
-    id: z.string().min(1).max(MAX_SERVICE_ID),
-    type: z.string().min(1).max(MAX_SERVICE_TYPE),
+    id: z.string().min(1),
+    type: z.string().min(1),
   })
   .catchall(z.unknown())
   .superRefine((entry, ctx) => {
     if (entry.type === 'DfosRelay') {
       const endpoint = (entry as Record<string, unknown>)['endpoint'];
-      if (
-        typeof endpoint !== 'string' ||
-        endpoint.length < 1 ||
-        endpoint.length > MAX_SERVICE_STRING
-      ) {
+      if (typeof endpoint !== 'string' || endpoint.length < 1) {
         ctx.addIssue({ code: 'custom', message: 'DfosRelay requires a non-empty endpoint string' });
       }
     } else if (entry.type === 'ContentAnchor') {
       const label = (entry as Record<string, unknown>)['label'];
       const anchor = (entry as Record<string, unknown>)['anchor'];
-      if (typeof label !== 'string' || label.length < 1 || label.length > MAX_SERVICE_STRING) {
+      if (typeof label !== 'string' || label.length < 1) {
         ctx.addIssue({
           code: 'custom',
           message: 'ContentAnchor requires a non-empty label string',

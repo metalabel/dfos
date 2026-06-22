@@ -228,7 +228,7 @@ If you create content with `--peer` but the identity hasn't been published to th
 
 ## Multi-Device Identities (1-of-N)
 
-An identity can hold up to 16 controller keys and 16 auth keys. **Any one current key in a role set can sign** — so the same identity can act from multiple devices, each holding its own key. This is _availability_, not key recovery: with a key on more than one device, losing a single device is not loss of the identity. A surviving device can keep publishing and can even rotate out the lost key.
+An identity can hold up to 256 controller keys and 256 auth keys. **Any one current key in a role set can sign** — so the same identity can act from multiple devices, each holding its own key. This is _availability_, not key recovery: with a key on more than one device, losing a single device is not loss of the identity. A surviving device can keep publishing and can even rotate out the lost key.
 
 The handoff never moves a private key. A new device generates its own keypair locally; only its **public** key crosses to a device holding a controller key, which adds it to the chain.
 
@@ -359,7 +359,7 @@ Two types are structurally recognized:
 - **`DfosRelay`** — `{id, type, endpoint}`, a transport endpoint where this identity's chains can be fetched.
 - **`ContentAnchor`** — `{id, type, label, anchor}`, a stable pointer to a content chain (31-char content id) or an artifact (CIDv1 `baf…`), addressable by `label` (e.g. `profile`, `avatar`).
 
-Bounds (enforced at sign time by the protocol layer): at most 16 entries, unique ids, `id`/`type` each 1..64 chars, and an 8192-byte cap on the encoded services array.
+Bounds (enforced at sign time by the protocol layer): at most 256 entries, unique ids, non-empty `id`/`type`, and a 32768-byte cap on the encoded services array. Individual field lengths are not separately capped — the aggregate byte cap is the single bound.
 
 ```bash
 # attach services at genesis

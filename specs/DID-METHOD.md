@@ -145,8 +145,8 @@ When an identity chain includes `update` operations that change the key sets, th
 
 Identity chain `create`/`update` operations MAY carry a controller-signed
 `services` array — the identity's discovery vocabulary. It is full-state (an
-`update` replaces the entire set), bounded (≤16 entries, unique ids, an
-8192-byte cap on the canonical encoding), and projected into verified identity
+`update` replaces the entire set), bounded (≤256 entries, unique ids, a
+32768-byte cap on the canonical encoding), and projected into verified identity
 state alongside the key sets. The complete normative definition is in
 [PROTOCOL.md → Services](https://protocol.dfos.com/spec#services).
 
@@ -291,7 +291,7 @@ Both costs sit comfortably above the 128-bit security floor, so the self-certifi
 
 If a controller key is compromised, the legitimate holder should immediately sign a key rotation (`update`) operation removing the compromised key. The protocol does not support key pre-rotation — there is no mechanism to pre-commit to a future key. The window of vulnerability exists between compromise and rotation.
 
-Because each role set holds up to 16 keys and any one current key in a set can authorize an operation, an identity can hold controller and auth keys on multiple devices (1-of-N availability). Any one held key can independently act, so a single lost or destroyed device key is not loss of the identity — a key on a surviving device can still rotate out the lost one. This is availability, not recovery: it requires registering additional keys in advance, while a controller key is still held. Note that 1-of-N availability is symmetric with the compromise surface — any held key in a set can authorize, so each additional device key is also an additional thing to keep safe.
+Because each role set holds up to 256 keys and any one current key in a set can authorize an operation, an identity can hold controller and auth keys on multiple devices (1-of-N availability). Any one held key can independently act, so a single lost or destroyed device key is not loss of the identity — a key on a surviving device can still rotate out the lost one. This is availability, not recovery: it requires registering additional keys in advance, while a controller key is still held. Note that 1-of-N availability is symmetric with the compromise surface — any held key in a set can authorize, so each additional device key is also an additional thing to keep safe.
 
 ### 6.3 Equivocation
 

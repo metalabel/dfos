@@ -11,6 +11,23 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
+### Changed
+
+- **[BREAKING]** Raised the keys-per-role cardinality cap from 16 to **256** (each of
+  `authKeys`/`assertKeys`/`controllerKeys`) and the `services` entry cap from 16 to
+  **256**, with the canonical `services` byte cap raised 8192 → **32768** so 256
+  entries are reachable. These are generous cardinality bounds; the op-size cap
+  (65536) remains the real byte arbiter. Validity-determining and enforced
+  identically in TS and Go.
+
+### Removed
+
+- **[BREAKING]** Removed the per-field string-length caps on `services` entries
+  (`id`/`type`/`endpoint`/`label`) — they were a defensive measure with no
+  cross-implementation backing that forked validity across TS and Go. Entry fields
+  are now only required to be non-empty; the single aggregate 32768-byte services
+  cap is the bound. Finishes the per-field length-zoo collapse started in #87.
+
 ## [0.11.0]
 
 ### Added

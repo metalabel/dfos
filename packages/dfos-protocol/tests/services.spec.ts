@@ -107,8 +107,8 @@ describe('ServiceEntry schema', () => {
 });
 
 describe('ServicesArray schema', () => {
-  it('rejects more than 16 entries', () => {
-    const many = Array.from({ length: 17 }, (_, i) => ({ ...RELAY, id: `relay-${i}` }));
+  it('rejects more than 256 entries', () => {
+    const many = Array.from({ length: 257 }, (_, i) => ({ ...RELAY, id: `relay-${i}` }));
     expect(ServicesArray.safeParse(many).success).toBe(false);
   });
 
@@ -214,13 +214,9 @@ describe('services projection', () => {
 
   it('rejects an over-cap services payload at verification', async () => {
     const k = makeKey();
-    // 16 entries each with a 512-char endpoint → well over the 8192 byte cap
-    const big = 'https://' + 'a'.repeat(504);
-    const oversized = Array.from({ length: 16 }, (_, i) => ({
-      id: `relay-${i}`,
-      type: 'DfosRelay',
-      endpoint: big,
-    }));
+    // One entry with a ~33 KB endpoint — individually valid (non-empty, no
+    // per-field length cap) but past the 32768-byte aggregate services cap.
+    const oversized = [{ id: 'relay', type: 'DfosRelay', endpoint: 'https://' + 'a'.repeat(33000) }];
     const create: IdentityOperation = {
       version: 1,
       type: 'create',
@@ -234,5 +230,27 @@ describe('services projection', () => {
     await expect(
       verifyIdentityChain({ didPrefix: 'did:dfos', log: [genesis.jwsToken] }),
     ).rejects.toThrow(/services payload exceeds max size/);
+  });
+
+  it('accepts a services payload just under the cap (positive control)', async () => {
+    const k = makeKey();
+    // Positive control pinning the byte boundary. The single-entry envelope is a
+    // fixed 38 bytes (array+map+id/type keys+values+endpoint header), so an
+    // endpoint of 'https://' + 32714×'a' (len 32722) encodes to 32760 bytes,
+    // just under the 32768 cap. One more byte flips it over (see the test above),
+    // proving the bound is exactly 32768.
+    const underCap = [{ id: 'relay', type: 'DfosRelay', endpoint: 'https://' + 'a'.repeat(32714) }];
+    const create: IdentityOperation = {
+      version: 1,
+      type: 'create',
+      authKeys: [k.key],
+      assertKeys: [k.key],
+      controllerKeys: [k.key],
+      services: underCap,
+      createdAt: ts(0),
+    };
+    const genesis = await sign(create, k);
+    const verified = await verifyIdentityChain({ didPrefix: 'did:dfos', log: [genesis.jwsToken] });
+    expect(verified.services).toHaveLength(1);
   });
 });
