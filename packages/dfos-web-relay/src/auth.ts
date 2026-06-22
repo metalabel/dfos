@@ -142,6 +142,49 @@ export const hasPublicStandingAuth = async (
 };
 
 /**
+ * Derive the public (`aud:"*"`) credential JWS tokens that currently authorize
+ * `read` on the given content chain — each re-verified live against the proof
+ * plane (signature, expiry, revocation, delegation rooted at the creator)
+ * through the same verifier the read path uses.
+ *
+ * This is the document gateway's enriched-resolve material: the proof node hands
+ * the gateway the credentials themselves, not a pre-chewed "publicly readable"
+ * boolean, so a split gateway or a zero-trust caller can independently
+ * re-verify them. The result is sorted lexicographically so the field is
+ * deterministic across relays and store backends (mirrors the Go relay's
+ * `derivePublicGrants`).
+ */
+export const derivePublicGrants = async (
+  contentId: string,
+  creatorDID: string,
+  store: RelayStore,
+): Promise<string[]> => {
+  const resource = `chain:${contentId}`;
+  const publicCreds = await store.getPublicCredentials(resource);
+  if (publicCreds.length === 0) return [];
+
+  const resolveIdentity = createHistoricalIdentityResolver(store);
+  const isRevoked = async (issuerDID: string, credentialCID: string) =>
+    store.isCredentialRevoked(issuerDID, credentialCID);
+
+  const grants: string[] = [];
+  for (const credJws of publicCreds) {
+    try {
+      const cred = await verifyDFOSCredential(credJws, { resolveIdentity });
+      if (await isRevoked(cred.iss, cred.credentialCID)) continue;
+      if (!(await matchesResource(cred.att, resource, 'read'))) continue;
+      await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID, isRevoked });
+      grants.push(credJws);
+    } catch {
+      continue;
+    }
+  }
+
+  grants.sort();
+  return grants;
+};
+
+/**
  * Verify content access for a specific resource
  *
  * Checks in order:

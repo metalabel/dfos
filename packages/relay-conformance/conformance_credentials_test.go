@@ -979,3 +979,159 @@ func TestPublicStandingAuthAnonymousRead(t *testing.T) {
 		t.Fatalf("expected 401 or 403 after revocation, got %d", anonResp2.StatusCode)
 	}
 }
+
+// ===================================================================
+// revoked standing authorization denies read (symmetry coverage)
+// ===================================================================
+
+// TestRevokedStandingAuthDeniesAuthedRead closes a coverage gap: an authenticated
+// reader who relies on standing authorization (auth token, no x-credential) must
+// be denied once the public grant is revoked. The anonymous variant is covered by
+// TestPublicStandingAuthAnonymousRead; this is the authed-but-standing path.
+func TestRevokedStandingAuthDeniesAuthedRead(t *testing.T) {
+	base := relayURL(t)
+	alice := createIdentity(t, base)
+	cc := createContent(t, base, alice)
+
+	// upload blob as creator
+	tok := authToken(t, base, alice)
+	blobData, _ := json.Marshal(cc.document)
+	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+
+	// issue and submit public read credential (aud: "*")
+	kid := alice.did + "#" + alice.auth.keyID
+	credToken := createPublicCredential(t, alice.did, kid, "read", cc.contentID, 5*time.Minute, alice.auth.priv)
+	if res := postOperations(t, base, []string{credToken}); res.StatusCode != 200 {
+		t.Fatalf("submit public credential: status %d, body: %s", res.StatusCode, readBody(t, res))
+	}
+
+	// reader with an auth token but NO x-credential — relies purely on standing auth
+	reader := createIdentity(t, base)
+	readerTok := authToken(t, base, reader)
+	if dlRes := getBlob(t, base, cc.contentID, readerTok); dlRes.StatusCode != 200 {
+		t.Fatalf("expected standing auth to grant authed read: status %d, body: %s", dlRes.StatusCode, readBody(t, dlRes))
+	}
+
+	// revoke the public grant
+	credHeader, _, err := dfos.DecodeJWSUnsafe(credToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revToken, _ := createRevocation(t, alice.did, credHeader.CID, alice.auth)
+	if revRes := postOperations(t, base, []string{revToken}); revRes.StatusCode != 200 {
+		t.Fatalf("revocation submit: status %d, body: %s", revRes.StatusCode, readBody(t, revRes))
+	}
+
+	// authed-but-standing read must now be denied
+	dlRes2 := getBlob(t, base, cc.contentID, readerTok)
+	dlRes2.Body.Close()
+	if dlRes2.StatusCode == 200 {
+		t.Fatal("expected authed standing-auth read to be denied after revocation")
+	}
+	if dlRes2.StatusCode != 401 && dlRes2.StatusCode != 403 {
+		t.Fatalf("expected 401 or 403 after revocation, got %d", dlRes2.StatusCode)
+	}
+}
+
+// TestRevokedWildcardStandingAuthDeniesRead mirrors the above for a chain:*
+// wildcard public grant: revoking it must deny standing-auth reads on a covered
+// chain. (TestChainWildcardStandingAuth proves the grant works; this adds the
+// revoke tail.)
+func TestRevokedWildcardStandingAuthDeniesRead(t *testing.T) {
+	base := relayURL(t)
+	alice := createIdentity(t, base)
+	cc := createContent(t, base, alice)
+
+	tok := authToken(t, base, alice)
+	blobData, _ := json.Marshal(cc.document)
+	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+
+	// chain:* wildcard public grant (contentID "*")
+	kid := alice.did + "#" + alice.auth.keyID
+	credToken := createPublicCredential(t, alice.did, kid, "read", "*", 5*time.Minute, alice.auth.priv)
+	if res := postOperations(t, base, []string{credToken}); res.StatusCode != 200 {
+		t.Fatalf("submit wildcard public credential: status %d, body: %s", res.StatusCode, readBody(t, res))
+	}
+
+	reader := createIdentity(t, base)
+	readerTok := authToken(t, base, reader)
+	if dlRes := getBlob(t, base, cc.contentID, readerTok); dlRes.StatusCode != 200 {
+		t.Fatalf("expected wildcard standing auth to grant read: status %d, body: %s", dlRes.StatusCode, readBody(t, dlRes))
+	}
+
+	credHeader, _, err := dfos.DecodeJWSUnsafe(credToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revToken, _ := createRevocation(t, alice.did, credHeader.CID, alice.auth)
+	if revRes := postOperations(t, base, []string{revToken}); revRes.StatusCode != 200 {
+		t.Fatalf("revocation submit: status %d, body: %s", revRes.StatusCode, readBody(t, revRes))
+	}
+
+	dlRes2 := getBlob(t, base, cc.contentID, readerTok)
+	dlRes2.Body.Close()
+	if dlRes2.StatusCode == 200 {
+		t.Fatal("expected wildcard standing-auth read to be denied after revocation")
+	}
+	if dlRes2.StatusCode != 401 && dlRes2.StatusCode != 403 {
+		t.Fatalf("expected 401 or 403 after revocation, got %d", dlRes2.StatusCode)
+	}
+}
+
+// ===================================================================
+// publicGrants enrichment on the content-state response
+// ===================================================================
+
+// TestPublicGrantsSurfacedOnContentState verifies the document gateway's
+// enriched-resolve material: GET /proof/v1/content/:contentId surfaces the
+// public grant credentials covering the chain (re-verified live), and the field
+// empties once the grant is revoked. This is what lets a split gateway or a
+// zero-trust caller discover and independently re-verify public read grants.
+func TestPublicGrantsSurfacedOnContentState(t *testing.T) {
+	base := relayURL(t)
+	alice := createIdentity(t, base)
+	cc := createContent(t, base, alice)
+
+	stateURL := fmt.Sprintf("%s/proof/v1/content/%s", base, cc.contentID)
+	type contentState struct {
+		PublicGrants []string `json:"publicGrants"`
+	}
+
+	// before any grant: publicGrants present and empty
+	var before contentState
+	getJSON(t, stateURL, &before).Body.Close()
+	if len(before.PublicGrants) != 0 {
+		t.Fatalf("expected no public grants before ingest, got %d", len(before.PublicGrants))
+	}
+
+	// ingest a public read grant
+	kid := alice.did + "#" + alice.auth.keyID
+	credToken := createPublicCredential(t, alice.did, kid, "read", cc.contentID, 5*time.Minute, alice.auth.priv)
+	if res := postOperations(t, base, []string{credToken}); res.StatusCode != 200 {
+		t.Fatalf("submit public credential: status %d, body: %s", res.StatusCode, readBody(t, res))
+	}
+
+	// after ingest: the grant is surfaced
+	var after contentState
+	getJSON(t, stateURL, &after).Body.Close()
+	if len(after.PublicGrants) != 1 || after.PublicGrants[0] != credToken {
+		t.Fatalf("expected the public grant surfaced on content state, got %v", after.PublicGrants)
+	}
+
+	// revoke it
+	credHeader, _, err := dfos.DecodeJWSUnsafe(credToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revToken, _ := createRevocation(t, alice.did, credHeader.CID, alice.auth)
+	if revRes := postOperations(t, base, []string{revToken}); revRes.StatusCode != 200 {
+		t.Fatalf("revocation submit: status %d, body: %s", revRes.StatusCode, readBody(t, revRes))
+	}
+
+	// after revoke: publicGrants empties (revoked grant no longer authorizes)
+	var afterRevoke contentState
+	getJSON(t, stateURL, &afterRevoke).Body.Close()
+	if len(afterRevoke.PublicGrants) != 0 {
+		t.Fatalf("expected no public grants after revocation, got %d", len(afterRevoke.PublicGrants))
+	}
+}

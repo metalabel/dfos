@@ -319,10 +319,11 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"contentId":  chain.ContentID,
-		"genesisCID": chain.GenesisCID,
-		"headCID":    chain.State.HeadCID,
-		"state":      chain.State,
+		"contentId":    chain.ContentID,
+		"genesisCID":   chain.GenesisCID,
+		"headCID":      chain.State.HeadCID,
+		"state":        chain.State,
+		"publicGrants": r.derivePublicGrants(contentID, chain.State.CreatorDID),
 	})
 }
 
