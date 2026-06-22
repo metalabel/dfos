@@ -242,13 +242,17 @@ export type ContentOperation = z.infer<typeof ContentOperation>;
 
 // ---
 
-/** Max length for artifact $schema strings */
-const MAX_SCHEMA = 256;
 /** Max CBOR-encoded payload size for artifacts (bytes) — protocol constant */
 export const MAX_ARTIFACT_PAYLOAD_SIZE = 16384;
 
-/** Artifact content: structured inline document with required $schema discriminator */
-const ArtifactContent = z.object({ $schema: z.string().max(MAX_SCHEMA) }).catchall(z.unknown());
+/**
+ * Artifact content: structured inline document with required $schema discriminator.
+ * No per-field length cap on $schema (no length zoo): artifacts are bounded solely
+ * by the aggregate MAX_ARTIFACT_PAYLOAD_SIZE, identical-by-construction with Go's
+ * VerifyArtifact (which only requires $schema be a present string). A former TS-only
+ * 256-char cap forked artifact validity from Go and is removed.
+ */
+const ArtifactContent = z.object({ $schema: z.string() }).catchall(z.unknown());
 
 /** Artifact: standalone signed inline document, immutable, CID-addressable */
 export const ArtifactPayload = z.looseObject({

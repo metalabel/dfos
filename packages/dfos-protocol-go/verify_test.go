@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -755,6 +756,41 @@ func TestVerifyArtifact(t *testing.T) {
 	}
 	if result.Content["$schema"] != "urn:dfos:relay-profile:v1" {
 		t.Error("content $schema mismatch")
+	}
+}
+
+// TestVerifyArtifact_LongSchema is the Go side of the TS↔Go parity guard: a
+// $schema far longer than the former TS-only 256-char cap must verify, since
+// artifacts are bounded only by the aggregate payload byte cap. Mirrors the TS
+// "accepts a $schema longer than 256 chars" test.
+func TestVerifyArtifact_LongSchema(t *testing.T) {
+	priv, pub, _, keyID := testKeys(t)
+	_, did, _ := testSignIdentityGenesis(t,
+		[]MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}, nil, nil,
+		keyID, priv, "2026-03-07T00:00:00.000Z",
+	)
+
+	kid := did + "#" + keyID
+	longSchema := "urn:dfos:" + strings.Repeat("a", 400) // 409 chars, over the old 256
+	content := map[string]any{"$schema": longSchema, "name": "long schema"}
+	artifactJWS, _, err := SignArtifact(did, content, kid, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := func(k string) (ed25519.PublicKey, error) {
+		if k == kid {
+			return pub, nil
+		}
+		return nil, fmt.Errorf("unknown kid: %s", k)
+	}
+
+	result, err := VerifyArtifact(artifactJWS, resolver)
+	if err != nil {
+		t.Fatalf("VerifyArtifact (long $schema) should succeed: %v", err)
+	}
+	if result.Content["$schema"] != longSchema {
+		t.Error("long $schema not preserved through verify")
 	}
 }
 
