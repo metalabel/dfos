@@ -172,11 +172,13 @@ For content owned by the user's DID, the credential is issued by that DID:
 
 ```json
 {
+  "version": 1,
   "type": "DFOSCredential",
   "iss": "did:dfos:<user>",
   "aud": "did:dfos:<3p_app>",
   "att": [{ "resource": "chain:<contentId>", "action": "read" }],
   "prf": [],
+  "iat": 1752613600,
   "exp": 1752700000
 }
 ```
