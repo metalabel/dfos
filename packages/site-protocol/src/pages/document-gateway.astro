@@ -1,0 +1,13 @@
+---
+import fs from 'node:fs';
+import SpecPage from '../layouts/SpecPage.astro';
+
+const source = fs.readFileSync('../../specs/DOCUMENT-GATEWAY.md', 'utf-8');
+---
+
+<SpecPage
+  title="Document Gateway"
+  description="DFOS Document Gateway (0.1) — a stateless, content-addressed blob store whose authorization is re-derived live from the proof plane."
+  path="/document-gateway"
+  source={source}
+/>

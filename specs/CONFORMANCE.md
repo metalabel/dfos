@@ -88,7 +88,9 @@ A relay ingests, sequences, and serves. It implements:
 **The content plane is OPTIONAL.** A compliant relay **always** serves the proof plane
 (`capabilities.proof: false` is not a valid value); when `capabilities.content: false`,
 all content-plane routes return 501 (WEB-RELAY.md "Well-Known Endpoint",
-`specs/WEB-RELAY.md`). Proof-plane-only is a fully conformant relay.
+`specs/WEB-RELAY.md`). Proof-plane-only is a fully conformant relay. The content plane is
+the [document gateway](https://protocol.dfos.com/document-gateway), an optional service on
+its own `0.x` clock — outside the v1 conformance tiers.
 
 **Writes are OPTIONAL too.** A lite (pull-only) proof node MAY advertise
 `capabilities.write: false`, in which case `POST /proof/v1/operations` returns **501 Not

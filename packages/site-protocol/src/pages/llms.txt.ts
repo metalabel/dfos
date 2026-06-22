@@ -25,6 +25,7 @@ export const GET: APIRoute = () => {
     '## Implementation',
     '',
     '- [Web Relay](https://protocol.dfos.com/web-relay): Verifying HTTP relay for identity chains, content chains, services, countersignatures, and content blobs',
+    '- [Document Gateway](https://protocol.dfos.com/document-gateway): Stateless content-addressed blob store (0.1) — the content plane, with authorization re-derived live from the proof plane',
     '- [CLI](https://protocol.dfos.com/cli): Go command-line interface for managing identities, signing operations, and interacting with relays',
     '- [Deploy](https://protocol.dfos.com/deploy): Run a relay with Docker Compose, Caddy auto-TLS, peering, and container images',
     '- [Claude Code Skill](https://protocol.dfos.com/skill): AI-assisted CLI workflows — install the DFOS skill for Claude Code',
