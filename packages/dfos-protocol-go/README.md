@@ -18,7 +18,7 @@ ctrl := dfos.NewMultikeyPublicKey(dfos.GenerateKeyID(), pubKey)
 token, did, opCID, err := dfos.SignIdentityCreate(
     []dfos.MultikeyPublicKey{ctrl},  // controllers
     []dfos.MultikeyPublicKey{auth},  // authentication
-    []dfos.MultikeyPublicKey{},      // delegates
+    []dfos.MultikeyPublicKey{},      // assertion
     keyID, privateKey,
 )
 

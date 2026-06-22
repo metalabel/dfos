@@ -27,6 +27,11 @@ describes the protocol-package surface of that release.
   cross-implementation backing that forked validity across TS and Go. Entry fields
   are now only required to be non-empty; the single aggregate 32768-byte services
   cap is the bound. Finishes the per-field length-zoo collapse started in #87.
+- **[BREAKING]** Removed the TS-only 256-char length cap on artifact `$schema`.
+  Artifacts are now bounded solely by the aggregate 16384-byte payload cap
+  (`MAX_ARTIFACT_PAYLOAD_SIZE`); the per-field cap forked artifact validity
+  between TS and Go (TS rejected a 257+ char `$schema` that Go accepted) and is
+  gone — TS and Go now enforce identical artifact validity. (#92)
 
 ## [0.11.0]
 

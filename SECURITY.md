@@ -15,8 +15,8 @@ older minors before 1.0.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.10.x  | Yes       |
-| < 0.10  | No        |
+| 0.11.x  | Yes       |
+| < 0.11  | No        |
 
 ## Reporting a vulnerability
 
