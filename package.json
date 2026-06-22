@@ -11,6 +11,7 @@
     "clean": "pnpm -r --if-present run clean && pnpm -r exec rm -rf node_modules .turbo tsconfig.tsbuildinfo && rm -rf node_modules .turbo tsconfig.tsbuildinfo",
     "format": "prettier --write .",
     "lint": "prettier --check .",
+    "lint:specs": "node scripts/check-spec-anchors.mjs",
     "typecheck": "turbo run typecheck",
     "build": "turbo run build",
     "test": "turbo run test",
