@@ -216,7 +216,9 @@ describe('services projection', () => {
     const k = makeKey();
     // One entry with a ~33 KB endpoint — individually valid (non-empty, no
     // per-field length cap) but past the 32768-byte aggregate services cap.
-    const oversized = [{ id: 'relay', type: 'DfosRelay', endpoint: 'https://' + 'a'.repeat(33000) }];
+    const oversized = [
+      { id: 'relay', type: 'DfosRelay', endpoint: 'https://' + 'a'.repeat(33000) },
+    ];
     const create: IdentityOperation = {
       version: 1,
       type: 'create',

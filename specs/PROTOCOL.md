@@ -163,11 +163,11 @@ A delegated content `update`/`delete` carries its authorizing credential in the 
 
 **Cardinality caps (structure, not byte length):**
 
-| Field                                        | Max       | Rationale                               |
-| -------------------------------------------- | --------- | --------------------------------------- |
+| Field                                        | Max       | Rationale                                       |
+| -------------------------------------------- | --------- | ----------------------------------------------- |
 | `authKeys` / `assertKeys` / `controllerKeys` | 256 items | Generous ceiling; op-size cap is the real bound |
-| `services` entries                           | 256 items | (see Services, above)                   |
-| countersignature `relation`                  | 64 chars  | Open-namespace tag (min 1 when present) |
+| `services` entries                           | 256 items | (see Services, above)                           |
+| countersignature `relation`                  | 64 chars  | Open-namespace tag (min 1 when present)         |
 
 The protocol does NOT limit individual field string lengths, **document content size** (the protocol commits to a CID, not the document — large binary media is referenced, not inlined), **chain length**, or **number of chains per identity**. These are application/transport concerns.
 
