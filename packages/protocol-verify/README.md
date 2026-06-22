@@ -32,6 +32,10 @@ Each suite **hardcodes the reference constants inline** — there is no shared f
 10. **DFOS credentials** — UCAN-style credentials with resource/action attenuations
 11. **Number encoding determinism** — integers MUST encode as CBOR integers, not floats
 
+### Out of cross-language scope
+
+**Countersignatures** (`typ: did:dfos:countersign`, see PROTOCOL.md → Countersignatures) are a stateless single-JWS primitive but are intentionally **not** covered by these five suites. Countersignature signing/verification is exercised only by the TypeScript and Go unit tests, not as a shared cross-language reference vector — adopting a new language does not require implementing it.
+
 ## Adding a New Language
 
 1. Create a new directory (e.g., `kotlin/`)

@@ -278,7 +278,7 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 
 ```json
 {
-  "did": "did:dfos:edgerelay0000000000000",
+  "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
   "protocol": "dfos-web-relay",
   "version": "0.0.0",
   "capabilities": {
@@ -292,18 +292,18 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 }
 ```
 
-| Field                    | Type    | Description                                                                |
-| ------------------------ | ------- | -------------------------------------------------------------------------- |
-| `did`                    | string  | The relay's DID, resolvable on this relay's proof plane                    |
-| `protocol`               | string  | Protocol identifier, always `"dfos-web-relay"`                             |
-| `version`                | string  | Relay protocol version (semver)                                            |
-| `capabilities`           | object  | Capability flags for optional features                                     |
-| `capabilities.proof`     | boolean | MUST be `true`. A relay without proof plane capability is not a relay      |
-| `capabilities.write`     | boolean | Whether the relay accepts writes via `POST /proof/v1/operations`           |
-| `capabilities.content`   | boolean | Whether the relay supports content plane (blob upload/download)            |
-| `capabilities.documents` | boolean | Whether the relay serves the documents endpoint                            |
-| `capabilities.log`       | boolean | Whether the global operation log is available (`GET /proof/v1/log`)        |
-| `profile`                | string  | The relay's profile artifact as a compact JWS token — self-proving payload |
+| Field                    | Type    | Description                                                                                                                                                                          |
+| ------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `did`                    | string  | The relay's DID, resolvable on this relay's proof plane                                                                                                                              |
+| `protocol`               | string  | Protocol identifier, always `"dfos-web-relay"`                                                                                                                                       |
+| `version`                | string  | Relay protocol version (semver)                                                                                                                                                      |
+| `capabilities`           | object  | Capability flags for optional features                                                                                                                                               |
+| `capabilities.proof`     | boolean | MUST be `true`. A relay without proof plane capability is not a relay                                                                                                                |
+| `capabilities.write`     | boolean | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                                                     |
+| `capabilities.content`   | boolean | Whether the relay supports content plane (blob upload/download)                                                                                                                      |
+| `capabilities.documents` | boolean | Whether the relay serves the documents endpoint. In v1 this mirrors `capabilities.content` (the documents endpoint is part of the content plane) and is not independently toggleable |
+| `capabilities.log`       | boolean | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                                                  |
+| `profile`                | string  | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                                           |
 
 `capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
 
@@ -417,6 +417,10 @@ Chain history is available via the per-chain log routes described above.
 
 ## Content Plane Access
 
+Content plane requests carry a self-signed **auth token** in the `Bearer` header to prove caller identity (verified against the issuer's _current_ identity state — a rotated-out key cannot mint one; see [Key Resolution](#key-resolution)).
+
+**Auth-token lifetime ceiling**: the relay rejects an auth token whose declared lifetime (`exp − iat`) exceeds a configured maximum (default **24 hours**), returning `401`. Auth tokens are ephemeral by design (minutes); this ceiling stops a buggy or malicious signer from minting an effectively-permanent bearer token. It applies only to auth tokens — DFOS credentials (read/write/standing) are verified on a separate path and may carry hours-to-months lifetimes. Setting the maximum to `≤ 0` disables the ceiling.
+
 ### Blob Upload (`PUT /content/:contentId/blob/:operationCID`)
 
 The upload path mirrors the download path — the operation CID identifies which operation's document is being uploaded.
@@ -450,7 +454,7 @@ Returns all documents committed to a content chain as an ordered list, from gene
 
 This endpoint requires the same authorization as blob download — standing authorization grants access without authentication, otherwise the caller must be the chain creator or present a valid DFOS credential with `action: "read"`.
 
-When `capabilities.documents: false` in the well-known response, this route returns **501 Not Implemented**.
+The documents endpoint is part of the content plane: when `capabilities.content: false`, this route returns **501 Not Implemented** (`content plane not available`). `capabilities.documents` mirrors `capabilities.content` and is not independently toggleable in v1.
 
 ### Standing Authorization
 
