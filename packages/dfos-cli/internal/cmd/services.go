@@ -16,7 +16,7 @@ import (
 //
 // The namespace is OPEN: unrecognized types carry their extra key=value pairs
 // through verbatim. All values are strings — the recognized-type structural
-// rules (and the 16-entry / 8192-byte caps) are enforced by the protocol layer
+// rules (and the 256-entry / 32768-byte caps) are enforced by the protocol layer
 // at sign time, so this stays a thin transcription with no validation of its
 // own beyond requiring id and type.
 func parseServiceFlags(specs []string) ([]protocol.ServiceEntry, error) {

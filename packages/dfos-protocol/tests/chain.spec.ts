@@ -1697,8 +1697,8 @@ describe('operation field limits', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should reject more than 16 keys per role', () => {
-    const keys = Array.from({ length: 17 }, (_, i) => ({ ...validKey, id: `key_${i}` }));
+  it('should reject more than 256 keys per role', () => {
+    const keys = Array.from({ length: 257 }, (_, i) => ({ ...validKey, id: `key_${i}` }));
     const result = IdentityOperationSchema.safeParse({
       version: 1,
       type: 'create',

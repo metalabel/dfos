@@ -37,8 +37,8 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   `enforceAuthorization` is enabled (PROTOCOL.md "Verification → Content Chain",
   `specs/PROTOCOL.md:722`; "Content Chain Signer Model", `specs/PROTOCOL.md:102`).
 - **Services projection** — project the identity-chain `services` array into verified
-  identity state as full-state discovery vocabulary: enforce ≤ 16 entries, `id`s unique
-  within the set, the 8192-byte CBOR-encoded cap, and recognized-type structure
+  identity state as full-state discovery vocabulary: enforce ≤ 256 entries, `id`s unique
+  within the set, the 32768-byte CBOR-encoded cap, and recognized-type structure
   (`DfosRelay` requires `endpoint`, `ContentAnchor` requires `label` + `anchor`); preserve
   but ignore unrecognized `type`s (MUST-ignore-unknown) (PROTOCOL.md "Services",
   `specs/PROTOCOL.md:522`).

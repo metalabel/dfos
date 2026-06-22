@@ -105,17 +105,16 @@ func TestServicesRejections(t *testing.T) {
 	priv, pub, _, keyID := testKeys(t)
 	ctrl := []MultikeyPublicKey{NewMultikeyPublicKey(keyID, pub)}
 
-	bigEndpoint := "https://" + strings.Repeat("a", 504)
-	over := make([]ServiceEntry, 0, 16)
-	for i := 0; i < 16; i++ {
-		over = append(over, ServiceEntry{"id": string(rune('a' + i)), "type": "DfosRelay", "endpoint": bigEndpoint})
-	}
+	// One entry with a ~33 KB endpoint — individually valid (non-empty, no
+	// per-field length cap) but pushing the CBOR array past the 32768-byte cap.
+	over := []ServiceEntry{{"id": "r", "type": "DfosRelay", "endpoint": "https://" + strings.Repeat("a", 33000)}}
 
 	cases := map[string][]ServiceEntry{
 		"too many entries": func() []ServiceEntry {
-			s := make([]ServiceEntry, 0, 17)
-			for i := 0; i < 17; i++ {
-				s = append(s, relayEntry(string(rune('a'+i))))
+			s := make([]ServiceEntry, 0, 257)
+			for i := 0; i < 257; i++ {
+				id := string(rune('a'+i/26)) + string(rune('a'+i%26))
+				s = append(s, relayEntry(id))
 			}
 			return s
 		}(),
@@ -134,6 +133,20 @@ func TestServicesRejections(t *testing.T) {
 		if _, err := VerifyIdentityChain([]string{genesisJWS}); err == nil {
 			t.Errorf("%s: expected verification to reject", name)
 		}
+	}
+
+	// Positive control pinning the byte boundary: a single entry whose
+	// canonical-CBOR encoding lands just UNDER 32768 bytes verifies cleanly. The
+	// single-entry envelope is a fixed 38 bytes, so "https://"+32714×'a' (len
+	// 32722) encodes to 32760 < 32768. This proves the over-cap rejection above
+	// fires at 32768 specifically, not at some smaller incidental limit.
+	underCap := []ServiceEntry{{"id": "r", "type": "DfosRelay", "endpoint": "https://" + strings.Repeat("a", 32714)}}
+	underJWS, _, _, err := SignIdentityCreateWithServices(ctrl, ctrl, ctrl, underCap, keyID, priv)
+	if err != nil {
+		t.Fatalf("just-under-cap services: sign: %v", err)
+	}
+	if _, err := VerifyIdentityChain([]string{underJWS}); err != nil {
+		t.Errorf("just-under-cap services (32760 bytes) should verify, got: %v", err)
 	}
 }
 

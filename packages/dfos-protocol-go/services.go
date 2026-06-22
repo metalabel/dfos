@@ -6,12 +6,14 @@ import (
 )
 
 // Services discovery vocabulary limits — mirror the TS reference (schemas.ts).
+// Individual entry fields are NOT length-capped (no per-field length zoo): the
+// aggregate byte cap plus the op-size cap bound entry size. maxServicesEntries is
+// a generous cardinality ceiling on resolution fan-out; maxServicesPayloadSize is
+// the single aggregate that replaced the former per-field caps, sized so the
+// 256-entry ceiling is reachable with realistic entries.
 const (
-	maxServiceID           = 64
-	maxServiceType         = 64
-	maxServiceString       = 512
-	maxServicesEntries     = 16
-	maxServicesPayloadSize = 8192
+	maxServicesEntries     = 256
+	maxServicesPayloadSize = 32768
 )
 
 // Anchor target shapes — a ContentAnchor references a STABLE content identifier,
@@ -95,7 +97,7 @@ func AnchorsByLabel(services []ServiceEntry, label string) []ServiceEntry {
 // parseServices reads and validates the optional services array from an identity
 // operation payload, mirroring the TS reference: common envelope (id + type) on
 // every entry, structural validation of recognized types, bounded entry count,
-// unique ids, and an 8192-byte cap on the canonical-CBOR-encoded array. Returns
+// unique ids, and a 32768-byte cap on the canonical-CBOR-encoded array. Returns
 // nil when the field is absent (CID-neutral). Unrecognized types pass through
 // with envelope + cap only (MUST-ignore-unknown).
 func parseServices(payload map[string]any) ([]ServiceEntry, error) {
@@ -119,27 +121,27 @@ func parseServices(payload map[string]any) ([]ServiceEntry, error) {
 			return nil, fmt.Errorf("service entry must be an object")
 		}
 		id, ok := entry["id"].(string)
-		if !ok || len(id) < 1 || len(id) > maxServiceID {
-			return nil, fmt.Errorf("service entry requires an id string (1..%d chars)", maxServiceID)
+		if !ok || len(id) < 1 {
+			return nil, fmt.Errorf("service entry requires a non-empty id string")
 		}
 		if seen[id] {
 			return nil, fmt.Errorf("service entry ids must be unique: %s", id)
 		}
 		seen[id] = true
 		typ, ok := entry["type"].(string)
-		if !ok || len(typ) < 1 || len(typ) > maxServiceType {
-			return nil, fmt.Errorf("service entry requires a type string (1..%d chars)", maxServiceType)
+		if !ok || len(typ) < 1 {
+			return nil, fmt.Errorf("service entry requires a non-empty type string")
 		}
 
 		switch typ {
 		case "DfosRelay":
 			ep, ok := entry["endpoint"].(string)
-			if !ok || len(ep) < 1 || len(ep) > maxServiceString {
+			if !ok || len(ep) < 1 {
 				return nil, fmt.Errorf("DfosRelay requires a non-empty endpoint string")
 			}
 		case "ContentAnchor":
 			label, ok := entry["label"].(string)
-			if !ok || len(label) < 1 || len(label) > maxServiceString {
+			if !ok || len(label) < 1 {
 				return nil, fmt.Errorf("ContentAnchor requires a non-empty label string")
 			}
 			anchor, ok := entry["anchor"].(string)

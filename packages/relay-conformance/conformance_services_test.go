@@ -262,20 +262,60 @@ func assertServicesRejected(t *testing.T, base, what string, services []dfos.Ser
 	}
 }
 
+// assertServicesAccepted is the positive-control counterpart to
+// assertServicesRejected: it signs a genesis carrying the given services and
+// asserts the relay accepts it ("new"). Pairing an at-/just-under-bound
+// acceptance with each rejection proves the boundary is where we claim it is.
+func assertServicesAccepted(t *testing.T, base, what string, services []dfos.ServiceEntry) {
+	t.Helper()
+	ctrl := newKeypair()
+	auth := newKeypair()
+	token, _, _, err := dfos.SignIdentityCreateWithServices(
+		[]dfos.MultikeyPublicKey{ctrl.mk},
+		[]dfos.MultikeyPublicKey{auth.mk},
+		[]dfos.MultikeyPublicKey{},
+		services,
+		ctrl.keyID,
+		ctrl.priv,
+	)
+	if err != nil {
+		t.Fatalf("%s: SignIdentityCreateWithServices: %v", what, err)
+	}
+	res := postOperations(t, base, []string{token})
+	var body struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	b := readBody(t, res)
+	if err := json.Unmarshal(b, &body); err != nil {
+		t.Fatalf("%s: decode /operations response: %v (body: %s)", what, err, b)
+	}
+	if len(body.Results) != 1 {
+		t.Fatalf("%s: expected 1 result, got %d (body: %s)", what, len(body.Results), b)
+	}
+	if body.Results[0].Status != "new" {
+		t.Fatalf("%s: expected new, got %q (body: %s)", what, body.Results[0].Status, b)
+	}
+}
+
 // TestServicesBoundsRejected drives every normative services bound (PROTOCOL.md
 // §Bounds, L573-583). Each case is constructed to pass every check except the one
 // under test, so a `rejected` result pins exactly that bound. These hold against
 // both the Go and TS relays — the limit constants are mirrored across impls.
 func TestServicesBoundsRejected(t *testing.T) {
 	base := relayURL(t)
-	const anchor = "cv7n8vkvr64cctf3294h9k4eanhff8z" // 31-char content id
 
-	t.Run("too many entries (>16)", func(t *testing.T) {
-		svcs := make([]dfos.ServiceEntry, 17)
+	t.Run("too many entries (>256)", func(t *testing.T) {
+		// 257 entries, each small (rejected by the cardinality cap, not the byte
+		// cap — 257 tiny entries stay well under 32768 bytes). Unique 2-char ids.
+		svcs := make([]dfos.ServiceEntry, 257)
 		for i := range svcs {
-			svcs[i] = relaySvc("relay-"+repeatA(2)+string(rune('a'+i)), "https://r.example.com")
+			id := string(rune('a'+i/26)) + string(rune('a'+i%26))
+			svcs[i] = relaySvc(id, "https://r.example.com")
 		}
-		assertServicesRejected(t, base, "17 entries", svcs)
+		assertServicesRejected(t, base, "257 entries", svcs)
 	})
 
 	t.Run("duplicate ids", func(t *testing.T) {
@@ -291,34 +331,26 @@ func TestServicesBoundsRejected(t *testing.T) {
 		})
 	})
 
-	t.Run("over-length id (>64)", func(t *testing.T) {
-		assertServicesRejected(t, base, "65-char id", []dfos.ServiceEntry{
-			relaySvc(repeatA(65), "https://a.example.com"),
-		})
-	})
-
-	t.Run("over-length endpoint (>512)", func(t *testing.T) {
-		assertServicesRejected(t, base, "513-char endpoint", []dfos.ServiceEntry{
-			relaySvc("relay", "https://"+repeatA(513)),
-		})
-	})
-
-	t.Run("over-length label (>512)", func(t *testing.T) {
-		assertServicesRejected(t, base, "513-char label", []dfos.ServiceEntry{
-			anchorSvc("a", repeatA(513), anchor),
-		})
-	})
-
-	t.Run("oversized CBOR array (>8192 bytes)", func(t *testing.T) {
-		// 16 entries (== max count) each individually valid (id ≤64, endpoint
-		// ≤512) but collectively exceeding the 8192-byte CBOR cap (~9.7KB). The
-		// only bound that can reject this is the array byte cap.
-		svcs := make([]dfos.ServiceEntry, 16)
-		for i := range svcs {
-			id := repeatA(62) + string(rune('a'+i/26)) + string(rune('a'+i%26)) // unique, 64 chars
-			svcs[i] = relaySvc(id, "https://"+repeatA(504))                     // 512-char endpoint
-		}
+	// Per-field length caps were removed (no length zoo): id/type/endpoint/label
+	// are bounded only by the aggregate byte cap below + the op-size cap. So an
+	// over-length single field is NOT rejected on its own — only the aggregate is.
+	t.Run("oversized CBOR array (>32768 bytes)", func(t *testing.T) {
+		// One entry with a giant (~33 KB) endpoint — individually valid (non-empty)
+		// but pushing the CBOR array past the 32768-byte cap. The only bound that
+		// can reject this is the array byte cap.
+		svcs := []dfos.ServiceEntry{relaySvc("relay", "https://"+repeatA(33000))}
 		assertServicesRejected(t, base, "oversized CBOR", svcs)
+	})
+
+	t.Run("CBOR array just under 32768 bytes (positive control)", func(t *testing.T) {
+		// Positive control pinning the byte boundary: a single entry whose
+		// canonical-CBOR encoding lands a few bytes UNDER 32768 is accepted. The
+		// single-entry envelope is a fixed 38 bytes (array+map+id/type keys+values+
+		// endpoint header), so an endpoint of "https://"+32714×'a' (len 32722)
+		// encodes to 32760 bytes < 32768. One byte more on the endpoint flips it
+		// over, proving the bound is exactly 32768 — not merely "~33KB is rejected".
+		svcs := []dfos.ServiceEntry{relaySvc("relay", "https://"+repeatA(32714))}
+		assertServicesAccepted(t, base, "just-under CBOR", svcs)
 	})
 }
 

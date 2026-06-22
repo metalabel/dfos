@@ -19,9 +19,10 @@ const maxOperationSize = 65536
 
 // maxKeysPerRole bounds the number of keys in any single role array (authKeys,
 // assertKeys, controllerKeys) on an identity operation. A CARDINALITY cap (DoS
-// pre-allocation guard, generous for key rotation), enforced identically in the
-// TS reference (MAX_KEYS_PER_ROLE in chain/schemas.ts).
-const maxKeysPerRole = 16
+// pre-allocation guard) — a generous ceiling on key fan-out; the op-size cap is
+// the real byte arbiter. Enforced identically in the TS reference
+// (MAX_KEYS_PER_ROLE in chain/schemas.ts).
+const maxKeysPerRole = 256
 
 // operationSizeForCap returns the dag-cbor-encoded byte length of an operation
 // payload for the purpose of the op-size cap, EXCLUDING any embedded
