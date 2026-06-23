@@ -63,7 +63,7 @@ The prefix encodes the plane and its version (`{plane}/{version}`), so the proof
 
 Two route families deliberately stay at the root, on their own clocks:
 
-- **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and per-plane versions.
+- **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and the relay's own release version.
 - **Content plane routes** (`/content/:contentId/blob[/:ref]`, `/content/:contentId/documents`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` and `/content/:contentId/documents` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
 
 ---
@@ -282,30 +282,28 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 {
   "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
   "protocol": "dfos-web-relay",
-  "version": "0.0.0",
+  "version": "1.4.0",
   "capabilities": {
     "proof": true,
     "write": true,
     "content": true,
-    "documents": true,
     "log": true
   },
   "profile": "eyJhbGciOiJFZERTQSIs..."
 }
 ```
 
-| Field                    | Type    | Description                                                                                                                                                                          |
-| ------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `did`                    | string  | The relay's DID, resolvable on this relay's proof plane                                                                                                                              |
-| `protocol`               | string  | Protocol identifier, always `"dfos-web-relay"`                                                                                                                                       |
-| `version`                | string  | Relay protocol version (semver)                                                                                                                                                      |
-| `capabilities`           | object  | Capability flags for optional features                                                                                                                                               |
-| `capabilities.proof`     | boolean | MUST be `true`. A relay without proof plane capability is not a relay                                                                                                                |
-| `capabilities.write`     | boolean | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                                                     |
-| `capabilities.content`   | boolean | Whether the relay supports content plane (blob upload/download)                                                                                                                      |
-| `capabilities.documents` | boolean | Whether the relay serves the documents endpoint. In v1 this mirrors `capabilities.content` (the documents endpoint is part of the content plane) and is not independently toggleable |
-| `capabilities.log`       | boolean | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                                                  |
-| `profile`                | string  | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                                           |
+| Field                  | Type    | Description                                                                                                                                              |
+| ---------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `did`                  | string  | The relay's DID, resolvable on this relay's proof plane                                                                                                  |
+| `protocol`             | string  | Protocol identifier, always `"dfos-web-relay"`                                                                                                           |
+| `version`              | string  | The relay's own release version (semver), independent of the frozen proof-plane clock — the proof version lives in the `/proof/v1` path prefix, not here |
+| `capabilities`         | object  | Capability flags for optional features                                                                                                                   |
+| `capabilities.proof`   | boolean | MUST be `true`. A relay without proof plane capability is not a relay                                                                                    |
+| `capabilities.write`   | boolean | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                         |
+| `capabilities.content` | boolean | Whether the relay supports the content plane (blob upload/download _and_ the documents endpoint, which rides this same flag — there is no separate one)  |
+| `capabilities.log`     | boolean | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                      |
+| `profile`              | string  | The relay's profile artifact as a compact JWS token — self-proving payload                                                                               |
 
 `capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
 
@@ -409,12 +407,11 @@ Resolved identity state includes the identity's `services` — the controller-si
     "currentDocumentCID": "bafy...",
     "length": 1,
     "creatorDID": "did:dfos:..."
-  },
-  "publicGrants": ["eyJhbGciOiJFZERTQSIs...", "..."]
+  }
 }
 ```
 
-`publicGrants` is the document gateway's enriched-resolve material: the public (`aud: "*"`) credentials that **currently authorize `read`** on this chain, each re-verified live (signature, expiry, revocation, delegation rooted at the creator) before it is surfaced, and sorted deterministically. A revoked or expired grant drops out. The field is additive and backward-compatible (consumers that don't know it ignore it); the grants are public, so surfacing them discloses nothing private. It lets a document gateway split across origins — or a zero-trust caller — discover and independently re-verify public read grants over HTTP. See [DOCUMENT-GATEWAY.md → Enriched resolve](https://protocol.dfos.com/document-gateway#enriched-resolve-proof-plane-support).
+This response is **frozen with protocol v1** and carries pure chain state — no derived authorization material. Public-read discovery (surfacing the `aud: "*"` credentials that currently authorize `read` on a chain) is a **document gateway** concern on the `0.x` clock, not a proof-plane field: keeping it off the frozen route lets that ergonomic evolve without touching the locked contract. See [DOCUMENT-GATEWAY.md → Public-read discovery](https://protocol.dfos.com/document-gateway#public-read-discovery-0x).
 
 Chain history is available via the per-chain log routes described above.
 
@@ -461,7 +458,7 @@ Returns all documents committed to a content chain as an ordered list, from gene
 
 This endpoint requires the same authorization as blob download — standing authorization grants access without authentication, otherwise the caller must be the chain creator or present a valid DFOS credential with `action: "read"`.
 
-The documents endpoint is part of the content plane: when `capabilities.content: false`, this route returns **501 Not Implemented** (`content plane not available`). `capabilities.documents` mirrors `capabilities.content` and is not independently toggleable in v1.
+The documents endpoint is part of the content plane: it rides `capabilities.content`, with no separate flag. When `capabilities.content: false`, this route returns **501 Not Implemented** (`content plane not available`).
 
 ### Standing Authorization
 
