@@ -2,7 +2,7 @@
 
 Cryptographic identity verification for third-party applications — Ed25519 challenge-response via a universal `/authorize` endpoint. One flow, two signing paths (managed and sovereign), same JWS output. Verification is pure crypto — no DFOS server in the loop after issuance.
 
-> **Specification only.** This document describes the SIWD protocol design. No reference implementation exists yet in this repository — it is published here for review and to inform implementors.
+> **SIWD version 0.1.** Sign In With DFOS is an **optional authentication seam on its own `0.x` clock, independent of the Protocol v1 freeze** — it is **not part of the frozen protocol surface**. SIWD builds _on top of_ the frozen primitives (the identity chain, the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile), and [DFOS Credentials](https://protocol.dfos.com/credentials)) and may reference them, but the frozen protocol never depends on SIWD. The challenge-response and verification rules below are protocol-normative for any SIWD verifier; the platform endpoint, KMS custody, local CLI port, and health-check behavior are **reference-implementation** details of the DFOS platform, not normative requirements. No reference implementation of the third-party verifier exists yet in this repository — published here for review and to inform implementors. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
 ---
 
@@ -40,14 +40,16 @@ Query parameters:
 | -------------- | -------- | ------------------------------------------------------------------------------ |
 | `challenge`    | Yes      | Base64url-encoded challenge object (see [Challenge Schema](#challenge-schema)) |
 | `redirect_uri` | Yes      | URL the platform redirects to after signing                                    |
-| `scope`        | Yes      | Comma-separated list of requested scopes                                       |
+| `scope`        | Yes      | A single requested scope (one scope per authorization request)                 |
 
 Scopes:
 
-| Scope                          | Meaning                                                              |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `identity`                     | Prove DID ownership only                                             |
-| `read:<chainType>:<contentId>` | Prove DID + return a read credential for the specified content chain |
+| Scope              | Meaning                                                                  |
+| ------------------ | ------------------------------------------------------------------------ |
+| `identity`         | Prove DID ownership only                                                 |
+| `read:<contentId>` | Prove DID + return a read credential for the content chain `<contentId>` |
+
+The `<contentId>` is the content chain's content ID as defined by the protocol. A `read:<contentId>` scope maps to exactly one [DFOS credential](https://protocol.dfos.com/credentials) attenuation: `{ "resource": "chain:<contentId>", "action": "read" }`. SIWD does not define a resource grammar of its own — the resource form, action vocabulary, and matching rules are the credential spec's `chain:<contentId>` exact-match form (see [Credentials — Resource Types](https://protocol.dfos.com/credentials)). There is no separate "chain type" dimension; every content resource is a `chain:` resource.
 
 ### 2. Consent screen
 
@@ -113,6 +115,8 @@ The platform holds the user's DID key material in a KMS (Key Management Service)
 
 The KMS key is one of the keys declared in the user's identity chain (`authKeys` or `controllerKeys`). The signature is indistinguishable from any other Ed25519 signature over the challenge — the third party verifies it against the identity chain like any other key.
 
+The KMS custody model and the platform's session handling are **reference-implementation** details; what is normative is only that the signature is produced by a key declared in the identity chain and verifies under the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile).
+
 ---
 
 ## Sovereign Signing Path
@@ -127,6 +131,8 @@ The user enables local signing in their platform settings:
 | --------------------- | ------- | -------------------------------------------------------------------- |
 | `localSigningEnabled` | boolean | Whether the sovereign signing option is presented on consent screens |
 | `localSigningPort`    | number  | Port the local CLI listens on (default: `8420`)                      |
+
+> These settings, the `localhost` port, and the preflight `GET /health` probe are **reference-implementation** behavior of the DFOS platform and Go CLI, not protocol-normative. A SIWD verifier never observes them — it sees only the resulting JWS.
 
 ### Flow
 
@@ -168,20 +174,7 @@ When `scope` includes resource access beyond `identity`, the callback includes a
 
 ### User-owned content
 
-For content owned by the user's DID, the credential is issued by that DID:
-
-```json
-{
-  "version": 1,
-  "type": "DFOSCredential",
-  "iss": "did:dfos:<user>",
-  "aud": "did:dfos:<3p_app>",
-  "att": [{ "resource": "chain:<contentId>", "action": "read" }],
-  "prf": [],
-  "iat": 1752613600,
-  "exp": 1752700000
-}
-```
+For content owned by the user's DID, the credential is issued by that DID: a standard [DFOS credential](https://protocol.dfos.com/credentials) with `iss` = the user's DID, `aud` = the third-party app's DID, and a single attenuation `{ "resource": "chain:<contentId>", "action": "read" }` covering the requested content chain. The envelope, signing, CID derivation, and validity bounds are exactly as the [credential spec](https://protocol.dfos.com/credentials) defines — SIWD adds no fields and no separate credential format.
 
 ### Space-owned content
 
