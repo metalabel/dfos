@@ -2,13 +2,13 @@
 
 Verifiable identity and content chains — Ed25519 signatures, content-addressed CIDs, W3C DIDs. Cross-language verification in TypeScript, Go, Python, Rust, and Swift.
 
-> **Status — Protocol v1: feature-complete, in soak.** The v1 surface is **frozen**: the core primitives — chain mechanics, canonical DAG-CBOR encoding, identifier derivation, and the validity bounds — are settled and will not change in shape. Build on the wire as specified. v1 is _in soak_ rather than declared immutable — we are gathering independent implementation experience, and changes from here are disciplined, not routine:
+> **Status — Protocol v1: feature-complete and frozen.** The v1 surface is **frozen**: the core primitives — chain mechanics, canonical DAG-CBOR encoding, identifier derivation, and the validity bounds — are settled and will not change in shape. Build on the wire as specified. v1 is frozen but not yet declared final — we are still gathering independent implementation experience, and changes from here are limited and disciplined:
 >
 > - **Clarifications** — where the prose was ambiguous but conformant implementations already agree — are corrected in place.
 > - **Additive** capability — new optional fields, new service types, the [document gateway](https://protocol.dfos.com/document-gateway) — lands atop frozen v1, never as a break.
 > - A genuine **breaking** change to a frozen field is never a silent v1 edit; it becomes v1.1 or v2.
 >
-> v1 sheds "in soak" once independent implementations confirm the spec verifies byte-for-byte from the prose alone. The protocol version is independent of the reference packages: the `@metalabel/dfos-protocol` and `dfos-protocol-go` releases stay on their own `0.x` semver line, so freezing v1 commits the **wire**, not yet a library API. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
+> v1 is declared final once independent implementations confirm the spec verifies byte-for-byte from the prose alone. The protocol version is independent of the reference packages: the `@metalabel/dfos-protocol` and `dfos-protocol-go` releases stay on their own `0.x` semver line, so freezing v1 commits the **wire**, not yet a library API. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol)
 
