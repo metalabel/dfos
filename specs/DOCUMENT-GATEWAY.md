@@ -10,12 +10,15 @@ This spec is under active review. Discuss it in the [clear.txt](https://clear.df
 > optional service on its own `0.x` clock, independent of the Protocol v1 freeze.
 > It matches the behavior the reference relay (`@metalabel/dfos-web-relay`,
 > `dfos-web-relay-go`) ships today: both the public-grant and delegated read paths
-> re-derive authorization live from the proof plane on every request, and the
-> proof plane surfaces re-verified public grants via the `publicGrants` field (see
-> [Enriched resolve](#enriched-resolve-proof-plane-support)). A relay MAY keep a
-> materialized public-credential index as a **non-authoritative performance
-> cache** — it is never authority (see [Statelessness](#statelessness)). Published
-> here for review and to inform implementors.
+> re-derive authorization live from the proof plane on every request — the gateway
+> derives the public grants covering a chain directly from the proof-plane
+> operation log it already reads (see [Public-grant derivation](#public-grant-derivation)).
+> A relay MAY keep a materialized public-credential index as a **non-authoritative
+> performance cache** — it is never authority (see [Statelessness](#statelessness)).
+> One ergonomic is **not yet built**: inlining the authorizing credentials in the
+> blob response so an unauthenticated caller can re-verify the gateway's decision
+> (see [Public-read discovery](#public-read-discovery-0x)) — a `0.x` design slated
+> for after the v1 freeze. Published here for review and to inform implementors.
 
 ---
 
@@ -92,7 +95,7 @@ There is no second code path, no "is it public?" branch that trusts a stored fla
 
 ### Two paths, one verifier
 
-- **Public path.** The reader presents no credential. The gateway derives the relevant public credentials (`aud: "*"`) covering the chain from the proof plane (see [Public-grant derivation](#public-grant-derivation)) and runs each through the unified verifier. A surviving public grant authorizes the read. The candidates may come from a materialized public-credential index, but that index is a **non-authoritative cache** — authority is the live re-verify, never the stored lookup.
+- **Public path.** The reader presents no credential. The gateway derives the relevant public credentials (`aud: "*"`) covering the chain from the proof-plane operation log it already reads (see [Public-grant derivation](#public-grant-derivation)) and runs each through the unified verifier. A surviving public grant authorizes the read. The candidates may come from a materialized public-credential index, but that index is a **non-authoritative cache** — authority is the live re-verify, never the stored lookup.
 - **Delegated path.** The reader presents a DFOS credential in the `X-Credential` header. The gateway runs the same verifier over it. Unchanged in shape — it simply gains the same revocation check the public path runs.
 
 Both paths check revocation at **every link** of the delegation chain. There is no asymmetry: a revoked public grant and a revoked presented credential are denied identically. See [Revocation](#revocation).
@@ -101,7 +104,7 @@ Both paths check revocation at **every link** of the delegation chain. There is 
 
 Public credentials (`aud: "*"`) are ordinary proof-plane operations — they enter through `POST /proof/v1/operations` and live in the operation log like any other signed op (kind `credential`). The gateway therefore needs no separate grant table _as authority_: it derives the public grants covering a chain from the proof plane it already reads for the chain head. (A relay MAY keep a materialized index of these credentials as a non-authoritative candidate cache; see [Statelessness](#statelessness).)
 
-The proof plane surfaces these grants through an enriched content-state response (see [Enriched resolve](#enriched-resolve-proof-plane-support)). Crucially, the proof node hands the gateway the **credentials themselves**, not a pre-chewed `publiclyReadable: true`. The node provides _data_; the gateway makes the _decision_ by re-verifying through the unified verifier. The node never makes an authorization judgment the gateway blindly trusts — a lying node hands a malformed or revoked credential and the verifier rejects it. This keeps the verifier honest and composable.
+Because the grants live in the proof-plane log the gateway already reads, the gateway holds the **credentials themselves**, never a pre-chewed `publiclyReadable: true`. It re-verifies each through the unified verifier and makes the _decision_ itself — there is no authorization judgment handed down from elsewhere that the gateway must blindly trust. A malformed or revoked credential is caught by the verifier. This keeps the verifier honest and composable. When the gateway _serves_ a public read, it can hand the same authorizing credentials back to the caller so the caller re-verifies the decision independently (see [Public-read discovery](#public-read-discovery-0x)) — a `0.x` ergonomic, not yet built.
 
 A public grant may name `chain:<contentId>` (this chain) or `chain:*` (all of the issuer's chains). Either way it MUST root at the content creator to authorize. Public credentials SHOULD be read-scoped — a public `write` grant is a world-writable bearer token (see [CREDENTIALS.md → `aud: "*"` + write](https://protocol.dfos.com/credentials#security-aud--write--a-world-writable-bearer-grant)).
 
@@ -218,31 +221,24 @@ The document gateway sits below two version clocks and references neither's inte
 - **Protocol v1 (frozen)** — chain mechanics, DAG-CBOR encoding, identifier derivation, validity bounds. The gateway depends **only** on these frozen primitives (CIDs, credentials, signatures). The protocol never references the gateway.
 - **Content-schema conventions** — the gateway is content-agnostic; it serves bytes addressed by `documentCID` and does not interpret document schemas.
 
-The gateway's own `0.x` clock advances independently. New gateway capability arrives **additively** atop frozen v1 — a new service type, an enriched (backward-compatible) response field — never as a protocol break. The governance invariant: **capability flows up from frozen primitives; the protocol never reaches down to a gateway.**
+The gateway's own `0.x` clock advances independently. New gateway capability arrives **additively** atop frozen v1 — a new service type, a richer (backward-compatible) blob-response envelope — never as a protocol break. The governance invariant: **capability flows up from frozen primitives; the protocol never reaches down to a gateway.**
 
 ---
 
-## Enriched resolve (proof-plane support)
+## Public-read discovery (0.x)
 
-The gateway needs the proof plane to surface, alongside a chain's head state, the **public grant credentials** covering that chain — so the gateway (or a split gateway, or any zero-trust caller) can re-verify them live rather than trust a stored flag.
+> **Status: design, not yet built.** A `0.x` gateway ergonomic slated for after the
+> v1 freeze. The frozen proof plane is **not** involved — `GET /proof/v1/content/:contentId`
+> returns pure replayed chain state and carries no derived authorization data. This
+> ergonomic lives entirely at the gateway tier and ships on the gateway's own clock.
 
-`GET /proof/v1/content/:contentId` (already called for the head `documentCID`) is **enriched** with a `publicGrants` field: an array of compact credential JWS tokens (`aud: "*"`) that **currently authorize `read`** on this chain (`chain:<contentId>` or `chain:*`). Each is **re-verified live** before it is surfaced — signature, issuer-key resolution, expiry, revocation, and delegation rooted at the creator — so the field reflects grants that actually grant, not raw candidates. A revoked or expired grant drops out. The field sits as a top-level sibling to `state`, not inside it — `state` remains the pure replayed chain projection; `publicGrants` is derived authorization data. It is sorted deterministically (lexicographically by token) so it is byte-identical across relays and store backends.
+When a reader fetches a blob over the **public path** — an unauthenticated `GET /content/:contentId/blob[/:ref]` that a public standing grant authorizes — the gateway already had to derive and re-verify the authorizing `aud: "*"` credential(s) to make its serve/deny decision. The ergonomic: hand those same credentials **back to the caller alongside the bytes**, so the caller can independently re-run the [unified verifier](#the-unified-verifier) and confirm the gateway's authorization decision rather than take the `200` on faith.
 
-Surfacing the re-verified _credentials themselves_ (not a `publiclyReadable: true` boolean) keeps the node honest: it provides data a zero-trust caller or a split gateway re-verifies independently and arrives at the same answer. The node's filtering is a convenience; the caller's re-verify is the backstop.
+The authorizing credentials are returned **in a response envelope, not a header**. A delegated grant carries its full `prf` chain and can run to a few hundred bytes per link; bounded at **≤256 KiB** total (the protocol's credential-size ceiling), that is comfortably an envelope payload but well past what belongs in an HTTP header. The envelope wraps the blob bytes (or references them) and carries the compact credential JWS tokens that authorized the read — each `aud: "*"`, covering `chain:<contentId>` or `chain:*`, rooted at the content creator. Revocation-currency is an **optional extra proof-plane check** the caller MAY run (each credential and every `prf` link against live revocation state); the gateway already ran it before serving, so it is a backstop, not a requirement.
 
-```json
-{
-  "contentId": "abc123...",
-  "genesisCID": "bafy...",
-  "headCID": "bafy...",
-  "state": { "...": "pure replayed chain state" },
-  "publicGrants": ["eyJhbGciOiJFZERTQSIs...", "..."]
-}
-```
+This keeps the gateway honest the same way the proof plane does elsewhere: the node provides the re-verifiable _credentials themselves_, never a pre-chewed `publiclyReadable: true` boolean. A zero-trust caller — or a gateway split across origins from its proof plane — re-verifies and arrives at the same answer. The gateway's filtering is the convenience; the caller's re-verify is the backstop. It adds **zero proof-plane routes** and **zero new gateway routes** — it enriches the existing blob response, and only on the public path. The grants are public credentials; surfacing them discloses nothing private.
 
-This is **additive and backward-compatible** (MUST-ignore-unknown): a consumer that does not know `publicGrants` ignores it. It adds **+0 routes** — it enriches an existing one. The grants are public credentials; surfacing them discloses nothing private.
-
-**Coupling wrinkle to watch.** Enriching the content-_state_ response folds authorization metadata into a chain-state response. This is fine for 0.1 (public grants are public; it saves a round-trip). If the conflation ever bites, the clean split is a sibling `GET /proof/v1/content/:contentId/grants` (mirroring `/log`) — at the cost of +1 route and +1 round-trip. Deferred until it earns its place.
+The exact envelope shape (inline bytes vs. a sidecar metadata response, field names, content negotiation) is left for the implementation that builds it; this section fixes the **intent** — re-verifiable public-read authorization handed back with the bytes — not the wire format.
 
 ---
 
@@ -250,5 +246,5 @@ This is **additive and backward-compatible** (MUST-ignore-unknown): a consumer t
 
 - **`DfosManifest`** — a content chain enumerating an identity's documents. Pure discovery, orthogonal to authorization; a gated manifest is just another content chain under the same rules. Out of 0.1 scope.
 - **Credentials-by-resource query** — reverse discovery ("what can DID X read"). It serves no part of the read path; YAGNI for 0.1.
-- **Sibling `/grants` route** — the cleaner separation of authorization metadata from chain state, deferred until the enriched-resolve conflation actually bites.
+- **Blob-response credential envelope** — inlining the authorizing public-read credentials with the served bytes so the caller re-verifies the gateway's decision (see [Public-read discovery](#public-read-discovery-0x)). Designed, not yet built; a `0.x` gateway addition with no proof-plane change.
 - **Media** — explicitly **out of gateway and protocol scope**. Media is a [referential document](#terminal-and-referential-documents): a content-schema convention describing how to fetch external bytes (`ipfs://`, a proprietary signed-CDN API), delivered out-of-protocol. If it ever earns a spec, that spec is a SIWD-class content convention — never a gateway `0.x` version or a protocol primitive.

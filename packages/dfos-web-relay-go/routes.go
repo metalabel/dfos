@@ -102,11 +102,10 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 		"protocol": "dfos-web-relay",
 		"version":  Version,
 		"capabilities": map[string]any{
-			"proof":     true,
-			"write":     r.writeEnabled,
-			"content":   r.contentEnabled,
-			"log":       r.logEnabled,
-			"documents": r.contentEnabled,
+			"proof":   true,
+			"write":   r.writeEnabled,
+			"content": r.contentEnabled,
+			"log":     r.logEnabled,
 		},
 		"profile": r.profileArtifactJWS,
 	})
@@ -319,11 +318,10 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"contentId":    chain.ContentID,
-		"genesisCID":   chain.GenesisCID,
-		"headCID":      chain.State.HeadCID,
-		"state":        chain.State,
-		"publicGrants": r.derivePublicGrants(contentID, chain.State.CreatorDID),
+		"contentId":  chain.ContentID,
+		"genesisCID": chain.GenesisCID,
+		"headCID":    chain.State.HeadCID,
+		"state":      chain.State,
 	})
 }
 
