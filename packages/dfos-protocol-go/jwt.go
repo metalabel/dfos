@@ -10,7 +10,7 @@ import (
 
 // maxCredentialSize bounds the byte length of a credential JWS token — the
 // credential's analog of maxOperationSize. Credentials are EXEMPT from the 64
-// KiB operation cap (a maximum-depth 16-hop delegation chain embeds each parent
+// KiB operation cap (a maximum-depth 16-credential delegation chain embeds each parent
 // in prf and legitimately exceeds it), so they carry their own larger ceiling.
 // VALIDITY-determining: MUST match the TS reference (MAX_CREDENTIAL_SIZE).
 const maxCredentialSize = 262144

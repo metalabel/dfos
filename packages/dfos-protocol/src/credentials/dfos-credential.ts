@@ -339,7 +339,7 @@ export const verifyDelegationChain = async (
     current = parent;
   }
 
-  throw new CredentialVerificationError('delegation chain too deep (max 16 hops)');
+  throw new CredentialVerificationError('delegation chain too deep (max 16 credentials)');
 };
 
 // -----------------------------------------------------------------------------

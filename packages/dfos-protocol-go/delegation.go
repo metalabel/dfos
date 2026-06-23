@@ -171,7 +171,7 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 	// 17th credential is reached at depth 16 and rejected. This boundary is
 	// canonical with the TS verifier (see CREDENTIALS.md "Delegation depth").
 	if depth >= 16 {
-		return fmt.Errorf("delegation chain too deep (max 16 hops)")
+		return fmt.Errorf("delegation chain too deep (max 16 credentials)")
 	}
 
 	// no parents — this is the root credential, issuer must be the root DID
