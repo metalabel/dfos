@@ -539,6 +539,22 @@ describe('dfos credential', () => {
     expect(isAttenuated(parent, child)).toBe(false);
   });
 
+  it('should accept child with empty action elements (canonicalizes to parent set)', () => {
+    // "write," canonicalizes to {write}; Go already dropped the empty element,
+    // TS now converges — the attenuation verdict matches across implementations.
+    const parent = [{ resource: 'chain:content1', action: 'write' }];
+    const child = [{ resource: 'chain:content1', action: 'write,' }];
+    expect(isAttenuated(parent, child)).toBe(true);
+  });
+
+  it('should treat an empty action set as granting nothing on matchesResource', async () => {
+    // "," canonicalizes to {} — vacuously a subset on attenuation, but it covers
+    // no concrete request, so the relay authorizes no operation.
+    const att = [{ resource: 'chain:content1', action: ',' }];
+    expect(await matchesResource(att, 'chain:content1', 'write')).toBe(false);
+    expect(await matchesResource(att, 'chain:content1', 'read')).toBe(false);
+  });
+
   it('should reject child that extends expiry in delegation chain', async () => {
     const space = makeIdentity();
     const member = makeIdentity();

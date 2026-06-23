@@ -353,10 +353,21 @@ const parseResource = (resource: string): { type: string; id: string } | null =>
   return { type: resource.substring(0, colonIdx), id: resource.substring(colonIdx + 1) };
 };
 
-/** Parse action string into a set of individual actions */
-const parseActions = (action: string): Set<string> => {
-  return new Set(action.split(',').map((a) => a.trim()));
-};
+/** Parse action string into a set of individual actions.
+ *
+ * Splits on comma, trims each element, and DROPS empty elements so the action
+ * set is canonical: "write," / "read,,write" / "  read , write " all reduce to
+ * their non-empty token sets. This converges TS onto the Go ParseActions
+ * (delegation.go) so isAttenuated and matchesResource reach identical verdicts
+ * across implementations — a divergent empty-string element would otherwise
+ * make a child action "write," covered by parent "write" on Go but not TS. */
+const parseActions = (action: string): Set<string> =>
+  new Set(
+    action
+      .split(',')
+      .map((a) => a.trim())
+      .filter((a) => a !== ''),
+  );
 
 /**
  * Check if `childAtt` is a valid attenuation of `parentAtt`

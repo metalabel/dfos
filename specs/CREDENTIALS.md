@@ -180,7 +180,42 @@ Invalid widening:
 
 ### Action Coverage
 
-Actions are comma-separated strings. The child's action set must be a subset of the parent's action set for the matched resource entry.
+An action is a **comma-separated list** of action tokens. To compare two action
+strings, each is **canonicalized to a set** of tokens by the following rules,
+applied identically by every verifier:
+
+1. **Split on comma** (`,`).
+2. **Trim** ASCII leading/trailing whitespace from each element.
+3. **Drop empty elements.** An element that is empty after trimming contributes
+   nothing to the set. Leading, trailing, and doubled commas are therefore
+   insignificant — `read`, `read,`, `,read`, and `read,,read` all canonicalize
+   to `{read}`.
+4. **Collect into a set.** Order and duplication are insignificant; `write,read`
+   and `read,write` both canonicalize to `{read, write}`.
+5. **Compare tokens by exact, case-sensitive byte equality.** `read` and `Read`
+   are distinct actions. There is **no action wildcard** — a `*` token is an
+   ordinary, literal action token, not a match-all.
+
+The child's canonical action set MUST be a **subset** of the parent's canonical
+action set for the matched resource entry. Equivalently, every token in the
+child's set MUST appear in the parent's set.
+
+| Parent action | Child action  | Canonical child set | Covered? |
+| ------------- | ------------- | ------------------- | -------- |
+| `read,write`  | `read`        | `{read}`            | Yes      |
+| `read,write`  | `write,read`  | `{read, write}`     | Yes      |
+| `read,write`  | `read,,write` | `{read, write}`     | Yes      |
+| `write`       | `write,`      | `{write}`           | Yes      |
+| `read`        | `read,write`  | `{read, write}`     | No       |
+| `read`        | `Read`        | `{Read}`            | No       |
+
+**Empty action set (canonical bottom).** An action string that canonicalizes to
+the empty set `{}` (e.g. `""` or `","`) is the bottom of the action lattice: it
+is **vacuously a subset of any parent set**, so it never widens scope and passes
+the attenuation check, but it **grants nothing** — a request always carries a
+concrete action token, which is never a member of `{}`, so an `att` entry with
+an empty action set authorizes no operation. Such an entry is inert, not
+separately rejected.
 
 ### Expiry Narrowing
 
