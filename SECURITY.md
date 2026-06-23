@@ -10,13 +10,8 @@ researchers to disclose them responsibly.
 
 DFOS is pre-1.0 and ships in lockstep across all published packages (the npm
 `@metalabel/*` packages and the Go modules share a single version). Security
-fixes are made against the latest released minor only. We do not backport to
-older minors before 1.0.
-
-| Version | Supported |
-| ------- | --------- |
-| 0.11.x  | Yes       |
-| < 0.11  | No        |
+fixes are made against the **latest released minor only** — we do not backport to
+older minors before 1.0. Always run the most recently published version.
 
 ## Reporting a vulnerability
 
