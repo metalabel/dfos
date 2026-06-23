@@ -2,7 +2,7 @@
 
 W3C DID Method specification for DFOS identity chains. Self-certifying, transport-agnostic, Ed25519-based decentralized identifiers.
 
-> **Status — Protocol v1: feature-complete, in soak.** The method core — `did:dfos` derivation, chain resolution, and the DID-document mapping — is **frozen** as part of the v1 surface; build on it as specified. Per the [core protocol status](https://protocol.dfos.com/spec), v1 is in soak: clarifications are corrected in place and new capability lands additively, while a genuine break to a frozen field becomes v1.1 or v2 — never a silent edit. The reference packages stay on their own `0.x` semver line. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
+> **Status — Protocol v1: feature-complete and frozen.** The method core — `did:dfos` derivation, chain resolution, and the DID-document mapping — is **frozen** as part of the v1 surface; build on it as specified. Per the [core protocol status](https://protocol.dfos.com/spec), v1 is frozen but not yet final: clarifications are corrected in place and new capability lands additively, while a genuine break to a frozen field becomes v1.1 or v2 — never a silent edit. The reference packages stay on their own `0.x` semver line. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) · [Protocol Specification](https://protocol.dfos.com/spec) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol)
 
