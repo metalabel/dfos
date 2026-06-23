@@ -471,4 +471,17 @@ describe('canonical encode depth guard', () => {
     const block = await dagCborCanonicalEncode({ a: [{ b: [{ c: 1 }] }] });
     expect(block.cid.toString()).toMatch(/^b/);
   });
+
+  it('accepts nesting exactly at the cap (1024) but rejects one past it (Go twin boundary)', async () => {
+    const { dagCborCanonicalEncode } = await import('../src/crypto/multiformats');
+    const nest = (d: number): unknown => {
+      let v: unknown = 'x';
+      for (let i = 0; i < d; i++) v = [v];
+      return v;
+    };
+    // MAX_CANONICAL_DEPTH = 1024: a leaf at the cap is accepted...
+    await expect(dagCborCanonicalEncode(nest(1024))).resolves.toBeDefined();
+    // ...one level deeper trips the DoS resource guard.
+    await expect(dagCborCanonicalEncode(nest(1025))).rejects.toThrow(/max depth/);
+  });
 });
