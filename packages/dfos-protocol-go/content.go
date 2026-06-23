@@ -14,7 +14,7 @@ type ContentState struct {
 }
 
 // SignContentCreate signs a content chain genesis (create) operation.
-func SignContentCreate(did, documentCID, kid string, note string, privateKey ed25519.PrivateKey) (jwsToken string, contentID string, operationCID string, err error) {
+func SignContentCreate(did, documentCID, kid string, privateKey ed25519.PrivateKey) (jwsToken string, contentID string, operationCID string, err error) {
 	now := protocolTimestamp()
 
 	payload := map[string]any{
@@ -24,10 +24,6 @@ func SignContentCreate(did, documentCID, kid string, note string, privateKey ed2
 		"documentCID":     documentCID,
 		"baseDocumentCID": nil,
 		"createdAt":       now.Format("2006-01-02T15:04:05.000Z"),
-		"note":            nil,
-	}
-	if note != "" {
-		payload["note"] = note
 	}
 
 	_, cidBytes, cidStr, err := DagCborCID(payload)
@@ -53,14 +49,13 @@ func SignContentCreate(did, documentCID, kid string, note string, privateKey ed2
 
 // ContentUpdateOptions holds optional parameters for content update operations.
 type ContentUpdateOptions struct {
-	Note            string
 	BaseDocumentCID string
 	Authorization   string
 }
 
 // SignContentUpdate signs a content chain update operation.
-func SignContentUpdate(did, previousCID, documentCID, kid string, note string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
-	return SignContentUpdateWithOptions(did, previousCID, documentCID, kid, privateKey, ContentUpdateOptions{Note: note})
+func SignContentUpdate(did, previousCID, documentCID, kid string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
+	return SignContentUpdateWithOptions(did, previousCID, documentCID, kid, privateKey, ContentUpdateOptions{})
 }
 
 // SignContentUpdateWithOptions signs a content chain update operation with full options.
@@ -75,10 +70,6 @@ func SignContentUpdateWithOptions(did, previousCID, documentCID, kid string, pri
 		"documentCID":          documentCID,
 		"baseDocumentCID":      nil,
 		"createdAt":            now.Format("2006-01-02T15:04:05.000Z"),
-		"note":                 nil,
-	}
-	if opts.Note != "" {
-		payload["note"] = opts.Note
 	}
 	if opts.BaseDocumentCID != "" {
 		payload["baseDocumentCID"] = opts.BaseDocumentCID
@@ -108,7 +99,7 @@ func SignContentUpdateWithOptions(did, previousCID, documentCID, kid string, pri
 }
 
 // SignContentDelete signs a content chain delete operation (permanent destruction).
-func SignContentDelete(did, previousCID, kid string, note string, authorization string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
+func SignContentDelete(did, previousCID, kid string, authorization string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
 	now := protocolTimestamp()
 
 	payload := map[string]any{
@@ -117,10 +108,6 @@ func SignContentDelete(did, previousCID, kid string, note string, authorization 
 		"did":                  did,
 		"previousOperationCID": previousCID,
 		"createdAt":            now.Format("2006-01-02T15:04:05.000Z"),
-		"note":                 nil,
-	}
-	if note != "" {
-		payload["note"] = note
 	}
 	if authorization != "" {
 		payload["authorization"] = authorization

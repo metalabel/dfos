@@ -70,7 +70,6 @@ const createContentGenesis = async (
     documentCID: 'bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenera6h5y',
     baseDocumentCID: null,
     createdAt: ts(),
-    note: null,
   };
   const { jwsToken, operationCID } = await signContentOperation({
     operation: op,
@@ -383,7 +382,6 @@ describe('verifyContentExtensionFromTrustedState', () => {
       documentCID: 'bafkreiupdatedocument000000000000000000000000000000000000000',
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: 'updated',
     };
     const { jwsToken: updateJws } = await signContentOperation({
       operation: update,
@@ -417,7 +415,6 @@ describe('verifyContentExtensionFromTrustedState', () => {
       did: creator.identity.did,
       previousOperationCID: genesis.operationCID,
       createdAt: ts(1),
-      note: null,
     };
     const { jwsToken: delJws } = await signContentOperation({
       operation: del,
@@ -451,7 +448,6 @@ describe('verifyContentExtensionFromTrustedState', () => {
       documentCID: 'bafkreiupdatedoc1000000000000000000000000000000000000000000000',
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
     };
     const { jwsToken: update1Jws, operationCID: update1CID } = await signContentOperation({
       operation: update1,
@@ -474,7 +470,6 @@ describe('verifyContentExtensionFromTrustedState', () => {
       documentCID: 'bafkreiupdatedoc2000000000000000000000000000000000000000000000',
       baseDocumentCID: null,
       createdAt: ts(2),
-      note: null,
     };
     const { jwsToken: update2Jws } = await signContentOperation({
       operation: update2,
@@ -506,7 +501,6 @@ describe('verifyContentExtensionFromTrustedState', () => {
       did: creator.identity.did,
       previousOperationCID: genesis.operationCID,
       createdAt: ts(1),
-      note: null,
     };
     const { jwsToken: delJws } = await signContentOperation({
       operation: del,
@@ -529,7 +523,6 @@ describe('verifyContentExtensionFromTrustedState', () => {
       documentCID: 'bafkreiupdatedoc3000000000000000000000000000000000000000000000',
       baseDocumentCID: null,
       createdAt: ts(2),
-      note: null,
     };
     const { jwsToken: updateJws } = await signContentOperation({
       operation: update,
@@ -619,7 +612,6 @@ describe('verifyContentExtensionFromTrustedState', () => {
       documentCID: 'bafkreidelegatedoc0000000000000000000000000000000000000000000',
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
       authorization: credentialToken,
     };
     const { jwsToken: updateJws } = await signContentOperation({

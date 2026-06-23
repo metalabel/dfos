@@ -5,7 +5,7 @@ export type Signer = (message: Uint8Array) => Promise<Uint8Array>;
 
 // --- protocol limits ---
 //
-// Per-field STRING-LENGTH caps (did, key id, multibase, CID, note) were removed
+// Per-field STRING-LENGTH caps (did, key id, multibase, CID) were removed
 // in favor of one aggregate MAX_OPERATION_SIZE cap (below): the per-field limits
 // were a TS-only defensive zoo with no spec mandate and no Go parity, so they
 // forked validity across implementations. The genuine validity rules those
@@ -71,12 +71,22 @@ export type MultikeyPublicKey = z.infer<typeof MultikeyPublicKey>;
  * Anchor target shapes — a ContentAnchor references a STABLE content
  * identifier, dispatched by structural form:
  *   - 31-char contentId (content chain) → mutable, gateable
- *   - CIDv1 base32 (artifact)           → immutable, public
- * Both are stable; a chain HEAD CID (also base32 but resolves to a non-artifact
- * op) is rejected by the shape-dispatch + resolution type check, never anchored.
+ *   - CIDv1 dag-cbor+sha256 (artifact)  → immutable, public
+ * Both are stable; a chain HEAD CID (also a `bafyrei…` CID but resolves to a
+ * non-artifact op) is rejected by the shape-dispatch + resolution type check,
+ * never anchored.
+ *
+ * The artifact form is the EXACT 59-char CIDv1(dag-cbor 0x71 + sha256 0x12 0x20)
+ * base32 string — 36 raw bytes → 58 base32 chars + the `b` multibase prefix,
+ * fixed `bafyrei` head + 52 base32 chars. Artifact payloads are ALWAYS dag-cbor +
+ * sha256 (ArtifactPayload below), so every real artifact CID is `bafyrei…`. The
+ * regex is pinned to that exact length (not a loose `baf…{20,}`) so an anchor of
+ * any other shape — wrong codec, wrong length — is rejected uniformly across
+ * implementations. New anchor KINDS arrive via a new service `type`, never a new
+ * anchor shape.
  */
 export const CONTENT_ID_ANCHOR_RE = /^[2346789acdefhknrtvz]{31}$/;
-export const ARTIFACT_CID_ANCHOR_RE = /^baf[a-z2-7]{20,}$/;
+export const ARTIFACT_CID_ANCHOR_RE = /^bafyrei[a-z2-7]{52}$/;
 
 /**
  * Service entry — discovery vocabulary in identity-chain state.
@@ -204,7 +214,6 @@ const ContentCreate = z.looseObject({
   documentCID: CIDString,
   baseDocumentCID: CIDString.nullable(),
   createdAt: Iso8601,
-  note: z.string().nullable(),
 });
 
 /** Content chain: update — commit new document (null documentCID = clear) */
@@ -216,7 +225,6 @@ const ContentUpdate = z.looseObject({
   documentCID: CIDString.nullable(),
   baseDocumentCID: CIDString.nullable(),
   createdAt: Iso8601,
-  note: z.string().nullable(),
   /** DFOS credential authorizing this operation when signer is not the chain creator */
   authorization: z.string().optional(),
 });
@@ -228,7 +236,6 @@ const ContentDelete = z.looseObject({
   did: z.string(),
   previousOperationCID: CIDString,
   createdAt: Iso8601,
-  note: z.string().nullable(),
   /** DFOS credential authorizing this operation when signer is not the chain creator */
   authorization: z.string().optional(),
 });

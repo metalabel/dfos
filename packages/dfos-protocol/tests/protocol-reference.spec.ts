@@ -200,7 +200,6 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     documentCID,
     baseDocumentCID: null,
     createdAt: '2026-03-07T00:02:00.000Z',
-    note: null,
   };
   const { jwsToken: contentCreateJws, operationCID: contentCreateCID } = await signContentOperation(
     {
@@ -232,7 +231,6 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     documentCID: documentCID2,
     baseDocumentCID: documentCID,
     createdAt: '2026-03-07T00:03:00.000Z',
-    note: 'edited title and body',
   };
   const { jwsToken: contentUpdateJws, operationCID: contentUpdateCID } = await signContentOperation(
     {
@@ -494,9 +492,9 @@ describe('protocol reference artifacts', () => {
 
     expect(a.documentCID).toBe('bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy');
     expect(a.documentCID2).toBe('bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy');
-    expect(a.contentCreateCID).toBe('bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y');
-    expect(a.contentUpdateCID).toBe('bafyreibpx4cgb4j6n3mz764pylrdg6q7a46njnhx6p4cq2rlgeue3s3evq');
-    expect(a.contentId).toBe('cv7n8vkvr64cctf3294h9k4eanhff8z');
+    expect(a.contentCreateCID).toBe('bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy');
+    expect(a.contentUpdateCID).toBe('bafyreia2llpluo7i2slh752ipwbsqwkvazivjbvzd7m66isfmzhboh3l6y');
+    expect(a.contentId).toBe('a3n7r3nde8e4keeak92rr3aeztftvc2');
 
     // --- cross-check the examples/ fixtures (a second golden source) ---
     // identity-genesis.json: chain[0] is the genesis JWS, expected pins DID/keys.

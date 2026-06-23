@@ -300,9 +300,6 @@ echo '{"$schema":"...","body":"hello"}' | dfos content create -
 dfos content create - <<'EOF'
 {"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"hello"}
 EOF
-
-# with operation note
-dfos content create post.json --note "initial draft"
 ```
 
 If the document has no `$schema` field, the CLI warns but proceeds. The relay is document-agnostic — schema enforcement is a client-side convention, not a protocol rule.

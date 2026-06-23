@@ -85,7 +85,7 @@ func TestCrossBatchExtensionBeforeGenesis(t *testing.T) {
 	doc2 := map[string]any{"type": "post", "title": "extension before genesis"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
 	kid := id.did + "#" + id.auth.keyID
-	extToken, _, _ := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, "", id.auth.priv)
+	extToken, _, _ := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, id.auth.priv)
 
 	// batch 1: extension only (genesis doesn't exist yet)
 	res1 := postOperations(t, base, []string{extToken})
@@ -138,19 +138,19 @@ func TestCrossBatchForkBeforeAncestor(t *testing.T) {
 	// create update A (extends genesis)
 	docA := map[string]any{"type": "post", "title": "branch A"}
 	docCIDA, _, _ := dfos.DocumentCID(docA)
-	tokenA, cidA, _ := dfos.SignContentUpdate(id.did, cc.genCID, docCIDA, kid, "", id.auth.priv)
+	tokenA, cidA, _ := dfos.SignContentUpdate(id.did, cc.genCID, docCIDA, kid, id.auth.priv)
 
 	// create update B (also extends genesis — fork)
 	time.Sleep(10 * time.Millisecond)
 	docB := map[string]any{"type": "post", "title": "branch B"}
 	docCIDB, _, _ := dfos.DocumentCID(docB)
-	tokenB, _, _ := dfos.SignContentUpdate(id.did, cc.genCID, docCIDB, kid, "", id.auth.priv)
+	tokenB, _, _ := dfos.SignContentUpdate(id.did, cc.genCID, docCIDB, kid, id.auth.priv)
 
 	// create update C that extends A (deeper branch)
 	time.Sleep(10 * time.Millisecond)
 	docC := map[string]any{"type": "post", "title": "extends branch A"}
 	docCIDC, _, _ := dfos.DocumentCID(docC)
-	tokenC, _, _ := dfos.SignContentUpdate(id.did, cidA, docCIDC, kid, "", id.auth.priv)
+	tokenC, _, _ := dfos.SignContentUpdate(id.did, cidA, docCIDC, kid, id.auth.priv)
 
 	// batch 1: submit C first (depends on A which hasn't been submitted)
 	res1 := postOperations(t, base, []string{tokenC})
@@ -212,7 +212,7 @@ func createContentTokens(t *testing.T, id idTokens) contentTokens {
 	doc := map[string]any{"type": "post", "title": "sequencer test content"}
 	docCID, _, _ := dfos.DocumentCID(doc)
 	kid := id.did + "#" + id.auth.keyID
-	token, contentID, genCID, err := dfos.SignContentCreate(id.did, docCID, kid, "", id.auth.priv)
+	token, contentID, genCID, err := dfos.SignContentCreate(id.did, docCID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}

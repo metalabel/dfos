@@ -50,7 +50,6 @@ describe('countersignature', () => {
       documentCID: docCID,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { operationCID } = await signContentOperation({
       operation: op,

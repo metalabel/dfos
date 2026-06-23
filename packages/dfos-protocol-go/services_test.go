@@ -9,7 +9,8 @@ import (
 // canonical anchor fixtures (mirror services.spec.ts)
 const (
 	testContentIDAnchor = "2346789acdefhknrtvz2346789acdef" // 31 chars, content-chain alphabet
-	testArtifactAnchor  = "bafkreieabcdefghijklmnoprstuvwxyz234567"
+	// 59-char CIDv1 dag-cbor+sha256 ("bafyrei…") — the only artifact anchor shape.
+	testArtifactAnchor = "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy"
 )
 
 func relayEntry(id string) ServiceEntry {
@@ -24,11 +25,15 @@ func TestClassifyAnchor(t *testing.T) {
 	cases := map[string]AnchorKind{
 		testContentIDAnchor: AnchorChain,
 		testArtifactAnchor:  AnchorArtifact,
-		// a head CID is base32 baf… → artifact-shaped (rejected later at resolution)
-		"bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi": AnchorArtifact,
+		// a head CID is a bafyrei dag-cbor CID → artifact-shaped (rejected later at resolution)
+		"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne": AnchorArtifact,
 		"not-an-anchor": AnchorInvalid,
 		"short":         AnchorInvalid,
 		"":              AnchorInvalid,
+		// a non-dag-cbor CID (raw 0x55 → bafkrei, dag-pb → bafybei) is NOT a valid
+		// artifact anchor under the tightened grammar — artifacts are always dag-cbor.
+		"bafkreieabcdefghijklmnoprstuvwxyz234567":                    AnchorInvalid,
+		"bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi": AnchorInvalid,
 	}
 	for anchor, want := range cases {
 		if got := ClassifyAnchor(anchor); got != want {

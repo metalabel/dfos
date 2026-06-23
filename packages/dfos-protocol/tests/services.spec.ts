@@ -12,7 +12,8 @@ import { createNewEd25519Keypair, generateId, signPayloadEd25519 } from '../src/
 
 // stable anchor fixtures
 const CONTENT_ID = '2346789acdefhknrtvz2346789acdef'; // 31 chars, content-chain alphabet
-const ARTIFACT_CID = 'bafkreieabcdefghijklmnoprstuvwxyz234567'; // CIDv1 base32 → artifact
+// 59-char CIDv1 dag-cbor+sha256 ("bafyrei…") — the only artifact anchor shape.
+const ARTIFACT_CID = 'bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy';
 
 const RELAY: ServiceEntry = {
   id: 'relay-0',
@@ -41,15 +42,15 @@ describe('classifyAnchor', () => {
     expect(classifyAnchor(CONTENT_ID)).toBe('chain');
   });
 
-  it('classifies a CIDv1 base32 string as an artifact', () => {
+  it('classifies a 59-char CIDv1 dag-cbor string as an artifact', () => {
     expect(classifyAnchor(ARTIFACT_CID)).toBe('artifact');
   });
 
   it('classifies a chain HEAD CID as artifact-shaped (rejected later at resolution)', () => {
-    // a head CID is also baf… base32 — it dispatches to 'artifact', then fails
-    // the resolution-time type check (resolves to a non-artifact op). So
-    // "never anchor a head CID" holds without a mode flag.
-    expect(classifyAnchor('bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi')).toBe(
+    // a head CID is also a bafyrei dag-cbor CID — it dispatches to 'artifact',
+    // then fails the resolution-time type check (resolves to a non-artifact op).
+    // So "never anchor a head CID" holds without a mode flag.
+    expect(classifyAnchor('bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne')).toBe(
       'artifact',
     );
   });
@@ -58,6 +59,15 @@ describe('classifyAnchor', () => {
     expect(classifyAnchor('not-an-anchor')).toBe('invalid');
     expect(classifyAnchor('short')).toBe('invalid');
     expect(classifyAnchor('')).toBe('invalid');
+  });
+
+  it('rejects a non-dag-cbor CID as an artifact anchor (tightened grammar)', () => {
+    // raw (0x55 → bafkrei) and dag-pb (bafybei) CIDs are NOT valid artifact
+    // anchors — artifact payloads are always dag-cbor, so only bafyrei is valid.
+    expect(classifyAnchor('bafkreieabcdefghijklmnoprstuvwxyz234567')).toBe('invalid');
+    expect(classifyAnchor('bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi')).toBe(
+      'invalid',
+    );
   });
 });
 

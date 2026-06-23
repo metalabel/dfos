@@ -193,7 +193,7 @@ func createTestContent(t *testing.T, id testIdentity) (token, contentID, opCID s
 		t.Fatal(err)
 	}
 	kid := id.did + "#" + id.auth.keyID
-	token, contentID, opCID, err = dfos.SignContentCreate(id.did, docCID, kid, "", id.auth.priv)
+	token, contentID, opCID, err = dfos.SignContentCreate(id.did, docCID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}

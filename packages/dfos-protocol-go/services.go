@@ -18,10 +18,13 @@ const (
 
 // Anchor target shapes — a ContentAnchor references a STABLE content identifier,
 // dispatched by structural form: a 31-char contentId resolves to a content chain;
-// a CIDv1 base32 ("baf…") resolves to an artifact.
+// the exact 59-char CIDv1 dag-cbor+sha256 form ("bafyrei…") resolves to an
+// artifact. Artifact payloads are ALWAYS dag-cbor + sha256, so every real artifact
+// CID is `bafyrei` + 52 base32 chars; the regex is pinned to that exact length
+// (not a loose `baf…{20,}`) so any other shape is rejected uniformly with TS.
 var (
 	contentIDAnchorRe   = regexp.MustCompile(`^[2346789acdefhknrtvz]{31}$`)
-	artifactCIDAnchorRe = regexp.MustCompile(`^baf[a-z2-7]{20,}$`)
+	artifactCIDAnchorRe = regexp.MustCompile(`^bafyrei[a-z2-7]{52}$`)
 )
 
 // ServiceEntry is one discovery-vocabulary entry in identity-chain state. The

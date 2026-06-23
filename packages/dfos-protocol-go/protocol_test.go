@@ -574,7 +574,7 @@ func TestSignContentCreate(t *testing.T) {
 	kid := "key_ez9a874tckr3dv933d3ckdn7z6zrct8"
 	docCID := "bafyreihzwuoupfg3dxip6xmgzmxsywyi2jeoxxzbgx3zxm2in7knoi3g4"
 
-	token, contentID, cidStr, err := SignContentCreate(did, docCID, kid, "", priv2)
+	token, contentID, cidStr, err := SignContentCreate(did, docCID, kid, priv2)
 	if err != nil {
 		t.Fatalf("SignContentCreate: %v", err)
 	}
@@ -843,12 +843,12 @@ func TestSignContentDelete(t *testing.T) {
 	kid := did + "#key_test"
 	docCID := "bafyreihzwuoupfg3dxip6xmgzmxsywyi2jeoxxzbgx3zxm2in7knoi3g4"
 
-	_, _, genCID, err := SignContentCreate(did, docCID, kid, "", priv1)
+	_, _, genCID, err := SignContentCreate(did, docCID, kid, priv1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	token, opCID, err := SignContentDelete(did, genCID, kid, "removing this content", "", priv1)
+	token, opCID, err := SignContentDelete(did, genCID, kid, "", priv1)
 	if err != nil {
 		t.Fatalf("SignContentDelete: %v", err)
 	}
@@ -869,8 +869,8 @@ func TestSignContentDelete(t *testing.T) {
 	if p["previousOperationCID"] != genCID {
 		t.Fatalf("previousOperationCID: got %v", p["previousOperationCID"])
 	}
-	if p["note"] != "removing this content" {
-		t.Fatalf("note: got %v", p["note"])
+	if _, ok := p["note"]; ok {
+		t.Fatalf("note must not appear in a content op payload, got %v", p["note"])
 	}
 	if p["did"] != did {
 		t.Fatalf("did: got %v", p["did"])
@@ -887,7 +887,7 @@ func TestSignContentUpdateWithOptions(t *testing.T) {
 	kid := did + "#key_test"
 	docCID := "bafyreihzwuoupfg3dxip6xmgzmxsywyi2jeoxxzbgx3zxm2in7knoi3g4"
 
-	_, _, genCID, err := SignContentCreate(did, docCID, kid, "", priv1)
+	_, _, genCID, err := SignContentCreate(did, docCID, kid, priv1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -897,7 +897,6 @@ func TestSignContentUpdateWithOptions(t *testing.T) {
 	authz := "eyJhbGciOiJFZERTQSJ9.fake-credential-token"
 
 	token, opCID, err := SignContentUpdateWithOptions(did, genCID, newDocCID, kid, priv1, ContentUpdateOptions{
-		Note:            "delegated update",
 		BaseDocumentCID: baseCID,
 		Authorization:   authz,
 	})
@@ -921,8 +920,8 @@ func TestSignContentUpdateWithOptions(t *testing.T) {
 	if p["authorization"] != authz {
 		t.Fatalf("authorization: got %v", p["authorization"])
 	}
-	if p["note"] != "delegated update" {
-		t.Fatalf("note: got %v", p["note"])
+	if _, ok := p["note"]; ok {
+		t.Fatalf("note must not appear in a content op payload, got %v", p["note"])
 	}
 }
 
@@ -1103,13 +1102,13 @@ func TestSignContentUpdate(t *testing.T) {
 	kid := did + "#key_test"
 	docCID := "bafyreihzwuoupfg3dxip6xmgzmxsywyi2jeoxxzbgx3zxm2in7knoi3g4"
 
-	_, _, genCID, err := SignContentCreate(did, docCID, kid, "", priv1)
+	_, _, genCID, err := SignContentCreate(did, docCID, kid, priv1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	newDocCID := "bafyreifoo000000000000000000000000000000000000000000000000bar"
-	token, opCID, err := SignContentUpdate(did, genCID, newDocCID, kid, "update note", priv1)
+	token, opCID, err := SignContentUpdate(did, genCID, newDocCID, kid, priv1)
 	if err != nil {
 		t.Fatalf("SignContentUpdate: %v", err)
 	}
@@ -1124,8 +1123,8 @@ func TestSignContentUpdate(t *testing.T) {
 	if p["type"] != "update" {
 		t.Fatalf("payload type: got %v", p["type"])
 	}
-	if p["note"] != "update note" {
-		t.Fatalf("note: got %v", p["note"])
+	if _, ok := p["note"]; ok {
+		t.Fatalf("note must not appear in a content op payload, got %v", p["note"])
 	}
 	if p["previousOperationCID"] != genCID {
 		t.Fatalf("previousOperationCID: got %v", p["previousOperationCID"])

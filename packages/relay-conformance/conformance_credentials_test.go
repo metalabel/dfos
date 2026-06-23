@@ -427,7 +427,7 @@ func TestDocumentsEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	kid := id.did + "#" + id.auth.keyID
-	createToken, contentID, genCID, err := dfos.SignContentCreate(id.did, docCID1, kid, "", id.auth.priv)
+	createToken, contentID, genCID, err := dfos.SignContentCreate(id.did, docCID1, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +441,7 @@ func TestDocumentsEndpoint(t *testing.T) {
 	// update with second document
 	doc2 := map[string]any{"type": "post", "title": "second document", "body": "v2"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
-	updateToken, updateCID, err := dfos.SignContentUpdate(id.did, genCID, docCID2, kid, "", id.auth.priv)
+	updateToken, updateCID, err := dfos.SignContentUpdate(id.did, genCID, docCID2, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}

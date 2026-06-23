@@ -196,7 +196,7 @@ dfos identity fetch <did> --peer <relay> [--name <n>]   # pull from relay
 
 ```bash
 # Create content chain (from file, stdin, or heredoc)
-dfos content create <file|-|> [--peer <relay>] [--note <msg>]
+dfos content create <file|-|> [--peer <relay>]
 
 # Inspect
 dfos content list                           # list all content chains
@@ -205,7 +205,7 @@ dfos content log <contentId>                # operation history
 dfos content download <contentId> [-o file] # download blob
 
 # Mutate
-dfos content update <contentId> <file|-|> [--peer <relay>] [--note <msg>]
+dfos content update <contentId> <file|-|> [--peer <relay>]
 dfos content delete <contentId> [--peer <relay>]
 
 # Publish / fetch

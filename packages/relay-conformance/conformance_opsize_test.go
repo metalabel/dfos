@@ -16,15 +16,12 @@ import (
 func TestOperationSizeCap(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
-	doc := map[string]any{"$schema": "https://schemas.dfos.com/post/v1", "format": "short-post", "body": "x"}
-	docCID, _, err := dfos.DocumentCID(doc)
-	if err != nil {
-		t.Fatalf("DocumentCID: %v", err)
-	}
 	kid := id.did + "#" + id.auth.keyID
 
-	// over-cap content op (~70 KB note) → rejected by the op-size cap.
-	overToken, _, _, err := dfos.SignContentCreate(id.did, docCID, kid, strings.Repeat("x", 70000), id.auth.priv)
+	// The op-size cap is measured over the whole dag-cbor payload, independent of
+	// any single field. We inflate the (string-validated) documentCID to push the
+	// encoded operation over / under the 64 KiB bound.
+	overToken, _, _, err := dfos.SignContentCreate(id.did, strings.Repeat("x", 70000), kid, id.auth.priv)
 	if err != nil {
 		t.Fatalf("SignContentCreate (over): %v", err)
 	}
@@ -32,8 +29,8 @@ func TestOperationSizeCap(t *testing.T) {
 		t.Fatalf("over-cap operation should be rejected, got status %q", st)
 	}
 
-	// under-cap content op (~60 KB note) → accepted.
-	underToken, _, _, err := dfos.SignContentCreate(id.did, docCID, kid, strings.Repeat("x", 60000), id.auth.priv)
+	// under-cap content op → accepted.
+	underToken, _, _, err := dfos.SignContentCreate(id.did, strings.Repeat("x", 60000), kid, id.auth.priv)
 	if err != nil {
 		t.Fatalf("SignContentCreate (under): %v", err)
 	}
