@@ -2,7 +2,7 @@
 
 UCAN-style authorization credentials for the DFOS protocol. Replaces VC-JWTs with a simpler, more powerful model: CID-addressable JWS tokens with embedded delegation chains, monotonic attenuation enforcement, and first-class public credential semantics.
 
-> **⚠ Stabilizing toward Protocol v1 lock.** This spec is under active review and converging on a v1 freeze alongside the [core protocol](https://protocol.dfos.com/spec). The v1 surface is deliberately narrow and nearly settled — breaking changes remain possible while pre-v1, but they are slowing, and each is now a considered exception rather than routine churn. When v1 locks, the credential model — the JWS envelope, linear delegation, monotonic attenuation, and the validity bounds — is frozen; new capability arrives **additively** atop frozen v1, never as a v2 break. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
+> **Status — Protocol v1: feature-complete, in soak.** The credential model — the JWS envelope, linear delegation, monotonic attenuation, revocation, and the validity bounds — is **frozen** as part of the v1 surface; build on it as specified. Per the [core protocol status](https://protocol.dfos.com/spec), v1 is in soak: clarifications are corrected in place and new capability lands additively, while a genuine break to a frozen field becomes v1.1 or v2 — never a silent edit. The reference packages stay on their own `0.x` semver line. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/src/credentials) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol)
 
