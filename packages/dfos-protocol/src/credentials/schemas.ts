@@ -21,7 +21,7 @@ const MAX_PRF = 1;
 /**
  * Max byte length of a credential JWS token — the credential's analog of
  * MAX_OPERATION_SIZE. Credentials are EXEMPT from the 64 KiB operation cap (a
- * maximum-depth 16-hop delegation chain embeds each parent token in `prf` and
+ * maximum-depth 16-credential delegation chain embeds each parent token in `prf` and
  * legitimately exceeds it), so they carry their own larger ceiling. Measured
  * over the serialized leaf token, which contains the entire nested chain, so one
  * bound caps the whole delegation. A DoS guard on the nested `prf` structure;
