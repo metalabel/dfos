@@ -39,7 +39,7 @@ Content plane access requires two credentials:
 
 The content creator (the DID that signed the genesis content operation) can always read their own blobs with just an auth token.
 
-Content plane support is optional per relay. When disabled (`content: false` in the well-known response), all content plane routes return **501 Not Implemented** — not 404 (resource doesn't exist), but 501 (capability not supported).
+Content plane support is optional per relay. When disabled (`capabilities.content: false` in the well-known response), all content plane routes return **501 Not Implemented** — not 404 (resource doesn't exist), but 501 (capability not supported).
 
 ---
 
