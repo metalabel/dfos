@@ -265,7 +265,6 @@ describe('web relay', () => {
       expect(body.capabilities.proof).toBe(true);
       expect(body.capabilities.write).toBe(true);
       expect(body.capabilities.content).toBe(true);
-      expect(body.capabilities.documents).toBe(true);
       expect(body.capabilities.log).toBe(true);
     });
 
@@ -285,7 +284,6 @@ describe('web relay', () => {
       const body = (await res.json()) as Record<string, unknown>;
       const caps = body.capabilities as Record<string, unknown>;
       expect(caps.content).toBe(false);
-      expect(caps.documents).toBe(false);
     });
 
     it('should always include profile in well-known response', async () => {

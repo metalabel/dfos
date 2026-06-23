@@ -30,8 +30,7 @@ func contentDisabledBase(t *testing.T) string {
 
 	var meta struct {
 		Capabilities struct {
-			Content   bool `json:"content"`
-			Documents bool `json:"documents"`
+			Content bool `json:"content"`
 		} `json:"capabilities"`
 	}
 	resp := getJSON(t, base+"/.well-known/dfos-relay", &meta)
@@ -41,12 +40,9 @@ func contentDisabledBase(t *testing.T) string {
 	if meta.Capabilities.Content {
 		t.Skip("relay advertises capabilities.content: true — skipping content-disabled conformance")
 	}
-	// documents mirrors content in v1 (WEB-RELAY.md): a content-disabled relay
-	// MUST also report documents: false. Pin that here so a relay that disables
-	// content but leaves documents advertised is caught.
-	if meta.Capabilities.Documents {
-		t.Errorf("capabilities.documents must mirror capabilities.content (both false when content is disabled)")
-	}
+	// The documents endpoint rides capabilities.content (there is no separate
+	// flag; WEB-RELAY.md). With content disabled, GET /content/{id}/documents
+	// returns 501 — asserted directly in TestContentDisabledRoutes501 below.
 	return base
 }
 
