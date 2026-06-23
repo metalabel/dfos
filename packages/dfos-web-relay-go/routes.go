@@ -17,9 +17,9 @@ import (
 const maxRequestBodyBytes = 16 << 20 // 16 MB
 
 // proofBasePath namespaces every frozen proof-plane route under one prefix so the
-// three version clocks (proof v1 / document 0.x / media 0.x) are legible in the URL
-// and each plane mounts/proxies by prefix. Frozen with protocol v1; MUST stay in
-// byte-sync with the TS relay (PROOF_BASE_PATH in relay.ts) and the clients.
+// two version clocks (proof v1 / document 0.x) are legible in the URL and each
+// plane mounts/proxies by prefix. Frozen with protocol v1; MUST stay in byte-sync
+// with the TS relay (PROOF_BASE_PATH in relay.ts) and the clients.
 const proofBasePath = "/proof/v1"
 
 func newRouter(r *Relay) http.Handler {

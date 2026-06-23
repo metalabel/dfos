@@ -30,7 +30,7 @@ All proof plane routes are unauthenticated. The operations themselves carry thei
 
 Raw content blobs — the actual documents that content chains commit to via `documentCID`. The content plane never gossips. Blobs are stored by the relay that received them and served only to authorized readers.
 
-A relay's content plane **is** a document gateway — the same surface named as a standalone service on its own `0.x` clock. See [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway) for the gateway contract: a stateless, content-addressed blob store whose authorization is re-derived live from the proof plane.
+A relay's content plane **is** a document gateway — the same surface named as a standalone service on its own `0.x` clock. See [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway) for the gateway contract: a stateless, content-addressed blob store whose authorization is re-derived live from the proof plane. The served blob is the document itself — whether terminal (the bytes _are_ the content) or referential (the document points at external bytes, e.g. `ipfs://` or a signed-CDN reference). The relay never resolves a referential pointer; delivery of referenced media is out of protocol.
 
 Content plane access requires two credentials:
 
@@ -64,7 +64,7 @@ The prefix encodes the plane and its version (`{plane}/{version}`), so the proof
 Two route families deliberately stay at the root, on their own clocks:
 
 - **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and per-plane versions.
-- **Content plane routes** (`/content/:contentId/blob[/:ref]`, `/content/:contentId/documents`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` until a future gateway version re-keys them on `documentCID`. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` and `/content/:contentId/documents` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
+- **Content plane routes** (`/content/:contentId/blob[/:ref]`, `/content/:contentId/documents`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` and `/content/:contentId/documents` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
 
 ---
 
@@ -422,7 +422,7 @@ Chain history is available via the per-chain log routes described above.
 
 ## Content Plane Access
 
-This section describes the content plane as the relay serves it today. The standalone gateway contract — including the stateless, proof-plane-derived authorization model the public-grant path is converging to — is specified in [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway).
+This section describes the content plane as the relay serves it today. The standalone gateway contract — the stateless, proof-plane-derived authorization model, where authority is re-derived live every request and any materialized public-credential index is a non-authoritative cache — is specified in [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway).
 
 Content plane requests carry a self-signed **auth token** in the `Bearer` header to prove caller identity (verified against the issuer's _current_ identity state — a rotated-out key cannot mint one; see [Key Resolution](#key-resolution)).
 
