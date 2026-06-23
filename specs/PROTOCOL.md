@@ -83,9 +83,11 @@ A valid chain is a **directed acyclic graph (DAG)** of operations rooted at a ge
 
 **Forks are valid.** Two operations referencing the same `previousOperationCID` constitute a fork — both branches are accepted. The chain log stores all branches. A **deterministic head selection** rule ensures convergence across implementations given the same set of operations:
 
-1. Find all **tips** — operations with no children
-2. Select the tip with the **highest `createdAt`** timestamp
-3. **Lexicographic highest CID** as tiebreaker
+1. Find all **tips** — operations with no children.
+2. Select the tip with the **highest `createdAt`** string (descending order).
+3. If two or more tips share an identical `createdAt`, break the tie by the **highest CID multibase string** (descending order). Two distinct operations cannot collide on both `createdAt` and CID: distinct payloads yield distinct CIDs (the CID is the SHA-256 of the dag-cbor payload), so this tiebreak is total.
+
+**Comparison basis (normative).** Both ordering comparisons — `createdAt` for timestamp ordering and head selection, and the CID for the head-selection tiebreak — MUST be performed as a byte-wise (Unicode code-point) comparison of the raw strings, equivalent to comparing the UTF-8 byte sequences left to right. An implementation MUST NOT parse `createdAt` to an epoch, a floating-point value, or a broken-down time before comparing, and MUST NOT apply any locale-aware or collation-aware comparison (e.g. ICU collation, JavaScript `String.prototype.localeCompare`) to either field. This is sound, not merely convenient: `createdAt` is the fixed-width grammar `YYYY-MM-DDTHH:MM:SS.sssZ` (see Timestamp Grammar) — UTC, a literal `Z`, exactly three fraction digits, zero-padded throughout — so byte-wise order is identical to chronological order; and a CID is a base32-lower multibase string (`b`-prefixed, ASCII `[a-z2-7]`), so code-point order is identical to byte order. Locale collation has no determinism contract across engines or locales and would let two conforming relays select different heads from the same operation set; parsing-to-number discards sub-millisecond byte identity and admits format-dependent drift. The reference implementations use the relational string operators directly (TypeScript `a < b`/`a > b` on the UTF-16 code units, which for this ASCII grammar equals byte order; Go string comparison, which is byte-wise) and are byte-for-byte equivalent on this input domain.
 
 This is deterministic: any implementation with the same operations computes the same head, regardless of ingestion order. Semantic interpretation of forks (concurrency glitch, intentional recovery, etc.) is application-defined — the protocol stores the DAG, clients interpret it.
 
@@ -177,14 +179,15 @@ The protocol does NOT limit individual field string lengths, **document content 
 
 ## Standards and Dependencies
 
-| Component           | Standard / Library                                                         |
-| ------------------- | -------------------------------------------------------------------------- |
-| Key generation      | Ed25519 (RFC 8032) via `@noble/curves/ed25519`                             |
-| Signature algorithm | EdDSA over Ed25519 (pure, no prehash — Ed25519 handles SHA-512 internally) |
-| Key encoding        | W3C Multikey (multicodec `0xed01` + base58btc multibase)                   |
-| Signed envelopes    | JWS Compact Serialization (RFC 7515) with `alg: "EdDSA"`                   |
-| Content addressing  | CIDv1 with dag-cbor codec (`0x71`) + SHA-256 multihash (`0x12`)            |
-| ID encoding         | SHA-256 → custom 19-char alphabet, 31 characters                           |
+| Component           | Standard / Library                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| Key generation      | Ed25519 (RFC 8032) via `@noble/curves/ed25519`                                      |
+| Signature algorithm | EdDSA over Ed25519 (pure, no prehash — Ed25519 handles SHA-512 internally)          |
+| Key encoding        | W3C Multikey (multicodec `0xed01` + base58btc multibase)                            |
+| Signed envelopes    | JWS Compact Serialization (RFC 7515) with `alg: "EdDSA"`                            |
+| Content addressing  | CIDv1 with dag-cbor codec (`0x71`) + SHA-256 multihash (`0x12`)                     |
+| ID encoding         | SHA-256 → custom 19-char alphabet, 31 characters                                    |
+| Timestamp encoding  | Strict ISO-8601 / RFC 3339 UTC, fixed millisecond precision (see Timestamp Grammar) |
 
 ### ID Alphabet
 
@@ -225,6 +228,32 @@ Base58btc + 'z':      z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb
 ```
 
 Note: `[0xed, 0x01]` is the unsigned varint encoding of 237 (`0xed`). Since `0xed > 0x7f`, it requires two bytes in varint format: `0xed` (low 7 bits + continuation bit) then `0x01` (high bits). This is NOT big-endian `[0x00, 0xed]`.
+
+### Timestamp Grammar
+
+Every operation's `createdAt` field MUST match exactly the grammar:
+
+```
+YYYY-MM-DDTHH:MM:SS.sssZ
+```
+
+That is, in order, with no other characters and no surrounding or internal whitespace:
+
+- a 4-digit zero-padded calendar **year** (`0000`–`9999`),
+- a literal `-`, a 2-digit zero-padded **month** (`01`–`12`),
+- a literal `-`, a 2-digit zero-padded **day** of month,
+- a literal uppercase **`T`** date/time separator,
+- a 2-digit zero-padded **hour** (`00`–`23`), `:`, a 2-digit **minute** (`00`–`59`), `:`, a 2-digit **second** (`00`–`59`),
+- a literal `.` followed by **exactly three** decimal digits of fractional seconds (millisecond precision — no more, no fewer),
+- a literal uppercase **`Z`** designating UTC.
+
+The value MUST be a real calendar instant: the month/day combination MUST be valid (leap years are honored — e.g. `2024-02-29` is valid, `2023-02-29` is not). A **timezone offset** (e.g. `+00:00`, `-05:00`) MUST NOT appear; only the literal `Z` is permitted. **Leap seconds** (`:60`) MUST be rejected. A lowercase `z`, a missing or differently-sized fractional part, a space in place of `T`, non-zero-padded fields, or any leading/trailing/embedded whitespace MUST be rejected.
+
+A verifier MUST reject any operation whose `createdAt` does not match this grammar. This applies on the read/verify path, not only at write time.
+
+This grammar is load-bearing for ordering. Per-branch timestamp ordering (Chain Validity → **Timestamp ordering**) and deterministic head selection (Chain Validity, step 2 — "highest `createdAt`") are implemented as a **lexicographic string comparison** of the `createdAt` field. Because the grammar is fixed-width and zero-padded, lexicographic byte order is identical to chronological order, so the comparison is correct without parsing. An implementation that accepted a looser grammar — variable fractional-second width, an offset form, a space separator, etc. — would compare strings whose lexicographic order no longer tracks time, forking ordering and head selection from conforming implementations. The grammar is therefore a validity rule, not a formatting suggestion.
+
+> The reference implementations gate this identically: the TypeScript library validates `createdAt` with `z.iso.datetime({ offset: false, precision: 3 })` and the Go library with `time.Parse("2006-01-02T15:04:05.000Z", …)` on the verify path. Both are exercised against a shared 22-case accept/reject vector set asserted verdict-for-verdict across the two implementations.
 
 ### CID Construction (dag-cbor + SHA-256)
 

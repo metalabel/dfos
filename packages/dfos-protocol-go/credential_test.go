@@ -91,6 +91,56 @@ func TestVerifyCredentialExpired(t *testing.T) {
 	}
 }
 
+// TestVerifyCredentialTemporalBoundaries pins the half-open interval [iat, exp)
+// documented in CREDENTIALS.md "Time Basis Conversion and Boundaries". The exp
+// boundary is closed-rejecting (exp == now is expired); the iat boundary is
+// open-accepting (iat == now is valid). This is the Go twin of the TS
+// boundary tests in dfos-protocol/tests/chain.spec.ts.
+func TestVerifyCredentialTemporalBoundaries(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	iss := "did:dfos:abc123"
+	aud := "did:dfos:reader456"
+	kid := iss + "#key_auth_0"
+
+	// CreateCredential sets iat = issuance time, exp = iat + ttl. Read the
+	// actual claims back rather than guessing the issuance instant, so the
+	// boundary arithmetic is exact regardless of clock ticks.
+	token, err := CreateCredential(iss, aud, kid, "chain:x", "read", 10*time.Second, priv)
+	if err != nil {
+		t.Fatalf("CreateCredential: %v", err)
+	}
+	probe, err := VerifyCredentialAt(token, pub, aud, "read", time.Now().Unix())
+	if err != nil {
+		t.Fatalf("probe verify: %v", err)
+	}
+	issuedAt := probe.Iat
+	exp := probe.Exp
+
+	// exp closed-rejecting: currentTime == exp MUST be expired.
+	if _, err := VerifyCredentialAt(token, pub, aud, "read", exp); err == nil {
+		t.Error("exp == now MUST be rejected as expired (closed boundary)")
+	} else if err.Error() != "credential expired" {
+		t.Errorf("exp == now: expected 'credential expired', got %q", err.Error())
+	}
+
+	// just inside exp: currentTime == exp-1 MUST be accepted.
+	if _, err := VerifyCredentialAt(token, pub, aud, "read", exp-1); err != nil {
+		t.Errorf("now == exp-1 MUST be accepted, got %v", err)
+	}
+
+	// iat open-accepting: currentTime == iat MUST be accepted.
+	if _, err := VerifyCredentialAt(token, pub, aud, "read", issuedAt); err != nil {
+		t.Errorf("now == iat MUST be accepted (open boundary), got %v", err)
+	}
+
+	// just before iat: currentTime == iat-1 MUST be not-yet-valid.
+	if _, err := VerifyCredentialAt(token, pub, aud, "read", issuedAt-1); err == nil {
+		t.Error("now == iat-1 MUST be rejected as not-yet-valid")
+	} else if err.Error() != "credential not yet valid (iat is in the future)" {
+		t.Errorf("now == iat-1: expected 'credential not yet valid (iat is in the future)', got %q", err.Error())
+	}
+}
+
 func TestVerifyCredentialWrongSubject(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	iss := "did:dfos:abc123"

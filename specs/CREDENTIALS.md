@@ -193,6 +193,31 @@ The child's `exp` MUST be less than or equal to every parent's `exp`. A delegate
 - **At ingest** (a delegated content operation carrying an inline `authorization`): `exp` is compared against the operation's own `createdAt`. A relay MUST NOT add an ingest-time wall-clock `exp` check. Each relay reads its own clock at a different instant, so a wall-clock check would make ingest verdicts diverge across relays and break convergence — the same content op would be accepted on one relay and rejected on another.
 - **At read** (standing authorization / per-request credential checks): `exp` is compared against the current time, because reads are local, ephemeral decisions that never enter the replicated log.
 
+#### Time Basis Conversion and Boundaries (Normative)
+
+The ingest time basis is derived from the operation's `createdAt` (an ISO-8601, millisecond-precision, UTC string) by converting to **integer Unix seconds**:
+
+```
+now_s = floor(createdAt_epoch_ms / 1000)
+```
+
+where `createdAt_epoch_ms` is the number of milliseconds since the Unix epoch parsed from the `createdAt` string. The conversion MUST truncate (floor) the millisecond remainder; it MUST NOT round. For the `.000Z` millisecond form used by all conforming operations this is exact, but implementations MUST floor unconditionally so that any sub-second component is discarded rather than rounded up.
+
+A credential's `iat` and `exp` are integer Unix seconds (JWT `NumericDate`). At ingest, a credential is temporally authorized **if and only if**:
+
+```
+iat <= now_s  AND  now_s < exp
+```
+
+This is the half-open interval `[iat, exp)`. The two boundaries are not symmetric and MUST be enforced exactly as stated:
+
+- **`iat` boundary is inclusive (open-accepting).** A credential MUST be accepted when `iat == now_s`. A credential MUST be rejected as not-yet-valid only when `iat > now_s`.
+- **`exp` boundary is exclusive (closed-rejecting).** A credential MUST be rejected as expired when `exp <= now_s`, including the exact instant `exp == now_s`. A credential is temporally valid only while `now_s < exp`.
+
+Conversely, an `exp` strictly greater than `now_s` (i.e. in the future relative to the operation's `createdAt`) MUST be accepted on the temporal check — even if that `exp` is already in the past relative to the verifier's own wall clock.
+
+This conversion and these boundaries are evaluated against the operation's `createdAt`, never against the verifier's wall clock (see the ingest bullet above). Two relays processing the same content operation therefore reach the same temporal verdict regardless of when each one ingests it.
+
 Revocation — not expiry — is the **timely lever** for invalidating a credential ahead of its natural expiry (see Revocation, below). A relay MAY additionally enforce a local maximum-age policy as **relay policy** (rejecting credentials whose `exp` is implausibly far in the future), but this is post-v1 and out of scope for the wire protocol; v1 defines no maximum-`exp` cap.
 
 ---
