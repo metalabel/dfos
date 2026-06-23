@@ -32,7 +32,7 @@ func TestContentRejectPostDelete(t *testing.T) {
 	kid := id.did + "#" + id.auth.keyID
 
 	// delete content
-	delToken, delCID, err := dfos.SignContentDelete(id.did, cc.genCID, kid, "", "", id.auth.priv)
+	delToken, delCID, err := dfos.SignContentDelete(id.did, cc.genCID, kid, "", id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestContentRejectPostDelete(t *testing.T) {
 	// try to extend after delete
 	doc2 := map[string]any{"type": "post", "title": "post-delete update"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
-	updateToken, _, err := dfos.SignContentUpdate(id.did, delCID, docCID2, kid, "", id.auth.priv)
+	updateToken, _, err := dfos.SignContentUpdate(id.did, delCID, docCID2, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestContentWithNote(t *testing.T) {
 	kid := id.did + "#" + id.auth.keyID
 
 	// create with note
-	token, contentID, genCID, err := dfos.SignContentCreate(id.did, docCID, kid, "initial version", id.auth.priv)
+	token, contentID, genCID, err := dfos.SignContentCreate(id.did, docCID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestContentWithNote(t *testing.T) {
 	// update with note
 	doc2 := map[string]any{"type": "post", "body": "updated with note"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
-	updateToken, _, err := dfos.SignContentUpdate(id.did, genCID, docCID2, kid, "revision 2", id.auth.priv)
+	updateToken, _, err := dfos.SignContentUpdate(id.did, genCID, docCID2, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestContentUpdateAfterKeyRotation(t *testing.T) {
 	doc2 := map[string]any{"type": "post", "title": "after rotation"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
 	newKid := id.did + "#" + newAuth.keyID
-	updateToken, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, newKid, "", newAuth.priv)
+	updateToken, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, newKid, newAuth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestDelegatedContentDelete(t *testing.T) {
 
 	// delegate signs delete with credential
 	delegateKid := delegate.did + "#" + delegate.auth.keyID
-	delToken, _, err := dfos.SignContentDelete(delegate.did, cc.genCID, delegateKid, "delegated delete", cred, delegate.auth.priv)
+	delToken, _, err := dfos.SignContentDelete(delegate.did, cc.genCID, delegateKid, cred, delegate.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func TestBlobMultiVersion(t *testing.T) {
 	doc2 := map[string]any{"type": "post", "title": "version 2", "body": "updated"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
 	kid := id.did + "#" + id.auth.keyID
-	updateToken, updateCID, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, "", id.auth.priv)
+	updateToken, updateCID, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,7 +532,7 @@ func TestBatchContentIdentitySort(t *testing.T) {
 	doc := map[string]any{"type": "post", "title": "batch test"}
 	docCID, _, _ := dfos.DocumentCID(doc)
 	kid := did + "#" + auth.keyID
-	contentToken, _, _, err := dfos.SignContentCreate(did, docCID, kid, "", auth.priv)
+	contentToken, _, _, err := dfos.SignContentCreate(did, docCID, kid, auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}

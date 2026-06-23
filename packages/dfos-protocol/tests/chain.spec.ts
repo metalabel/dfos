@@ -520,7 +520,6 @@ describe('content chain', () => {
       documentCID: docCID,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken } = await signContentOperation({
       operation: op,
@@ -553,7 +552,6 @@ describe('content chain', () => {
       documentCID: doc1,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken: createJws, operationCID: createCID } = await signContentOperation({
       operation: createOp,
@@ -569,7 +567,6 @@ describe('content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: 'edited title',
     };
     const { jwsToken: updateJws } = await signContentOperation({
       operation: updateOp,
@@ -590,15 +587,15 @@ describe('content chain', () => {
 
   it('rejects an operation exceeding the max operation size', async () => {
     const id = makeIdentity();
-    const doc = await makeDocCID({ type: 'post', title: 'big' });
     const op: ContentOperation = {
       version: 1,
       type: 'create',
       did: id.did,
-      documentCID: doc,
+      // inflate the (string-validated) documentCID to push the whole dag-cbor
+      // payload past the 64 KiB cap (the cap is over the whole op, not one field)
+      documentCID: 'x'.repeat(70_000),
       baseDocumentCID: null,
       createdAt: ts(),
-      note: 'x'.repeat(70_000), // pushes the dag-cbor payload past the 64 KiB cap
     };
     const { jwsToken } = await signContentOperation({
       operation: op,
@@ -612,15 +609,14 @@ describe('content chain', () => {
 
   it('accepts an operation near but under the max operation size', async () => {
     const id = makeIdentity();
-    const doc = await makeDocCID({ type: 'post', title: 'big-but-ok' });
     const op: ContentOperation = {
       version: 1,
       type: 'create',
       did: id.did,
-      documentCID: doc,
+      // ~60 KB documentCID string → whole op under the 64 KiB cap
+      documentCID: 'x'.repeat(60_000),
       baseDocumentCID: null,
       createdAt: ts(),
-      note: 'x'.repeat(60_000), // ~60 KB payload, under the 64 KiB cap
     };
     const { jwsToken } = await signContentOperation({
       operation: op,
@@ -642,7 +638,6 @@ describe('content chain', () => {
       documentCID: doc1,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken: createJws, operationCID: createCID } = await signContentOperation({
       operation: createOp,
@@ -658,7 +653,6 @@ describe('content chain', () => {
       documentCID: null, // clear
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: 'cleared content',
     };
     const { jwsToken: clearJws } = await signContentOperation({
       operation: clearOp,
@@ -686,7 +680,6 @@ describe('content chain', () => {
       documentCID: doc1,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken: createJws, operationCID: createCID } = await signContentOperation({
       operation: createOp,
@@ -700,7 +693,6 @@ describe('content chain', () => {
       did: id.did,
       previousOperationCID: createCID,
       createdAt: ts(1),
-      note: 'removing content',
     };
     const { jwsToken: deleteJws } = await signContentOperation({
       operation: deleteOp,
@@ -735,7 +727,6 @@ describe('content chain', () => {
         documentCID: doc1,
         baseDocumentCID: null,
         createdAt: ts(0),
-        note: null,
       },
       signer: id.signer,
       kid: id.kid,
@@ -752,7 +743,6 @@ describe('content chain', () => {
         documentCID: doc2,
         baseDocumentCID: null,
         createdAt: ts(1),
-        note: null,
       },
       signer: id.signer,
       kid: id.kid,
@@ -769,7 +759,6 @@ describe('content chain', () => {
         documentCID: doc3,
         baseDocumentCID: null,
         createdAt: ts(2),
-        note: 'final',
       },
       signer: id.signer,
       kid: id.kid,
@@ -784,7 +773,6 @@ describe('content chain', () => {
         did: id.did,
         previousOperationCID: r3.operationCID,
         createdAt: ts(3),
-        note: 'removing',
       },
       signer: id.signer,
       kid: id.kid,
@@ -814,7 +802,6 @@ describe('content chain', () => {
       documentCID: docCID,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken } = await signContentOperation({
       operation: op,
@@ -839,7 +826,6 @@ describe('content chain', () => {
       documentCID: docCID,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken, operationCID } = await signContentOperation({
       operation: op,
@@ -865,7 +851,6 @@ describe('content chain', () => {
       documentCID: docCID,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken, operationCID } = await signContentOperation({
       operation: op,
@@ -886,7 +871,6 @@ describe('content chain', () => {
       documentCID: docCID,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     // manually construct JWS without cid header
     const header = { alg: 'EdDSA', typ: 'did:dfos:content-op', kid: id.kid };
@@ -911,7 +895,6 @@ describe('content chain', () => {
       documentCID: docCID,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     // manually construct JWS with wrong cid header
     const header = {
@@ -950,7 +933,6 @@ describe('content chain', () => {
       documentCID: 'bafyreifake',
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken } = await signContentOperation({
       operation: op,
@@ -973,7 +955,6 @@ describe('content chain', () => {
       documentCID: doc,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken: createJws } = await signContentOperation({
       operation: createOp,
@@ -989,7 +970,6 @@ describe('content chain', () => {
       documentCID: doc,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
     };
     const { jwsToken: updateJws } = await signContentOperation({
       operation: updateOp,
@@ -1014,7 +994,6 @@ describe('content chain', () => {
         documentCID: doc,
         baseDocumentCID: null,
         createdAt: ts(0),
-        note: null,
       },
       signer: id.signer,
       kid: id.kid,
@@ -1026,7 +1005,6 @@ describe('content chain', () => {
         did: id.did,
         previousOperationCID: r1.operationCID,
         createdAt: ts(1),
-        note: null,
       },
       signer: id.signer,
       kid: id.kid,
@@ -1040,7 +1018,6 @@ describe('content chain', () => {
         documentCID: doc,
         baseDocumentCID: null,
         createdAt: ts(2),
-        note: null,
       },
       signer: id.signer,
       kid: id.kid,
@@ -1066,7 +1043,6 @@ describe('content chain', () => {
       documentCID: doc,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
     const { jwsToken } = await signContentOperation({
       operation: op,
@@ -1095,7 +1071,6 @@ describe('content chain', () => {
         documentCID: doc,
         baseDocumentCID: null,
         createdAt: ts(0),
-        note: null,
       },
       signer: id.signer,
       kid: id.kid,
@@ -1109,7 +1084,6 @@ describe('content chain', () => {
         documentCID: doc,
         baseDocumentCID: null,
         createdAt: ts(-5), // in the past
-        note: null,
       },
       signer: id.signer,
       kid: id.kid,
@@ -1135,7 +1109,6 @@ describe('content chain', () => {
       documentCID: doc,
       baseDocumentCID: null,
       createdAt: ts(),
-      note: null,
     };
 
     // sign with other's kid (DID mismatch with payload.did)
@@ -1204,7 +1177,6 @@ describe('delegated content chain', () => {
       documentCID: doc,
       baseDocumentCID: null,
       createdAt: ts(0),
-      note: null,
     };
     const { jwsToken: createJws, operationCID: createCID } = await signContentOperation({
       operation: createOp,
@@ -1265,7 +1237,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: 'delegated edit',
       authorization: vc,
     };
     const { jwsToken: updateJws } = await signContentOperation({
@@ -1316,7 +1287,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
       authorization: vc,
     };
     const { jwsToken: updateJws } = await signContentOperation({
@@ -1352,7 +1322,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
     };
     const { jwsToken: updateJws } = await signContentOperation({
       operation: updateOp,
@@ -1396,7 +1365,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
       authorization: vc,
     };
     const { jwsToken: updateJws } = await signContentOperation({
@@ -1442,7 +1410,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
       authorization: vc,
     };
     const { jwsToken: updateJws } = await signContentOperation({
@@ -1488,7 +1455,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
       authorization: vc,
     };
     const { jwsToken: updateJws } = await signContentOperation({
@@ -1547,7 +1513,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt,
-      note: null,
       authorization: vc,
     };
     const { jwsToken: updateJws } = await signContentOperation({
@@ -1622,7 +1587,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
       authorization: vc,
     };
     const { jwsToken: updateJws } = await signContentOperation({
@@ -1667,7 +1631,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
       authorization: vc,
     };
     const { jwsToken: updateJws } = await signContentOperation({
@@ -1699,7 +1662,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
     };
     const { jwsToken: updateJws } = await signContentOperation({
       operation: updateOp,
@@ -1731,7 +1693,6 @@ describe('delegated content chain', () => {
       documentCID: doc2,
       baseDocumentCID: null,
       createdAt: ts(1),
-      note: null,
     };
     const { jwsToken: updateJws } = await signContentOperation({
       operation: updateOp,
@@ -1800,10 +1761,10 @@ describe('operation field limits', () => {
   });
 
   it('accepts long string fields at the schema layer — per-field length caps removed', () => {
-    // The per-field length caps (did/CID/note ≤ 256/512) were collapsed into a
-    // single aggregate MAX_OPERATION_SIZE cap enforced at verification. The schema
-    // no longer rejects long individual fields; oversized whole operations are
-    // caught by the op-size cap in verifyContentChain/verifyIdentityChain.
+    // The per-field length caps (did/CID ≤ 256/512) were collapsed into a single
+    // aggregate MAX_OPERATION_SIZE cap enforced at verification. The schema no
+    // longer rejects long individual fields; oversized whole operations are caught
+    // by the op-size cap in verifyContentChain/verifyIdentityChain.
     const result = ContentOperationSchema.safeParse({
       version: 1,
       type: 'create',
@@ -1811,9 +1772,28 @@ describe('operation field limits', () => {
       documentCID: 'b'.repeat(1000),
       baseDocumentCID: null,
       createdAt: '2026-01-01T00:00:00.000Z',
-      note: 'x'.repeat(1000),
     });
     expect(result.success).toBe(true);
+  });
+
+  it('preserves a content op carrying the now-removed `note` key (forward-compat)', () => {
+    // `note` was dropped from the v1 content-op schema. A historical op that still
+    // carries `note` MUST remain valid — looseObject preserves the unknown key
+    // (MUST-ignore-unknown), so the re-derived CID still matches and the op verifies.
+    const parsed = ContentOperationSchema.safeParse({
+      version: 1,
+      type: 'create',
+      did: 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr',
+      documentCID: 'bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy',
+      baseDocumentCID: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      note: 'a legacy advisory note',
+    });
+    expect(parsed.success).toBe(true);
+    // the unknown key is PRESERVED (not stripped) so CID re-derivation is stable
+    expect(parsed.success && (parsed.data as Record<string, unknown>).note).toBe(
+      'a legacy advisory note',
+    );
   });
 
   it('should accept values within limits', () => {

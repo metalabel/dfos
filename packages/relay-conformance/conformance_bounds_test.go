@@ -121,7 +121,6 @@ func TestUnknownEnvelopeKeyTolerated(t *testing.T) {
 		"documentCID":     docCID,
 		"baseDocumentCID": nil,
 		"createdAt":       time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		"note":            nil,
 		"futureExtension": "ignored-by-spec",
 	}
 	_, _, cidStr, err := dfos.DagCborCID(payload)

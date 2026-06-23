@@ -37,7 +37,6 @@ func newContentCmd() *cobra.Command {
 }
 
 func newContentCreateCmd() *cobra.Command {
-	var note string
 	var peerName string
 	var noSchemaWarn bool
 
@@ -101,7 +100,7 @@ func newContentCreateCmd() *cobra.Command {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
 
-			jwsToken, contentID, opCID, err := protocol.SignContentCreate(chain.DID, documentCID, kid, note, privKey)
+			jwsToken, contentID, opCID, err := protocol.SignContentCreate(chain.DID, documentCID, kid, privKey)
 			if err != nil {
 				return fmt.Errorf("sign content: %w", err)
 			}
@@ -174,7 +173,6 @@ func newContentCreateCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&note, "note", "", "Operation note")
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().BoolVar(&noSchemaWarn, "no-schema-warn", false, "Suppress $schema warning")
 	return cmd
@@ -604,7 +602,6 @@ func newContentLogCmd() *cobra.Command {
 }
 
 func newContentUpdateCmd() *cobra.Command {
-	var note string
 	var peerName string
 	var authorization string
 	var baseDocumentCID string
@@ -672,7 +669,6 @@ func newContentUpdateCmd() *cobra.Command {
 			jwsToken, opCID, err := protocol.SignContentUpdateWithOptions(
 				idChain.DID, contentChain.State.HeadCID, documentCID, kid, privKey,
 				protocol.ContentUpdateOptions{
-					Note:            note,
 					BaseDocumentCID: baseDocumentCID,
 					Authorization:   authorization,
 				},
@@ -726,7 +722,6 @@ func newContentUpdateCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&note, "note", "", "Operation note")
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOS write credential for delegated writes")
 	cmd.Flags().StringVar(&baseDocumentCID, "base-document-cid", "", "CID of the base document this update is derived from")
@@ -734,7 +729,6 @@ func newContentUpdateCmd() *cobra.Command {
 }
 
 func newContentDeleteCmd() *cobra.Command {
-	var note string
 	var peerName string
 	var authorization string
 
@@ -771,7 +765,7 @@ func newContentDeleteCmd() *cobra.Command {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
 
-			jwsToken, opCID, err := protocol.SignContentDelete(idChain.DID, contentChain.State.HeadCID, kid, note, authorization, privKey)
+			jwsToken, opCID, err := protocol.SignContentDelete(idChain.DID, contentChain.State.HeadCID, kid, authorization, privKey)
 			if err != nil {
 				return fmt.Errorf("sign delete: %w", err)
 			}
@@ -811,7 +805,6 @@ func newContentDeleteCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&note, "note", "", "Operation note")
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().StringVar(&authorization, "authorization", "", "DFOS write credential for delegated deletes")
 	return cmd

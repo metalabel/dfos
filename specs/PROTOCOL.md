@@ -151,7 +151,7 @@ Every proof-plane operation payload (identity, content, artifact, countersign, r
 
 ### Operation Size and Cardinality Limits
 
-The protocol bounds operations with **one aggregate size cap** plus a small set of **cardinality caps** — not a per-field string-length table. The single bound is measured over the exact CBOR bytes the CID commits to, so it is identical-by-construction across implementations; a per-field length table (`did ≤ 256`, `note ≤ 256`, …) would instead invite Unicode/length-counting divergence between implementations.
+The protocol bounds operations with **one aggregate size cap** plus a small set of **cardinality caps** — not a per-field string-length table. The single bound is measured over the exact CBOR bytes the CID commits to, so it is identical-by-construction across implementations; a per-field length table (`did ≤ 256`, `label ≤ 256`, …) would instead invite Unicode/length-counting divergence between implementations.
 
 **Aggregate operation size (size cap):**
 
@@ -383,18 +383,16 @@ REPLACES the entire prior set; a `delete` carries the last set unchanged.
 { version: 1, type: "create",
   did: string,                           // author DID, committed to by CID
   documentCID: string,                   // CID of flat content object
-  baseDocumentCID: string | null,        // edit lineage — CID of prior document version
-  createdAt: string,
-  note: string | null }
+  baseDocumentCID: string | null,        // committed-but-uninterpreted provenance
+  createdAt: string }
 
 // Content change (null documentCID = clear content)
 { version: 1, type: "update",
   did: string,                           // author DID
   previousOperationCID: string,
   documentCID: string | null,
-  baseDocumentCID: string | null,
+  baseDocumentCID: string | null,        // committed-but-uninterpreted provenance
   createdAt: string,
-  note: string | null,
   authorization?: string }               // DFOS credential for delegated operations
 
 // Permanent destruction
@@ -402,9 +400,12 @@ REPLACES the entire prior set; a `delete` carries the last set unchanged.
   did: string,                           // author DID
   previousOperationCID: string,
   createdAt: string,
-  note: string | null,
   authorization?: string }               // DFOS credential for delegated operations
 ```
+
+`baseDocumentCID` is committed-but-uninterpreted provenance — validated as
+CID-or-null, no verification meaning; lets the public proof plane express
+content-version lineage without exposing the private document.
 
 ### MultikeyPublicKey
 
@@ -595,13 +596,23 @@ dispatched by structural form:
 | Anchor shape                  | Resolves to                       |
 | ----------------------------- | --------------------------------- |
 | `^[2346789acdefhknrtvz]{31}$` | content chain (mutable, gateable) |
-| `^baf[a-z2-7]{20,}$`          | artifact (immutable, public)      |
+| `^bafyrei[a-z2-7]{52}$`       | artifact (immutable, public)      |
+
+These two shapes are the ONLY valid anchors, and the structural dispatch above is
+normative. The contentId anchor is the exact 31-char form `^[2346789acdefhknrtvz]{31}$`.
+The artifact anchor is the exact 59-char CIDv1(dag-cbor + SHA-256) base32 form
+`^bafyrei[a-z2-7]{52}$` — artifact payloads are always dag-cbor + SHA-256, so every
+artifact CID has the fixed `bafyrei` prefix and this exact length. An anchor matching
+NEITHER shape MUST be rejected (`AnchorInvalid`); verifiers do not accept other CID
+codecs or lengths. New anchor KINDS arrive via a new service `type`, never a new
+anchor shape — the dispatch surface stays closed.
 
 The `label` is an opaque client-semantic key (e.g. `"profile"`, `"avatar"`) —
 the protocol assigns it no meaning, leaving applications free to define their own
-namespaces while still resolving anchors uniformly. A chain HEAD CID is also
-`baf…`-shaped, so it dispatches to "artifact" and then fails the resolution-time
-`type: "artifact"` check — "never anchor a head CID" holds without a mode flag.
+namespaces while still resolving anchors uniformly. A chain HEAD CID is also a
+`bafyrei…` dag-cbor CID, so it dispatches to "artifact" and then fails the
+resolution-time `type: "artifact"` check — "never anchor a head CID" holds without
+a mode flag.
 
 ### Bounds
 
@@ -630,11 +641,11 @@ identically to a service-less operation (CID-neutral).
 content anchors (one content-chain, one artifact). Signed by reference key 1:
 
 ```
-did:          did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar
+did:          did:dfos:hd34z9a4tf6h62864nh4f7at6hr36r4
 typ:          did:dfos:identity-op
-cid:          bafyreidi3qps3qttqp22m3y33bdbf2iykbq5r45jjhwa37mgesov7sdgze
+cid:          bafyreighuvzitfa7ofyyrwyvyuakmqfefzmuphi7fafawox3ahxdh3tsa4
 services:     [ { id: "relay",   type: "DfosRelay",     endpoint: "https://relay.dfos.com" },
-                { id: "profile", type: "ContentAnchor", label: "profile", anchor: "cv7n8vkvr64cctf3294h9k4eanhff8z" },
+                { id: "profile", type: "ContentAnchor", label: "profile", anchor: "a3n7r3nde8e4keeak92rr3aeztftvc2" },
                 { id: "avatar",  type: "ContentAnchor", label: "avatar",  anchor: "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy" } ]
 ```
 
@@ -948,7 +959,7 @@ Content Create JWS Header:
   "alg": "EdDSA",
   "typ": "did:dfos:content-op",
   "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
-  "cid": "bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y"
+  "cid": "bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy"
 }
 ```
 
@@ -961,27 +972,26 @@ Content Create Payload:
   "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
   "documentCID": "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy",
   "baseDocumentCID": null,
-  "createdAt": "2026-03-07T00:02:00.000Z",
-  "note": null
+  "createdAt": "2026-03-07T00:02:00.000Z"
 }
 ```
 
 Content Create JWS Signature (hex):
 
 ```
-3ce4dcbd16d86f9aff3fa669251340b9f0a410799f79b5327358dbfd44a0ef1746f1bc2ae76d0732c83ac168dfae153c63eefff3a21c2f0a65743d37fcbd3e02
+993442bcf81af3d8557aefa0368c2b2fc4c0a68189971550070dc2cebbc403e2f1010692a74dd4ca7d09c1d84f5a1db652dc194ded9ddbb208b89ecffb93ed00
 ```
 
 Content Create JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWFxYXRnZGd3Z2d1Zmd5NHRzejZldXJ3dWR0ZHh5Z3V6dHQ3bnE1d2dkN3FpNDQ1bnY1NnkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiIsIm5vdGUiOm51bGx9.POTcvRbYb5r_P6ZpJRNAufCkEHmfebUyc1jb_USg7xdG8bwq520HMsg6wWjfrhU8Y-7_86IcLwpldD03_L0-Ag
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWQyNmJhZ241Y2ZlZTN4cHRhZmptYmx4d3VkdzQzNXA2cms1ZzNwNGdqdGtudXlscnhzc3kifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.mTRCvPga89hVeu-gNowrL8TApoGJlxVQBw3CzrvEA-LxAQaSp03Uyn0JwdhPWh22UtwZTe2d27IIuJ7P-5PtAA
 ```
 
 Content Operation CID:
 
 ```
-bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y
+bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy
 ```
 
 ### Content Chain: Update
@@ -993,11 +1003,10 @@ Content Update Payload:
   "version": 1,
   "type": "update",
   "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
-  "previousOperationCID": "bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y",
+  "previousOperationCID": "bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy",
   "documentCID": "bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy",
   "baseDocumentCID": "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy",
-  "createdAt": "2026-03-07T00:03:00.000Z",
-  "note": "edited title and body"
+  "createdAt": "2026-03-07T00:03:00.000Z"
 }
 ```
 
@@ -1022,15 +1031,15 @@ bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy
 Content Update CID:
 
 ```
-bafyreibpx4cgb4j6n3mz764pylrdg6q7a46njnhx6p4cq2rlgeue3s3evq
+bafyreia2llpluo7i2slh752ipwbsqwkvazivjbvzd7m66isfmzhboh3l6y
 ```
 
 ### Content Chain Verified State
 
 ```
-Content ID:   cv7n8vkvr64cctf3294h9k4eanhff8z
-Genesis CID:  bafyreiaqatgdgwggufgy4tsz6eurwudtdxyguztt7nq5wgd7qi445nv56y
-Head CID:     bafyreibpx4cgb4j6n3mz764pylrdg6q7a46njnhx6p4cq2rlgeue3s3evq
+Content ID:   a3n7r3nde8e4keeak92rr3aeztftvc2
+Genesis CID:  bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy
+Head CID:     bafyreia2llpluo7i2slh752ipwbsqwkvazivjbvzd7m66isfmzhboh3l6y
 ```
 
 ---

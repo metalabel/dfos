@@ -33,7 +33,7 @@ func TestRejectTamperedSignature(t *testing.T) {
 	doc := map[string]any{"type": "post", "title": "tampered"}
 	docCID, _, _ := dfos.DocumentCID(doc)
 	kid := id.did + "#" + id.auth.keyID
-	token, _, _, err := dfos.SignContentCreate(id.did, docCID, kid, "", id.auth.priv)
+	token, _, _, err := dfos.SignContentCreate(id.did, docCID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestRejectWrongSigningKey(t *testing.T) {
 
 	// Sign with a random key, not the identity's auth key
 	wrongKey := newKeypair()
-	token, _, _, err := dfos.SignContentCreate(id.did, docCID, kid, "", wrongKey.priv)
+	token, _, _, err := dfos.SignContentCreate(id.did, docCID, kid, wrongKey.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,13 +104,13 @@ func TestBatchMixedValidInvalid(t *testing.T) {
 	doc := map[string]any{"type": "post", "title": "valid op"}
 	docCID, _, _ := dfos.DocumentCID(doc)
 	kid := id.did + "#" + id.auth.keyID
-	validToken, _, _, _ := dfos.SignContentCreate(id.did, docCID, kid, "", id.auth.priv)
+	validToken, _, _, _ := dfos.SignContentCreate(id.did, docCID, kid, id.auth.priv)
 
 	// invalid: content create from unknown identity
 	fakeKP := newKeypair()
 	fakeDID := "did:dfos:fakefakefakefakefake00"
 	fakeKid := fakeDID + "#" + fakeKP.keyID
-	invalidToken, _, _, _ := dfos.SignContentCreate(fakeDID, docCID, fakeKid, "", fakeKP.priv)
+	invalidToken, _, _, _ := dfos.SignContentCreate(fakeDID, docCID, fakeKid, fakeKP.priv)
 
 	res := postOperations(t, base, []string{validToken, invalidToken})
 	body := readBody(t, res)
@@ -161,7 +161,7 @@ func TestBatchMultiChain(t *testing.T) {
 	doc := map[string]any{"type": "post", "title": "multi-chain batch"}
 	docCID, _, _ := dfos.DocumentCID(doc)
 	kid1 := did1 + "#" + auth1.keyID
-	contentTok, _, _, _ := dfos.SignContentCreate(did1, docCID, kid1, "", auth1.priv)
+	contentTok, _, _, _ := dfos.SignContentCreate(did1, docCID, kid1, auth1.priv)
 
 	// all three in one batch
 	res := postOperations(t, base, []string{tok1, tok2, contentTok})
@@ -408,7 +408,7 @@ func TestMultipleContentChainsIndependent(t *testing.T) {
 	doc2 := map[string]any{"type": "post", "title": "second chain", "body": "different"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
 	kid := id.did + "#" + id.auth.keyID
-	token2, contentID2, _, err := dfos.SignContentCreate(id.did, docCID2, kid, "", id.auth.priv)
+	token2, contentID2, _, err := dfos.SignContentCreate(id.did, docCID2, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +417,7 @@ func TestMultipleContentChainsIndependent(t *testing.T) {
 	// update chain 1
 	doc3 := map[string]any{"type": "post", "title": "chain 1 updated"}
 	docCID3, _, _ := dfos.DocumentCID(doc3)
-	updateToken, _, err := dfos.SignContentUpdate(id.did, cc1.genCID, docCID3, kid, "", id.auth.priv)
+	updateToken, _, err := dfos.SignContentUpdate(id.did, cc1.genCID, docCID3, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +455,7 @@ func TestLongContentChain(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		doc := map[string]any{"type": "post", "title": fmt.Sprintf("update %d", i), "seq": i}
 		docCID, _, _ := dfos.DocumentCID(doc)
-		updateToken, updateCID, err := dfos.SignContentUpdate(id.did, headCID, docCID, kid, "", id.auth.priv)
+		updateToken, updateCID, err := dfos.SignContentUpdate(id.did, headCID, docCID, kid, id.auth.priv)
 		if err != nil {
 			t.Fatalf("update %d: %v", i, err)
 		}

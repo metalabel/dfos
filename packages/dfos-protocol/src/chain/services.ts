@@ -8,9 +8,9 @@
   An anchor references a STABLE content identifier, dispatched by shape:
 
     31-char contentId (alphabet 2346789acdefhknrtvz) → content chain (mutable, gateable)
-    CIDv1 base32 ("baf…")                            → artifact (immutable, public)
+    59-char CIDv1 dag-cbor+sha256 ("bafyrei…")       → artifact (immutable, public)
 
-  A chain HEAD CID is also base32 but is NOT a stable anchor: it dispatches to
+  A chain HEAD CID is also a bafyrei CID but is NOT a stable anchor: it dispatches to
   'artifact', and artifact resolution requires the fetched op to be type:"artifact"
   — a head CID resolves to a non-artifact op and is rejected. So "never anchor a
   head CID" holds without a mode flag.

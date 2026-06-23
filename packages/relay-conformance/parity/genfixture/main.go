@@ -129,7 +129,6 @@ func contentCreate(did, docCID, kid, createdAt string, priv ed25519.PrivateKey) 
 		"documentCID":     docCID,
 		"baseDocumentCID": nil,
 		"createdAt":       createdAt,
-		"note":            nil,
 	}
 	_, cidBytes, cidStr, err := dfos.DagCborCID(payload)
 	if err != nil {
@@ -150,7 +149,6 @@ func contentUpdate(did, prevCID, docCID, kid, createdAt string, priv ed25519.Pri
 		"documentCID":          docCID,
 		"baseDocumentCID":      nil,
 		"createdAt":            createdAt,
-		"note":                 nil,
 	}
 	return signJWS("did:dfos:content-op", kid, payload, priv)
 }

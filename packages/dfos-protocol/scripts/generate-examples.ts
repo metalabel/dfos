@@ -146,7 +146,6 @@ const main = async () => {
     documentCID: documentCID1,
     baseDocumentCID: null,
     createdAt: '2026-03-07T00:02:00.000Z',
-    note: null,
   };
   const { jwsToken: contentCreateJws, operationCID: contentCreateCID } = await signContentOperation(
     { operation: contentCreateOp, signer: signer2, kid: kid2 },
@@ -171,7 +170,6 @@ const main = async () => {
     documentCID: documentCID2,
     baseDocumentCID: documentCID1,
     createdAt: '2026-03-07T00:03:00.000Z',
-    note: 'edited title and body',
   };
   const { jwsToken: contentUpdateJws } = await signContentOperation({
     operation: contentUpdateOp,
@@ -191,7 +189,6 @@ const main = async () => {
     did: identityRotated.did,
     previousOperationCID: contentCreateCID,
     createdAt: '2026-03-07T00:03:00.000Z',
-    note: 'removing content',
   };
   const { jwsToken: contentDeleteJws } = await signContentOperation({
     operation: contentDeleteOp,
@@ -327,7 +324,6 @@ const main = async () => {
     documentCID: delegatedDocCID1,
     baseDocumentCID: null,
     createdAt: '2026-03-07T00:10:00.000Z',
-    note: null,
   };
   const { jwsToken: delegatedCreateJws, operationCID: delegatedCreateCID } =
     await signContentOperation({
@@ -374,7 +370,6 @@ const main = async () => {
     documentCID: delegatedDocCID2,
     baseDocumentCID: delegatedDocCID1,
     createdAt: '2026-03-07T00:11:00.000Z',
-    note: 'delegated edit by key3',
     authorization: delegateWriteVC,
   };
   const { jwsToken: delegatedUpdateJws } = await signContentOperation({

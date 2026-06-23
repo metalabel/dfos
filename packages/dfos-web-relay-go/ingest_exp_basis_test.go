@@ -48,7 +48,6 @@ func signBackdatedContentCreate(t *testing.T, id testIdentity, docCID string, cr
 		"documentCID":     docCID,
 		"baseDocumentCID": nil,
 		"createdAt":       createdAt.UTC().Format(expBasisTimeFormat),
-		"note":            nil,
 	}
 	_, cidBytes, cidStr, err := dfos.DagCborCID(payload)
 	if err != nil {
@@ -75,7 +74,6 @@ func signBackdatedDelegatedUpdate(t *testing.T, delegate testIdentity, previousC
 		"documentCID":          docCID,
 		"baseDocumentCID":      nil,
 		"createdAt":            createdAt.UTC().Format(expBasisTimeFormat),
-		"note":                 nil,
 		"authorization":        authorization,
 	}
 	_, _, cidStr, err := dfos.DagCborCID(payload)

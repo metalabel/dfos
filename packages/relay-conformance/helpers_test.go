@@ -100,7 +100,7 @@ func createContent(t *testing.T, base string, id identity) contentChain {
 	}
 
 	kid := id.did + "#" + id.auth.keyID
-	token, contentID, opCID, err := dfos.SignContentCreate(id.did, docCID, kid, "", id.auth.priv)
+	token, contentID, opCID, err := dfos.SignContentCreate(id.did, docCID, kid, id.auth.priv)
 	if err != nil {
 		t.Fatalf("SignContentCreate: %v", err)
 	}

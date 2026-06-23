@@ -109,7 +109,6 @@ func testSignContentGenesis(t *testing.T, signerDID, documentCID, kid string, pr
 		"documentCID":     documentCID,
 		"baseDocumentCID": nil,
 		"createdAt":       createdAt,
-		"note":            nil,
 	}
 	_, cidBytes, cidStr, err := DagCborCID(payload)
 	if err != nil {
@@ -133,7 +132,6 @@ func testSignContentUpdate(t *testing.T, signerDID, previousCID, documentCID, ki
 		"documentCID":          documentCID,
 		"baseDocumentCID":      nil,
 		"createdAt":            createdAt,
-		"note":                 nil,
 	}
 	_, _, cidStr, err := DagCborCID(payload)
 	if err != nil {
@@ -155,7 +153,6 @@ func testSignContentDelete(t *testing.T, signerDID, previousCID, kid string, pri
 		"did":                  signerDID,
 		"previousOperationCID": previousCID,
 		"createdAt":            createdAt,
-		"note":                 nil,
 	}
 	_, _, cidStr, err := DagCborCID(payload)
 	if err != nil {
@@ -661,7 +658,6 @@ func TestVerifyContentChain_DelegatedWriteWithCredential(t *testing.T) {
 		"documentCID":          docCID2,
 		"baseDocumentCID":      nil,
 		"createdAt":            updateTime,
-		"note":                 nil,
 		"authorization":        vc,
 	}
 	_, _, updateCIDStr, _ := DagCborCID(updatePayload)

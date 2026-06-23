@@ -498,7 +498,7 @@ func TestContentRejectUnknownIdentity(t *testing.T) {
 	fakeDID := "did:dfos:fakefakefakefakefakef"
 	docCID, _, _ := dfos.DocumentCID(map[string]any{"test": true})
 	kid := fakeDID + "#" + kp.keyID
-	token, _, _, err := dfos.SignContentCreate(fakeDID, docCID, kid, "", kp.priv)
+	token, _, _, err := dfos.SignContentCreate(fakeDID, docCID, kid, kp.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +522,7 @@ func TestContentDelete(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	kid := id.did + "#" + id.auth.keyID
-	token, _, err := dfos.SignContentDelete(id.did, cc.genCID, kid, "deleting", "", id.auth.priv)
+	token, _, err := dfos.SignContentDelete(id.did, cc.genCID, kid, "", id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -555,7 +555,7 @@ func TestContentForkRejection(t *testing.T) {
 	// first update (succeeds)
 	doc2 := map[string]any{"type": "post", "title": "update 1"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
-	tok1, opCID1, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, "", id.auth.priv)
+	tok1, opCID1, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +566,7 @@ func TestContentForkRejection(t *testing.T) {
 	// second update with same previousCID (fork — should be accepted)
 	doc3 := map[string]any{"type": "post", "title": "fork attempt"}
 	docCID3, _, _ := dfos.DocumentCID(doc3)
-	tok2, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID3, kid, "", id.auth.priv)
+	tok2, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID3, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,14 +593,14 @@ func TestContentForkDAGLog(t *testing.T) {
 	// create two fork branches off genesis
 	doc1 := map[string]any{"type": "post", "title": "branch-a"}
 	docCID1, _, _ := dfos.DocumentCID(doc1)
-	tok1, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID1, kid, "", id.auth.priv)
+	tok1, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID1, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	doc2 := map[string]any{"type": "post", "title": "branch-b"}
 	docCID2, _, _ := dfos.DocumentCID(doc2)
-	tok2, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, "", id.auth.priv)
+	tok2, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCID2, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +636,7 @@ func TestContentForkDeterministicHead(t *testing.T) {
 	// branch A: signed first (earlier createdAt)
 	docA := map[string]any{"type": "post", "title": "earlier"}
 	docCIDA, _, _ := dfos.DocumentCID(docA)
-	tokA, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCIDA, kid, "", id.auth.priv)
+	tokA, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCIDA, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,7 +644,7 @@ func TestContentForkDeterministicHead(t *testing.T) {
 	// branch B: signed second (later createdAt — should become head)
 	docB := map[string]any{"type": "post", "title": "later"}
 	docCIDB, _, _ := dfos.DocumentCID(docB)
-	tokB, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCIDB, kid, "", id.auth.priv)
+	tokB, _, err := dfos.SignContentUpdate(id.did, cc.genCID, docCIDB, kid, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1065,7 +1065,7 @@ func TestDelegatedUpdateWithoutCredential(t *testing.T) {
 	delegateKid := delegate.did + "#" + delegate.auth.keyID
 	// no authorization credential
 	token, _, err := dfos.SignContentUpdate(
-		delegate.did, cc.genCID, docCID2, delegateKid, "", delegate.auth.priv,
+		delegate.did, cc.genCID, docCID2, delegateKid, delegate.auth.priv,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1269,7 +1269,7 @@ func TestBlobDownloadDeletedContent(t *testing.T) {
 	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
 
 	kid := id.did + "#" + id.auth.keyID
-	delToken, _, _ := dfos.SignContentDelete(id.did, cc.genCID, kid, "", "", id.auth.priv)
+	delToken, _, _ := dfos.SignContentDelete(id.did, cc.genCID, kid, "", id.auth.priv)
 	postOperations(t, base, []string{delToken}).Body.Close()
 
 	// download at head should 404
@@ -1451,7 +1451,6 @@ func TestRejectContentFutureTimestamp(t *testing.T) {
 		"documentCID":     docCID,
 		"baseDocumentCID": nil,
 		"createdAt":       farFuture,
-		"note":            nil,
 	}
 
 	_, _, cidStr, err := dfos.DagCborCID(payload)
