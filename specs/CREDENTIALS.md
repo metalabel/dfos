@@ -180,7 +180,42 @@ Invalid widening:
 
 ### Action Coverage
 
-Actions are comma-separated strings. The child's action set must be a subset of the parent's action set for the matched resource entry.
+An attenuation entry's `action` field is a **comma-separated list of action tokens** that, taken together, form a **set**. Both implementations canonicalize an `action` string into its token set identically, and verifiers MUST follow this exact procedure:
+
+1. **Split** the raw `action` string on every U+002C COMMA (`,`). There is no escaping mechanism and no split limit — a `,` is always a separator.
+2. **Trim** leading and trailing whitespace from each resulting element. (Whitespace is the implementation's native Unicode whitespace: ECMAScript `String.prototype.trim()` / Go `strings.TrimSpace`. ASCII space and the common ASCII whitespace controls are the only forms that appear in practice; producers SHOULD emit no interior or surrounding whitespace at all.)
+3. **Collect** the trimmed elements into a set. Duplicate tokens collapse; token order is not significant.
+4. An element that is **empty after trimming** carries no meaning and MUST NOT be treated as a grantable action. (Producers MUST NOT rely on empty elements; e.g. `"read,"`, `"read,,write"`, and `",read"` denote exactly the same set as `"read"` / `"read,write"`.)
+
+Tokens are compared by **exact, case-sensitive byte-for-byte equality**. `Write` is not `write`; `read ` (already trimmed) is `read`; there is **no wildcard token** for actions — `*` is a wildcard only for the *resource* id (`chain:*`), never for `action`. v1 defines `read` and `write`; any other token is an opaque string matched verbatim.
+
+**Coverage rule (both directions use the same canonicalization):**
+
+- **Attenuation (delegation hop):** for each child `att` entry, the child's action set MUST be a **subset** of the matched parent entry's action set. A child action token absent from the parent set widens scope and MUST be rejected.
+- **Request matching (relay read/write):** a credential `att` entry covers a request only if the requested action set is a **subset** of that entry's action set. On the relay the requested action is always a single token (`read` or `write`).
+
+#### Worked Example — Multi-Action Subset
+
+Parent (root) credential grants both actions on a chain:
+
+```json
+{ "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "read,write" }
+```
+
+A child credential may narrow to either token or keep both:
+
+| Child `att` action            | Canonical set        | Subset of `{read, write}`? | Valid attenuation? |
+| ----------------------------- | -------------------- | -------------------------- | ------------------ |
+| `"read"`                      | `{read}`             | yes                        | yes                |
+| `"write"`                     | `{write}`            | yes                        | yes                |
+| `"read,write"`                | `{read, write}`      | yes (equal)                | yes                |
+| `"write,read"`                | `{read, write}`      | yes (order-insensitive)    | yes                |
+| `" read , write "`            | `{read, write}`      | yes (whitespace trimmed)   | yes                |
+| `"read,,write"`               | `{read, write}`      | yes (empty element dropped)| yes                |
+| `"read,delete"`               | `{read, delete}`     | no (`delete` not in parent)| **no — widens**    |
+| `"Write"`                     | `{Write}`            | no (case-sensitive)        | **no — widens**    |
+
+A relay then authorizes a **write** request against the `"read,write"` (or `"write"`) credential because `{write} ⊆ {read, write}`, and authorizes a **read** request against any of the above whose set contains `read`. A request whose action is not a subset of the entry's set is rejected — the relay scans every `att` entry and matches if any single entry covers both the resource and the full requested action set.
 
 ### Expiry Narrowing
 
@@ -192,6 +227,31 @@ The child's `exp` MUST be less than or equal to every parent's `exp`. A delegate
 
 - **At ingest** (a delegated content operation carrying an inline `authorization`): `exp` is compared against the operation's own `createdAt`. A relay MUST NOT add an ingest-time wall-clock `exp` check. Each relay reads its own clock at a different instant, so a wall-clock check would make ingest verdicts diverge across relays and break convergence — the same content op would be accepted on one relay and rejected on another.
 - **At read** (standing authorization / per-request credential checks): `exp` is compared against the current time, because reads are local, ephemeral decisions that never enter the replicated log.
+
+#### Time Basis Conversion and Boundaries (Normative)
+
+The ingest time basis is derived from the operation's `createdAt` (an ISO-8601, millisecond-precision, UTC string) by converting to **integer Unix seconds**:
+
+```
+now_s = floor(createdAt_epoch_ms / 1000)
+```
+
+where `createdAt_epoch_ms` is the number of milliseconds since the Unix epoch parsed from the `createdAt` string. The conversion MUST truncate (floor) the millisecond remainder; it MUST NOT round. For the `.000Z` millisecond form used by all conforming operations this is exact, but implementations MUST floor unconditionally so that any sub-second component is discarded rather than rounded up.
+
+A credential's `iat` and `exp` are integer Unix seconds (JWT `NumericDate`). At ingest, a credential is temporally authorized **if and only if**:
+
+```
+iat <= now_s  AND  now_s < exp
+```
+
+This is the half-open interval `[iat, exp)`. The two boundaries are not symmetric and MUST be enforced exactly as stated:
+
+- **`iat` boundary is inclusive (open-accepting).** A credential MUST be accepted when `iat == now_s`. A credential MUST be rejected as not-yet-valid only when `iat > now_s`.
+- **`exp` boundary is exclusive (closed-rejecting).** A credential MUST be rejected as expired when `exp <= now_s`, including the exact instant `exp == now_s`. A credential is temporally valid only while `now_s < exp`.
+
+Conversely, an `exp` strictly greater than `now_s` (i.e. an `exp` in the future relative to the operation's `createdAt`) MUST be accepted on the temporal check; expiry is the only reason this check may reject, and it does so solely on the `exp <= now_s` and `iat > now_s` conditions above.
+
+This conversion and these boundaries are evaluated against the operation's `createdAt`, never against the verifier's wall clock (see the ingest bullet above). Two relays processing the same content operation therefore reach the same temporal verdict regardless of when each one ingests it.
 
 Revocation — not expiry — is the **timely lever** for invalidating a credential ahead of its natural expiry (see Revocation, below). A relay MAY additionally enforce a local maximum-age policy as **relay policy** (rejecting credentials whose `exp` is implausibly far in the future), but this is post-v1 and out of scope for the wire protocol; v1 defines no maximum-`exp` cap.
 

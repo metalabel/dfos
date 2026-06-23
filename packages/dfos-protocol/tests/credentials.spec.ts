@@ -584,6 +584,37 @@ describe('dfos credential', () => {
     expect(await matchesResource(att, 'chain:content2', 'write')).toBe(false);
   });
 
+  // --- action canonicalization (see CREDENTIALS.md "Action Coverage") ---
+  // Pins the comma-split / trim / set-collapse / exact case-sensitive token
+  // equality / no-action-wildcard behavior of matchesResource so the TS impl
+  // stays locked to the spec's worked-example table and to the Go twin.
+
+  describe('action canonicalization (matchesResource)', () => {
+    const att = (action: string) => [{ resource: 'chain:c1', action }];
+
+    it('write covered by read,write', async () => {
+      expect(await matchesResource(att('read,write'), 'chain:c1', 'write')).toBe(true);
+    });
+    it('order-insensitive (write,read covers read)', async () => {
+      expect(await matchesResource(att('write,read'), 'chain:c1', 'read')).toBe(true);
+    });
+    it('trims surrounding whitespace', async () => {
+      expect(await matchesResource(att(' read , write '), 'chain:c1', 'write')).toBe(true);
+    });
+    it('drops empty elements', async () => {
+      expect(await matchesResource(att('read,,write'), 'chain:c1', 'write')).toBe(true);
+    });
+    it('case-sensitive: Write does not cover write', async () => {
+      expect(await matchesResource(att('Write'), 'chain:c1', 'write')).toBe(false);
+    });
+    it('no action wildcard: * does not cover write', async () => {
+      expect(await matchesResource(att('*'), 'chain:c1', 'write')).toBe(false);
+    });
+    it('delete not covered by read,write', async () => {
+      expect(await matchesResource(att('read,write'), 'chain:c1', 'delete')).toBe(false);
+    });
+  });
+
   // --- public credentials ---
 
   it('should create and verify public credential with aud "*"', async () => {

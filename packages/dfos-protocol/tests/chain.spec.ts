@@ -1507,6 +1507,95 @@ describe('delegated content chain', () => {
     ).rejects.toThrow(/authorization verification failed/i);
   });
 
+  // --- exact temporal boundaries (see CREDENTIALS.md "Time Basis Conversion
+  //     and Boundaries"): the ingest interval is half-open [iat, exp) over
+  //     now_s = floor(op.createdAt_ms / 1000). exp is closed-rejecting
+  //     (exp == now_s is expired); iat is open-accepting (iat == now_s is
+  //     valid). These four pin the exact byte boundaries the coarse
+  //     future/past tests above do not. ---
+
+  // helper: build + verify a delegated update at a FIXED createdAt, with a
+  // credential whose iat/exp are derived from that op's floor via the supplied
+  // function. Passing the createdAt in (rather than calling ts() inside) makes
+  // now_s = floor(createdAt_ms/1000) a single source of truth — no wall-second
+  // race between computing the boundary and stamping the op.
+  const verifyAtBoundary = async (
+    createdAt: string,
+    boundaries: (opNowS: number) => { iat: number; exp: number },
+  ) => {
+    const opNowS = Math.floor(new Date(createdAt).getTime() / 1000);
+    const { iat, exp } = boundaries(opNowS);
+    const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
+      await createGenesisChain();
+    const delegate = makeIdentity();
+    addDelegate(delegate);
+    const doc2 = await makeDocCID({ type: 'post', title: 'boundary' });
+    const vc = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: 'chain:*', action: 'write' }],
+      iat,
+      exp,
+      signer: creator.signer,
+      keyId: creator.keyId,
+    });
+    const updateOp: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: delegate.did,
+      previousOperationCID: createCID,
+      documentCID: doc2,
+      baseDocumentCID: null,
+      createdAt,
+      note: null,
+      authorization: vc,
+    };
+    const { jwsToken: updateJws } = await signContentOperation({
+      operation: updateOp,
+      signer: delegate.signer,
+      kid: delegate.kid,
+    });
+    return verifyContentChain({
+      log: [createJws, updateJws],
+      resolveKey,
+      enforceAuthorization: true,
+      resolveIdentity,
+    });
+  };
+
+  // A fixed createdAt one minute in the future (clears the strictly-greater
+  // ordering check against genesis) with a .000 ms component, so floor is exact.
+  const boundaryCreatedAt = () =>
+    new Date(Math.floor((Date.now() + 60_000) / 1000) * 1000).toISOString();
+
+  it('exp closed boundary: exp == floor(op.createdAt_s) MUST be rejected (expired)', async () => {
+    await expect(
+      verifyAtBoundary(boundaryCreatedAt(), (n) => ({ iat: n - 10, exp: n })),
+    ).rejects.toThrow(/authorization verification failed/i);
+  });
+
+  it('exp just inside boundary: exp == floor(op.createdAt_s) + 1 MUST be accepted', async () => {
+    const result = await verifyAtBoundary(boundaryCreatedAt(), (n) => ({
+      iat: n - 10,
+      exp: n + 1,
+    }));
+    expect(result.length).toBe(2);
+  });
+
+  it('iat open boundary: iat == floor(op.createdAt_s) MUST be accepted', async () => {
+    const result = await verifyAtBoundary(boundaryCreatedAt(), (n) => ({
+      iat: n,
+      exp: n + 3600,
+    }));
+    expect(result.length).toBe(2);
+  });
+
+  it('iat just past boundary: iat == floor(op.createdAt_s) + 1 MUST be rejected (not yet valid)', async () => {
+    await expect(
+      verifyAtBoundary(boundaryCreatedAt(), (n) => ({ iat: n + 1, exp: n + 3600 })),
+    ).rejects.toThrow(/authorization verification failed/i);
+  });
+
   it('should reject delegated update with wrong contentId narrowing', async () => {
     const { creator, createJws, createCID, resolveKey, resolveIdentity, addDelegate } =
       await createGenesisChain();
