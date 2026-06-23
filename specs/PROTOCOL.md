@@ -149,7 +149,7 @@ Every proof-plane operation payload (identity, content, artifact, countersign, r
 
 ### Operation Size and Cardinality Limits
 
-The protocol bounds operations with **one aggregate size cap** plus a small set of **cardinality caps** — not a per-field string-length table. A per-field length zoo (`did ≤ 256`, `note ≤ 256`, …) was a defensive measure with no cross-implementation backing; it is replaced by a single bound measured over the exact bytes the CID commits to, which is identical-by-construction across implementations.
+The protocol bounds operations with **one aggregate size cap** plus a small set of **cardinality caps** — not a per-field string-length table. The single bound is measured over the exact CBOR bytes the CID commits to, so it is identical-by-construction across implementations; a per-field length table (`did ≤ 256`, `note ≤ 256`, …) would instead invite Unicode/length-counting divergence between implementations.
 
 **Aggregate operation size (size cap):**
 
@@ -1067,7 +1067,7 @@ Given the artifacts above, verify:
 
 ## Source and Verification
 
-All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. 266 checks across 5 languages.
+All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) — self-contained, zero monorepo dependencies. Cross-language test counts are listed in the [table below](#cross-language-verification).
 
 - [`crypto/ed25519`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/ed25519.ts) — `createNewEd25519Keypair`, `importEd25519Keypair`, `signPayloadEd25519`, `isValidEd25519Signature`
 - [`crypto/jws`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/crypto/jws.ts) — `createJws`, `verifyJws`, `decodeJwsUnsafe`
@@ -1105,10 +1105,3 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 | Rust       | 19    | [`protocol-verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/rust)     |
 | Python     | 63    | [`protocol-verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/python) |
 | Swift      | 18    | [`protocol-verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/swift)   |
-
----
-
-## Special Thanks
-
-- **Vinny Bellavia** — [stcisgood.com](https://stcisgood.com)
-- **Allison Clift-Jennings** — [Jura Labs](https://juralabs.com)

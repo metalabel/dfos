@@ -66,7 +66,7 @@ Each attenuation entry is an object with two non-empty string fields:
 
 ### Size and Cardinality Limits
 
-A credential is bounded by **one aggregate size cap** plus a small set of **cardinality caps** — not a per-field string-length table. Per-field length caps (`iss`, `aud`, `resource`, `action`) were a TS-only defensive measure with no Go parity; they forked validity across implementations and are removed. The genuine validity rules those fields rely on (issuer-key resolution, `aud → iss` delegation linkage, attenuation subset coverage) are enforced directly and identically in both implementations.
+A credential is bounded by **one aggregate size cap** plus a small set of **cardinality caps** — not a per-field string-length table. The validity rules that `iss`, `aud`, `resource`, and `action` participate in (issuer-key resolution, `aud → iss` delegation linkage, attenuation subset coverage) are enforced directly and identically in both implementations, so no per-field length cap is needed — and a per-field cap would only risk forking validity across implementations.
 
 **Aggregate credential size:**
 
