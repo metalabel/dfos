@@ -179,14 +179,14 @@ The protocol does NOT limit individual field string lengths, **document content 
 
 ## Standards and Dependencies
 
-| Component           | Standard / Library                                                         |
-| ------------------- | -------------------------------------------------------------------------- |
-| Key generation      | Ed25519 (RFC 8032) via `@noble/curves/ed25519`                             |
-| Signature algorithm | EdDSA over Ed25519 (pure, no prehash — Ed25519 handles SHA-512 internally) |
-| Key encoding        | W3C Multikey (multicodec `0xed01` + base58btc multibase)                   |
-| Signed envelopes    | JWS Compact Serialization (RFC 7515) with `alg: "EdDSA"`                   |
-| Content addressing  | CIDv1 with dag-cbor codec (`0x71`) + SHA-256 multihash (`0x12`)            |
-| ID encoding         | SHA-256 → custom 19-char alphabet, 31 characters                           |
+| Component           | Standard / Library                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| Key generation      | Ed25519 (RFC 8032) via `@noble/curves/ed25519`                                      |
+| Signature algorithm | EdDSA over Ed25519 (pure, no prehash — Ed25519 handles SHA-512 internally)          |
+| Key encoding        | W3C Multikey (multicodec `0xed01` + base58btc multibase)                            |
+| Signed envelopes    | JWS Compact Serialization (RFC 7515) with `alg: "EdDSA"`                            |
+| Content addressing  | CIDv1 with dag-cbor codec (`0x71`) + SHA-256 multihash (`0x12`)                     |
+| ID encoding         | SHA-256 → custom 19-char alphabet, 31 characters                                    |
 | Timestamp encoding  | Strict ISO-8601 / RFC 3339 UTC, fixed millisecond precision (see Timestamp Grammar) |
 
 ### ID Alphabet

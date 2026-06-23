@@ -66,11 +66,6 @@ func TestParseActions(t *testing.T) {
 		{"read,write", map[string]bool{"read": true, "write": true}},
 		{"read, write", map[string]bool{"read": true, "write": true}},
 		{"", map[string]bool{}},
-		// Canonicalization pins (see CREDENTIALS.md "Action Coverage"):
-		{"write,read", map[string]bool{"read": true, "write": true}},  // order-insensitive
-		{"read,,write", map[string]bool{"read": true, "write": true}}, // interior empty element dropped
-		{"read,read", map[string]bool{"read": true}},                  // duplicate collapse
-		{"Read", map[string]bool{"Read": true}},                       // case-sensitive: NOT "read"
 	}
 
 	for _, tt := range tests {

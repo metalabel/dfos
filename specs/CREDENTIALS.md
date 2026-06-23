@@ -180,42 +180,7 @@ Invalid widening:
 
 ### Action Coverage
 
-An attenuation entry's `action` field is a **comma-separated list of action tokens** that, taken together, form a **set**. Both implementations canonicalize an `action` string into its token set identically, and verifiers MUST follow this exact procedure:
-
-1. **Split** the raw `action` string on every U+002C COMMA (`,`). There is no escaping mechanism and no split limit — a `,` is always a separator.
-2. **Trim** leading and trailing whitespace from each resulting element. (Whitespace is the implementation's native Unicode whitespace: ECMAScript `String.prototype.trim()` / Go `strings.TrimSpace`. ASCII space and the common ASCII whitespace controls are the only forms that appear in practice; producers SHOULD emit no interior or surrounding whitespace at all.)
-3. **Collect** the trimmed elements into a set. Duplicate tokens collapse; token order is not significant.
-4. An element that is **empty after trimming** carries no meaning and MUST NOT be treated as a grantable action. (Producers MUST NOT rely on empty elements; e.g. `"read,"`, `"read,,write"`, and `",read"` denote exactly the same set as `"read"` / `"read,write"`.)
-
-Tokens are compared by **exact, case-sensitive byte-for-byte equality**. `Write` is not `write`; `read ` (already trimmed) is `read`; there is **no wildcard token** for actions — `*` is a wildcard only for the *resource* id (`chain:*`), never for `action`. v1 defines `read` and `write`; any other token is an opaque string matched verbatim.
-
-**Coverage rule (both directions use the same canonicalization):**
-
-- **Attenuation (delegation hop):** for each child `att` entry, the child's action set MUST be a **subset** of the matched parent entry's action set. A child action token absent from the parent set widens scope and MUST be rejected.
-- **Request matching (relay read/write):** a credential `att` entry covers a request only if the requested action set is a **subset** of that entry's action set. On the relay the requested action is always a single token (`read` or `write`).
-
-#### Worked Example — Multi-Action Subset
-
-Parent (root) credential grants both actions on a chain:
-
-```json
-{ "resource": "chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "action": "read,write" }
-```
-
-A child credential may narrow to either token or keep both:
-
-| Child `att` action            | Canonical set        | Subset of `{read, write}`? | Valid attenuation? |
-| ----------------------------- | -------------------- | -------------------------- | ------------------ |
-| `"read"`                      | `{read}`             | yes                        | yes                |
-| `"write"`                     | `{write}`            | yes                        | yes                |
-| `"read,write"`                | `{read, write}`      | yes (equal)                | yes                |
-| `"write,read"`                | `{read, write}`      | yes (order-insensitive)    | yes                |
-| `" read , write "`            | `{read, write}`      | yes (whitespace trimmed)   | yes                |
-| `"read,,write"`               | `{read, write}`      | yes (empty element dropped)| yes                |
-| `"read,delete"`               | `{read, delete}`     | no (`delete` not in parent)| **no — widens**    |
-| `"Write"`                     | `{Write}`            | no (case-sensitive)        | **no — widens**    |
-
-A relay then authorizes a **write** request against the `"read,write"` (or `"write"`) credential because `{write} ⊆ {read, write}`, and authorizes a **read** request against any of the above whose set contains `read`. A request whose action is not a subset of the entry's set is rejected — the relay scans every `att` entry and matches if any single entry covers both the resource and the full requested action set.
+Actions are comma-separated strings. The child's action set must be a subset of the parent's action set for the matched resource entry.
 
 ### Expiry Narrowing
 
@@ -249,7 +214,7 @@ This is the half-open interval `[iat, exp)`. The two boundaries are not symmetri
 - **`iat` boundary is inclusive (open-accepting).** A credential MUST be accepted when `iat == now_s`. A credential MUST be rejected as not-yet-valid only when `iat > now_s`.
 - **`exp` boundary is exclusive (closed-rejecting).** A credential MUST be rejected as expired when `exp <= now_s`, including the exact instant `exp == now_s`. A credential is temporally valid only while `now_s < exp`.
 
-Conversely, an `exp` strictly greater than `now_s` (i.e. an `exp` in the future relative to the operation's `createdAt`) MUST be accepted on the temporal check; expiry is the only reason this check may reject, and it does so solely on the `exp <= now_s` and `iat > now_s` conditions above.
+Conversely, an `exp` strictly greater than `now_s` (i.e. in the future relative to the operation's `createdAt`) MUST be accepted on the temporal check — even if that `exp` is already in the past relative to the verifier's own wall clock.
 
 This conversion and these boundaries are evaluated against the operation's `createdAt`, never against the verifier's wall clock (see the ingest bullet above). Two relays processing the same content operation therefore reach the same temporal verdict regardless of when each one ingests it.
 
