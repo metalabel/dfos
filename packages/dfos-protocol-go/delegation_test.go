@@ -66,6 +66,13 @@ func TestParseActions(t *testing.T) {
 		{"read,write", map[string]bool{"read": true, "write": true}},
 		{"read, write", map[string]bool{"read": true, "write": true}},
 		{"", map[string]bool{}},
+		// Trailing / doubled / surrounded commas are insignificant — empty
+		// elements are dropped, canonicalizing to the non-empty token set. TS
+		// converges onto this same behavior (see dfos-credential.ts parseActions).
+		{"write,", map[string]bool{"write": true}},
+		{"read,,write", map[string]bool{"read": true, "write": true}},
+		{",", map[string]bool{}},
+		{" read , write ", map[string]bool{"read": true, "write": true}},
 	}
 
 	for _, tt := range tests {
