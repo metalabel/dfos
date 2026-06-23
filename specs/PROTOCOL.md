@@ -4,7 +4,7 @@ Verifiable identity and content chains — Ed25519 signatures, content-addressed
 
 > **⚠ Stabilizing toward Protocol v1 lock.** This spec is under active review and converging on a v1 freeze. The v1 surface is deliberately narrow and nearly settled — breaking changes remain possible while pre-v1, but they are slowing, and each is now a considered exception rather than routine churn. When v1 locks, the core primitives — chain mechanics, canonical DAG-CBOR encoding, identifier derivation, and the validity bounds — are frozen; new capability (the document gateway, additional service types) arrives **additively** atop frozen v1, never as a v2 break. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
-[Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol) · [Gist](https://gist.github.com/bvalosek/ed4c96fd4b841302de544ffaee871648)
+[Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol)
 
 ---
 
