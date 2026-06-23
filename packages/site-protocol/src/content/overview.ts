@@ -49,7 +49,7 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 
 ## Status
 
-The specification is under active development. It is open source under the [MIT license](https://github.com/metalabel/dfos/blob/main/LICENSE). The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, Docker, or a single curl command. The [DFOS platform](https://dfos.com) runs on this protocol in production.
+The protocol's v1 surface is **feature-complete and in soak** — the core wire (chain mechanics, DAG-CBOR encoding, identifier derivation, validity bounds) is frozen in shape and gathering independent implementation experience; the reference packages remain on their own \`0.x\` release line. It is open source under the [MIT license](https://github.com/metalabel/dfos/blob/main/LICENSE). The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, Docker, or a single curl command. The [DFOS platform](https://dfos.com) runs on this protocol in production.
 
 Discussion happens in the [clear.txt](https://clear.dfos.com) space on DFOS. Read the [full specification](https://protocol.dfos.com/spec), explore the [FAQ](https://protocol.dfos.com/faq), or browse the [source on GitHub](https://github.com/metalabel/dfos).
 `;

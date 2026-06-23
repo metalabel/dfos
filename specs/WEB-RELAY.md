@@ -2,7 +2,7 @@
 
 An HTTP relay for the DFOS protocol — receives, verifies, stores, and serves identity chains, content chains, artifacts, countersignatures, and content blobs.
 
-This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
+The **proof plane** (`/proof/v1/*`) is **frozen with Protocol v1** — see the [core protocol status](https://protocol.dfos.com/spec). The relay's other surfaces — ingestion ergonomics, peering, and the content plane — are reference-implementation behavior on their own clock, not frozen. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-web-relay) · [npm](https://www.npmjs.com/package/@metalabel/dfos-web-relay) · [Protocol](https://protocol.dfos.com)
 
