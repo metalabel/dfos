@@ -95,6 +95,8 @@ Several schemas reference media objects. The standard representation:
 
 `id` is required (opaque identifier). `uri` is optional.
 
+A media object is the canonical **referential** case: a document is either _terminal_ (the `{ $schema, … }` blob _is_ the content) or _referential_ (it describes how to fetch external bytes). A media object's `id` (and optional `uri`) is a pointer — an opaque application reference, an `ipfs://` CID, or a signed-CDN URL — and resolving it (delivery of the actual media bytes) is **outside the protocol**. The document gateway serves the document that _contains_ the media object as opaque bytes; it never dereferences the pointer. There is no "media gateway": media lives at the application/delivery layer, bound to the proof plane only by the signed reference (which MAY carry a content hash so a consumer can verify the bytes it ultimately receives).
+
 ---
 
 ## Chain Interpretation
