@@ -179,6 +179,44 @@ jobs:
         working-directory: packages/relay-conformance
         run: ./scripts/run-parity.sh
 
+  conformance-write-disabled:
+    # Read-only (write:false / lite) conformance: boots BOTH reference relays
+    # (TS Hono + Go) in write-disabled mode with a user identity seeded
+    # out-of-band, then asserts POST /proof/v1/operations → 501 and that every
+    # served chain's resolved state recomputes from its log. The variant
+    # self-skips against a write-enabled relay, so it is exercised only here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/dfos-cli/go.mod
+          cache-dependency-path: packages/dfos-cli/go.sum
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run write-disabled conformance against TS + Go relays
+        working-directory: packages/relay-conformance
+        run: ./scripts/run-write-disabled.sh
+
   verify-ts:
     runs-on: ubuntu-latest
     timeout-minutes: 5
