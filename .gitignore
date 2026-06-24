@@ -23,3 +23,4 @@ dist/goreleaser
 # but a manual `go build` can leave these in-tree)
 packages/dfos-web-relay-go/dfos-test
 packages/dfos-web-relay-go/parity-serve
+packages/dfos-web-relay-go/write-disabled-serve

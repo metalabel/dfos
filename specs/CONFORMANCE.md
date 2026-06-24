@@ -96,7 +96,11 @@ its own `0.x` clock — outside the v1 conformance tiers.
 `capabilities.write: false`, in which case `POST /proof/v1/operations` returns **501 Not
 Implemented** while all proof-plane read routes remain conformant; the node stays current
 by pulling peers' logs (WEB-RELAY.md "Lite (pull-only) node"). So a conformant proof node
-need not accept writes — only serve and verify them.
+need not accept writes — only serve and verify them. A read-only node cannot be seeded by
+the suite (its POSTs 501), so the write-disabled variant verifies it by **recomputing from
+the log**: it pulls a served chain's log and independently re-derives the head and state,
+asserting the relay's served state matches. The served state must be reproducible from the
+served operations alone — which needs no write.
 
 ---
 
@@ -143,7 +147,11 @@ core is unambiguous across languages.
 - **`packages/relay-conformance`** — a Go integration suite that runs against **any live
   relay endpoint** over HTTP. It exercises the relay-tier MUST set (ingestion, sequencing,
   fork acceptance, head convergence, capability flags, 501 semantics, deletion semantics)
-  against the running service rather than the library.
+  against the running service rather than the library. Capability-gated variants self-skip
+  unless the relay advertises the matching flag: the content-disabled suite (501 on every
+  content route when `capabilities.content: false`) and the write-disabled suite
+  (`scripts/run-write-disabled.sh` — recompute-from-log read-only conformance when
+  `capabilities.write: false`).
 
 ---
 
