@@ -10,11 +10,16 @@
 
 */
 
-import { createRequire } from 'node:module';
 import type { VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
+// Version is inlined from package.json at build time (tsup/esbuild bundles the
+// JSON import as a literal). Avoid `createRequire(import.meta.url)` — that breaks
+// when a downstream consumer re-bundles this ESM dist into a CJS target (esbuild
+// stubs `import.meta` so `import.meta.url` is undefined → createRequire throws at
+// module init). The JSON import survives both native ESM and CJS re-bundling.
+import { version as RELAY_VERSION } from '../package.json';
 import {
   authenticateRequest,
   DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS,
@@ -26,9 +31,6 @@ import { ingestOperations } from './ingest';
 import { computeOpCID, sequenceOps } from './sequencer';
 import { PROOF_BASE_PATH } from './types';
 import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
-
-const require = createRequire(import.meta.url);
-const { version: RELAY_VERSION } = require('../package.json') as { version: string };
 
 // -----------------------------------------------------------------------------
 // relay result type
