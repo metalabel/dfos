@@ -17,41 +17,31 @@
       "type": "string",
       "description": "Short bio or description."
     },
-    "avatar": {
-      "$ref": "#/$defs/media",
-      "description": "Avatar image."
-    },
-    "banner": {
-      "$ref": "#/$defs/media",
-      "description": "Banner image."
-    },
-    "background": {
-      "$ref": "#/$defs/media",
-      "description": "Background image."
-    },
-    "createdByDID": {
-      "type": "string",
-      "pattern": "^did:",
-      "description": "DID of the identity that authored this content. Optional — omit when the signer IS the author."
+    "links": {
+      "type": "array",
+      "maxItems": 20,
+      "description": "External links — websites, social profiles, and other URIs.",
+      "items": {
+        "type": "object",
+        "required": ["uri"],
+        "properties": {
+          "uri": {
+            "type": "string",
+            "format": "uri",
+            "description": "Link target URI."
+          },
+          "label": {
+            "type": "string",
+            "description": "Optional short display label for the link."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional longer description of the link."
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
-  "additionalProperties": false,
-  "$defs": {
-    "media": {
-      "type": "object",
-      "required": ["id"],
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Opaque media object identifier."
-        },
-        "uri": {
-          "type": "string",
-          "format": "uri",
-          "description": "Optional URI for the media object."
-        }
-      },
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

@@ -72,15 +72,12 @@ The primary content type. Covers short posts, long-form posts, comments, and rep
 
 The displayable identity for any agent, person, group, or space.
 
-| Field          | Type   | Required | Description                             |
-| -------------- | ------ | -------- | --------------------------------------- |
-| `$schema`      | string | yes      | `"https://schemas.dfos.com/profile/v1"` |
-| `name`         | string | no       | Display name                            |
-| `description`  | string | no       | Short bio or description                |
-| `avatar`       | media  | no       | Avatar image                            |
-| `banner`       | media  | no       | Banner image                            |
-| `background`   | media  | no       | Background image                        |
-| `createdByDID` | string | no       | DID of the identity subject             |
+| Field         | Type   | Required | Description                                                     |
+| ------------- | ------ | -------- | --------------------------------------------------------------- |
+| `$schema`     | string | yes      | `"https://schemas.dfos.com/profile/v1"`                         |
+| `name`        | string | no       | Display name                                                    |
+| `description` | string | no       | Short bio or description                                        |
+| `links`       | link[] | no       | External links — up to 20 `{ uri, label?, description? }` items |
 
 ### Media Object
 
