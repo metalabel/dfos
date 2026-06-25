@@ -30,6 +30,12 @@ type Relay struct {
 	peerClient         PeerClient
 	maxAuthTokenTTL    time.Duration // ceiling on self-signed auth-token lifetime (exp-iat)
 	ingestMu           sync.Mutex    // serializes all chain-state mutations (ingest + sequencer)
+	// gossipDisabled holds peer URLs that rejected a gossip push as pull-only
+	// (HTTP 501, write-disabled). Pushing to them is guaranteed to 501, so once
+	// a peer rejects we suppress all further gossip to it for the process
+	// lifetime. Keyed by peer URL (values struct{}); a sync.Map because gossipOps
+	// records hits from concurrent per-batch goroutines.
+	gossipDisabled sync.Map
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT
