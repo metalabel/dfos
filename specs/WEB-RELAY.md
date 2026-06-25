@@ -266,13 +266,11 @@ The relay MUST publish a profile artifact signed by its own DID using the HEAD k
   "$schema": "https://schemas.dfos.com/profile/v1",
   "name": "edge.relay.dfos.com",
   "description": "Cloudflare edge relay for the DFOS network",
-  "image": { "id": "relay-avatar", "uri": "https://cdn.example.com/avatar.png" },
-  "operator": "Metalabel",
-  "motd": "Welcome to the dark forest"
+  "links": [{ "uri": "https://dfos.com", "label": "operator", "description": "Metalabel" }]
 }
 ```
 
-All fields are optional except `name`, which SHOULD be present. The `image.uri` field is any valid URI (operator choice — CDN, content-plane reference, or any resolvable URL). The profile JWS token is inlined in the well-known response — self-proving, no extra fetch needed.
+All fields are optional except `name`, which SHOULD be present. The optional `links` array carries up to 20 `{ uri, label?, description? }` entries (operator site, status page, contact). The profile JWS token is inlined in the well-known response — self-proving, no extra fetch needed.
 
 ### Well-Known Endpoint (`GET /.well-known/dfos-relay`)
 

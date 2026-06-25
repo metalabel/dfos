@@ -176,21 +176,39 @@ describe('profile schema validation', () => {
         $schema: 'https://schemas.dfos.com/profile/v1',
         name: 'Alice',
         description: 'Building cool things',
-        avatar: { id: 'media_avatar', uri: 'https://cdn.example.com/avatar.jpg' },
-        banner: { id: 'media_banner' },
-        background: { id: 'media_bg' },
+        links: [
+          { uri: 'https://x.com/alice', label: 'x', description: 'My posts on X.' },
+          { uri: 'https://alice.example.com' },
+        ],
       }),
     ).toBe(true);
   });
 
-  it('accepts a profile with createdByDID', () => {
+  it('accepts a profile with links', () => {
     expect(
       validate({
         $schema: 'https://schemas.dfos.com/profile/v1',
-        name: 'Alice',
-        createdByDID: 'did:dfos:abc123',
+        links: [{ uri: 'https://example.com', label: 'home' }],
       }),
     ).toBe(true);
+  });
+
+  it('rejects a link missing uri', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        links: [{ label: 'no uri' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects more than 20 links', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        links: Array.from({ length: 21 }, (_, i) => ({ uri: `https://example.com/${i}` })),
+      }),
+    ).toBe(false);
   });
 
   it('rejects missing $schema', () => {
