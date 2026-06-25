@@ -3,12 +3,20 @@ package relay
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"time"
 )
+
+// ErrPeerWriteDisabled is wrapped into the error returned by SubmitOperations
+// when a peer rejects a gossip push with HTTP 501 — it advertises
+// capabilities.write == false (a pull-only / lite node). Callers use errors.Is
+// to distinguish this permanent capability signal from a transient push failure
+// and stop gossiping to the peer rather than retrying it every cycle.
+var ErrPeerWriteDisabled = errors.New("peer is write-disabled (pull-only)")
 
 // HttpPeerClient implements PeerClient using HTTP requests.
 type HttpPeerClient struct {
@@ -111,6 +119,11 @@ func (c *HttpPeerClient) SubmitOperations(peerURL string, operations []string) e
 		// Drain a bounded amount of the body so the error is actionable without
 		// risking an unbounded read from a misbehaving peer.
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		// A 501 means the peer is pull-only (writes disabled). Wrap the sentinel
+		// so the caller can stop gossiping to it instead of retrying forever.
+		if resp.StatusCode == http.StatusNotImplemented {
+			return fmt.Errorf("peer %s rejected gossip: %d %s: %w", peerURL, resp.StatusCode, string(snippet), ErrPeerWriteDisabled)
+		}
 		return fmt.Errorf("peer %s rejected gossip: %d %s", peerURL, resp.StatusCode, string(snippet))
 	}
 	return nil

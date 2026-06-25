@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
@@ -119,6 +120,13 @@ func (r *Relay) gossipOps(tokens []string) {
 		if peer.Gossip != nil && !*peer.Gossip {
 			continue
 		}
+		// Skip peers known to be pull-only (write-disabled): they rejected an
+		// earlier push with 501, so re-trying every cycle is pure log spam and
+		// wasted goroutines. Suppression lasts the process lifetime; a peer that
+		// gains write support is re-probed on the next relay restart.
+		if _, disabled := r.gossipDisabled.Load(peer.URL); disabled {
+			continue
+		}
 		for start := 0; start < len(tokens); start += maxGossipBatch {
 			end := start + maxGossipBatch
 			if end > len(tokens) {
@@ -127,9 +135,20 @@ func (r *Relay) gossipOps(tokens []string) {
 			chunk := tokens[start:end]
 			peerURL := peer.URL
 			go func() {
-				if err := r.peerClient.SubmitOperations(peerURL, chunk); err != nil {
-					r.logger.Warn("gossip submit failed", "peer", peerURL, "ops", len(chunk), "error", err)
+				err := r.peerClient.SubmitOperations(peerURL, chunk)
+				if err == nil {
+					return
 				}
+				if errors.Is(err, ErrPeerWriteDisabled) {
+					// First push that learns the peer is pull-only: suppress all
+					// further gossip to it. LoadOrStore dedupes the log line
+					// across the concurrent per-batch goroutines.
+					if _, loaded := r.gossipDisabled.LoadOrStore(peerURL, struct{}{}); !loaded {
+						r.logger.Info("peer is write-disabled; suppressing further gossip", "peer", peerURL)
+					}
+					return
+				}
+				r.logger.Warn("gossip submit failed", "peer", peerURL, "ops", len(chunk), "error", err)
 			}()
 		}
 	}

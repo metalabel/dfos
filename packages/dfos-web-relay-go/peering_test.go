@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,7 @@ type mockPeerClient struct {
 	backingStore *MemoryStore
 	pageSize     int // 0 = use caller's limit
 	submits      chan submitCall
+	submitErr    error // if set, SubmitOperations records the call then returns this
 }
 
 func newMockPeerClient(store *MemoryStore, pageSize int) *mockPeerClient {
@@ -79,7 +81,7 @@ func (m *mockPeerClient) GetOperationLog(_ string, after string, limit int) (*Pe
 
 func (m *mockPeerClient) SubmitOperations(peerURL string, operations []string) error {
 	m.submits <- submitCall{PeerURL: peerURL, Operations: operations}
-	return nil
+	return m.submitErr
 }
 
 func (m *mockPeerClient) paginateChainLog(log []string, after string, limit int) *PeerLogPage {
@@ -327,6 +329,60 @@ func TestGossipAllPeers(t *testing.T) {
 		if !urls[u] {
 			t.Fatalf("missing gossip to %s", u)
 		}
+	}
+}
+
+// TestGossipStopsAfterWriteDisabled verifies that once a peer rejects a push as
+// pull-only (ErrPeerWriteDisabled / HTTP 501), the relay suppresses all further
+// gossip to it instead of re-pushing — and 501-ing — every cycle.
+func TestGossipStopsAfterWriteDisabled(t *testing.T) {
+	peerStore := NewMemoryStore()
+	mock := newMockPeerClient(peerStore, 0)
+	mock.submitErr = ErrPeerWriteDisabled
+	store := NewMemoryStore()
+	relay, err := NewRelay(RelayOptions{
+		Store:      store,
+		PeerClient: mock,
+		Peers:      []PeerConfig{{URL: "http://peer-a"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First ingest: the relay pushes once, the peer 501s, and the relay marks it
+	// write-disabled.
+	relay.Ingest([]string{createTestIdentity(t).token})
+	if calls := mock.drainSubmits(100 * time.Millisecond); len(calls) != 1 {
+		t.Fatalf("expected 1 gossip attempt on first ingest, got %d", len(calls))
+	}
+
+	// Second ingest of a fresh op: the peer is now known pull-only, so the relay
+	// must not push to it again.
+	relay.Ingest([]string{createTestIdentity(t).token})
+	if calls := mock.drainSubmits(100 * time.Millisecond); len(calls) != 0 {
+		t.Fatalf("expected 0 gossip attempts after write-disabled, got %d", len(calls))
+	}
+}
+
+// TestSubmitOperationsWrapsWriteDisabled verifies the HTTP client maps a 501
+// push rejection to ErrPeerWriteDisabled (so gossipOps can detect it), while a
+// non-501 rejection stays a plain transient error.
+func TestSubmitOperationsWrapsWriteDisabled(t *testing.T) {
+	lite := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotImplemented)
+		_, _ = w.Write([]byte(`{"error":"this relay is pull-only; writes are disabled"}`))
+	}))
+	defer lite.Close()
+	if err := NewHttpPeerClient().SubmitOperations(lite.URL, []string{"tok"}); !errors.Is(err, ErrPeerWriteDisabled) {
+		t.Fatalf("expected ErrPeerWriteDisabled for 501, got %v", err)
+	}
+
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer broken.Close()
+	if err := NewHttpPeerClient().SubmitOperations(broken.URL, []string{"tok"}); err == nil || errors.Is(err, ErrPeerWriteDisabled) {
+		t.Fatalf("expected a non-write-disabled error for 500, got %v", err)
 	}
 }
 
