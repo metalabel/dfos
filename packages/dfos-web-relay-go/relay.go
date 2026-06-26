@@ -138,13 +138,16 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	var newOps []string
 	var newCount, dupCount, rejCount int
 	for i, res := range results {
-		if res.CID == "" {
+		// Drain raw_ops by the storage CID (PutRawOp's key, captured above) and
+		// GATE on it too, not res.CID — see runSequencerLocked for why res.CID (the
+		// JWS-header-claimed CID) can diverge: it may be empty for a decodable-but-
+		// malformed credential whose payload still hashed to a real, stored rawCID,
+		// so gating on res.CID=="" would strand that row 'pending' forever.
+		// rawCID=="" ⇒ undecodable token ⇒ PutRawOp was skipped ⇒ nothing to drain.
+		rawCID := rawCIDs[i]
+		if rawCID == "" {
 			continue
 		}
-		// Drain raw_ops by the storage CID (PutRawOp's key, captured above), not
-		// res.CID — see the sequencer loop for why res.CID can diverge (the
-		// JWS-header-claimed CID) and strand the row 'pending'.
-		rawCID := rawCIDs[i]
 		switch {
 		case res.Status == "new":
 			// Only gossip if the sequenced status was actually persisted —
