@@ -231,7 +231,19 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // well-known
   // -------------------------------------------------------------------------
 
-  app.get('/.well-known/dfos-relay', (c) => {
+  app.get('/.well-known/dfos-relay', async (c) => {
+    // Operational telemetry, kept in a nested "stats" object so the protocol
+    // contract (did/capabilities/profile) stays clean. pendingOps is the raw_ops
+    // backlog awaiting sequencing — a healthy idle relay reads 0; a wedged or
+    // backed-up one reads >0. Surfacing it here makes the otherwise-invisible
+    // sequencer-backlog failure mode a single curl. Best-effort: a transient read
+    // error reports -1 rather than 500ing the status endpoint.
+    let pendingOps = -1;
+    try {
+      pendingOps = await store.countUnsequenced();
+    } catch {
+      pendingOps = -1;
+    }
     return c.json({
       did: relayDID,
       protocol: 'dfos-web-relay',
@@ -243,6 +255,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         log: logEnabled,
       },
       profile: profileArtifactJws,
+      stats: {
+        pendingOps,
+      },
     });
   });
 
