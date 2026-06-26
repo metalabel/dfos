@@ -97,6 +97,18 @@ func storeErr(w http.ResponseWriter, err error) bool {
 // ---------------------------------------------------------------------------
 
 func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
+	// Operational telemetry, kept in a nested "stats" object so the protocol
+	// contract (did/capabilities/profile) stays clean. pendingOps is the raw_ops
+	// backlog awaiting sequencing — a healthy idle relay reads 0; a wedged or
+	// backed-up one reads >0. Surfacing it here makes the otherwise-invisible
+	// sequencer-backlog failure mode a single curl instead of an on-box sqlite3
+	// query. Best-effort: a transient read error reports -1 rather than 500ing
+	// the status endpoint. readStore uses the WAL read pool and never races on
+	// the ingest transaction.
+	pendingOps := -1
+	if n, err := r.readStore.CountUnsequenced(); err == nil {
+		pendingOps = n
+	}
 	writeJSON(w, 200, map[string]any{
 		"did":      r.did,
 		"protocol": "dfos-web-relay",
@@ -108,6 +120,9 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 			"log":     r.logEnabled,
 		},
 		"profile": r.profileArtifactJWS,
+		"stats": map[string]any{
+			"pendingOps": pendingOps,
+		},
 	})
 }
 
