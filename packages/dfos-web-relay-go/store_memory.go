@@ -18,8 +18,8 @@ type MemoryStore struct {
 	countersignatures map[string][]string
 	operationLog      []LogEntry
 	peerCursors       map[string]string
-	rawOps            map[string]rawOpEntry // cid → entry
-	revocations       map[string]StoredRevocation      // key: "issuerDID::credentialCID"
+	rawOps            map[string]rawOpEntry             // cid → entry
+	revocations       map[string]StoredRevocation       // key: "issuerDID::credentialCID"
 	publicCredentials map[string]StoredPublicCredential // key: credential CID
 }
 

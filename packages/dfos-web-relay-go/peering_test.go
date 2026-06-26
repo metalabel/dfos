@@ -668,7 +668,13 @@ func TestSyncCursorPersistence(t *testing.T) {
 	results := IngestOperations([]string{id.token}, peerStore)
 	opCID := results[0].CID
 
-	mock := newMockPeerClient(peerStore, 0)
+	// pageSize 1 makes the lone op come back as a FULL page (the peer supplies a
+	// non-nil cursor), so the relay persists that peer-supplied cursor. The
+	// forward pull only persists a cursor the PEER returned — it never fabricates
+	// one from the last entry's CID on a null final page (that fabrication is the
+	// stall bug fixed in pullPeerOps; a partial final page leaves the high-water
+	// cursor at the last full-page boundary instead).
+	mock := newMockPeerClient(peerStore, 1)
 	store := NewMemoryStore()
 	relay, err := NewRelay(RelayOptions{
 		Store:      store,
