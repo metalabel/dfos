@@ -45,18 +45,25 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 		var sequencedCIDs []string
 
 		for i, res := range results {
-			if res.CID == "" {
+			// Drain the raw_ops row by the SAME CID it was stored under
+			// (computeOpCID(token) == PutRawOp's key), NOT res.CID — and GATE on
+			// this storage CID too, not res.CID. Ingest carries the JWS-header-
+			// claimed CID on some results, which can DIVERGE from the storage CID:
+			//   - non-empty but wrong (e.g. a forged header cid): keying drain on
+			//     res.CID would update zero rows → row stays 'pending' → re-verifies
+			//     as duplicate/rejected → 100% CPU spin holding ingestMu.
+			//   - EMPTY while the payload decoded fine (e.g. a credential with a
+			//     missing/empty header cid, rejected at ingest.go): gating on
+			//     res.CID=="" would `continue` past a row that PutRawOp DID store
+			//     under the non-empty recomputed CID → stranded 'pending' forever
+			//     (a permanent leak + unbounded-growth vector, since each distinct
+			//     payload mints a fresh row).
+			// rawCID=="" means the token was undecodable, so PutRawOp was skipped
+			// and there is genuinely nothing to drain — skip it.
+			rawCID := computeOpCID(tokens[i])
+			if rawCID == "" {
 				continue
 			}
-			// Drain the raw_ops row by the SAME CID it was stored under
-			// (computeOpCID(token) == PutRawOp's key), NOT res.CID. Ingest carries
-			// the JWS-header-claimed CID on some results (e.g. credential
-			// rejections, ingest.go); when that disagrees with the recomputed
-			// storage CID, MarkOps{Sequenced,Rejected}(res.CID) would update zero
-			// rows, the op would stay 'pending', re-verify as duplicate/rejected
-			// next pass (progress=true), and this loop would spin at ~100% CPU
-			// holding ingestMu. Keying on the storage CID guarantees the row drains.
-			rawCID := computeOpCID(tokens[i])
 			switch {
 			case res.Status == "new":
 				sequencedCIDs = append(sequencedCIDs, rawCID)

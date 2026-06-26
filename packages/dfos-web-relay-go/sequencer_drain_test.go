@@ -78,6 +78,62 @@ func TestSequencerDrainsDivergentHeaderCID(t *testing.T) {
 	}
 }
 
+// emptyHeaderCIDCredToken builds a credential JWS with an EMPTY header `cid`. It is
+// rejected ("kid must be a DID URL") before any CID-integrity check, returning
+// res.CID=="" — yet computeOpCID(token) (the storage key) is non-empty because the
+// payload decodes fine, so PutRawOp stored a real row. Gating the drain on res.CID
+// would strand that row 'pending' forever; gating on the storage CID drains it.
+func emptyHeaderCIDCredToken(t *testing.T) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := dfos.JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:credential",
+		Kid: "no-did-url", // no '#' → rejected before the cid-integrity check
+		CID: "",           // empty header cid → ingest returns res.CID==""
+	}
+	token, err := dfos.CreateJWS(header, map[string]any{"aud": "*"}, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// TestSequencerDrainsEmptyHeaderCID is the regression for the #117 sibling: a raw op
+// whose ingest result carries an EMPTY CID (but whose payload hashed to a real,
+// stored storage CID) must still drain — not leak as permanently 'pending'. Before
+// the drain-guard fix the loop `continue`d on res.CID=="" and stranded the row.
+func TestSequencerDrainsEmptyHeaderCID(t *testing.T) {
+	store := NewMemoryStore()
+	relay, err := NewRelay(RelayOptions{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	token := emptyHeaderCIDCredToken(t)
+	storageCID := computeOpCID(token)
+	if storageCID == "" {
+		t.Fatal("expected a decodable, non-empty storage CID")
+	}
+	if err := store.PutRawOp(storageCID, token); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := store.CountUnsequenced(); n != 1 {
+		t.Fatalf("expected 1 pending raw op, got %d", n)
+	}
+
+	relay.RunSequencer()
+
+	// The malformed credential must have drained (permanent reject → deleted),
+	// keyed by its storage CID — not leaked as permanently 'pending'.
+	if n, err := store.CountUnsequenced(); err != nil || n != 0 {
+		t.Fatalf("expected 0 pending raw ops after sequencing, got %d (err=%v)", n, err)
+	}
+}
+
 // backstopStubStore forces the livelock scenario the backstop guards: every pass
 // GetUnsequencedOps yields the same op (so the op classifies → progress=true) but
 // MarkOps* are no-ops and CountUnsequenced never shrinks — i.e. progress is claimed

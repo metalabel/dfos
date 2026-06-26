@@ -770,10 +770,15 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
 	}
 
-	// the header CID keys the raw op in the store; carry it on every rejection
-	// below so a decodable-but-invalid credential is durably rejected rather than
-	// re-verified every sequencer tick (WP-3(a) — matches the TS twin). An empty
-	// header CID is genuinely unkeyable and is handled explicitly further down.
+	// header.CID is the JWS-header-claimed CID. It keys the OPERATION store /
+	// idempotency lookups below (GetOperation/PutOperation) and is surfaced to API
+	// callers as IngestionResult.CID — but it does NOT key the raw op: raw_ops is
+	// keyed by the recomputed storage CID (computeOpCID(token) = DagCborCID(payload)),
+	// independent of header.CID. The drain loops therefore key MarkOp{Rejected,
+	// Sequenced} on that storage CID, and gate on it (NOT on this res.CID), so a
+	// rejection carrying an empty header.CID still drains its stored raw row rather
+	// than stranding it 'pending'. (Pre-#117 this comment claimed header.CID keyed
+	// the raw op — it never did in the Go relay; that mismatch caused the wedge.)
 	cid := header.CID
 
 	// verify it's a credential
