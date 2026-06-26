@@ -36,6 +36,14 @@ type Relay struct {
 	// lifetime. Keyed by peer URL (values struct{}); a sync.Map because gossipOps
 	// records hits from concurrent per-batch goroutines.
 	gossipDisabled sync.Map
+	// reconcileCycle counts sync cycles per peer URL to pace the bounded
+	// anti-entropy scrubber (see reconcilePeer). In-memory only — the scrubber's
+	// trailing position is persisted in peer_cursors; the cadence counter just
+	// resets to 0 on restart. SyncFromPeers is the sole caller and runs on one
+	// ticker goroutine, but reconcileMu guards it so a future concurrent caller
+	// stays correct.
+	reconcileMu    sync.Mutex
+	reconcileCycle map[string]int
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT
@@ -88,6 +96,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		peers:              opts.Peers,
 		peerClient:         opts.PeerClient,
 		maxAuthTokenTTL:    maxAuthTokenTTL,
+		reconcileCycle:     make(map[string]int),
 	}, nil
 }
 
@@ -202,10 +211,38 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 // minutes — catch-up happens incrementally over multiple cycles.
 const maxOpsPerSyncCycle = 5000
 
+// Bounded anti-entropy ("reconcile scrubber"). A peer whose proof-log cursor
+// sorts by op timestamp rather than ingest order (notably the production relay,
+// which paginates a createdAt|cid cursor) can serve a BACK-DATED op — one whose
+// log position sorts BEHIND our high-water cursor. Forward pagination from the
+// high-water mark never surfaces it, so an already-caught-up puller silently
+// misses it forever. We can't rewind an opaque forward cursor, and a caught-up
+// relay fetches nothing forward to anchor on, so the only robust client-side
+// recovery is a slow second cursor that re-walks the peer's log in bounded
+// windows. Each sweep re-fetches at most reconcileWindow ops (dedup makes the
+// re-fetch cheap) and the scrubber advances a persisted trailing cursor; when it
+// reaches the head it laps back to the start. This recovers back-dated ops at
+// any depth WITHOUT ever re-streaming the whole corpus in a single tick. A
+// deliberate, immediate full re-sync remains a separate on-purpose operation
+// (ResetPeerCursors / RESYNC), not this routine background scrub.
+const (
+	// reconcileEveryCycles is the number of sync cycles between scrub sweeps.
+	// Wall-clock cadence is this times SYNC_INTERVAL.
+	reconcileEveryCycles = 12
+	// reconcileWindow caps ops re-fetched per sweep — the "sensible number of
+	// ops back" we re-examine, never the full corpus at once.
+	reconcileWindow = 2000
+	// reconcileCursorSuffix mangles the peer URL into a second peer_cursors key
+	// so the scrubber's trailing position persists alongside (but distinct from)
+	// the high-water cursor. ResetPeerCursors clears both.
+	reconcileCursorSuffix = "#reconcile"
+)
+
 // SyncFromPeers pulls raw ops from all configured sync peers into the raw
 // store, then runs the sequencer to process everything. Fetch volume is
 // bounded by maxOpsPerSyncCycle per peer per cycle — if more ops are available
-// the next cycle picks up where the cursor left off.
+// the next cycle picks up where the cursor left off. Each cycle also advances a
+// bounded anti-entropy scrubber per peer (see reconcilePeer).
 func (r *Relay) SyncFromPeers() error {
 	if r.peerClient == nil {
 		return nil
@@ -216,96 +253,151 @@ func (r *Relay) SyncFromPeers() error {
 		}
 		// readStore for the cursor read — never races on the ingestion tx.
 		cursor, _ := r.readStore.GetPeerCursor(peer.URL)
-		fetched := 0
-		caughtUp := true
-		for fetched < maxOpsPerSyncCycle {
-			page, err := r.peerClient.GetOperationLog(peer.URL, cursor, 1000)
-			if err != nil {
-				r.logger.Error("peer sync failed", "peer", peer.URL, "error", err)
+		fetched, reached := r.pullPeerOps(peer.URL, cursor, maxOpsPerSyncCycle, true)
+		if fetched > 0 {
+			r.logger.Info("peer sync fetched ops",
+				"peer", peer.URL,
+				"ops", fetched,
+				"caughtUp", fetched < maxOpsPerSyncCycle,
+			)
+		}
+		// Bounded anti-entropy: recover back-dated ops a forward pull can't see.
+		r.reconcilePeer(peer.URL, reached)
+	}
+
+	// sequence all stored ops — fixed-point loop until no more progress
+	r.RunSequencerAndGossip()
+	return nil
+}
+
+// pullPeerOps fetches up to maxOps ops from peerURL starting at startCursor,
+// storing each op deduped by its locally-computed storage CID. It returns the
+// number of ops stored and the cursor reached. When persist is true the peer's
+// high-water cursor is advanced as each page commits (the normal forward pull);
+// when false the stored high-water cursor is left untouched and the caller owns
+// the cursor bookkeeping (the bounded scrub sweep). On a transient store failure
+// it stops without advancing, so the same page is re-fetched next cycle.
+func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist bool) (int, string) {
+	cursor := startCursor
+	fetched := 0
+	for fetched < maxOps {
+		page, err := r.peerClient.GetOperationLog(peerURL, cursor, 1000)
+		if err != nil {
+			r.logger.Error("peer sync failed", "peer", peerURL, "error", err)
+			break
+		}
+		if page == nil || len(page.Entries) == 0 {
+			break
+		}
+		// Raw-op + cursor writes go through the ingestion store's writerDB(),
+		// which aliases the active batch transaction. Hold ingestMu so these
+		// writes don't race on s.tx with a concurrent ingest/sequencer batch.
+		r.ingestMu.Lock()
+		pageStoreFailed := false
+		for _, e := range page.Entries {
+			// Compute the CID LOCALLY from the token — never trust the
+			// peer-claimed CID. A mismatched cid would key the raw_ops row
+			// by a bogus CID; the sequencer's MarkOpsSequenced(realCID)
+			// would then match no row and loop forever holding ingestMu.
+			// Undecodable tokens are skipped (computeOpCID returns "")
+			// rather than stored under an empty key.
+			cid := computeOpCID(e.JWSToken)
+			if cid == "" {
+				r.logger.Warn("peer sync: skipping undecodable op",
+					"peer", peerURL,
+					"claimedCID", e.CID,
+				)
+				continue
+			}
+			if err := r.store.PutRawOp(cid, e.JWSToken); err != nil {
+				// Durability discipline (mirrors Ingest's "never advance past
+				// unpersisted work"): on a transient store failure, do NOT
+				// advance the cursor — otherwise the next cycle resumes AFTER
+				// the dropped op and it is permanently lost. Stop the page and
+				// re-fetch this same page next cycle.
+				r.logger.Error("peer sync: failed to store raw op — not advancing cursor",
+					"peer", peerURL,
+					"cid", cid,
+					"error", err,
+				)
+				pageStoreFailed = true
 				break
 			}
-			if page == nil || len(page.Entries) == 0 {
-				break
-			}
-			// Raw-op + cursor writes go through the ingestion store's writerDB(),
-			// which aliases the active batch transaction. Hold ingestMu so these
-			// writes don't race on s.tx with a concurrent ingest/sequencer batch.
-			r.ingestMu.Lock()
-			pageStoreFailed := false
-			for _, e := range page.Entries {
-				// Compute the CID LOCALLY from the token — never trust the
-				// peer-claimed CID. A mismatched cid would key the raw_ops row
-				// by a bogus CID; the sequencer's MarkOpsSequenced(realCID)
-				// would then match no row and loop forever holding ingestMu.
-				// Undecodable tokens are skipped (computeOpCID returns "")
-				// rather than stored under an empty key.
-				cid := computeOpCID(e.JWSToken)
-				if cid == "" {
-					r.logger.Warn("peer sync: skipping undecodable op",
-						"peer", peer.URL,
-						"claimedCID", e.CID,
-					)
-					continue
-				}
-				if err := r.store.PutRawOp(cid, e.JWSToken); err != nil {
-					// Durability discipline (mirrors Ingest's "never advance past
-					// unpersisted work"): on a transient store failure, do NOT
-					// advance the peer cursor — otherwise the next cycle resumes
-					// AFTER the dropped op and it is permanently lost. Stop the
-					// page and re-fetch this same page next cycle.
-					r.logger.Error("peer sync: failed to store raw op — not advancing cursor",
-						"peer", peer.URL,
-						"cid", cid,
-						"error", err,
-					)
-					pageStoreFailed = true
-					break
-				}
-			}
-			if pageStoreFailed {
-				// leave the cursor untouched and stop the fetch loop for this
-				// peer; the same page is re-fetched on the next cycle.
-				r.ingestMu.Unlock()
-				break
-			}
-			fetched += len(page.Entries)
-			if page.Cursor != nil {
-				cursor = *page.Cursor
-			} else {
-				cursor = page.Entries[len(page.Entries)-1].CID
-			}
-			// Check the SetPeerCursor return — a silent failure here would also
-			// let the high-water mark drift. On failure, stop without persisting
+		}
+		if pageStoreFailed {
+			r.ingestMu.Unlock()
+			break
+		}
+		fetched += len(page.Entries)
+		if page.Cursor != nil {
+			cursor = *page.Cursor
+		} else {
+			cursor = page.Entries[len(page.Entries)-1].CID
+		}
+		if persist {
+			// Check the SetPeerCursor return — a silent failure here would let
+			// the high-water mark drift. On failure, stop without persisting
 			// further progress; the same page is re-fetched next cycle.
-			if err := r.store.SetPeerCursor(peer.URL, cursor); err != nil {
+			if err := r.store.SetPeerCursor(peerURL, cursor); err != nil {
 				r.logger.Error("peer sync: failed to persist peer cursor — backing off",
-					"peer", peer.URL,
+					"peer", peerURL,
 					"cursor", cursor,
 					"error", err,
 				)
 				r.ingestMu.Unlock()
 				break
 			}
-			r.ingestMu.Unlock()
-			if page.Cursor == nil {
-				break
-			}
 		}
-		if fetched >= maxOpsPerSyncCycle {
-			caughtUp = false
-		}
-		if fetched > 0 {
-			r.logger.Info("peer sync fetched ops",
-				"peer", peer.URL,
-				"ops", fetched,
-				"caughtUp", caughtUp,
-			)
+		r.ingestMu.Unlock()
+		if page.Cursor == nil {
+			break
 		}
 	}
+	return fetched, cursor
+}
 
-	// sequence all stored ops — fixed-point loop until no more progress
-	r.RunSequencerAndGossip()
-	return nil
+// reconcilePeer advances the bounded anti-entropy scrubber for one peer. Every
+// reconcileEveryCycles cycles it re-scans up to reconcileWindow ops forward from
+// a persisted trailing cursor, recovering any back-dated op a forward pull from
+// the high-water mark misses. The trailing cursor laps back to the start once it
+// reaches the head, so over time the scrub re-walks the whole log in bounded
+// steps. highWater is the cursor the normal forward pull reached this cycle,
+// used only to detect when the scrubber has caught up to the head.
+func (r *Relay) reconcilePeer(peerURL, highWater string) {
+	r.reconcileMu.Lock()
+	n := r.reconcileCycle[peerURL] + 1
+	if n < reconcileEveryCycles {
+		r.reconcileCycle[peerURL] = n
+		r.reconcileMu.Unlock()
+		return
+	}
+	r.reconcileCycle[peerURL] = 0
+	r.reconcileMu.Unlock()
+
+	rcKey := peerURL + reconcileCursorSuffix
+	anchor, _ := r.readStore.GetPeerCursor(rcKey)
+	fetched, reached := r.pullPeerOps(peerURL, anchor, reconcileWindow, false)
+
+	// Advance the trailing cursor; lap back to the start once the scrub reaches
+	// the head (short page, or caught up to the forward high-water mark), so the
+	// next pass re-walks from the oldest op and no back-dated op is missed for
+	// more than one lap.
+	next := reached
+	if fetched < reconcileWindow || reached == "" || reached == highWater {
+		next = ""
+	}
+	if err := r.store.SetPeerCursor(rcKey, next); err != nil {
+		r.logger.Error("peer reconcile: failed to persist scrub cursor",
+			"peer", peerURL,
+			"error", err,
+		)
+	}
+	if fetched > 0 {
+		r.logger.Info("peer reconcile swept ops",
+			"peer", peerURL,
+			"ops", fetched,
+		)
+	}
 }
 
 // ResetPeerCursors clears all sync cursors, forcing a full re-sync on next cycle.
