@@ -211,20 +211,22 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 // minutes — catch-up happens incrementally over multiple cycles.
 const maxOpsPerSyncCycle = 5000
 
-// Bounded anti-entropy ("reconcile scrubber"). A peer whose proof-log cursor
-// sorts by op timestamp rather than ingest order (notably the production relay,
-// which paginates a createdAt|cid cursor) can serve a BACK-DATED op — one whose
-// log position sorts BEHIND our high-water cursor. Forward pagination from the
-// high-water mark never surfaces it, so an already-caught-up puller silently
-// misses it forever. We can't rewind an opaque forward cursor, and a caught-up
-// relay fetches nothing forward to anchor on, so the only robust client-side
-// recovery is a slow second cursor that re-walks the peer's log in bounded
-// windows. Each sweep re-fetches at most reconcileWindow ops (dedup makes the
-// re-fetch cheap) and the scrubber advances a persisted trailing cursor; when it
-// reaches the head it laps back to the start. This recovers back-dated ops at
-// any depth WITHOUT ever re-streaming the whole corpus in a single tick. A
-// deliberate, immediate full re-sync remains a separate on-purpose operation
-// (ResetPeerCursors / RESYNC), not this routine background scrub.
+// Bounded anti-entropy ("reconcile scrubber") — defense-in-depth for the
+// forward pull. The forward pull tracks a single high-water cursor and can only
+// move forward; if that cursor ever becomes stale or unusable against a peer,
+// the pull silently fetches nothing and the relay stops converging. That happens
+// in practice: a relay that persisted a cursor a peer no longer accepts (e.g. a
+// bare CID fabricated by the pre-fix pullPeerOps, which the production relay's
+// timestamp|cid pagination returns empty for), or any peer whose log ordering
+// can place an op behind an already-advanced cursor. The scrubber is a slow
+// SECOND cursor that re-walks the peer's log in bounded windows so the relay
+// self-heals regardless of how the high-water cursor got wedged. Each sweep
+// re-fetches at most reconcileWindow ops (dedup makes the re-fetch cheap) and
+// advances a persisted trailing cursor; when it reaches the head it laps back to
+// the start, re-walking the whole log over time WITHOUT ever re-streaming the
+// corpus in a single tick. A deliberate, immediate full re-sync remains a
+// separate on-purpose operation (ResetPeerCursors / RESYNC), not this routine
+// background scrub.
 const (
 	// reconcileEveryCycles is the number of sync cycles between scrub sweeps.
 	// Wall-clock cadence is this times SYNC_INTERVAL.
@@ -261,7 +263,7 @@ func (r *Relay) SyncFromPeers() error {
 				"caughtUp", fetched < maxOpsPerSyncCycle,
 			)
 		}
-		// Bounded anti-entropy: recover back-dated ops a forward pull can't see.
+		// Bounded anti-entropy: self-heal a wedged/stale forward cursor.
 		r.reconcilePeer(peer.URL, reached)
 	}
 
@@ -329,11 +331,22 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			break
 		}
 		fetched += len(page.Entries)
-		if page.Cursor != nil {
-			cursor = *page.Cursor
-		} else {
-			cursor = page.Entries[len(page.Entries)-1].CID
+		if page.Cursor == nil {
+			// The peer signals no further pages from this cursor. Do NOT
+			// fabricate a resume cursor from the last entry's CID: a peer whose
+			// cursor format is not a bare CID — notably the production relay,
+			// which pages a timestamp|cid cursor and returns null on the final
+			// page — serves an EMPTY page for an unrecognized bare CID, which
+			// permanently stalls the forward pull at this point (the bug this
+			// fixes). Retain the last peer-supplied cursor (already persisted)
+			// so the next cycle resumes with a token the peer understands; it
+			// re-fetches the final partial page, which dedups cheaply. A relay
+			// that already persisted a fabricated bare CID (pre-fix) self-heals
+			// via the bounded reconcile scrubber, which re-walks from the start.
+			r.ingestMu.Unlock()
+			break
 		}
+		cursor = *page.Cursor
 		if persist {
 			// Check the SetPeerCursor return — a silent failure here would let
 			// the high-water mark drift. On failure, stop without persisting
@@ -349,20 +362,18 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			}
 		}
 		r.ingestMu.Unlock()
-		if page.Cursor == nil {
-			break
-		}
 	}
 	return fetched, cursor
 }
 
 // reconcilePeer advances the bounded anti-entropy scrubber for one peer. Every
 // reconcileEveryCycles cycles it re-scans up to reconcileWindow ops forward from
-// a persisted trailing cursor, recovering any back-dated op a forward pull from
-// the high-water mark misses. The trailing cursor laps back to the start once it
-// reaches the head, so over time the scrub re-walks the whole log in bounded
-// steps. highWater is the cursor the normal forward pull reached this cycle,
-// used only to detect when the scrubber has caught up to the head.
+// a persisted trailing cursor, recovering any op the forward pull's high-water
+// cursor misses — including the case where that cursor is wedged or stale and
+// the forward pull is fetching nothing. The trailing cursor laps back to the
+// start once it reaches the head, so over time the scrub re-walks the whole log
+// in bounded steps. highWater is the cursor the normal forward pull reached this
+// cycle, used only to detect when the scrubber has caught up to the head.
 func (r *Relay) reconcilePeer(peerURL, highWater string) {
 	r.reconcileMu.Lock()
 	n := r.reconcileCycle[peerURL] + 1
