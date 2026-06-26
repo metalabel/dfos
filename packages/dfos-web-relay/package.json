@@ -1,6 +1,6 @@
 {
   "name": "@metalabel/dfos-web-relay",
-  "version": "0.13.3",
+  "version": "0.13.4",
   "type": "module",
   "description": "DFOS Web Relay — verifying HTTP relay for identity chains, content chains, and content blobs",
   "license": "MIT",
@@ -58,7 +58,7 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@metalabel/dfos-protocol": "^0.13.3"
+    "@metalabel/dfos-protocol": "^0.13.4"
   },
   "devDependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
