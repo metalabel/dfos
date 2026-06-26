@@ -32,6 +32,7 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 		opts = append(opts, WithLogDisabled())
 	}
 
+	prevPending := -1
 	for {
 		tokens, err := r.store.GetUnsequencedOps(10000)
 		if err != nil || len(tokens) == 0 {
@@ -47,17 +48,26 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 			if res.CID == "" {
 				continue
 			}
+			// Drain the raw_ops row by the SAME CID it was stored under
+			// (computeOpCID(token) == PutRawOp's key), NOT res.CID. Ingest carries
+			// the JWS-header-claimed CID on some results (e.g. credential
+			// rejections, ingest.go); when that disagrees with the recomputed
+			// storage CID, MarkOps{Sequenced,Rejected}(res.CID) would update zero
+			// rows, the op would stay 'pending', re-verify as duplicate/rejected
+			// next pass (progress=true), and this loop would spin at ~100% CPU
+			// holding ingestMu. Keying on the storage CID guarantees the row drains.
+			rawCID := computeOpCID(tokens[i])
 			switch {
 			case res.Status == "new":
-				sequencedCIDs = append(sequencedCIDs, res.CID)
+				sequencedCIDs = append(sequencedCIDs, rawCID)
 				newOps = append(newOps, tokens[i])
 				result.Sequenced++
 				progress = true
 			case res.Status == "duplicate":
-				sequencedCIDs = append(sequencedCIDs, res.CID)
+				sequencedCIDs = append(sequencedCIDs, rawCID)
 				progress = true
 			case res.Status == "rejected" && isPermanentRejection(res):
-				r.store.MarkOpRejected(res.CID, res.Error)
+				r.store.MarkOpRejected(rawCID, res.Error)
 				result.Rejected++
 				progress = true
 			default:
@@ -82,6 +92,23 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 
 		if !progress {
 			break
+		}
+
+		// Livelock backstop: a pass that claims progress MUST shrink the pending
+		// set. If it didn't, no forward progress is possible — the same pending
+		// ops re-verify identically next pass — so break instead of spinning at
+		// ~100% CPU holding ingestMu. With the drain keyed on the storage CID
+		// above, progress now implies a real drain, so a flat (or growing) count
+		// is a genuine dead-end, not a transient. The next sequencer tick retries.
+		pending, cerr := r.store.CountUnsequenced()
+		if cerr == nil {
+			if prevPending >= 0 && pending >= prevPending {
+				r.logger.Error("sequencer: progress claimed but pending set did not shrink — backing off",
+					"pending", pending,
+				)
+				break
+			}
+			prevPending = pending
 		}
 	}
 

@@ -107,11 +107,15 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	// a concurrent sequencer batch races on s.tx.
 	r.ingestMu.Lock()
 
-	// store all raw ops first — they can never be lost
-	for _, token := range tokens {
-		cid := computeOpCID(token)
-		if cid != "" {
-			r.store.PutRawOp(cid, token)
+	// store all raw ops first — they can never be lost. Capture each row's
+	// storage CID (computeOpCID) so the drain loop below reuses the exact same
+	// key it was stored under, rather than recomputing it (or trusting res.CID,
+	// which can diverge — see the sequencer loop).
+	rawCIDs := make([]string, len(tokens))
+	for i, token := range tokens {
+		rawCIDs[i] = computeOpCID(token)
+		if rawCIDs[i] != "" {
+			r.store.PutRawOp(rawCIDs[i], token)
 		}
 	}
 
@@ -137,24 +141,28 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 		if res.CID == "" {
 			continue
 		}
+		// Drain raw_ops by the storage CID (PutRawOp's key, captured above), not
+		// res.CID — see the sequencer loop for why res.CID can diverge (the
+		// JWS-header-claimed CID) and strand the row 'pending'.
+		rawCID := rawCIDs[i]
 		switch {
 		case res.Status == "new":
 			// Only gossip if the sequenced status was actually persisted —
 			// otherwise local state and what we'd advertise diverge. On failure
 			// the op stays pending and the sequencer retries it.
-			if err := r.store.MarkOpsSequenced([]string{res.CID}); err != nil {
-				r.logger.Error("ingest: failed to mark op sequenced — skipping gossip", "cid", res.CID, "error", err)
+			if err := r.store.MarkOpsSequenced([]string{rawCID}); err != nil {
+				r.logger.Error("ingest: failed to mark op sequenced — skipping gossip", "cid", rawCID, "error", err)
 			} else {
 				newOps = append(newOps, tokens[i])
 				newCount++
 			}
 		case res.Status == "duplicate":
-			if err := r.store.MarkOpsSequenced([]string{res.CID}); err != nil {
-				r.logger.Error("ingest: failed to mark duplicate op sequenced", "cid", res.CID, "error", err)
+			if err := r.store.MarkOpsSequenced([]string{rawCID}); err != nil {
+				r.logger.Error("ingest: failed to mark duplicate op sequenced", "cid", rawCID, "error", err)
 			}
 			dupCount++
 		case res.Status == "rejected" && isPermanentRejection(res):
-			r.store.MarkOpRejected(res.CID, res.Error)
+			r.store.MarkOpRejected(rawCID, res.Error)
 			rejCount++
 		}
 	}
