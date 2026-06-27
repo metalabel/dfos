@@ -144,6 +144,13 @@ func verifyServedIdentity(t *testing.T, base, did string) {
 	if served.State.DID != result.State.DID {
 		t.Fatalf("identity %s: served state.did %s != recomputed %s", did, served.State.DID, result.State.DID)
 	}
+	// The served DID MUST be a well-formed did:dfos identifier (canonical width
+	// over the protocol alphabet). A relay running a stale derivation that
+	// truncates the resolved DID to a pre-v1 width is non-conformant even if it
+	// echoes that truncated DID consistently.
+	if !dfos.IsValidDID(served.State.DID) {
+		t.Fatalf("identity %s: served state.did %q is not a well-formed did:dfos identifier", did, served.State.DID)
+	}
 	if served.State.IsDeleted != result.State.IsDeleted {
 		t.Fatalf("identity %s: served isDeleted=%v != recomputed %v", did, served.State.IsDeleted, result.State.IsDeleted)
 	}

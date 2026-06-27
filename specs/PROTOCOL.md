@@ -206,6 +206,9 @@ Entropy:  ~131.6 bits (19^31)
 Process: `SHA-256(input) → for each of first 31 bytes: alphabet[byte % 19]`. The modulo introduces a ~0.3% bias (256 is not evenly divisible by 19) — not security-relevant for identifiers.
 
 DIDs: `did:dfos:` + 31-char ID derived from `SHA-256(genesis CID raw bytes)`
+
+There is a single canonical identifier width. Verifiers MUST reject any `did:dfos:` identifier that is not exactly 31 characters over this alphabet — whether it appears in an operation's signing-key `kid`, in an operation payload, or as the DID of a resolved identity state.
+
 Key IDs: `key_` + 31-char ID. Convention: derive from public key hash (`key_` + `customAlpha(SHA-256(publicKey))`), making key IDs deterministic and verifiable. Not a protocol requirement — key IDs can be any string.
 
 ### Multikey Encoding (W3C Multikey for Ed25519)

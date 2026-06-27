@@ -174,6 +174,10 @@ func CreateKeyResolver(store Store) dfos.KeyResolver {
 		did := kid[:hashIdx]
 		keyID := kid[hashIdx+1:]
 
+		if err := dfos.ValidateDID(did); err != nil {
+			return nil, err
+		}
+
 		identity, err := store.GetIdentityChain(did)
 		if err != nil {
 			return nil, err
@@ -240,6 +244,10 @@ func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 		}
 		did := kid[:hashIdx]
 		keyID := kid[hashIdx+1:]
+
+		if err := dfos.ValidateDID(did); err != nil {
+			return nil, err
+		}
 
 		identity, err := store.GetIdentityChain(did)
 		if err != nil {

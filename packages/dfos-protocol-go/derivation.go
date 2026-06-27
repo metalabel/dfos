@@ -3,15 +3,34 @@ package dfos
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"fmt"
+	"regexp"
 )
 
 const (
 	idAlphabet = "2346789acdefhknrtvz"
 	// 31 chars over the 19-symbol alphabet ≈ 2^131.6 targeted second-preimage —
 	// above the 128-bit floor for this registry-free self-certifying identifier.
-	// (Was 22 ≈ 2^93.4 pre-v1.)
 	idLength = 31
 )
+
+// didRe matches a well-formed did:dfos identifier: the method prefix followed by
+// exactly idLength characters of the protocol alphabet. The protocol has a single
+// identifier width — any other length or character set is not a DID.
+var didRe = regexp.MustCompile(fmt.Sprintf(`^did:dfos:[%s]{%d}$`, idAlphabet, idLength))
+
+// ValidateDID returns an error if did is not a well-formed did:dfos identifier.
+func ValidateDID(did string) error {
+	if !didRe.MatchString(did) {
+		return fmt.Errorf("malformed did:dfos identifier: %q", did)
+	}
+	return nil
+}
+
+// IsValidDID reports whether did is a well-formed did:dfos identifier.
+func IsValidDID(did string) bool {
+	return didRe.MatchString(did)
+}
 
 // DeriveID derives a 31-char identifier from raw bytes using sha256 + modular alphabet encoding.
 func DeriveID(seed []byte) string {

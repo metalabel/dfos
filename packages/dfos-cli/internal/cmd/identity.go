@@ -594,7 +594,10 @@ func newIdentityDeleteCmd() *cobra.Command {
 
 			var chain *relay.StoredIdentityChain
 			if len(args) > 0 {
-				did := resolveIdentityDID(args[0])
+				did, err := resolveIdentityDID(args[0])
+				if err != nil {
+					return err
+				}
 				chain, _ = lr.Relay.GetIdentity(did)
 				if chain == nil {
 					return fmt.Errorf("identity '%s' not found", args[0])
@@ -732,7 +735,10 @@ func newIdentityShowCmd() *cobra.Command {
 			var chain *relay.StoredIdentityChain
 
 			if len(args) > 0 {
-				did := resolveIdentityDID(args[0])
+				did, err := resolveIdentityDID(args[0])
+				if err != nil {
+					return err
+				}
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
 				_, chain2, err := requireIdentity()
@@ -780,7 +786,10 @@ func newIdentityKeysCmd() *cobra.Command {
 
 			var chain *relay.StoredIdentityChain
 			if len(args) > 0 {
-				did := resolveIdentityDID(args[0])
+				did, err := resolveIdentityDID(args[0])
+				if err != nil {
+					return err
+				}
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
 				_, chain2, _ := requireIdentity()
@@ -851,7 +860,10 @@ func newIdentityServicesCmd() *cobra.Command {
 
 			var chain *relay.StoredIdentityChain
 			if len(args) > 0 {
-				did := resolveIdentityDID(args[0])
+				did, err := resolveIdentityDID(args[0])
+				if err != nil {
+					return err
+				}
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
 				_, chain2, _ := requireIdentity()
@@ -928,7 +940,10 @@ func newIdentityPublishCmd() *cobra.Command {
 
 			var chain *relay.StoredIdentityChain
 			if len(args) > 0 {
-				did := resolveIdentityDID(args[0])
+				did, err := resolveIdentityDID(args[0])
+				if err != nil {
+					return err
+				}
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
 				_, chain2, _ := requireIdentity()
@@ -993,7 +1008,10 @@ func newIdentityFetchCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
-			did := resolveIdentityDID(target)
+			did, err := resolveIdentityDID(target)
+			if err != nil {
+				return err
+			}
 
 			rn := peerName
 			if rn == "" {
@@ -1090,14 +1108,17 @@ func newIdentityRemoveCmd() *cobra.Command {
 
 // helpers
 
-func resolveIdentityDID(nameOrDID string) string {
+func resolveIdentityDID(nameOrDID string) (string, error) {
+	did := nameOrDID
 	if idCfg, ok := cfg.Identities[nameOrDID]; ok {
-		return idCfg.DID
+		did = idCfg.DID
+	} else if len(nameOrDID) > 4 && nameOrDID[:4] != "did:" {
+		did = "did:dfos:" + nameOrDID
 	}
-	if len(nameOrDID) > 4 && nameOrDID[:4] != "did:" {
-		return "did:dfos:" + nameOrDID
+	if err := protocol.ValidateDID(did); err != nil {
+		return "", fmt.Errorf("invalid identity %q: %w", nameOrDID, err)
 	}
-	return nameOrDID
+	return did, nil
 }
 
 func toStringSlice(v any) ([]string, bool) {
