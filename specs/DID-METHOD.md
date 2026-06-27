@@ -60,6 +60,8 @@ dfos-char      = "2" / "3" / "4" / "6" / "7" / "8" / "9" /
 
 The alphabet is 19 characters: `2346789acdefhknrtvz`. The identifier is exactly 31 characters, providing ~131.6 bits of entropy.
 
+An identifier that does not match `dfos-id` — the exact 31-character form over this alphabet — is not a valid `did:dfos` identifier. Resolvers and verifiers MUST reject any operation that references, and any resolved state that yields, a `did:dfos` identifier of any other length or character set.
+
 ### 3.2 Derivation
 
 The method-specific identifier is derived deterministically from the genesis identity operation:
