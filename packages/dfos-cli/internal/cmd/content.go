@@ -476,12 +476,12 @@ func newContentFetchCmd() *cobra.Command {
 				return err
 			}
 
-			data, err := c.GetContent(contentID)
+			// Pull the operation chain from the peer's log endpoint. The
+			// /content/{id} response carries resolved state, not ops.
+			log, err := c.GetContentLog(contentID)
 			if err != nil {
 				return fmt.Errorf("fetch content: %w", err)
 			}
-
-			log, _ := toStringSlice(data["log"])
 
 			lr, err := getRelay()
 			if err != nil {
@@ -958,12 +958,8 @@ func fetchAndIngestIdentity(lr *localrelay.LocalRelay, c *client.Client, did str
 	if existing != nil {
 		return
 	}
-	data, err := c.GetIdentity(did)
-	if err != nil {
-		return
-	}
-	log, ok := toStringSlice(data["log"])
-	if !ok || len(log) == 0 {
+	log, err := c.GetIdentityLog(did)
+	if err != nil || len(log) == 0 {
 		return
 	}
 	lr.Relay.Ingest(log)
