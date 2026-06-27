@@ -42,7 +42,11 @@ func newConfigGetCmd() *cobra.Command {
 			key := args[0]
 			switch key {
 			case "active_context":
-				fmt.Println(cfg.ActiveContext)
+				if jsonFlag {
+					outputJSON(map[string]string{"active_context": cfg.ActiveContext})
+				} else {
+					fmt.Println(cfg.ActiveContext)
+				}
 			default:
 				return fmt.Errorf("unknown config key: %s", key)
 			}

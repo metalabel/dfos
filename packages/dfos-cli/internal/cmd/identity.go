@@ -23,6 +23,7 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityCreateCmd())
 	cmd.AddCommand(newIdentityListCmd())
 	cmd.AddCommand(newIdentityShowCmd())
+	cmd.AddCommand(newIdentityLogCmd())
 	cmd.AddCommand(newIdentityKeysCmd())
 	cmd.AddCommand(newIdentityServicesCmd())
 	cmd.AddCommand(newIdentityUpdateCmd())
@@ -773,6 +774,77 @@ func newIdentityShowCmd() *cobra.Command {
 	}
 }
 
+func newIdentityLogCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "log <name|did>",
+		Short: "Show operation history",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			did, err := resolveIdentityDID(args[0])
+			if err != nil {
+				return err
+			}
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+			chain, err := lr.Relay.GetIdentity(did)
+			if err != nil || chain == nil {
+				return fmt.Errorf("identity '%s' not found", args[0])
+			}
+
+			if jsonFlag {
+				type opInfo struct {
+					Index  int    `json:"index"`
+					CID    string `json:"cid,omitempty"`
+					Type   string `json:"type,omitempty"`
+					Signer string `json:"signer,omitempty"`
+				}
+				var ops []opInfo
+				for i, token := range chain.Log {
+					h, p, _ := protocol.DecodeJWSUnsafe(token)
+					op := opInfo{Index: i}
+					if h != nil {
+						op.CID = h.CID
+						op.Signer = didFromKid(h.Kid)
+					}
+					if p != nil {
+						if t, ok := p["type"].(string); ok {
+							op.Type = t
+						}
+					}
+					ops = append(ops, op)
+				}
+				outputJSON(ops)
+				return nil
+			}
+
+			fmt.Printf("Identity: %s (%d operations)\n\n", did, len(chain.Log))
+			for i, token := range chain.Log {
+				h, p, _ := protocol.DecodeJWSUnsafe(token)
+				opType := "?"
+				if p != nil {
+					if t, ok := p["type"].(string); ok {
+						opType = t
+					}
+				}
+				cid := ""
+				signer := ""
+				if h != nil {
+					cid = h.CID
+					signer = didFromKid(h.Kid)
+				}
+				if signer != "" {
+					fmt.Printf("  [%d] %-8s %s  (%s)\n", i, opType, cid, signer)
+				} else {
+					fmt.Printf("  [%d] %-8s %s\n", i, opType, cid)
+				}
+			}
+			return nil
+		},
+	}
+}
+
 func newIdentityKeysCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "keys [name|did]",
@@ -1047,7 +1119,7 @@ func newIdentityFetchCmd() *cobra.Command {
 			results := lr.Relay.Ingest(log)
 			for _, r := range results {
 				if r.Status == "rejected" {
-					fmt.Printf("  Warning: operation %s rejected: %s\n", r.CID, r.Error)
+					fmt.Fprintf(os.Stderr, "  Warning: operation %s rejected: %s\n", r.CID, r.Error)
 				}
 			}
 
@@ -1115,7 +1187,7 @@ func resolveIdentityDID(nameOrDID string) (string, error) {
 		did = "did:dfos:" + nameOrDID
 	}
 	if err := protocol.ValidateDID(did); err != nil {
-		return "", fmt.Errorf("invalid identity %q: %w", nameOrDID, err)
+		return "", fmt.Errorf("invalid identity DID: %w", err)
 	}
 	return did, nil
 }

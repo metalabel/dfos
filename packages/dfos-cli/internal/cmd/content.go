@@ -508,7 +508,7 @@ func newContentFetchCmd() *cobra.Command {
 			results := lr.Relay.Ingest(log)
 			for _, r := range results {
 				if r.Status == "rejected" {
-					fmt.Printf("  Warning: operation %s rejected: %s\n", r.CID, r.Error)
+					fmt.Fprintf(os.Stderr, "  Warning: operation %s rejected: %s\n", r.CID, r.Error)
 				}
 			}
 
@@ -936,7 +936,7 @@ func newContentVerifyCmd() *cobra.Command {
 func newContentRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "remove <contentId>",
-		Short: "Sign a protocol-level content deletion",
+		Short: "Explain that content cannot be locally un-ingested (use 'content delete')",
 		Long:  "Content data in the local relay cannot be selectively un-ingested. Use 'dfos content delete' to sign a protocol-level deletion operation.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
