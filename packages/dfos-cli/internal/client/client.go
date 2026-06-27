@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -175,6 +176,74 @@ func (c *Client) submitBatch(operations []string) ([]IngestionResult, error) {
 // GetIdentity fetches an identity chain from the relay.
 func (c *Client) GetIdentity(did string) (map[string]any, error) {
 	return c.getJSON(proofBasePath + "/identities/" + did)
+}
+
+// LogEntry is a single entry from a relay /log endpoint.
+type LogEntry struct {
+	CID      string `json:"cid"`
+	JWSToken string `json:"jwsToken"`
+}
+
+// logPage is one page of a paginated /log response.
+type logPage struct {
+	Entries []LogEntry `json:"entries"`
+	Cursor  *string    `json:"cursor"`
+}
+
+// GetIdentityLog pulls the full operation chain for a DID, following cursors,
+// and returns the ordered JWS tokens ready to Ingest. The /identities/{did}
+// response carries resolved state, NOT the op log, so fetch must use this.
+func (c *Client) GetIdentityLog(did string) ([]string, error) {
+	return c.getLog(proofBasePath + "/identities/" + did + "/log")
+}
+
+// GetContentLog pulls the full operation chain for a content ID, following
+// cursors, and returns the ordered JWS tokens ready to Ingest.
+func (c *Client) GetContentLog(contentID string) ([]string, error) {
+	return c.getLog(proofBasePath + "/content/" + contentID + "/log")
+}
+
+// getLog walks a paginated /log endpoint via the `after` cursor and returns
+// every JWS token. Mirrors the relay's own peer-sync pull (peer_client.go /
+// relay.go SyncFromPeers): accumulate entries, stop when cursor is null.
+func (c *Client) getLog(path string) ([]string, error) {
+	var tokens []string
+	after := ""
+	for {
+		u := c.BaseURL + path
+		if after != "" {
+			u += "?after=" + url.QueryEscape(after)
+		}
+		resp, err := c.HTTPClient.Get(u)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == 404 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("not found")
+		}
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+		}
+		var page logPage
+		if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+		resp.Body.Close()
+		for _, e := range page.Entries {
+			tokens = append(tokens, e.JWSToken)
+		}
+		// cursor==nil terminates; a non-nil cursor with no entries would loop
+		// forever against a misbehaving peer, so stop making progress there too.
+		if page.Cursor == nil || len(page.Entries) == 0 {
+			break
+		}
+		after = *page.Cursor
+	}
+	return tokens, nil
 }
 
 // GetContent fetches a content chain from the relay.

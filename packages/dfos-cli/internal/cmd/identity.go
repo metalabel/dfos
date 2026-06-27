@@ -1014,13 +1014,12 @@ func newIdentityFetchCmd() *cobra.Command {
 				return err
 			}
 
-			data, err := c.GetIdentity(did)
+			// Pull the operation chain from the peer's log endpoint. The
+			// /identities/{did} response carries resolved state, not ops.
+			log, err := c.GetIdentityLog(did)
 			if err != nil {
 				return fmt.Errorf("fetch identity: %w", err)
 			}
-
-			// extract log from response
-			log, _ := toStringSlice(data["log"])
 
 			// ingest into local relay
 			lr, err := getRelay()
