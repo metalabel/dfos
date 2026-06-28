@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -76,6 +77,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newCredentialCmd())
 	root.AddCommand(newWitnessCmd())
 	root.AddCommand(newCountersigsCmd())
+	root.AddCommand(newOperationCmd())
 	root.AddCommand(newAuthCmd())
 	root.AddCommand(newPeerCmd())
 	root.AddCommand(newAPICmd())
@@ -92,7 +94,12 @@ func getRelay() (*localrelay.LocalRelay, error) {
 		return localRelayInstance, nil
 	}
 	var err error
-	localRelayInstance, err = localrelay.Open(cfg, nil)
+	// One-shot CLI commands drive an embedded relay whose INFO chatter ("ingest
+	// complete", "peer sync fetched ops") is pure noise on the terminal. Open it
+	// with a Warn-level logger so the happy path is silent while genuine
+	// warnings/errors still surface. (`serve` opens its own relay with INFO.)
+	quiet := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	localRelayInstance, err = localrelay.Open(cfg, &localrelay.Options{Logger: quiet})
 	if err != nil {
 		return nil, fmt.Errorf("open local relay: %w", err)
 	}

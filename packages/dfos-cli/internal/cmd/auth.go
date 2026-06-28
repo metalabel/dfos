@@ -80,15 +80,20 @@ func newAuthStatusCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, _ := resolveCtx()
 			if ctx == nil || ctx.IdentityName == "" {
+				if jsonFlag {
+					outputJSON(map[string]any{"authenticated": false})
+					return nil
+				}
 				fmt.Println("Not authenticated. Use 'dfos identity create --name <name>' first.")
 				return nil
 			}
 
 			if jsonFlag {
 				outputJSON(map[string]any{
-					"identity": ctx.IdentityDID,
-					"name":     ctx.IdentityName,
-					"peer":     ctx.RelayURL,
+					"authenticated": true,
+					"identity":      ctx.IdentityDID,
+					"name":          ctx.IdentityName,
+					"peer":          ctx.RelayURL,
 				})
 				return nil
 			}

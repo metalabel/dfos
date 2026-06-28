@@ -3,6 +3,7 @@ package localrelay
 import (
 	"crypto/ed25519"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -21,10 +22,11 @@ type LocalRelay struct {
 // Options configures the local relay. All fields are optional — sensible
 // defaults are used when omitted.
 type Options struct {
-	DBPath      string   // override database path (default: ~/.dfos/relay.db)
-	ProfileName string   // relay profile name (default: "DFOS CLI")
-	ExtraPeers  []string // additional peer URLs beyond config.toml
-	Write       *bool    // nil/true = accept writes; false = LITE pull-only node
+	DBPath      string       // override database path (default: ~/.dfos/relay.db)
+	ProfileName string       // relay profile name (default: "DFOS CLI")
+	ExtraPeers  []string     // additional peer URLs beyond config.toml
+	Write       *bool        // nil/true = accept writes; false = LITE pull-only node
+	Logger      *slog.Logger // nil = relay's slog.Default(); CLI passes a quiet one
 }
 
 // Open opens (or creates) the local relay database and bootstraps the relay
@@ -80,6 +82,7 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 		Peers:      peers,
 		PeerClient: peerClient,
 		Write:      opts.Write,
+		Logger:     opts.Logger,
 	})
 	if err != nil {
 		store.Close()
