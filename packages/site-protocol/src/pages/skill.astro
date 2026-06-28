@@ -2,9 +2,12 @@
 import fs from 'node:fs';
 import SpecPage from '../layouts/SpecPage.astro';
 
+// Canonical skill source. The same file is embedded in the dfos binary
+// (`dfos skill`), shipped as a Claude Code plugin (plugins/dfos), and discovered
+// by `npx skills` — all kept in sync by scripts/sync-skill.sh.
 // Full file (with YAML frontmatter) is offered via the copy button; the rendered
 // body strips the frontmatter block.
-const source = fs.readFileSync('../../specs/CLAUDE-SKILL.md', 'utf-8');
+const source = fs.readFileSync('../../skills/dfos/SKILL.md', 'utf-8');
 const body = source.replace(/^---\n[\s\S]*?\n---\n/, '');
 ---
 
@@ -20,12 +23,28 @@ const body = source.replace(/^---\n[\s\S]*?\n---\n/, '');
   <div slot="intro" class="skill-install-note">
     <p>
       This is a <a href="https://docs.anthropic.com/en/docs/claude-code/skills">Claude Code skill</a>
-      for the DFOS CLI. To install, copy the skill file and save it to your project:
+      for the DFOS CLI. Install it any way you like &mdash; every path delivers the same skill:
     </p>
+    <p><strong>From the CLI</strong> &mdash; recommended; the skill is embedded in the binary, so it always matches your installed version:</p>
     <div class="code-wrap">
       <button class="code-copy" aria-label="Copy code">copy</button>
-      <pre><code>mkdir -p .claude/skills/dfos
-# paste into .claude/skills/dfos/SKILL.md</code></pre>
+      <pre><code>dfos skill install            # ./.claude/skills/dfos/SKILL.md
+dfos skill install --global   # ~/.claude/skills/dfos/SKILL.md</code></pre>
     </div>
+    <p><strong>As a Claude Code plugin</strong> &mdash; via the marketplace, with auto-updates:</p>
+    <div class="code-wrap">
+      <button class="code-copy" aria-label="Copy code">copy</button>
+      <pre><code>/plugin marketplace add metalabel/dfos
+/plugin install dfos@metalabel</code></pre>
+    </div>
+    <p><strong>With <a href="https://github.com/vercel-labs/skills">npx skills</a></strong> &mdash; cross-agent (Claude Code, Cursor, &hellip;):</p>
+    <div class="code-wrap">
+      <button class="code-copy" aria-label="Copy code">copy</button>
+      <pre><code>npx skills add metalabel/dfos -a claude-code</code></pre>
+    </div>
+    <p>
+      <strong>Or copy the file</strong> with the button below and save it to
+      <code>.claude/skills/dfos/SKILL.md</code>.
+    </p>
   </div>
 </SpecPage>
