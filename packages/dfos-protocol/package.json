@@ -1,6 +1,6 @@
 {
   "name": "@metalabel/dfos-protocol",
-  "version": "0.13.5",
+  "version": "0.13.6",
   "type": "module",
   "description": "DFOS Protocol — Ed25519 signed chain primitives, services, credentials, and verification",
   "license": "MIT",
