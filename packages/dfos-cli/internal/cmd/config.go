@@ -22,8 +22,8 @@ func newConfigCmd() *cobra.Command {
 
 func newConfigListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "Show full configuration",
+		Use:     "list",
+		Short:   "Show full configuration",
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			data, _ := json.MarshalIndent(cfg, "", "  ")
@@ -66,8 +66,14 @@ func newConfigSetCmd() *cobra.Command {
 			case "active_context":
 				cfg.ActiveContext = value
 			case "defaults.auth_token_ttl":
+				if cfg.Defaults == nil {
+					cfg.Defaults = &config.DefaultsConfig{}
+				}
 				cfg.Defaults.AuthTokenTTL = value
 			case "defaults.credential_ttl":
+				if cfg.Defaults == nil {
+					cfg.Defaults = &config.DefaultsConfig{}
+				}
 				cfg.Defaults.CredentialTTL = value
 			default:
 				return fmt.Errorf("unknown config key: %s", key)

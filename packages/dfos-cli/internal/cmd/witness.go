@@ -12,9 +12,10 @@ func newWitnessCmd() *cobra.Command {
 	var peerName string
 	var relation string
 	cmd := &cobra.Command{
-		Use:   "witness <operationCID>",
-		Short: "Countersign an operation (solemnize it with a collective endorsement)",
-		Args:  cobra.ExactArgs(1),
+		Use:     "witness <operationCID>",
+		Aliases: []string{"countersign"},
+		Short:   "Countersign an operation (solemnize it with a collective endorsement)",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			operationCID := args[0]
 
@@ -107,7 +108,7 @@ func newCountersigsCmd() *cobra.Command {
 				tokens, err := lr.Store.GetCountersignatures(cid)
 				if err == nil && len(tokens) > 0 {
 					if jsonFlag {
-						outputJSON(map[string]any{"countersignatures": tokens})
+						outputJSON(tokens)
 						return nil
 					}
 					fmt.Printf("Countersignatures for %s (%d):\n\n", cid, len(tokens))
@@ -137,7 +138,14 @@ func newCountersigsCmd() *cobra.Command {
 				rn = ctx.RelayName
 			}
 			if rn == "" {
-				return fmt.Errorf("--peer is required")
+				// No peer to query and the local store has none: for a --json
+				// scripting consumer the honest answer is an empty set, not a
+				// hard error (mirrors the bare-array contract of the other paths).
+				if jsonFlag {
+					outputJSON([]string{})
+					return nil
+				}
+				return fmt.Errorf("no countersignatures for %s found locally; --peer is required to query a peer", cid)
 			}
 
 			c, _, err := getPeerClient(rn)
@@ -153,7 +161,10 @@ func newCountersigsCmd() *cobra.Command {
 			csArr, _ := data["countersignatures"].([]any)
 
 			if jsonFlag {
-				outputJSON(data)
+				if csArr == nil {
+					csArr = []any{}
+				}
+				outputJSON(csArr)
 				return nil
 			}
 

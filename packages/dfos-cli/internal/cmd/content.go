@@ -253,6 +253,9 @@ func newContentShowCmd() *cobra.Command {
 			if chain.State.CurrentDocumentCID != nil {
 				fmt.Printf("Current Doc:  %s\n", *chain.State.CurrentDocumentCID)
 			}
+			if chain.LastCreatedAt != "" {
+				fmt.Printf("Updated:      %s\n", chain.LastCreatedAt)
+			}
 			fmt.Printf("Deleted:      %v\n", chain.State.IsDeleted)
 			return nil
 		},
@@ -388,7 +391,7 @@ func newContentPublishCmd() *cobra.Command {
 				rn = peerFlag
 			}
 			if rn == "" {
-				return fmt.Errorf("--peer is required")
+				return fmt.Errorf("--peer is required to publish: pass --peer <name> or set an active context with 'dfos use <identity@peer>'")
 			}
 
 			c, _, err := getPeerClient(rn)
@@ -940,6 +943,14 @@ func newContentRemoveCmd() *cobra.Command {
 		Long:  "Content data in the local relay cannot be selectively un-ingested. Use 'dfos content delete' to sign a protocol-level deletion operation.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if jsonFlag {
+				outputJSON(map[string]any{
+					"removed":    false,
+					"reason":     "content data in the local relay cannot be selectively un-ingested",
+					"useInstead": fmt.Sprintf("dfos content delete %s", args[0]),
+				})
+				return nil
+			}
 			fmt.Printf("Content data lives in the local relay and cannot be selectively removed.\n")
 			fmt.Printf("Use 'dfos content delete %s' to sign a protocol-level deletion.\n", args[0])
 			return nil

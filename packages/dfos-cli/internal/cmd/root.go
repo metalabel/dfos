@@ -187,74 +187,108 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show current context, identity, and relay status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, _ := resolveCtx()
+			ctx, ctxErr := resolveCtx()
 
-			status := map[string]any{}
-
-			if ctx != nil && ctx.IdentityName != "" {
-				lr, relayErr := getRelay()
-
-				var chain *relay.StoredIdentityChain
-				if relayErr == nil && ctx.IdentityDID != "" {
-					chain, _ = lr.Relay.GetIdentity(ctx.IdentityDID)
-				}
-
-				contextStr := ""
-				if ctx.IdentityName != "" && ctx.RelayName != "" {
-					contextStr = ctx.IdentityName + "@" + ctx.RelayName
-				} else if ctx.IdentityName != "" {
-					contextStr = ctx.IdentityName + " (local only)"
-				}
-
-				if jsonFlag {
-					status["context"] = contextStr
-					status["identity"] = ctx.IdentityDID
-					status["identityName"] = ctx.IdentityName
-					status["peer"] = ctx.RelayURL
-					status["peerName"] = ctx.RelayName
-					if chain != nil {
-						status["operations"] = len(chain.Log)
+			// No usable identity: distinguish a BROKEN active context (something
+			// is set but won't resolve) from nothing-configured, instead of
+			// telling a user with identities that they have none.
+			if ctx == nil || ctx.IdentityName == "" {
+				if cfg.ActiveContext != "" {
+					reason := "names an unknown identity or peer"
+					if ctxErr != nil {
+						reason = ctxErr.Error()
 					}
-					outputJSON(status)
+					if jsonFlag {
+						outputJSON(map[string]any{"context": cfg.ActiveContext, "resolved": false, "error": reason})
+						return nil
+					}
+					fmt.Printf("Active context '%s' is set but cannot be resolved: %s\n", cfg.ActiveContext, reason)
+					fmt.Printf("Fix it with 'dfos use <identity[@peer]>', add the peer via 'dfos peer add <name> <url>', or run 'dfos identity list'.\n")
 					return nil
 				}
-
-				fmt.Printf("Context:   %s\n", contextStr)
-				if chain != nil {
-					fmt.Printf("Identity:  %s (%s)\n", chain.DID, ctx.IdentityName)
-					totalKeys := len(chain.State.AuthKeys) + len(chain.State.ControllerKeys) + len(chain.State.AssertKeys)
-					haveKeys := countKeysInChain(chain)
-					fmt.Printf("  Keys:    %d/%d (%s)\n", haveKeys, totalKeys, keys.Backend())
-					fmt.Printf("  Chain:   %d operation(s)\n", len(chain.Log))
-				} else {
-					fmt.Printf("Identity:  %s (%s) — not in local relay\n", ctx.IdentityDID, ctx.IdentityName)
-				}
-			} else {
 				if jsonFlag {
-					status["context"] = nil
-					status["identity"] = nil
-					outputJSON(status)
+					outputJSON(map[string]any{"context": nil, "resolved": false, "identity": nil})
 					return nil
 				}
-				fmt.Println("No active context. Use 'dfos use <identity@peer>' or 'dfos identity create'")
+				if len(cfg.Identities) == 0 {
+					fmt.Println("No active context. Use 'dfos identity create --name <name>' to begin.")
+				} else {
+					fmt.Println("No active context. Use 'dfos use <identity[@peer]>' (see 'dfos identity list').")
+				}
+				return nil
 			}
 
-			if ctx != nil && ctx.RelayURL != "" {
-				c := client.New(ctx.RelayURL)
-				info, err := c.GetRelayInfo()
-				if !jsonFlag {
-					label := ctx.RelayURL
-					if r, ok := cfg.Relays[ctx.RelayName]; ok && r.ProfileName != "" {
-						label = r.ProfileName + " (" + ctx.RelayURL + ")"
-					}
-					fmt.Printf("Peer:      %s\n", label)
-					if err == nil {
-						fmt.Printf("  DID:     %s\n", info.DID)
-						fmt.Printf("  Version: %s %s\n", info.Protocol, info.Version)
-						fmt.Printf("  Content: %s  Proof: %s  Write: %s\n", boolYesNo(info.Content), boolYesNo(info.Proof), boolYesNo(info.Write))
+			lr, relayErr := getRelay()
+			var chain *relay.StoredIdentityChain
+			if relayErr == nil && ctx.IdentityDID != "" {
+				chain, _ = lr.Relay.GetIdentity(ctx.IdentityDID)
+			}
+
+			contextStr := ctx.IdentityName + " (local only)"
+			if ctx.RelayName != "" {
+				contextStr = ctx.IdentityName + "@" + ctx.RelayName
+			}
+
+			// Fetch peer health once; both the JSON and human paths render it.
+			var info *client.RelayInfo
+			var infoErr error
+			if ctx.RelayURL != "" {
+				info, infoErr = client.New(ctx.RelayURL).GetRelayInfo()
+			}
+
+			if jsonFlag {
+				status := map[string]any{
+					"context":      contextStr,
+					"resolved":     true,
+					"identity":     ctx.IdentityDID,
+					"identityName": ctx.IdentityName,
+					"peer":         ctx.RelayURL,
+					"peerName":     ctx.RelayName,
+				}
+				if chain != nil {
+					status["operations"] = len(chain.Log)
+				}
+				if ctx.RelayURL != "" {
+					relayObj := map[string]any{"reachable": infoErr == nil}
+					if infoErr == nil {
+						relayObj["did"] = info.DID
+						relayObj["protocol"] = info.Protocol
+						relayObj["version"] = info.Version
+						relayObj["content"] = info.Content
+						relayObj["proof"] = info.Proof
+						relayObj["write"] = info.Write
 					} else {
-						fmt.Printf("  Error:   %s\n", err)
+						relayObj["error"] = infoErr.Error()
 					}
+					status["relay"] = relayObj
+				}
+				outputJSON(status)
+				return nil
+			}
+
+			fmt.Printf("Context:   %s\n", contextStr)
+			if chain != nil {
+				fmt.Printf("Identity:  %s (%s)\n", chain.DID, ctx.IdentityName)
+				totalKeys := len(distinctKeyIDs(chain))
+				haveKeys := countKeysInChain(chain)
+				fmt.Printf("  Keys:    %d/%d (%s)\n", haveKeys, totalKeys, keys.Backend())
+				fmt.Printf("  Chain:   %d operation(s)\n", len(chain.Log))
+			} else {
+				fmt.Printf("Identity:  %s (%s) — not in local relay\n", ctx.IdentityDID, ctx.IdentityName)
+			}
+
+			if ctx.RelayURL != "" {
+				label := ctx.RelayURL
+				if r, ok := cfg.Relays[ctx.RelayName]; ok && r.ProfileName != "" {
+					label = r.ProfileName + " (" + ctx.RelayURL + ")"
+				}
+				fmt.Printf("Peer:      %s\n", label)
+				if infoErr == nil {
+					fmt.Printf("  DID:     %s\n", info.DID)
+					fmt.Printf("  Version: %s %s\n", info.Protocol, info.Version)
+					fmt.Printf("  Content: %s  Proof: %s  Write: %s\n", boolYesNo(info.Content), boolYesNo(info.Proof), boolYesNo(info.Write))
+				} else {
+					fmt.Printf("  Error:   %s\n", infoErr)
 				}
 			}
 			return nil
@@ -292,6 +326,10 @@ func newUseCmd() *cobra.Command {
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
+			if jsonFlag {
+				outputJSON(map[string]string{"context": ctx})
+				return nil
+			}
 			fmt.Printf("Active context set to: %s\n", ctx)
 			return nil
 		},
@@ -309,12 +347,32 @@ func didFromKid(kid string) string {
 	return kid
 }
 
+// distinctKeyIDs returns the unique key ids across all role sets, in
+// controller→auth→assert order. The common production shape is ONE physical key
+// bound to all three roles; counting per-role membership made that read "0/3"
+// (or "3/3"), so tallies dedupe by id and report it as "0/1" / "1/1".
+func distinctKeyIDs(chain *relay.StoredIdentityChain) []string {
+	seen := map[string]bool{}
+	var ids []string
+	add := func(set []protocol.MultikeyPublicKey) {
+		for _, k := range set {
+			if !seen[k.ID] {
+				seen[k.ID] = true
+				ids = append(ids, k.ID)
+			}
+		}
+	}
+	add(chain.State.ControllerKeys)
+	add(chain.State.AuthKeys)
+	add(chain.State.AssertKeys)
+	return ids
+}
+
+// countKeysInChain counts the distinct keys this device actually holds.
 func countKeysInChain(chain *relay.StoredIdentityChain) int {
 	count := 0
-	allKeys := append(append(chain.State.AuthKeys, chain.State.ControllerKeys...), chain.State.AssertKeys...)
-	for _, k := range allKeys {
-		account := chain.DID + "#" + k.ID
-		if keys.HasKey(account) {
+	for _, id := range distinctKeyIDs(chain) {
+		if keys.HasKey(chain.DID + "#" + id) {
 			count++
 		}
 	}

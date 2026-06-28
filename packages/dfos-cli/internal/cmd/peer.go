@@ -117,6 +117,10 @@ func newPeerRemoveCmd() *cobra.Command {
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
+			if jsonFlag {
+				outputJSON(map[string]string{"removed": name})
+				return nil
+			}
 			fmt.Printf("Peer '%s' removed\n", name)
 			return nil
 		},

@@ -31,6 +31,12 @@ func newAPICmd() *cobra.Command {
 			method := strings.ToUpper(args[0])
 			path := args[1]
 
+			switch method {
+			case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+			default:
+				return fmt.Errorf("invalid HTTP method %q\nusage: dfos api <METHOD> <path> (e.g. dfos api GET /proof/v1/stats)", args[0])
+			}
+
 			ctx, _ := resolveCtx()
 			if ctx == nil || ctx.RelayURL == "" {
 				return fmt.Errorf("no peer configured")
