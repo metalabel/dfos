@@ -198,8 +198,9 @@ One line each — run `dfos <command> --help` for flags.
   `--clear-services` are mutually exclusive.
 - **`identity update` has no positional name.** It acts on the active/`--identity`
   identity, signed with a controller key. To target alice: `dfos use alice` first,
-  or `dfos --identity alice identity update …`. (Most other identity subcommands,
-  e.g. `show`/`delete`/`services`/`log`, _do_ take an optional `[name|did]`.)
+  or `dfos --identity alice identity update …`. (The read-only identity subcommands
+  `show`/`keys`/`services`/`delete` take an optional `[name|did]`; `log` and `fetch`
+  **require** the `<name|did>` argument.)
 - **Publishing auto-resolves the creator, not delegates.** `content create --peer`
   and `content publish` auto-publish _your_ identity to the peer first. But a
   **delegated** writer's identity (someone updating via a write credential) must
@@ -237,15 +238,19 @@ URL works; common ones are `https://schemas.dfos.com/post/v1` and
 
 ```bash
 BOB_DID=$(dfos identity show bob --json | jq -r .did)
-CRED=$(dfos credential grant "$CONTENT" "$BOB_DID" --read --json | jq -r .credential)
+GRANT=$(dfos credential grant "$CONTENT" "$BOB_DID" --read --json)
+CRED=$(echo "$GRANT" | jq -r .credential)        # the JWS to hand to bob
+CRED_CID=$(echo "$GRANT" | jq -r .credentialCID) # the id you revoke later
 
 # Bob downloads by presenting the read credential:
 dfos --ctx bob@prod content download "$CONTENT" --credential "$CRED"
 ```
 
-Use `--write` to grant delegated write; `--ttl` to set lifetime (default 24h);
-`--broad` for a wildcard credential covering all of your content. Revoke with
-`dfos credential revoke <credentialCID> [--peer prod]`.
+Flags: `--write` grants delegated write; `--ttl` sets lifetime (default 24h);
+`--scope <contentId>` narrows a grant to one chain; `--broad` issues a wildcard
+credential covering all of your content. Revoke with
+`dfos credential revoke "$CRED_CID" [--peer prod]` — note revocation only blocks
+**future** fetches; a party who already downloaded the content keeps their copy.
 
 ### Delegated write
 
