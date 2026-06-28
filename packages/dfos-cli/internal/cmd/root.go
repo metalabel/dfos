@@ -84,6 +84,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newSyncCmd())
+	root.AddCommand(newSkillCmd())
 
 	return root
 }

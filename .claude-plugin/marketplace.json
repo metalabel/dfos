@@ -1,0 +1,19 @@
+{
+  "name": "metalabel",
+  "owner": {
+    "name": "Metalabel"
+  },
+  "description": "Skills for the DFOS protocol — drive the dfos CLI from Claude Code.",
+  "plugins": [
+    {
+      "name": "dfos",
+      "source": "./plugins/dfos",
+      "description": "Install, configure, and use the DFOS protocol CLI: identities, content chains, credentials, services, and relays.",
+      "homepage": "https://protocol.dfos.com/skill",
+      "repository": "https://github.com/metalabel/dfos",
+      "license": "MIT",
+      "keywords": ["dfos", "did", "cli", "protocol", "identity", "content-addressing"],
+      "category": "productivity"
+    }
+  ]
+}
