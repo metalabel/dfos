@@ -12,18 +12,19 @@ const body = source.replace(/^---\n[\s\S]*?\n---\n/, '');
 ---
 
 <SpecPage
-  title="Claude Code Skill"
-  description="DFOS CLI skill for Claude Code — install, configure, and use the protocol CLI with AI-assisted workflows."
+  title="Agent Skill"
+  description="Agent skill for the DFOS CLI — install into Claude Code or any coding agent to create identities, publish content, issue credentials, and manage relays."
   path="/skill"
   source={source}
   body={body}
   copyLabel="copy skill"
-  copyTitle="Copy full skill file (with frontmatter) for Claude Code"
+  copyTitle="Copy the full skill file (with frontmatter)"
 >
   <div slot="intro" class="skill-install-note">
     <p>
-      This is a <a href="https://docs.anthropic.com/en/docs/claude-code/skills">Claude Code skill</a>
-      for the DFOS CLI. Install it any way you like &mdash; every path delivers the same skill:
+      This is an <a href="https://docs.anthropic.com/en/docs/claude-code/skills">agent skill</a>
+      for the DFOS CLI &mdash; canonical in Claude Code, and installable into any coding agent.
+      Install it any way you like; every path delivers the same skill:
     </p>
     <p><strong>From the CLI</strong> &mdash; recommended; the skill is embedded in the binary, so it always matches your installed version:</p>
     <div class="code-wrap">
