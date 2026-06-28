@@ -78,17 +78,25 @@ func newCredentialGrantCmd() *cobra.Command {
 				return fmt.Errorf("create credential: %w", err)
 			}
 
+			// Surface the credential's CID (its content address) so the holder can
+			// `dfos credential revoke <credentialCID>` without hand-decoding the JWS.
+			credentialCID := ""
+			if h, _, derr := protocol.DecodeJWSUnsafe(token); derr == nil {
+				credentialCID = h.CID
+			}
+
 			if jsonFlag {
 				outputJSON(map[string]any{
-					"credential": token,
-					"action":     action,
-					"resource":   resource,
-					"issuer":     chain.DID,
-					"audience":   subjectDID,
-					"expiresIn":  dur.String(),
+					"credential":    token,
+					"credentialCID": credentialCID,
+					"action":        action,
+					"resource":      resource,
+					"issuer":        chain.DID,
+					"audience":      subjectDID,
+					"expiresIn":     dur.String(),
 				})
 			} else {
-				fmt.Printf("Credential issued (%s %s, expires in %s):\n  %s\n", action, resource, dur, token)
+				fmt.Printf("Credential issued (%s %s, expires in %s):\n  CID: %s\n  %s\n", action, resource, dur, credentialCID, token)
 			}
 			return nil
 		},
