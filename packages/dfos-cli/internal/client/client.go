@@ -80,7 +80,7 @@ type IdentityKey struct {
 
 // GetIdentityState fetches a typed identity response from the relay.
 func (c *Client) GetIdentityState(did string) (*IdentityResponse, error) {
-	resp, err := c.HTTPClient.Get(c.BaseURL + proofBasePath + "/identities/" + did)
+	resp, err := c.HTTPClient.Get(c.BaseURL + proofBasePath + "/identities/" + url.PathEscape(did))
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (c *Client) submitBatch(operations []string) ([]IngestionResult, error) {
 
 // GetIdentity fetches an identity chain from the relay.
 func (c *Client) GetIdentity(did string) (map[string]any, error) {
-	return c.getJSON(proofBasePath + "/identities/" + did)
+	return c.getJSON(proofBasePath + "/identities/" + url.PathEscape(did))
 }
 
 // LogEntry is a single entry from a relay /log endpoint.
@@ -194,13 +194,13 @@ type logPage struct {
 // and returns the ordered JWS tokens ready to Ingest. The /identities/{did}
 // response carries resolved state, NOT the op log, so fetch must use this.
 func (c *Client) GetIdentityLog(did string) ([]string, error) {
-	return c.getLog(proofBasePath + "/identities/" + did + "/log")
+	return c.getLog(proofBasePath + "/identities/" + url.PathEscape(did) + "/log")
 }
 
 // GetContentLog pulls the full operation chain for a content ID, following
 // cursors, and returns the ordered JWS tokens ready to Ingest.
 func (c *Client) GetContentLog(contentID string) ([]string, error) {
-	return c.getLog(proofBasePath + "/content/" + contentID + "/log")
+	return c.getLog(proofBasePath + "/content/" + url.PathEscape(contentID) + "/log")
 }
 
 // getLog walks a paginated /log endpoint via the `after` cursor and returns
@@ -220,7 +220,7 @@ func (c *Client) getLog(path string) ([]string, error) {
 		}
 		if resp.StatusCode == 404 {
 			resp.Body.Close()
-			return nil, fmt.Errorf("not found")
+			return nil, fmt.Errorf("not found: %s", path)
 		}
 		if resp.StatusCode != 200 {
 			body, _ := io.ReadAll(resp.Body)
@@ -248,24 +248,24 @@ func (c *Client) getLog(path string) ([]string, error) {
 
 // GetContent fetches a content chain from the relay.
 func (c *Client) GetContent(contentID string) (map[string]any, error) {
-	return c.getJSON(proofBasePath + "/content/" + contentID)
+	return c.getJSON(proofBasePath + "/content/" + url.PathEscape(contentID))
 }
 
 // GetOperation fetches an operation by CID.
 func (c *Client) GetOperation(cid string) (map[string]any, error) {
-	return c.getJSON(proofBasePath + "/operations/" + cid)
+	return c.getJSON(proofBasePath + "/operations/" + url.PathEscape(cid))
 }
 
 // GetCountersignatures fetches countersignatures for an operation CID.
 func (c *Client) GetCountersignatures(cid string) (map[string]any, error) {
-	return c.getJSON(proofBasePath + "/countersignatures/" + cid)
+	return c.getJSON(proofBasePath + "/countersignatures/" + url.PathEscape(cid))
 }
 
 // UploadBlob uploads a content blob, keyed by the operation CID that
 // introduced the documentCID. The caller must be either the chain creator
 // or the signer of the referenced operation.
 func (c *Client) UploadBlob(contentID string, operationCID string, data []byte, authToken string) error {
-	req, err := http.NewRequest("PUT", c.BaseURL+"/content/"+contentID+"/blob/"+operationCID, bytes.NewReader(data))
+	req, err := http.NewRequest("PUT", c.BaseURL+"/content/"+url.PathEscape(contentID)+"/blob/"+url.PathEscape(operationCID), bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -288,9 +288,9 @@ func (c *Client) UploadBlob(contentID string, operationCID string, data []byte, 
 // DownloadBlob downloads a content blob. If ref is non-empty, downloads blob at
 // that specific operation CID (historical version) instead of chain head.
 func (c *Client) DownloadBlob(contentID string, authToken string, credential string, ref ...string) ([]byte, string, error) {
-	path := "/content/" + contentID + "/blob"
+	path := "/content/" + url.PathEscape(contentID) + "/blob"
 	if len(ref) > 0 && ref[0] != "" {
-		path += "/" + ref[0]
+		path += "/" + url.PathEscape(ref[0])
 	}
 	req, err := http.NewRequest("GET", c.BaseURL+path, nil)
 	if err != nil {
@@ -356,7 +356,7 @@ func (c *Client) getJSON(path string) (map[string]any, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("not found")
+		return nil, fmt.Errorf("not found: %s", path)
 	}
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)

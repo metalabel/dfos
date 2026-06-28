@@ -740,6 +740,7 @@ func newIdentityShowCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				fetchIdentityFromPeerIfRequested(did)
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
 				_, chain2, err := requireIdentity()
@@ -862,6 +863,7 @@ func newIdentityKeysCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				fetchIdentityFromPeerIfRequested(did)
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
 				_, chain2, _ := requireIdentity()
@@ -936,6 +938,7 @@ func newIdentityServicesCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				fetchIdentityFromPeerIfRequested(did)
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
 				_, chain2, _ := requireIdentity()
@@ -1178,6 +1181,42 @@ func newIdentityRemoveCmd() *cobra.Command {
 }
 
 // helpers
+
+// fetchIdentityFromPeerIfRequested best-effort pulls a DID's chain from an
+// explicitly requested --peer into the local store before a read command
+// (show/keys/services) resolves it, so `--peer X` reflects X's state rather
+// than only what is already local. No-op when no --peer is set. Ingest is
+// idempotent, so re-fetching an already-local chain is harmless.
+//
+// Best-effort by design: a peer that is down or doesn't carry the DID must NOT
+// mask a locally-available chain, so failures warn to stderr and fall through
+// to local resolution. This keeps the CLI's local-first contract (content
+// fetch / operation show / countersigs all read local first and only error
+// when local is missing) rather than turning a working local read into a hard
+// error just because --peer was passed.
+func fetchIdentityFromPeerIfRequested(did string) {
+	if peerFlag == "" {
+		return
+	}
+	c, _, err := getPeerClient(peerFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: peer %q unavailable (%v); using local state\n", peerFlag, err)
+		return
+	}
+	log, err := c.GetIdentityLog(did)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: fetch from peer %q failed: %v; using local state\n", peerFlag, err)
+		return
+	}
+	if len(log) == 0 {
+		return
+	}
+	lr, err := getRelay()
+	if err != nil {
+		return
+	}
+	lr.Relay.Ingest(log)
+}
 
 func resolveIdentityDID(nameOrDID string) (string, error) {
 	did := nameOrDID
