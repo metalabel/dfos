@@ -52,6 +52,9 @@ func newCredentialGrantCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("invalid --ttl %q: %w (use Go duration units like 5m, 1h, 24h — note day units like \"1d\" are not supported)", ttl, err)
 			}
+			if dur <= 0 {
+				return fmt.Errorf("--ttl must be positive, got %q (a non-positive TTL mints an already-expired credential)", ttl)
+			}
 
 			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
 			if err != nil {

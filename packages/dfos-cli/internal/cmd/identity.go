@@ -131,8 +131,16 @@ func newIdentityCreateCmd() *cobra.Command {
 
 			// register name in config only after all operations succeed
 			cfg.Identities[name] = config.IdentityConfig{DID: did}
-			if rn != "" && cfg.ActiveContext == "" {
-				cfg.ActiveContext = name + "@" + rn
+			// Select the first identity created so `status`/signing commands work
+			// immediately, instead of leaving the user with "No active context".
+			activated := ""
+			if cfg.ActiveContext == "" {
+				if rn != "" {
+					cfg.ActiveContext = name + "@" + rn
+				} else {
+					cfg.ActiveContext = name
+				}
+				activated = cfg.ActiveContext
 			}
 			if err := config.Save(cfg); err != nil {
 				return err
@@ -147,6 +155,7 @@ func newIdentityCreateCmd() *cobra.Command {
 					"authKey":       authKeyID,
 					"services":      len(services),
 					"publishedTo":   publishedTo,
+					"activeContext": cfg.ActiveContext,
 				})
 			} else {
 				fmt.Printf("Identity created:\n")
@@ -161,6 +170,9 @@ func newIdentityCreateCmd() *cobra.Command {
 					fmt.Printf("  Published to:   %s\n", joinComma(publishedTo))
 				} else {
 					fmt.Printf("  Status:         local only. Use 'dfos identity publish' to push to a peer.\n")
+				}
+				if activated != "" {
+					fmt.Printf("  Active context: %s\n", activated)
 				}
 				fmt.Fprintf(os.Stderr, "\nWarning: key loss is unrecoverable. There is no seed phrase, backup, or recovery flow.\n")
 				fmt.Fprintf(os.Stderr, "         If you lose these keys (%s), control of this identity is gone for good.\n", keys.Backend())
@@ -712,7 +724,7 @@ func newIdentityListCmd() *cobra.Command {
 				if name == "" {
 					name = "-"
 				}
-				totalKeys := len(chain.State.AuthKeys) + len(chain.State.ControllerKeys) + len(chain.State.AssertKeys)
+				totalKeys := len(distinctKeyIDs(&chain))
 				haveKeys := countKeysInChain(&chain)
 				fmt.Printf("%-10s %-36s %d/%-3d %d\n",
 					name, chain.DID, haveKeys, totalKeys, len(chain.Log))
@@ -764,11 +776,14 @@ func newIdentityShowCmd() *cobra.Command {
 			if name != "" {
 				fmt.Printf("Name:        %s\n", name)
 			}
-			totalKeys := len(chain.State.AuthKeys) + len(chain.State.ControllerKeys) + len(chain.State.AssertKeys)
+			totalKeys := len(distinctKeyIDs(chain))
 			haveKeys := countKeysInChain(chain)
 			fmt.Printf("Keys:        %d/%d (%s)\n", haveKeys, totalKeys, keys.Backend())
 			fmt.Printf("Services:    %d\n", len(chain.State.Services))
 			fmt.Printf("Operations:  %d\n", len(chain.Log))
+			if chain.LastCreatedAt != "" {
+				fmt.Printf("Updated:     %s\n", chain.LastCreatedAt)
+			}
 			fmt.Printf("Deleted:     %v\n", chain.State.IsDeleted)
 			return nil
 		},
@@ -866,7 +881,10 @@ func newIdentityKeysCmd() *cobra.Command {
 				fetchIdentityFromPeerIfRequested(did)
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
-				_, chain2, _ := requireIdentity()
+				_, chain2, err := requireIdentity()
+				if err != nil {
+					return err
+				}
 				chain = chain2
 			}
 			if chain == nil {
@@ -899,7 +917,7 @@ func newIdentityKeysCmd() *cobra.Command {
 				label = chain.DID + " (" + name + ")"
 			}
 			fmt.Printf("Identity: %s\n\n", label)
-			fmt.Printf("%-30s %-12s %s\n", "KEY ID", "ROLE", "KEYCHAIN")
+			fmt.Printf("%-30s %-12s %s\n", "KEY ID", "ROLE", "HELD")
 			printKeys := func(mkKeys []protocol.MultikeyPublicKey, role string) {
 				for _, k := range mkKeys {
 					has := "-"
@@ -941,7 +959,10 @@ func newIdentityServicesCmd() *cobra.Command {
 				fetchIdentityFromPeerIfRequested(did)
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
-				_, chain2, _ := requireIdentity()
+				_, chain2, err := requireIdentity()
+				if err != nil {
+					return err
+				}
 				chain = chain2
 			}
 			if chain == nil {
@@ -1006,6 +1027,7 @@ func newIdentityPublishCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "publish [name|did]",
 		Short: "Push identity chain to a peer",
+		Long:  "Push an identity's full operation chain to a peer relay. The target peer is taken from --peer, else the active context's peer; one or the other is required.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			lr, err := getRelay()
@@ -1021,7 +1043,10 @@ func newIdentityPublishCmd() *cobra.Command {
 				}
 				chain, _ = lr.Relay.GetIdentity(did)
 			} else {
-				_, chain2, _ := requireIdentity()
+				_, chain2, err := requireIdentity()
+				if err != nil {
+					return err
+				}
 				chain = chain2
 			}
 			if chain == nil {
@@ -1039,7 +1064,7 @@ func newIdentityPublishCmd() *cobra.Command {
 				}
 			}
 			if rn == "" {
-				return fmt.Errorf("--peer is required")
+				return fmt.Errorf("--peer is required to publish: pass --peer <name> or set an active context with 'dfos use <identity@peer>'")
 			}
 
 			c, _, err := getPeerClient(rn)

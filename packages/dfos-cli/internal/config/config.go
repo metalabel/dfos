@@ -9,35 +9,39 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Config is the top-level configuration.
+// Config is the top-level configuration. JSON tags mirror the TOML snake_case
+// keys so `config list --json` emits the same namespace that `config get`/`set`
+// and the on-disk TOML use (round-trippable via jq), not Go PascalCase fields.
 type Config struct {
-	ActiveContext string                    `toml:"active_context,omitempty"`
-	Relays       map[string]RelayConfig    `toml:"relays,omitempty"`
-	Identities   map[string]IdentityConfig `toml:"identities,omitempty"`
-	Contexts     map[string]ContextConfig  `toml:"contexts,omitempty"`
-	Defaults     DefaultsConfig            `toml:"defaults,omitempty"`
+	ActiveContext string                    `toml:"active_context,omitempty" json:"active_context,omitempty"`
+	Relays        map[string]RelayConfig    `toml:"relays,omitempty" json:"relays,omitempty"`
+	Identities    map[string]IdentityConfig `toml:"identities,omitempty" json:"identities,omitempty"`
+	Contexts      map[string]ContextConfig  `toml:"contexts,omitempty" json:"contexts,omitempty"`
+	// Pointer so an empty Defaults is omitted by both encoders (json omitempty is
+	// a no-op on a struct value, which would otherwise render "defaults":{}).
+	Defaults *DefaultsConfig `toml:"defaults,omitempty" json:"defaults,omitempty"`
 }
 
 type RelayConfig struct {
-	URL         string `toml:"url"`
-	DID         string `toml:"did,omitempty"`          // cached from well-known
-	ProfileName string `toml:"profile_name,omitempty"` // cached from profile artifact
-	Content     *bool  `toml:"content,omitempty"`      // cached capability
-	Proof       *bool  `toml:"proof,omitempty"`        // cached capability
+	URL         string `toml:"url" json:"url"`
+	DID         string `toml:"did,omitempty" json:"did,omitempty"`                   // cached from well-known
+	ProfileName string `toml:"profile_name,omitempty" json:"profile_name,omitempty"` // cached from profile artifact
+	Content     *bool  `toml:"content,omitempty" json:"content,omitempty"`           // cached capability
+	Proof       *bool  `toml:"proof,omitempty" json:"proof,omitempty"`               // cached capability
 }
 
 type IdentityConfig struct {
-	DID string `toml:"did"`
+	DID string `toml:"did" json:"did"`
 }
 
 type ContextConfig struct {
-	Identity string `toml:"identity"`
-	Relay    string `toml:"relay"`
+	Identity string `toml:"identity" json:"identity"`
+	Relay    string `toml:"relay" json:"relay"`
 }
 
 type DefaultsConfig struct {
-	AuthTokenTTL  string `toml:"auth_token_ttl,omitempty"`
-	CredentialTTL string `toml:"credential_ttl,omitempty"`
+	AuthTokenTTL  string `toml:"auth_token_ttl,omitempty" json:"auth_token_ttl,omitempty"`
+	CredentialTTL string `toml:"credential_ttl,omitempty" json:"credential_ttl,omitempty"`
 }
 
 // ResolvedContext is a fully resolved (identity, relay) pair.

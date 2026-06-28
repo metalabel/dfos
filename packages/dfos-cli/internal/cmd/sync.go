@@ -19,21 +19,33 @@ func newSyncCmd() *cobra.Command {
 
 			peerCount := len(cfg.Relays)
 			if peerCount == 0 {
+				if jsonFlag {
+					outputJSON(map[string]any{"peers": 0, "processed": 0, "status": "no_peers"})
+					return nil
+				}
 				fmt.Println("No peers configured. Use 'dfos peer add <name> <url>'")
 				return nil
 			}
 
-			fmt.Printf("Syncing with %d peer(s)...\n", peerCount)
+			if !jsonFlag {
+				fmt.Printf("Syncing with %d peer(s)...\n", peerCount)
+			}
 			if err := lr.Relay.SyncFromPeers(); err != nil {
 				return fmt.Errorf("sync failed: %w", err)
 			}
 
 			unsequenced, _ := lr.Store.CountUnsequenced()
 			if unsequenced > 0 {
-				fmt.Printf("Processing %d pending operations...\n", unsequenced)
+				if !jsonFlag {
+					fmt.Printf("Processing %d pending operations...\n", unsequenced)
+				}
 				lr.Relay.RunSequencerAndGossip()
 			}
 
+			if jsonFlag {
+				outputJSON(map[string]any{"peers": peerCount, "processed": unsequenced, "status": "complete"})
+				return nil
+			}
 			fmt.Println("Sync complete.")
 			return nil
 		},

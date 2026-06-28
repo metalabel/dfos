@@ -78,12 +78,16 @@ func renderOperation(cid, jws, chainType, chainID string) error {
 
 	opType := ""
 	previous := ""
+	created := ""
 	if p != nil {
 		if t, ok := p["type"].(string); ok {
 			opType = t
 		}
 		if prev, ok := p["previousOperationCID"].(string); ok {
 			previous = prev
+		}
+		if c, ok := p["createdAt"].(string); ok {
+			created = c
 		}
 	}
 	signer := ""
@@ -125,6 +129,9 @@ func renderOperation(cid, jws, chainType, chainID string) error {
 	}
 	if signer != "" {
 		fmt.Printf("Signer:      %s\n", signer)
+	}
+	if created != "" {
+		fmt.Printf("Created:     %s\n", created)
 	}
 	if previous != "" {
 		fmt.Printf("Previous:    %s\n", previous)

@@ -49,6 +49,9 @@ func newAuthTokenCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("invalid --ttl %q: %w (use Go duration units like 5m, 1h, 24h — note day units like \"1d\" are not supported)", ttl, err)
 			}
+			if dur <= 0 {
+				return fmt.Errorf("--ttl must be positive, got %q (a non-positive TTL mints an already-expired token)", ttl)
+			}
 
 			c := client.New(ctx.RelayURL)
 			info, err := c.GetRelayInfo()
@@ -78,10 +81,25 @@ func newAuthStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show current auth state",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, _ := resolveCtx()
+			ctx, ctxErr := resolveCtx()
 			if ctx == nil || ctx.IdentityName == "" {
 				if jsonFlag {
-					outputJSON(map[string]any{"authenticated": false})
+					out := map[string]any{"authenticated": false}
+					if cfg.ActiveContext != "" {
+						out["activeContext"] = cfg.ActiveContext
+						if ctxErr != nil {
+							out["error"] = ctxErr.Error()
+						}
+					}
+					outputJSON(out)
+					return nil
+				}
+				if cfg.ActiveContext != "" {
+					reason := "names an unknown identity or peer"
+					if ctxErr != nil {
+						reason = ctxErr.Error()
+					}
+					fmt.Printf("Not authenticated. Active context '%s' cannot be resolved: %s\n", cfg.ActiveContext, reason)
 					return nil
 				}
 				fmt.Println("Not authenticated. Use 'dfos identity create --name <name>' first.")
