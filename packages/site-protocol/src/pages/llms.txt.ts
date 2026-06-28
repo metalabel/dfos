@@ -28,7 +28,7 @@ export const GET: APIRoute = () => {
     '- [Document Gateway](https://protocol.dfos.com/document-gateway): Stateless content-addressed blob store (0.1) — the content plane, with authorization re-derived live from the proof plane',
     '- [CLI](https://protocol.dfos.com/cli): Go command-line interface for managing identities, signing operations, and interacting with relays',
     '- [Deploy](https://protocol.dfos.com/deploy): Run a relay with Docker Compose, Caddy auto-TLS, peering, and container images',
-    '- [Claude Code Skill](https://protocol.dfos.com/skill): AI-assisted CLI workflows — install the DFOS skill for Claude Code',
+    '- [Agent Skill](https://protocol.dfos.com/skill): Drive the DFOS CLI from a coding agent — install into Claude Code or any agent (plugin, npx skills, or the embedded `dfos skill` command)',
     '',
     '## Full Content',
     '',
