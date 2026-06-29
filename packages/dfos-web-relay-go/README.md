@@ -36,15 +36,15 @@ The container generates Ed25519 keys on first boot and persists them in SQLite. 
 
 All configuration is via environment variables:
 
-| Variable            | Default          | Description                                 |
-| ------------------- | ---------------- | ------------------------------------------- |
-| `PORT`              | `8080`           | HTTP listen port                            |
-| `STORE`             | `sqlite`         | Storage backend: `sqlite` or `memory`       |
-| `SQLITE_PATH`       | `/data/relay.db` | Path to SQLite database                     |
-| `RELAY_NAME`        | `DFOS Relay`     | Profile name (shown in well-known endpoint) |
-| `RELAY_DESCRIPTION` | _(empty)_        | Profile description                         |
-| `PEERS`             | _(empty)_        | Peer relay URLs (see below)                 |
-| `SYNC_INTERVAL`     | `30s`            | How often to poll peers for new operations  |
+| Variable            | Default          | Description                                                      |
+| ------------------- | ---------------- | ---------------------------------------------------------------- |
+| `PORT`              | `8080`           | HTTP listen port                                                 |
+| `STORE`             | `sqlite`         | Storage backend: `sqlite` or `memory`                            |
+| `SQLITE_PATH`       | `/data/relay.db` | Path to SQLite database                                          |
+| `RELAY_NAME`        | `DFOS Relay`     | Profile name (shown in well-known endpoint)                      |
+| `RELAY_DESCRIPTION` | _(empty)_        | Profile description                                              |
+| `PEERS`             | _(empty)_        | Peer relay URLs (see below)                                      |
+| `SYNC_INTERVAL`     | `30s`            | How often to poll peers for new operations                       |
 | `CONTENT_FOLLOW`    | `none`           | `eager` = pull & cache granted public document bytes (see below) |
 
 ### Peer Configuration

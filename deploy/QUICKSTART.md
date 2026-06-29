@@ -35,15 +35,15 @@ You should get back a JSON object with the relay's DID and profile.
 All configuration is via environment variables on the `relay` service in
 `docker-compose.yml`.
 
-| Variable        | Default            | Description                                                    |
-| --------------- | ------------------ | -------------------------------------------------------------- |
-| `PORT`          | `4444`             | HTTP listen port inside the container                          |
-| `RELAY_NAME`    | `DFOS Relay`       | Human-readable relay profile name                              |
-| `PEERS`         | _(none)_           | Peer relay URLs to sync from (comma-separated or JSON array)   |
-| `SYNC_INTERVAL` | `30s`              | How often to pull from peers and run the sequencer             |
-| `SQLITE_PATH`   | `~/.dfos/relay.db` | Database file path (set to `/data/relay.db` in the container)  |
-| `RESYNC`        | `false`            | Set to `true` to reset peer cursors on boot for a full re-pull |
-| `CONTENT_FOLLOW`| `none`             | `eager` = also pull & cache the document bytes of public content you're granted to read (see below) |
+| Variable         | Default            | Description                                                                                         |
+| ---------------- | ------------------ | --------------------------------------------------------------------------------------------------- |
+| `PORT`           | `4444`             | HTTP listen port inside the container                                                               |
+| `RELAY_NAME`     | `DFOS Relay`       | Human-readable relay profile name                                                                   |
+| `PEERS`          | _(none)_           | Peer relay URLs to sync from (comma-separated or JSON array)                                        |
+| `SYNC_INTERVAL`  | `30s`              | How often to pull from peers and run the sequencer                                                  |
+| `SQLITE_PATH`    | `~/.dfos/relay.db` | Database file path (set to `/data/relay.db` in the container)                                       |
+| `RESYNC`         | `false`            | Set to `true` to reset peer cursors on boot for a full re-pull                                      |
+| `CONTENT_FOLLOW` | `none`             | `eager` = also pull & cache the document bytes of public content you're granted to read (see below) |
 
 ## Peering
 
