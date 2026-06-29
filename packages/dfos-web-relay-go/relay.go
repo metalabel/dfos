@@ -45,6 +45,18 @@ type Relay struct {
 	// stays correct.
 	reconcileMu    sync.Mutex
 	reconcileCycle map[string]int
+	// materializeMu coalesces content-follow sweeps: both the timer sweep and the
+	// trigger-kicked sweep (fired when the sequencer makes progress) call
+	// MaterializeFollowedContent, and a TryLock here makes a concurrent caller a
+	// no-op rather than a redundant second pass. gcMu does the same for the GC sweep.
+	materializeMu sync.Mutex
+	gcMu          sync.Mutex
+	// blobSourceCooldown is the per-peer circuit breaker for blob pulls: a peer
+	// that fails a fetch with a transport/5xx error (NOT a 404 — that's "ask
+	// elsewhere," not "down") is suppressed until the stored unix-nanos deadline,
+	// so a dead origin isn't hammered once per granted chain every sweep. Keyed by
+	// peer URL → int64 deadline; a sync.Map because sweeps fetch concurrently.
+	blobSourceCooldown sync.Map
 }
 
 // NewRelay creates a new Relay instance. If no identity is provided, a JIT

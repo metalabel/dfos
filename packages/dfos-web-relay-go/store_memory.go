@@ -135,6 +135,13 @@ func (s *MemoryStore) PutBlob(key BlobKey, data []byte) error {
 	return nil
 }
 
+func (s *MemoryStore) DeleteBlob(key BlobKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.blobs, blobKeyStr(key)) // idempotent: deleting a missing key is a no-op
+	return nil
+}
+
 func (s *MemoryStore) GetCountersignatures(operationCID string) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

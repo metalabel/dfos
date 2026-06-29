@@ -203,6 +203,10 @@ type Store interface {
 	// blobs (content plane)
 	GetBlob(key BlobKey) ([]byte, error)
 	PutBlob(key BlobKey, data []byte) error
+	// DeleteBlob removes a stored document blob. A missing key is a no-op (nil
+	// error) — deletion is idempotent. Used by the follower GC sweep to reclaim
+	// bytes whose chain is no longer publicly readable (revoked or deleted).
+	DeleteBlob(key BlobKey) error
 
 	// countersignatures — implementations MUST dedup by witness DID per target CID
 	GetCountersignatures(operationCID string) ([]string, error)
