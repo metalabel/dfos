@@ -51,6 +51,13 @@ type Relay struct {
 	// no-op rather than a redundant second pass. gcMu does the same for the GC sweep.
 	materializeMu sync.Mutex
 	gcMu          sync.Mutex
+	// materializeDirty / gcDirty are the event-driven work queues for content
+	// following. The sequencer records the contentIDs (or a full-scan request) that
+	// new ops make relevant; the sweeps drain them. This is what keeps a steady-
+	// state follower idle instead of re-scanning every chain and re-verifying every
+	// grant on each sync tick. nil unless ContentFollow == "eager".
+	materializeDirty *dirtyQueue
+	gcDirty          *dirtyQueue
 	// blobSourceCooldown is the per-peer circuit breaker for blob pulls: a peer
 	// that fails a fetch with a transport/5xx error (NOT a 404 — that's "ask
 	// elsewhere," not "down") is suppressed until the stored unix-nanos deadline,
@@ -111,6 +118,8 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		peerClient:         opts.PeerClient,
 		maxAuthTokenTTL:    maxAuthTokenTTL,
 		reconcileCycle:     make(map[string]int),
+		materializeDirty:   newDirtyQueue(),
+		gcDirty:            newDirtyQueue(),
 	}, nil
 }
 

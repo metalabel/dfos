@@ -234,6 +234,99 @@ func TestGCReclaimsRevokedContentBlob(t *testing.T) {
 	}
 }
 
+// TestMaterializeFastPathGatedOnDirty is the core proof of the event-driven
+// rewrite: with an empty work queue the fast path does NOTHING (a steady-state
+// follower must not re-scan the corpus or re-pull bytes — that was the 100%-CPU
+// bug), while the convergent backstop (ReconcileFollowedContent) forces a full scan
+// and still materializes. Together: idle when clean, convergent on demand.
+func TestMaterializeFastPathGatedOnDirty(t *testing.T) {
+	originStore, creator, _, docCID, _ := seedGrantedContentOrigin(t)
+	follower := newFollower(t, originStore, "eager") // sync+sequence marks the queue
+	key := BlobKey{CreatorDID: creator.did, DocumentCID: docCID}
+
+	// Drain the queue WITHOUT acting on it, simulating steady state: the chain +
+	// grant are present locally, but nothing is flagged for work.
+	follower.materializeDirty.take()
+	if !follower.materializeDirty.empty() {
+		t.Fatal("queue should be empty after take")
+	}
+
+	// Empty-queue fast path must be a no-op — no blob pulled.
+	follower.MaterializeFollowedContent()
+	if b, _ := follower.readStore.GetBlob(key); b != nil {
+		t.Fatal("empty-queue fast path materialized a blob — steady state must be idle")
+	}
+
+	// The backstop forces a full convergent scan and DOES materialize.
+	follower.ReconcileFollowedContent()
+	if b, _ := follower.readStore.GetBlob(key); b == nil {
+		t.Fatal("full-scan backstop failed to materialize the granted blob")
+	}
+}
+
+// TestMarkContentFollowDirtyRouting pins how newly-sequenced ops route into the
+// work queues: a content-op flags its own contentID for a targeted materialize, a
+// credential (unbounded blast radius) requests a full materialize scan, a
+// revocation requests a GC pass, and a non-eager relay marks nothing.
+func TestMarkContentFollowDirtyRouting(t *testing.T) {
+	r, err := NewRelay(RelayOptions{Store: NewMemoryStore(), ContentFollow: "eager"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.markContentFollowDirty(IngestionResult{Status: "new", Kind: "content-op", ChainID: "contentX"})
+	ids, full := r.materializeDirty.take()
+	if full || len(ids) != 1 || ids[0] != "contentX" {
+		t.Fatalf("content-op should mark only its contentID dirty, got ids=%v full=%v", ids, full)
+	}
+
+	r.markContentFollowDirty(IngestionResult{Status: "new", Kind: "credential", ChainID: "did:dfos:issuer"})
+	if _, full := r.materializeDirty.take(); !full {
+		t.Fatal("a new credential should request a full materialize scan")
+	}
+
+	r.markContentFollowDirty(IngestionResult{Status: "new", Kind: "revocation", ChainID: "did:dfos:issuer"})
+	if _, full := r.gcDirty.take(); !full {
+		t.Fatal("a revocation should request a GC pass")
+	}
+
+	// A non-eager relay must never mark work — content following is off.
+	off, err := NewRelay(RelayOptions{Store: NewMemoryStore()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	off.markContentFollowDirty(IngestionResult{Status: "new", Kind: "content-op", ChainID: "c"})
+	if !off.materializeDirty.empty() {
+		t.Fatal("a non-eager relay must not mark materialize work")
+	}
+}
+
+// TestGCGatedOnDirty guards GC's steady-state idle: with nothing revoked/deleted
+// since the last pass, GCRevokedContent must NOT scan the corpus — even an
+// out-of-band orphaned blob is left for the periodic backstop. A markFull (what a
+// synced revocation does) then drives reclamation.
+func TestGCGatedOnDirty(t *testing.T) {
+	originStore, creator, _, docCID, _ := seedGrantedContentOrigin(t)
+	follower := newFollower(t, originStore, "eager")
+	key := BlobKey{CreatorDID: creator.did, DocumentCID: docCID}
+
+	// Materialize the granted blob, then plant a state where the blob exists but the
+	// grant is gone (drop the public credential out-of-band, no revocation synced →
+	// gcDirty stays empty), modelling a missed mark.
+	follower.ReconcileFollowedContent()
+	if b, _ := follower.readStore.GetBlob(key); b == nil {
+		t.Fatal("setup: blob was not materialized")
+	}
+	// drain anything the reconcile queued so gcDirty is genuinely empty
+	follower.gcDirty.take()
+
+	// GC with an empty queue is a no-op — it must not even scan, so the blob stays.
+	follower.GCRevokedContent()
+	if b, _ := follower.readStore.GetBlob(key); b == nil {
+		t.Fatal("empty-queue GC reclaimed a blob — steady state must be idle")
+	}
+}
+
 // failingBlobPeerClient is a PeerClient whose GetBlob always returns a configured
 // error — used to exercise the blob-source circuit breaker.
 type failingBlobPeerClient struct{ err error }

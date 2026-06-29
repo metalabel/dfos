@@ -17,10 +17,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// contentGCIntervalMultiple sets the content-follow GC cadence as a multiple of
-// the sync interval — GC reclaims revoked/deleted blobs and is far less
-// time-sensitive than materialization, so it runs an order of magnitude slower.
-const contentGCIntervalMultiple = 10
+// contentReconcileIntervalMultiple sets the content-follow backstop cadence as a
+// multiple of the sync interval. Per-tick materialization/GC is event-driven (the
+// sequencer marks dirty contentIDs; trigger-kicks drain them), so this whole-corpus
+// reconcile is only defense-in-depth against a missed mark — it runs deliberately
+// slowly so a steady-state follower stays idle between real changes instead of
+// re-scanning every chain and re-verifying every grant on each tick.
+const contentReconcileIntervalMultiple = 60
 
 func newServeCmd() *cobra.Command {
 	var port string
@@ -182,55 +185,40 @@ All flags support environment variable fallbacks for container deployment:
 						return
 					case <-ticker.C:
 						res := lr.Relay.RunSequencerAndGossip()
-						// Trigger: when the sequencer lands new ops (a public-read
-						// grant or a content commit may be among them), kick a
-						// coalesced materialize sweep so a newly-granted chain's bytes
-						// appear within a tick instead of waiting for the next
-						// materialize interval. Cheap when nothing's relevant — the
-						// sweep skips materialized chains and TryLock-coalesces with
-						// the timer sweep, so a spurious kick is nearly free.
+						// Event-driven trigger: the sequencer has already marked which
+						// contentIDs (or a full scan, for a new grant) the just-sequenced
+						// ops make relevant. These kicks just DRAIN those queues, so a
+						// newly created/granted chain's bytes appear within a tick. Cheap
+						// no-ops when nothing content-relevant landed — a spurious kick
+						// costs a TryLock and an empty-queue check, never a corpus scan.
 						if contentFollow == "eager" && res.Sequenced > 0 {
 							go lr.Relay.MaterializeFollowedContent()
+							go lr.Relay.GCRevokedContent()
 						}
 					}
 				}
 			}()
 
-			// background content-follow sweep (eager mode only): the convergent
-			// materializer. A boot pass catches up every grant already synced, then
-			// the timer reconverges. No-op for already-materialized chains, so it's
-			// cheap once steady-state. Sequencer-independent: it only acts on chains
-			// already in local state, so op-ingest ordering can't race it.
+			// background content-follow backstop (eager mode only): a boot pass
+			// catches up every grant/revocation already synced before the process
+			// started, then a slow periodic full reconcile guarantees convergence
+			// regardless of which dirty marks the event-driven fast path recorded.
+			// The per-tick work is the sequencer trigger above; this timer is
+			// deliberately slow (contentReconcileIntervalMultiple) defense-in-depth,
+			// so a steady-state follower stays idle between real changes. Sequencer-
+			// independent: it only acts on chains already in local state, so op-ingest
+			// ordering can't race it.
 			if contentFollow == "eager" {
 				go func() {
-					lr.Relay.MaterializeFollowedContent()
-					ticker := time.NewTicker(interval)
+					lr.Relay.ReconcileFollowedContent()
+					ticker := time.NewTicker(interval * contentReconcileIntervalMultiple)
 					defer ticker.Stop()
 					for {
 						select {
 						case <-ctx.Done():
 							return
 						case <-ticker.C:
-							lr.Relay.MaterializeFollowedContent()
-						}
-					}
-				}()
-
-				// background GC sweep: reclaim bytes for chains that lost their
-				// public-read grant (revoked) or were deleted/sealed. Runs on a
-				// slower cadence than materialization — revocations are rare and a
-				// revoke-then-regrant flip just re-fetches, so there's no value in
-				// racing it. A boot pass catches up anything revoked while down.
-				go func() {
-					lr.Relay.GCRevokedContent()
-					ticker := time.NewTicker(interval * contentGCIntervalMultiple)
-					defer ticker.Stop()
-					for {
-						select {
-						case <-ctx.Done():
-							return
-						case <-ticker.C:
-							lr.Relay.GCRevokedContent()
+							lr.Relay.ReconcileFollowedContent()
 						}
 					}
 				}()

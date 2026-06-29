@@ -70,6 +70,7 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 				newOps = append(newOps, tokens[i])
 				result.Sequenced++
 				progress = true
+				r.markContentFollowDirty(res)
 			case res.Status == "duplicate":
 				sequencedCIDs = append(sequencedCIDs, rawCID)
 				progress = true

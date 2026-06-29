@@ -47,24 +47,54 @@ func verifyBlobBytes(bytes []byte, wantDocumentCID string) error {
 	return nil
 }
 
-// MaterializeFollowedContent runs one convergent materialization pass: for every
-// content chain this relay holds a standing public-read grant for, ensure its
-// committed document blobs are present locally, pulling any missing ones from
-// peers (bounded concurrency, content-address-verified). Idempotent and safe to
-// call repeatedly — already-present blobs are skipped and transient failures are
-// left for the next pass (the sweep IS the retry). A no-op unless
-// ContentFollow == "eager", and a no-op if another sweep is already in flight
-// (the timer sweep and the trigger-kicked sweep coalesce via materializeMu).
+// markContentFollowDirty records, for one newly-sequenced op, what content-follow
+// work it makes relevant. Called under ingestMu in the sequencer loop, so it only
+// touches the in-memory dirty queues — never any I/O. A no-op unless following.
 //
-// This is the correctness backbone of content following. It converges a follower
-// to "all granted public blobs materialized" regardless of op-ingest ordering: in
-// a sync batch a credential op (sequencer priority 1) is replayed BEFORE the
-// content op it grants (priority 2), so a purely trigger-driven materializer would
-// race the chain into existence — the sweep cannot, because it only ever acts on
-// chains already present in local state. The materialize gate is the SAME
-// predicate as the per-read serve gate (hasPublicStandingAuth), which is what
-// makes revoke correctness-free: a revoked chain stops being swept and its cached
-// bytes become unreachable to readers (GCRevokedContent reclaims the storage).
+//   - content-op (create/update/delete): the chain's own bytes may need pulling, so
+//     mark that contentID for a targeted materialize. A delete leaves stale blobs,
+//     but GC is correctness-free and revocation/delete are rare, so reclamation
+//     rides the periodic GC backstop rather than decoding every content-op here.
+//   - credential: a new public grant's blast radius is unbounded (a broad grant can
+//     authorize many chains), so request a full materialize scan rather than guess
+//     the resource — credentials are rare relative to content-ops.
+//   - revocation: may orphan materialized blobs — request a GC pass.
+func (r *Relay) markContentFollowDirty(res IngestionResult) {
+	if r.contentFollow != contentFollowEager {
+		return
+	}
+	switch res.Kind {
+	case "content-op":
+		r.materializeDirty.markID(res.ChainID) // ChainID is the contentID for content-ops
+	case "credential":
+		r.materializeDirty.markFull()
+	case "revocation":
+		r.gcDirty.markFull()
+	}
+}
+
+// MaterializeFollowedContent drains the materialize work queue: for each contentID
+// the sequencer flagged (or, on a full-scan request, every granted chain), ensure
+// the chain's committed document blobs are present locally, pulling any missing
+// ones from peers (content-address-verified). Idempotent and safe to call
+// repeatedly — already-present blobs are skipped and transient failures are left
+// for the next pass (the sweep IS the retry). A no-op unless ContentFollow ==
+// "eager", a no-op if another sweep is already in flight (TryLock coalesces the
+// trigger-kicked and timer sweeps), and — crucially — a near-instant no-op when the
+// queue is empty, so a steady-state follower sits idle instead of re-scanning every
+// chain and re-verifying every grant on every tick.
+//
+// This is the correctness backbone of content following. The full-scan path
+// converges a follower to "all granted public blobs materialized" regardless of
+// op-ingest ordering: in a sync batch a credential op (sequencer priority 1) is
+// replayed BEFORE the content op it grants (priority 2), so a purely trigger-driven
+// materializer would race the chain into existence — the scan cannot, because it
+// only ever acts on chains already present in local state. The boot catch-up and
+// the periodic backstop both request a full scan, so the event-driven fast path
+// never weakens the convergence guarantee. The materialize gate is the SAME
+// predicate as the per-read serve gate (hasPublicStandingAuth), which is what makes
+// revoke correctness-free: a revoked chain stops being swept and its cached bytes
+// become unreachable to readers (GCRevokedContent reclaims the storage).
 func (r *Relay) MaterializeFollowedContent() {
 	if r.contentFollow != contentFollowEager {
 		return
@@ -78,6 +108,28 @@ func (r *Relay) MaterializeFollowedContent() {
 	}
 	defer r.materializeMu.Unlock()
 
+	// Drain until empty so a burst of ops sequenced during a pass still materializes
+	// this tick. A full-scan request supersedes any pending ids (it covers the whole
+	// corpus), so we run it and return rather than looping.
+	for {
+		ids, full := r.materializeDirty.take()
+		if full {
+			r.materializeAllGrantedChains()
+			return
+		}
+		if len(ids) == 0 {
+			return
+		}
+		for _, contentID := range ids {
+			r.materializeOneChain(contentID)
+		}
+	}
+}
+
+// materializeAllGrantedChains is the convergent whole-corpus pass: pull missing
+// blobs for every content chain a standing public-read grant authorizes. O(corpus)
+// — reserved for boot catch-up and the periodic backstop, NOT the per-tick path.
+func (r *Relay) materializeAllGrantedChains() {
 	chains, err := r.readStore.ListContentChains()
 	if err != nil {
 		r.logger.Warn("materialize: list content chains failed", "error", err)
@@ -106,6 +158,40 @@ func (r *Relay) MaterializeFollowedContent() {
 		}()
 	}
 	wg.Wait()
+}
+
+// materializeOneChain is the targeted fast path: load a single chain by contentID,
+// gate it, and pull its missing blobs. O(1) chains — driven by the sequencer's
+// dirty marks so a freshly created/granted chain materializes within a tick without
+// a whole-corpus scan.
+func (r *Relay) materializeOneChain(contentID string) {
+	chain, err := r.readStore.GetContentChain(contentID)
+	if err != nil || chain == nil {
+		return
+	}
+	if chain.State.IsDeleted {
+		return
+	}
+	if !r.hasPublicStandingAuth(chain.ContentID, "read") {
+		return
+	}
+	r.materializeChainBlobs(*chain)
+}
+
+// ReconcileFollowedContent forces a convergent full pass over both planes:
+// materialize every granted chain's missing blobs and GC every now-unreadable
+// chain's stale blobs. This is the boot catch-up and the periodic backstop behind
+// the event-driven fast path — it guarantees eventual consistency regardless of
+// which dirty marks were or weren't recorded. A no-op unless ContentFollow ==
+// "eager".
+func (r *Relay) ReconcileFollowedContent() {
+	if r.contentFollow != contentFollowEager {
+		return
+	}
+	r.materializeDirty.markFull()
+	r.MaterializeFollowedContent()
+	r.gcDirty.markFull()
+	r.GCRevokedContent()
 }
 
 // materializeChainBlobs ensures every document blob committed by a chain's ops is
@@ -219,6 +305,15 @@ func (r *Relay) GCRevokedContent() {
 		return
 	}
 	defer r.gcMu.Unlock()
+
+	// GC only ever has whole-corpus work (a revocation or delete can orphan blobs
+	// anywhere), and revocation/delete are rare — so the queue is a single "a scan
+	// is warranted" flag. Nothing flagged since the last pass → skip the corpus
+	// scan entirely (the common case). Reclamation is correctness-free, so even if a
+	// mark is missed the periodic backstop catches it.
+	if _, full := r.gcDirty.take(); !full {
+		return
+	}
 
 	chains, err := r.readStore.ListContentChains()
 	if err != nil {
