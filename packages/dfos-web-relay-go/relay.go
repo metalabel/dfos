@@ -190,6 +190,12 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 			} else {
 				newOps = append(newOps, tokens[i])
 				newCount++
+				// Mark content-follow work here too: ops arriving via gossip-push or a
+				// direct client write are sequenced in THIS immediate batch (not the
+				// runSequencerLocked pass below, which then sees them as duplicates), so
+				// without this an eager follower would only materialize them on the slow
+				// reconcile backstop. Mirrors the sequencer-loop marking.
+				r.markContentFollowDirty(res)
 			}
 		case res.Status == "duplicate":
 			if err := r.store.MarkOpsSequenced([]string{rawCID}); err != nil {

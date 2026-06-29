@@ -327,6 +327,35 @@ func TestGCGatedOnDirty(t *testing.T) {
 	}
 }
 
+// TestIngestMarksContentFollowDirty is the regression guard for meshed
+// propagation: ops that arrive via Ingest — a gossip-push from a peer, or a direct
+// client write — are sequenced in Ingest's immediate batch, NOT the pull sequencer
+// (which then sees them as duplicates). If Ingest doesn't mark content-follow work,
+// a meshed eager follower only materializes gossip-delivered content on the slow
+// reconcile backstop, so a write to one lark takes minutes to appear on another.
+func TestIngestMarksContentFollowDirty(t *testing.T) {
+	r, err := NewRelay(RelayOptions{Store: NewMemoryStore(), ContentFollow: "eager"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creator := createTestIdentity(t)
+	contentToken, contentID, _ := createTestContent(t, creator)
+
+	// Deliver via Ingest — the gossip-push / direct-write entry point — not a pull.
+	r.Ingest([]string{creator.token, contentToken})
+
+	ids, _ := r.materializeDirty.take()
+	found := false
+	for _, id := range ids {
+		if id == contentID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Ingest of a content-op did not mark its contentID dirty (got %v) — meshed gossip propagation would stall to the backstop", ids)
+	}
+}
+
 // failingBlobPeerClient is a PeerClient whose GetBlob always returns a configured
 // error — used to exercise the blob-source circuit breaker.
 type failingBlobPeerClient struct{ err error }

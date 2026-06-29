@@ -184,31 +184,40 @@ All flags support environment variable fallbacks for container deployment:
 					case <-ctx.Done():
 						return
 					case <-ticker.C:
-						res := lr.Relay.RunSequencerAndGossip()
-						// Event-driven trigger: the sequencer has already marked which
-						// contentIDs (or a full scan, for a new grant) the just-sequenced
-						// ops make relevant. These kicks just DRAIN those queues, so a
-						// newly created/granted chain's bytes appear within a tick. Cheap
-						// no-ops when nothing content-relevant landed — a spurious kick
-						// costs a TryLock and an empty-queue check, never a corpus scan.
-						if contentFollow == "eager" && res.Sequenced > 0 {
-							go lr.Relay.MaterializeFollowedContent()
-							go lr.Relay.GCRevokedContent()
-						}
+						lr.Relay.RunSequencerAndGossip()
 					}
 				}
 			}()
 
-			// background content-follow backstop (eager mode only): a boot pass
-			// catches up every grant/revocation already synced before the process
-			// started, then a slow periodic full reconcile guarantees convergence
-			// regardless of which dirty marks the event-driven fast path recorded.
-			// The per-tick work is the sequencer trigger above; this timer is
-			// deliberately slow (contentReconcileIntervalMultiple) defense-in-depth,
-			// so a steady-state follower stays idle between real changes. Sequencer-
-			// independent: it only acts on chains already in local state, so op-ingest
-			// ordering can't race it.
 			if contentFollow == "eager" {
+				// Fast drain (eager mode only): every tick, drain whatever the
+				// sequencer marked dirty. The sweeps are near-instant no-ops when the
+				// queues are empty (a TryLock + empty-queue check, never a corpus
+				// scan), so running them every tick is cheap AND robust — it drains
+				// marks made by ANY sequencing path: a peer pull, a gossip-push receive,
+				// or a direct client write. A sequence-count-gated trigger missed the
+				// last two because those ops are already sequenced before the next tick.
+				go func() {
+					ticker := time.NewTicker(interval)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-ticker.C:
+							lr.Relay.MaterializeFollowedContent()
+							lr.Relay.GCRevokedContent()
+						}
+					}
+				}()
+
+				// Convergent backstop: a boot pass catches up every grant/revocation
+				// already synced before the process started, then a slow periodic full
+				// reconcile (contentReconcileIntervalMultiple) guarantees convergence
+				// regardless of which dirty marks the fast path recorded. Deliberately
+				// slow defense-in-depth — a steady-state follower stays idle between
+				// real changes. Sequencer-independent: it only acts on chains already in
+				// local state, so op-ingest ordering can't race it.
 				go func() {
 					lr.Relay.ReconcileFollowedContent()
 					ticker := time.NewTicker(interval * contentReconcileIntervalMultiple)
