@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -82,6 +83,31 @@ func (c *HttpPeerClient) GetContentLog(peerURL, contentID string, after string, 
 		return nil, err
 	}
 	return &page, nil
+}
+
+// GetBlob fetches raw document bytes from peerURL's content plane. The blob
+// route lives at the relay ROOT (not under proofBasePath) — it belongs to the
+// document gateway's own 0.x clock, not the frozen proof plane. Returns the
+// verbatim octet-stream body, capped at maxRequestBodyBytes (the same ceiling
+// the server enforces on PUT) so a hostile/buggy peer can't exhaust memory.
+func (c *HttpPeerClient) GetBlob(peerURL, contentID, ref string) ([]byte, error) {
+	rawURL := strings.TrimRight(peerURL, "/") + "/content/" + url.PathEscape(contentID) + "/blob/" + url.PathEscape(ref)
+	resp, err := c.client.Get(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("peer returned %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxRequestBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxRequestBodyBytes {
+		return nil, fmt.Errorf("peer blob exceeds %d bytes", maxRequestBodyBytes)
+	}
+	return data, nil
 }
 
 func (c *HttpPeerClient) GetOperationLog(peerURL string, after string, limit int) (*PeerLogPage, error) {

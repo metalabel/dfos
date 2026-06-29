@@ -61,6 +61,9 @@ func (c *nullFinalCursorPeerClient) GetContentLog(string, string, string, int) (
 	return nil, nil
 }
 func (c *nullFinalCursorPeerClient) SubmitOperations(string, []string) error { return nil }
+func (c *nullFinalCursorPeerClient) GetBlob(string, string, string) ([]byte, error) {
+	return nil, nil
+}
 
 // TestForwardPullSurvivesNullFinalCursor is the regression for the lark-vs-prod
 // stall: against a peer that returns a null cursor on its final page and rejects
@@ -165,7 +168,8 @@ func (c *cidCursorPeerClient) GetIdentityLog(string, string, string, int) (*Peer
 func (c *cidCursorPeerClient) GetContentLog(string, string, string, int) (*PeerLogPage, error) {
 	return nil, nil
 }
-func (c *cidCursorPeerClient) SubmitOperations(string, []string) error { return nil }
+func (c *cidCursorPeerClient) SubmitOperations(string, []string) error        { return nil }
+func (c *cidCursorPeerClient) GetBlob(string, string, string) ([]byte, error) { return nil, nil }
 
 // TestReconcileRecoversCursorInvisibleOp verifies the bounded anti-entropy
 // scrubber recovers an op the forward pull can never reach: once the relay's

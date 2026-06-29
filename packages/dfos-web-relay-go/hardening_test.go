@@ -34,6 +34,9 @@ func (m *mismatchedCIDPeerClient) GetContentLog(string, string, string, int) (*P
 	return nil, nil
 }
 func (m *mismatchedCIDPeerClient) SubmitOperations(string, []string) error { return nil }
+func (m *mismatchedCIDPeerClient) GetBlob(string, string, string) ([]byte, error) {
+	return nil, nil
+}
 
 func (m *mismatchedCIDPeerClient) GetOperationLog(_ string, _ string, _ int) (*PeerLogPage, error) {
 	if m.served {
@@ -179,6 +182,7 @@ func (g *gossipRecorderPeerClient) GetContentLog(string, string, string, int) (*
 func (g *gossipRecorderPeerClient) GetOperationLog(string, string, int) (*PeerLogPage, error) {
 	return nil, nil
 }
+func (g *gossipRecorderPeerClient) GetBlob(string, string, string) ([]byte, error) { return nil, nil }
 func (g *gossipRecorderPeerClient) SubmitOperations(_ string, ops []string) error {
 	g.submits <- ops
 	return nil
@@ -260,6 +264,7 @@ func (c *chunkRecorderPeerClient) GetContentLog(string, string, string, int) (*P
 func (c *chunkRecorderPeerClient) GetOperationLog(string, string, int) (*PeerLogPage, error) {
 	return nil, nil
 }
+func (c *chunkRecorderPeerClient) GetBlob(string, string, string) ([]byte, error) { return nil, nil }
 func (c *chunkRecorderPeerClient) SubmitOperations(_ string, ops []string) error {
 	c.batches <- len(ops)
 	return nil

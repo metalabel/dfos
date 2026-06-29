@@ -45,6 +45,7 @@ All configuration is via environment variables:
 | `RELAY_DESCRIPTION` | _(empty)_        | Profile description                         |
 | `PEERS`             | _(empty)_        | Peer relay URLs (see below)                 |
 | `SYNC_INTERVAL`     | `30s`            | How often to poll peers for new operations  |
+| `CONTENT_FOLLOW`    | `none`           | `eager` = pull & cache granted public document bytes (see below) |
 
 ### Peer Configuration
 
@@ -65,6 +66,28 @@ Per-peer flags (all default to `true`):
 - `gossip` — push new operations to this peer
 - `readThrough` — fetch from this peer on local 404
 - `sync` — poll this peer's `/log` for background sync
+
+### Content following
+
+The operation log federates the **proof plane** (identities, content chains,
+credentials, revocations — all pushed and gossiped). The **content plane** (the
+document _bytes_) is never gossiped: it's content-addressed and pulled behind a
+grant.
+
+Set `CONTENT_FOLLOW=eager` to turn this relay into a **content follower**. On
+each sync interval it sweeps the content chains it holds a standing public-read
+grant for and pulls any missing document blobs from its peers, verifying each
+against the committed `documentCID` before storing. The relay can then serve that
+public content independently of the origin — an edge cache, not just a proof
+mirror.
+
+- `none` (default) — proof plane only; byte-identical to a non-following node.
+- `eager` — convergent sweep pulls granted public blobs.
+
+Pulling is gated by the same predicate as serving (a standing public-read grant),
+so a revoked grant stops a chain from being served and a non-public chain is never
+followed. Blobs are content-address-verified, so following from an untrusted peer
+is safe. (`lazy` read-through-on-404 is reserved for a future release.)
 
 ## Topology Testing
 

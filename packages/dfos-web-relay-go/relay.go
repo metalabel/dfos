@@ -24,7 +24,8 @@ type Relay struct {
 	profileArtifactJWS string
 	contentEnabled     bool
 	logEnabled         bool
-	writeEnabled       bool // false = LITE pull-only node (POST /operations rejected)
+	writeEnabled       bool   // false = LITE pull-only node (POST /operations rejected)
+	contentFollow      string // "eager" = materialize granted public content blobs; else off
 	logger             *slog.Logger
 	peers              []PeerConfig
 	peerClient         PeerClient
@@ -92,6 +93,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		contentEnabled:     contentEnabled,
 		logEnabled:         logEnabled,
 		writeEnabled:       writeEnabled,
+		contentFollow:      opts.ContentFollow,
 		logger:             logger,
 		peers:              opts.Peers,
 		peerClient:         opts.PeerClient,

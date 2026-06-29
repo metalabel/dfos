@@ -290,7 +290,8 @@ func (s *syncPageClient) GetIdentityLog(string, string, string, int) (*PeerLogPa
 func (s *syncPageClient) GetContentLog(string, string, string, int) (*PeerLogPage, error) {
 	return nil, nil
 }
-func (s *syncPageClient) SubmitOperations(string, []string) error { return nil }
+func (s *syncPageClient) SubmitOperations(string, []string) error        { return nil }
+func (s *syncPageClient) GetBlob(string, string, string) ([]byte, error) { return nil, nil }
 
 func (s *syncPageClient) GetOperationLog(_ string, after string, _ int) (*PeerLogPage, error) {
 	s.callCount++

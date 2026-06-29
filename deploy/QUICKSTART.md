@@ -43,6 +43,7 @@ All configuration is via environment variables on the `relay` service in
 | `SYNC_INTERVAL` | `30s`              | How often to pull from peers and run the sequencer             |
 | `SQLITE_PATH`   | `~/.dfos/relay.db` | Database file path (set to `/data/relay.db` in the container)  |
 | `RESYNC`        | `false`            | Set to `true` to reset peer cursors on boot for a full re-pull |
+| `CONTENT_FOLLOW`| `none`             | `eager` = also pull & cache the document bytes of public content you're granted to read (see below) |
 
 ## Peering
 
@@ -64,6 +65,31 @@ environment:
 The relay pulls new operations from each peer on every sync interval and gossips
 its own sequenced operations back. Peering is additive -- adding a peer never
 removes existing data.
+
+## Content following
+
+By default a relay syncs the **proof plane** -- identity chains, content chains,
+credentials, and revocations all ride the operation log and gossip between peers.
+The **content plane** (the actual document _bytes_ a content chain commits to) is
+_not_ gossiped: it's content-addressed and pulled on demand, gated by a grant.
+
+Set `CONTENT_FOLLOW=eager` to make this relay a **content follower**: on every
+sync interval it sweeps the content chains it holds a standing public-read grant
+for and pulls any document bytes it's missing from its peers, verifying each blob
+against the `documentCID` the chain committed before storing it.
+
+```yaml
+environment:
+  PEERS: 'https://relay-a.example.com'
+  CONTENT_FOLLOW: 'eager'
+```
+
+The result is a relay that can serve public content **independently of its
+origin** -- a real edge cache, not just a proof mirror. Following is safe to turn
+on or off at any time: bytes are only ever pulled for chains you're already
+authorized to read, every blob is content-address-verified, and a revoked grant
+stops the chain from being served (cached bytes simply become unreachable). The
+default (`none`) leaves the relay byte-identical to a proof-only node.
 
 ## Persistence
 
