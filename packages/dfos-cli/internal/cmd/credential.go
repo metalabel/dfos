@@ -25,6 +25,7 @@ func newCredentialGrantCmd() *cobra.Command {
 	var ttl string
 	var scopeContentID string
 	var noScope bool
+	var peerName string
 
 	cmd := &cobra.Command{
 		Use:   "grant <contentId> <did>",
@@ -85,6 +86,44 @@ func newCredentialGrantCmd() *cobra.Command {
 				credentialCID = h.CID
 			}
 
+			// Ingest into the local relay so this machine reflects the grant it just
+			// issued, then push to a peer if one is named (local --peer or the global
+			// flag). A PUBLIC standing grant (aud "*") only takes effect once a relay
+			// ingests it — minting alone leaves it inert — so publishing is what makes
+			// `dfos credential grant ... <peer>` actually authorize reads there.
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+			if results := lr.Relay.Ingest([]string{token}); len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
+			}
+
+			var publishedTo []string
+			rn := peerName
+			if rn == "" {
+				rn = peerFlag
+			}
+			if rn != "" {
+				c, _, err := getPeerClient(rn)
+				if err != nil {
+					return err
+				}
+				// the peer must hold the issuer's identity chain to verify the grant's
+				// signature, so push it first (no-op if already present).
+				if err := publishIdentityIfNeeded(chain, rn, c); err != nil {
+					return err
+				}
+				peerResults, err := c.SubmitOperations([]string{token})
+				if err != nil {
+					return fmt.Errorf("submit: %w", err)
+				}
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
+				}
+				publishedTo = append(publishedTo, rn)
+			}
+
 			if jsonFlag {
 				outputJSON(map[string]any{
 					"credential":    token,
@@ -94,9 +133,15 @@ func newCredentialGrantCmd() *cobra.Command {
 					"issuer":        chain.DID,
 					"audience":      subjectDID,
 					"expiresIn":     dur.String(),
+					"publishedTo":   publishedTo,
 				})
 			} else {
 				fmt.Printf("Credential issued (%s %s, expires in %s):\n  CID: %s\n  %s\n", action, resource, dur, credentialCID, token)
+				if len(publishedTo) > 0 {
+					fmt.Printf("  Published to: %s\n", joinComma(publishedTo))
+				} else {
+					fmt.Printf("  Status:       local only. Pass --peer <name> to publish (a public grant only authorizes reads once a relay ingests it).\n")
+				}
 			}
 			return nil
 		},
@@ -106,6 +151,7 @@ func newCredentialGrantCmd() *cobra.Command {
 	cmd.Flags().StringVar(&ttl, "ttl", "24h", "Credential TTL")
 	cmd.Flags().StringVar(&scopeContentID, "scope", "", "Scope credential to specific content ID")
 	cmd.Flags().BoolVar(&noScope, "broad", false, "Issue wildcard credential covering all content")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Publish the credential to this peer immediately")
 	return cmd
 }
 
