@@ -152,6 +152,14 @@ core is unambiguous across languages.
   content route when `capabilities.content: false`) and the write-disabled suite
   (`scripts/run-write-disabled.sh` — recompute-from-log read-only conformance when
   `capabilities.write: false`).
+- **Content following** is inherently a **two-relay** behavior (a follower materializing an
+  origin's bytes), so it is exercised in the Go relay library's race-tested in-package suite
+  rather than the single-endpoint conformance corpus. An origin and an eager follower are
+  wired over loopback HTTP; the suite asserts the full lifecycle —
+  authorized-but-not-yet-materialized (`200`/`document: null`, blob `404`), then eventual
+  materialization of content-address-verified bytes, then revoke (the serve gate denies
+  while bytes are still cached), then GC reclamation — over the real `HttpPeerClient` and
+  content-plane HTTP routes. See WEB-RELAY.md "Content Following".
 
 ---
 
