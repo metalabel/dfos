@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -82,6 +83,41 @@ func (m *mockPeerClient) GetOperationLog(_ string, after string, limit int) (*Pe
 func (m *mockPeerClient) SubmitOperations(peerURL string, operations []string) error {
 	m.submits <- submitCall{PeerURL: peerURL, Operations: operations}
 	return m.submitErr
+}
+
+// GetBlob serves a document blob from the backing store, resolving ref ("head"
+// or an operationCID) to its documentCID the same way the real readBlob route
+// does, then reading {creatorDID, documentCID} from the store.
+func (m *mockPeerClient) GetBlob(_ string, contentID, ref string) ([]byte, error) {
+	chain, err := m.backingStore.GetContentChain(contentID)
+	if err != nil || chain == nil {
+		return nil, fmt.Errorf("peer returned 404")
+	}
+	var docCID string
+	if ref == "head" {
+		if chain.State.CurrentDocumentCID != nil {
+			docCID = *chain.State.CurrentDocumentCID
+		}
+	} else {
+		for _, jws := range chain.Log {
+			header, payload, derr := dfos.DecodeJWSUnsafe(jws)
+			if derr != nil || header == nil || header.CID != ref {
+				continue
+			}
+			if d, ok := payload["documentCID"].(string); ok {
+				docCID = d
+			}
+			break
+		}
+	}
+	if docCID == "" {
+		return nil, fmt.Errorf("peer returned 404")
+	}
+	data, err := m.backingStore.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: docCID})
+	if err != nil || data == nil {
+		return nil, fmt.Errorf("peer returned 404")
+	}
+	return data, nil
 }
 
 func (m *mockPeerClient) paginateChainLog(log []string, after string, limit int) *PeerLogPage {
@@ -625,6 +661,7 @@ func (r *routingMockPeerClient) GetOperationLog(peerURL string, after string, li
 	return nil, nil
 }
 
+func (r *routingMockPeerClient) GetBlob(string, string, string) ([]byte, error) { return nil, nil }
 func (r *routingMockPeerClient) SubmitOperations(peerURL string, operations []string) error {
 	return nil
 }

@@ -559,13 +559,10 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	var parsed any
-	if err := json.Unmarshal(bytes, &parsed); err != nil {
-		writeError(w, 400, "blob bytes do not match documentCID")
-		return
-	}
-	_, _, computedCID, err := dfos.DagCborCID(parsed)
-	if err != nil || computedCID != documentCID {
+	// Content-address check (shared with the follower materializer): the bytes
+	// must canonically hash to the documentCID the chain committed. Integrity is
+	// the CID alone — no signature over the bytes is needed or wanted.
+	if err := verifyBlobBytes(bytes, documentCID); err != nil {
 		writeError(w, 400, "blob bytes do not match documentCID")
 		return
 	}

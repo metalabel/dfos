@@ -38,6 +38,15 @@ type RelayOptions struct {
 	// token. Zero = default (24h); a negative value disables the ceiling. Applies
 	// only to auth tokens, never to DFOS credentials.
 	MaxAuthTokenTTL time.Duration
+	// ContentFollow controls whether this relay eagerly materializes the document
+	// BYTES of content chains it holds a standing public-read grant for. The op
+	// log federates the authz plane (grants are pushed + gossiped); the bytes are
+	// NOT gossiped — a follower pulls them, content-addressed, behind the grant.
+	// "" or "none" = off (default; byte-identical to today). "eager" = a periodic
+	// convergent sweep pulls any missing granted blobs from peers. An origin (an
+	// authoritative store) already holds its bytes and never follows; a follower
+	// (a cache store, e.g. an edge SQLite node) opts in. See MaterializeFollowedContent.
+	ContentFollow string
 }
 
 // PeerConfig configures a single peer relay.
@@ -61,6 +70,11 @@ type PeerClient interface {
 	GetContentLog(peerURL, contentID string, after string, limit int) (*PeerLogPage, error)
 	GetOperationLog(peerURL string, after string, limit int) (*PeerLogPage, error)
 	SubmitOperations(peerURL string, operations []string) error
+	// GetBlob fetches the raw document bytes a content chain committed at a given
+	// ref ("head" or an operationCID) from a peer's content plane (the document
+	// gateway, root-mounted — not under /proof/v1). Returns the verbatim
+	// octet-stream body; the caller content-address-verifies it before storing.
+	GetBlob(peerURL, contentID, ref string) ([]byte, error)
 }
 
 // PeerLogPage is a paginated log response from a peer.

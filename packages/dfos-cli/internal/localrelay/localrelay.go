@@ -27,6 +27,10 @@ type Options struct {
 	ExtraPeers  []string     // additional peer URLs beyond config.toml
 	Write       *bool        // nil/true = accept writes; false = LITE pull-only node
 	Logger      *slog.Logger // nil = relay's slog.Default(); CLI passes a quiet one
+	// ContentFollow: "eager" = eagerly materialize the document bytes of content
+	// chains this relay holds a standing public-read grant for (a follower / cache
+	// node). "" or "none" = off (default). See relay.RelayOptions.ContentFollow.
+	ContentFollow string
 }
 
 // Open opens (or creates) the local relay database and bootstraps the relay
@@ -77,12 +81,13 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 	}
 
 	r, err := relay.NewRelay(relay.RelayOptions{
-		Store:      store,
-		Identity:   identity,
-		Peers:      peers,
-		PeerClient: peerClient,
-		Write:      opts.Write,
-		Logger:     opts.Logger,
+		Store:         store,
+		Identity:      identity,
+		Peers:         peers,
+		PeerClient:    peerClient,
+		Write:         opts.Write,
+		Logger:        opts.Logger,
+		ContentFollow: opts.ContentFollow,
 	})
 	if err != nil {
 		store.Close()

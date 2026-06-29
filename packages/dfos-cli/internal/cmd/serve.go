@@ -25,6 +25,7 @@ func newServeCmd() *cobra.Command {
 	var peers string
 	var resync bool
 	var noWrite bool
+	var contentFollow string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -33,7 +34,7 @@ func newServeCmd() *cobra.Command {
 Your machine becomes a reachable node in the DFOS network.
 
 All flags support environment variable fallbacks for container deployment:
-  PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, SYNC_INTERVAL`,
+  PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, SYNC_INTERVAL, CONTENT_FOLLOW`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// env-var fallbacks for container deployment
 			if !cmd.Flags().Changed("port") {
@@ -66,10 +67,23 @@ All flags support environment variable fallbacks for container deployment:
 					syncInterval = v
 				}
 			}
+			if !cmd.Flags().Changed("content-follow") {
+				if v := os.Getenv("CONTENT_FOLLOW"); v != "" {
+					contentFollow = v
+				}
+			}
 
 			interval, err := time.ParseDuration(syncInterval)
 			if err != nil {
 				return fmt.Errorf("invalid sync interval: %w", err)
+			}
+
+			// content-follow accepts none|eager today ("lazy" is reserved). Reject
+			// anything else loudly rather than silently disabling on a typo.
+			switch contentFollow {
+			case "", "none", "eager":
+			default:
+				return fmt.Errorf("invalid --content-follow %q (expected: none|eager)", contentFollow)
 			}
 
 			// parse extra peers from flag/env (comma-separated URLs or JSON array)
@@ -85,9 +99,10 @@ All flags support environment variable fallbacks for container deployment:
 
 			// open relay with serve-specific options
 			opts := &localrelay.Options{
-				DBPath:      dbPath,
-				ProfileName: relayName,
-				ExtraPeers:  extraPeers,
+				DBPath:        dbPath,
+				ProfileName:   relayName,
+				ExtraPeers:    extraPeers,
+				ContentFollow: contentFollow,
 			}
 			// LITE pull-only node: reject POST /operations, sync from peers only.
 			if noWrite {
@@ -166,6 +181,27 @@ All flags support environment variable fallbacks for container deployment:
 				}
 			}()
 
+			// background content-follow sweep (eager mode only): the convergent
+			// materializer. A boot pass catches up every grant already synced, then
+			// the timer reconverges. No-op for already-materialized chains, so it's
+			// cheap once steady-state. Sequencer-independent: it only acts on chains
+			// already in local state, so op-ingest ordering can't race it.
+			if contentFollow == "eager" {
+				go func() {
+					lr.Relay.MaterializeFollowedContent()
+					ticker := time.NewTicker(interval)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-ticker.C:
+							lr.Relay.MaterializeFollowedContent()
+						}
+					}
+				}()
+			}
+
 			srv := &http.Server{
 				Addr:    ":" + port,
 				Handler: lr.Relay.Handler(),
@@ -202,6 +238,7 @@ All flags support environment variable fallbacks for container deployment:
 	cmd.Flags().StringVar(&peers, "peers", "", "Comma-separated peer URLs or JSON array (env: PEERS)")
 	cmd.Flags().BoolVar(&resync, "resync", false, "Reset peer cursors for full re-sync on boot (env: RESYNC)")
 	cmd.Flags().BoolVar(&noWrite, "no-write", false, "LITE pull-only node: reject POST /operations, sync from peers only")
+	cmd.Flags().StringVar(&contentFollow, "content-follow", "none", "Materialize granted public content blobs from peers: none|eager (env: CONTENT_FOLLOW)")
 	return cmd
 }
 
