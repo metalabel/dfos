@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css';
+import { primaryNav, headerLabel } from '../data/nav';
 
 interface Props {
   title: string;
@@ -133,16 +134,7 @@ const jsonLd = schema ?? defaultSchema;
           <img src="/dfos-logo-green.svg" alt="DFOS" />
         </a>
         <nav>
-          <a href="/overview">Why</a>
-          <a href="/spec">Spec</a>
-          <a href="/did-method">DID</a>
-          <a href="/content-model">Content</a>
-          <a href="/web-relay">Relay</a>
-          <a href="/cli">CLI</a>
-          <a href="/deploy">Deploy</a>
-          <a href="/skill">Skill</a>
-          <a href="/faq">FAQ</a>
-          <a href="https://github.com/metalabel/dfos">GitHub</a>
+          {primaryNav.map((link) => <a href={link.href}>{headerLabel(link)}</a>)}
         </nav>
         <img src="/key-icon-green.svg" alt="" class="key-icon" />
       </header>
