@@ -28,7 +28,7 @@ All proof plane routes are unauthenticated. The operations themselves carry thei
 
 ### Content Plane (private)
 
-Raw content blobs — the actual documents that content chains commit to via `documentCID`. The content plane never gossips. Blobs are stored by the relay that received them and served only to authorized readers.
+Raw content blobs — the actual documents that content chains commit to via `documentCID`. The content plane never **gossips**: blobs are never pushed on the operation log the way proof-plane operations are. A blob enters a relay one of two ways — it is uploaded to the relay that holds the chain, or it is **pulled** by a relay that is authorized to read it (content-addressed, behind a grant; see [Content Following](#content-following)). Either way a blob is served only to authorized readers, and its integrity is its `documentCID`, so a pulled blob is verified by hash regardless of where it came from.
 
 A relay's content plane **is** a document gateway — the same surface named as a standalone service on its own `0.x` clock. See [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway) for the gateway contract: a stateless, content-addressed blob store whose authorization is re-derived live from the proof plane. The served blob is the document itself — whether terminal (the bytes _are_ the content) or referential (the document points at external bytes, e.g. `ipfs://` or a signed-CDN reference). The relay never resolves a referential pointer; delivery of referenced media is out of protocol.
 
@@ -484,6 +484,19 @@ Revocation artifacts (`typ: did:dfos:revocation`) are ingested via `POST /proof/
 4. Future content plane requests presenting the revoked credential are rejected
 
 Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the revocation payload format.
+
+### Content Following
+
+The operation log federates the **authorization plane**: identity chains, content chains, public-read credentials, and revocations are all pushed and gossiped between peers. The **content plane** — the document _bytes_ — is deliberately not on that wire. A relay MAY nonetheless make those bytes available locally by **following**: pulling the documents of the content chains it is authorized to read, content-addressed and gated by the grant. This turns a relay from a proof mirror into a true edge cache that serves public content **independently of the origin** that authored it.
+
+Following is a per-relay, optional behavior on the content plane's own `0.x` clock; it adds **no wire surface** and changes nothing for a relay that does not opt in. The reference Go relay exposes it as `CONTENT_FOLLOW=eager` (default `none`). The shape, normatively:
+
+- **Pull, not push.** A follower fetches blobs from its peers over the existing public blob route (`GET /content/:contentId/blob[/:ref]`). Blobs are never gossiped; there is no new endpoint.
+- **The materialize gate is the serve gate.** A follower materializes a chain's bytes only while a standing public-read grant authorizes anonymous read of it — the same predicate (`hasPublicStandingAuth`) the serve path checks. So a chain that is private, revoked, or deleted is never followed.
+- **Verified by hash, trustless in source.** Every pulled blob is checked against the `documentCID` the chain committed (its content address) before it is stored. A follower may therefore pull from any peer; a byte that does not hash to its committed CID is rejected.
+- **Eventually consistent.** Authorization arrives instantly (the grant rides the log); the bytes arrive asynchronously. Between the two, a follower that is authorized but has not yet materialized a blob returns `200` with `document: null` on `/documents` (and `404 blob not found` on `/blob`) — the **honest "authorized-but-not-yet-materialized" state**, not an error. A conforming follower converges to serving the bytes; it need not do so instantaneously. See [DOCUMENT-GATEWAY.md → Follower materialization](https://protocol.dfos.com/document-gateway#follower-materialization-0x).
+- **Convergent, ordering-immune.** Following is driven by a sweep over the chains the follower already holds in local state, so it cannot be raced by op-ingest ordering (a credential op sequences before the content op it grants). The sweep is the correctness backbone; low-latency triggers, if any, are an optimization over it.
+- **Revoke is correctness-free; GC is reclamation.** When a grant is revoked, the per-request serve gate immediately makes any cached bytes unreachable — correctness needs nothing more. Reclaiming the now-orphaned bytes (deleting them) is a separate, convergent garbage-collection pass keyed on the same gate, and is purely a storage concern.
 
 ---
 

@@ -245,6 +245,22 @@ This adds **zero proof-plane surface**: it is purely a gateway-side enrichment o
 
 ---
 
+## Follower materialization (0.x)
+
+A gateway holds the bytes for the chains it authored or was uploaded to. A gateway MAY also acquire bytes by **following**: pulling the documents of chains it is authorized to read from peer gateways, so it can serve that content independently of the origin. This is the content-plane counterpart to proof-plane sync — same "authored at origin, verified at the edge" geometry, opposite transport (pull, not gossip), one shared gate.
+
+It is an optional `0.x` behavior that adds **no new route** and is invisible to a gateway that does not opt in. The normative shape:
+
+- **Pull over the existing public blob route.** A follower fetches `GET /content/:contentId/blob/:operationCID` (or `/blob` for the head) from a source gateway. No new endpoint, no new wire field.
+- **Content-addressed, source-agnostic.** Each pulled blob is verified against the `documentCID` the chain committed — the same content-addressing check `PUT` enforces. Integrity is the CID, which is already signed in the proof plane, so a follower may pull from any source and reject anything that does not hash to its committed CID. This is what makes following trustless.
+- **Gated by the same predicate that serves.** A follower materializes a chain's bytes only while a surviving public-read grant authorizes anonymous read of it — the gateway's own download-authorization decision (see [Download authorization](#download-authorization)). A private, revoked, or deleted chain is never followed.
+- **`200 + document: null` is CONFORMANT.** Authorization (the grant) arrives on the proof plane instantly; the bytes arrive asynchronously. A follower that is authorized for a chain but has not yet materialized a document returns `200` with `document: null` on `/documents`, and `404 blob not found` on `/blob`. This is the honest **authorized-but-not-yet-materialized** state, NOT a conformance failure. A conforming follower converges to serving the bytes (it is _eventually_ consistent); a conformance test asserts eventual materialization (poll until served), never instantaneous.
+- **Revoke is correctness-free; GC is reclamation.** The per-request download-authorization decision is re-derived live, so revoking a grant makes any cached bytes immediately unreachable — the gate, not deletion, is what enforces revocation. Deleting the now-orphaned bytes is a separate convergent garbage-collection pass keyed on the same gate; it reclaims storage and is never load-bearing for correctness.
+
+Whether a gateway follows, which sources it pulls from, and how aggressively are deployment choices, not protocol. The reference Go relay exposes following as `CONTENT_FOLLOW=eager` (default `none`); see [WEB-RELAY.md → Content Following](https://protocol.dfos.com/web-relay#content-following).
+
+---
+
 ## What's deferred
 
 - **`DfosManifest`** — a content chain enumerating an identity's documents. Pure discovery, orthogonal to authorization; a gated manifest is just another content chain under the same rules. Out of 0.1 scope.
