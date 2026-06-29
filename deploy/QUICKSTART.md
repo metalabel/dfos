@@ -73,10 +73,13 @@ credentials, and revocations all ride the operation log and gossip between peers
 The **content plane** (the actual document _bytes_ a content chain commits to) is
 _not_ gossiped: it's content-addressed and pulled on demand, gated by a grant.
 
-Set `CONTENT_FOLLOW=eager` to make this relay a **content follower**: on every
-sync interval it sweeps the content chains it holds a standing public-read grant
-for and pulls any document bytes it's missing from its peers, verifying each blob
-against the `documentCID` the chain committed before storing it.
+Set `CONTENT_FOLLOW=eager` to make this relay a **content follower**: it pulls the
+document bytes of any content chain it holds a standing public-read grant for,
+verifying each blob against the `documentCID` the chain committed before storing
+it. Materialization is event-driven — a newly synced grant or content commit is
+pulled within a sync tick — backed by a periodic convergent reconcile that
+guarantees consistency regardless of op ordering. A steady-state follower with
+nothing new to pull sits idle.
 
 ```yaml
 environment:
