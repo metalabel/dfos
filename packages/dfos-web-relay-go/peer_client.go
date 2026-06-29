@@ -19,6 +19,12 @@ import (
 // and stop gossiping to the peer rather than retrying it every cycle.
 var ErrPeerWriteDisabled = errors.New("peer is write-disabled (pull-only)")
 
+// ErrBlobNotFound is returned by GetBlob when a peer responds 404 — the peer is
+// reachable but does not (yet) hold that blob. The materializer uses errors.Is
+// to distinguish this from a transport/5xx failure: a 404 means "try another
+// source," NOT "this peer is down," so it must not trip the source circuit breaker.
+var ErrBlobNotFound = errors.New("peer does not have this blob")
+
 // HttpPeerClient implements PeerClient using HTTP requests.
 type HttpPeerClient struct {
 	client *http.Client
@@ -97,6 +103,9 @@ func (c *HttpPeerClient) GetBlob(peerURL, contentID, ref string) ([]byte, error)
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil, ErrBlobNotFound
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("peer returned %d", resp.StatusCode)
 	}

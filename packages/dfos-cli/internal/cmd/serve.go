@@ -17,6 +17,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// contentGCIntervalMultiple sets the content-follow GC cadence as a multiple of
+// the sync interval — GC reclaims revoked/deleted blobs and is far less
+// time-sensitive than materialization, so it runs an order of magnitude slower.
+const contentGCIntervalMultiple = 10
+
 func newServeCmd() *cobra.Command {
 	var port string
 	var syncInterval string
@@ -176,7 +181,17 @@ All flags support environment variable fallbacks for container deployment:
 					case <-ctx.Done():
 						return
 					case <-ticker.C:
-						lr.Relay.RunSequencerAndGossip()
+						res := lr.Relay.RunSequencerAndGossip()
+						// Trigger: when the sequencer lands new ops (a public-read
+						// grant or a content commit may be among them), kick a
+						// coalesced materialize sweep so a newly-granted chain's bytes
+						// appear within a tick instead of waiting for the next
+						// materialize interval. Cheap when nothing's relevant — the
+						// sweep skips materialized chains and TryLock-coalesces with
+						// the timer sweep, so a spurious kick is nearly free.
+						if contentFollow == "eager" && res.Sequenced > 0 {
+							go lr.Relay.MaterializeFollowedContent()
+						}
 					}
 				}
 			}()
@@ -197,6 +212,25 @@ All flags support environment variable fallbacks for container deployment:
 							return
 						case <-ticker.C:
 							lr.Relay.MaterializeFollowedContent()
+						}
+					}
+				}()
+
+				// background GC sweep: reclaim bytes for chains that lost their
+				// public-read grant (revoked) or were deleted/sealed. Runs on a
+				// slower cadence than materialization — revocations are rare and a
+				// revoke-then-regrant flip just re-fetches, so there's no value in
+				// racing it. A boot pass catches up anything revoked while down.
+				go func() {
+					lr.Relay.GCRevokedContent()
+					ticker := time.NewTicker(interval * contentGCIntervalMultiple)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-ticker.C:
+							lr.Relay.GCRevokedContent()
 						}
 					}
 				}()

@@ -428,6 +428,15 @@ func (s *SQLiteStore) PutBlob(key BlobKey, data []byte) error {
 	return err
 }
 
+func (s *SQLiteStore) DeleteBlob(key BlobKey) error {
+	// Idempotent: deleting a missing row affects zero rows and returns no error.
+	_, err := s.writerDB().Exec(
+		"DELETE FROM blobs WHERE creator_did = ? AND document_cid = ?",
+		key.CreatorDID, key.DocumentCID,
+	)
+	return err
+}
+
 // ---------------------------------------------------------------------------
 // countersignatures
 // ---------------------------------------------------------------------------

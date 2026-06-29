@@ -2,6 +2,8 @@ package relay
 
 import (
 	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,7 +49,7 @@ func TestVerifyBlobBytes(t *testing.T) {
 // the state a producing relay has. Returns the store plus the creator and the
 // committed documentCID. The blob is stored on the origin but NOT carried by the
 // op log (blobs never gossip), which is exactly the gap the materializer closes.
-func seedGrantedContentOrigin(t *testing.T) (store *MemoryStore, creator testIdentity, contentID, docCID string) {
+func seedGrantedContentOrigin(t *testing.T) (store *MemoryStore, creator testIdentity, contentID, docCID, credentialCID string) {
 	t.Helper()
 	store = NewMemoryStore()
 	origin, err := NewRelay(RelayOptions{Store: store})
@@ -72,6 +74,11 @@ func seedGrantedContentOrigin(t *testing.T) (store *MemoryStore, creator testIde
 	if err != nil {
 		t.Fatal(err)
 	}
+	grantHeader, _, err := dfos.DecodeJWSUnsafe(grant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialCID = grantHeader.CID
 
 	origin.Ingest([]string{creator.token, contentToken, grant})
 	origin.RunSequencerAndGossip()
@@ -81,7 +88,7 @@ func seedGrantedContentOrigin(t *testing.T) (store *MemoryStore, creator testIde
 	if err := store.PutBlob(BlobKey{CreatorDID: creator.did, DocumentCID: docCID}, blobBytes); err != nil {
 		t.Fatal(err)
 	}
-	return store, creator, contentID, docCID
+	return store, creator, contentID, docCID, credentialCID
 }
 
 // newFollower builds a follower relay peered to originStore (via the mock peer
@@ -111,7 +118,7 @@ func newFollower(t *testing.T, originStore *MemoryStore, mode string) *Relay {
 // and verifies the document blob on a sweep, going from "authorized but
 // not-yet-materialized" (200 + blob 404) to serving real content.
 func TestMaterializeFollowedContentPullsGrantedBlob(t *testing.T) {
-	originStore, creator, contentID, docCID := seedGrantedContentOrigin(t)
+	originStore, creator, contentID, docCID, _ := seedGrantedContentOrigin(t)
 	follower := newFollower(t, originStore, "eager")
 
 	key := BlobKey{CreatorDID: creator.did, DocumentCID: docCID}
@@ -139,7 +146,7 @@ func TestMaterializeFollowedContentPullsGrantedBlob(t *testing.T) {
 // holding the same grant but with ContentFollow unset (or "none") must NOT pull
 // any bytes — byte-identical to a non-following node.
 func TestMaterializeIsNoOpWhenNotEager(t *testing.T) {
-	originStore, creator, _, docCID := seedGrantedContentOrigin(t)
+	originStore, creator, _, docCID, _ := seedGrantedContentOrigin(t)
 	key := BlobKey{CreatorDID: creator.did, DocumentCID: docCID}
 
 	for _, mode := range []string{"", "none"} {
@@ -178,5 +185,135 @@ func TestMaterializeSkipsUngrantedChain(t *testing.T) {
 
 	if b, _ := follower.readStore.GetBlob(BlobKey{CreatorDID: creator.did, DocumentCID: docCID}); b != nil {
 		t.Fatal("materialized a chain with no standing public-read grant")
+	}
+}
+
+// TestGCReclaimsRevokedContentBlob is the GC-on-revoke proof: a follower
+// materializes a granted chain, the creator revokes the grant, the follower syncs
+// the revocation, and the GC sweep reclaims the now-unreadable blob.
+func TestGCReclaimsRevokedContentBlob(t *testing.T) {
+	originStore, creator, contentID, docCID, credentialCID := seedGrantedContentOrigin(t)
+	follower := newFollower(t, originStore, "eager")
+	key := BlobKey{CreatorDID: creator.did, DocumentCID: docCID}
+
+	// materialize the granted blob
+	follower.MaterializeFollowedContent()
+	if b, _ := follower.readStore.GetBlob(key); b == nil {
+		t.Fatal("setup: blob was not materialized")
+	}
+
+	// the creator revokes the grant; propagate it onto the origin's log
+	creatorKid := creator.did + "#" + creator.auth.keyID
+	revToken, _, err := dfos.SignRevocation(creator.did, credentialCID, creatorKid, creator.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin2, err := NewRelay(RelayOptions{Store: originStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := origin2.Ingest([]string{revToken}); r[0].Status != "new" {
+		t.Fatalf("expected revocation accepted, got %s (%s)", r[0].Status, r[0].Error)
+	}
+	origin2.RunSequencerAndGossip()
+
+	// follower syncs the revocation
+	if err := follower.SyncFromPeers(); err != nil {
+		t.Fatal(err)
+	}
+	follower.RunSequencerAndGossip()
+	if follower.hasPublicStandingAuth(contentID, "read") {
+		t.Fatal("precondition: grant should be revoked on the follower")
+	}
+
+	// GC reclaims the now-unreadable blob; the materialize gate already made it
+	// unreachable, so this is pure storage reclamation.
+	follower.GCRevokedContent()
+	if b, _ := follower.readStore.GetBlob(key); b != nil {
+		t.Fatal("GC did not reclaim the revoked chain's blob")
+	}
+}
+
+// failingBlobPeerClient is a PeerClient whose GetBlob always returns a configured
+// error — used to exercise the blob-source circuit breaker.
+type failingBlobPeerClient struct{ err error }
+
+func (f *failingBlobPeerClient) GetIdentityLog(string, string, string, int) (*PeerLogPage, error) {
+	return nil, nil
+}
+func (f *failingBlobPeerClient) GetContentLog(string, string, string, int) (*PeerLogPage, error) {
+	return nil, nil
+}
+func (f *failingBlobPeerClient) GetOperationLog(string, string, int) (*PeerLogPage, error) {
+	return nil, nil
+}
+func (f *failingBlobPeerClient) SubmitOperations(string, []string) error { return nil }
+func (f *failingBlobPeerClient) GetBlob(string, string, string) ([]byte, error) {
+	return nil, f.err
+}
+
+// TestBlobSourceCircuitBreaker pins the dead-source heuristic: a transport/5xx
+// failure trips the breaker (so a dead origin isn't re-hit per chain every sweep),
+// a 404 does NOT (the peer is reachable, just lacks that blob), and an elapsed
+// cooldown self-clears.
+func TestBlobSourceCircuitBreaker(t *testing.T) {
+	key := BlobKey{CreatorDID: "did:dfos:x", DocumentCID: "bafyDoc"}
+
+	// transport error → breaker trips
+	down, err := NewRelay(RelayOptions{
+		Store: NewMemoryStore(), ContentFollow: "eager",
+		Peers:      []PeerConfig{{URL: "http://dead"}},
+		PeerClient: &failingBlobPeerClient{err: errors.New("connection refused")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if down.blobSourceCoolingDown("http://dead") {
+		t.Fatal("breaker should be closed initially")
+	}
+	down.pullAndStoreBlob("chainX", "opX", key)
+	if !down.blobSourceCoolingDown("http://dead") {
+		t.Fatal("a transport failure must trip the breaker")
+	}
+	// an elapsed deadline self-clears
+	down.blobSourceCooldown.Store("http://dead", time.Now().Add(-time.Second).UnixNano())
+	if down.blobSourceCoolingDown("http://dead") {
+		t.Fatal("an elapsed cooldown must self-clear")
+	}
+
+	// a 404 must NOT trip the breaker
+	missing, err := NewRelay(RelayOptions{
+		Store: NewMemoryStore(), ContentFollow: "eager",
+		Peers:      []PeerConfig{{URL: "http://up"}},
+		PeerClient: &failingBlobPeerClient{err: ErrBlobNotFound},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing.pullAndStoreBlob("chainX", "opX", key)
+	if missing.blobSourceCoolingDown("http://up") {
+		t.Fatal("a 404 must not trip the breaker (the peer is reachable)")
+	}
+}
+
+// TestMaterializeConcurrentCallsAreSafe exercises the bounded-concurrency sweep and
+// the TryLock coalescing under concurrent callers (timer sweep + trigger kick).
+// Run under -race in CI; here it asserts the sweep still converges.
+func TestMaterializeConcurrentCallsAreSafe(t *testing.T) {
+	originStore, creator, _, docCID, _ := seedGrantedContentOrigin(t)
+	follower := newFollower(t, originStore, "eager")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			follower.MaterializeFollowedContent()
+		}()
+	}
+	wg.Wait()
+
+	if b, _ := follower.readStore.GetBlob(BlobKey{CreatorDID: creator.did, DocumentCID: docCID}); b == nil {
+		t.Fatal("concurrent sweeps did not converge to a materialized blob")
 	}
 }
