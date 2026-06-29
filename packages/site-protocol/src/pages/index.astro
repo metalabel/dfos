@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import { navLinks, primaryNav, headerLabel } from '../data/nav';
 ---
 
 <Base
@@ -14,17 +15,7 @@ import Base from '../layouts/Base.astro';
         <img src="/dfos-logo-green.svg" alt="DFOS" />
       </a>
       <nav>
-        <a href="/overview">Why</a>
-        <a href="/spec">Spec</a>
-        <a href="/did-method">DID</a>
-        <a href="/content-model">Content</a>
-        <a href="/credentials">Credentials</a>
-        <a href="/web-relay">Relay</a>
-        <a href="/cli">CLI</a>
-        <a href="/deploy">Deploy</a>
-        <a href="/skill">Skill</a>
-        <a href="/faq">FAQ</a>
-        <a href="https://github.com/metalabel/dfos">GitHub</a>
+        {primaryNav.map((link) => <a href={link.href}>{headerLabel(link)}</a>)}
       </nav>
     </header>
 
@@ -130,24 +121,6 @@ import Base from '../layouts/Base.astro';
       Same deterministic test vectors across all five implementations.
       <a href="/spec">The protocol specification</a> is the single source of truth.
     </p>
-
-    <div class="intent-routing">
-      <a href="#get-started" class="intent-card">
-        <span class="intent-label">B U I L D</span>
-        <span class="intent-title">Install the CLI</span>
-        <span class="intent-desc">One binary. Create identities, sign content, run relays. Linux, macOS, Windows.</span>
-      </a>
-      <a href="/overview" class="intent-card">
-        <span class="intent-label">U N D E R S T A N D</span>
-        <span class="intent-title">Why this exists</span>
-        <span class="intent-desc">The structural condition of platform identity, the dark forest topology, and what falls out of it.</span>
-      </a>
-      <a href="/spec" class="intent-card">
-        <span class="intent-label">E V A L U A T E</span>
-        <span class="intent-title">Read the spec</span>
-        <span class="intent-desc">Chains, services, credentials, CID derivation, verification rules, and deterministic test vectors.</span>
-      </a>
-    </div>
   </section>
 
   <!-- ═══ Key Separator ═══ -->
@@ -405,20 +378,7 @@ dfos serve`} /></pre>
       <img src="/key-icon-green.svg" alt="" class="closing-key" />
       <div class="closing-mark">DFOS Protocol</div>
       <nav class="closing-nav">
-        <a href="/overview">Why</a>
-        <a href="/spec">Spec</a>
-        <a href="/did-method">DID</a>
-        <a href="/content-model">Content</a>
-        <a href="/credentials">Credentials</a>
-        <a href="/web-relay">Relay</a>
-        <a href="/cli">CLI</a>
-        <a href="/deploy">Deploy</a>
-        <a href="/skill">Skill</a>
-        <a href="/threat-model">Threat Model</a>
-        <a href="/conformance">Conformance</a>
-        <a href="/faq">FAQ</a>
-        <a href="https://github.com/metalabel/dfos">GitHub</a>
-        <a href="https://dfos.com">dfos.com</a>
+        {navLinks.filter((link) => link.href !== '/').map((link) => <a href={link.href}>{link.label}</a>)}
       </nav>
       <p class="closing-credits">Yancey &middot; Ilya &middot; Brandon &middot; Lena</p>
       <p class="closing-credits"><a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT License</a> &middot; 2026</p>

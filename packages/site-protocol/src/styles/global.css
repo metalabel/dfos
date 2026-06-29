@@ -1480,7 +1480,7 @@ a.card:hover {
 .credibility-sub {
   font-size: 0.88rem;
   color: var(--teal-dim);
-  margin-bottom: 3.5rem;
+  margin-bottom: 0;
 }
 
 /* ═══ Intent Routing ═══ */
@@ -1696,8 +1696,14 @@ a.card:hover {
 }
 
 @media (max-width: 600px) {
+  /* Keep the trimmed primary spine visible on phones — it wraps cleanly now
+     that it's a short list, where the old 10–11 link nav had to be hidden. */
   .site-header nav {
-    display: none;
+    gap: 0.6rem 0.9rem;
+  }
+
+  .site-header nav a {
+    font-size: 0.78rem;
   }
 
   .anchor {
