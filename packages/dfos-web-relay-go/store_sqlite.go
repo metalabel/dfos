@@ -533,8 +533,15 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 		entries = []LogEntry{}
 	}
 
+	// Return a resume cursor whenever the page has entries — NOT only when it's
+	// full. Gating on len==limit meant the final partial page returned an empty
+	// cursor, so a caught-up puller never advanced past it and re-fetched the whole
+	// tail (up to a full page) every sync cycle forever — pure anti-entropy chatter
+	// (re-decode + re-hash of already-sequenced ops, dedup-dropped). With a cursor on
+	// the final page, the puller advances to the head; its next fetch (seq > last)
+	// returns an empty page and it stops. New ops resume forward from there.
 	var cursor string
-	if len(entries) == limit {
+	if len(entries) > 0 {
 		cursor = entries[len(entries)-1].CID
 	}
 
