@@ -233,7 +233,11 @@ export class MemoryRelayStore implements RelayStore {
     }
 
     const entries = this.operationLog.slice(startIdx, startIdx + params.limit);
-    const cursor = entries.length === params.limit ? entries[entries.length - 1]!.cid : null;
+    // Return a resume cursor whenever the page has entries — NOT only when full — so
+    // a caught-up puller advances past the final partial page instead of re-fetching
+    // the tail every sync cycle (anti-entropy chatter). Its next fetch from this
+    // cursor returns an empty page and it stops. Mirrors the Go twin's ReadLog.
+    const cursor = entries.length > 0 ? entries[entries.length - 1]!.cid : null;
     return { entries, cursor };
   }
 
