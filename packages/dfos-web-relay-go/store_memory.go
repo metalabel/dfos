@@ -219,8 +219,11 @@ func (s *MemoryStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	result := make([]LogEntry, len(entries))
 	copy(result, entries)
 
+	// Return a resume cursor whenever the page has entries (not only when full), so
+	// a caught-up puller advances past the final partial page instead of re-fetching
+	// the tail every cycle. Mirrors SQLiteStore.ReadLog.
 	var cursor string
-	if len(result) == limit {
+	if len(result) > 0 {
 		cursor = result[len(result)-1].CID
 	}
 

@@ -2475,11 +2475,18 @@ describe('web relay', () => {
       expect(body1.entries).toHaveLength(2);
       expect(body1.cursor).not.toBeNull();
 
-      // read with cursor
+      // read with cursor — the final partial page now carries a resume cursor, so a
+      // caught-up puller advances past it instead of re-fetching the tail every cycle
       const res2 = await req(`/proof/v1/log?after=${body1.cursor}`);
       const body2 = await json(res2);
       expect(body2.entries).toHaveLength(1);
-      expect(body2.cursor).toBeNull();
+      expect(body2.cursor).not.toBeNull();
+
+      // fetching from the final cursor returns an empty page (caught up) — not a
+      // re-serve of the tail
+      const res3 = await req(`/proof/v1/log?after=${body2.cursor}`);
+      const body3 = await json(res3);
+      expect(body3.entries).toEqual([]);
     });
 
     it('should handle unknown cursor gracefully', async () => {
