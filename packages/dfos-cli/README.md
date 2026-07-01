@@ -140,44 +140,44 @@ dfos content publish <id> --peer prod   # submit when ready
 
 ## Commands
 
-| Command                     | Description                            |
-| --------------------------- | -------------------------------------- |
-| `identity create`           | Generate keys + sign genesis           |
-| `identity list`             | List all known identities              |
-| `identity show`             | Show identity state                    |
-| `identity keys`             | Show key state + keychain availability |
-| `identity services`         | Show resolved discovery services       |
-| `identity publish`          | Submit to a relay                      |
-| `identity fetch`            | Download from a relay                  |
-| `identity update`           | Rotate keys / set services             |
-| `identity delete`           | Permanently delete identity            |
-| `identity log`              | Show operation history                 |
-| `identity remove`           | Drop a name from config (data stays)   |
-| `content create`            | Create content chain                   |
-| `content show`              | Show content chain state               |
-| `content update`            | Update content chain                   |
-| `content download`          | Download blob                          |
-| `content publish`           | Submit to a relay                      |
-| `content fetch`             | Download from a relay                  |
-| `content log`               | Show operation history                 |
-| `content list`              | List locally stored content chains     |
-| `content delete`            | Permanently delete content chain       |
-| `credential grant`          | Issue read/write credential            |
-| `credential revoke`         | Revoke a credential                    |
-| `content verify`            | Re-verify chain integrity              |
-| `witness`                   | Countersign (solemnize) an operation   |
-| `auth token`                | Mint auth token (stdout)               |
-| `auth status`               | Show auth state                        |
-| `api`                       | Raw HTTP to relay                      |
-| `peer add/remove/list/info` | Manage relays (alias: `relay`)         |
-| `use`                       | Set active context                     |
-| `config list/get/set`       | Manage configuration                   |
-| `status`                    | At-a-glance overview                   |
-| `sync`                      | Sync with all configured relays        |
-| `serve`                     | Run the local relay as an HTTP server  |
-| `operation show`            | Inspect a protocol operation           |
-| `countersigs`               | Show countersignatures for an operation |
+| Command                     | Description                                 |
+| --------------------------- | ------------------------------------------- |
+| `identity create`           | Generate keys + sign genesis                |
+| `identity list`             | List all known identities                   |
+| `identity show`             | Show identity state                         |
+| `identity keys`             | Show key state + keychain availability      |
+| `identity services`         | Show resolved discovery services            |
+| `identity publish`          | Submit to a relay                           |
+| `identity fetch`            | Download from a relay                       |
+| `identity update`           | Rotate keys / set services                  |
+| `identity delete`           | Permanently delete identity                 |
+| `identity log`              | Show operation history                      |
+| `identity remove`           | Drop a name from config (data stays)        |
+| `content create`            | Create content chain                        |
+| `content show`              | Show content chain state                    |
+| `content update`            | Update content chain                        |
+| `content download`          | Download blob                               |
+| `content publish`           | Submit to a relay                           |
+| `content fetch`             | Download from a relay                       |
+| `content log`               | Show operation history                      |
+| `content list`              | List locally stored content chains          |
+| `content delete`            | Permanently delete content chain            |
+| `credential grant`          | Issue read/write credential                 |
+| `credential revoke`         | Revoke a credential                         |
+| `content verify`            | Re-verify chain integrity                   |
+| `witness`                   | Countersign (solemnize) an operation        |
+| `auth token`                | Mint auth token (stdout)                    |
+| `auth status`               | Show auth state                             |
+| `api`                       | Raw HTTP to relay                           |
+| `peer add/remove/list/info` | Manage relays (alias: `relay`)              |
+| `use`                       | Set active context                          |
+| `config list/get/set`       | Manage configuration                        |
+| `status`                    | At-a-glance overview                        |
+| `sync`                      | Sync with all configured relays             |
+| `serve`                     | Run the local relay as an HTTP server       |
+| `operation show`            | Inspect a protocol operation                |
+| `countersigs`               | Show countersignatures for an operation     |
 | `skill print/install`       | Print or install the DFOS Claude Code skill |
-| `version`                   | Show version info                      |
+| `version`                   | Show version info                           |
 
 See [CLI.md](./CLI.md) for the full command reference (flags, examples, and the `--json` contract).
