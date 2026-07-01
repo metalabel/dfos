@@ -56,3 +56,5 @@
   Cache-Control: public, max-age=0, must-revalidate
 /threat-model/
   Cache-Control: public, max-age=0, must-revalidate
+/document-gateway/
+  Cache-Control: public, max-age=0, must-revalidate

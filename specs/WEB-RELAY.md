@@ -280,7 +280,7 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 {
   "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
   "protocol": "dfos-web-relay",
-  "version": "1.4.0",
+  "version": "0.14.4",
   "capabilities": {
     "proof": true,
     "write": true,
@@ -487,7 +487,7 @@ Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfo
 
 ### Content Following
 
-The operation log federates the **authorization plane**: identity chains, content chains, public-read credentials, and revocations are all pushed and gossiped between peers. The **content plane** — the document _bytes_ — is deliberately not on that wire. A relay MAY nonetheless make those bytes available locally by **following**: pulling the documents of the content chains it is authorized to read, content-addressed and gated by the grant. This turns a relay from a proof mirror into a true edge cache that serves public content **independently of the origin** that authored it.
+The operation log federates the **proof plane**: identity chains, content chains, public-read credentials, and revocations are all pushed and gossiped between peers. The **content plane** — the document _bytes_ — is deliberately not on that wire. A relay MAY nonetheless make those bytes available locally by **following**: pulling the documents of the content chains it is authorized to read, content-addressed and gated by the grant. This turns a relay from a proof mirror into a true edge cache that serves public content **independently of the origin** that authored it.
 
 Following is a per-relay, optional behavior on the content plane's own `0.x` clock; it adds **no wire surface** and changes nothing for a relay that does not opt in. The reference Go relay exposes it as `CONTENT_FOLLOW=eager` (default `none`). The shape, normatively:
 

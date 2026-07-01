@@ -113,7 +113,7 @@ The platform holds the user's DID key material in a KMS (Key Management Service)
 2. Platform signs the challenge with the user's KMS-held key.
 3. Platform redirects to `redirect_uri` with the signed JWS and DID.
 
-The KMS key is one of the keys declared in the user's identity chain (`authKeys` or `controllerKeys`). The signature is indistinguishable from any other Ed25519 signature over the challenge — the third party verifies it against the identity chain like any other key.
+The KMS key is one of the user's `authKeys` declared in the identity chain — the authentication key set that verification resolves against (see step 2 below). The signature is indistinguishable from any other Ed25519 signature over the challenge — the third party verifies it against the identity chain like any other key.
 
 The KMS custody model and the platform's session handling are **reference-implementation** details; what is normative is only that the signature is produced by a key declared in the identity chain and verifies under the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile).
 

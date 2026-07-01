@@ -17,7 +17,7 @@ export const faqs: FaqEntry[] = [
   {
     question: 'What problem does it solve?',
     answer:
-      'Your identity and content are rented back to you by the platforms that own it. If a service shuts down or locks your account, everything disappears. The DFOS Protocol makes identity and content provenance self-sovereign — derived from cryptographic keys you control, verifiable by anyone with your public key and any standard EdDSA library.',
+      'Your identity and content are rented back to you by the platforms that own them. If a service shuts down or locks your account, everything disappears. The DFOS Protocol makes identity and content provenance self-sovereign — derived from cryptographic keys you control, verifiable by anyone with your public key and any standard EdDSA library.',
   },
   {
     question: 'What does "dark forest" mean in this context?',

@@ -7,6 +7,13 @@ Keys live in the OS keychain. Operations are signed locally and submitted to [re
 ## Install
 
 ```bash
+# macOS / Linux (recommended)
+curl -sSL https://protocol.dfos.com/install.sh | sh
+
+# Homebrew
+brew install metalabel/tap/dfos
+
+# Go
 go install github.com/metalabel/dfos/packages/dfos-cli/cmd/dfos@latest
 ```
 
@@ -142,6 +149,10 @@ dfos content publish <id> --peer prod   # submit when ready
 | `identity services`         | Show resolved discovery services       |
 | `identity publish`          | Submit to a relay                      |
 | `identity fetch`            | Download from a relay                  |
+| `identity update`           | Rotate keys / set services             |
+| `identity delete`           | Permanently delete identity            |
+| `identity log`              | Show operation history                 |
+| `identity remove`           | Drop a name from config (data stays)   |
 | `content create`            | Create content chain                   |
 | `content show`              | Show content chain state               |
 | `content update`            | Update content chain                   |
@@ -149,6 +160,8 @@ dfos content publish <id> --peer prod   # submit when ready
 | `content publish`           | Submit to a relay                      |
 | `content fetch`             | Download from a relay                  |
 | `content log`               | Show operation history                 |
+| `content list`              | List locally stored content chains     |
+| `content delete`            | Permanently delete content chain       |
 | `credential grant`          | Issue read/write credential            |
 | `credential revoke`         | Revoke a credential                    |
 | `content verify`            | Re-verify chain integrity              |
@@ -160,3 +173,11 @@ dfos content publish <id> --peer prod   # submit when ready
 | `use`                       | Set active context                     |
 | `config list/get/set`       | Manage configuration                   |
 | `status`                    | At-a-glance overview                   |
+| `sync`                      | Sync with all configured relays        |
+| `serve`                     | Run the local relay as an HTTP server  |
+| `operation show`            | Inspect a protocol operation           |
+| `countersigs`               | Show countersignatures for an operation |
+| `skill print/install`       | Print or install the DFOS Claude Code skill |
+| `version`                   | Show version info                      |
+
+See [CLI.md](./CLI.md) for the full command reference (flags, examples, and the `--json` contract).

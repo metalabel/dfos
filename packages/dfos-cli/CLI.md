@@ -466,8 +466,10 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey |
 | `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)        |
 | `POST` | `identity delete`               | Permanently delete identity                 |
-| `POST` | `identity publish [name]`       | Submit identity chain to a relay            |
-| `GET`  | `identity fetch <did>`          | Download identity chain from relay          |
+| `POST` | `identity publish [name\|did]`  | Submit identity chain to a relay            |
+| `GET`  | `identity fetch <did\|name>`    | Download identity chain from relay          |
+| `GET`  | `identity log <name\|did>`      | Show identity operation history             |
+| `DEL`  | `identity remove <name>`        | Drop an identity name from config (data stays in relay) |
 | `GET`  | `content show <id>`             | Show content chain state                    |
 | `GET`  | `content log <id>`              | Show operation history                      |
 | `GET`  | `content download <id>`         | Download blob (stdout or file)              |
@@ -476,11 +478,13 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `content delete <id>`           | Permanently delete content chain            |
 | `POST` | `content publish <id>`          | Submit content chain + blob to a relay      |
 | `GET`  | `content fetch <id>`            | Download content chain from relay           |
+| `GET`  | `content list`                  | List locally stored content chains          |
 | `POST` | `credential grant <id> <did>`   | Issue read/write credential                 |
 | `POST` | `credential revoke <cid>`       | Revoke a credential                         |
 | `GET`  | `content verify <id>`           | Re-verify chain integrity locally           |
 | `POST` | `witness <cid>`                 | Countersign an operation (`--relation`)     |
 | `GET`  | `countersigs <cid>`             | Show countersignatures for an operation     |
+| `GET`  | `operation show <cid>`          | Inspect a protocol operation                |
 | `GET`  | `auth token`                    | Mint short-lived auth token (stdout)        |
 | `GET`  | `auth status`                   | Show current auth state                     |
 | `*`    | `api <METHOD> <path>`           | Raw HTTP to relay with optional `--auth`    |
@@ -490,7 +494,12 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `DEL`  | `peer remove <name>`            | Unregister a relay                          |
 | `SET`  | `use <context>`                 | Set active context                          |
 | `GET`  | `config list`                   | Show full configuration                     |
+| `GET`  | `config get <key>`              | Read a single config value                  |
+| `SET`  | `config set <key> <value>`      | Write a config value                        |
 | `GET`  | `status`                        | At-a-glance overview                        |
+| `POST` | `sync`                          | Sync with all configured relays             |
+| `*`    | `serve`                         | Run the local relay as an HTTP server       |
+| `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`) |
 
 ---
 
@@ -498,5 +507,5 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 
 - **Schema validation**: validate documents against bundled JSON schemas (currently warns on missing `$schema` only)
 - **Key backup/recovery**: mnemonic seed phrases or encrypted export
-- **Shell completion**: cobra generates these, needs testing and docs
+- **Shell completion docs**: `dfos completion <bash|zsh|fish>` ships today (cobra-generated); dedicated setup docs are still pending
 - **Batch refresh** (`identity fetch --all`): re-fetch all tracked remote identities
