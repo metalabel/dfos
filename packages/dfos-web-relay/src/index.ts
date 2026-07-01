@@ -1,6 +1,16 @@
 export { bootstrapRelayIdentity, bootstrapRelayIdentityFromKey } from './bootstrap';
 export { createHttpPeerClient } from './peer-client';
 export { createRelay, chunkOps, type CreatedRelay } from './relay';
+export {
+  isValidDfosDid,
+  identityToDidDocument,
+  resolveDidDocument,
+  type DidDocument,
+  type DidVerificationMethod,
+  type DidServiceEntry,
+  type DidDocumentMetadata,
+  type DidResolutionResult,
+} from './did-document';
 export { MemoryRelayStore } from './store';
 export {
   ingestOperations,

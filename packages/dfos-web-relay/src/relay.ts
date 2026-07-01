@@ -27,6 +27,7 @@ import {
   verifyContentAccess,
 } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
+import { isValidDfosDid, resolveDidDocument } from './did-document';
 import { ingestOperations } from './ingest';
 import { computeOpCID, sequenceOps } from './sequencer';
 import { PROOF_BASE_PATH } from './types';
@@ -368,6 +369,67 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       headCID: chain.headCID,
       state: chain.state,
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // universal DID resolver (DIF-compat, additive, own clock)
+  //
+  // Read-only DID-core projection of the SAME self-certified terminal state the
+  // proof-plane /identities route serves. Mounts at ROOT (not under
+  // PROOF_BASE_PATH) — it rides the frozen v1 surface without touching the wire,
+  // the proof plane, or the parity contract. DIF Universal Resolver HTTP binding:
+  // GET /1.0/identifiers/{did} → { didDocument, didResolutionMetadata,
+  // didDocumentMetadata }. See specs/DID-METHOD.md §4 for the normative mapping.
+  // ---------------------------------------------------------------------------
+  app.get('/1.0/identifiers/:did{.+}', async (c) => {
+    const did = c.req.param('did');
+
+    // reject any non-canonical did:dfos (wrong width/charset/method) — §3.1:63
+    if (!isValidDfosDid(did)) {
+      return c.json(
+        {
+          didDocument: null,
+          didResolutionMetadata: { error: 'invalidDid' },
+          didDocumentMetadata: {},
+        },
+        400,
+      );
+    }
+
+    let chain = await store.getIdentityChain(did);
+
+    // read-through: try peers on local miss (paginate through full log)
+    if (!chain && readThroughPeers.length > 0 && peerClient) {
+      for (const peer of readThroughPeers) {
+        let after: string | undefined;
+        while (true) {
+          const logPage = await peerClient.getIdentityLog(peer.url, did, {
+            ...(after ? { after } : {}),
+            limit: 1000,
+          });
+          if (!logPage || logPage.entries.length === 0) break;
+          await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
+          if (!logPage.cursor) break;
+          after = logPage.cursor;
+        }
+        chain = await store.getIdentityChain(did);
+        if (chain) break;
+      }
+    }
+
+    if (!chain) {
+      return c.json(
+        {
+          didDocument: null,
+          didResolutionMetadata: { error: 'notFound' },
+          didDocumentMetadata: {},
+        },
+        404,
+      );
+    }
+
+    // deactivated identities are NOT an error: 200 with empty VMs + deactivated:true
+    return c.json(resolveDidDocument(chain));
   });
 
   /** Get a content chain log */
