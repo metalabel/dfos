@@ -43,6 +43,9 @@ Your machine becomes a reachable node in the DFOS network.
 
 All flags support environment variable fallbacks for container deployment:
   PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, SYNC_INTERVAL, CONTENT_FOLLOW`,
+		// A long-lived daemon must not hold the process-wide state lock (it
+		// would block every other dfos invocation for its entire run).
+		Annotations: map[string]string{annNoStateLock: "true"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// env-var fallbacks for container deployment
 			if !cmd.Flags().Changed("port") {
