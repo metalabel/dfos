@@ -2,7 +2,7 @@
 
 The sovereign actor in the DFOS architecture. Generates keys, signs operations, stores chains locally, decides what to publish and when. Relays are dumb pipes — the CLI holds the keys.
 
-This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
+This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-cli) · [Protocol](https://protocol.dfos.com)
 

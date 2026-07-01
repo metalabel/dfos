@@ -9,7 +9,7 @@ points at the normative MUST sets already specified in
 [DID-METHOD.md](https://protocol.dfos.com/did-method), and binds each tier to the tests
 that exercise it.
 
-This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
+This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
 
 ---
 

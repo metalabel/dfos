@@ -2,7 +2,7 @@
 
 A stateless, content-addressed blob store whose authorization is a re-verifiable endorsement derived live from the proof plane. The gateway serves the **content plane** — the raw documents that content chains commit to via `documentCID` — and holds no _authoritative_ authorization state of its own (it re-derives every decision live).
 
-This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
+This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
 
 [Protocol](https://protocol.dfos.com) · [Web Relay](https://protocol.dfos.com/web-relay) · [Credentials](https://protocol.dfos.com/credentials)
 

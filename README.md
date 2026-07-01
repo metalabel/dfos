@@ -35,7 +35,7 @@ This repository contains the protocol specification, reference implementations i
 - [Chain verifier](https://verify.dfos.com) — browser-based chain verification tool
 - [DFOS app](https://app.dfos.com) — the platform
 - [npm package](https://www.npmjs.com/package/@metalabel/dfos-protocol) — `@metalabel/dfos-protocol`
-- [clear.txt](https://clear.dfos.com) — the builder and cryptography space on DFOS
+- [DFOS](https://nce.dfos.com) — the builder and cryptography space
 - [dfos.com](https://dfos.com)
 
 ## License

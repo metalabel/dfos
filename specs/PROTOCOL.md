@@ -8,7 +8,7 @@ Verifiable identity and content chains — Ed25519 signatures, content-addressed
 > - **Additive** capability — new optional fields, new service types, the [document gateway](https://protocol.dfos.com/document-gateway) — lands atop frozen v1, never as a break.
 > - A genuine **breaking** change to a frozen field is never a silent v1 edit; it becomes v1.1 or v2.
 >
-> v1 is declared final once independent implementations confirm the spec verifies byte-for-byte from the prose alone. The protocol version is independent of the reference packages: the `@metalabel/dfos-protocol` and `dfos-protocol-go` releases stay on their own `0.x` semver line, so freezing v1 commits the **wire**, not yet a library API. Discuss in the [clear.txt](https://clear.dfos.com) space on DFOS.
+> v1 is declared final once independent implementations confirm the spec verifies byte-for-byte from the prose alone. The protocol version is independent of the reference packages: the `@metalabel/dfos-protocol` and `dfos-protocol-go` releases stay on their own `0.x` semver line, so freezing v1 commits the **wire**, not yet a library API. Discuss in the [DFOS](https://nce.dfos.com) space.
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol) · [npm](https://www.npmjs.com/package/@metalabel/dfos-protocol)
 
