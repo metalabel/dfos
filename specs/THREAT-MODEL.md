@@ -8,7 +8,7 @@ already specified, in prose, across [PROTOCOL.md](https://protocol.dfos.com/spec
 [DID-METHOD.md](https://protocol.dfos.com/did-method), and
 [SIWD.md](https://protocol.dfos.com/siwd), and links each claim back to its source.
 
-This spec is under active review. Discuss it in the [clear.txt](https://clear.dfos.com) space on DFOS.
+This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
 
 ---
 

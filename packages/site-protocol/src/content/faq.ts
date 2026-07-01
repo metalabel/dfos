@@ -86,9 +86,9 @@ export const faqs: FaqEntry[] = [
   {
     question: 'Where can I discuss the protocol?',
     answer:
-      'The specification is open source on GitHub (metalabel/dfos). Protocol discussion happens in the clear.txt space on DFOS.',
+      'The specification is open source on GitHub (metalabel/dfos). Protocol discussion happens in the DFOS space.',
     answerHtml:
-      'The specification is open source on <a href="https://github.com/metalabel/dfos">GitHub</a>. Protocol discussion happens in the <a href="https://clear.dfos.com">clear.txt</a> space on <a href="https://dfos.com">DFOS</a>.',
+      'The specification is open source on <a href="https://github.com/metalabel/dfos">GitHub</a>. Protocol discussion happens in the <a href="https://nce.dfos.com">DFOS</a> space.',
   },
 ];
 
