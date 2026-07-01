@@ -259,6 +259,13 @@ paths:
                             type:
                               type: string
                             serviceEndpoint: {}
+                            label:
+                              type: string
+                              description: >-
+                                Human-readable label, emitted for ContentAnchor
+                                service entries. Unrecognized service types are
+                                preserved verbatim, so additional properties may
+                                appear.
                   didResolutionMetadata:
                     type: object
                     properties:

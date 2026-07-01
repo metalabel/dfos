@@ -781,6 +781,31 @@ describe('web relay', () => {
       });
     });
 
+    it('preserves an unrecognized service type verbatim, re-anchoring only the id', async () => {
+      // §4.5 MUST-ignore-unknown: a type the relay does not recognize keeps all
+      // of its fields; only the entry id is re-anchored to a DID-URL fragment.
+      const id = await createIdentityWithServices([
+        {
+          id: 'gateway',
+          type: 'DfosDocumentGateway',
+          endpoint: 'https://gw.dfos.com',
+          weight: 7,
+        } as unknown as ServiceEntry,
+      ]);
+      await postOps([id.jwsToken]);
+
+      const doc = (await json(await resolve(id.did))).didDocument;
+      const gw = doc.service.find((s: { id: string }) => s.id === `${id.did}#gateway`);
+      expect(gw).toEqual({
+        id: `${id.did}#gateway`,
+        type: 'DfosDocumentGateway',
+        endpoint: 'https://gw.dfos.com',
+        weight: 7,
+      });
+      // NOT mapped into serviceEndpoint (that projection is for recognized types only)
+      expect(gw.serviceEndpoint).toBeUndefined();
+    });
+
     it('omits the service array entirely when there are no services', async () => {
       const id = await createIdentity();
       await postOps([id.jwsToken]);
@@ -813,7 +838,11 @@ describe('web relay', () => {
       expect(body.didDocumentMetadata.deactivated).toBe(true);
       expect(body.didDocumentMetadata.operationCount).toBe(2);
       expect(body.didDocument.verificationMethod).toEqual([]);
+      // §5.4: keyless sealed identity omits every relationship + services
       expect(body.didDocument.authentication).toBeUndefined();
+      expect(body.didDocument.assertionMethod).toBeUndefined();
+      expect(body.didDocument.capabilityInvocation).toBeUndefined();
+      expect(body.didDocument.service).toBeUndefined();
     });
 
     it('returns 404 notFound for an unknown but well-formed did', async () => {

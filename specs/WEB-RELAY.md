@@ -61,10 +61,11 @@ Every proof plane route is namespaced under a single prefix, **`/proof/v1`**:
 
 The prefix encodes the plane and its version (`{plane}/{version}`), so the proof plane's version clock is legible in the URL and the plane mounts or proxies as a unit by prefix. The proof routes are **frozen with protocol v1** — a relay MUST serve them at exactly these paths.
 
-Two route families deliberately stay at the root, on their own clocks:
+Three route families deliberately stay at the root, on their own clocks:
 
 - **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and the relay's own release version.
 - **Content plane routes** (`/content/:contentId/blob[/:ref]`, `/content/:contentId/documents`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` and `/content/:contentId/documents` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
+- **Universal resolver** (`GET /1.0/identifiers/:did`) — the DID-core / DIF Universal Resolver binding on its own `1.0` clock (the DIF driver interface version, [DID-METHOD.md](https://protocol.dfos.com/did-method) §5.2.4). It is an additive, read-only projection of the same self-certified terminal state the proof plane serves at `/proof/v1/identities/:did`, rendered as a W3C DID Document. It stays at the root because it tracks the DIF driver clock, not the frozen proof plane.
 
 ---
 

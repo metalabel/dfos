@@ -47,7 +47,7 @@ serve({ port: 4444 });
 | `GET`  | `/proof/v1/operations/:cid`                   | Get a single operation by CID                               |
 | `GET`  | `/proof/v1/countersignatures/:cid`            | Get countersignatures for an operation                      |
 | `GET`  | `/proof/v1/operations/:cid/countersignatures` | Same as above (alias)                                       |
-| `GET`  | `/1.0/identifiers/:did`                       | Resolve a `did:dfos` to a W3C DID Document (DIF-compat)      |
+| `GET`  | `/1.0/identifiers/:did`                       | Resolve a `did:dfos` to a W3C DID Document (DIF-compat)     |
 | `PUT`  | `/content/:contentId/blob/:operationCID`      | Upload blob (auth required)                                 |
 | `GET`  | `/content/:contentId/blob`                    | Download blob at head (standing auth, or auth + credential) |
 | `GET`  | `/content/:contentId/blob/:ref`               | Download blob at specific operation ref                     |
