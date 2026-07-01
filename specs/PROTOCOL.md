@@ -552,7 +552,7 @@ When `enforceAuthorization` is enabled on content chain verification:
 3. **Different DID signs**: Must include an `authorization` field containing a valid DFOS credential where:
    - The delegation chain roots at the chain creator DID
    - The credential's `att` includes an entry with `action: "write"` covering this chain's resource
-   - The credential is temporally valid (`iat <= op.createdAt < exp`, not wall clock)
+   - The credential is temporally valid (`iat <= now_s < exp`, where `now_s = floor(op.createdAt_ms / 1000)` — the operation's own timestamp, not wall clock; see CREDENTIALS.md)
 
 The `authorization` field is available on `update` and `delete` content operations. It is absent for creator-signed operations.
 

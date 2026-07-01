@@ -104,7 +104,7 @@ Public credentials (`aud: "*"`) are ordinary proof-plane operations — they ent
 
 The gateway derives these grants from the proof-plane operation log it already reads (see [Public-read discovery](#public-read-discovery-0x) for how it then hands them to a public-read caller). Crucially, the gateway works from the **credentials themselves**, not a pre-chewed `publiclyReadable: true`. The proof plane provides _data_; the gateway makes the _decision_ by re-verifying through the unified verifier. The proof plane never makes an authorization judgment the gateway blindly trusts — a malformed or revoked credential is rejected by the verifier. This keeps the verifier honest and composable.
 
-A public grant may name `chain:<contentId>` (this chain) or `chain:*` (all of the issuer's chains). Either way it MUST root at the content creator to authorize. Public credentials SHOULD be read-scoped — a public `write` grant is a world-writable bearer token (see [CREDENTIALS.md → `aud: "*"` + write](https://protocol.dfos.com/credentials#security-aud--write--a-world-writable-bearer-grant)).
+A public grant may name `chain:<contentId>` (this chain) or `chain:*` (all of the issuer's chains). Either way it MUST root at the content creator to authorize. Public credentials SHOULD be read-scoped — a public `write` grant is a world-writable bearer token (see [CREDENTIALS.md → `aud: "*"` + write](https://protocol.dfos.com/credentials#security-aud-quotquot--write--a-world-writable-bearer-grant)).
 
 ---
 

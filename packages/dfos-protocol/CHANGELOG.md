@@ -11,6 +11,81 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
+## [0.14.4] — 2026-06-30
+
+No protocol-package changes. Lockstep release with a CLI fix: concurrent `dfos`
+invocations now serialize on a cross-process state lock, closing a config/keystore
+write race under parallel `identity create` (#138).
+
+## [0.14.3] — 2026-06-29
+
+No protocol-package changes. Lockstep release with a relay fix: the operation-log
+endpoint returns a resume cursor on its final (partial) page, ending the
+anti-entropy tail re-pull between meshed relays (#137).
+
+## [0.14.2] — 2026-06-29
+
+No protocol-package changes. Lockstep release with a relay fix: gossip-pushed and
+directly-written content now materializes on follower relays (#136).
+
+## [0.14.1] — 2026-06-29
+
+No protocol-package changes. Lockstep release with relay/CLI fixes: event-driven
+content materialization removes the follower's steady-state CPU peg (#134), and
+`credential grant` now actually publishes the minted credential (#135).
+
+## [0.14.0] — 2026-06-29
+
+No protocol-package changes. Lockstep release that introduces the **content plane**
+on the reference relay — all additive, atop frozen v1: eager content-byte
+materialization for followers (`CONTENT_FOLLOW`, #131), follow hardening with
+triggers / circuit-breaker / GC (#132), real-HTTP content-following conformance
+(#133), and a batch of relay anti-entropy fixes (#116–#120).
+
+## [0.13.6] — 2026-06-28
+
+### Added
+
+- **did:dfos well-formedness validation** — malformed and non-canonical-width DIDs
+  are rejected at parse time, identically in TS and Go. Valid v1 DIDs are
+  unaffected; the 31-character canonical width is unchanged. (#122)
+
+## [0.13.3] – [0.13.5] — 2026-06-26
+
+No protocol-package changes. Lockstep releases with relay, site, and CLI work
+(profile content chains, write-disabled conformance, deploy fixes).
+
+## [0.13.2] — 2026-06-25
+
+### Changed
+
+- **`profile/v1` content schema** is now `{name?, description?, links?}` — media
+  fields dropped, a `links` array added. This is a content-model vocabulary change
+  on the schema library's own `0.x` clock, not a core-wire change. (#115)
+
+## [0.13.1] — 2026-06-25
+
+No protocol-package changes. Lockstep release with a relay packaging fix (inline
+version; drop `createRequire(import.meta.url)`, #114).
+
+## [0.13.0] — 2026-06-24
+
+The final **pre-v1-freeze breaking pass**: the v1 wire surface is narrowed and the
+last cross-implementation determinism forks are pinned, after which the v1 core is
+frozen. Every entry is a pre-v1 breaking wire change — adopting it requires a corpus
+re-mint, never an automatic update.
+
+### Changed
+
+- **[BREAKING]** Narrowed the v1 wire surface: dropped the `note` field, relabeled
+  `baseDocumentCID`, and pinned + tightened the anchor grammar, so TS and Go agree
+  by construction. (#110)
+- **[BREAKING]** Converged credential `action` canonicalization — TS now drops empty
+  elements to match Go — and pinned the grammar normatively. (#107)
+- Pinned three determinism grammars normatively as v1-freeze preparation (#104), and
+  corrected the delegation depth-limit wording to **16 credentials, not 16 hops**
+  (#102).
+
 ## [0.12.0] — 2026-06-23
 
 Completes the proof-layer **bounds refactor**: the per-field string-length caps
@@ -86,7 +161,18 @@ update.
 Baseline of this changelog. Earlier history predates the changelog and is
 recorded in the git log and GitHub releases.
 
-[Unreleased]: https://github.com/metalabel/dfos/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/metalabel/dfos/compare/v0.14.4...HEAD
+[0.14.4]: https://github.com/metalabel/dfos/compare/v0.14.3...v0.14.4
+[0.14.3]: https://github.com/metalabel/dfos/compare/v0.14.2...v0.14.3
+[0.14.2]: https://github.com/metalabel/dfos/compare/v0.14.1...v0.14.2
+[0.14.1]: https://github.com/metalabel/dfos/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/metalabel/dfos/compare/v0.13.6...v0.14.0
+[0.13.6]: https://github.com/metalabel/dfos/compare/v0.13.5...v0.13.6
+
+[0.13.3] – [0.13.5]: https://github.com/metalabel/dfos/compare/v0.13.2...v0.13.5
+[0.13.2]: https://github.com/metalabel/dfos/compare/v0.13.1...v0.13.2
+[0.13.1]: https://github.com/metalabel/dfos/compare/v0.13.0...v0.13.1
+[0.13.0]: https://github.com/metalabel/dfos/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/metalabel/dfos/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/metalabel/dfos/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/metalabel/dfos/compare/v0.9.0...v0.10.0

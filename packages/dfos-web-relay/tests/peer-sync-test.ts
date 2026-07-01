@@ -7,7 +7,7 @@ import { createRelay } from '../src/relay';
 import { serve } from '../src/serve';
 import { MemoryRelayStore } from '../src/store';
 
-const PEER_URL = process.argv[2] || 'https://relay.atx.lark717.xyz';
+const PEER_URL = process.argv[2] || 'https://relay.dfos.com';
 const PORT = 4455;
 
 const store = new MemoryRelayStore();

@@ -278,7 +278,7 @@ After deactivation:
 
 Deactivation is **reversible by the controller, and only by the controller**. Because the web relay accepts forks (see WEB-RELAY.md, _Fork Acceptance_), a current controller MAY supersede a delete by forking from a pre-delete operation with a higher `createdAt`; deterministic head selection then makes the non-deleted branch the head and resolution reports `deactivated: false`. The original `delete` remains permanently in the log on a non-head branch.
 
-This is a deliberate consequence of the fork-convergence model: a controller cannot permanently brick an identity it controls by a mistaken delete, while **no external party can ever reactivate (or extend) an identity** — every operation, `delete` and undelete alike, must be signed by a current controller key (Section 6.3). Treating deactivation as a true protocol-level seal against the holder's own forks — and the adversarial cases that motivates — is out of scope for this revision and deferred to future work.
+This is a deliberate consequence of the fork-convergence model: a controller cannot permanently brick an identity it controls by a mistaken delete, while **no external party can ever reactivate (or extend) an identity** — every operation, `delete` and undelete alike, must be signed by a current controller key (Section 6.3). Treating deactivation as a true protocol-level seal against the holder's own forks — and the adversarial cases that motivate it — is out of scope for this revision and deferred to future work.
 
 ---
 
