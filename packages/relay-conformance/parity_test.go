@@ -38,6 +38,8 @@ type parityFixture struct {
 	Ops             []string `json:"ops"`
 	QueryDID        string   `json:"queryDid"`
 	QueryContentID  string   `json:"queryContentId"`
+	QueryServiceDID string   `json:"queryServiceDid"`
+	QueryDeletedDID string   `json:"queryDeletedDid"`
 }
 
 func loadParityEnv(t *testing.T) (tsURL, goURL string, fix parityFixture) {
@@ -184,9 +186,10 @@ func TestDualRelayParity(t *testing.T) {
 	postOps(t, tsURL, allOps)
 	postOps(t, goURL, allOps)
 
-	// Expected accepted entries: bootstrap (2) + 5 of the 6 user ops. The
-	// content UPDATE chains onto the create, the artifact + credential + 2
-	// identities all sequence. (All 6 user ops are accepted in the fixture.)
+	// Expected accepted entries = every op in the fixture: bootstrap (relay
+	// genesis + profile) + the user op set (identities A/B/C/D, A's content
+	// create+update, artifact, credential, D's delete). All sequence cleanly in
+	// dependency order, so the drained log count equals len(allOps).
 	wantEntries := len(allOps)
 
 	// Drain both: TS sequences inline, Go runs on a ticker. Wait for both to

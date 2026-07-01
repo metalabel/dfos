@@ -39,6 +39,14 @@ func newRouter(r *Relay) http.Handler {
 	mux.HandleFunc("GET "+proofBasePath+"/countersignatures/{cid}", r.handleGetCountersignatures)
 	mux.HandleFunc("GET "+proofBasePath+"/log", r.handleGetLog)
 
+	// universal DID resolver (DIF-compat, additive, own version clock) — mounts at
+	// ROOT (not under proofBasePath), riding the frozen v1 surface without touching
+	// the wire, the proof plane, or the parity contract. DIF Universal Resolver HTTP
+	// binding: GET /1.0/identifiers/{did}. Read-only DID-core projection of the SAME
+	// self-certified terminal state the proof-plane /identities route serves. Byte
+	// twin of the TS route in relay.ts. See did_document.go for the projection.
+	mux.HandleFunc("GET /1.0/identifiers/{did...}", r.handleResolveDID)
+
 	// document gateway — optional, 0.x (its own version clock); routes stay at root
 	// under /content/{id} until DocumentGateway 0.2 keys on documentCID. The proof
 	// node owns the bare /proof/v1/content/{id} chain paths; the gateway owns the
@@ -223,6 +231,68 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 		"headCID": chain.HeadCID,
 		"state":   chain.State,
 	})
+}
+
+// handleResolveDID is the universal DID resolver (DIF Universal Resolver HTTP
+// binding). Byte twin of the TS `/1.0/identifiers/:did` route in relay.ts: same
+// status codes + error envelopes for invalidDid (400) and notFound (404), the
+// same peer read-through on local miss, and deactivated identities served as a
+// 200 (NOT an error). The read-through block mirrors handleGetIdentity — inlined
+// (as the TS twin does) to keep this route purely additive.
+func (r *Relay) handleResolveDID(w http.ResponseWriter, req *http.Request) {
+	did := req.PathValue("did")
+
+	// reject any non-canonical did:dfos (wrong width/charset/method) — §3.1
+	if !isValidDfosDid(did) {
+		writeJSON(w, 400, resolverErrorEnvelope{
+			DidResolutionMetadata: resolverErrorMeta{Error: "invalidDid"},
+		})
+		return
+	}
+
+	chain, err := r.readStore.GetIdentityChain(did)
+	if storeErr(w, err) {
+		return
+	}
+
+	// read-through: try peers on local miss (paginate through full log)
+	if chain == nil && r.peerClient != nil {
+		for _, peer := range r.peers {
+			if peer.ReadThrough != nil && !*peer.ReadThrough {
+				continue
+			}
+			after := ""
+			for {
+				page, perr := r.peerClient.GetIdentityLog(peer.URL, did, after, 1000)
+				if perr != nil || page == nil || len(page.Entries) == 0 {
+					break
+				}
+				tokens := make([]string, len(page.Entries))
+				for i, e := range page.Entries {
+					tokens[i] = e.JWSToken
+				}
+				r.Ingest(tokens)
+				if page.Cursor == nil {
+					break
+				}
+				after = *page.Cursor
+			}
+			chain, _ = r.readStore.GetIdentityChain(did)
+			if chain != nil {
+				break
+			}
+		}
+	}
+
+	if chain == nil {
+		writeJSON(w, 404, resolverErrorEnvelope{
+			DidResolutionMetadata: resolverErrorMeta{Error: "notFound"},
+		})
+		return
+	}
+
+	// deactivated identities are NOT an error: 200 with empty VMs + deactivated:true
+	writeJSON(w, 200, resolveDidDocument(chain))
 }
 
 func (r *Relay) handleIdentityLog(w http.ResponseWriter, req *http.Request) {
