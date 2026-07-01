@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -22,7 +23,13 @@ func main() {
 
 	root := cmd.NewRootCmd()
 	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		// Honor --json on the error path too, so scripted callers always get
+		// machine-readable output instead of a bare error line.
+		if cmd.JSONFlag() {
+			json.NewEncoder(os.Stderr).Encode(map[string]string{"error": err.Error()})
+		} else {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 

@@ -721,13 +721,18 @@ func newIdentityListCmd() *cobra.Command {
 			fmt.Printf("%-10s %-36s %-6s %s\n", "NAME", "DID", "KEYS", "OPS")
 			for _, chain := range chains {
 				name := config.FindIdentityName(cfg, chain.DID)
-				if name == "" {
+				// countKeysInChain probes the OS keychain once per key, which
+				// is O(keys) slow — a list of many gossiped-in identities would
+				// hang. Only probe identities we track by name (ours); for the
+				// rest we don't hold keys, so show "-" and skip the lookups.
+				keysCol := "-"
+				if name != "" {
+					keysCol = fmt.Sprintf("%d/%d", countKeysInChain(&chain), len(distinctKeyIDs(&chain)))
+				} else {
 					name = "-"
 				}
-				totalKeys := len(distinctKeyIDs(&chain))
-				haveKeys := countKeysInChain(&chain)
-				fmt.Printf("%-10s %-36s %d/%-3d %d\n",
-					name, chain.DID, haveKeys, totalKeys, len(chain.Log))
+				fmt.Printf("%-10s %-36s %-6s %d\n",
+					name, chain.DID, keysCol, len(chain.Log))
 			}
 			return nil
 		},

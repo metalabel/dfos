@@ -11,6 +11,7 @@ import (
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/statelock"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
@@ -32,12 +33,47 @@ var (
 	localRelayInstance *localrelay.LocalRelay
 )
 
+// annNoStateLock marks a command that must NOT take the process-wide state
+// lock — set it on long-lived daemons (e.g. serve) that would otherwise hold
+// the lock for their entire run and block every other dfos invocation.
+const annNoStateLock = "dfos:no_state_lock"
+
+// JSONFlag reports whether --json was requested. Used by main to render a
+// top-level command error as JSON instead of a plain line.
+func JSONFlag() bool { return jsonFlag }
+
+// skipStateLock reports whether a command should NOT take the state lock:
+// commands explicitly opted out (daemons), and cobra's own completion/help
+// machinery, which never mutate local state and must stay non-blocking (shell
+// tab-completion invokes __complete constantly).
+func skipStateLock(cmd *cobra.Command) bool {
+	if cmd.Annotations[annNoStateLock] == "true" {
+		return true
+	}
+	switch cmd.Name() {
+	case "completion", "help", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+		return true
+	}
+	return false
+}
+
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "dfos",
-		Short: "DFOS CLI — local-first relay node for the DFOS protocol",
-		Long:  "Command-line interface for the DFOS protocol. Your machine is a relay. Manage identities, content chains, and credentials. Sync with peers.",
+		Use:     "dfos",
+		Short:   "DFOS CLI — local-first relay node for the DFOS protocol",
+		Long:    "Command-line interface for the DFOS protocol. Your machine is a relay. Manage identities, content chains, and credentials. Sync with peers.",
+		Version: Version,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Serialize concurrent `dfos` invocations that mutate local state
+			// (config.toml, keystore) so they don't clobber each other. Taken
+			// BEFORE config is loaded so the whole load→modify→save is atomic
+			// across processes. Skipped for daemons and completion (see
+			// skipStateLock); released automatically on process exit.
+			if !skipStateLock(cmd) {
+				if err := statelock.Acquire(); err != nil {
+					return fmt.Errorf("acquire state lock: %w", err)
+				}
+			}
 			var err error
 			cfg, err = config.Load()
 			if err != nil {
