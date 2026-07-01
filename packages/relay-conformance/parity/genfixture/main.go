@@ -40,6 +40,11 @@ type Fixture struct {
 	// QueryDIDs / QueryContentIDs let the test hit per-chain log routes.
 	QueryDID       string `json:"queryDid"`
 	QueryContentID string `json:"queryContentId"`
+	// QueryServiceDID resolves to an identity carrying a DfosRelay + ContentAnchor
+	// services set; QueryDeletedDID resolves to a deactivated (create+delete)
+	// identity. Both drive the universal-resolver parity cases.
+	QueryServiceDID string `json:"queryServiceDid"`
+	QueryDeletedDID string `json:"queryDeletedDid"`
 }
 
 // seededKey returns a deterministic ed25519 keypair from a single seed byte.
@@ -104,6 +109,44 @@ func identityCreate(priv ed25519.PrivateKey, pub ed25519.PublicKey, keyID string
 	token = must(dfos.CreateJWS(header, payload, priv))
 	did = dfos.DeriveDID(cidBytes)
 	return token, did, cidStr
+}
+
+// identityCreateWithServices is identityCreate plus a services set on the genesis
+// payload (added BEFORE CID derivation so the DID commits to it). Exercises the
+// resolver's service[] projection (DfosRelay + ContentAnchor).
+func identityCreateWithServices(priv ed25519.PrivateKey, pub ed25519.PublicKey, keyID string, services []any) (token, did, opCID string) {
+	mk := dfos.NewMultikeyPublicKey(keyID, pub)
+	payload := map[string]any{
+		"version":        1,
+		"type":           "create",
+		"authKeys":       []dfos.MultikeyPublicKey{mk},
+		"assertKeys":     []dfos.MultikeyPublicKey{mk},
+		"controllerKeys": []dfos.MultikeyPublicKey{mk},
+		"services":       services,
+		"createdAt":      pinnedTime,
+	}
+	_, cidBytes, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		panic(err)
+	}
+	header := dfos.JWSHeader{Alg: "EdDSA", Typ: "did:dfos:identity-op", Kid: keyID, CID: cidStr}
+	token = must(dfos.CreateJWS(header, payload, priv))
+	did = dfos.DeriveDID(cidBytes)
+	return token, did, cidStr
+}
+
+// identityDelete builds a delete op (permanent deactivation) chaining onto a
+// genesis. The signer uses a DID-URL kid over a current controller key. createdAt
+// is strictly after the genesis so the delete sequences deterministically.
+func identityDelete(did, prevCID, keyID, createdAt string, priv ed25519.PrivateKey) (token, opCID string) {
+	kid := did + "#" + keyID
+	payload := map[string]any{
+		"version":              1,
+		"type":                 "delete",
+		"previousOperationCID": prevCID,
+		"createdAt":            createdAt,
+	}
+	return signJWS("did:dfos:identity-op", kid, payload, priv)
 }
 
 func profileArtifact(did, keyID string, priv ed25519.PrivateKey) (token, cid string) {
@@ -219,6 +262,23 @@ func main() {
 	// --- public credential (aud:*) by A ---
 	cred, _ := publicCredential(aDID, aKid, aPriv)
 
+	// --- user C (seed 4): genesis WITH a services set (DfosRelay + ContentAnchor) ---
+	// The ContentAnchor points at A's 31-char content chain id, which satisfies the
+	// contentId anchor shape validated at ingest.
+	cPriv, cPub := seededKey(4)
+	cKeyID := "key_userC00000000000000000000000"
+	cServices := []any{
+		map[string]any{"id": "svc_relay", "type": "DfosRelay", "endpoint": "https://relay.example"},
+		map[string]any{"id": "svc_anchor", "type": "ContentAnchor", "label": "pinned", "anchor": contentID},
+	}
+	cGenesis, cDID, _ := identityCreateWithServices(cPriv, cPub, cKeyID, cServices)
+
+	// --- user D (seed 5): genesis then delete (deactivated identity) ---
+	dPriv, dPub := seededKey(5)
+	dKeyID := "key_userD00000000000000000000000"
+	dGenesis, dDID, dCreateCID := identityCreate(dPriv, dPub, dKeyID)
+	dDelete, _ := identityDelete(dDID, dCreateCID, dKeyID, pinnedTimeAt(1), dPriv)
+
 	fixture := Fixture{
 		RelayDID:        relayDID,
 		RelayProfileJWS: relayProfile,
@@ -234,9 +294,14 @@ func main() {
 			cUpdate,
 			artifact,
 			cred,
+			cGenesis,
+			dGenesis,
+			dDelete,
 		},
-		QueryDID:       aDID,
-		QueryContentID: contentID,
+		QueryDID:        aDID,
+		QueryContentID:  contentID,
+		QueryServiceDID: cDID,
+		QueryDeletedDID: dDID,
 	}
 
 	data, err := json.MarshalIndent(fixture, "", "  ")

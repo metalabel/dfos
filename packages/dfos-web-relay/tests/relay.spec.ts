@@ -660,6 +660,222 @@ describe('web relay', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // universal DID resolver (DIF /1.0/identifiers — DID-core projection)
+  // ---------------------------------------------------------------------------
+
+  describe('universal DID resolver', () => {
+    const ANCHOR = 'cv7n8vkvr64cctf3294h9k4eanhff8z'; // 31-char content id
+
+    const resolve = (did: string) => req(`/1.0/identifiers/${did}`);
+
+    // genesis carrying an explicit services set (mirrors createIdentity)
+    const createIdentityWithServices = async (services: ServiceEntry[] | undefined) => {
+      const controller = makeKey();
+      const authKey = makeKey();
+      const createOp: IdentityOperation = {
+        version: 1,
+        type: 'create',
+        authKeys: [authKey.key],
+        assertKeys: [],
+        controllerKeys: [controller.key],
+        createdAt: ts(),
+        services,
+      };
+      const { jwsToken, operationCID } = await signIdentityOperation({
+        operation: createOp,
+        signer: controller.signer,
+        keyId: controller.keyId,
+      });
+      const encoded = await dagCborCanonicalEncode(createOp);
+      const { deriveChainIdentifier } = await import('@metalabel/dfos-protocol/chain');
+      const did = deriveChainIdentifier(encoded.cid.bytes, 'did:dfos');
+      return { did, controller, authKey, jwsToken, operationCID };
+    };
+
+    it('resolves a live identity into a DID Document + DIF envelope', async () => {
+      const id = await createIdentity();
+      await postOps([id.jwsToken]);
+
+      const res = await resolve(id.did);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+
+      expect(body['@context']).toBe('https://w3id.org/did-resolution/v1');
+      expect(body.didResolutionMetadata.contentType).toBe('application/did+ld+json');
+
+      const doc = body.didDocument;
+      expect(doc['@context']).toEqual([
+        'https://www.w3.org/ns/did/v1',
+        'https://w3id.org/security/multikey/v1',
+      ]);
+      expect(doc.id).toBe(id.did);
+      expect(doc.controller).toBe(id.did);
+
+      const authVm = `${id.did}#${id.authKey.keyId}`;
+      const ctrlVm = `${id.did}#${id.controller.keyId}`;
+      expect(doc.verificationMethod).toHaveLength(2);
+      const authEntry = doc.verificationMethod.find((v: { id: string }) => v.id === authVm);
+      expect(authEntry.type).toBe('Multikey');
+      expect(authEntry.controller).toBe(id.did);
+      expect(authEntry.publicKeyMultibase).toBe(id.authKey.key.publicKeyMultibase);
+      expect(doc.authentication).toEqual([authVm]);
+      expect(doc.capabilityInvocation).toEqual([ctrlVm]);
+      expect(doc.assertionMethod).toEqual([]);
+
+      expect(body.didDocumentMetadata.operationCount).toBe(1);
+      expect(body.didDocumentMetadata.deactivated).toBe(false);
+      expect(body.didDocumentMetadata.created).toBeDefined();
+      expect(body.didDocumentMetadata.updated).toBeDefined();
+    });
+
+    it('dedups a key shared across roles into a single verification method', async () => {
+      // one key serving auth + assert + controller (the common case)
+      const shared = makeKey();
+      const createOp: IdentityOperation = {
+        version: 1,
+        type: 'create',
+        authKeys: [shared.key],
+        assertKeys: [shared.key],
+        controllerKeys: [shared.key],
+        createdAt: ts(),
+      };
+      const { jwsToken } = await signIdentityOperation({
+        operation: createOp,
+        signer: shared.signer,
+        keyId: shared.keyId,
+      });
+      const encoded = await dagCborCanonicalEncode(createOp);
+      const { deriveChainIdentifier } = await import('@metalabel/dfos-protocol/chain');
+      const did = deriveChainIdentifier(encoded.cid.bytes, 'did:dfos');
+      await postOps([jwsToken]);
+
+      const doc = (await json(await resolve(did))).didDocument;
+      const vm = `${did}#${shared.keyId}`;
+      expect(doc.verificationMethod).toHaveLength(1);
+      expect(doc.verificationMethod[0].id).toBe(vm);
+      expect(doc.authentication).toEqual([vm]);
+      expect(doc.assertionMethod).toEqual([vm]);
+      expect(doc.capabilityInvocation).toEqual([vm]);
+    });
+
+    it('projects services (DfosRelay + ContentAnchor) into the service array', async () => {
+      const id = await createIdentityWithServices([
+        { id: 'relay', type: 'DfosRelay', endpoint: 'https://relay.dfos.com' },
+        { id: 'avatar', type: 'ContentAnchor', label: 'avatar', anchor: ANCHOR },
+      ]);
+      await postOps([id.jwsToken]);
+
+      const doc = (await json(await resolve(id.did))).didDocument;
+      const relay = doc.service.find((s: { id: string }) => s.id === `${id.did}#relay`);
+      expect(relay).toEqual({
+        id: `${id.did}#relay`,
+        type: 'DfosRelay',
+        serviceEndpoint: 'https://relay.dfos.com',
+      });
+      const anchor = doc.service.find((s: { id: string }) => s.id === `${id.did}#avatar`);
+      expect(anchor).toEqual({
+        id: `${id.did}#avatar`,
+        type: 'ContentAnchor',
+        serviceEndpoint: ANCHOR,
+        label: 'avatar',
+      });
+    });
+
+    it('preserves an unrecognized service type verbatim, re-anchoring only the id', async () => {
+      // §4.5 MUST-ignore-unknown: a type the relay does not recognize keeps all
+      // of its fields; only the entry id is re-anchored to a DID-URL fragment.
+      const id = await createIdentityWithServices([
+        {
+          id: 'gateway',
+          type: 'DfosDocumentGateway',
+          endpoint: 'https://gw.dfos.com',
+          weight: 7,
+        } as unknown as ServiceEntry,
+      ]);
+      await postOps([id.jwsToken]);
+
+      const doc = (await json(await resolve(id.did))).didDocument;
+      const gw = doc.service.find((s: { id: string }) => s.id === `${id.did}#gateway`);
+      expect(gw).toEqual({
+        id: `${id.did}#gateway`,
+        type: 'DfosDocumentGateway',
+        endpoint: 'https://gw.dfos.com',
+        weight: 7,
+      });
+      // NOT mapped into serviceEndpoint (that projection is for recognized types only)
+      expect(gw.serviceEndpoint).toBeUndefined();
+    });
+
+    it('omits the service array entirely when there are no services', async () => {
+      const id = await createIdentity();
+      await postOps([id.jwsToken]);
+      const doc = (await json(await resolve(id.did))).didDocument;
+      expect(doc.service).toBeUndefined();
+    });
+
+    it('resolves a deactivated identity to 200 with empty verification methods', async () => {
+      const id = await createIdentity();
+      await postOps([id.jwsToken]);
+
+      // sign + append a delete op from the controller key
+      const deleteOp: IdentityOperation = {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: id.operationCID,
+        createdAt: ts(1),
+      };
+      const { jwsToken: deleteToken } = await signIdentityOperation({
+        operation: deleteOp,
+        signer: id.controller.signer,
+        keyId: id.controller.keyId,
+        identityDID: id.did,
+      });
+      await postOps([deleteToken]);
+
+      const res = await resolve(id.did);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body.didDocumentMetadata.deactivated).toBe(true);
+      expect(body.didDocumentMetadata.operationCount).toBe(2);
+      expect(body.didDocument.verificationMethod).toEqual([]);
+      // §5.4: keyless sealed identity omits every relationship + services
+      expect(body.didDocument.authentication).toBeUndefined();
+      expect(body.didDocument.assertionMethod).toBeUndefined();
+      expect(body.didDocument.capabilityInvocation).toBeUndefined();
+      expect(body.didDocument.service).toBeUndefined();
+    });
+
+    it('returns 404 notFound for an unknown but well-formed did', async () => {
+      const id = await createIdentity(); // never posted
+      const res = await resolve(id.did);
+      expect(res.status).toBe(404);
+      const body = await json(res);
+      expect(body.didResolutionMetadata.error).toBe('notFound');
+      expect(body.didDocument).toBeNull();
+    });
+
+    it('returns 400 invalidDid for a wrong-width did:dfos', async () => {
+      const res = await resolve('did:dfos:tooshort');
+      expect(res.status).toBe(400);
+      const body = await json(res);
+      expect(body.didResolutionMetadata.error).toBe('invalidDid');
+      expect(body.didDocument).toBeNull();
+    });
+
+    it('returns 400 invalidDid for a legacy 22-char did:dfos', async () => {
+      const res = await resolve('did:dfos:cnnnft9f8a2rn938d6nkz3'); // 22 chars
+      expect(res.status).toBe(400);
+      expect((await json(res)).didResolutionMetadata.error).toBe('invalidDid');
+    });
+
+    it('returns 400 invalidDid for a non-dfos method', async () => {
+      const res = await resolve('did:web:example.com');
+      expect(res.status).toBe(400);
+      expect((await json(res)).didResolutionMetadata.error).toBe('invalidDid');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // content chain lifecycle
   // ---------------------------------------------------------------------------
 

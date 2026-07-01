@@ -179,6 +179,145 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /1.0/identifiers/{did}:
+    get:
+      operationId: resolveDID
+      summary: Resolve a did:dfos to a W3C DID Document
+      description: |
+        Resolve a `did:dfos` identifier into a W3C DID Document, following the
+        DIF Universal Resolver HTTP binding. Read-only and self-certifying: the
+        relay serves the DID-core projection of the identity chain's verified
+        terminal state. A deactivated identity resolves to 200 with an empty
+        verification-method set and `deactivated: true`. Additive — rides the
+        frozen v1 surface, does not touch the wire or the proof plane.
+      tags: [DID Resolution]
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 'DID to resolve (e.g., did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr)'
+      responses:
+        '200':
+          description: DIF resolution result
+          content:
+            application/did+ld+json:
+              schema:
+                type: object
+                required: ['@context', didDocument, didResolutionMetadata, didDocumentMetadata]
+                properties:
+                  '@context':
+                    type: string
+                    example: https://w3id.org/did-resolution/v1
+                  didDocument:
+                    type: object
+                    required: ['@context', id, controller, verificationMethod]
+                    properties:
+                      '@context':
+                        type: array
+                        items:
+                          type: string
+                      id:
+                        type: string
+                      controller:
+                        type: string
+                      verificationMethod:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            type:
+                              type: string
+                              example: Multikey
+                            controller:
+                              type: string
+                            publicKeyMultibase:
+                              type: string
+                      authentication:
+                        type: array
+                        items:
+                          type: string
+                      assertionMethod:
+                        type: array
+                        items:
+                          type: string
+                      capabilityInvocation:
+                        type: array
+                        items:
+                          type: string
+                      service:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, type]
+                          properties:
+                            id:
+                              type: string
+                            type:
+                              type: string
+                            serviceEndpoint: {}
+                            label:
+                              type: string
+                              description: >-
+                                Human-readable label, emitted for ContentAnchor
+                                service entries. Unrecognized service types are
+                                preserved verbatim, so additional properties may
+                                appear.
+                  didResolutionMetadata:
+                    type: object
+                    properties:
+                      contentType:
+                        type: string
+                        example: application/did+ld+json
+                  didDocumentMetadata:
+                    type: object
+                    properties:
+                      created:
+                        type: string
+                      updated:
+                        type: string
+                      deactivated:
+                        type: boolean
+                      operationCount:
+                        type: integer
+        '400':
+          description: Malformed did:dfos identifier
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  didDocument:
+                    nullable: true
+                  didResolutionMetadata:
+                    type: object
+                    properties:
+                      error:
+                        type: string
+                        example: invalidDid
+                  didDocumentMetadata:
+                    type: object
+        '404':
+          description: No identity chain found for the DID
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  didDocument:
+                    nullable: true
+                  didResolutionMetadata:
+                    type: object
+                    properties:
+                      error:
+                        type: string
+                        example: notFound
+                  didDocumentMetadata:
+                    type: object
+
   /proof/v1/content/{contentId}:
     get:
       operationId: getContentChain
@@ -787,3 +926,5 @@ tags:
     description: Public routes for signed chain operations and countersignatures
   - name: Content Plane
     description: Authenticated routes for content blob storage and retrieval
+  - name: DID Resolution
+    description: DIF Universal Resolver binding — resolve a did:dfos to a W3C DID Document
