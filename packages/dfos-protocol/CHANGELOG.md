@@ -43,6 +43,17 @@ documentation work, all additive atop frozen v1.
   `DOCUMENT-GATEWAY.md` blob byte-encoding pin. Prose only; no normative spec
   semantics changed. (#142)
 
+## [0.15.0] — 2026-07-01
+
+No protocol-package changes. Lockstep release that makes `did:dfos` publicly
+resolvable: the reference relay gains a **universal resolver** at
+`GET /1.0/identifiers/:did` — a root-level route on the DIF driver's own `1.0`
+clock, returning a DIF resolution-result envelope wrapping a W3C DID Document
+projected from verified identity state. Read-only, self-certifying, zero new
+crypto; implemented identically in the TypeScript relay and the Go twin with
+dual-relay byte-parity coverage (#141). Ships alongside a public-repo prose
+audit (#139) and the rename of the discussion space to "DFOS" (#140).
+
 ## [0.14.4] — 2026-06-30
 
 No protocol-package changes. Lockstep release with a CLI fix: concurrent `dfos`
@@ -193,7 +204,8 @@ update.
 Baseline of this changelog. Earlier history predates the changelog and is
 recorded in the git log and GitHub releases.
 
-[Unreleased]: https://github.com/metalabel/dfos/compare/v0.14.4...HEAD
+[Unreleased]: https://github.com/metalabel/dfos/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/metalabel/dfos/compare/v0.14.4...v0.15.0
 [0.14.4]: https://github.com/metalabel/dfos/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/metalabel/dfos/compare/v0.14.2...v0.14.3
 [0.14.2]: https://github.com/metalabel/dfos/compare/v0.14.1...v0.14.2
