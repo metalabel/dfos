@@ -69,7 +69,7 @@ GO_PID=$!
 wait_ready() {
   local port="$1" pid="$2" name="$3"
   for _ in $(seq 1 60); do
-    if curl -s "http://localhost:$port/.well-known/dfos-relay" > /dev/null 2>&1; then
+    if curl -s --max-time 10 "http://localhost:$port/.well-known/dfos-relay" > /dev/null 2>&1; then
       return 0
     fi
     if ! kill -0 "$pid" 2>/dev/null; then
@@ -92,4 +92,4 @@ cd "$CONFORMANCE_DIR"
 TS_RELAY_URL="http://localhost:$TS_PORT" \
 GO_RELAY_URL="http://localhost:$GO_PORT" \
 PARITY_FIXTURE="$FIXTURE" \
-  go test -v -count=1 -run 'TestDualRelayParity' ./...
+  go test -v -count=1 -timeout 300s -run 'TestDualRelayParity' ./...

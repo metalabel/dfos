@@ -11,6 +11,38 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
+No protocol-package (`@metalabel/dfos-protocol`) changes. Lockstep-pending relay and
+documentation work, all additive atop frozen v1.
+
+### Added
+
+- **Relay revocation-status query routes** — a new own-clock `/revocations/v1` route
+  family on the reference relay: `GET /revocations/v1/credential/:cid` (status of a
+  single credential — the signed revocation operation if revoked, an honest not-found
+  otherwise) and `GET /revocations/v1/issuer/:did` (revocations published by an
+  issuer). Answers are self-proving: every positive response carries the revocation
+  JWS, so a zero-trust caller re-verifies the issuer's signature instead of trusting
+  the relay's word — and absence is never proof of non-revocation. Advertised via a
+  new `capabilities.revocations` flag; a relay without the index reports `false` and
+  501s the routes, mirroring the content/log capability semantics. Implemented
+  identically in the TypeScript relay and the Go twin, with conformance and
+  dual-relay byte-parity coverage. (#143)
+
+### Changed
+
+- **Relay store interface — breaking for store implementers.** The relay storage
+  interface gained two revocation-query methods to back the routes above:
+  `getRevocationForCredential` / `getRevocationsByIssuer` on the TypeScript
+  `RelayStore` interface, and their twins `GetRevocationForCredential` /
+  `GetRevocationsByIssuer` on the Go `Store` interface. Third-party store
+  implementations must add them. This is a relay-embedding surface change only — the
+  v1 wire remains frozen and no corpus re-mint is required. (#143)
+- **Documentation drift pass** — OpenAPI corrections (capabilities shape,
+  `ContentChainResponse`, `stats.pendingOps`), the `WEB-RELAY.md` documents-endpoint
+  cursor pagination and the credential `chainId` indexer note, and a
+  `DOCUMENT-GATEWAY.md` blob byte-encoding pin. Prose only; no normative spec
+  semantics changed. (#142)
+
 ## [0.14.4] — 2026-06-30
 
 No protocol-package changes. Lockstep release with a CLI fix: concurrent `dfos`
