@@ -42,7 +42,7 @@ paths:
                     example: '0.15.0'
                   capabilities:
                     type: object
-                    required: [proof, write, content, log]
+                    required: [proof, write, content, log, revocations]
                     properties:
                       proof:
                         type: boolean
