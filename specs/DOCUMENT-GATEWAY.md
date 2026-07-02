@@ -186,10 +186,10 @@ What is **not** re-verifiable is the host's **serve discipline** — whether an 
 
 ## Security model
 
-| Property                | Guarantee                                                                                                                                                           |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Property                | Guarantee                                                                                                                                                                                                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Can't forge**         | A reader checks served bytes against the known `documentCID` by re-canonicalizing (decode-JSON → dag-cbor → sha-256), not by hashing the served bytes directly; wrong bytes fail content-addressing. Integrity is cryptographic **even against a malicious gateway**. |
-| **Can withhold / leak** | The gateway holds plaintext. Content-plane access control is **host-cooperative** — it protects an _honest_ host from mis-serving. It is not a cryptographic vault. |
+| **Can withhold / leak** | The gateway holds plaintext. Content-plane access control is **host-cooperative** — it protects an _honest_ host from mis-serving. It is not a cryptographic vault.                                                                                                   |
 
 The cryptographic guarantees — integrity, authenticity, authorization — live in the **proof plane**. The content plane is honest-host access control: the "undisclosed-by-default among cooperating relays" layer of the dark forest, not end-to-end encryption. Anything that must stay confidential against a _hostile_ host is withheld or encrypted **above** the protocol. This is the explicit, accepted trust boundary; see [THREAT-MODEL.md](https://protocol.dfos.com/threat-model) for the consolidated proof-plane / content-plane split.
 

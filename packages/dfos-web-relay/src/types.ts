@@ -276,6 +276,22 @@ export interface RelayStore {
   addRevocation(revocation: StoredRevocation): Promise<void>;
   /** Check if a specific credential CID has been revoked by a specific issuer */
   isCredentialRevoked(issuerDID: string, credentialCID: string): Promise<boolean>;
+  /**
+   * Get the stored revocation for a credential CID, any issuer. Serves the
+   * `/revocations/v1/credential/:credentialCID` status route. If more than one
+   * issuer has revoked the same CID (possible — the set is keyed by
+   * (issuerDID, credentialCID) and issuer-only enforcement happens at
+   * credential verification, not ingest), implementations MUST return the one
+   * with the lexicographically smallest issuerDID so the answer is
+   * deterministic across stores and twins.
+   */
+  getRevocationForCredential(credentialCID: string): Promise<StoredRevocation | undefined>;
+  /**
+   * Get all stored revocations issued by a DID, sorted by credentialCID
+   * ascending (deterministic across stores and twins). Serves the
+   * `/revocations/v1/issuer/:did` listing route.
+   */
+  getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]>;
 
   // --- public credentials (standing authorization) ---
 

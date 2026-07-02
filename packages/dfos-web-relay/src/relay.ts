@@ -29,6 +29,12 @@ import {
 import { bootstrapRelayIdentity } from './bootstrap';
 import { isValidDfosDid, resolveDidDocument } from './did-document';
 import { ingestOperations } from './ingest';
+import {
+  credentialRevocationStatus,
+  issuerRevocationList,
+  isValidCredentialCid,
+  REVOCATIONS_BASE_PATH,
+} from './revocations';
 import { computeOpCID, sequenceOps } from './sequencer';
 import { PROOF_BASE_PATH } from './types';
 import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
@@ -254,6 +260,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         write: writeEnabled,
         content: contentEnabled,
         log: logEnabled,
+        // The reference relay always serves the revocation-status index
+        // (/revocations/v1). A relay that does not would advertise false and
+        // 501 those routes, mirroring the content/log capability semantics.
+        revocations: true,
       },
       profile: profileArtifactJws,
       stats: {
@@ -430,6 +440,45 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
     // deactivated identities are NOT an error: 200 with empty VMs + deactivated:true
     return c.json(resolveDidDocument(chain));
+  });
+
+  // ---------------------------------------------------------------------------
+  // revocation status (additive, own clock)
+  //
+  // Read-only projection of the relay's revocation set — the same
+  // (issuerDID, credentialCID) index credential enforcement already consults.
+  // Mounts at ROOT under REVOCATIONS_BASE_PATH (not the frozen proof plane).
+  // Every positive answer carries the revocation JWS so a zero-trust caller
+  // re-verifies it instead of trusting the relay's boolean; `revoked: false`
+  // only means THIS relay has not ingested a revocation (honest absence — not
+  // proof of non-revocation). See src/revocations.ts for the projection.
+  // ---------------------------------------------------------------------------
+
+  /** Revocation status for a single credential CID */
+  app.get(`${REVOCATIONS_BASE_PATH}/credential/:credentialCID`, async (c) => {
+    const credentialCID = c.req.param('credentialCID');
+
+    // reject anything that is not a credential-shaped CID — a malformed param
+    // gets a 400, never a well-formed-looking `revoked: false`
+    if (!isValidCredentialCid(credentialCID)) {
+      return c.json({ error: 'invalid credential CID' }, 400);
+    }
+
+    const revocation = await store.getRevocationForCredential(credentialCID);
+    return c.json(credentialRevocationStatus(credentialCID, revocation));
+  });
+
+  /** All revocations issued by a DID */
+  app.get(`${REVOCATIONS_BASE_PATH}/issuer/:did{.+}`, async (c) => {
+    const did = c.req.param('did');
+
+    // must be the exact canonical 31-char did:dfos form
+    if (!isValidDfosDid(did)) {
+      return c.json({ error: 'invalid DID' }, 400);
+    }
+
+    const revocations = await store.getRevocationsByIssuer(did);
+    return c.json(issuerRevocationList(did, revocations));
   });
 
   /** Get a content chain log */

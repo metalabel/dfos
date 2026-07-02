@@ -3418,6 +3418,134 @@ describe('web relay', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // revocation status (/revocations/v1, own clock)
+  // ---------------------------------------------------------------------------
+
+  describe('revocation status', () => {
+    /** Ingest an identity, mint a credential, revoke it. Returns the pieces. */
+    const revokeFreshCredential = async () => {
+      const issuer = await createIdentity();
+      await postOps([issuer.jwsToken]);
+
+      const now = Math.floor(Date.now() / 1000);
+      const credential = await createDFOSCredential({
+        issuerDID: issuer.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:someContentId`, action: 'read' }],
+        exp: now + 3600,
+        signer: issuer.authKey.signer,
+        keyId: issuer.authKey.keyId,
+        iat: now,
+      });
+      const credentialCID = decodeDFOSCredentialUnsafe(credential)!.header.cid;
+
+      const { jwsToken: revocationJws } = await signRevocation({
+        issuerDID: issuer.did,
+        credentialCID,
+        signer: issuer.authKey.signer,
+        keyId: issuer.authKey.keyId,
+      });
+      const res = await postOps([credential, revocationJws]);
+      const body = await json(res);
+      expect(body.results[1].status).toBe('new');
+      expect(body.results[1].kind).toBe('revocation');
+
+      return { issuer, credential, credentialCID, revocationJws };
+    };
+
+    it('returns revoked:true with the self-proving revocation JWS', async () => {
+      const { issuer, credentialCID, revocationJws } = await revokeFreshCredential();
+
+      const res = await req(`/revocations/v1/credential/${credentialCID}`);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body).toEqual({ credentialCID, revoked: true, revocation: revocationJws });
+
+      // the JWS is the proof — it decodes to the revoked CID and the issuer
+      const decoded = decodeJwsUnsafe(body.revocation)!;
+      expect(decoded.header.typ).toBe('did:dfos:revocation');
+      expect((decoded.payload as Record<string, unknown>)['credentialCID']).toBe(credentialCID);
+      expect((decoded.payload as Record<string, unknown>)['did']).toBe(issuer.did);
+    });
+
+    it('returns revoked:false (no revocation key) for an unknown credential CID', async () => {
+      // well-formed dag-cbor CID the relay has never seen — honest known-nothing
+      const unknownCID = `bafyrei${'a'.repeat(52)}`;
+      const res = await req(`/revocations/v1/credential/${unknownCID}`);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body).toEqual({ credentialCID: unknownCID, revoked: false });
+      expect('revocation' in body).toBe(false);
+    });
+
+    it('returns 400 for a malformed credential CID', async () => {
+      const res = await req('/revocations/v1/credential/not-a-cid');
+      expect(res.status).toBe(400);
+      expect((await json(res)).error).toBe('invalid credential CID');
+    });
+
+    it('lists all revocations for an issuer, sorted by credentialCID', async () => {
+      const issuer = await createIdentity();
+      await postOps([issuer.jwsToken]);
+
+      // two credentials, both revoked
+      const now = Math.floor(Date.now() / 1000);
+      const revoke = async (resource: string) => {
+        const credential = await createDFOSCredential({
+          issuerDID: issuer.did,
+          audienceDID: '*',
+          att: [{ resource, action: 'read' }],
+          exp: now + 3600,
+          signer: issuer.authKey.signer,
+          keyId: issuer.authKey.keyId,
+          iat: now,
+        });
+        const credentialCID = decodeDFOSCredentialUnsafe(credential)!.header.cid;
+        const { jwsToken } = await signRevocation({
+          issuerDID: issuer.did,
+          credentialCID,
+          signer: issuer.authKey.signer,
+          keyId: issuer.authKey.keyId,
+        });
+        await postOps([jwsToken]);
+        return { credentialCID, revocationJws: jwsToken };
+      };
+      const revA = await revoke('chain:contentA');
+      const revB = await revoke('chain:contentB');
+      const expected = [revA, revB].sort((a, b) => (a.credentialCID < b.credentialCID ? -1 : 1));
+
+      const res = await req(`/revocations/v1/issuer/${issuer.did}`);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      expect(body).toEqual({
+        did: issuer.did,
+        revocations: expected.map((r) => ({
+          credentialCID: r.credentialCID,
+          revocation: r.revocationJws,
+        })),
+      });
+    });
+
+    it('returns an empty array for an issuer with no revocations', async () => {
+      const issuer = await createIdentity(); // never revoked anything
+      const res = await req(`/revocations/v1/issuer/${issuer.did}`);
+      expect(res.status).toBe(200);
+      expect(await json(res)).toEqual({ did: issuer.did, revocations: [] });
+    });
+
+    it('returns 400 for a malformed DID', async () => {
+      const res = await req('/revocations/v1/issuer/did:dfos:tooshort');
+      expect(res.status).toBe(400);
+      expect((await json(res)).error).toBe('invalid DID');
+    });
+
+    it('advertises the revocations capability in the well-known', async () => {
+      const body = await json(await req('/.well-known/dfos-relay'));
+      expect(body.capabilities.revocations).toBe(true);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // public credential ingestion
   // ---------------------------------------------------------------------------
 

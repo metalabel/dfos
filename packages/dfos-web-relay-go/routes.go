@@ -47,6 +47,14 @@ func newRouter(r *Relay) http.Handler {
 	// twin of the TS route in relay.ts. See did_document.go for the projection.
 	mux.HandleFunc("GET /1.0/identifiers/{did...}", r.handleResolveDID)
 
+	// revocation status (additive, own 0.x version clock) — mounts at ROOT under
+	// revocationsBasePath (not the frozen proof plane). Read-only projection of
+	// the SAME (issuerDID, credentialCID) revocation set credential enforcement
+	// already consults; revocations still ENTER via POST /proof/v1/operations.
+	// Byte twin of the TS routes in relay.ts. See revocations.go.
+	mux.HandleFunc("GET "+revocationsBasePath+"/credential/{credentialCID}", r.handleRevocationStatus)
+	mux.HandleFunc("GET "+revocationsBasePath+"/issuer/{did...}", r.handleIssuerRevocations)
+
 	// document gateway — optional, 0.x (its own version clock); routes stay at root
 	// under /content/{id} until DocumentGateway 0.2 keys on documentCID. The proof
 	// node owns the bare /proof/v1/content/{id} chain paths; the gateway owns the
@@ -126,6 +134,10 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 			"write":   r.writeEnabled,
 			"content": r.contentEnabled,
 			"log":     r.logEnabled,
+			// The reference relay always serves the revocation-status index
+			// (/revocations/v1). A relay that does not would advertise false and
+			// 501 those routes, mirroring the content/log capability semantics.
+			"revocations": true,
 		},
 		"profile": r.profileArtifactJWS,
 		"stats": map[string]any{
