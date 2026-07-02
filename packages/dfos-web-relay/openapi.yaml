@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DFOS Web Relay
-  version: 0.9.0
+  version: 0.15.0
   description: |
     HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves
     identity chains, content chains, countersignatures, and content blobs.
@@ -28,7 +28,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [did, protocol, version, capabilities, profile]
+                required: [did, protocol, version, capabilities, profile, stats]
                 properties:
                   did:
                     type: string
@@ -39,10 +39,10 @@ paths:
                     enum: [dfos-web-relay]
                   version:
                     type: string
-                    example: '0.8.0'
+                    example: '0.15.0'
                   capabilities:
                     type: object
-                    required: [proof, write, content, documents, log]
+                    required: [proof, write, content, log]
                     properties:
                       proof:
                         type: boolean
@@ -52,16 +52,20 @@ paths:
                         description: Whether the relay accepts writes via POST /proof/v1/operations (false = lite pull-only node)
                       content:
                         type: boolean
-                        description: Whether the relay supports content plane (blob upload/download)
-                      documents:
-                        type: boolean
-                        description: Whether the relay serves the documents endpoint
+                        description: Whether the relay supports content plane (blob upload/download and the documents endpoint, which rides this same flag — there is no separate one)
                       log:
                         type: boolean
                         description: Whether the global operation log is available (GET /proof/v1/log)
                   profile:
                     type: string
                     description: The relay's profile artifact as a compact JWS token
+                  stats:
+                    type: object
+                    required: [pendingOps]
+                    properties:
+                      pendingOps:
+                        type: integer
+                        description: Count of operations pending processing (-1 if unavailable)
 
   /proof/v1/operations:
     post:
@@ -843,16 +847,14 @@ components:
 
     ContentChainResponse:
       type: object
-      required: [contentId, genesisCID, log, state]
+      required: [contentId, genesisCID, headCID, state]
       properties:
         contentId:
           type: string
         genesisCID:
           type: string
-        log:
-          type: array
-          items:
-            type: string
+        headCID:
+          type: string
         state:
           type: object
           required:

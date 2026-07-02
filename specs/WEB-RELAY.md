@@ -281,14 +281,17 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 {
   "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
   "protocol": "dfos-web-relay",
-  "version": "0.14.4",
+  "version": "0.15.0",
   "capabilities": {
     "proof": true,
     "write": true,
     "content": true,
     "log": true
   },
-  "profile": "eyJhbGciOiJFZERTQSIs..."
+  "profile": "eyJhbGciOiJFZERTQSIs...",
+  "stats": {
+    "pendingOps": 0
+  }
 }
 ```
 
@@ -303,6 +306,7 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 | `capabilities.content` | boolean | Whether the relay supports the content plane (blob upload/download _and_ the documents endpoint, which rides this same flag — there is no separate one)  |
 | `capabilities.log`     | boolean | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                      |
 | `profile`              | string  | The relay's profile artifact as a compact JWS token — self-proving payload                                                                               |
+| `stats`                | object  | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                             |
 
 `capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
 
@@ -347,13 +351,15 @@ Returns log entries starting after the given CID cursor.
 | `entries[].cid`      | string       | Operation CID                                                                                      |
 | `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync                                 |
 | `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `artifact`, `countersign`, `revocation`, `credential` |
-| `entries[].chainId`  | string       | DID (identity/artifact), contentId (content), or targetCID (countersign)                           |
+| `entries[].chainId`  | string       | DID (`identity-op`, `artifact`, `credential`, and `revocation` — all keyed to the issuer/signer DID), contentId (`content-op`), or targetCID (`countersign`) |
 | `cursor`             | string\|null | CID to pass as `after` for the next page. `null` means caught up                                   |
 
 Parameters:
 
 - **`after`** (optional): CID cursor. Omit to start from the beginning of the log
 - **`limit`** (optional): Max entries to return. Default: 100. Max: 1000
+
+> **`chainId` is not a per-chain partition key.** Because `credential` and `revocation` entries carry `chainId` = the issuer DID — the **same** value as that DID's `identity-op` and `artifact` entries — folding the global log per-chain on `chainId` alone silently co-mingles credentials, revocations, artifacts, and identity ops under a single DID. An indexer reconstructing a specific chain MUST filter by `kind` first (e.g. `kind === 'identity-op'` to rebuild the identity chain) rather than grouping on `chainId` alone.
 
 Pagination is forward-only. The log is ordered by ingestion time. JWS tokens are included in every entry because proof-plane JWS payloads are bounded (chain operations and artifacts have finite size), keeping the log self-contained — a syncing peer can replay the log without separate fetches.
 
@@ -451,9 +457,11 @@ The optional `:ref` parameter selects which operation's document to return:
 - `head` (default): the current document at chain head
 - An operation CID: the document committed by that specific operation
 
-### Documents Endpoint (`GET /content/:contentId/documents`)
+### Documents Endpoint (`GET /content/:contentId/documents?after={cid}&limit=N`)
 
-Returns all documents committed to a content chain as an ordered list, from genesis to head. Each entry includes the operation CID that committed the document and the resolved document content.
+Returns documents committed to a content chain as an ordered list, from genesis to head. Like the log routes, this endpoint is **forward-only cursor-paginated**: it takes `after` (CID cursor, omit to start from genesis) and `limit` (default 100, max 1000) query params, and returns `{ contentId, documents[], nextCursor }` where `nextCursor` is the CID to pass as `after` for the next page (`null` when caught up).
+
+Each `documents[]` entry includes `operationCID` (the operation that committed the document), `documentCID` (the content-addressed CID of the document, nullable), `document` (the resolved document content, nullable), `signerDID`, and `createdAt`.
 
 This endpoint requires the same authorization as blob download — standing authorization grants access without authentication, otherwise the caller must be the chain creator or present a valid DFOS credential with `action: "read"`.
 
