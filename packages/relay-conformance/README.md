@@ -31,6 +31,7 @@ Tests covering:
 - Input validation (malformed JSON, empty operations, invalid JWS)
 - Future timestamp guard (reject identity/content ops >24h ahead)
 - Artifact ingestion and sequencer cross-batch dependency resolution
+- Revocation status routes (`/revocations/v1` — self-proving JWS answers, honest absence, malformed-param 400s, capability-gated)
 
 ## Dependencies
 

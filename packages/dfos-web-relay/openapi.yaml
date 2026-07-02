@@ -56,6 +56,9 @@ paths:
                       log:
                         type: boolean
                         description: Whether the global operation log is available (GET /proof/v1/log)
+                      revocations:
+                        type: boolean
+                        description: Whether the revocation status index is served (GET /revocations/v1/*)
                   profile:
                     type: string
                     description: The relay's profile artifact as a compact JWS token
@@ -321,6 +324,108 @@ paths:
                         example: notFound
                   didDocumentMetadata:
                     type: object
+
+  /revocations/v1/credential/{credentialCID}:
+    get:
+      operationId: getCredentialRevocationStatus
+      summary: Revocation status for a credential
+      description: |
+        Read-only projection of the relay's revocation set — the same
+        (issuerDID, credentialCID) index credential enforcement consults. On its
+        own 0.x clock at the relay root; revocations still enter through
+        POST /proof/v1/operations. Every positive answer carries the full
+        revocation JWS so a zero-trust caller re-verifies the proof instead of
+        trusting the boolean. `revoked: false` is an honest known-nothing answer
+        — absence is NOT proof of non-revocation. Relays without the index
+        (capabilities.revocations: false) return 501.
+      tags: [Revocation Status]
+      parameters:
+        - name: credentialCID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 'Credential CID (CIDv1 dag-cbor + sha256, bafyrei…)'
+      responses:
+        '200':
+          description: Revocation status (revoked or honest known-nothing)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credentialCID, revoked]
+                properties:
+                  credentialCID:
+                    type: string
+                  revoked:
+                    type: boolean
+                  revocation:
+                    type: string
+                    description: The full revocation JWS token — present iff revoked. Self-proving.
+        '400':
+          description: Malformed credential CID
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: invalid credential CID
+        '501':
+          description: Revocation status index not supported by this relay
+
+  /revocations/v1/issuer/{did}:
+    get:
+      operationId: getIssuerRevocations
+      summary: All revocations ingested for an issuer
+      description: |
+        Every revocation this relay has ingested for the issuer, sorted by
+        credentialCID ascending. Each entry carries the full revocation JWS
+        (self-proving). An issuer with none returns an empty array — same honest
+        absence semantics as the credential route.
+      tags: [Revocation Status]
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 'Issuer DID (canonical 31-char did:dfos)'
+      responses:
+        '200':
+          description: Issuer revocation list (possibly empty)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [did, revocations]
+                properties:
+                  did:
+                    type: string
+                  revocations:
+                    type: array
+                    items:
+                      type: object
+                      required: [credentialCID, revocation]
+                      properties:
+                        credentialCID:
+                          type: string
+                        revocation:
+                          type: string
+                          description: The full revocation JWS token — self-proving
+        '400':
+          description: Malformed did:dfos identifier
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: invalid DID
+        '501':
+          description: Revocation status index not supported by this relay
 
   /proof/v1/content/{contentId}:
     get:

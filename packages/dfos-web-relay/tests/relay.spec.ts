@@ -3512,9 +3512,7 @@ describe('web relay', () => {
       };
       const revA = await revoke('chain:contentA');
       const revB = await revoke('chain:contentB');
-      const expected = [revA, revB].sort((a, b) =>
-        a.credentialCID < b.credentialCID ? -1 : 1,
-      );
+      const expected = [revA, revB].sort((a, b) => (a.credentialCID < b.credentialCID ? -1 : 1));
 
       const res = await req(`/revocations/v1/issuer/${issuer.did}`);
       expect(res.status).toBe(200);

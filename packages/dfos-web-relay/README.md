@@ -48,6 +48,8 @@ serve({ port: 4444 });
 | `GET`  | `/proof/v1/countersignatures/:cid`            | Get countersignatures for an operation                      |
 | `GET`  | `/proof/v1/operations/:cid/countersignatures` | Same as above (alias)                                       |
 | `GET`  | `/1.0/identifiers/:did`                       | Resolve a `did:dfos` to a W3C DID Document (DIF-compat)     |
+| `GET`  | `/revocations/v1/credential/:credentialCID`   | Revocation status for a credential (self-proving JWS)       |
+| `GET`  | `/revocations/v1/issuer/:did`                 | All revocations ingested for an issuer                      |
 | `PUT`  | `/content/:contentId/blob/:operationCID`      | Upload blob (auth required)                                 |
 | `GET`  | `/content/:contentId/blob`                    | Download blob at head (standing auth, or auth + credential) |
 | `GET`  | `/content/:contentId/blob/:ref`               | Download blob at specific operation ref                     |
@@ -69,6 +71,27 @@ returns `400 invalidDid`; an unknown identity returns `404 notFound`. Public and
 unauthenticated, like the proof plane. This route is **additive** — it rides the
 frozen v1 surface without touching the wire or the proof plane. See
 [DID-METHOD.md](../../specs/DID-METHOD.md) §4 for the normative mapping.
+
+## Revocation Status
+
+`GET /revocations/v1/credential/:credentialCID` answers whether the relay has
+ingested a revocation for a credential —
+`{ credentialCID, revoked, revocation? }` — and
+`GET /revocations/v1/issuer/:did` lists every revocation ingested for an issuer,
+sorted by `credentialCID`. Like the universal resolver, the family rides its own
+`0.x` clock at the relay root; revocations still _enter_ through
+`POST /proof/v1/operations` as ordinary proof-plane operations.
+
+Every positive answer carries the **full revocation JWS**, so a zero-trust
+caller re-verifies the proof (signature, CID integrity, kid-DID == payload
+`did`, issuer-only rule) instead of trusting the relay's boolean.
+`revoked: false` is an honest known-nothing answer — the relay attests only to
+what it has ingested; absence is NOT proof of non-revocation (query a quorum of
+relays for stronger assurance). A malformed CID or DID returns `400`. Support is
+advertised via `capabilities.revocations` in the well-known (always `true` for
+this relay); a relay without the index returns `501` on these routes. See
+[WEB-RELAY.md](../../specs/WEB-RELAY.md) → Revocation Status for the full
+semantics.
 
 ## Blob Authorization
 

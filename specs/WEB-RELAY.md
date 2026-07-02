@@ -61,11 +61,12 @@ Every proof plane route is namespaced under a single prefix, **`/proof/v1`**:
 
 The prefix encodes the plane and its version (`{plane}/{version}`), so the proof plane's version clock is legible in the URL and the plane mounts or proxies as a unit by prefix. The proof routes are **frozen with protocol v1** — a relay MUST serve them at exactly these paths.
 
-Three route families deliberately stay at the root, on their own clocks:
+Four route families deliberately stay at the root, on their own clocks:
 
 - **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and the relay's own release version.
 - **Content plane routes** (`/content/:contentId/blob[/:ref]`, `/content/:contentId/documents`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` and `/content/:contentId/documents` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
 - **Universal resolver** (`GET /1.0/identifiers/:did`) — the DID-core / DIF Universal Resolver binding on its own `1.0` clock (the DIF driver interface version, [DID-METHOD.md](https://protocol.dfos.com/did-method) §5.2.4). It is an additive, read-only projection of the same self-certified terminal state the proof plane serves at `/proof/v1/identities/:did`, rendered as a W3C DID Document. It stays at the root because it tracks the DIF driver clock, not the frozen proof plane.
+- **Revocation status** (`GET /revocations/v1/credential/:credentialCID`, `GET /revocations/v1/issuer/:did`) — an indexed, read-only projection of the relay's revocation set on its own `0.x` clock. Revocations still _enter_ through the frozen proof plane (`POST /proof/v1/operations`); this family only exposes a read over the index the relay already maintains for its own credential enforcement. See [Revocation Status](#revocation-status-0x).
 
 ---
 
@@ -286,7 +287,8 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
     "proof": true,
     "write": true,
     "content": true,
-    "log": true
+    "log": true,
+    "revocations": true
   },
   "profile": "eyJhbGciOiJFZERTQSIs...",
   "stats": {
@@ -295,20 +297,21 @@ Returns relay metadata. All fields are required — `profile` is the relay's pro
 }
 ```
 
-| Field                  | Type    | Description                                                                                                                                              |
-| ---------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `did`                  | string  | The relay's DID, resolvable on this relay's proof plane                                                                                                  |
-| `protocol`             | string  | Protocol identifier, always `"dfos-web-relay"`                                                                                                           |
-| `version`              | string  | The relay's own release version (semver), independent of the frozen proof-plane clock — the proof version lives in the `/proof/v1` path prefix, not here |
-| `capabilities`         | object  | Capability flags for optional features                                                                                                                   |
-| `capabilities.proof`   | boolean | MUST be `true`. A relay without proof plane capability is not a relay                                                                                    |
-| `capabilities.write`   | boolean | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                         |
-| `capabilities.content` | boolean | Whether the relay supports the content plane (blob upload/download _and_ the documents endpoint, which rides this same flag — there is no separate one)  |
-| `capabilities.log`     | boolean | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                      |
-| `profile`              | string  | The relay's profile artifact as a compact JWS token — self-proving payload                                                                               |
-| `stats`                | object  | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                             |
+| Field                      | Type    | Description                                                                                                                                              |
+| -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `did`                      | string  | The relay's DID, resolvable on this relay's proof plane                                                                                                  |
+| `protocol`                 | string  | Protocol identifier, always `"dfos-web-relay"`                                                                                                           |
+| `version`                  | string  | The relay's own release version (semver), independent of the frozen proof-plane clock — the proof version lives in the `/proof/v1` path prefix, not here |
+| `capabilities`             | object  | Capability flags for optional features                                                                                                                   |
+| `capabilities.proof`       | boolean | MUST be `true`. A relay without proof plane capability is not a relay                                                                                    |
+| `capabilities.write`       | boolean | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                         |
+| `capabilities.content`     | boolean | Whether the relay supports the content plane (blob upload/download _and_ the documents endpoint, which rides this same flag — there is no separate one)  |
+| `capabilities.log`         | boolean | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                      |
+| `capabilities.revocations` | boolean | Whether the [revocation status](#revocation-status-0x) index is served (`GET /revocations/v1/*`). Both reference relays always serve it                  |
+| `profile`                  | string  | The relay's profile artifact as a compact JWS token — self-proving payload                                                                               |
+| `stats`                    | object  | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                             |
 
-`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
+`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. When `capabilities.revocations: false`, the `/revocations/v1/*` routes return **501 Not Implemented** — the same capability-not-supported semantics. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
 
 ### Lite (pull-only) node — `capabilities.write: false`
 
@@ -492,7 +495,7 @@ Revocation artifacts (`typ: did:dfos:revocation`) are ingested via `POST /proof/
 3. Future content chain operations embedding the revoked credential as `authorization` are rejected
 4. Future content plane requests presenting the revoked credential are rejected
 
-Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the revocation payload format.
+Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the revocation payload format. A relay MAY additionally expose a read over the revocation index it keeps for this enforcement — see [Revocation Status](#revocation-status-0x).
 
 ### Content Following
 
@@ -506,6 +509,46 @@ Following is a per-relay, optional behavior on the content plane's own `0.x` clo
 - **Eventually consistent.** Authorization arrives instantly (the grant rides the log); the bytes arrive asynchronously. Between the two, a follower that is authorized but has not yet materialized a blob returns `200` with `document: null` on `/documents` (and `404 blob not found` on `/blob`) — the **honest "authorized-but-not-yet-materialized" state**, not an error. A conforming follower converges to serving the bytes; it need not do so instantaneously. See [DOCUMENT-GATEWAY.md → Follower materialization](https://protocol.dfos.com/document-gateway#follower-materialization-0x).
 - **Convergent, ordering-immune.** Following is driven by a sweep over the chains the follower already holds in local state, so it cannot be raced by op-ingest ordering (a credential op sequences before the content op it grants). The sweep is the correctness backbone; low-latency triggers, if any, are an optimization over it.
 - **Revoke is correctness-free; GC is reclamation.** When a grant is revoked, the per-request serve gate immediately makes any cached bytes unreachable — correctness needs nothing more. Reclaiming the now-orphaned bytes (deleting them) is a separate, convergent garbage-collection pass keyed on the same gate, and is purely a storage concern.
+
+---
+
+## Revocation Status (0.x)
+
+A relay that enforces revocation already maintains an `(issuerDID, credentialCID)` revocation set (see [Revocation Ingestion](#revocation-ingestion)). The **revocation status** route family exposes an indexed, read-only projection of that set, so a client can ask "has this credential been revoked?" or "what has this issuer revoked?" with one GET instead of replaying the operation log.
+
+Like the universal resolver, this family rides its **own `0.x` version clock at the relay root** — it is NOT part of the frozen `/proof/v1` proof plane, and nothing about ingestion changes: revocations remain ordinary proof-plane operations (`typ: did:dfos:revocation`), submitted via `POST /proof/v1/operations` and gossiped like everything else. A relay advertises support via `capabilities.revocations` in the well-known; when unsupported, the routes return **501 Not Implemented** (capability not supported, consistent with `content`/`log`). Both reference relays serve the index unconditionally.
+
+### Credential Status (`GET /revocations/v1/credential/:credentialCID`)
+
+```json
+{
+  "credentialCID": "bafyrei…",
+  "revoked": true,
+  "revocation": "eyJhbGciOiJFZERTQSIs…"
+}
+```
+
+- **`200` revoked** — includes `revocation`, the full revocation JWS token.
+- **`200` not revoked** — `{ "credentialCID": "…", "revoked": false }`, no `revocation` key.
+- **`400`** — the param is not a well-formed credential CID (CIDv1 dag-cbor + sha256, `bafyrei` + 52 base32 chars).
+
+**The JWS is the proof; the boolean is a convenience.** A zero-trust caller does not take the relay's word for it: it re-verifies the returned revocation token itself — signature against the issuer's identity chain, CID integrity, kid-DID == payload `did`, and the issuer-only rule (only the credential's issuer can revoke it). The relay serves the index; the operation carries its own authority.
+
+**Absence is NOT proof of non-revocation.** `revoked: false` is the honest known-nothing answer: it attests only that _this relay_ has not ingested a revocation for that CID. A relay can be behind, partitioned, or adversarially withholding. A caller that needs stronger assurance queries a quorum of independent relays (and gossip makes withholding progressively harder) — the same trust posture as every other read in the protocol.
+
+If more than one issuer has revoked the same credential CID (possible, since the set is scoped per issuer and the issuer-only rule is enforced at credential verification rather than ingest), the relay MUST answer deterministically: the revocation with the lexicographically smallest `issuerDID`. Callers re-verifying the JWS against the credential's actual issuer are unaffected either way.
+
+### Issuer Revocations (`GET /revocations/v1/issuer/:did`)
+
+```json
+{
+  "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+  "revocations": [{ "credentialCID": "bafyrei…", "revocation": "eyJhbGciOiJFZERTQSIs…" }]
+}
+```
+
+- **`200`** — every revocation this relay has ingested for the issuer, sorted by `credentialCID` ascending (deterministic across implementations). An issuer with none returns an empty array — same honest-absence semantics as above.
+- **`400`** — the param is not a canonical 31-char `did:dfos` identifier.
 
 ---
 
