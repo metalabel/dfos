@@ -11,6 +11,15 @@ export {
   type DidDocumentMetadata,
   type DidResolutionResult,
 } from './did-document';
+export {
+  isValidCredentialCid,
+  credentialRevocationStatus,
+  issuerRevocationList,
+  REVOCATIONS_BASE_PATH,
+  type CredentialRevocationStatus,
+  type IssuerRevocationEntry,
+  type IssuerRevocationList,
+} from './revocations';
 export { MemoryRelayStore } from './store';
 export {
   ingestOperations,
@@ -26,6 +35,7 @@ export type {
   StoredIdentityChain,
   StoredContentChain,
   StoredOperation,
+  StoredRevocation,
   BlobKey,
   LogEntry,
   OperationKind,

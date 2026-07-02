@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"sync"
 
@@ -437,6 +438,37 @@ func (s *MemoryStore) IsCredentialRevoked(issuerDID string, credentialCID string
 	key := issuerDID + "::" + credentialCID
 	_, ok := s.revocations[key]
 	return ok, nil
+}
+
+func (s *MemoryStore) GetRevocationForCredential(credentialCID string) (*StoredRevocation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// deterministic across stores/twins: smallest issuerDID wins on a
+	// (theoretical) multi-issuer collision
+	var found *StoredRevocation
+	for _, rev := range s.revocations {
+		if rev.CredentialCID != credentialCID {
+			continue
+		}
+		if found == nil || rev.IssuerDID < found.IssuerDID {
+			r := rev
+			found = &r
+		}
+	}
+	return found, nil
+}
+
+func (s *MemoryStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	revs := []StoredRevocation{}
+	for _, rev := range s.revocations {
+		if rev.IssuerDID == issuerDID {
+			revs = append(revs, rev)
+		}
+	}
+	sort.Slice(revs, func(i, j int) bool { return revs[i].CredentialCID < revs[j].CredentialCID })
+	return revs, nil
 }
 
 // ---------------------------------------------------------------------------

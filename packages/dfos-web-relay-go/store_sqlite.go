@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS revocations (
 
 CREATE INDEX IF NOT EXISTS idx_revocations_issuer ON revocations(issuer_did);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_revocations_scope ON revocations(issuer_did, credential_cid);
+CREATE INDEX IF NOT EXISTS idx_revocations_credential ON revocations(credential_cid);
 
 CREATE TABLE IF NOT EXISTS public_credentials (
 	cid TEXT PRIMARY KEY,
@@ -804,6 +805,43 @@ func (s *SQLiteStore) IsCredentialRevoked(issuerDID string, credentialCID string
 		return false, err
 	}
 	return true, nil
+}
+
+func (s *SQLiteStore) GetRevocationForCredential(credentialCID string) (*StoredRevocation, error) {
+	// deterministic across stores/twins: smallest issuerDID wins on a
+	// (theoretical) multi-issuer collision
+	var rev StoredRevocation
+	err := s.readerDB().QueryRow(
+		"SELECT cid, issuer_did, credential_cid, jws_token FROM revocations WHERE credential_cid = ? ORDER BY issuer_did ASC LIMIT 1",
+		credentialCID,
+	).Scan(&rev.CID, &rev.IssuerDID, &rev.CredentialCID, &rev.JWSToken)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &rev, nil
+}
+
+func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
+	rows, err := s.readerDB().Query(
+		"SELECT cid, issuer_did, credential_cid, jws_token FROM revocations WHERE issuer_did = ? ORDER BY credential_cid ASC",
+		issuerDID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	revs := []StoredRevocation{}
+	for rows.Next() {
+		var rev StoredRevocation
+		if err := rows.Scan(&rev.CID, &rev.IssuerDID, &rev.CredentialCID, &rev.JWSToken); err != nil {
+			return nil, err
+		}
+		revs = append(revs, rev)
+	}
+	return revs, rows.Err()
 }
 
 // ---------------------------------------------------------------------------

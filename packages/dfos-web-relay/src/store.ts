@@ -119,6 +119,26 @@ export class MemoryRelayStore implements RelayStore {
     return this.revocations.has(`${issuerDID}::${credentialCID}`);
   }
 
+  async getRevocationForCredential(credentialCID: string): Promise<StoredRevocation | undefined> {
+    // deterministic across stores/twins: smallest issuerDID wins on a
+    // (theoretical) multi-issuer collision
+    let found: StoredRevocation | undefined;
+    for (const rev of this.revocations.values()) {
+      if (rev.credentialCID !== credentialCID) continue;
+      if (!found || rev.issuerDID < found.issuerDID) found = rev;
+    }
+    return found;
+  }
+
+  async getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]> {
+    const revs: StoredRevocation[] = [];
+    for (const rev of this.revocations.values()) {
+      if (rev.issuerDID === issuerDID) revs.push(rev);
+    }
+    revs.sort((a, b) => (a.credentialCID < b.credentialCID ? -1 : 1));
+    return revs;
+  }
+
   // --- public credentials ---
 
   async getPublicCredentials(resource: string): Promise<string[]> {

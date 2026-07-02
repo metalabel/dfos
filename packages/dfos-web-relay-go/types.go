@@ -235,6 +235,15 @@ type Store interface {
 	GetRevocations(issuerDID string) ([]string, error)
 	AddRevocation(revocation StoredRevocation) error
 	IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error)
+	// GetRevocationForCredential returns the stored revocation for a credential
+	// CID, any issuer (nil when unknown). Serves the revocation-status route. If
+	// more than one issuer has revoked the same CID, implementations MUST return
+	// the one with the lexicographically smallest issuerDID (deterministic
+	// across stores and twins).
+	GetRevocationForCredential(credentialCID string) (*StoredRevocation, error)
+	// GetRevocationsByIssuer returns all stored revocations issued by a DID,
+	// sorted by credentialCID ascending (deterministic across stores and twins).
+	GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error)
 
 	// public credentials (standing authorization)
 	GetPublicCredentials(resource string) ([]string, error) // returns JWS tokens
