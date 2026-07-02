@@ -32,14 +32,16 @@ import (
 // ===========================================================================
 
 type parityFixture struct {
-	RelayDID        string   `json:"relayDid"`
-	RelayProfileJWS string   `json:"relayProfileJws"`
-	BootstrapOps    []string `json:"bootstrapOps"`
-	Ops             []string `json:"ops"`
-	QueryDID        string   `json:"queryDid"`
-	QueryContentID  string   `json:"queryContentId"`
-	QueryServiceDID string   `json:"queryServiceDid"`
-	QueryDeletedDID string   `json:"queryDeletedDid"`
+	RelayDID                  string   `json:"relayDid"`
+	RelayProfileJWS           string   `json:"relayProfileJws"`
+	BootstrapOps              []string `json:"bootstrapOps"`
+	Ops                       []string `json:"ops"`
+	QueryDID                  string   `json:"queryDid"`
+	QueryContentID            string   `json:"queryContentId"`
+	QueryServiceDID           string   `json:"queryServiceDid"`
+	QueryDeletedDID           string   `json:"queryDeletedDid"`
+	QueryRevokedCredentialCID string   `json:"queryRevokedCredentialCid"`
+	QueryRevocationIssuerDID  string   `json:"queryRevocationIssuerDid"`
 }
 
 func loadParityEnv(t *testing.T) (tsURL, goURL string, fix parityFixture) {

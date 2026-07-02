@@ -45,6 +45,11 @@ type Fixture struct {
 	// identity. Both drive the universal-resolver parity cases.
 	QueryServiceDID string `json:"queryServiceDid"`
 	QueryDeletedDID string `json:"queryDeletedDid"`
+	// QueryRevokedCredentialCID is the CID of a credential issued AND revoked by
+	// QueryRevocationIssuerDID (user B). Both drive the revocation-status parity
+	// cases (/revocations/v1).
+	QueryRevokedCredentialCID string `json:"queryRevokedCredentialCid"`
+	QueryRevocationIssuerDID  string `json:"queryRevocationIssuerDid"`
 }
 
 // seededKey returns a deterministic ed25519 keypair from a single seed byte.
@@ -196,6 +201,20 @@ func contentUpdate(did, prevCID, docCID, kid, createdAt string, priv ed25519.Pri
 	return signJWS("did:dfos:content-op", kid, payload, priv)
 }
 
+// revocation builds a pinned-createdAt revocation of a credential CID, signed by
+// the issuer (issuer-only rule). Payload shape matches SignRevocation, which
+// stamps wall-clock createdAt and so cannot be byte-pinned.
+func revocation(issuerDID, credentialCID, kid, createdAt string, priv ed25519.PrivateKey) (token, cid string) {
+	payload := map[string]any{
+		"version":       1,
+		"type":          "revocation",
+		"did":           issuerDID,
+		"credentialCID": credentialCID,
+		"createdAt":     createdAt,
+	}
+	return signJWS("did:dfos:revocation", kid, payload, priv)
+}
+
 func publicCredential(issuerDID, kid string, priv ed25519.PrivateKey) (token, cid string) {
 	payload := map[string]any{
 		"version": 1,
@@ -241,7 +260,7 @@ func main() {
 	bPriv, bPub := seededKey(3)
 	bKeyID := "key_userB00000000000000000000000"
 	bGenesis, bDID, _ := identityCreate(bPriv, bPub, bKeyID)
-	_ = bDID
+	bKid := bDID + "#" + bKeyID
 
 	// --- content chain owned by A: create + update (strictly increasing createdAt) ---
 	doc1 := docCID(map[string]any{"type": "post", "title": "first", "body": "hello"})
@@ -261,6 +280,12 @@ func main() {
 
 	// --- public credential (aud:*) by A ---
 	cred, _ := publicCredential(aDID, aKid, aPriv)
+
+	// --- credential by B, revoked by B (revocation-status parity cases) ---
+	// A separate issuer so A's standing public credential is untouched; the
+	// revocation removes B's from the public set on BOTH twins identically.
+	bCred, bCredCID := publicCredential(bDID, bKid, bPriv)
+	bRevocation, _ := revocation(bDID, bCredCID, bKid, pinnedTimeAt(3), bPriv)
 
 	// --- user C (seed 4): genesis WITH a services set (DfosRelay + ContentAnchor) ---
 	// The ContentAnchor points at A's 31-char content chain id, which satisfies the
@@ -294,14 +319,18 @@ func main() {
 			cUpdate,
 			artifact,
 			cred,
+			bCred,
+			bRevocation,
 			cGenesis,
 			dGenesis,
 			dDelete,
 		},
-		QueryDID:        aDID,
-		QueryContentID:  contentID,
-		QueryServiceDID: cDID,
-		QueryDeletedDID: dDID,
+		QueryDID:                  aDID,
+		QueryContentID:            contentID,
+		QueryServiceDID:           cDID,
+		QueryDeletedDID:           dDID,
+		QueryRevokedCredentialCID: bCredCID,
+		QueryRevocationIssuerDID:  bDID,
 	}
 
 	data, err := json.MarshalIndent(fixture, "", "  ")
