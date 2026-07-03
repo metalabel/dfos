@@ -17,6 +17,19 @@ lockstep-pending relay and documentation work, all additive atop frozen v1.
 
 ### Added
 
+- **`@metalabel/dfos-web-relay/peer-client` subpath export** — a lightweight,
+  server-free entry for relay CONSUMERS: `createHttpPeerClient` (which now accepts
+  an optional injected `fetch` for timeouts/retries/tests), the `PROOF_BASE_PATH` /
+  `REVOCATIONS_BASE_PATH` route-prefix constants, and the `PeerClient` /
+  `PeerLogEntry` types. Importing it pulls none of the relay server graph (no hono,
+  no zod, no stores). Purely additive — the root export is unchanged. First
+  consumer: `@metalabel/dfos-client`. (#147)
+- **`@metalabel/dfos-client` scaffolded (private, pre-release)** — the high-level
+  read client: resolve + verify orchestration over untrusted relays, trust-as-data
+  (`Resolved<T>`), quorum by response digest, cache-the-log + verify-forward,
+  `./siwd` (canonical signing-input byte contract + no-throw verifier) and
+  `./store` (memory + IndexedDB) subpaths. Not published — ships with a future
+  stamped release. (#147)
 - **Media object + `profile/v1` additive `avatar` field** — the content model now
   defines the canonical **Media object** shape `{ uri, cid?, href? }`: `uri`
   (required) is the canonical reference — an `attachment://<id>` ref (opaque,

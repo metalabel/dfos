@@ -1,33 +1,32 @@
 {
-  "name": "@metalabel/dfos-web-relay",
+  "name": "@metalabel/dfos-client",
   "version": "0.15.0",
+  "private": true,
   "type": "module",
-  "description": "DFOS Web Relay — verifying HTTP relay for identity chains, content chains, and content blobs",
+  "description": "DFOS Client — read-only resolve + verify orchestration over untrusted relays. Fetch, resolve, verify-orchestration, cache; all crypto truth comes from @metalabel/dfos-protocol",
   "license": "MIT",
   "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
   "repository": {
     "type": "git",
     "url": "https://github.com/metalabel/dfos.git",
-    "directory": "packages/dfos-web-relay"
+    "directory": "packages/dfos-client"
   },
   "homepage": "https://protocol.dfos.com",
   "keywords": [
     "dfos",
-    "relay",
-    "web-relay",
-    "hono",
-    "ed25519",
-    "jws",
+    "client",
     "did",
     "verifiable",
-    "identity",
-    "content-addressing",
+    "resolve",
+    "siwd",
+    "ed25519",
+    "jws",
     "metalabel"
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./node": "./src/serve.ts",
-    "./peer-client": "./src/peer-client.ts"
+    "./siwd": "./src/siwd.ts",
+    "./store": "./src/store/index.ts"
   },
   "publishConfig": {
     "exports": {
@@ -35,19 +34,19 @@
         "import": "./dist/index.js",
         "types": "./dist/index.d.ts"
       },
-      "./node": {
-        "import": "./dist/serve.js",
-        "types": "./dist/serve.d.ts"
+      "./siwd": {
+        "import": "./dist/siwd.js",
+        "types": "./dist/siwd.d.ts"
       },
-      "./peer-client": {
-        "import": "./dist/peer-client.js",
-        "types": "./dist/peer-client.d.ts"
+      "./store": {
+        "import": "./dist/store/index.js",
+        "types": "./dist/store/index.d.ts"
       }
     }
   },
+  "sideEffects": false,
   "files": [
     "dist",
-    "openapi.yaml",
     "LICENSE",
     "README.md"
   ],
@@ -58,18 +57,15 @@
     "test": "vitest run",
     "prepublishOnly": "pnpm build"
   },
-  "dependencies": {
-    "hono": "^4.12.23",
-    "zod": "^4.4.3"
-  },
   "peerDependencies": {
-    "@metalabel/dfos-protocol": "^0.15.0"
+    "@metalabel/dfos-protocol": "^0.15.0",
+    "@metalabel/dfos-web-relay": "^0.15.0"
   },
   "devDependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
+    "@metalabel/dfos-web-relay": "workspace:*",
     "@types/node": "^24.10.4",
     "tsup": "^8.5.1",
-    "tsx": "^4.22.4",
     "vitest": "^4.1.8"
   }
 }
