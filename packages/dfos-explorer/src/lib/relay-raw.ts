@@ -103,6 +103,47 @@ export const fetchCountersigs = async (cid: string, relays: string[]): Promise<s
   return [];
 };
 
+export interface RevocationFeedProbe {
+  relay: string;
+  /** 'live' = feed answered; 'absent' = 404/501 (relay predates the route); 'down' = unreachable */
+  feed: 'live' | 'absent' | 'down';
+  revoked: boolean;
+  /** the self-proving revocation JWS when the relay returned one */
+  revocation?: string;
+}
+
+/**
+ * Probe each relay's /revocations/v1 credential-status route — for DISPLAY.
+ * The trust decision lives in dfos-client's checker (which re-verifies any
+ * positive proof); this exists so the UI can distinguish "no feed available
+ * anywhere — a revocation would be invisible here" from "feeds consulted,
+ * no revocation seen".
+ */
+export const probeRevocationFeeds = async (
+  credentialCID: string,
+  relays: string[],
+): Promise<RevocationFeedProbe[]> => {
+  return Promise.all(
+    relays.map(async (relay): Promise<RevocationFeedProbe> => {
+      try {
+        const res = await tryJson(
+          `${relay}/revocations/v1/credential/${encodeURIComponent(credentialCID)}`,
+        );
+        if (!res.ok) return { relay, feed: 'absent', revoked: false };
+        const body = (await res.json()) as { revoked?: boolean; revocation?: string };
+        return {
+          relay,
+          feed: 'live',
+          revoked: body.revoked === true,
+          ...(typeof body.revocation === 'string' ? { revocation: body.revocation } : {}),
+        };
+      } catch {
+        return { relay, feed: 'down', revoked: false };
+      }
+    }),
+  );
+};
+
 export interface BlobResult {
   relay: string;
   status: number; // 0 = network error

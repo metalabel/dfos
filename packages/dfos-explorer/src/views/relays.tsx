@@ -11,15 +11,31 @@ import type { RelayHealth } from '@metalabel/dfos-client';
 import { useEffect, useState } from 'preact/hooks';
 import { Panel } from '../components/ui';
 import { getClient } from '../lib/client';
-import { addRelay, DEFAULT_RELAYS, getRelays, removeRelay, subscribeRelays } from '../lib/relays';
+import {
+  addRelay,
+  DEFAULT_RELAYS,
+  getQuorum,
+  getRelays,
+  removeRelay,
+  setQuorum,
+  subscribeRelays,
+} from '../lib/relays';
 
 export const Relays = () => {
   const [relays, setRelays] = useState(getRelays());
+  const [quorum, setQuorumState] = useState(getQuorum());
   const [health, setHealth] = useState<Map<string, RelayHealth>>(new Map());
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
 
-  useEffect(() => subscribeRelays(() => setRelays(getRelays())), []);
+  useEffect(
+    () =>
+      subscribeRelays(() => {
+        setRelays(getRelays());
+        setQuorumState(getQuorum());
+      }),
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -111,6 +127,27 @@ export const Relays = () => {
           The default seed ({DEFAULT_RELAYS.join(', ')}) is a pragmatic starting point, not a
           blessing — remove it any time. Each relay's local-index sync cursor is tracked
           independently; the op pool is a union across relays.
+        </div>
+      </Panel>
+
+      <Panel title="quorum" right={<span class="lbl">agreement threshold</span>}>
+        <div class="filters">
+          {[1, 2, 3].map((n) => (
+            <button
+              key={n}
+              class={quorum === n ? 'on' : ''}
+              disabled={n > relays.length}
+              onClick={() => setQuorum(n)}
+            >
+              {n} relay{n === 1 ? '' : 's'}
+            </button>
+          ))}
+        </div>
+        <div class="ck-note" style={{ marginTop: 8 }}>
+          How many distinct relays must return <b>byte-identical</b> answers before a read is
+          treated as agreed. 1 = first-wins (fastest). Higher thresholds need that many configured,
+          reachable relays — agreement is convergence evidence across an untrusted set, never
+          completeness proof. Every answer is still fully re-verified locally regardless.
         </div>
       </Panel>
     </>
