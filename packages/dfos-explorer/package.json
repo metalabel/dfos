@@ -24,6 +24,7 @@
     "@metalabel/dfos-client": "workspace:*",
     "@metalabel/dfos-protocol": "workspace:*",
     "@metalabel/dfos-web-relay": "workspace:*",
+    "multiformats": "^14.0.0",
     "preact": "^10.28.2"
   },
   "devDependencies": {
