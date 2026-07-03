@@ -499,7 +499,10 @@ header {
 }
 
 .kv .v {
-  word-break: break-all;
+  /* wrap prose on word boundaries; only break a long unbreakable token (a CID /
+     DID) when it would otherwise overflow — never mid-word like break-all did */
+  overflow-wrap: anywhere;
+  word-break: normal;
   min-width: 0;
 }
 
