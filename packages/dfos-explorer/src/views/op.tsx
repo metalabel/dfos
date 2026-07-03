@@ -12,7 +12,8 @@
 */
 
 import { verifyCountersignature } from '@metalabel/dfos-protocol/chain';
-import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { decodeDFOSCredentialUnsafe } from '@metalabel/dfos-protocol/credentials';
+import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks, type CheckState } from '../components/checks';
 import { OpTimeline, OpType } from '../components/timeline';
@@ -41,7 +42,11 @@ interface OpState {
   payload?: Record<string, unknown>;
   kind: string;
   chainId: string;
+  /** How chainId was obtained — governs whether chain placement is trustworthy. */
+  chainSource: 'derived' | 'relay-hint' | 'none';
   source: 'local' | 'relay' | 'missing';
+  /** props.cid re-derived from the payload bytes (real integrity check). */
+  selfCidOk: boolean;
 }
 
 interface ChainVerify {
@@ -71,12 +76,14 @@ const didOfKid = (kid: string): string => {
 export const Op = (props: { cid: string }) => {
   const [op, setOp] = useState<OpState | null>(null);
   const [chain, setChain] = useState<ChainVerify | null>(null);
+  const [chainPending, setChainPending] = useState(false);
   const [witnesses, setWitnesses] = useState<WitnessRow[] | null>(null);
 
   useEffect(() => {
     let dead = false;
     setOp(null);
     setChain(null);
+    setChainPending(false);
     setWitnesses(null);
     const relays = getRelays();
     const client = getClient();
@@ -99,21 +106,52 @@ export const Op = (props: { cid: string }) => {
       const decoded = jwsToken ? decodeJwsUnsafe(jwsToken) : null;
       const typ = typeof decoded?.header.typ === 'string' ? decoded.header.typ : '';
 
-      // credentials get the dedicated view
-      if (typ === 'did:dfos:credential') {
-        location.hash = `#/cred/${props.cid}`;
+      // Credentials get the dedicated view — but ONLY hand off a token that
+      // actually decodes as a credential, else the cred view bounces it right
+      // back here and we spin. replace() (not push) so Back isn't trapped.
+      if (typ === 'did:dfos:credential' && jwsToken && decodeDFOSCredentialUnsafe(jwsToken)) {
+        location.replace(`#/cred/${props.cid}`);
         return;
       }
 
       const payload = decoded?.payload ?? {};
-      const kind = local?.kind ?? KIND_OF_TYP[typ] ?? '';
-      const chainId =
-        local?.chainId ??
-        (kind === 'identity-op'
-          ? didOfKid(typeof decoded?.header.kid === 'string' ? decoded.header.kid : '')
-          : typeof payload['did'] === 'string'
-            ? payload['did']
-            : '');
+      // kind from the JWS envelope is authoritative over the relay index hint
+      const kind = KIND_OF_TYP[typ] ?? local?.kind ?? '';
+
+      // Real self-CID integrity: re-derive the CID from the payload bytes and
+      // compare to the routed CID — NOT a trust of the relay-supplied header.cid.
+      let selfCidOk = false;
+      if (decoded) {
+        try {
+          const encoded = await dagCborCanonicalEncode(payload);
+          selfCidOk = encoded.cid.toString() === props.cid;
+        } catch {
+          selfCidOk = false;
+        }
+      }
+      if (dead) return;
+
+      // chainId provenance:
+      //  - identity-op: a non-genesis op's kid IS did:dfos:<chain>#<key> — the
+      //    chain is cryptographically named by the op itself (derived).
+      //  - content-op: the contentId is NOT in the payload (payload.did is the
+      //    SIGNER, not the chain) — it is only knowable from the local index
+      //    hint (relay-asserted) or not at all.
+      let chainId = '';
+      let chainSource: OpState['chainSource'] = 'none';
+      if (kind === 'identity-op') {
+        const derived = didOfKid(typeof decoded?.header.kid === 'string' ? decoded.header.kid : '');
+        if (derived) {
+          chainId = derived;
+          chainSource = 'derived';
+        } else if (local?.chainId) {
+          chainId = local.chainId;
+          chainSource = 'relay-hint';
+        }
+      } else if (kind === 'content-op' && local?.chainId) {
+        chainId = local.chainId;
+        chainSource = 'relay-hint';
+      }
 
       const state: OpState = {
         ...(jwsToken ? { jwsToken } : {}),
@@ -122,12 +160,15 @@ export const Op = (props: { cid: string }) => {
           : {}),
         kind,
         chainId,
+        chainSource,
         source,
+        selfCidOk,
       };
       setOp(state);
 
       // tier 2: fold the whole chain and place this op on it
       if (chainId && (kind === 'identity-op' || kind === 'content-op')) {
+        setChainPending(true);
         try {
           const log = await client.log(kind === 'identity-op' ? 'identity' : 'content', chainId);
           if (dead) return;
@@ -155,18 +196,24 @@ export const Op = (props: { cid: string }) => {
               note: e instanceof Error ? e.message : String(e),
               rows: [],
             });
+        } finally {
+          if (!dead) setChainPending(false);
         }
       }
     })();
 
     // countersignature web — independent of op resolvability
     void (async () => {
-      const tokens = await fetchCountersigs(props.cid, relays);
+      const all = await fetchCountersigs(props.cid, relays);
       if (dead) return;
-      if (tokens.length === 0) {
+      if (all.length === 0) {
         setWitnesses([]);
         return;
       }
+      // a hostile relay can return an unbounded witness list; cap the per-op
+      // verification work (each row resolves an identity + verifies a sig)
+      const MAX_WITNESSES = 200;
+      const tokens = all.slice(0, MAX_WITNESSES);
       const callbacks = getClient().callbacks();
       const rows: WitnessRow[] = [];
       for (const token of tokens) {
@@ -196,25 +243,29 @@ export const Op = (props: { cid: string }) => {
 
   const typ = typeof op?.header?.['typ'] === 'string' ? (op.header['typ'] as string) : '';
   const kid = typeof op?.header?.['kid'] === 'string' ? (op.header['kid'] as string) : '';
-  const headerCid = typeof op?.header?.['cid'] === 'string' ? (op.header['cid'] as string) : '';
-  const selfCidOk = !!op?.header && headerCid === props.cid;
+  const selfCidOk = op?.selfCidOk ?? false;
   const payload = op?.payload ?? {};
 
   const pill = !op
     ? { state: 'pending' as const, text: 'decoding…' }
     : !op.jwsToken
       ? { state: 'warn' as const, text: 'not resolvable' }
-      : !chain
-        ? op.kind === 'identity-op' || op.kind === 'content-op'
-          ? { state: 'pending' as const, text: 'verifying in chain…' }
-          : { state: 'warn' as const, text: 'decoded · not chain-verified' }
-        : !chain.present
-          ? chain.note
+      : chainPending
+        ? { state: 'pending' as const, text: 'verifying in chain…' }
+        : !chain
+          ? // no fold ran: honest terminal state keyed on the real self-CID check
+            selfCidOk
+            ? { state: 'warn' as const, text: 'bytes verified · chain not placed' }
+            : { state: 'bad' as const, text: 'cid mismatch' }
+          : chain.note
             ? { state: 'warn' as const, text: 'decoded · chain verify failed' }
-            : { state: 'bad' as const, text: 'not in chain' }
-          : chain.isHead
-            ? { state: 'ok' as const, text: 'verified in chain' }
-            : { state: 'warn' as const, text: 'verified · superseded' };
+            : !chain.present
+              ? op.chainSource === 'relay-hint'
+                ? { state: 'warn' as const, text: 'not in relay-asserted chain' }
+                : { state: 'bad' as const, text: 'not in chain' }
+              : chain.isHead
+                ? { state: 'ok' as const, text: 'verified in chain' }
+                : { state: 'warn' as const, text: 'verified · superseded' };
 
   const chainLink = op?.chainId ? (
     op.kind === 'content-op' ? (
@@ -278,9 +329,9 @@ export const Op = (props: { cid: string }) => {
           <div class="v">
             {op?.header ? (
               selfCidOk ? (
-                <Pill state="ok">names its own hash</Pill>
+                <Pill state="ok">bytes re-hash to this CID</Pill>
               ) : (
-                <Pill state="bad">cid mismatch</Pill>
+                <Pill state="bad">✗ bytes do NOT hash to this CID</Pill>
               )
             ) : (
               <span class="muted">n/a</span>
@@ -317,10 +368,10 @@ export const Op = (props: { cid: string }) => {
       {op?.jwsToken ? (
         <Panel title="verification" right={<span class="lbl">op alone vs whole chain</span>}>
           <div class="ck-note" style={{ marginBottom: 8 }}>
-            Alone, an operation proves only that its payload hashes to this CID, and — once you
-            fetch the signer's key — that this key signed it. It cannot prove the key was
-            authorized, that the op sits on canonical history, or that it wasn't superseded. That
-            takes folding the whole chain.
+            Alone, an operation proves only that its payload hashes to this CID (recomputed here).
+            It cannot prove the signer's key was authorized, that the op sits on canonical history,
+            or that it wasn't superseded — that takes folding the whole chain. The signature itself
+            is checked only via the chain fold, where the signing key resolves.
           </div>
           <Checks>
             <Check state="ok" note={typ}>
@@ -330,11 +381,11 @@ export const Op = (props: { cid: string }) => {
               state={selfCidOk ? 'ok' : 'bad'}
               note={
                 selfCidOk
-                  ? 'header.cid == requested cid — the op names its own hash'
-                  : 'header.cid differs from requested cid'
+                  ? 'payload re-encoded (canonical dag-cbor) and re-hashed here — matches the CID'
+                  : 'payload does NOT hash to the requested CID — forged or corrupted'
               }
             >
-              self-certifying CID
+              self-certifying CID (recomputed)
             </Check>
             {op.kind === 'identity-op' || op.kind === 'content-op' ? (
               !chain ? (

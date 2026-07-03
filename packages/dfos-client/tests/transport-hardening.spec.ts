@@ -218,4 +218,39 @@ describe('globalLog resilience', () => {
     expect(page.entries).toEqual(toEntries(id.log));
     expect(page.provenance.answeredBy).toBe(A);
   });
+
+  it('passes the caller limit through, clamped to the relay window', async () => {
+    const asked: (number | undefined)[] = [];
+    const limitSpy: PeerClient = {
+      ...fakePeerClient({}),
+      async getOperationLog(_url, params) {
+        asked.push(params?.limit);
+        return { entries: [], cursor: null };
+      },
+    };
+    const client = createClient({ relays: [A], peerClient: limitSpy });
+    await client.globalLog();
+    await client.globalLog(undefined, { limit: 500 });
+    await client.globalLog(undefined, { limit: 99999 });
+    await client.globalLog(undefined, { limit: 0 });
+    expect(asked).toEqual([100, 500, 1000, 1]);
+  });
+
+  it('preserves relay-asserted kind/chainId hints on global-log entries', async () => {
+    const annotated: PeerClient = {
+      ...fakePeerClient({}),
+      async getOperationLog() {
+        return {
+          entries: [
+            { cid: 'bafy-1', jwsToken: 'a.b.c', kind: 'identity-op', chainId: 'did:dfos:aaa' },
+          ],
+          cursor: null,
+        };
+      },
+    };
+    const client = createClient({ relays: [A], peerClient: annotated });
+    const page = await client.globalLog();
+    expect(page.entries[0]?.kind).toBe('identity-op');
+    expect(page.entries[0]?.chainId).toBe('did:dfos:aaa');
+  });
 });

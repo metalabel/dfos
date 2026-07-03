@@ -49,6 +49,33 @@ describe('trust aggregation', () => {
     expect(res.value.creator.did).toBe(creator.did);
   });
 
+  it('rejects a relay that serves a different valid identity under the requested DID', async () => {
+    // chain substitution: the relay answers the query for `wanted.did` with a
+    // fully valid chain for a DIFFERENT identity. The internal verify passes;
+    // the id-binding check must reject it rather than resolve as `wanted.did`.
+    const wanted = await buildIdentity();
+    const other = await buildIdentity();
+    const peerClient = fakePeerClient({
+      [RELAY]: { identities: { [wanted.did]: other.log } },
+    });
+    const client = createClient({ relays: [RELAY], peerClient });
+    await expect(client.identity(wanted.did)).rejects.toThrow(/mismatched identity/);
+  });
+
+  it('rejects a relay that serves a different valid content chain under the requested id', async () => {
+    const creator = await buildIdentity();
+    const wanted = await buildContent(creator);
+    const other = await buildContent(creator);
+    const peerClient = fakePeerClient({
+      [RELAY]: {
+        identities: { [creator.did]: creator.log },
+        contents: { [wanted.contentId]: other.log },
+      },
+    });
+    const client = createClient({ relays: [RELAY], peerClient });
+    await expect(client.content(wanted.contentId)).rejects.toThrow(/mismatched content/);
+  });
+
   it('a cache-only read (all relays down) degrades trust to tip', async () => {
     const id = await buildIdentity();
     const store = memoryStore();

@@ -76,6 +76,18 @@ export interface PeerConfig {
 export interface PeerLogEntry {
   cid: string;
   jwsToken: string;
+  /**
+   * Relay-asserted operation kind. Global /log entries carry it; chain logs
+   * omit it. A ROUTING HINT for indexers/browsers, never a verification
+   * input — folds re-derive everything from the JWS itself.
+   */
+  kind?: string;
+  /**
+   * Relay-asserted chain identifier — DID for identity/artifact ops, contentId
+   * for content ops, targetCID for countersigns, issuer DID for credentials.
+   * Same hint-only status as `kind`.
+   */
+  chainId?: string;
 }
 
 /** Injected peer transport — the relay expresses intent, the caller decides transport */

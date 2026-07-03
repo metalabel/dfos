@@ -38,3 +38,18 @@ export const parseMediaObject = (value: unknown): MediaObject | null => {
 };
 
 export const isAttachmentUri = (uri: string): boolean => uri.startsWith('attachment://');
+
+/**
+ * A relay-controlled href/uri is only safe to render as a clickable/fetchable
+ * link if it is http(s). Anything else — notably `javascript:` and `data:` —
+ * is rejected to `null` so it can never reach an anchor href or a fetch.
+ */
+export const safeHttpUrl = (value: string | undefined): string | null => {
+  if (!value) return null;
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.toString() : null;
+  } catch {
+    return null;
+  }
+};

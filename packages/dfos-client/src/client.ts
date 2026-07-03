@@ -28,6 +28,7 @@ import type {
   Client,
   ClientConfig,
   DocumentBlob,
+  GlobalLogOptions,
   GlobalLogPage,
   LogOp,
   Provenance,
@@ -292,13 +293,16 @@ export const createClient = (config: ClientConfig): Client => {
     return { value, trust: trust(true, axes), provenance: res.provenance };
   };
 
-  const globalLog = async (cursor?: string, options?: CallOptions): Promise<GlobalLogPage> => {
+  const globalLog = async (cursor?: string, options?: GlobalLogOptions): Promise<GlobalLogPage> => {
     const pager = operationPager(peerClient);
+    // page size is caller-tunable (sync engines want big pages); clamp to the
+    // relay-enforced 1..1000 window so an out-of-range ask can't 400
+    const limit = Math.max(1, Math.min(1000, Math.floor(options?.limit ?? 100)));
     // a single page from the first reachable relay — a seam, not a sync engine
     for (const url of relaysFor(options)) {
       let page: Awaited<ReturnType<typeof pager>> = null;
       try {
-        page = await pager(url, cursor ? { after: cursor, limit: 100 } : { limit: 100 });
+        page = await pager(url, cursor ? { after: cursor, limit } : { limit });
       } catch {
         page = null;
       }

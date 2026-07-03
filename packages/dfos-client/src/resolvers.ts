@@ -192,6 +192,12 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
         const log = entries.map((e) => e.jwsToken);
         if (log.length === 0) throw new Error(`identity not found: ${did}`);
         const state = await verifyIdentityChain({ didPrefix: DID_PREFIX, log });
+        // BIND to the requested id: verifyIdentityChain derives the DID from
+        // whatever genesis op it was handed — a relay that serves a DIFFERENT
+        // (internally valid) chain under this DID must not resolve as `did`.
+        if (state.did !== did) {
+          throw new Error(`relay served a mismatched identity: asked ${did}, got ${state.did}`);
+        }
         const last = opMeta(log[log.length - 1]!);
         return { state, log, headCID: last.cid, lastCreatedAt: last.createdAt };
       }
@@ -304,6 +310,14 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
           resolveIdentity,
           isRevoked: deps.isRevoked,
         });
+        // BIND to the requested id: contentId is derived from the genesis op
+        // CID inside verifyContentChain — reject a relay that serves a different
+        // valid chain under this contentId.
+        if (state.contentId !== contentId) {
+          throw new Error(
+            `relay served a mismatched content chain: asked ${contentId}, got ${state.contentId}`,
+          );
+        }
         const last = opMeta(log[log.length - 1]!);
         return { state, log, headCID: last.cid, lastCreatedAt: last.createdAt };
       }

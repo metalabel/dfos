@@ -12,7 +12,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { isAttachmentUri, rawCidOf, type MediaObject } from '../lib/media';
+import { isAttachmentUri, rawCidOf, safeHttpUrl, type MediaObject } from '../lib/media';
 import { Copyable, Panel, Pill, Term } from './ui';
 
 interface FetchState {
@@ -23,26 +23,32 @@ interface FetchState {
   mediaType?: string;
 }
 
+// hard cap on href-fetched media bytes — a hostile host must not OOM the tab
+const MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+
 export const MediaPanel = (props: { title: string; media: MediaObject }) => {
   const { media } = props;
   const [fetched, setFetched] = useState<FetchState | null>(null);
+  const safeHref = safeHttpUrl(media.href);
 
   useEffect(() => {
     let dead = false;
     let url: string | undefined;
     setFetched(null);
-    if (!media.href || !/^https?:\/\//.test(media.href)) return;
+    if (!safeHref) return;
     void (async () => {
       try {
-        const res = await fetch(media.href as string, {
-          mode: 'cors',
-          signal: AbortSignal.timeout(20000),
-        });
+        const res = await fetch(safeHref, { mode: 'cors', signal: AbortSignal.timeout(20000) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const declared = Number(res.headers.get('content-length') ?? '0');
+        if (declared > MAX_MEDIA_BYTES) throw new Error('media too large');
         const bytes = new Uint8Array(await res.arrayBuffer());
+        if (bytes.length > MAX_MEDIA_BYTES) throw new Error('media too large');
         const derivedCid = await rawCidOf(bytes);
         const mediaType = res.headers.get('content-type') ?? '';
-        if (mediaType.startsWith('image/')) {
+        // preview ONLY when the bytes provably match the committed cid — never
+        // render mismatched bytes as the object's image
+        if (mediaType.startsWith('image/') && media.cid && derivedCid === media.cid) {
           url = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: mediaType }));
         }
         if (!dead)
@@ -61,7 +67,7 @@ export const MediaPanel = (props: { title: string; media: MediaObject }) => {
       dead = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [media.uri, media.href, media.cid]);
+  }, [media.uri, safeHref, media.cid]);
 
   const cidMatch = media.cid && fetched?.derivedCid ? media.cid === fetched.derivedCid : null;
 
@@ -92,17 +98,23 @@ export const MediaPanel = (props: { title: string; media: MediaObject }) => {
               href <span class="lbl">non-normative hint</span>
             </div>
             <div class="v">
-              <a href={media.href} target="_blank" rel="noreferrer noopener">
-                {short(media.href, 40, 12)}
-              </a>
+              {safeHref ? (
+                <a href={safeHref} target="_blank" rel="noreferrer noopener">
+                  {short(safeHref, 40, 12)}
+                </a>
+              ) : (
+                <span class="err" title={media.href}>
+                  {short(media.href, 40, 12)} <span class="lbl">— non-http scheme, not linked</span>
+                </span>
+              )}
             </div>
           </>
         ) : null}
       </div>
       <div style={{ marginTop: 8 }}>
-        {!media.href ? (
+        {!safeHref ? (
           <span class="ck-note">
-            No fetch hint — bytes are not addressable from here.{' '}
+            No usable fetch hint — bytes are not addressable from here.{' '}
             {media.cid
               ? 'Anyone who obtains the bytes can verify them against the cid above.'
               : 'Without a cid there is no integrity commitment at all — this ref is pure trust in the host.'}

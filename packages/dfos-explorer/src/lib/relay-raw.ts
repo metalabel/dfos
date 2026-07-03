@@ -12,6 +12,19 @@
 
 const PROOF = '/proof/v1';
 
+// hard cap on any relay-served body the explorer buffers into memory — a
+// hostile relay must not be able to OOM the tab with a giant blob/document
+const MAX_BODY_BYTES = 16 * 1024 * 1024;
+
+/** Read a response body with a hard size cap (declared + actual). Throws over cap. */
+const boundedBytes = async (res: Response): Promise<Uint8Array> => {
+  const declared = Number(res.headers.get('content-length') ?? '0');
+  if (declared > MAX_BODY_BYTES) throw new Error('response too large');
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.length > MAX_BODY_BYTES) throw new Error('response too large');
+  return bytes;
+};
+
 export interface ClaimResult {
   relay: string;
   status: number; // 0 = network error / no relay reachable
@@ -163,7 +176,7 @@ export const fetchBlobRaw = async (contentId: string, relays: string[]): Promise
         signal: AbortSignal.timeout(15000),
       });
       if (res.ok) {
-        const bytes = new Uint8Array(await res.arrayBuffer());
+        const bytes = await boundedBytes(res);
         const servedDocCid = res.headers.get('x-document-cid') ?? undefined;
         const mediaType = res.headers.get('content-type') ?? undefined;
         return {

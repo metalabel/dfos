@@ -19,6 +19,9 @@ import type { OpRow } from './op-rows';
 export { INDEX_V1_SCHEMA };
 export type { IndexEntry };
 
+// per-op index document size cap (index docs are small delta streams)
+const MAX_DOC_BYTES = 4 * 1024 * 1024;
+
 export interface FoldedIndex {
   /** the resolved LWW-Map */
   entries: Map<string, IndexEntry>;
@@ -72,7 +75,17 @@ export const foldIndexChain = async (options: {
             { mode: 'cors', signal: AbortSignal.timeout(15000) },
           );
           if (!res.ok) continue;
+          // cap per-op document size — a hostile relay must not OOM the fold
+          const declared = Number(res.headers.get('content-length') ?? '0');
+          if (declared > MAX_DOC_BYTES) {
+            gaps.push({ opCid: row.cid, reason: 'document exceeds size cap' });
+            return { cid: row.cid, createdAt: row.createdAt, document: null };
+          }
           const bytes = new Uint8Array(await res.arrayBuffer());
+          if (bytes.length > MAX_DOC_BYTES) {
+            gaps.push({ opCid: row.cid, reason: 'document exceeds size cap' });
+            return { cid: row.cid, createdAt: row.createdAt, document: null };
+          }
           const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
           const encoded = await dagCborCanonicalEncode(parsed as Record<string, unknown>);
           if (encoded.cid.toString() !== committedCid) {

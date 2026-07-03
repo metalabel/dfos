@@ -17,6 +17,22 @@ lockstep-pending relay and documentation work, all additive atop frozen v1.
 
 ### Added
 
+- **Global-log read ergonomics (`dfos-web-relay` + `dfos-client`)** —
+  `PeerLogEntry` and `LogOp` now carry the relay's per-entry `kind` / `chainId`
+  as typed OPTIONAL fields (the global `/log` has always served them; the types
+  dropped them). Documented as relay-asserted routing hints for
+  indexers/browsers — never a verification input. `client.globalLog` gains a
+  `limit` option (1–1000, clamped to the relay window; default 100 unchanged)
+  so sync engines can pull big pages. Driven by the dfos-explorer full-log
+  sync, the client's first real consumer. (#154)
+- **`@metalabel/dfos-explorer` scaffolded (private, local-only)** — a
+  client-side-only chain explorer over untrusted relays: two-beat
+  claim→verified views for identities / content / operations / credentials,
+  full-log sync into a normalized IndexedDB local index (chains fold offline),
+  in-tab canonical fold for `index/v1` chains, Media object integrity
+  re-hashing, per-relay revocation-feed honesty, quorum + provenance as
+  first-class UI. Not published, not deployed — the first full consumer of
+  `@metalabel/dfos-client`. (#149, #150, #151, #152, #153)
 - **`@metalabel/dfos-web-relay/peer-client` subpath export** — a lightweight,
   server-free entry for relay CONSUMERS: `createHttpPeerClient` (which now accepts
   an optional injected `fetch` for timeouts/retries/tests), the `PROOF_BASE_PATH` /

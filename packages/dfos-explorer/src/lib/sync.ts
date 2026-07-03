@@ -34,17 +34,8 @@ export interface SyncOptions {
   signal?: AbortSignal;
 }
 
-/**
- * The relay's /log entries carry `kind` and `chainId` beyond the typed LogOp
- * floor (the peer-client passes the parsed JSON through untouched). Routing
- * hints only — never a verification input.
- */
-interface AnnotatedLogOp {
-  cid: string;
-  jwsToken: string;
-  kind?: unknown;
-  chainId?: unknown;
-}
+/** Page size for full-log sync — big pages, few roundtrips (relay caps at 1000). */
+const SYNC_PAGE_LIMIT = 500;
 
 export const syncFromRelay = async (options: SyncOptions): Promise<{ added: number }> => {
   const { db, client, relay, onProgress, signal } = options;
@@ -60,14 +51,17 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
   for (const chain of await db.allChains()) rollups.set(chain.chainId, chain);
 
   while (!signal?.aborted) {
-    const page = await client.globalLog(cursor ?? undefined, { relays: [relay] });
+    const page = await client.globalLog(cursor ?? undefined, {
+      relays: [relay],
+      limit: SYNC_PAGE_LIMIT,
+    });
     if (!page.provenance.answeredBy) throw new Error(`relay unreachable: ${relay}`);
     if (page.entries.length === 0) break;
 
     const known = await db.knownOps(page.entries.map((e) => e.cid));
     const ops: ExplorerOp[] = [];
     const touched = new Map<string, ChainRollup>();
-    for (const entry of page.entries as AnnotatedLogOp[]) {
+    for (const entry of page.entries) {
       const kind = isOpKind(entry.kind) ? entry.kind : 'artifact';
       const chainId = typeof entry.chainId === 'string' ? entry.chainId : '';
       if (!entry.cid || !entry.jwsToken || !chainId) continue;
