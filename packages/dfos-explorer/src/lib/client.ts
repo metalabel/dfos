@@ -11,17 +11,18 @@
 
 import { createClient, type Client } from '@metalabel/dfos-client';
 import { indexedDbStore } from '@metalabel/dfos-client/store';
-import { getRelays } from './relays';
+import { getQuorum, getRelays } from './relays';
 
 let cached: { key: string; client: Client } | null = null;
 
 export const getClient = (): Client => {
   const relays = getRelays();
-  const key = relays.join('|');
+  const quorum = Math.min(getQuorum(), relays.length);
+  const key = `${quorum}|${relays.join('|')}`;
   if (!cached || cached.key !== key) {
     cached = {
       key,
-      client: createClient({ relays, store: indexedDbStore('dfos-explorer-client') }),
+      client: createClient({ relays, quorum, store: indexedDbStore('dfos-explorer-client') }),
     };
   }
   return cached.client;

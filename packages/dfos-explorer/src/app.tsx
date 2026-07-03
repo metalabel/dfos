@@ -11,12 +11,12 @@ import { getRelays, subscribeRelays } from './lib/relays';
 import { dispatchInput, routeFor } from './lib/resolve-input';
 import { navigate, useRoute } from './router';
 import { Content } from './views/content';
+import { Credential } from './views/credential';
 import { Glossary } from './views/glossary';
 import { Home } from './views/home';
 import { Identity } from './views/identity';
 import { LocalIndex } from './views/local-index';
 import { Op } from './views/op';
-import { Pending } from './views/pending';
 import { Relays } from './views/relays';
 
 const Header = () => {
@@ -143,7 +143,7 @@ export const App = () => {
       case 'op':
         return <Op cid={route.id} />;
       case 'cred':
-        return <Pending kind="credential" id={route.id} />;
+        return <Credential cid={route.id} />;
       default:
         return <Home onSample={onSample} />;
     }

@@ -86,3 +86,31 @@ export const subscribeRelays = (fn: Listener): (() => void) => {
   listeners.add(fn);
   return () => listeners.delete(fn);
 };
+
+// -----------------------------------------------------------------------------
+// quorum — how many relays must return byte-identical answers
+// -----------------------------------------------------------------------------
+
+const QUORUM_KEY = 'dfos.explorer.quorum';
+const MAX_QUORUM = 5;
+
+export const getQuorum = (): number => {
+  try {
+    const raw = storage()?.getItem(QUORUM_KEY);
+    const n = raw ? Number(raw) : 1;
+    if (Number.isInteger(n) && n >= 1 && n <= MAX_QUORUM) return n;
+  } catch {
+    // fall through
+  }
+  return 1;
+};
+
+export const setQuorum = (n: number): void => {
+  const clamped = Math.max(1, Math.min(MAX_QUORUM, Math.floor(n)));
+  try {
+    storage()?.setItem(QUORUM_KEY, String(clamped));
+  } catch {
+    // storage unavailable
+  }
+  for (const fn of listeners) fn();
+};
