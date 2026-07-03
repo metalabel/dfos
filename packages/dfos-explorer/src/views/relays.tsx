@@ -32,6 +32,9 @@ const CAP_LABELS: { key: string; label: string }[] = [
   { key: 'proof', label: 'proof' },
   { key: 'content', label: 'content' },
   { key: 'log', label: 'log' },
+  // revocation-status query routes (/revocations/v1) — a relay advertising this
+  // serves the credential/issuer revocation feeds the credential view consults.
+  { key: 'revocations', label: 'revocations' },
   { key: 'write', label: 'write' },
 ];
 
