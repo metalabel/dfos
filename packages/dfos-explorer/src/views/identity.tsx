@@ -305,8 +305,9 @@ interface ResolvedProfile {
  * Profile header — renders an identity's profile when it anchors one via a
  * ContentAnchor service and the doc is publicly readable. The bytes are
  * re-hashed to the on-chain committed CID before anything renders, so a relay
- * cannot dress arbitrary bytes up as someone's profile. Only shows for public
- * profiles (a standing public-read grant made the bytes servable to anyone).
+ * cannot dress arbitrary bytes up as someone's profile. The "public" pill means
+ * exactly what was observed: the bytes were served to an UNAUTHENTICATED fetch
+ * (the empirical effect of a public-read grant) — not a verified grant object.
  */
 const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean }) => {
   const [profile, setProfile] = useState<ResolvedProfile | null>(null);

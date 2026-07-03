@@ -12,7 +12,13 @@
 import { useEffect, useState } from 'preact/hooks';
 import { short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { isAttachmentUri, rawCidOf, safeHttpUrl, type MediaObject } from '../lib/media';
+import {
+  fetchBoundedBytes,
+  isAttachmentUri,
+  rawCidOf,
+  safeHttpUrl,
+  type MediaObject,
+} from '../lib/media';
 import { Copyable, Panel, Pill, Term } from './ui';
 
 interface FetchState {
@@ -37,31 +43,35 @@ export const MediaPanel = (props: { title: string; media: MediaObject }) => {
     setFetched(null);
     if (!safeHref) return;
     void (async () => {
-      try {
-        const res = await fetch(safeHref, { mode: 'cors', signal: AbortSignal.timeout(20000) });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const declared = Number(res.headers.get('content-length') ?? '0');
-        if (declared > MAX_MEDIA_BYTES) throw new Error('media too large');
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        if (bytes.length > MAX_MEDIA_BYTES) throw new Error('media too large');
-        const derivedCid = await rawCidOf(bytes);
-        const mediaType = res.headers.get('content-type') ?? '';
-        // preview ONLY when the bytes provably match the committed cid — never
-        // render mismatched bytes as the object's image
-        if (mediaType.startsWith('image/') && media.cid && derivedCid === media.cid) {
-          url = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: mediaType }));
-        }
-        if (!dead)
-          setFetched({
-            status: 'ok',
-            derivedCid,
-            bytes: bytes.length,
-            mediaType,
-            ...(url ? { objectUrl: url } : {}),
-          });
-      } catch {
-        if (!dead) setFetched({ status: 'failed' });
+      // streaming byte-cap fetch — a hostile host cannot OOM the tab past the cap
+      const fetched = await fetchBoundedBytes(safeHref, MAX_MEDIA_BYTES);
+      if (dead) return;
+      if (!fetched) {
+        setFetched({ status: 'failed' });
+        return;
       }
+      const { bytes, mediaType } = fetched;
+      const derivedCid = await rawCidOf(bytes);
+      if (dead) return;
+      // preview ONLY when the bytes provably match the committed cid — never
+      // render mismatched bytes as the object's image
+      let made: string | undefined;
+      if (mediaType.startsWith('image/') && media.cid && derivedCid === media.cid) {
+        made = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: mediaType }));
+        // the effect may have torn down during the awaits — revoke, don't leak
+        if (dead) {
+          URL.revokeObjectURL(made);
+          return;
+        }
+        url = made;
+      }
+      setFetched({
+        status: 'ok',
+        derivedCid,
+        bytes: bytes.length,
+        mediaType,
+        ...(made ? { objectUrl: made } : {}),
+      });
     })();
     return () => {
       dead = true;

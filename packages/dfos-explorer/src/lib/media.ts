@@ -40,6 +40,54 @@ export const parseMediaObject = (value: unknown): MediaObject | null => {
 export const isAttachmentUri = (uri: string): boolean => uri.startsWith('attachment://');
 
 /**
+ * Fetch bytes from an untrusted host with a HARD cap enforced during the
+ * stream, not after. The content-length header is a hint a hostile host can
+ * omit or forge, so we also count bytes as they arrive and abort the moment the
+ * cap is exceeded — never materializing an unbounded body into tab memory.
+ * Returns null on any failure (non-ok, over-cap, network) — callers treat a
+ * null as "no verifiable bytes", never as an error to surface.
+ */
+export const fetchBoundedBytes = async (
+  url: string,
+  maxBytes: number,
+  timeoutMs = 20000,
+): Promise<{ bytes: Uint8Array; mediaType: string } | null> => {
+  try {
+    const res = await fetch(url, { mode: 'cors', signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return null;
+    if (Number(res.headers.get('content-length') ?? '0') > maxBytes) return null;
+    const mediaType = res.headers.get('content-type') ?? '';
+    const reader = res.body?.getReader();
+    if (!reader) {
+      const buf = new Uint8Array(await res.arrayBuffer());
+      return buf.length > maxBytes ? null : { bytes: buf, mediaType };
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.length;
+      if (total > maxBytes) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return { bytes, mediaType };
+  } catch {
+    return null;
+  }
+};
+
+/**
  * A relay-controlled href/uri is only safe to render as a clickable/fetchable
  * link if it is http(s). Anything else — notably `javascript:` and `data:` —
  * is rejected to `null` so it can never reach an anchor href or a fetch.

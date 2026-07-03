@@ -12,7 +12,7 @@
 
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { rawCidOf, safeHttpUrl, type MediaObject } from '../lib/media';
+import { fetchBoundedBytes, rawCidOf, safeHttpUrl, type MediaObject } from '../lib/media';
 import { Pill } from './ui';
 
 const AVATAR_MAX_BYTES = 4 * 1024 * 1024;
@@ -29,21 +29,20 @@ const Avatar = (props: { media: MediaObject | null | undefined; fallback: string
     setObjectUrl(null);
     if (!media || !safeHref || !media.cid) return;
     void (async () => {
-      try {
-        const res = await fetch(safeHref, { mode: 'cors', signal: AbortSignal.timeout(20000) });
-        if (!res.ok) return;
-        const declared = Number(res.headers.get('content-length') ?? '0');
-        if (declared > AVATAR_MAX_BYTES) return;
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        if (bytes.length > AVATAR_MAX_BYTES) return;
-        const type = res.headers.get('content-type') ?? '';
-        // integrity gate — bytes MUST re-hash to the committed cid to render
-        if (!type.startsWith('image/') || (await rawCidOf(bytes)) !== media.cid) return;
-        url = URL.createObjectURL(new Blob([bytes.slice().buffer], { type }));
-        if (!dead) setObjectUrl(url);
-      } catch {
-        // no verified image — fall back to the glyph
+      // streaming byte-cap fetch — a hostile relay cannot OOM the tab past the cap
+      const fetched = await fetchBoundedBytes(safeHref, AVATAR_MAX_BYTES);
+      if (dead || !fetched) return;
+      const { bytes, mediaType } = fetched;
+      // integrity gate — bytes MUST re-hash to the committed cid to render
+      if (!mediaType.startsWith('image/') || (await rawCidOf(bytes)) !== media.cid) return;
+      const made = URL.createObjectURL(new Blob([bytes.slice().buffer], { type: mediaType }));
+      // the effect may have torn down during the awaits above — revoke, don't leak
+      if (dead) {
+        URL.revokeObjectURL(made);
+        return;
       }
+      url = made;
+      setObjectUrl(made);
     })();
     return () => {
       dead = true;

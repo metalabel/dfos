@@ -145,9 +145,10 @@ const RelayCard = (props: { url: string; health: RelayHealth | undefined }) => {
           </div>
           {verify === 'verified' ? (
             <div class="ck-note">
-              Profile artifact verified: signed by a key this relay's self-certifying identity
-              holds, CID self-consistent. The identity itself re-folds in your tab when you open the
-              relay DID.
+              Profile artifact verified — signed by a key the advertised DID holds, CID
+              self-consistent. This authenticates the <b>artifact</b>, not that this host controls
+              the DID (relays are parameters, never authorities). Open the DID to fold its identity
+              in-tab.
             </div>
           ) : verify === 'relay-asserted' ? (
             <div class="ck-note">
