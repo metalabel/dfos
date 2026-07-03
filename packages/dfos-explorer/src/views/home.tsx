@@ -42,7 +42,7 @@ export const Home = (props: { onSample: (q: string) => void }) => (
       </div>
     </Panel>
     <Panel title="what this is">
-      <div class="kv" style={{ gridTemplateColumns: 'minmax(90px, 120px) 1fr', gap: '8px 12px' }}>
+      <div class="kv about">
         <div class="k">no backend</div>
         <div class="v muted">
           A static page. Relays are swappable parameters, like RPC endpoints — never authorities.

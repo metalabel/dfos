@@ -19,7 +19,7 @@ import { LocalIndex } from './views/local-index';
 import { Op } from './views/op';
 import { Relays } from './views/relays';
 
-const Header = () => {
+const Header = (props: { onToggleIndex: () => void; indexOpen: boolean }) => {
   const [relays, setRelays] = useState(getRelays());
   const [status, setStatus] = useState<'probing' | 'up' | 'mixed' | 'down'>('probing');
 
@@ -65,6 +65,9 @@ const Header = () => {
           <a href="#/relays">
             {relays.length} relay{relays.length === 1 ? '' : 's'}
           </a>
+          <a class="index-toggle" onClick={props.onToggleIndex}>
+            {props.indexOpen ? '✕ index' : '☰ index'}
+          </a>
         </div>
       </div>
     </header>
@@ -98,6 +101,7 @@ const SearchBar = () => {
           placeholder="paste a did:dfos:… / contentId / operation CID (baf…)"
           autocomplete="off"
           spellcheck={false}
+          onInput={() => setError('')}
           onKeyDown={(e) => {
             if (e.key === 'Enter') go();
           }}
@@ -124,6 +128,12 @@ const Foot = () => (
 
 export const App = () => {
   const route = useRoute();
+  const [indexOpen, setIndexOpen] = useState(false);
+
+  // navigating (tapping an index row) closes the mobile drawer
+  useEffect(() => {
+    setIndexOpen(false);
+  }, [route]);
 
   const onSample = (q: string): void => {
     const target = dispatchInput(q);
@@ -151,12 +161,17 @@ export const App = () => {
 
   return (
     <>
-      <Header />
+      <Header onToggleIndex={() => setIndexOpen((v) => !v)} indexOpen={indexOpen} />
       <div class="wrap">
         <SearchBar />
         <div class="cols">
           <main>{view}</main>
-          <aside>
+          <aside class={indexOpen ? 'open' : ''}>
+            {indexOpen ? (
+              <div class="drawer-close">
+                <a onClick={() => setIndexOpen(false)}>✕ close</a>
+              </div>
+            ) : null}
             <LocalIndex />
           </aside>
         </div>

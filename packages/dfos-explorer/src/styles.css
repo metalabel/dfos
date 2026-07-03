@@ -247,6 +247,54 @@ header {
   }
 }
 
+/* mobile: the local index becomes a slide-in drawer toggled from the header */
+@media (max-width: 899px) {
+  .cols aside {
+    display: none;
+  }
+
+  .cols aside.open {
+    display: block;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(340px, 92vw);
+    z-index: 30;
+    overflow-y: auto;
+    background: var(--bg);
+    border-left: 1px solid var(--line);
+    box-shadow: -6px 0 18px rgba(0, 0, 0, 0.18);
+    padding: 10px;
+  }
+
+  .cols aside.open .panel {
+    margin-bottom: 0;
+  }
+
+  .drawer-close {
+    text-align: right;
+    padding: 2px 0 8px;
+    font-size: 11px;
+  }
+}
+
+@media (min-width: 900px) {
+  .drawer-close {
+    display: none;
+  }
+
+  .index-rows {
+    max-height: none;
+  }
+}
+
+@media (min-width: 900px) {
+  .index-toggle {
+    display: none;
+  }
+}
+
 /* ---------------------------------------------------------------- panel */
 
 .panel {
@@ -453,6 +501,38 @@ header {
 .kv .v {
   word-break: break-all;
   min-width: 0;
+}
+
+/* wider label variants (glossary, about) — still stack on narrow phones */
+.kv.terms {
+  grid-template-columns: minmax(120px, 190px) 1fr;
+  gap: 9px 12px;
+}
+
+.kv.about {
+  grid-template-columns: minmax(90px, 120px) 1fr;
+  gap: 8px 12px;
+}
+
+/* narrow phones: stack each key over its value */
+@media (max-width: 480px) {
+  .kv,
+  .kv.terms,
+  .kv.about {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .kv .k {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-top: 7px;
+  }
+
+  .kv .k:first-child {
+    margin-top: 0;
+  }
 }
 
 .kv-note {
