@@ -22,6 +22,7 @@ import { getClient } from './client';
 import { getDb } from './db-instance';
 import { fmtCount, short } from './format';
 import { getRelays } from './relays';
+import { getAutoSyncMinutes } from './settings';
 import { syncAll, type SyncProgress } from './sync';
 
 export type SyncPhase = 'idle' | 'syncing' | 'done' | 'error';
@@ -177,6 +178,45 @@ const persistLastSync = (ms: number): void => {
   } catch {
     // storage unavailable — in-memory value still drives this session
   }
+};
+
+// -----------------------------------------------------------------------------
+// auto-sync — a single heartbeat that fires a background sync when the index
+// is older than the configured cadence. A 30s tick keeps it simple: setting
+// changes, load-time staleness, and post-run rescheduling all fall out of the
+// same due-check, no timer juggling.
+// -----------------------------------------------------------------------------
+
+const HEARTBEAT_MS = 30_000;
+
+/** ms epoch the next auto-sync is due, or 0 when auto-sync is off. */
+export const nextAutoSyncAt = (): number => {
+  const minutes = getAutoSyncMinutes();
+  if (minutes <= 0) return 0;
+  const base = state.lastSyncAt || 0;
+  return base + minutes * 60_000;
+};
+
+const autoTick = (): void => {
+  const minutes = getAutoSyncMinutes();
+  if (minutes <= 0 || isSyncing()) return;
+  const due = state.lastSyncAt === 0 || Date.now() >= state.lastSyncAt + minutes * 60_000;
+  if (due) void startSync('auto');
+};
+
+let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+/** Start the auto-sync heartbeat (idempotent). Returns a stop fn. */
+export const startAutoSyncScheduler = (): (() => void) => {
+  if (heartbeat === null) {
+    heartbeat = setInterval(autoTick, HEARTBEAT_MS);
+  }
+  return () => {
+    if (heartbeat !== null) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+  };
 };
 
 /** Subscribe a component to the live sync state. */
