@@ -12,9 +12,10 @@
 import type { Resolved } from '@metalabel/dfos-client';
 import type { ServiceEntry, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { classifyAnchor } from '@metalabel/dfos-protocol/chain';
-import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks, type CheckState } from '../components/checks';
+import { ProfileCard } from '../components/profile';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
 import {
@@ -32,8 +33,10 @@ import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
+import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
-import { fetchClaim, type ClaimResult } from '../lib/relay-raw';
+import { isProfileContent, profileAnchorOf } from '../lib/profile';
+import { fetchBlobRaw, fetchClaim, type ClaimResult } from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
 import { jitIndexChain } from '../lib/sync-store';
 import { NotFound } from './not-found';
@@ -132,8 +135,14 @@ export const Identity = (props: { did: string }) => {
         ? { state: 'ok' as CheckState, text: 'verified locally' }
         : { state: 'warn' as CheckState, text: 'verified · tip drift' };
 
+  const services = ('services' in state ? state.services : undefined) ?? [];
+
   return (
     <>
+      <IdentityProfile
+        anchor={stateVerified ? profileAnchorOf(services) : null}
+        chainVerified={stateVerified}
+      />
       <Panel
         title={
           <>
@@ -223,7 +232,7 @@ export const Identity = (props: { did: string }) => {
       </Panel>
 
       <KeysPanel state={state} verified={stateVerified} />
-      <ServicesPanel services={('services' in state ? state.services : undefined) ?? []} />
+      <ServicesPanel services={services} />
 
       <Panel title="credentials issued" right={<span class="lbl">from local index</span>}>
         {creds === null ? (
@@ -282,6 +291,72 @@ export const Identity = (props: { did: string }) => {
         )}
       </Panel>
     </>
+  );
+};
+
+interface ResolvedProfile {
+  name?: string | undefined;
+  description?: string | undefined;
+  avatar: ReturnType<typeof parseMediaObject>;
+  publicRead: boolean;
+}
+
+/**
+ * Profile header — renders an identity's profile when it anchors one via a
+ * ContentAnchor service and the doc is publicly readable. The bytes are
+ * re-hashed to the on-chain committed CID before anything renders, so a relay
+ * cannot dress arbitrary bytes up as someone's profile. The "public" pill means
+ * exactly what was observed: the bytes were served to an UNAUTHENTICATED fetch
+ * (the empirical effect of a public-read grant) — not a verified grant object.
+ */
+const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean }) => {
+  const [profile, setProfile] = useState<ResolvedProfile | null>(null);
+
+  useEffect(() => {
+    let dead = false;
+    setProfile(null);
+    if (!props.anchor || !props.chainVerified) return;
+    const anchor = props.anchor;
+    const relays = getRelays();
+    void (async () => {
+      try {
+        const [res, blob] = await Promise.all([
+          getClient().content(anchor),
+          fetchBlobRaw(anchor, relays),
+        ]);
+        if (dead || !blob.bytes) return; // gated / absent → no public profile to show
+        const committedCid = res.value.chain.currentDocumentCID;
+        const text = new TextDecoder('utf-8', { fatal: false }).decode(blob.bytes);
+        const parsed: unknown = JSON.parse(text);
+        const derived = (
+          await dagCborCanonicalEncode(parsed as Record<string, unknown>)
+        ).cid.toString();
+        // integrity gate — the served bytes MUST hash to the committed doc CID
+        if (dead || derived !== committedCid || !isProfileContent(parsed)) return;
+        setProfile({
+          name: parsed.name,
+          description: parsed.description,
+          avatar: parseMediaObject(parsed.avatar),
+          publicRead: !blob.gated,
+        });
+      } catch {
+        // no renderable public profile — the identity view stands on its own
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [props.anchor, props.chainVerified]);
+
+  if (!profile) return null;
+  return (
+    <ProfileCard
+      name={profile.name}
+      description={profile.description}
+      avatar={profile.avatar}
+      verify="verified"
+      publicRead={profile.publicRead}
+    />
   );
 };
 

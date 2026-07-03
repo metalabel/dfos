@@ -73,6 +73,7 @@ const Header = (props: { onToggleIndex: () => void; indexOpen: boolean }) => {
           </a>
         </div>
         <div class="hnav">
+          <a href="#/relays">relays</a>
           <a href="#/glossary">glossary</a>
         </div>
         <div class="hstatus">
