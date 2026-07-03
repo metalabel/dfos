@@ -34,6 +34,7 @@ import {
   type VerifiedDFOSCredential,
 } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { compareHeadPreference } from '@metalabel/dfos-protocol/fold';
 import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityChain } from './types';
 
 // -----------------------------------------------------------------------------
@@ -1198,16 +1199,15 @@ const selectDeterministicHead = (log: string[]): { cid: string; createdAt: strin
 
   const tips = ops.filter((op) => !hasChild.has(op.cid));
 
-  // sort: highest createdAt first, then highest CID. Use a code-point/byte
-  // comparator (NOT localeCompare — ICU collation is locale/engine-dependent
-  // with no determinism contract). For base32lower CIDs + ASCII ISO8601, JS
-  // string `<`/`>` (UTF-16 code-unit order) equals the Go twin's byte-wise
-  // order, so both relays select the same head on conflicting tips.
-  const cmp = (x: string, y: string): number => (x < y ? -1 : x > y ? 1 : 0);
-  tips.sort((a, b) => {
-    if (a.createdAt !== b.createdAt) return cmp(b.createdAt, a.createdAt);
-    return cmp(b.cid, a.cid);
-  });
+  // sort: highest createdAt first, then highest CID. `compareHeadPreference`
+  // (from @metalabel/dfos-protocol/fold) is the SINGLE byte-wise comparator
+  // shared with the canonical fold's `linearize` — the fold orders the whole
+  // log ascending so the head-preferred op sorts LAST, and reuses this exact
+  // function so head selection and the fold can never drift. Byte-wise (NOT
+  // localeCompare); for base32lower CIDs + ASCII ISO8601, JS `<`/`>` (UTF-16
+  // code-unit order) equals the Go twin's byte-wise order, so both relays
+  // select the same head on conflicting tips.
+  tips.sort(compareHeadPreference);
 
   return tips[0] ?? { cid: '', createdAt: '' };
 };

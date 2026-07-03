@@ -124,10 +124,11 @@ Unlike a living document (where the head document is the state) or a stream (whe
 
 Each schema implies a default projection — how applications derive resolved state from the chain:
 
-| Schema       | Projection                                                                      |
-| ------------ | ------------------------------------------------------------------------------- |
-| `post/v1`    | Living document — head `documentCID` is the current post. History is edit trail |
-| `profile/v1` | Living document — head `documentCID` is the current profile                     |
+| Schema       | Projection                                                                              |
+| ------------ | --------------------------------------------------------------------------------------- |
+| `post/v1`    | Living document — head `documentCID` is the current post. History is edit trail         |
+| `profile/v1` | Living document — head `documentCID` is the current profile                             |
+| `index/v1`   | Canonical fold — LWW-Map folded over all operations (every branch). See [Index](#index) |
 
 Stream and event fold schemas define their own projection rules in their schema documentation. The protocol does not enforce projections — these are reading conventions that applications agree on.
 
@@ -142,6 +143,101 @@ Use cases for `targetOperationCID`:
 - **Annotations**: A document annotates a specific version (operation) of another chain's content
 
 `targetOperationCID` is a content field (inside the document committed by CID), not an operation field. The protocol commits to it via `documentCID` but does not interpret it. Applications resolve the reference by looking up the target operation on the relay.
+
+---
+
+## Canonical Fold
+
+The [Event Fold](#event-fold) interpretation says a chain's resolved state is the result of replaying its operations "in order." The **canonical fold** makes that order precise: a single deterministic total order over **all** operations in a chain's log — every branch, not just the selected-head branch — so that any implementation holding the same set of operations computes the same folded state.
+
+### Linearization
+
+The canonical order is the [web relay's deterministic head-selection comparator](https://protocol.dfos.com/web-relay#fork-acceptance) generalized from "pick one tip" to "order the whole log."
+
+Head selection prefers, among the chain's tips (operations with no child), the operation with the **highest `createdAt`**, breaking ties by the **highest operation CID** — both compared **byte-wise** over the multibase CID string and the ASCII ISO-8601 timestamp (a code-point comparison, never locale collation, so every implementation agrees; see [Threat Model → Fork head selection](https://protocol.dfos.com/threat-model)).
+
+The canonical linearization lays that same preference out in full, **ascending**, so the operation head selection would prefer sorts **last**:
+
+1. **`createdAt` ascending** (byte-wise string comparison).
+2. **Operation CID ascending** as tiebreak (byte-wise multibase string).
+
+Because the two orderings are exact reverses of one another, they can never disagree: the **last** operation of a full-log linearization is exactly the operation head selection picks. This holds structurally — any operation with a child has a strictly-greater-`createdAt` child (each write's `createdAt` must exceed its predecessor's), so the operation with the globally-maximal `createdAt` is always a tip. Sorting the head-preferred operation last is what makes the fold **last-applied-wins**: the newest write settles a contended key.
+
+Both the relay's head selection and the fold's linearization call the **same exported comparison function** ([`compareHeadPreference`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/fold/linearize.ts)), so the two cannot drift.
+
+### Branch-inclusive is deliberate
+
+Folding **every branch**, rather than only the selected-head branch, is a deliberate divergence from the head-selection register semantics used by living-document schemas:
+
+- **Head selection answers "which single document is current."** A `profile/v1` or `post/v1` chain is a register — one head document is the state, and a losing fork is simply not the head. A concurrently-appended fork is _dropped_ from the resolved value.
+- **The canonical fold answers "what is the merged state of a CRDT chain."** An index (or any LWW-Map / event-fold schema) is not a register; its state is the accumulation of every operation. Here concurrent forks must **converge**, not compete — dropping a branch would silently lose the writes on it.
+
+So the two readings coexist on the same wire format: a register chain reads its head via head selection; a fold chain folds its whole log. This is what retro-solves the concurrent-append fork-drop hazard for accumulating schemas — two clients that append at the same chain position both keep their writes, and every reader converges on the same merged state regardless of ingest order.
+
+### Delete-terminality
+
+The fold assumes a **live** chain. If the **selected head branch is delete-terminal** — the highest-ranked tip is a `delete` — the chain is deleted, resolution reports it as such, and **the fold is moot**: a consumer checks `isDeleted` (from chain verification) first and does not fold a deleted chain. (A `delete` on a _non-head_ branch is just another superseded operation and does not delete the chain — see [Undeletion](https://protocol.dfos.com/web-relay).)
+
+### Library
+
+The fold is a set of **pure functions** over already-verified operations, published at [`@metalabel/dfos-protocol/fold`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/src/fold) (no cryptographic or network dependencies):
+
+- `linearize(ops)` — the deterministic total order above.
+- `foldLwwMap(deltas)` — the generic LWW-Map fold over an ordered delta stream.
+- `foldIndexV1(ops)` — the `index/v1` fold (below) built on the two.
+
+---
+
+## Index
+
+An **index chain** is a curated map of content refs — a space's catalog, an author's works, a reading list, a set of pinned items. It is an [LWW-Map](#library) folded via the [canonical fold](#canonical-fold): each operation commits an `index/v1` document carrying deltas, and the resolved index is the fold over every operation in the log.
+
+### Index (`https://schemas.dfos.com/index/v1`)
+
+An index document carries an **array of deltas** — matching the delta-per-event shape of the [reference content stream](#reference-content-stream-schema) and keeping each operation comfortably under the 64 KiB operation cap while a single append can still set or remove several entries at once.
+
+| Field     | Type    | Required | Description                                  |
+| --------- | ------- | -------- | -------------------------------------------- |
+| `$schema` | string  | yes      | `"https://schemas.dfos.com/index/v1"`        |
+| `deltas`  | delta[] | yes      | Ordered deltas contributed by this operation |
+
+Each delta is one of two shapes:
+
+| Delta                              | Effect                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `{ "op": "set", "key", "value"? }` | Add or replace entry `key`. `value` is optional metadata (see below); omit it (or use `{}`) for a pure set-membership entry |
+| `{ "op": "remove", "key" }`        | Drop entry `key`                                                                                                            |
+
+- **`key`** is a **content ref** — a 31-char content chain id or a CID — consistent with how refs are named elsewhere in the content model.
+- **`value`** is an optional entry-metadata object `{ label?, order?, … }`. `label` is a display string; `order` is an integer ordering hint (integers only, per the number-encoding rule above). A pure set-membership index uses the degenerate `value: {}`. Unknown metadata fields are preserved (additive forward compat).
+
+```json
+{
+  "$schema": "https://schemas.dfos.com/index/v1",
+  "deltas": [
+    {
+      "op": "set",
+      "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": { "label": "First Release", "order": 1 }
+    },
+    { "op": "remove", "key": "ccccccccccccccccccccccccccccccc" }
+  ]
+}
+```
+
+### Fold semantics
+
+The resolved index is the [canonical fold](#canonical-fold) as an LWW-Map:
+
+1. **Linearize** every operation in the log (all branches) into the canonical total order.
+2. **Flatten** each `index/v1` document's `deltas` array in array order, producing one ordered delta stream.
+3. **Fold** the stream: `set` writes `key → value`, `remove` deletes `key`. The **last delta touching a key wins** at its linearized position — so a `remove` supersedes an earlier `set`, and a later `set` re-adds a removed key.
+
+**Unknown delta shapes are skipped deterministically** — a delta whose `op` is neither `set` nor `remove`, whose `key` is not a string, or whose `set` `value` is present but not an object is ignored, not an error. This lets the vocabulary grow (new delta ops) without forking existing readers, and every reader skips the same deltas.
+
+Because the fold is branch-inclusive and last-applied-wins, an index **converges**: any ingest order of the same operation set folds to the same map, and two clients that concurrently append entries both keep their writes. If the chain's selected head is delete-terminal, the index is deleted and the fold is moot (see [Delete-terminality](#delete-terminality)).
+
+The `index/v1` fold is implemented as `foldIndexV1(ops)` in [`@metalabel/dfos-protocol/fold`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/src/fold). See [`schemas/index.v1.json`](https://github.com/metalabel/dfos/blob/main/schemas/index.v1.json) and the worked chain in [`examples/index/`](https://github.com/metalabel/dfos/tree/main/examples/index).
 
 ---
 

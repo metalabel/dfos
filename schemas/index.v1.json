@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dfos.com/index/v1",
+  "title": "Index",
+  "description": "An index chain — an LWW-Map folded via the canonical fold. Each operation's document carries an array of set/remove deltas over content-ref keys. The resolved index is the fold over ALL operations (every branch) in canonical order; the last delta touching a key wins.",
+  "type": "object",
+  "required": ["$schema", "deltas"],
+  "properties": {
+    "$schema": { "const": "https://schemas.dfos.com/index/v1" },
+    "deltas": {
+      "type": "array",
+      "description": "Ordered deltas contributed by this operation. Applied in array order within the document, then across documents in canonical fold order.",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["op", "key"],
+            "properties": {
+              "op": { "const": "set" },
+              "key": {
+                "type": "string",
+                "description": "Content ref — a 31-char content chain id or a CID."
+              },
+              "value": { "$ref": "#/$defs/entry" }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["op", "key"],
+            "properties": {
+              "op": { "const": "remove" },
+              "key": {
+                "type": "string",
+                "description": "Content ref to drop from the index."
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "description": "Optional entry metadata. A pure set-membership index uses the degenerate empty object {}. Unknown fields are preserved (forward compat).",
+      "properties": {
+        "label": { "type": "string", "description": "Optional display label." },
+        "order": {
+          "type": "integer",
+          "description": "Optional ordering hint (integer per the content number-encoding rule)."
+        }
+      }
+    }
+  }
+}

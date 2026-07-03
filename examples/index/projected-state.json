@@ -1,0 +1,11 @@
+{
+  "description": "Expected index map after folding all 5 operations from chain.json in canonical order (createdAt ascending, operationCID ascending tiebreak, branch-inclusive).",
+  "entries": {
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": { "label": "First Release (remastered)", "order": 1 },
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": { "label": "Second Release", "order": 2 },
+    "ccccccccccccccccccccccccccccccc": {},
+    "ddddddddddddddddddddddddddddddd": { "label": "Fourth Release", "order": 4 }
+  },
+  "head": "bafyreieeindexunknown0000000000000000000000000000000000000",
+  "note": "Branch A (op2, 01-03) removed key aaa; branch B (op3, 01-04) re-set it later in canonical order, so the remastered entry wins (last-applied wins). Key ccc is the degenerate set-membership case ({}). The `reorder` delta in op4 is an unknown shape and is skipped deterministically. The head is op4 (highest createdAt among the two tips op2 and op4); it is a set, not a delete, so the chain is live and the fold applies."
+}
