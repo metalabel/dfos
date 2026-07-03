@@ -3,3 +3,4 @@ dist
 build
 .turbo
 pnpm-lock.yaml
+.playwright-mcp
