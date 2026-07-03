@@ -17,6 +17,7 @@ import {
   verifyDelegationChain,
   type VerifiedDelegationChain,
 } from '@metalabel/dfos-protocol/credentials';
+import { dagCborCanonicalEncode } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
 import { ProvenancePanel } from '../components/provenance';
@@ -25,12 +26,7 @@ import { getClient } from '../lib/client';
 import { getDb } from '../lib/db-instance';
 import { fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import {
-  fetchClaim,
-  fetchOpRaw,
-  probeRevocationFeeds,
-  type RevocationFeedProbe,
-} from '../lib/relay-raw';
+import { fetchOpRaw, probeRevocationFeeds, type RevocationFeedProbe } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
 import { NotFound } from './not-found';
 
@@ -45,6 +41,7 @@ export const Credential = (props: { cid: string }) => {
   const [jws, setJws] = useState<string | null | undefined>(undefined); // undefined = loading
   const [resolved, setResolved] = useState<Resolved<ResolvedCredential> | null>(null);
   const [verifyError, setVerifyError] = useState('');
+  const [bindError, setBindError] = useState('');
   const [root, setRoot] = useState<RootCheck | null>(null);
   const [feeds, setFeeds] = useState<RevocationFeedProbe[] | null>(null);
 
@@ -53,6 +50,7 @@ export const Credential = (props: { cid: string }) => {
     setJws(undefined);
     setResolved(null);
     setVerifyError('');
+    setBindError('');
     setRoot(null);
     setFeeds(null);
     const relays = getRelays();
@@ -64,15 +62,35 @@ export const Credential = (props: { cid: string }) => {
       let token = local?.jwsToken ?? null;
       if (!token) token = (await fetchOpRaw(props.cid, relays))?.jwsToken ?? null;
       if (dead) return;
-      setJws(token);
-      if (!token) return;
 
-      const decoded = decodeDFOSCredentialUnsafe(token);
-      if (!decoded) {
-        // not a credential after all — hand off to the generic op view
-        location.hash = `#/op/${props.cid}`;
+      const decoded = token ? decodeDFOSCredentialUnsafe(token) : null;
+      if (token && !decoded) {
+        // token exists but isn't a well-formed credential — hand to the op
+        // view via replace() (not push) so this doesn't ping-pong with op.tsx.
+        location.replace(`#/op/${props.cid}`);
         return;
       }
+
+      // BIND the served token to the routed CID: re-derive the CID from the
+      // payload bytes and require it to equal props.cid. A relay serving a
+      // different (valid) credential under this CID must not render as this CID.
+      if (token && decoded) {
+        try {
+          const encoded = await dagCborCanonicalEncode(decoded.payload);
+          if (encoded.cid.toString() !== props.cid) {
+            if (!dead) setBindError(encoded.cid.toString());
+            setJws(null);
+            return;
+          }
+        } catch {
+          if (!dead) setBindError('unencodable payload');
+          setJws(null);
+          return;
+        }
+      }
+      if (dead) return;
+      setJws(token);
+      if (!token || !decoded) return;
 
       // full client resolution: issuer + signature + revocation checker
       void (async () => {
@@ -104,9 +122,16 @@ export const Credential = (props: { cid: string }) => {
           return;
         }
         const contentId = first.resource.slice('chain:'.length);
-        const claim = await fetchClaim('content', contentId, relays);
-        const creatorDID = (claim.body?.['state'] as { creatorDID?: string } | undefined)
-          ?.creatorDID;
+        // Resolve the granted chain through the CLIENT (binds contentId + verifies
+        // the creator), NOT a raw relay claim — the delegation root must be a
+        // VERIFIED creatorDID, or a relay could name any DID as root.
+        let creatorDID: string | undefined;
+        try {
+          const contentRes = await client.content(contentId);
+          creatorDID = contentRes.value.creator.did;
+        } catch {
+          creatorDID = undefined;
+        }
         if (dead) return;
         if (!creatorDID) {
           setRoot({
@@ -132,12 +157,21 @@ export const Credential = (props: { cid: string }) => {
               delegation,
             });
         } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          // temporal / revocation / transport failures are NOT an authority
+          // denial — only a genuine root-mismatch is "issuer lacks authority"
+          const authFailure =
+            /root|delegation|attenuat|not the (issuer|creator)|does not (own|match)/i.test(msg);
           if (!dead)
-            setRoot({
-              state: 'bad',
-              text: 'issuer does not hold authority over the granted chain',
-              note: e instanceof Error ? e.message : String(e),
-            });
+            setRoot(
+              authFailure
+                ? {
+                    state: 'bad',
+                    text: 'issuer does not hold authority over the granted chain',
+                    note: msg,
+                  }
+                : { state: 'warn', text: 'root authority unproven (not denied)', note: msg },
+            );
         }
       })();
 
@@ -156,6 +190,22 @@ export const Credential = (props: { cid: string }) => {
     return (
       <Panel title="credential">
         <span class="muted">resolving…</span>
+      </Panel>
+    );
+  }
+  if (bindError) {
+    return (
+      <Panel title="credential CID mismatch">
+        <div class="kv">
+          <div class="k">requested</div>
+          <div class="v">{props.cid}</div>
+          <div class="k">relay served</div>
+          <div class="v err">{bindError}</div>
+        </div>
+        <div class="ck-note" style={{ marginTop: 8 }}>
+          A relay returned a credential whose bytes hash to a DIFFERENT CID than the one requested —
+          it is not the credential at this address. Not rendering it as this CID.
+        </div>
       </Panel>
     );
   }
@@ -182,9 +232,9 @@ export const Credential = (props: { cid: string }) => {
         : /not yet/i.test(verifyError)
           ? { state: 'warn' as const, text: 'not yet valid' }
           : { state: 'bad' as const, text: 'verification failed' }
-      : !resolved
+      : !resolved || root === null
         ? { state: 'pending' as const, text: 'verifying locally…' }
-        : root?.state === 'bad'
+        : root.state === 'bad'
           ? { state: 'warn' as const, text: 'verified · authority unproven' }
           : { state: 'ok' as const, text: 'verified locally' };
 

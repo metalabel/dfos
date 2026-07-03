@@ -82,6 +82,14 @@ export const Identity = (props: { did: string }) => {
 
     void getDb()
       .then((db) => db.chainOps(props.did, 'credential'))
+      // the index groups credentials under a relay-asserted chainId; only keep
+      // tokens whose OWN payload.iss is this DID (the token itself is the claim)
+      .then((ops) =>
+        ops.filter((op) => {
+          const decoded = decodeJwsUnsafe(op.jwsToken);
+          return decoded?.payload['iss'] === props.did;
+        }),
+      )
       .then((ops) => {
         if (!dead) setCreds(ops);
       })

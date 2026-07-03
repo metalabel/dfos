@@ -7,7 +7,10 @@
 /** Ellipsize the middle of a long identifier. */
 export const short = (value: string | null | undefined, head = 10, tail = 6): string => {
   if (!value) return '';
-  return value.length > head + tail + 1 ? `${value.slice(0, head)}…${value.slice(-tail)}` : value;
+  if (value.length <= head + tail + 1) return value;
+  // slice(-0) === slice(0) returns the WHOLE string — guard tail===0 explicitly
+  const end = tail > 0 ? value.slice(-tail) : '';
+  return `${value.slice(0, head)}…${end}`;
 };
 
 /** Unix seconds → YYYY-MM-DD (credential iat/exp). */

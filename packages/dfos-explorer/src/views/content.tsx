@@ -244,7 +244,13 @@ export const Content = (props: { id: string }) => {
         </Checks>
       </Panel>
 
-      <SchemaPanels contentId={props.id} doc={doc} rows={rows} />
+      <SchemaPanels
+        contentId={props.id}
+        doc={doc}
+        rows={rows}
+        committedCid={docCid}
+        verified={!!chain}
+      />
 
       <DocPanel doc={doc} committedCid={docCid} verified={!!chain} />
 
@@ -260,19 +266,37 @@ export const Content = (props: { id: string }) => {
 };
 
 /** Schema-aware extras: index chains get the fold, profile avatars get media. */
-const SchemaPanels = (props: { contentId: string; doc: DocState | null; rows: OpRow[] }) => {
+const SchemaPanels = (props: {
+  contentId: string;
+  doc: DocState | null;
+  rows: OpRow[];
+  committedCid: string | null;
+  verified: boolean;
+}) => {
   const parsed = props.doc?.parsed;
   if (parsed === undefined || props.rows.length === 0) return null;
 
+  // The index fold fetches + integrity-checks each op's document itself, so it
+  // is safe to run from the chain alone (it does not trust props.doc bytes).
   if (isIndexDocument(parsed)) {
     return <IndexPanel contentId={props.contentId} rows={props.rows} />;
   }
 
+  // The avatar path reads THIS doc's bytes. Only surface it once the served
+  // bytes have been re-hashed to the committed document CID AND the chain
+  // verified — otherwise a relay could dress up arbitrary bytes as the profile.
+  const bytesTrusted =
+    props.verified && !!props.doc?.derivedCid && props.doc.derivedCid === props.committedCid;
   const rec =
     typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : null;
-  if (rec && rec['$schema'] === 'https://schemas.dfos.com/profile/v1' && rec['avatar']) {
+  if (
+    bytesTrusted &&
+    rec &&
+    rec['$schema'] === 'https://schemas.dfos.com/profile/v1' &&
+    rec['avatar']
+  ) {
     const media = parseMediaObject(rec['avatar']);
     if (media) return <MediaPanel title="avatar" media={media} />;
   }
