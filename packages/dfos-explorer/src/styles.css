@@ -825,3 +825,135 @@ button.primary:hover {
   text-transform: uppercase;
   opacity: 0.75;
 }
+
+/* ---------------------------------------------------------------- profile */
+
+.profile-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  margin-bottom: 14px;
+}
+
+.avatar {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--line);
+  background: var(--panel-hd);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.avatar-glyph {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--dim);
+}
+
+.profile-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.profile-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-name b {
+  font-size: 15px;
+}
+
+.profile-desc {
+  margin-top: 4px;
+  color: var(--dim);
+  line-height: 1.5;
+}
+
+.profile-meta {
+  margin-top: 8px;
+}
+
+/* ---------------------------------------------------------------- relay browser */
+
+.relay-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.relay-card {
+  border: 1px solid var(--line);
+  padding: 12px;
+  background: var(--panel-hd);
+}
+
+.relay-card-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.relay-host {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.relay-host b {
+  font-size: 13px;
+}
+
+.relay-remove {
+  font-size: 11px;
+}
+
+.relay-card .profile-card {
+  margin-bottom: 10px;
+  background: var(--panel);
+}
+
+.relay-kv {
+  margin-top: 4px;
+}
+
+.caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cap {
+  font-size: 10px;
+  padding: 2px 6px;
+  border: 1px solid var(--line2);
+  border-radius: 2px;
+  letter-spacing: 0.03em;
+}
+
+.cap.on {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.cap.off {
+  color: var(--dim);
+  background: var(--chip);
+}
