@@ -11,12 +11,24 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
-Protocol-package additions (a new `./fold` subpath and the `index/v1` standard
-schema) plus lockstep-pending relay and documentation work, all additive atop
-frozen v1.
+Protocol-package additions (a new `./fold` subpath, the `index/v1` standard
+schema, and the Media object + `profile/v1` avatar vocabulary) plus
+lockstep-pending relay and documentation work, all additive atop frozen v1.
 
 ### Added
 
+- **Media object + `profile/v1` additive `avatar` field** — the content model now
+  defines the canonical **Media object** shape `{ uri, cid?, href? }`: `uri`
+  (required) is the canonical reference — an `attachment://<id>` ref (opaque,
+  host-scoped, resolution host/gateway-dependent, no integrity of its own) or any
+  other URI; `cid` (optional) is a verifiable commitment to the bytes — CIDv1, raw
+  codec (`0x55`), sha2-256, base32 lowercase (`bafkrei…`), computed over the media
+  bytes exactly as stored/served; `href` (optional) is a non-normative resolution
+  hint with no integrity promise. First consumer: `profile/v1` gains an OPTIONAL
+  `avatar` field of the Media shape — strictly additive, existing avatar-less
+  profile documents remain valid (no `profile/v2`). `post/v1`'s legacy `{ id, uri? }`
+  media shape is unchanged within its version. Content-schema `0.x` clock only; no
+  wire change, no gateway primitive. (#147)
 - **Canonical fold library + `index/v1` standard schema** — a new
   `@metalabel/dfos-protocol/fold` subpath exporting pure functions over
   already-verified operations (zero crypto or network imports): `linearize(ops)`

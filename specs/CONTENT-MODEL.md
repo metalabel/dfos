@@ -79,7 +79,21 @@ The displayable identity for any agent, person, group, or space.
 | `$schema`     | string | yes      | `"https://schemas.dfos.com/profile/v1"`                         |
 | `name`        | string | no       | Display name                                                    |
 | `description` | string | no       | Short bio or description                                        |
+| `avatar`      | media  | no       | Avatar image as a [Media object](#media-object)                 |
 | `links`       | link[] | no       | External links — up to 20 `{ uri, label?, description? }` items |
+
+`avatar` is an **additive** `profile/v1` field (per the schema-evolution rules above — no `profile/v2`): existing avatar-less profile documents remain valid, and implementations that predate the field ignore it. It is the first consumer of the [Media object](#media-object) shape:
+
+```json
+{
+  "$schema": "https://schemas.dfos.com/profile/v1",
+  "name": "Alice",
+  "avatar": {
+    "uri": "attachment://media_abc123",
+    "cid": "bafkreibovzpnn2y6dquvxhidhx64hg7smduemox7drjs4vprjhlbmivfli"
+  }
+}
+```
 
 ### Index (`https://schemas.dfos.com/index/v1`)
 
@@ -130,18 +144,33 @@ The `index/v1` fold is implemented as `foldIndexV1(ops)` in [`@metalabel/dfos-pr
 
 ### Media Object
 
-Several schemas reference media objects. The standard representation:
+The standard representation of a reference to external media bytes. Defined once here; schemas that carry media reference this shape (the first consumer is the `profile/v1` `avatar` field above).
 
 ```json
 {
-  "id": "media_abc123",
-  "uri": "https://cdn.example.com/media/abc123.jpg"
+  "uri": "attachment://media_abc123",
+  "cid": "bafkreibovzpnn2y6dquvxhidhx64hg7smduemox7drjs4vprjhlbmivfli",
+  "href": "https://cdn.example.com/media/abc123.jpg"
 }
 ```
 
-`id` is required (opaque identifier). `uri` is optional.
+| Field  | Type   | Required | Description                                                                                      |
+| ------ | ------ | -------- | ------------------------------------------------------------------------------------------------ |
+| `uri`  | string | yes      | Canonical reference to the media — an `attachment://<id>` ref or any other URI. Always present   |
+| `cid`  | string | no       | Content commitment — CIDv1, raw codec (`0x55`), sha2-256, base32 lowercase, over the media bytes |
+| `href` | string | no       | Resolution hint — a plain URL where the bytes may currently be fetched. Non-normative            |
 
-A media object is the canonical **referential** case: a document is either _terminal_ (the `{ $schema, … }` blob _is_ the content) or _referential_ (it describes how to fetch external bytes). A media object's `id` (and optional `uri`) is a pointer — an opaque application reference, an `ipfs://` CID, or a signed-CDN URL — and resolving it (delivery of the actual media bytes) is **outside the protocol**. The document gateway serves the document that _contains_ the media object as opaque bytes; it never dereferences the pointer. There is no "media gateway": media lives at the application/delivery layer, bound to the proof plane only by the signed reference (which MAY carry a content hash so a consumer can verify the bytes it ultimately receives).
+- **`uri`** (REQUIRED) is the stable, canonical name of the media. It MAY be an `attachment://<id>` ref (below) or any other URI scheme (`ipfs://`, `https://`, …). The `uri` identifies; it does not promise integrity.
+- **`cid`** (OPTIONAL) is a verifiable commitment to the bytes: a CIDv1 with the **raw codec (`0x55`)** and **sha2-256**, encoded base32 lowercase (a 59-char `bafkrei…` string), computed over the media bytes **exactly as stored and served**. Media bytes are opaque binary, so a consumer verifies by hashing the fetched bytes directly — unlike document blobs, no re-canonicalization is involved. `cid` is optional because a cid may not have been computed (yet, or ever) for some media; when present, a consumer SHOULD verify the bytes it ultimately receives against it.
+- **`href`** (OPTIONAL) is an implementation-dependent fallback: a plain URL where the bytes may currently be fetched. It is non-normative, carries no integrity promise, and MAY rot. Consumers prefer resolving `uri` and verifying with `cid`; `href` is a hint, never the reference.
+
+#### The `attachment://` ref
+
+`attachment://<id>` is an **opaque, host-scoped media reference**: `<id>` is an identifier meaningful to the host that committed the document, and nothing about the bytes can be derived from the ref itself. Resolution — turning the ref into fetchable bytes — is host- or gateway-dependent (for example, a [document-gateway](https://protocol.dfos.com/document-gateway) deployment may resolve it via an out-of-protocol signed-CDN API). The ref carries **no integrity**; integrity is exactly what `cid` is for.
+
+A media object is the canonical **referential** case: a document is either _terminal_ (the `{ $schema, … }` blob _is_ the content) or _referential_ (it describes how to fetch external bytes). A media object is a pointer, and resolving it (delivery of the actual media bytes) is **outside the protocol**. The document gateway serves the document that _contains_ the media object as opaque bytes; it never dereferences the pointer. There is no "media gateway": media lives at the application/delivery layer, bound to the proof plane only by the signed reference — with `cid` as the optional content hash that lets a consumer verify the bytes it ultimately receives.
+
+> **Legacy shape (`post/v1`).** The `cover` and `attachments` fields of `post/v1` predate this definition and use an earlier `{ id, uri? }` media shape (`id` required, `uri` optional). Per the schema-evolution rules, that shape is unchanged within `post/v1`; a future post version adopts the Media object defined here.
 
 ---
 

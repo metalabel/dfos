@@ -229,6 +229,84 @@ describe('profile schema validation', () => {
       }),
     ).toBe(false);
   });
+
+  // --- avatar (Media object) — additive profile/v1 field ---
+
+  // real raw-codec CIDv1: sha2-256 over "DFOS example avatar bytes\n"
+  const avatarCid = 'bafkreibovzpnn2y6dquvxhidhx64hg7smduemox7drjs4vprjhlbmivfli';
+
+  it('accepts a profile with a full avatar Media object', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        name: 'Alice',
+        avatar: {
+          uri: 'attachment://media_abc123',
+          cid: avatarCid,
+          href: 'https://cdn.example.com/media/abc123.jpg',
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts an avatar with only uri (cid and href truly optional)', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        avatar: { uri: 'attachment://media_abc123' },
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts a profile without avatar (additive — pre-avatar docs stay valid)', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        name: 'Alice',
+        description: 'No avatar here.',
+        links: [{ uri: 'https://example.com' }],
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects an avatar missing uri', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        avatar: { cid: avatarCid },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects an avatar with a non-string cid', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        avatar: { uri: 'attachment://media_abc123', cid: 42 },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects an avatar cid that is not a raw-codec CIDv1 (dag-cbor bafyrei… rejected)', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        avatar: {
+          uri: 'attachment://media_abc123',
+          cid: 'bafyreibovzpnn2y6dquvxhidhx64hg7smduemox7drjs4vprjhlbmivfli',
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects unknown fields on the avatar Media object', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/profile/v1',
+        avatar: { uri: 'attachment://media_abc123', id: 'media_abc123' },
+      }),
+    ).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
