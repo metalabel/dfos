@@ -103,6 +103,16 @@ The challenge is a JSON object, base64url-encoded in the `challenge` query param
 
 The challenge is signed as a JWS using the user's DID key with `alg: "EdDSA"`. The JWS `kid` header contains the DID URL of the signing key (`did:dfos:<id>#<keyId>`), following the same convention as identity and content chain operations.
 
+### Canonical signing input
+
+The signer and the verifier MUST agree on the exact bytes that are signed — otherwise a field reordering or an omitted optional silently breaks verification across the package boundary. The **canonical signing input** is the challenge object serialized as UTF-8 JSON with its members in this fixed order, omitting any absent optional member:
+
+```
+domain, nonce, timestamp, statement?, did?
+```
+
+These bytes are both the JWS payload (the segment the `alg: "EdDSA"` signature covers) and the body that is base64url-encoded into the `challenge` query parameter — the same bytes serve both roles, so a verifier that holds the encoded challenge and the JWS can confirm they describe the same object. A reference implementation of this byte contract is `siwdSigningInput(challenge)` in [`@metalabel/dfos-client/siwd`](https://protocol.dfos.com), a pure function both a browser wallet (signing) and a third-party verifier (checking) import so the encoding lives in exactly one place.
+
 ---
 
 ## Managed Signing Path
@@ -156,7 +166,7 @@ The platform MAY perform a preflight health check (`GET http://localhost:<port>/
 Verification is identical regardless of signing path. The JWS signature MUST be checked under the DFOS [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile) — the same profile every DFOS verifier applies — not unprofiled "standard Ed25519 verification":
 
 1. **Decode the JWS** — extract the challenge payload, `kid` header (DID URL of signing key), and signature. Before any signature work, apply the profile header gates: the protected header `alg` MUST equal the exact string `"EdDSA"`; a `crit` member MUST cause rejection; and an embedded header key (`jwk`, `x5c`, or any key-bearing member) MUST cause rejection. The key is never read from the header.
-2. **Resolve the DID** — fetch the identity chain from any DFOS relay and replay it to its **current state**. Extract the public key matching the `kid` from the current `authKeys`. Keys that have been rotated out, and identities that have been deleted or revoked, MUST NOT verify — a challenge signed by a key that is no longer current (or by a deleted/revoked identity) MUST be rejected.
+2. **Resolve the DID** — fetch the identity chain from any DFOS relay and replay it to its **current state**. Extract the public key matching the `kid` from the current `authKeys`. Keys that have been rotated out, and identities that have been deleted, MUST NOT verify — a challenge signed by a key that is no longer current (or by a deleted identity) MUST be rejected. (The protocol has no identity-revocation primitive; deletion is the terminal state a verifier checks. Credential-scoped revocation is a separate mechanism that applies to the optional returned credential, not to the identity.)
 3. **Verify the signature** — Ed25519 verification of the JWS against the resolved public key, with the canonical-scalar gate (`S < L`) and the 64-byte length check from the profile.
 4. **Validate the nonce** — confirm the `nonce` in the challenge payload matches the server-side value issued to this session. Discard the nonce after use.
 5. **Validate the timestamp** — reject challenges older than a reasonable window (implementation-defined, e.g., 5 minutes).

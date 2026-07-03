@@ -1,0 +1,71 @@
+{
+  "name": "@metalabel/dfos-client",
+  "version": "0.15.0",
+  "private": true,
+  "type": "module",
+  "description": "DFOS Client — read-only resolve + verify orchestration over untrusted relays. Fetch, resolve, verify-orchestration, cache; all crypto truth comes from @metalabel/dfos-protocol",
+  "license": "MIT",
+  "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/metalabel/dfos.git",
+    "directory": "packages/dfos-client"
+  },
+  "homepage": "https://protocol.dfos.com",
+  "keywords": [
+    "dfos",
+    "client",
+    "did",
+    "verifiable",
+    "resolve",
+    "siwd",
+    "ed25519",
+    "jws",
+    "metalabel"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./siwd": "./src/siwd.ts",
+    "./store": "./src/store/index.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "import": "./dist/index.js",
+        "types": "./dist/index.d.ts"
+      },
+      "./siwd": {
+        "import": "./dist/siwd.js",
+        "types": "./dist/siwd.d.ts"
+      },
+      "./store": {
+        "import": "./dist/store/index.js",
+        "types": "./dist/store/index.d.ts"
+      }
+    }
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build"
+  },
+  "peerDependencies": {
+    "@metalabel/dfos-protocol": "^0.15.0",
+    "@metalabel/dfos-web-relay": "^0.15.0"
+  },
+  "devDependencies": {
+    "@metalabel/dfos-protocol": "workspace:*",
+    "@metalabel/dfos-web-relay": "workspace:*",
+    "@types/node": "^24.10.4",
+    "tsup": "^8.5.1",
+    "vitest": "^4.1.8"
+  }
+}
