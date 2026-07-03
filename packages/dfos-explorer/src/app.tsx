@@ -10,9 +10,12 @@ import { getClient } from './lib/client';
 import { getRelays, subscribeRelays } from './lib/relays';
 import { dispatchInput, routeFor } from './lib/resolve-input';
 import { navigate, useRoute } from './router';
+import { Content } from './views/content';
 import { Glossary } from './views/glossary';
 import { Home } from './views/home';
+import { Identity } from './views/identity';
 import { LocalIndex } from './views/local-index';
+import { Op } from './views/op';
 import { Pending } from './views/pending';
 import { Relays } from './views/relays';
 
@@ -134,11 +137,11 @@ export const App = () => {
       case 'relays':
         return <Relays />;
       case 'did':
-        return <Pending kind="identity" id={route.id} />;
+        return <Identity did={route.id} />;
       case 'content':
-        return <Pending kind="content chain" id={route.id} />;
+        return <Content id={route.id} />;
       case 'op':
-        return <Pending kind="operation" id={route.id} />;
+        return <Op cid={route.id} />;
       case 'cred':
         return <Pending kind="credential" id={route.id} />;
       default:
