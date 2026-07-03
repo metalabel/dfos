@@ -10,7 +10,7 @@ import { getClient } from './lib/client';
 import { fmtCount } from './lib/format';
 import { getRelays, subscribeRelays } from './lib/relays';
 import { dispatchInput, routeFor } from './lib/resolve-input';
-import { useSyncState } from './lib/sync-store';
+import { startAutoSyncScheduler, useSyncState } from './lib/sync-store';
 import { navigate, useRoute } from './router';
 import { Content } from './views/content';
 import { Credential } from './views/credential';
@@ -24,9 +24,11 @@ import { Relays } from './views/relays';
 const SyncTicker = () => {
   const sync = useSyncState();
   if (sync.phase !== 'syncing') return null;
+  const auto = sync.trigger === 'auto';
   return (
-    <a class="synctick" href="#/" title={`syncing — ${sync.status}`}>
+    <a class="synctick" href="#/" title={`${auto ? 'auto-' : ''}syncing — ${sync.status}`}>
       <span class="spin">◍</span>
+      {auto ? <span class="synctick-auto">auto</span> : null}
       <span class="synctick-n">{fmtCount(sync.ops)}</span>
     </a>
   );
@@ -143,6 +145,9 @@ const Foot = () => (
 export const App = () => {
   const route = useRoute();
   const [indexOpen, setIndexOpen] = useState(false);
+
+  // the auto-sync heartbeat lives for the life of the app
+  useEffect(() => startAutoSyncScheduler(), []);
 
   // navigating (tapping an index row) closes the mobile drawer
   useEffect(() => {

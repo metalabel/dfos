@@ -801,3 +801,27 @@ button.primary {
 button.primary:hover {
   filter: brightness(1.08);
 }
+
+/* auto-sync control */
+.autosync {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+
+.autosync .lbl {
+  flex: 0 0 auto;
+}
+
+.autosync-next {
+  margin: 0 0 8px;
+  color: var(--dim);
+}
+
+.synctick-auto {
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}

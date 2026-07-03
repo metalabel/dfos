@@ -13,7 +13,19 @@ import { Panel } from '../components/ui';
 import type { ChainRollup, OpKind } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtCount, short } from '../lib/format';
-import { markDbChanged, startSync, stopSync, useSyncState } from '../lib/sync-store';
+import {
+  AUTO_SYNC_OPTIONS,
+  getAutoSyncMinutes,
+  setAutoSyncMinutes,
+  subscribeSettings,
+} from '../lib/settings';
+import {
+  markDbChanged,
+  nextAutoSyncAt,
+  startSync,
+  stopSync,
+  useSyncState,
+} from '../lib/sync-store';
 
 type Filter = 'all' | 'identity-op' | 'content-op' | 'credential';
 type Sort = 'recent' | 'ops';
@@ -29,6 +41,15 @@ const SORTS: { key: Sort; label: string }[] = [
   { key: 'recent', label: 'recent' },
   { key: 'ops', label: 'most ops' },
 ];
+
+/** "next auto-sync" hint from a due ms-epoch: "~4m", "soon", "now". */
+const autoSyncHint = (dueAt: number): string => {
+  if (!dueAt) return '';
+  const secs = Math.round((dueAt - Date.now()) / 1000);
+  if (secs <= 0) return 'now';
+  if (secs < 60) return 'soon';
+  return `~${Math.round(secs / 60)}m`;
+};
 
 const routeForChain = (row: ChainRollup): string => {
   switch (row.kind) {
@@ -56,7 +77,10 @@ export const LocalIndex = () => {
   const sync = useSyncState();
   const syncing = sync.phase === 'syncing';
   const [wiped, setWiped] = useState('');
+  const [autoMin, setAutoMin] = useState(getAutoSyncMinutes());
   const lastPaint = useRef(0);
+
+  useEffect(() => subscribeSettings(() => setAutoMin(getAutoSyncMinutes())), []);
 
   const refresh = async (): Promise<void> => {
     const db = await getDb();
@@ -138,6 +162,24 @@ export const LocalIndex = () => {
         {status ||
           (counts.ops ? `${fmtCount(counts.ops)} ops · ${summary}` : 'no local data — hit sync')}
       </div>
+      <div class="autosync">
+        <span class="lbl">auto-sync</span>
+        <div class="filters">
+          {AUTO_SYNC_OPTIONS.map((m) => (
+            <button
+              key={m}
+              class={autoMin === m ? 'on' : ''}
+              onClick={() => setAutoSyncMinutes(m)}
+              title={m === 0 ? 'auto-sync off' : `re-sync in the background every ${m} minutes`}
+            >
+              {m === 0 ? 'off' : `${m}m`}
+            </button>
+          ))}
+        </div>
+      </div>
+      {autoMin > 0 && !syncing ? (
+        <div class="lbl autosync-next">next auto-sync {autoSyncHint(nextAutoSyncAt())}</div>
+      ) : null}
       <div class="filters" style={{ marginBottom: 4 }}>
         {FILTERS.map((f) => (
           <button key={f.key} class={filter === f.key ? 'on' : ''} onClick={() => setFilter(f.key)}>
