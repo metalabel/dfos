@@ -51,7 +51,7 @@ describe('identity verify-forward', () => {
     expect(second.value).toEqual(full);
   });
 
-  it('a caught-up relay returns the cached state without re-fetching from genesis', async () => {
+  it('a caught-up relay returns the cached state — but tip stays an unproven CLAIM', async () => {
     const id = await buildIdentity();
     const data: Record<string, RelayData> = {
       [RELAY]: { identities: { [id.did]: [...id.log] } },
@@ -63,9 +63,15 @@ describe('identity verify-forward', () => {
     });
 
     const first = await client.identity(id.did);
+    expect(first.trust.unverifiable).toBeUndefined(); // fresh full fetch
+
     const second = await client.identity(id.did);
     expect(second.value).toEqual(first.value);
-    expect(second.provenance.fromCache).toBe(false); // relay confirmed the tip (no new ops)
+    expect(second.provenance.fromCache).toBe(false); // relays DID answer...
+    // ...but an empty delta against a cached head is a freshness CLAIM, not
+    // proof — a relay that never saw our head answers the same empty page.
+    // Tip freshness is never proven in v1.
+    expect(second.trust.unverifiable).toEqual(['tip']);
   });
 });
 

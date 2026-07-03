@@ -27,7 +27,7 @@ import {
   generateId,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
-import type { PeerClient, PeerLogEntry } from '@metalabel/dfos-web-relay';
+import type { PeerClient, PeerLogEntry } from '@metalabel/dfos-web-relay/peer-client';
 
 const DOC_CID = 'bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenera6h5y';
 const DOC_CID_2 = 'bafkreiupdatedocument000000000000000000000000000000000000000';

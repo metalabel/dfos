@@ -11,7 +11,7 @@
 
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import type { VerifiedDFOSCredential } from '@metalabel/dfos-protocol/credentials';
-import type { PeerClient } from '@metalabel/dfos-web-relay';
+import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 
 // -----------------------------------------------------------------------------
 // trust + provenance (data, never exceptions)
@@ -19,10 +19,14 @@ import type { PeerClient } from '@metalabel/dfos-web-relay';
 
 /**
  * The two axes v1 genuinely cannot check:
- * - `revocation` — no non-checking revocation feed was wired, so a credential's
- *   revocation status is unknown (honest, not proven-unrevoked).
- * - `tip` — the answer came from cache without a live relay confirming the head,
- *   so we cannot assert we hold the true tip.
+ * - `revocation` — non-revocation is never provable (a relay can only attest to
+ *   what it has seen, and can withhold), so a credential's unrevoked status is
+ *   honest absence-of-evidence, not proof.
+ * - `tip` — tip freshness is never PROVEN in v1 (head proofs are v2 /
+ *   `tipProven`). The axis is carried whenever the answer's freshness rests on
+ *   a cached head: either the cache alone (all relays unreachable) or relays'
+ *   empty-delta claim against it (a relay that never saw the cached head reports
+ *   the same empty page as one that is genuinely caught up).
  */
 export type UnverifiableAxis = 'revocation' | 'tip';
 
@@ -182,9 +186,15 @@ export interface ClientConfig {
   isRevoked?: RevChecker;
   /** Injected fetch for blob/health/revocation calls. Default `globalThis.fetch`. */
   fetch?: typeof fetch;
+  /**
+   * Per-request timeout in ms (default 10000). A hung relay must fail so
+   * failover can move on — applied to every HTTP request the client makes,
+   * including the default peer-client transport.
+   */
+  timeoutMs?: number;
   /** Clock injection (unix ms). Default `Date.now`. */
   now?: () => number;
-  /** Injected log transport. Default `createHttpPeerClient()`. */
+  /** Injected log transport. Default `createHttpPeerClient({ fetch })`. */
   peerClient?: PeerClient;
 }
 

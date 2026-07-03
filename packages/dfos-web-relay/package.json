@@ -26,7 +26,8 @@
   ],
   "exports": {
     ".": "./src/index.ts",
-    "./node": "./src/serve.ts"
+    "./node": "./src/serve.ts",
+    "./peer-client": "./src/peer-client.ts"
   },
   "publishConfig": {
     "exports": {
@@ -37,6 +38,10 @@
       "./node": {
         "import": "./dist/serve.js",
         "types": "./dist/serve.d.ts"
+      },
+      "./peer-client": {
+        "import": "./dist/peer-client.js",
+        "types": "./dist/peer-client.d.ts"
       }
     }
   },

@@ -38,12 +38,15 @@ function syncMetalabelRanges(deps) {
 
 let changed = 0;
 for (const pkg of packages) {
-  if (pkg.private || pkg.path === root) continue;
+  if (pkg.path === root) continue;
   const pkgPath = resolve(pkg.path, 'package.json');
   const pkgJson = JSON.parse(readFileSync(pkgPath, 'utf8'));
 
   let touched = false;
-  if (pkgJson.version !== version) {
+  // private packages are excluded from the version bump (they don't publish),
+  // but their @metalabel/* ranges still sync below — otherwise a pre-release
+  // package's peer ranges rot against the moving lockstep version.
+  if (!pkgJson.private && pkgJson.version !== version) {
     pkgJson.version = version;
     touched = true;
   }

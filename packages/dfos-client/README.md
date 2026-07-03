@@ -6,11 +6,13 @@ If verification logic appears in this package, that is the bug: every proof come
 
 ## Install
 
+> **Not yet published — pre-release.** This package is `private` until it ships with a stamped release; until then it is consumable only inside this workspace.
+
 ```bash
 npm install @metalabel/dfos-client @metalabel/dfos-protocol @metalabel/dfos-web-relay
 ```
 
-`@metalabel/dfos-protocol` and `@metalabel/dfos-web-relay` are peer dependencies — one source of truth for the crypto kernel and the relay transport, no double-ship.
+`@metalabel/dfos-protocol` and `@metalabel/dfos-web-relay` are peer dependencies — one source of truth for the crypto kernel and the relay transport, no double-ship. The client imports only the relay package's lightweight `./peer-client` subpath (fetch + paging + route constants), never the relay server graph.
 
 ## The surface
 
@@ -45,7 +47,7 @@ interface Resolved<T> {
 }
 ```
 
-Trust degrades honestly: `revocation` when non-revocation cannot be proven, `tip` when an answer came from cache without a live relay confirming the head. Nothing is ever claimed as proven that was not.
+Trust degrades honestly: `revocation` when non-revocation cannot be proven, `tip` whenever an answer's freshness rests on a cached head — either the cache alone (relays unreachable) or relays' empty-delta claim against it. **Tip freshness is never proven in v1**: a relay that never saw your cached head answers the same empty page as one that is genuinely caught up, so the client refuses to launder that claim into proof (relay head-proofs / `tipProven` are v2). Nothing is ever claimed as proven that was not.
 
 ### Quorum
 

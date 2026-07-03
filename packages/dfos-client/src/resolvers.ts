@@ -9,6 +9,15 @@
   and verify FORWARD from the trusted prefix using the protocol's O(1) extension
   verifiers. Rotation costs one op; the cache is never stale-wrong.
 
+  Trust rules enforced here:
+  - a candidate log that fails verification is failed over, not fatal (transport
+    handles the failover; verification is the candidate filter)
+  - the cache is only written back when the answer both VERIFIED and met quorum —
+    a failed-quorum minority answer never becomes the trusted prefix
+  - `tipUnverified` is true whenever the answer's freshness rests on a cached
+    head that relays merely did not extend (the empty-delta claim) or on the
+    cache alone — tip freshness is never PROVEN in v1
+
 */
 
 import {
@@ -22,9 +31,9 @@ import {
   type VerifiedIdentity,
 } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import type { PeerClient } from '@metalabel/dfos-web-relay';
-import { contentPager, fanOutLog, identityPager, type FanOutResult } from './transport';
-import type { Callbacks, CallOptions, Provenance, RevChecker, Store } from './types';
+import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
+import { contentPager, fanOutLog, identityPager, normalizeRelays } from './transport';
+import type { Callbacks, CallOptions, LogOp, Provenance, RevChecker, Store } from './types';
 
 const DID_PREFIX = 'did:dfos';
 
@@ -135,12 +144,24 @@ export interface IdentityResolution {
   state: VerifiedIdentity;
   log: string[];
   provenance: Provenance;
+  /** True when tip freshness rests on the cache or on relays' empty-delta claim. */
+  tipUnverified: boolean;
 }
 
 export interface ContentResolution {
   state: VerifiedContentChain;
   log: string[];
   provenance: Provenance;
+  /** True when tip freshness rests on the cache or on relays' empty-delta claim. */
+  tipUnverified: boolean;
+}
+
+/** A verified chain candidate — the output of a verifyCandidate closure. */
+interface VerifiedCandidate<T> {
+  state: T;
+  log: string[];
+  headCID: string;
+  lastCreatedAt: string;
 }
 
 /** The internal resolver surface — the client and the free `resolvers()` both use it. */
@@ -151,7 +172,7 @@ export interface Resolvers {
 }
 
 export const createResolvers = (deps: ResolverDeps): Resolvers => {
-  const relaysFor = (o?: CallOptions) => o?.relays ?? deps.relays;
+  const relaysFor = (o?: CallOptions) => normalizeRelays(o?.relays ?? deps.relays);
 
   const getIdentityChain = async (
     did: string,
@@ -162,65 +183,76 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       ? undefined
       : ((await deps.store.get(key)) as CachedChain<VerifiedIdentity> | undefined);
 
-    const fetched: FanOutResult = await fanOutLog(
+    // verification IS the candidate filter: full verify from genesis when cold,
+    // O(1) verify-forward from the trusted prefix when cached
+    const verifyCandidate = async (
+      entries: LogOp[],
+    ): Promise<VerifiedCandidate<VerifiedIdentity>> => {
+      if (!cached) {
+        const log = entries.map((e) => e.jwsToken);
+        if (log.length === 0) throw new Error(`identity not found: ${did}`);
+        const state = await verifyIdentityChain({ didPrefix: DID_PREFIX, log });
+        const last = opMeta(log[log.length - 1]!);
+        return { state, log, headCID: last.cid, lastCreatedAt: last.createdAt };
+      }
+      let state = cached.state;
+      let headCID = cached.headCID;
+      let lastCreatedAt = cached.lastCreatedAt;
+      const log = [...cached.log];
+      for (const entry of entries) {
+        const r = await verifyIdentityExtensionFromTrustedState({
+          currentState: state,
+          headCID,
+          lastCreatedAt,
+          newOp: entry.jwsToken,
+        });
+        state = r.state;
+        headCID = r.operationCID;
+        lastCreatedAt = r.createdAt;
+        log.push(entry.jwsToken);
+      }
+      return { state, log, headCID, lastCreatedAt };
+    };
+
+    const fetched = await fanOutLog(
       identityPager(deps.peerClient, did),
       relaysFor(options),
       deps.quorum,
       cached?.headCID,
+      verifyCandidate,
     );
 
-    // every relay failed
-    if (fetched.provenance.answeredBy === '' && fetched.entries.length === 0) {
+    if (fetched.outcome === 'unreachable') {
       if (cached) {
         return {
           state: cached.state,
           log: cached.log,
           provenance: { ...fetched.provenance, fromCache: true },
+          tipUnverified: true,
         };
       }
       throw new Error(`identity not found on any relay: ${did}`);
     }
 
-    if (!cached) {
-      const log = fetched.entries.map((e) => e.jwsToken);
-      if (log.length === 0) throw new Error(`identity not found: ${did}`);
-      const state = await verifyIdentityChain({ didPrefix: DID_PREFIX, log });
-      const last = opMeta(log[log.length - 1]!);
+    const candidate = fetched.value!;
+    // cache only an answer that both verified AND met quorum — a minority
+    // answer must never become the trusted prefix
+    if (fetched.provenance.agreed && fetched.entries.length > 0) {
       await deps.store.set(key, {
-        log,
-        state,
-        headCID: last.cid,
-        lastCreatedAt: last.createdAt,
-      } satisfies CachedChain<VerifiedIdentity>);
-      return { state, log, provenance: fetched.provenance };
-    }
-
-    // verify forward from the trusted prefix
-    let state = cached.state;
-    let headCID = cached.headCID;
-    let lastCreatedAt = cached.lastCreatedAt;
-    const log = [...cached.log];
-    for (const entry of fetched.entries) {
-      const r = await verifyIdentityExtensionFromTrustedState({
-        currentState: state,
-        headCID,
-        lastCreatedAt,
-        newOp: entry.jwsToken,
-      });
-      state = r.state;
-      headCID = r.operationCID;
-      lastCreatedAt = r.createdAt;
-      log.push(entry.jwsToken);
-    }
-    if (fetched.entries.length > 0) {
-      await deps.store.set(key, {
-        log,
-        state,
-        headCID,
-        lastCreatedAt,
+        log: candidate.log,
+        state: candidate.state,
+        headCID: candidate.headCID,
+        lastCreatedAt: candidate.lastCreatedAt,
       } satisfies CachedChain<VerifiedIdentity>);
     }
-    return { state, log, provenance: fetched.provenance };
+    return {
+      state: candidate.state,
+      log: candidate.log,
+      provenance: fetched.provenance,
+      // an empty delta against a cached head is a relay CLAIM of freshness, not
+      // proof — the tip axis stays unverifiable whenever the answer leans on it
+      tipUnverified: cached !== undefined && fetched.entries.length === 0,
+    };
   };
 
   // the bound protocol-lib callbacks — the trunk product
@@ -259,70 +291,77 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       ? undefined
       : ((await deps.store.get(key)) as CachedChain<VerifiedContentChain> | undefined);
 
-    const fetched: FanOutResult = await fanOutLog(
+    const verifyCandidate = async (
+      entries: LogOp[],
+    ): Promise<VerifiedCandidate<VerifiedContentChain>> => {
+      if (!cached) {
+        const log = entries.map((e) => e.jwsToken);
+        if (log.length === 0) throw new Error(`content not found: ${contentId}`);
+        const state = await verifyContentChain({
+          log,
+          resolveKey,
+          enforceAuthorization: true,
+          resolveIdentity,
+          isRevoked: deps.isRevoked,
+        });
+        const last = opMeta(log[log.length - 1]!);
+        return { state, log, headCID: last.cid, lastCreatedAt: last.createdAt };
+      }
+      let state = cached.state;
+      let lastCreatedAt = cached.lastCreatedAt;
+      const log = [...cached.log];
+      for (const entry of entries) {
+        const r = await verifyContentExtensionFromTrustedState({
+          currentState: state,
+          lastCreatedAt,
+          newOp: entry.jwsToken,
+          resolveKey,
+          enforceAuthorization: true,
+          resolveIdentity,
+          isRevoked: deps.isRevoked,
+        });
+        state = r.state;
+        lastCreatedAt = r.createdAt;
+        log.push(entry.jwsToken);
+      }
+      return { state, log, headCID: state.headCID, lastCreatedAt };
+    };
+
+    const fetched = await fanOutLog(
       contentPager(deps.peerClient, contentId),
       relaysFor(options),
       deps.quorum,
       cached?.headCID,
+      verifyCandidate,
     );
 
-    if (fetched.provenance.answeredBy === '' && fetched.entries.length === 0) {
+    if (fetched.outcome === 'unreachable') {
       if (cached) {
         return {
           state: cached.state,
           log: cached.log,
           provenance: { ...fetched.provenance, fromCache: true },
+          tipUnverified: true,
         };
       }
       throw new Error(`content not found on any relay: ${contentId}`);
     }
 
-    if (!cached) {
-      const log = fetched.entries.map((e) => e.jwsToken);
-      if (log.length === 0) throw new Error(`content not found: ${contentId}`);
-      const state = await verifyContentChain({
-        log,
-        resolveKey,
-        enforceAuthorization: true,
-        resolveIdentity,
-        isRevoked: deps.isRevoked,
-      });
-      const last = opMeta(log[log.length - 1]!);
+    const candidate = fetched.value!;
+    if (fetched.provenance.agreed && fetched.entries.length > 0) {
       await deps.store.set(key, {
-        log,
-        state,
-        headCID: last.cid,
-        lastCreatedAt: last.createdAt,
-      } satisfies CachedChain<VerifiedContentChain>);
-      return { state, log, provenance: fetched.provenance };
-    }
-
-    let state = cached.state;
-    let lastCreatedAt = cached.lastCreatedAt;
-    const log = [...cached.log];
-    for (const entry of fetched.entries) {
-      const r = await verifyContentExtensionFromTrustedState({
-        currentState: state,
-        lastCreatedAt,
-        newOp: entry.jwsToken,
-        resolveKey,
-        enforceAuthorization: true,
-        resolveIdentity,
-        isRevoked: deps.isRevoked,
-      });
-      state = r.state;
-      lastCreatedAt = r.createdAt;
-      log.push(entry.jwsToken);
-    }
-    if (fetched.entries.length > 0) {
-      await deps.store.set(key, {
-        log,
-        state,
-        headCID: state.headCID,
-        lastCreatedAt,
+        log: candidate.log,
+        state: candidate.state,
+        headCID: candidate.headCID,
+        lastCreatedAt: candidate.lastCreatedAt,
       } satisfies CachedChain<VerifiedContentChain>);
     }
-    return { state, log, provenance: fetched.provenance };
+    return {
+      state: candidate.state,
+      log: candidate.log,
+      provenance: fetched.provenance,
+      tipUnverified: cached !== undefined && fetched.entries.length === 0,
+    };
   };
 
   return { getIdentityChain, getContentChain, callbacks };

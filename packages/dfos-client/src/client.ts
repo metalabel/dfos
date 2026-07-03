@@ -17,11 +17,11 @@ import {
 } from '@metalabel/dfos-protocol/chain';
 import { verifyDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import { createHttpPeerClient } from '@metalabel/dfos-web-relay';
+import { createHttpPeerClient } from '@metalabel/dfos-web-relay/peer-client';
 import { createResolvers, type Resolvers } from './resolvers';
 import { createRevocationChecker } from './revocation';
 import { memoryStore } from './store/memory';
-import { operationPager } from './transport';
+import { normalizeRelays, operationPager } from './transport';
 import type {
   Callbacks,
   CallOptions,
@@ -36,10 +36,55 @@ import type {
   Resolved,
   ResolvedContent,
   ResolvedCredential,
+  RevChecker,
   Trust,
   UnverifiableAxis,
   VerifyResult,
 } from './types';
+
+// -----------------------------------------------------------------------------
+// fetch policy — timeout + single transient retry
+// -----------------------------------------------------------------------------
+
+const DEFAULT_TIMEOUT_MS = 10_000;
+const RETRY_BACKOFF_MS = 250;
+
+const isAbortError = (err: unknown): boolean =>
+  err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wrap a fetch implementation with the client's transport policy: a per-request
+ * timeout (a hung relay must never stall the read loop — failover depends on
+ * requests actually failing) and ONE retry with a short backoff on transient
+ * failures (network throw or 5xx). Timeouts are NOT retried — a relay that hung
+ * for the full window is not transient inside this call, failover handles it.
+ */
+const withFetchPolicy = (base: typeof fetch, timeoutMs: number): typeof fetch => {
+  const attempt = (
+    input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+  ): Promise<Response> => {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+    return base(input, { ...init, signal });
+  };
+  return async (input, init) => {
+    try {
+      const res = await attempt(input, init);
+      if (res.status >= 500) {
+        await delay(RETRY_BACKOFF_MS);
+        return await attempt(input, init);
+      }
+      return res;
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      await delay(RETRY_BACKOFF_MS);
+      return attempt(input, init);
+    }
+  };
+};
 
 // -----------------------------------------------------------------------------
 // trust helpers
@@ -68,26 +113,38 @@ const opMeta = (jws: string): LogOp => {
 // -----------------------------------------------------------------------------
 
 export const createClient = (config: ClientConfig): Client => {
-  if (config.relays.length === 0) throw new Error('createClient requires at least one relay');
+  const relays = normalizeRelays(config.relays);
+  if (relays.length === 0) throw new Error('createClient requires at least one relay');
 
-  const relays = [...config.relays];
   const quorum = config.quorum ?? 1;
   const store = config.store ?? memoryStore();
-  const fetchImpl = config.fetch ?? globalThis.fetch;
+  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const baseFetch: typeof fetch = config.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  const fetchImpl = withFetchPolicy(baseFetch, timeoutMs);
   const nowMs = config.now ?? Date.now;
-  const peerClient = config.peerClient ?? createHttpPeerClient();
-  const isRevoked = config.isRevoked ?? createRevocationChecker(relays, fetchImpl);
+  const peerClient = config.peerClient ?? createHttpPeerClient({ fetch: fetchImpl });
+
+  // The default revocation checker verifies proofs through resolveKey, which the
+  // resolvers provide — and the resolvers need isRevoked. Late-bind through a
+  // stable wrapper to break the construction cycle.
+  let isRevokedImpl: RevChecker = async () => false;
+  const isRevoked: RevChecker = (issuerDID, credentialCID) =>
+    isRevokedImpl(issuerDID, credentialCID);
 
   const resolvers: Resolvers = createResolvers({ relays, quorum, store, peerClient, isRevoked });
-  const relaysFor = (o?: CallOptions) => o?.relays ?? relays;
+  isRevokedImpl =
+    config.isRevoked ??
+    createRevocationChecker(relays, fetchImpl, (kid) => resolvers.callbacks().resolveKey(kid));
+
+  const relaysFor = (o?: CallOptions) => normalizeRelays(o?.relays ?? relays);
 
   // --- identity ---
   const identity = async (
     did: string,
     options?: CallOptions,
   ): Promise<Resolved<VerifiedIdentity>> => {
-    const { state, provenance } = await resolvers.getIdentityChain(did, options);
-    const axes: UnverifiableAxis[] = provenance.fromCache ? ['tip'] : [];
+    const { state, provenance, tipUnverified } = await resolvers.getIdentityChain(did, options);
+    const axes: UnverifiableAxis[] = tipUnverified ? ['tip'] : [];
     return { value: state, trust: trust(true, axes), provenance };
   };
 
@@ -96,10 +153,13 @@ export const createClient = (config: ClientConfig): Client => {
     contentId: string,
     options?: CallOptions,
   ): Promise<Resolved<ResolvedContent>> => {
-    const { state, log, provenance } = await resolvers.getContentChain(contentId, options);
+    const { state, log, provenance, tipUnverified } = await resolvers.getContentChain(
+      contentId,
+      options,
+    );
     const creator = await resolvers.getIdentityChain(state.creatorDID, options);
     const axes: UnverifiableAxis[] = [];
-    if (provenance.fromCache) axes.push('tip');
+    if (tipUnverified) axes.push('tip');
     if (hasDelegatedOps(log)) axes.push('revocation');
     const value: ResolvedContent = { chain: state, creator: creator.state };
     return { value, trust: trust(true, axes), provenance };
@@ -122,7 +182,7 @@ export const createClient = (config: ClientConfig): Client => {
     const revoked = await isRevoked(verified.iss, verified.credentialCID);
 
     const axes: UnverifiableAxis[] = [];
-    if (issuer.provenance.fromCache) axes.push('tip');
+    if (issuer.tipUnverified) axes.push('tip');
     if (!revoked) axes.push('revocation'); // non-revocation is never provable in v1
     const value: ResolvedCredential = { credential: verified, issuer: issuer.state, revoked };
     return { value, trust: trust(!revoked, axes), provenance: issuer.provenance };
@@ -133,7 +193,10 @@ export const createClient = (config: ClientConfig): Client => {
     contentId: string,
     options?: CallOptions,
   ): Promise<Resolved<DocumentBlob>> => {
-    const { state, provenance } = await resolvers.getContentChain(contentId, options);
+    const { state, provenance, tipUnverified } = await resolvers.getContentChain(
+      contentId,
+      options,
+    );
     const documentCID = state.currentDocumentCID;
     if (!documentCID) throw new Error(`content ${contentId} has no current document`);
 
@@ -157,7 +220,7 @@ export const createClient = (config: ClientConfig): Client => {
       ...(blob.mediaType ? { mediaType: blob.mediaType } : {}),
       ...(decodedDoc !== undefined ? { decoded: decodedDoc } : {}),
     };
-    const axes: UnverifiableAxis[] = provenance.fromCache ? ['tip'] : [];
+    const axes: UnverifiableAxis[] = tipUnverified ? ['tip'] : [];
     return { value, trust: trust(integrity, axes), provenance };
   };
 
@@ -225,7 +288,7 @@ export const createClient = (config: ClientConfig): Client => {
         ? await resolvers.getIdentityChain(id, options)
         : await resolvers.getContentChain(id, options);
     const value = res.log.map(opMeta);
-    const axes: UnverifiableAxis[] = res.provenance.fromCache ? ['tip'] : [];
+    const axes: UnverifiableAxis[] = res.tipUnverified ? ['tip'] : [];
     return { value, trust: trust(true, axes), provenance: res.provenance };
   };
 
@@ -233,7 +296,12 @@ export const createClient = (config: ClientConfig): Client => {
     const pager = operationPager(peerClient);
     // a single page from the first reachable relay — a seam, not a sync engine
     for (const url of relaysFor(options)) {
-      const page = await pager(url, cursor ? { after: cursor, limit: 100 } : { limit: 100 });
+      let page: Awaited<ReturnType<typeof pager>> = null;
+      try {
+        page = await pager(url, cursor ? { after: cursor, limit: 100 } : { limit: 100 });
+      } catch {
+        page = null;
+      }
       if (page === null) continue;
       const provenance: Provenance = {
         answeredBy: url,

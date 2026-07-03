@@ -15,10 +15,12 @@ import { createClient } from '../src/client';
 import {
   createSiwdChallenge,
   decodeSiwdChallenge,
+  SIWD_JWS_TYP,
   siwdSigningInput,
   verifySiwd,
   type SiwdChallenge,
 } from '../src/siwd';
+import { memoryStore } from '../src/store/memory';
 import { buildIdentity, fakePeerClient, makeKey, ts } from './fixtures';
 
 const RELAY = 'https://relay.test';
@@ -27,9 +29,10 @@ const signChallenge = async (
   kid: string,
   signer: (m: Uint8Array) => Promise<Uint8Array>,
   challenge: SiwdChallenge,
+  typ: string = SIWD_JWS_TYP,
 ): Promise<string> =>
   createJws({
-    header: { alg: 'EdDSA', typ: 'did:dfos:siwd', kid },
+    header: { alg: 'EdDSA', typ, kid },
     payload: challenge as unknown as Record<string, unknown>,
     sign: signer,
   });
@@ -143,5 +146,70 @@ describe('verifySiwd', () => {
     const res = await verifySiwd(clientFor(id), jws, { domain: '3p.com', nonce: 'n' });
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/did/);
+  });
+
+  it('rejects a JWS whose typ is not did:dfos:siwd', async () => {
+    const id = await buildIdentity();
+    const challenge: SiwdChallenge = { domain: '3p.com', nonce: 'n', timestamp: ts(0) };
+    const jws = await signChallenge(id.kid, id.k.signer, challenge, 'did:dfos:credential');
+
+    const res = await verifySiwd(clientFor(id), jws, { domain: '3p.com', nonce: 'n' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/typ/);
+  });
+
+  it('rejects a future-dated challenge beyond clock skew', async () => {
+    const id = await buildIdentity();
+    // timestamp 10 minutes in the future — would pass any maxAge window forever
+    const challenge: SiwdChallenge = { domain: '3p.com', nonce: 'n', timestamp: ts(10) };
+    const jws = await signChallenge(id.kid, id.k.signer, challenge);
+
+    const res = await verifySiwd(clientFor(id), jws, { domain: '3p.com', nonce: 'n' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/future/);
+  });
+
+  it('rejects a timestamp that does not match the pinned expectation', async () => {
+    const id = await buildIdentity();
+    const challenge: SiwdChallenge = { domain: '3p.com', nonce: 'n', timestamp: ts(0) };
+    const jws = await signChallenge(id.kid, id.k.signer, challenge);
+
+    const res = await verifySiwd(clientFor(id), jws, {
+      domain: '3p.com',
+      nonce: 'n',
+      timestamp: ts(-1),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/timestamp/);
+  });
+
+  it('fails CLOSED when the identity resolution is stale, unless allowStale', async () => {
+    const id = await buildIdentity();
+    const store = memoryStore();
+    // warm the cache with a live relay, then go offline — resolution now rests
+    // on the cache alone, so "current authKeys" cannot be trusted for auth
+    const warm = createClient({
+      relays: [RELAY],
+      store,
+      peerClient: fakePeerClient({ [RELAY]: { identities: { [id.did]: id.log } } }),
+    });
+    await warm.identity(id.did);
+    const offline = createClient({ relays: [RELAY], store, peerClient: fakePeerClient({}) });
+
+    const challenge: SiwdChallenge = { domain: '3p.com', nonce: 'n', timestamp: ts(0) };
+    const jws = await signChallenge(id.kid, id.k.signer, challenge);
+
+    const closed = await verifySiwd(offline, jws, { domain: '3p.com', nonce: 'n' });
+    expect(closed.ok).toBe(false);
+    expect(closed.error).toMatch(/stale/);
+
+    // explicit opt-in accepts, and the honest gap rides along on the result
+    const opted = await verifySiwd(offline, jws, {
+      domain: '3p.com',
+      nonce: 'n',
+      allowStale: true,
+    });
+    expect(opted.ok).toBe(true);
+    expect(opted.unverifiable).toContain('tip');
   });
 });

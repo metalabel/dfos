@@ -28,6 +28,16 @@ import type { Client, VerifyResult } from './types';
 // challenge
 // -----------------------------------------------------------------------------
 
+/**
+ * The normative JWS header `typ` for a signed SIWD challenge (SIWD.md). Signers
+ * MUST set it; `verifySiwd` rejects anything else — it is also what lets typ-
+ * routing dispatchers tell a SIWD proof apart from credentials and chain ops.
+ */
+export const SIWD_JWS_TYP = 'did:dfos:siwd';
+
+/** Allowed forward clock skew when validating challenge timestamps (seconds). */
+const MAX_CLOCK_SKEW_SECONDS = 60;
+
 export interface SiwdChallenge {
   /** Origin domain of the requesting application. */
   domain: string;
@@ -127,8 +137,16 @@ export interface SiwdExpectations {
   nonce: string;
   /** If set, the challenge (and identity) MUST bind to this DID. */
   did?: string;
+  /** If set, the signed challenge's timestamp MUST equal this exact value. */
+  timestamp?: string;
   /** Reject challenges older than this many seconds. Default 300 (5 min). */
   maxAgeSeconds?: number;
+  /**
+   * Accept an identity resolution whose tip could not be verified (cache-only
+   * or empty-delta-against-cache). Default FALSE: authentication never silently
+   * degrades — a rotated-out key must not verify against a stale cached state.
+   */
+  allowStale?: boolean;
   /** Clock injection (unix ms). Default `Date.now()`. */
   now?: () => number;
 }
@@ -149,6 +167,11 @@ export const verifySiwd = async (
   try {
     const decoded = decodeJwsUnsafe(jws);
     if (!decoded) return fail('failed to decode JWS');
+
+    // typ gate — normative per SIWD.md; also what client.verify() routes on
+    if (decoded.header.typ !== SIWD_JWS_TYP) {
+      return fail(`invalid typ: expected ${SIWD_JWS_TYP}, got ${decoded.header.typ}`);
+    }
 
     const kid = decoded.header.kid;
     const hashIdx = kid.indexOf('#');
@@ -174,8 +197,18 @@ export const verifySiwd = async (
       return fail('signer did does not match expected did');
     }
 
-    // resolve the identity to its CURRENT state
+    // resolve the identity to its CURRENT state — and fail CLOSED when the tip
+    // could not be verified. Auth is the one place trust never silently
+    // degrades: "current authKeys" from a stale cache would let a rotated-out
+    // key keep verifying. `allowStale: true` is the explicit opt-out.
     const resolved = await client.identity(did);
+    const unverifiable = resolved.trust.unverifiable ?? [];
+    if (!expect.allowStale && (unverifiable.includes('tip') || resolved.provenance.fromCache)) {
+      return fail(
+        'identity resolution is stale (tip unverified) — refusing to authenticate against ' +
+          'a cached identity state; pass allowStale: true to accept the risk',
+      );
+    }
     const state = resolved.value;
     if (state.isDeleted) return fail('identity is deleted');
 
@@ -191,16 +224,24 @@ export const verifySiwd = async (
       return fail(err instanceof Error ? err.message : 'invalid signature');
     }
 
-    // nonce
+    // the signed payload must match what the verifier expects — nonce, domain,
+    // and (when pinned) the exact timestamp it minted
     if (payload.nonce !== expect.nonce) return fail('nonce mismatch');
-    // domain
     if (payload.domain !== expect.domain) return fail('domain mismatch');
-    // timestamp window
+    if (expect.timestamp !== undefined && payload.timestamp !== expect.timestamp) {
+      return fail('timestamp does not match expected challenge timestamp');
+    }
+
+    // timestamp window — bounded in BOTH directions: a stale challenge is
+    // replayable history, a future-dated one would outlive every maxAge window
     const maxAge = expect.maxAgeSeconds ?? 300;
     const nowMs = expect.now ? expect.now() : Date.now();
     const issuedMs = Date.parse(payload.timestamp);
     if (Number.isNaN(issuedMs)) return fail('invalid timestamp');
     if (nowMs - issuedMs > maxAge * 1000) return fail('challenge expired');
+    if (issuedMs - nowMs > MAX_CLOCK_SKEW_SECONDS * 1000) {
+      return fail('challenge timestamp is in the future');
+    }
 
     const session: SiwdSession = {
       did,
@@ -210,7 +251,13 @@ export const verifySiwd = async (
       kid,
       ...(payload.statement !== undefined ? { statement: payload.statement } : {}),
     };
-    return { ok: true, value: session };
+    return {
+      ok: true,
+      value: session,
+      // surface the resolution's honest gaps either way (populated only on the
+      // allowStale path — the default path fails closed above)
+      ...(unverifiable.length > 0 ? { unverifiable } : {}),
+    };
   } catch (err) {
     return fail(err instanceof Error ? err.message : 'siwd verification failed');
   }
