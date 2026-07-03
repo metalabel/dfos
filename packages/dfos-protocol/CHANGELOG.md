@@ -11,9 +11,19 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.16.0] — 2026-07-03
+
 Protocol-package additions (a new `./fold` subpath, the `index/v1` standard
 schema, and the Media object + `profile/v1` avatar vocabulary) plus
 lockstep-pending relay and documentation work, all additive atop frozen v1.
+The headline lockstep surface is the reference relay's `/revocations/v1`
+query routes (below) — the read plane that makes credential revocation
+observable to zero-trust callers. The private `dfos-client` gains a
+revocation checker wired to those routes, and the private `dfos-explorer`
+surfaces per-relay revocation-feed honesty; neither is published (they ride
+the published `dfos-protocol` + `dfos-web-relay` pair).
 
 ### Added
 
@@ -31,8 +41,12 @@ lockstep-pending relay and documentation work, all additive atop frozen v1.
   full-log sync into a normalized IndexedDB local index (chains fold offline),
   in-tab canonical fold for `index/v1` chains, Media object integrity
   re-hashing, per-relay revocation-feed honesty, quorum + provenance as
-  first-class UI. Not published, not deployed — the first full consumer of
-  `@metalabel/dfos-client`. (#149, #150, #151, #152, #153)
+  first-class UI. A nav-resilient global sync engine with live progress and an
+  opt-in background auto-sync scheduler, JIT chain indexing on visit, verified
+  profile rendering + a relay browser, byte-accurate index storage stats, and
+  related-credential surfacing on content chains round it out. Not published,
+  not deployed — the first full consumer of `@metalabel/dfos-client`. (#149,
+  #150, #151, #152, #153, #155, #156, #157, #158, #159, #160, #161)
 - **`@metalabel/dfos-web-relay/peer-client` subpath export** — a lightweight,
   server-free entry for relay CONSUMERS: `createHttpPeerClient` (which now accepts
   an optional injected `fetch` for timeouts/retries/tests), the `PROOF_BASE_PATH` /
@@ -262,7 +276,8 @@ update.
 Baseline of this changelog. Earlier history predates the changelog and is
 recorded in the git log and GitHub releases.
 
-[Unreleased]: https://github.com/metalabel/dfos/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/metalabel/dfos/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/metalabel/dfos/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/metalabel/dfos/compare/v0.14.4...v0.15.0
 [0.14.4]: https://github.com/metalabel/dfos/compare/v0.14.3...v0.14.4
 [0.14.3]: https://github.com/metalabel/dfos/compare/v0.14.2...v0.14.3
