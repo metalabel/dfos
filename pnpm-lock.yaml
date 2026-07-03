@@ -53,6 +53,9 @@ importers:
       '@metalabel/dfos-web-relay':
         specifier: workspace:*
         version: link:../dfos-web-relay
+      multiformats:
+        specifier: ^14.0.0
+        version: 14.0.0
       preact:
         specifier: ^10.28.2
         version: 10.29.2

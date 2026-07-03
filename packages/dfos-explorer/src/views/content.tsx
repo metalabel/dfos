@@ -14,12 +14,16 @@ import type { Resolved, ResolvedContent } from '@metalabel/dfos-client';
 import { dagCborCanonicalEncode } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
+import { IndexPanel } from '../components/index-view';
+import { MediaPanel } from '../components/media';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
 import { Copyable, DidLink, OpLink, Panel, Pill, Term } from '../components/ui';
 import { getClient } from '../lib/client';
 import { short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
+import { isIndexDocument } from '../lib/index-fold';
+import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
@@ -29,6 +33,7 @@ interface DocState {
   blob: BlobResult;
   /** re-derived CID of the served bytes (JSON → canonical dag-cbor → CID) */
   derivedCid?: string;
+  parsed?: unknown;
   pretty?: string;
   binary?: boolean;
 }
@@ -83,6 +88,7 @@ export const Content = (props: { id: string }) => {
         setDoc({
           blob,
           derivedCid: encoded.cid.toString(),
+          parsed,
           pretty: JSON.stringify(parsed, null, 2).slice(0, 4000),
         });
       } catch {
@@ -238,6 +244,8 @@ export const Content = (props: { id: string }) => {
         </Checks>
       </Panel>
 
+      <SchemaPanels contentId={props.id} doc={doc} rows={rows} />
+
       <DocPanel doc={doc} committedCid={docCid} verified={!!chain} />
 
       <Panel title="operation history">
@@ -249,6 +257,26 @@ export const Content = (props: { id: string }) => {
       </Panel>
     </>
   );
+};
+
+/** Schema-aware extras: index chains get the fold, profile avatars get media. */
+const SchemaPanels = (props: { contentId: string; doc: DocState | null; rows: OpRow[] }) => {
+  const parsed = props.doc?.parsed;
+  if (parsed === undefined || props.rows.length === 0) return null;
+
+  if (isIndexDocument(parsed)) {
+    return <IndexPanel contentId={props.contentId} rows={props.rows} />;
+  }
+
+  const rec =
+    typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  if (rec && rec['$schema'] === 'https://schemas.dfos.com/profile/v1' && rec['avatar']) {
+    const media = parseMediaObject(rec['avatar']);
+    if (media) return <MediaPanel title="avatar" media={media} />;
+  }
+  return null;
 };
 
 const DocPanel = (props: {

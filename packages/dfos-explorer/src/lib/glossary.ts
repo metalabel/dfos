@@ -102,6 +102,21 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'How many relays independently returned byte-identical answers to the same read — agreement across an untrusted set is evidence of convergence, never proof of completeness.',
   },
   {
+    key: 'index',
+    term: 'index',
+    def: 'A content chain whose documents are streams of set/remove deltas over content refs — folded into a last-write-wins map by the canonical fold, it is a signed, portable collection (a shelf, a blogroll, a catalog).',
+  },
+  {
+    key: 'canonicalFold',
+    term: 'canonical fold',
+    def: 'The deterministic total order over ALL operations in a chain log — createdAt ascending, op-CID tiebreak, branch-INCLUSIVE — so every implementation folds the same op set to the identical result regardless of arrival order or forks.',
+  },
+  {
+    key: 'media',
+    term: 'media object',
+    def: 'A {uri, cid?, href?} reference to bytes outside the proof plane: uri is the identity (often an opaque attachment:// ref), cid commits to the exact bytes (CIDv1/raw/sha2-256), href is a non-normative fetch hint — verify the bytes, never trust the host.',
+  },
+  {
     key: 'localIndex',
     term: 'local index',
     def: 'Your browser’s own copy of every operation it has synced from relay logs, stored in IndexedDB — chains fold offline from it, and it persists across visits.',
