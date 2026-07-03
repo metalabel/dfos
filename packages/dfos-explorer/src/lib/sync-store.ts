@@ -19,11 +19,12 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import { getClient } from './client';
+import type { OpKind } from './db';
 import { getDb } from './db-instance';
 import { fmtCount, short } from './format';
 import { getRelays } from './relays';
 import { getAutoSyncMinutes } from './settings';
-import { syncAll, type SyncProgress } from './sync';
+import { indexChainOps, syncAll, type SyncProgress } from './sync';
 
 export type SyncPhase = 'idle' | 'syncing' | 'done' | 'error';
 
@@ -170,6 +171,26 @@ export const startSync = async (trigger: 'manual' | 'auto' = 'manual'): Promise<
 
 export const stopSync = (): void => {
   controller?.abort();
+};
+
+/**
+ * Just-in-time index a single chain the detail view already fetched + verified.
+ * Best-effort and fire-and-forget: a failure here never blocks the view (the
+ * page renders from the client fold regardless). On any real add it signals the
+ * index changed so the local-index panel and home hero re-read their counts.
+ */
+export const jitIndexChain = async (
+  chainId: string,
+  kind: OpKind,
+  ops: { cid: string; jwsToken: string }[],
+): Promise<void> => {
+  try {
+    const db = await getDb();
+    const { added } = await indexChainOps(db, chainId, kind, ops);
+    if (added > 0) markDbChanged();
+  } catch {
+    // indexing is an optimization, never a correctness requirement
+  }
 };
 
 const persistLastSync = (ms: number): void => {

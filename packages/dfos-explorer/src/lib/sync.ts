@@ -14,7 +14,7 @@
 
 import type { Client } from '@metalabel/dfos-client';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import { isOpKind, type ChainRollup, type ExplorerDb, type ExplorerOp } from './db';
+import { isOpKind, type ChainRollup, type ExplorerDb, type ExplorerOp, type OpKind } from './db';
 
 export interface SyncProgress {
   relay: string;
@@ -119,6 +119,78 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
     if (!cursor) break;
   }
 
+  return { added };
+};
+
+// -----------------------------------------------------------------------------
+// JIT indexing — fold a single chain's ops into the local index on demand
+//
+// When you navigate straight to a chain (no full sync yet), the detail view has
+// already fetched + VERIFIED the op log via the client. Landing those ops in the
+// index makes the chain browsable immediately and lets a later full sync skip
+// them. The rollup is recomputed from the stored ops (not incrementally merged)
+// so it is always exact regardless of overlap with a prior sync.
+// -----------------------------------------------------------------------------
+
+const decodeOpMeta = (jwsToken: string): { type: string; createdAt: string; kid: string } => {
+  let type = '';
+  let createdAt = '';
+  let kid = '';
+  const decoded = decodeJwsUnsafe(jwsToken);
+  if (decoded) {
+    if (typeof decoded.payload['type'] === 'string') type = decoded.payload['type'];
+    if (typeof decoded.payload['createdAt'] === 'string') createdAt = decoded.payload['createdAt'];
+    if (typeof decoded.header.kid === 'string') kid = decoded.header.kid;
+  }
+  return { type, createdAt, kid };
+};
+
+const rollupFrom = (chainId: string, kind: OpKind, ops: ExplorerOp[]): ChainRollup => {
+  const rollup: ChainRollup = {
+    chainId,
+    kind,
+    opCount: ops.length,
+    firstCreatedAt: '',
+    lastCreatedAt: '',
+    headCid: '',
+  };
+  for (const op of ops) {
+    if (!rollup.firstCreatedAt || (op.createdAt && op.createdAt < rollup.firstCreatedAt))
+      rollup.firstCreatedAt = op.createdAt;
+    if (op.createdAt >= rollup.lastCreatedAt) {
+      rollup.lastCreatedAt = op.createdAt;
+      rollup.headCid = op.cid;
+    }
+  }
+  return rollup;
+};
+
+/**
+ * Land a single chain's ops into the local index (idempotent by CID) and
+ * recompute its rollup. `ops` are the verified log entries the detail view
+ * already holds. Returns how many were newly added.
+ */
+export const indexChainOps = async (
+  db: ExplorerDb,
+  chainId: string,
+  kind: OpKind,
+  ops: { cid: string; jwsToken: string }[],
+): Promise<{ added: number }> => {
+  const usable = ops.filter((o) => o.cid && o.jwsToken);
+  if (!chainId || usable.length === 0) return { added: 0 };
+
+  const known = await db.knownOps(usable.map((o) => o.cid));
+  const rows: ExplorerOp[] = usable.map((o, i) => {
+    const meta = decodeOpMeta(o.jwsToken);
+    return { cid: o.cid, jwsToken: o.jwsToken, kind, chainId, seq: i, ...meta };
+  });
+  await db.putBatch(rows, []);
+
+  // recompute the rollup from the authoritative stored set (exact, not merged)
+  const stored = await db.chainOps(chainId, kind);
+  await db.putBatch([], [rollupFrom(chainId, kind, stored)]);
+
+  const added = usable.filter((o) => !known.has(o.cid)).length;
   return { added };
 };
 
