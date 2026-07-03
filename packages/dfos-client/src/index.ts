@@ -20,6 +20,7 @@ export type {
   Client,
   ClientConfig,
   DocumentBlob,
+  GlobalLogOptions,
   GlobalLogPage,
   LogOp,
   Provenance,

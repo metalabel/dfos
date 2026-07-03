@@ -145,6 +145,23 @@ export interface Store {
 export interface LogOp {
   cid: string;
   jwsToken: string;
+  /**
+   * Relay-asserted operation kind — present on global-log entries, absent on
+   * chain logs. A ROUTING HINT for indexers/browsers, never a verification
+   * input: folds re-derive everything from the JWS itself.
+   */
+  kind?: string;
+  /**
+   * Relay-asserted chain identifier (DID / contentId / targetCID by kind).
+   * Same hint-only status as `kind`.
+   */
+  chainId?: string;
+}
+
+/** Options for a global-log page read. */
+export interface GlobalLogOptions extends CallOptions {
+  /** Page size, 1–1000 (relay-enforced cap). Default 100. */
+  limit?: number;
 }
 
 /** A page of the global operation log — a seam, not a sync engine (v1). */
@@ -215,6 +232,6 @@ export interface Client {
 
   /** Raw floor. */
   log(kind: 'identity' | 'content', id: string, options?: CallOptions): Promise<Resolved<LogOp[]>>;
-  globalLog(cursor?: string, options?: CallOptions): Promise<GlobalLogPage>;
+  globalLog(cursor?: string, options?: GlobalLogOptions): Promise<GlobalLogPage>;
   health(options?: CallOptions): Promise<RelayHealth[]>;
 }
