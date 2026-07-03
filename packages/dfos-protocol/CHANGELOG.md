@@ -11,11 +11,28 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
-No protocol-package (`@metalabel/dfos-protocol`) changes. Lockstep-pending relay and
-documentation work, all additive atop frozen v1.
+Protocol-package additions (a new `./fold` subpath and the `index/v1` standard
+schema) plus lockstep-pending relay and documentation work, all additive atop
+frozen v1.
 
 ### Added
 
+- **Canonical fold library + `index/v1` standard schema** — a new
+  `@metalabel/dfos-protocol/fold` subpath exporting pure functions over
+  already-verified operations (zero crypto or network imports): `linearize(ops)`
+  (deterministic total order over ALL operations in a chain's log — every branch —
+  `createdAt` ascending with operation-CID ascending tiebreak, the head-selection
+  comparator generalized so the head-preferred op sorts last and last-applied wins),
+  `foldLwwMap(deltas)` (generic LWW-Map fold), and `foldIndexV1(ops)` (the
+  `index/v1` fold). Ships with the new hosted **`index/v1`** standard schema — an
+  index chain is an LWW-Map of content refs folded via the canonical fold, with
+  `set`/`remove` deltas, optional `{ label, order }` entry metadata, and unknown
+  delta shapes skipped deterministically (forward compat). The reference relay's
+  deterministic head selection now imports the shared comparator
+  (`compareHeadPreference`) so head selection and the fold cannot drift —
+  behavior-identical, no wire change. Specced in `CONTENT-MODEL.md` (the Canonical
+  Fold and Index sections) on the content-schema `0.x` clock; the frozen v1 wire is
+  untouched. (#146)
 - **Relay revocation-status query routes** — a new own-clock `/revocations/v1` route
   family on the reference relay: `GET /revocations/v1/credential/:cid` (status of a
   single credential — the signed revocation operation if revoked, an honest not-found

@@ -1,0 +1,89 @@
+{
+  "description": "Five operations across two concurrent branches, demonstrating index/v1 LWW-Map folding via the canonical (branch-inclusive) fold. Ordering keys (createdAt, operationCID) are shown because they, not chain topology, determine the fold order.",
+  "schema": "https://schemas.dfos.com/index/v1",
+  "participants": {
+    "curator": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
+  },
+  "operations": [
+    {
+      "sequence": 0,
+      "operationCID": "bafyreiaaindexgenesis000000000000000000000000000000000000",
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "document": {
+        "$schema": "https://schemas.dfos.com/index/v1",
+        "deltas": [
+          {
+            "op": "set",
+            "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "value": { "label": "First Release", "order": 1 }
+          }
+        ]
+      }
+    },
+    {
+      "sequence": 1,
+      "operationCID": "bafyreibbindexop2000000000000000000000000000000000000000000",
+      "previousOperationCID": "bafyreiaaindexgenesis000000000000000000000000000000000000",
+      "createdAt": "2026-01-02T00:00:00.000Z",
+      "document": {
+        "$schema": "https://schemas.dfos.com/index/v1",
+        "deltas": [
+          {
+            "op": "set",
+            "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "value": { "label": "Second Release", "order": 2 }
+          }
+        ]
+      }
+    },
+    {
+      "sequence": 2,
+      "branch": "A",
+      "operationCID": "bafyreiccindexbranchA00000000000000000000000000000000000000",
+      "previousOperationCID": "bafyreibbindexop2000000000000000000000000000000000000000000",
+      "createdAt": "2026-01-03T00:00:00.000Z",
+      "document": {
+        "$schema": "https://schemas.dfos.com/index/v1",
+        "deltas": [
+          { "op": "set", "key": "ccccccccccccccccccccccccccccccc", "value": {} },
+          { "op": "remove", "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+        ]
+      }
+    },
+    {
+      "sequence": 3,
+      "branch": "B",
+      "operationCID": "bafyreiddindexbranchB00000000000000000000000000000000000000",
+      "previousOperationCID": "bafyreibbindexop2000000000000000000000000000000000000000000",
+      "createdAt": "2026-01-04T00:00:00.000Z",
+      "document": {
+        "$schema": "https://schemas.dfos.com/index/v1",
+        "deltas": [
+          {
+            "op": "set",
+            "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "value": { "label": "First Release (remastered)", "order": 1 }
+          }
+        ]
+      }
+    },
+    {
+      "sequence": 4,
+      "branch": "B",
+      "operationCID": "bafyreieeindexunknown0000000000000000000000000000000000000",
+      "previousOperationCID": "bafyreiddindexbranchB00000000000000000000000000000000000000",
+      "createdAt": "2026-01-05T00:00:00.000Z",
+      "document": {
+        "$schema": "https://schemas.dfos.com/index/v1",
+        "deltas": [
+          {
+            "op": "set",
+            "key": "ddddddddddddddddddddddddddddddd",
+            "value": { "label": "Fourth Release", "order": 4 }
+          },
+          { "op": "reorder", "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+        ]
+      }
+    }
+  ]
+}

@@ -15,6 +15,7 @@ const loadSchema = (name: string) => JSON.parse(readFileSync(resolve(schemasDir,
 
 const postSchema = loadSchema('post.v1.json');
 const profileSchema = loadSchema('profile.v1.json');
+const indexSchema = loadSchema('index.v1.json');
 const ajv = new Ajv({ strict: true, allErrors: true });
 addFormats(ajv);
 
@@ -29,6 +30,10 @@ describe('schema compilation', () => {
 
   it('profile.v1.json compiles', () => {
     expect(() => ajv.compile(profileSchema)).not.toThrow();
+  });
+
+  it('index.v1.json compiles', () => {
+    expect(() => ajv.compile(indexSchema)).not.toThrow();
   });
 });
 
@@ -223,5 +228,126 @@ describe('profile schema validation', () => {
         email: 'alice@example.com',
       }),
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Index schema
+// ---------------------------------------------------------------------------
+
+describe('index schema validation', () => {
+  const validate = ajv.compile(indexSchema);
+
+  it('accepts a set delta with entry metadata', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [
+          {
+            op: 'set',
+            key: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            value: { label: 'First', order: 1 },
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts the degenerate set-membership delta (no value)', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [{ op: 'set', key: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts a remove delta', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [{ op: 'remove', key: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts unknown delta ops (validators MUST NOT reject additional delta shapes)', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [{ op: 'reorder', key: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', anything: true }],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts entry metadata with unknown fields (forward compat)', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [{ op: 'set', key: 'k', value: { label: 'x', futureField: 'y' } }],
+      }),
+    ).toBe(true);
+  });
+
+  it('validates every document in the examples/index worked chain', () => {
+    const chain = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, '../../../examples/index/chain.json'), 'utf-8'),
+    ) as { operations: { sequence: number; document: unknown }[] };
+    for (const op of chain.operations) {
+      expect(validate(op.document), `sequence ${op.sequence} should validate`).toBe(true);
+    }
+  });
+
+  it('rejects a set delta missing key', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [{ op: 'set' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects a remove delta missing key', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [{ op: 'remove' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects a set delta with a non-string key', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [{ op: 'set', key: 42 }],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects a set delta with a non-object value', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [{ op: 'set', key: 'k', value: 'scalar' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects a non-integer order', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/index/v1',
+        deltas: [{ op: 'set', key: 'k', value: { order: 1.5 } }],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects missing deltas', () => {
+    expect(validate({ $schema: 'https://schemas.dfos.com/index/v1' })).toBe(false);
+  });
+
+  it('rejects missing $schema', () => {
+    expect(validate({ deltas: [] })).toBe(false);
   });
 });
