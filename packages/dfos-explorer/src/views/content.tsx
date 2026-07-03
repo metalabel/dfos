@@ -18,9 +18,11 @@ import { IndexPanel } from '../components/index-view';
 import { MediaPanel } from '../components/media';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
-import { Copyable, DidLink, OpLink, Panel, Pill, Term } from '../components/ui';
+import { Copyable, CredLink, DidLink, OpLink, Panel, Pill, Term } from '../components/ui';
 import { getClient } from '../lib/client';
-import { short } from '../lib/format';
+import { grantsForChain, type GrantSummary } from '../lib/credentials';
+import { getDb } from '../lib/db-instance';
+import { fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { isIndexDocument } from '../lib/index-fold';
 import { parseMediaObject } from '../lib/media';
@@ -44,6 +46,7 @@ export const Content = (props: { id: string }) => {
   const [resolved, setResolved] = useState<Resolved<ResolvedContent> | null>(null);
   const [rows, setRows] = useState<OpRow[]>([]);
   const [doc, setDoc] = useState<DocState | null>(null);
+  const [grants, setGrants] = useState<GrantSummary[] | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -52,9 +55,20 @@ export const Content = (props: { id: string }) => {
     setResolved(null);
     setRows([]);
     setDoc(null);
+    setGrants(null);
     setError('');
     const relays = getRelays();
     const client = getClient();
+
+    // related grants — scan the synced credential ops for any naming this chain
+    void getDb()
+      .then((db) => db.opsOfKind('credential', 100000))
+      .then((ops) => {
+        if (!dead) setGrants(grantsForChain(ops, props.id));
+      })
+      .catch(() => {
+        if (!dead) setGrants([]);
+      });
 
     void fetchClaim('content', props.id, relays).then((c) => {
       if (!dead) setClaim(c);
@@ -270,6 +284,8 @@ export const Content = (props: { id: string }) => {
 
       <DocPanel doc={doc} committedCid={docCid} verified={!!chain} />
 
+      <GrantsPanel grants={grants} publicBytes={!!doc?.blob.bytes} gated={!!doc?.blob.gated} />
+
       <Panel title="operation history">
         {rows.length === 0 ? (
           <span class="muted">{error ? <span class="err">{error}</span> : 'loading…'}</span>
@@ -317,6 +333,84 @@ const SchemaPanels = (props: {
     if (media) return <MediaPanel title="avatar" media={media} />;
   }
   return null;
+};
+
+/**
+ * Related grants — the public-read (and any scoped) credentials the local index
+ * holds that name this chain as a resource. Relay-asserted until opened; the
+ * credential view verifies the signature + that the delegation roots at the
+ * creator. Only rendered when there's something to say (grants found, or the
+ * bytes are publicly served / gated).
+ */
+const GrantsPanel = (props: {
+  grants: GrantSummary[] | null;
+  publicBytes: boolean;
+  gated: boolean;
+}) => {
+  const { grants } = props;
+  const has = grants && grants.length > 0;
+  // nothing to surface: no grants in the index and byte state is unknown/private
+  if (!has && !props.publicBytes && !props.gated) return null;
+
+  return (
+    <Panel
+      title="access"
+      right={
+        <span class="lbl">
+          <Term word="public-read grant" def={GLOSSARY['standingGrant'] ?? ''} />
+        </span>
+      }
+    >
+      {has ? (
+        <>
+          <table>
+            <thead>
+              <tr>
+                <th>credential</th>
+                <th>audience</th>
+                <th>grants</th>
+                <th>expires</th>
+              </tr>
+            </thead>
+            <tbody>
+              {grants.map((g) => (
+                <tr key={g.cid}>
+                  <td>
+                    <CredLink cid={g.cid} />
+                  </td>
+                  <td>
+                    {g.isPublic ? (
+                      <span class="k-role">public · anyone</span>
+                    ) : (
+                      <DidLink did={g.aud} />
+                    )}
+                  </td>
+                  <td class="muted">{g.actions.join(', ')} chain</td>
+                  <td class="muted">{g.exp ? fmtUnixDate(g.exp) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div class="ck-note" style={{ marginTop: 8 }}>
+            From the local index — a standing <code>read</code> grant with audience <code>*</code>{' '}
+            is what makes the document bytes anonymously servable. Open a credential to verify its
+            signature and that it roots at this chain's creator.
+          </div>
+        </>
+      ) : props.publicBytes ? (
+        <div class="ck-note">
+          The bytes are served publicly (an anonymous read succeeded), so a standing public-read
+          grant exists on the relay — but it isn't in your local index yet. <b>Sync the full log</b>{' '}
+          to surface the credential here.
+        </div>
+      ) : (
+        <div class="ck-note">
+          No public-read grant in your local index. The document bytes are gated — reads need a
+          credential or an auth token.
+        </div>
+      )}
+    </Panel>
+  );
 };
 
 const DocPanel = (props: {
