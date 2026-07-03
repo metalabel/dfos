@@ -18,7 +18,7 @@ export const Glossary = () => (
       </>
     }
   >
-    <div class="kv" style={{ gridTemplateColumns: 'minmax(120px, 190px) 1fr', gap: '9px 12px' }}>
+    <div class="kv terms">
       {GLOSSARY_TERMS.map((t) => (
         <>
           <div class="k" style={{ color: 'var(--ink)' }}>
