@@ -8,11 +8,13 @@
 
 */
 
+import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Panel } from '../components/ui';
-import type { ChainRollup, OpKind } from '../lib/db';
+import type { ChainRollup, ExplorerOp, OpKind } from '../lib/db';
+import { estimateStorageBytes } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { fmtCount, short } from '../lib/format';
+import { fmtBytes, fmtCount, short } from '../lib/format';
 import {
   AUTO_SYNC_OPTIONS,
   getAutoSyncMinutes,
@@ -72,8 +74,13 @@ export const LocalIndex = () => {
     byKind: Partial<Record<OpKind, number>>;
   }>({ ops: 0, chains: 0, byKind: {} });
   const [rows, setRows] = useState<ChainRollup[]>([]);
+  // credentials chain under their issuer DID (colliding with the identity
+  // chain), so they don't surface as their own rollup — list them from the ops
+  // store instead when the credential filter is active
+  const [credRows, setCredRows] = useState<ExplorerOp[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('recent');
+  const [storageBytes, setStorageBytes] = useState<number | null>(null);
   const sync = useSyncState();
   const syncing = sync.phase === 'syncing';
   const [wiped, setWiped] = useState('');
@@ -85,13 +92,16 @@ export const LocalIndex = () => {
   const refresh = async (): Promise<void> => {
     const db = await getDb();
     setCounts(await db.counts());
-    setRows(
-      await db.chainsQuery({
-        sort,
-        kind: filter === 'all' ? undefined : filter,
-        limit: 300,
-      }),
-    );
+    if (filter === 'credential') {
+      setCredRows(await db.opsOfKind('credential', 300));
+      setRows([]);
+    } else {
+      setRows(
+        await db.chainsQuery({ sort, kind: filter === 'all' ? undefined : filter, limit: 300 }),
+      );
+      setCredRows([]);
+    }
+    setStorageBytes(await estimateStorageBytes());
   };
 
   useEffect(() => {
@@ -139,7 +149,7 @@ export const LocalIndex = () => {
     const parts: string[] = [];
     if (k['identity-op']) parts.push(`${fmtCount(k['identity-op'])} id`);
     if (k['content-op']) parts.push(`${fmtCount(k['content-op'])} content`);
-    if (k['credential']) parts.push(`${fmtCount(k['credential'])} cred`);
+    if (k['credential']) parts.push(`${fmtCount(k['credential'])} grants`);
     return parts.join(' · ');
   }, [counts]);
 
@@ -161,6 +171,9 @@ export const LocalIndex = () => {
       <div class="lbl" style={{ margin: '7px 0' }}>
         {status ||
           (counts.ops ? `${fmtCount(counts.ops)} ops · ${summary}` : 'no local data — hit sync')}
+        {counts.ops && storageBytes ? (
+          <span class="idb-size"> · {fmtBytes(storageBytes)} on disk</span>
+        ) : null}
       </div>
       <div class="autosync">
         <span class="lbl">auto-sync</span>
@@ -195,7 +208,28 @@ export const LocalIndex = () => {
         ))}
       </div>
       <div class="index-rows">
-        {rows.length === 0 ? (
+        {filter === 'credential' ? (
+          credRows.length === 0 ? (
+            <span class="muted">{counts.byKind['credential'] ? '…' : 'no grants — hit sync'}</span>
+          ) : (
+            <table>
+              <tbody>
+                {credRows.map((op) => {
+                  const aud = decodeJwsUnsafe(op.jwsToken)?.payload['aud'];
+                  return (
+                    <tr key={op.cid} onClick={() => (location.hash = `#/cred/${op.cid}`)}>
+                      <td>
+                        <span class="kind credential">grant</span>
+                      </td>
+                      <td>{short(op.cid, 13, 5)}</td>
+                      <td class="n">{aud === '*' ? 'public' : aud ? 'scoped' : ''}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )
+        ) : rows.length === 0 ? (
           <span class="muted">{counts.chains ? 'no chains of this kind' : 'idle'}</span>
         ) : (
           <table>

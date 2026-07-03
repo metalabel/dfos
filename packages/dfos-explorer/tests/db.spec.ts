@@ -112,4 +112,31 @@ describe('explorer db', () => {
     expect(await db.getCursor('https://r1')).toBeUndefined();
     expect((await db.counts()).chains).toBe(0);
   });
+
+  it('counts credentials from OPS even when they collide with an identity chainId', async () => {
+    const db = await freshDb();
+    // one issuer DID hosts an identity chain AND 3 credential ops that chain
+    // under the same chainId — the rollup collapses to a single kind, but the
+    // credential count must still reflect all 3 ops
+    await db.putBatch(
+      [
+        op({ cid: 'id1', kind: 'identity-op', chainId: 'did:dfos:iss' }),
+        op({ cid: 'id2', kind: 'identity-op', chainId: 'did:dfos:iss', type: 'update' }),
+        op({ cid: 'cr1', kind: 'credential', chainId: 'did:dfos:iss' }),
+        op({ cid: 'cr2', kind: 'credential', chainId: 'did:dfos:iss' }),
+        op({ cid: 'cr3', kind: 'credential', chainId: 'did:dfos:iss' }),
+      ],
+      // the rollup for the shared chainId (last-writer-wins) lands as identity
+      [rollup({ chainId: 'did:dfos:iss', kind: 'identity-op', opCount: 5 })],
+    );
+
+    const counts = await db.counts();
+    expect(counts.byKind['identity-op']).toBe(1); // one identity CHAIN
+    expect(counts.byKind['credential']).toBe(3); // three credential OPS, not collapsed
+    expect(counts.chains).toBe(1);
+    expect(counts.ops).toBe(5);
+
+    const grants = await db.opsOfKind('credential', 300);
+    expect(grants.map((g) => g.cid).sort()).toEqual(['cr1', 'cr2', 'cr3']);
+  });
 });

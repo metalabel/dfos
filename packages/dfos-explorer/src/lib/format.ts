@@ -26,6 +26,16 @@ export const fmtUnixDate = (unix: number): string => {
 export const fmtCount = (n: number): string =>
   n >= 10000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
+/** Bytes → "~92 MB" / "~1.2 GB" (binary units, browser-estimate precision). */
+export const fmtBytes = (bytes: number | null | undefined): string => {
+  if (bytes == null) return '';
+  const mb = bytes / 1048576;
+  if (mb >= 1024) return `~${(mb / 1024).toFixed(1)} GB`;
+  if (mb >= 10) return `~${Math.round(mb)} MB`;
+  if (mb >= 1) return `~${mb.toFixed(1)} MB`;
+  return `~${Math.max(1, Math.round(bytes / 1024))} KB`;
+};
+
 export const copyToClipboard = (value: string): void => {
   void navigator.clipboard?.writeText(value).catch(() => {
     // clipboard denied — non-fatal

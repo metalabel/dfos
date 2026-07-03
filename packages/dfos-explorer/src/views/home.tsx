@@ -13,8 +13,9 @@
 import { useEffect, useState } from 'preact/hooks';
 import { Panel, Term } from '../components/ui';
 import type { OpKind } from '../lib/db';
+import { estimateStorageBytes } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { fmtCount } from '../lib/format';
+import { fmtBytes, fmtCount } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { startSync, stopSync, useSyncState } from '../lib/sync-store';
 
@@ -42,6 +43,7 @@ const SyncHero = () => {
     chains: number;
     byKind: Partial<Record<OpKind, number>>;
   } | null>(null);
+  const [storageBytes, setStorageBytes] = useState<number | null>(null);
 
   useEffect(() => {
     let dead = false;
@@ -50,6 +52,9 @@ const SyncHero = () => {
       .then((c) => {
         if (!dead) setCounts(c);
       });
+    void estimateStorageBytes().then((b) => {
+      if (!dead) setStorageBytes(b);
+    });
     return () => {
       dead = true;
     };
@@ -63,7 +68,7 @@ const SyncHero = () => {
     const parts: string[] = [];
     if (k['identity-op']) parts.push(`${fmtCount(k['identity-op'])} identities`);
     if (k['content-op']) parts.push(`${fmtCount(k['content-op'])} content`);
-    if (k['credential']) parts.push(`${fmtCount(k['credential'])} credentials`);
+    if (k['credential']) parts.push(`${fmtCount(k['credential'])} public-read grants`);
     return parts.join(' · ');
   })();
 
@@ -73,8 +78,9 @@ const SyncHero = () => {
       right={
         populated ? (
           <span class="lbl">
-            {fmtCount(counts?.chains ?? 0)} chains{' '}
-            {sync.lastSyncAt ? `· synced ${ago(sync.lastSyncAt)}` : ''}
+            {fmtCount(counts?.chains ?? 0)} chains
+            {storageBytes ? ` · ${fmtBytes(storageBytes)}` : ''}
+            {sync.lastSyncAt ? ` · synced ${ago(sync.lastSyncAt)}` : ''}
           </span>
         ) : null
       }

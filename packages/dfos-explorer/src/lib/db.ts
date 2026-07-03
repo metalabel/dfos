@@ -34,6 +34,16 @@ export const OP_KINDS: readonly OpKind[] = [
 
 export const isOpKind = (v: unknown): v is OpKind => OP_KINDS.includes(v as OpKind);
 
+/**
+ * Kinds that form a linked HISTORY under one chainId (identity / content), so a
+ * per-chain rollup is the meaningful unit. Everything else is a standalone OP
+ * that chains under some other primitive's chainId — most importantly a
+ * `credential` chains under its ISSUER DID, colliding with that identity's
+ * chain. Counting those by rollup-kind under-counts them (last-writer-wins on
+ * the shared chainId); they must be counted from the `ops` store instead.
+ */
+export const CHAIN_KINDS: readonly OpKind[] = ['identity-op', 'content-op'];
+
 /** One operation row. `kind`/`chainId` are relay-asserted routing hints. */
 export interface ExplorerOp {
   cid: string;
@@ -84,6 +94,14 @@ export interface ExplorerDb {
   chainOps(chainId: string, kind?: OpKind): Promise<ExplorerOp[]>;
   getChain(chainId: string): Promise<ChainRollup | undefined>;
   allChains(): Promise<ChainRollup[]>;
+  /** Ops of a single kind, newest first — the browsable list for op-primitives
+   *  (credentials, artifacts) that don't surface as their own chain rollup. */
+  opsOfKind(kind: OpKind, limit: number): Promise<ExplorerOp[]>;
+  /**
+   * counts.byKind is per-primitive: CHAIN counts for identity/content, OP counts
+   * for credential/artifact/etc. (see CHAIN_KINDS) — so a credential colliding
+   * with its issuer's identity chain is still counted.
+   */
   counts(): Promise<{ ops: number; chains: number; byKind: Partial<Record<OpKind, number>> }>;
   chainsQuery(q: ChainsQuery): Promise<ChainRollup[]>;
   getCursor(relay: string): Promise<SyncCursor | undefined>;
@@ -109,6 +127,21 @@ const done = (t: IDBTransaction): Promise<void> =>
     t.onerror = () => reject(t.error ?? new Error('indexeddb transaction failed'));
     t.onabort = () => reject(t.error ?? new Error('indexeddb transaction aborted'));
   });
+
+/**
+ * Origin storage usage (bytes) via the StorageManager estimate — dominated by
+ * this app's IndexedDB. `null` when the API is unavailable (older/locked-down
+ * browsers). It's an estimate the browser rounds for privacy, not an exact
+ * byte count, so it's surfaced as "~N MB".
+ */
+export const estimateStorageBytes = async (): Promise<number | null> => {
+  try {
+    const est = await globalThis.navigator?.storage?.estimate?.();
+    return typeof est?.usage === 'number' ? est.usage : null;
+  } catch {
+    return null;
+  }
+};
 
 export const openExplorerDb = async (
   name = 'dfos-explorer',
@@ -187,18 +220,37 @@ export const openExplorerDb = async (
     byKind: Partial<Record<OpKind, number>>;
   }> => {
     const t = db.transaction(['ops', 'chains']);
-    const opsCount = req(t.objectStore('ops').count());
+    const opsStore = t.objectStore('ops');
     const chainsStore = t.objectStore('chains');
+    const opsCount = req(opsStore.count());
     const chainsCount = req(chainsStore.count());
     const byKind: Partial<Record<OpKind, number>> = {};
+    // per-primitive: chain-forming kinds counted as CHAINS, everything else
+    // (credentials, artifacts…) counted as OPS from the ops store, so a
+    // credential sharing its issuer's chainId is never swallowed by the rollup
     const kindCounts = await Promise.all(
-      OP_KINDS.map((k) => req(chainsStore.index('kind').count(k))),
+      OP_KINDS.map((k) =>
+        CHAIN_KINDS.includes(k)
+          ? req(chainsStore.index('kind').count(k))
+          : req(opsStore.index('kind').count(k)),
+      ),
     );
     OP_KINDS.forEach((k, i) => {
       const n = kindCounts[i];
       if (n) byKind[k] = n;
     });
     return { ops: await opsCount, chains: await chainsCount, byKind };
+  };
+
+  const opsOfKind = async (kind: OpKind, limit: number): Promise<ExplorerOp[]> => {
+    const rows = (await req(
+      db.transaction('ops').objectStore('ops').index('kind').getAll(kind),
+    )) as ExplorerOp[];
+    rows.sort(
+      (a, b) =>
+        (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0) || b.seq - a.seq,
+    );
+    return rows.slice(0, limit);
   };
 
   const chainsQuery = (q: ChainsQuery): Promise<ChainRollup[]> => {
@@ -244,6 +296,7 @@ export const openExplorerDb = async (
     chainOps,
     getChain,
     allChains,
+    opsOfKind,
     counts,
     chainsQuery,
     getCursor,
