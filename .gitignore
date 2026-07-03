@@ -25,3 +25,6 @@ packages/dfos-web-relay-go/dfos-test
 packages/dfos-web-relay-go/parity-serve
 packages/dfos-web-relay-go/write-disabled-serve
 packages/relay-conformance/genfixture
+
+# playwright-mcp browser artifacts (screenshots/snapshots from local FE verification)
+.playwright-mcp/

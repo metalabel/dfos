@@ -1,0 +1,34 @@
+{
+  "name": "@metalabel/dfos-explorer",
+  "version": "0.15.0",
+  "private": true,
+  "type": "module",
+  "description": "DFOS Explorer — a client-side-only chain explorer over untrusted relays. Renders relay claims instantly, then re-verifies everything in the tab via @metalabel/dfos-client; syncs the full operation log into a local IndexedDB index that folds offline.",
+  "license": "MIT",
+  "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/metalabel/dfos.git",
+    "directory": "packages/dfos-explorer"
+  },
+  "homepage": "https://protocol.dfos.com",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@metalabel/dfos-client": "workspace:*",
+    "@metalabel/dfos-protocol": "workspace:*",
+    "@metalabel/dfos-web-relay": "workspace:*",
+    "preact": "^10.28.2"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.2",
+    "vite": "^7.2.7",
+    "vitest": "^4.1.8"
+  }
+}
