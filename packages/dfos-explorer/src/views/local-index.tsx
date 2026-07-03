@@ -8,14 +8,12 @@
 
 */
 
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Panel } from '../components/ui';
-import { getClient } from '../lib/client';
 import type { ChainRollup, OpKind } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtCount, short } from '../lib/format';
-import { getRelays, subscribeRelays } from '../lib/relays';
-import { syncAll } from '../lib/sync';
+import { markDbChanged, startSync, stopSync, useSyncState } from '../lib/sync-store';
 
 type Filter = 'all' | 'identity-op' | 'content-op' | 'credential';
 type Sort = 'recent' | 'ops';
@@ -55,11 +53,10 @@ export const LocalIndex = () => {
   const [rows, setRows] = useState<ChainRollup[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('recent');
-  const [syncing, setSyncing] = useState(false);
-  const [status, setStatus] = useState('');
-  const [relays, setRelays] = useState(getRelays());
-
-  useEffect(() => subscribeRelays(() => setRelays(getRelays())), []);
+  const sync = useSyncState();
+  const syncing = sync.phase === 'syncing';
+  const [wiped, setWiped] = useState('');
+  const lastPaint = useRef(0);
 
   const refresh = async (): Promise<void> => {
     const db = await getDb();
@@ -78,47 +75,40 @@ export const LocalIndex = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, sort]);
 
-  const doSync = async (): Promise<void> => {
-    if (syncing) return;
-    setSyncing(true);
-    setStatus('starting…');
-    try {
-      const db = await getDb();
-      let lastPaint = 0;
-      const result = await syncAll({
-        db,
-        client: getClient(),
-        relays,
-        onProgress: (p) => {
-          setStatus(
-            `${short(p.relay.replace(/^https?:\/\//, ''), 18, 0)} · ${fmtCount(p.count)} ops · ${fmtCount(p.chains)} chains`,
-          );
-          const now = performance.now();
-          if (now - lastPaint > 500) {
-            lastPaint = now;
-            void refresh();
-          }
-        },
-      });
-      setStatus(
-        result.errors.length
-          ? `done, ${result.errors.length} relay error(s): ${result.errors.map((e) => e.error).join('; ')}`
-          : `done · +${fmtCount(result.added)} new ops`,
-      );
-    } catch (e) {
-      setStatus(`sync failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setSyncing(false);
+  // live-refresh the rows as the global sync makes progress (throttled), and a
+  // final refresh whenever a run settles
+  useEffect(() => {
+    if (syncing) {
+      const now = performance.now();
+      if (now - lastPaint.current > 500) {
+        lastPaint.current = now;
+        void refresh();
+      }
+    } else {
       void refresh();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sync.dbEpoch, sync.phase]);
+
+  // any sync (even one kicked from the home hero) supersedes the wiped notice
+  useEffect(() => {
+    if (syncing && wiped) setWiped('');
+  }, [syncing, wiped]);
+
+  const doSync = (): void => {
+    if (wiped) setWiped('');
+    void startSync('manual');
   };
 
   const doWipe = async (): Promise<void> => {
     const db = await getDb();
     await db.wipe();
-    setStatus('wiped');
+    setWiped('wiped');
+    markDbChanged();
     void refresh();
   };
+
+  const status = wiped || sync.status;
 
   const summary = useMemo(() => {
     const k = counts.byKind;
@@ -132,13 +122,18 @@ export const LocalIndex = () => {
   return (
     <Panel title="local index" right={<span class="lbl">{fmtCount(counts.chains)} chains</span>}>
       <div class="bar">
-        <button onClick={() => void doSync()} disabled={syncing}>
-          {syncing ? 'syncing…' : 'sync full log'}
-        </button>
+        {syncing ? (
+          <button onClick={() => stopSync()} title="abort the running sync">
+            stop
+          </button>
+        ) : (
+          <button onClick={doSync}>sync full log</button>
+        )}
         <button onClick={() => void doWipe()} disabled={syncing} title="clear IndexedDB">
           wipe
         </button>
       </div>
+      {syncing ? <div class="syncbar" /> : null}
       <div class="lbl" style={{ margin: '7px 0' }}>
         {status ||
           (counts.ops ? `${fmtCount(counts.ops)} ops · ${summary}` : 'no local data — hit sync')}

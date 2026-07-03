@@ -712,3 +712,92 @@ tr:hover td {
   padding-top: 10px;
   line-height: 1.6;
 }
+
+/* ---------------------------------------------------------------- sync */
+
+/* indeterminate pulse — globalLog has no known total, so this is honest
+   motion, not a fabricated percentage */
+.syncbar {
+  height: 3px;
+  margin: 8px 0 2px;
+  border-radius: 2px;
+  background: var(--line2);
+  overflow: hidden;
+  position: relative;
+}
+
+.syncbar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 38%;
+  border-radius: 2px;
+  background: var(--ok);
+  animation: syncslide 1.15s ease-in-out infinite;
+}
+
+@keyframes syncslide {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* header live-sync ticker */
+.synctick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #cfcfae !important;
+}
+
+.synctick .spin {
+  font-size: 9px;
+}
+
+.synctick-n {
+  font-variant-numeric: tabular-nums;
+}
+
+/* home sync hero */
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hero-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.hero-row b {
+  font-size: 13px;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.hero-actions .muted {
+  flex: 1;
+  min-width: 200px;
+}
+
+button.primary {
+  background: var(--ok);
+  color: #fff;
+  border-color: var(--ok);
+  font-weight: 600;
+}
+
+button.primary:hover {
+  filter: brightness(1.08);
+}

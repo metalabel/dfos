@@ -7,8 +7,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { TermBar } from './components/ui';
 import { getClient } from './lib/client';
+import { fmtCount } from './lib/format';
 import { getRelays, subscribeRelays } from './lib/relays';
 import { dispatchInput, routeFor } from './lib/resolve-input';
+import { useSyncState } from './lib/sync-store';
 import { navigate, useRoute } from './router';
 import { Content } from './views/content';
 import { Credential } from './views/credential';
@@ -18,6 +20,17 @@ import { Identity } from './views/identity';
 import { LocalIndex } from './views/local-index';
 import { Op } from './views/op';
 import { Relays } from './views/relays';
+
+const SyncTicker = () => {
+  const sync = useSyncState();
+  if (sync.phase !== 'syncing') return null;
+  return (
+    <a class="synctick" href="#/" title={`syncing — ${sync.status}`}>
+      <span class="spin">◍</span>
+      <span class="synctick-n">{fmtCount(sync.ops)}</span>
+    </a>
+  );
+};
 
 const Header = (props: { onToggleIndex: () => void; indexOpen: boolean }) => {
   const [relays, setRelays] = useState(getRelays());
@@ -61,6 +74,7 @@ const Header = (props: { onToggleIndex: () => void; indexOpen: boolean }) => {
           <a href="#/glossary">glossary</a>
         </div>
         <div class="hstatus">
+          <SyncTicker />
           <span class={dotClass} />
           <a href="#/relays">
             {relays.length} relay{relays.length === 1 ? '' : 's'}
