@@ -5,6 +5,8 @@
  * here are plain { cid, createdAt, document } records — no signing needed.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   byteCompare,
@@ -289,6 +291,60 @@ describe('foldIndexV1', () => {
         b: { label: 'from-B' },
       });
     });
+  });
+});
+
+// --- golden example: examples/index/ -----------------------------------------
+
+describe('examples/index golden fixture', () => {
+  /**
+   * Drift guard for the worked example — folds examples/index/chain.json
+   * through foldIndexV1 and asserts the result matches the hand-written
+   * projected-state.json (entries AND head). If either file or the fold
+   * semantics change, this fails.
+   */
+  const exampleDir = resolve(import.meta.dirname, '../../../examples/index');
+  const chain = JSON.parse(readFileSync(resolve(exampleDir, 'chain.json'), 'utf-8')) as {
+    operations: {
+      sequence: number;
+      operationCID: string;
+      previousOperationCID?: string;
+      createdAt: string;
+      document: unknown;
+    }[];
+  };
+  const projected = JSON.parse(
+    readFileSync(resolve(exampleDir, 'projected-state.json'), 'utf-8'),
+  ) as { entries: Record<string, unknown>; head: string };
+
+  const foldOps: FoldOperation[] = chain.operations.map((op) => ({
+    cid: op.operationCID,
+    createdAt: op.createdAt,
+    document: op.document,
+  }));
+
+  it('folds chain.json to the projected-state.json entries', () => {
+    expect(Object.fromEntries(foldIndexV1(foldOps))).toEqual(projected.entries);
+  });
+
+  it('folds to the same entries under every ingest order', () => {
+    for (const perm of permutations(foldOps)) {
+      expect(Object.fromEntries(foldIndexV1(perm))).toEqual(projected.entries);
+    }
+  });
+
+  it('selects the projected-state.json head (and linearize agrees)', () => {
+    const hasChild = new Set(
+      chain.operations
+        .map((op) => op.previousOperationCID)
+        .filter((p): p is string => typeof p === 'string'),
+    );
+    const tips = chain.operations
+      .filter((op) => !hasChild.has(op.operationCID))
+      .map((op) => ({ cid: op.operationCID, createdAt: op.createdAt }));
+    tips.sort(compareHeadPreference);
+    expect(tips[0]!.cid).toBe(projected.head);
+    expect(linearize(foldOps).at(-1)!.cid).toBe(projected.head);
   });
 });
 

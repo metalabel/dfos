@@ -13,7 +13,7 @@ This directory contains a worked example of the `index/v1` schema — an **index
 
 `key` is a **content ref** — a 31-char content chain id or a CID (shown here as illustrative placeholders). Unknown delta shapes are **skipped deterministically** (forward compat).
 
-See [`schemas/index.v1.json`](../../schemas/index.v1.json).
+See [`packages/dfos-protocol/schemas/index.v1.json`](../../packages/dfos-protocol/schemas/index.v1.json).
 
 ## Projection Rules
 
@@ -27,17 +27,17 @@ The fold is **branch-inclusive** — it folds every operation in the log, not ju
 
 ## Example Chain
 
-`chain.json` contains 5 operations across **two concurrent branches** forking from op2:
+`chain.json` contains 5 operations across **two concurrent branches** forking from sequence 1. Operations are referred to by their 0-based `sequence` field:
 
-1. `set aaa` — "First Release" (genesis)
-2. `set bbb` — "Second Release"
-3. **branch A**: `set ccc {}` (membership-only) + `remove aaa`
-4. **branch B**: `set aaa` — "First Release (remastered)"
-5. **branch B**: `set ddd` — "Fourth Release" + an unknown `reorder` delta (skipped)
+- **sequence 0** — `set aaa` — "First Release" (genesis)
+- **sequence 1** — `set bbb` — "Second Release"
+- **sequence 2 (branch A)** — `set ccc {}` (membership-only) + `remove aaa`
+- **sequence 3 (branch B)** — `set aaa` — "First Release (remastered)"
+- **sequence 4 (branch B)** — `set ddd` — "Fourth Release" + an unknown `reorder` delta (skipped)
 
 ## Projected State
 
-Canonical order is op1 → op2 → op3(A) → op4(B) → op5(B), by `createdAt`. Folding:
+Canonical order is sequence 0 → 1 → 2(A) → 3(B) → 4(B), by `createdAt`. Folding:
 
 - **aaa** — set, then removed on branch A, then re-set on branch B later in canonical order → **"First Release (remastered)" wins** (last-applied wins)
 - **bbb** — "Second Release"
@@ -50,7 +50,7 @@ See `projected-state.json` for the expected map.
 
 Because linearization is a strict total order over operation `(createdAt, operationCID)` pairs — independent of the order operations were ingested — **any ingest order of the same operation set folds to the same map**. Two relays (or a relay and a client) that have seen the same operations compute an identical index, and the two concurrent branches here converge rather than one being dropped.
 
-The **head** (op5, the highest-`createdAt` tip) is a `set`, so the chain is live. Had the selected head branch been a `delete`, the chain would be deleted and the fold moot.
+The **head** (sequence 4, the highest-`createdAt` tip) is a `set`, so the chain is live. Had the selected head branch been a `delete`, the chain would be deleted and the fold moot.
 
 ## Purpose
 

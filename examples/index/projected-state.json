@@ -7,5 +7,5 @@
     "ddddddddddddddddddddddddddddddd": { "label": "Fourth Release", "order": 4 }
   },
   "head": "bafyreieeindexunknown0000000000000000000000000000000000000",
-  "note": "Branch A (op2, 01-03) removed key aaa; branch B (op3, 01-04) re-set it later in canonical order, so the remastered entry wins (last-applied wins). Key ccc is the degenerate set-membership case ({}). The `reorder` delta in op4 is an unknown shape and is skipped deterministically. The head is op4 (highest createdAt among the two tips op2 and op4); it is a set, not a delete, so the chain is live and the fold applies."
+  "note": "Operations are referred to by their 0-based `sequence` field. Branch A (sequence 2, 01-03) removed key aaa; branch B (sequence 3, 01-04) re-set it later in canonical order, so the remastered entry wins (last-applied wins). Key ccc is the degenerate set-membership case ({}). The `reorder` delta in sequence 4 is an unknown shape and is skipped deterministically. The head is sequence 4 (highest createdAt among the two tips, sequences 2 and 4); it is a set, not a delete, so the chain is live and the fold applies."
 }

@@ -81,6 +81,53 @@ The displayable identity for any agent, person, group, or space.
 | `description` | string | no       | Short bio or description                                        |
 | `links`       | link[] | no       | External links — up to 20 `{ uri, label?, description? }` items |
 
+### Index (`https://schemas.dfos.com/index/v1`)
+
+An **index chain** is a curated map of content refs — a space's catalog, an author's works, a reading list, a set of pinned items. It is an LWW-Map folded via the [canonical fold](#canonical-fold): each operation commits an `index/v1` document carrying deltas, and the resolved index is the fold over every operation in the log.
+
+An index document carries an **array of deltas** — matching the delta-per-event shape of the [reference content stream](#reference-content-stream-schema). A single append can set or remove several entries at once, and the index accumulates through many small delta documents instead of re-committing a whole catalog each time. (Note the deltas live in the document blob, which the operation-size cap does not measure — content operations commit only the `documentCID`. The protocol does not bound document blob size; any blob limit is gateway or application policy.)
+
+| Field     | Type    | Required | Description                                  |
+| --------- | ------- | -------- | -------------------------------------------- |
+| `$schema` | string  | yes      | `"https://schemas.dfos.com/index/v1"`        |
+| `deltas`  | delta[] | yes      | Ordered deltas contributed by this operation |
+
+Each delta is one of two shapes:
+
+| Delta                              | Effect                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `{ "op": "set", "key", "value"? }` | Add or replace entry `key`. `value` is optional metadata (see below); omit it (or use `{}`) for a pure set-membership entry |
+| `{ "op": "remove", "key" }`        | Drop entry `key`                                                                                                            |
+
+- **`key`** is a **content ref** — a 31-char content chain id or a CID — consistent with how refs are named elsewhere in the content model.
+- **`value`** is an optional entry-metadata object `{ label?, order?, … }`. `label` is a display string; `order` is an integer ordering hint (integers only, per the number-encoding rule above). A pure set-membership index uses the degenerate `value: {}`. Unknown metadata fields are preserved (additive forward compat).
+
+```json
+{
+  "$schema": "https://schemas.dfos.com/index/v1",
+  "deltas": [
+    {
+      "op": "set",
+      "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "value": { "label": "First Release", "order": 1 }
+    },
+    { "op": "remove", "key": "ccccccccccccccccccccccccccccccc" }
+  ]
+}
+```
+
+**Fold semantics.** The resolved index is the [canonical fold](#canonical-fold) as an LWW-Map:
+
+1. **Linearize** every operation in the log (all branches) into the canonical total order.
+2. **Flatten** each `index/v1` document's `deltas` array in array order, producing one ordered delta stream.
+3. **Fold** the stream: `set` writes `key → value`, `remove` deletes `key`. The **last delta touching a key wins** at its linearized position — so a `remove` supersedes an earlier `set`, and a later `set` re-adds a removed key.
+
+**Unknown delta shapes are skipped deterministically** — a delta whose `op` is neither `set` nor `remove`, whose `key` is not a string, or whose `set` `value` is present but not an object is ignored, not an error. This lets the vocabulary grow (new delta ops) without forking existing readers, and every reader skips the same deltas. The published JSON Schema mirrors this: schema validity covers the known vocabulary constraints only (a delta needs an object shape and a string `op`; a `set` or `remove` must carry a string `key`), and validators MUST NOT reject documents carrying additional delta shapes.
+
+Because the fold is branch-inclusive and last-applied-wins, an index **converges**: any ingest order of the same operation set folds to the same map, and two clients that concurrently append entries both keep their writes. If the chain's selected head is delete-terminal, the index is deleted and the fold is moot (see [Delete-terminality](#delete-terminality)).
+
+The `index/v1` fold is implemented as `foldIndexV1(ops)` in [`@metalabel/dfos-protocol/fold`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/src/fold). See [`schemas/index.v1.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/schemas/index.v1.json) and the worked chain in [`examples/index/`](https://github.com/metalabel/dfos/tree/main/examples/index).
+
 ### Media Object
 
 Several schemas reference media objects. The standard representation:
@@ -124,11 +171,11 @@ Unlike a living document (where the head document is the state) or a stream (whe
 
 Each schema implies a default projection — how applications derive resolved state from the chain:
 
-| Schema       | Projection                                                                              |
-| ------------ | --------------------------------------------------------------------------------------- |
-| `post/v1`    | Living document — head `documentCID` is the current post. History is edit trail         |
-| `profile/v1` | Living document — head `documentCID` is the current profile                             |
-| `index/v1`   | Canonical fold — LWW-Map folded over all operations (every branch). See [Index](#index) |
+| Schema       | Projection                                                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `post/v1`    | Living document — head `documentCID` is the current post. History is edit trail                                    |
+| `profile/v1` | Living document — head `documentCID` is the current profile                                                        |
+| `index/v1`   | Canonical fold — LWW-Map folded over all operations (every branch). See [Index](#index-httpsschemasdfoscomindexv1) |
 
 Stream and event fold schemas define their own projection rules in their schema documentation. The protocol does not enforce projections — these are reading conventions that applications agree on.
 
@@ -184,60 +231,7 @@ The fold is a set of **pure functions** over already-verified operations, publis
 
 - `linearize(ops)` — the deterministic total order above.
 - `foldLwwMap(deltas)` — the generic LWW-Map fold over an ordered delta stream.
-- `foldIndexV1(ops)` — the `index/v1` fold (below) built on the two.
-
----
-
-## Index
-
-An **index chain** is a curated map of content refs — a space's catalog, an author's works, a reading list, a set of pinned items. It is an [LWW-Map](#library) folded via the [canonical fold](#canonical-fold): each operation commits an `index/v1` document carrying deltas, and the resolved index is the fold over every operation in the log.
-
-### Index (`https://schemas.dfos.com/index/v1`)
-
-An index document carries an **array of deltas** — matching the delta-per-event shape of the [reference content stream](#reference-content-stream-schema) and keeping each operation comfortably under the 64 KiB operation cap while a single append can still set or remove several entries at once.
-
-| Field     | Type    | Required | Description                                  |
-| --------- | ------- | -------- | -------------------------------------------- |
-| `$schema` | string  | yes      | `"https://schemas.dfos.com/index/v1"`        |
-| `deltas`  | delta[] | yes      | Ordered deltas contributed by this operation |
-
-Each delta is one of two shapes:
-
-| Delta                              | Effect                                                                                                                      |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `{ "op": "set", "key", "value"? }` | Add or replace entry `key`. `value` is optional metadata (see below); omit it (or use `{}`) for a pure set-membership entry |
-| `{ "op": "remove", "key" }`        | Drop entry `key`                                                                                                            |
-
-- **`key`** is a **content ref** — a 31-char content chain id or a CID — consistent with how refs are named elsewhere in the content model.
-- **`value`** is an optional entry-metadata object `{ label?, order?, … }`. `label` is a display string; `order` is an integer ordering hint (integers only, per the number-encoding rule above). A pure set-membership index uses the degenerate `value: {}`. Unknown metadata fields are preserved (additive forward compat).
-
-```json
-{
-  "$schema": "https://schemas.dfos.com/index/v1",
-  "deltas": [
-    {
-      "op": "set",
-      "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "value": { "label": "First Release", "order": 1 }
-    },
-    { "op": "remove", "key": "ccccccccccccccccccccccccccccccc" }
-  ]
-}
-```
-
-### Fold semantics
-
-The resolved index is the [canonical fold](#canonical-fold) as an LWW-Map:
-
-1. **Linearize** every operation in the log (all branches) into the canonical total order.
-2. **Flatten** each `index/v1` document's `deltas` array in array order, producing one ordered delta stream.
-3. **Fold** the stream: `set` writes `key → value`, `remove` deletes `key`. The **last delta touching a key wins** at its linearized position — so a `remove` supersedes an earlier `set`, and a later `set` re-adds a removed key.
-
-**Unknown delta shapes are skipped deterministically** — a delta whose `op` is neither `set` nor `remove`, whose `key` is not a string, or whose `set` `value` is present but not an object is ignored, not an error. This lets the vocabulary grow (new delta ops) without forking existing readers, and every reader skips the same deltas.
-
-Because the fold is branch-inclusive and last-applied-wins, an index **converges**: any ingest order of the same operation set folds to the same map, and two clients that concurrently append entries both keep their writes. If the chain's selected head is delete-terminal, the index is deleted and the fold is moot (see [Delete-terminality](#delete-terminality)).
-
-The `index/v1` fold is implemented as `foldIndexV1(ops)` in [`@metalabel/dfos-protocol/fold`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/src/fold). See [`schemas/index.v1.json`](https://github.com/metalabel/dfos/blob/main/schemas/index.v1.json) and the worked chain in [`examples/index/`](https://github.com/metalabel/dfos/tree/main/examples/index).
+- `foldIndexV1(ops)` — the [`index/v1`](#index-httpsschemasdfoscomindexv1) fold built on the two.
 
 ---
 
