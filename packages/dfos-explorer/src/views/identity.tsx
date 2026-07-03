@@ -35,6 +35,7 @@ import { GLOSSARY } from '../lib/glossary';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { fetchClaim, type ClaimResult } from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
+import { jitIndexChain } from '../lib/sync-store';
 import { NotFound } from './not-found';
 
 interface IdentityClaimState {
@@ -75,6 +76,9 @@ export const Identity = (props: { did: string }) => {
         if (dead) return;
         setVerified(res);
         setRows(toOpRows(log.value));
+        // JIT: land this identity's verified ops in the local index so it shows
+        // up there without a full sync (relay-asserted routing metadata only)
+        void jitIndexChain(props.did, 'identity-op', log.value);
       } catch (e) {
         if (!dead) setError(e instanceof Error ? e.message : String(e));
       }

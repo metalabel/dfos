@@ -27,6 +27,7 @@ import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
+import { jitIndexChain } from '../lib/sync-store';
 import { NotFound } from './not-found';
 
 interface DocState {
@@ -68,6 +69,21 @@ export const Content = (props: { id: string }) => {
         if (dead) return;
         setResolved(res);
         setRows(toOpRows(log.value));
+        // JIT: land the content chain in the local index…
+        void jitIndexChain(props.id, 'content-op', log.value);
+        // …and pull the creator's identity (its keys/services) into the index
+        // too, so navigating a chain fills in the actors around it
+        const creator = res.value.chain.creatorDID;
+        if (creator) {
+          void client
+            .log('identity', creator)
+            .then((idLog) => {
+              if (!dead) void jitIndexChain(creator, 'identity-op', idLog.value);
+            })
+            .catch(() => {
+              // best-effort prefetch — the creator link still resolves on click
+            });
+        }
       } catch (e) {
         if (!dead) setError(e instanceof Error ? e.message : String(e));
       }
