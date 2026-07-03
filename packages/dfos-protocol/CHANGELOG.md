@@ -28,7 +28,7 @@ lockstep-pending relay and documentation work, all additive atop frozen v1.
   `avatar` field of the Media shape — strictly additive, existing avatar-less
   profile documents remain valid (no `profile/v2`). `post/v1`'s legacy `{ id, uri? }`
   media shape is unchanged within its version. Content-schema `0.x` clock only; no
-  wire change, no gateway primitive. (#147)
+  wire change, no gateway primitive. (#148)
 - **Canonical fold library + `index/v1` standard schema** — a new
   `@metalabel/dfos-protocol/fold` subpath exporting pure functions over
   already-verified operations (zero crypto or network imports): `linearize(ops)`
