@@ -309,25 +309,25 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 }
 ```
 
-| Field                      | Type          | Description                                                                                                                                              |
-| -------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `did`                      | string        | The relay's DID, resolvable on this relay's proof plane                                                                                                  |
-| `protocol`                 | string        | Protocol identifier, always `"dfos-web-relay"`                                                                                                           |
-| `version`                  | string        | The relay's own release version (semver), independent of the frozen proof-plane clock — the proof version lives in the `/proof/v1` path prefix, not here |
-| `capabilities`             | object        | Capability flags for optional features                                                                                                                   |
-| `capabilities.proof`       | boolean       | MUST be `true`. A relay without proof plane capability is not a relay                                                                                    |
-| `capabilities.write`       | boolean       | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                         |
-| `capabilities.content`     | boolean       | Whether the relay supports the content plane (blob upload/download)                                                                                      |
-| `capabilities.log`         | boolean       | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                      |
-| `capabilities.revocations` | boolean       | Whether the [revocation status](#revocation-status-v1) index is served (`GET /revocations/v1/*`). Both reference relays always serve it                  |
-| `profile`                  | string        | The relay's profile artifact as a compact JWS token — self-proving payload                                                                               |
-| `peers`                    | array         | OPTIONAL additive telemetry. Configured peer relays surfaced for mesh discovery; reference relays emit `[]` when no peers are configured                 |
-| `peers[].endpoint`         | string        | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                               |
-| `stats`                    | object        | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                             |
-| `stats.opCount`            | number        | OPTIONAL additive telemetry. Total entries in the global operation log                                                                                   |
-| `stats.countsByKind`       | object        | OPTIONAL additive telemetry. Global-log counts by primitive kind; reference relays emit `identity`, `content`, `artifact`, `credential`, `countersign`, `revocation` |
-| `stats.oldestOpAt`         | string \| null | OPTIONAL additive telemetry. `createdAt` of the oldest-position global-log entry, or `null` when the log is empty                                       |
-| `stats.headCid`            | string \| null | OPTIONAL additive telemetry. CID of the global-log tip, or `null` when the log is empty                                                                  |
+| Field                      | Type           | Description                                                                                                                                                          |
+| -------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `did`                      | string         | The relay's DID, resolvable on this relay's proof plane                                                                                                              |
+| `protocol`                 | string         | Protocol identifier, always `"dfos-web-relay"`                                                                                                                       |
+| `version`                  | string         | The relay's own release version (semver), independent of the frozen proof-plane clock — the proof version lives in the `/proof/v1` path prefix, not here             |
+| `capabilities`             | object         | Capability flags for optional features                                                                                                                               |
+| `capabilities.proof`       | boolean        | MUST be `true`. A relay without proof plane capability is not a relay                                                                                                |
+| `capabilities.write`       | boolean        | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                                     |
+| `capabilities.content`     | boolean        | Whether the relay supports the content plane (blob upload/download)                                                                                                  |
+| `capabilities.log`         | boolean        | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                                  |
+| `capabilities.revocations` | boolean        | Whether the [revocation status](#revocation-status-v1) index is served (`GET /revocations/v1/*`). Both reference relays always serve it                              |
+| `profile`                  | string         | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                           |
+| `peers`                    | array          | OPTIONAL additive telemetry. Configured peer relays surfaced for mesh discovery; reference relays emit `[]` when no peers are configured                             |
+| `peers[].endpoint`         | string         | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                                            |
+| `stats`                    | object         | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                                         |
+| `stats.opCount`            | number         | OPTIONAL additive telemetry. Total entries in the global operation log                                                                                               |
+| `stats.countsByKind`       | object         | OPTIONAL additive telemetry. Global-log counts by primitive kind; reference relays emit `identity`, `content`, `artifact`, `credential`, `countersign`, `revocation` |
+| `stats.oldestOpAt`         | string \| null | OPTIONAL additive telemetry. `createdAt` of the oldest-position global-log entry, or `null` when the log is empty                                                    |
+| `stats.headCid`            | string \| null | OPTIONAL additive telemetry. CID of the global-log tip, or `null` when the log is empty                                                                              |
 
 `capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. When `capabilities.revocations: false`, the `/revocations/v1/*` routes return **501 Not Implemented** — the same capability-not-supported semantics. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
 
@@ -657,19 +657,19 @@ setInterval(() => relay.syncFromPeers(), 30_000);
 
 The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFromPeers` (async function). The Hono app exposes:
 
-| Method | Path                                          | Plane   | Auth                                      |
-| ------ | --------------------------------------------- | ------- | ----------------------------------------- |
-| `GET`  | `/.well-known/dfos-relay`                     | meta    | none                                      |
-| `POST` | `/proof/v1/operations`                        | proof   | none                                      |
-| `GET`  | `/proof/v1/operations/:cid`                   | proof   | none                                      |
-| `GET`  | `/proof/v1/countersignatures/:cid`            | proof   | none                                      |
-| `GET`  | `/proof/v1/identities/:did`                   | proof   | none                                      |
-| `GET`  | `/proof/v1/identities/:did/log`               | proof   | none                                      |
-| `GET`  | `/proof/v1/content/:contentId`                | proof   | none                                      |
-| `GET`  | `/proof/v1/content/:contentId/log`            | proof   | none                                      |
-| `GET`  | `/proof/v1/log`                               | proof   | none                                      |
-| `PUT`  | `/content/:contentId/blob/:opCID`             | content | auth token                                |
-| `GET`  | `/content/:contentId/blob[/:ref]`             | content | standing auth, or auth token + credential |
+| Method | Path                               | Plane   | Auth                                      |
+| ------ | ---------------------------------- | ------- | ----------------------------------------- |
+| `GET`  | `/.well-known/dfos-relay`          | meta    | none                                      |
+| `POST` | `/proof/v1/operations`             | proof   | none                                      |
+| `GET`  | `/proof/v1/operations/:cid`        | proof   | none                                      |
+| `GET`  | `/proof/v1/countersignatures/:cid` | proof   | none                                      |
+| `GET`  | `/proof/v1/identities/:did`        | proof   | none                                      |
+| `GET`  | `/proof/v1/identities/:did/log`    | proof   | none                                      |
+| `GET`  | `/proof/v1/content/:contentId`     | proof   | none                                      |
+| `GET`  | `/proof/v1/content/:contentId/log` | proof   | none                                      |
+| `GET`  | `/proof/v1/log`                    | proof   | none                                      |
+| `PUT`  | `/content/:contentId/blob/:opCID`  | content | auth token                                |
+| `GET`  | `/content/:contentId/blob[/:ref]`  | content | standing auth, or auth token + credential |
 
 ---
 

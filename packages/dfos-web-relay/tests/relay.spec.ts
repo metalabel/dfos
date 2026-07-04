@@ -3596,8 +3596,7 @@ describe('web relay', () => {
         const currentCreatedAt = revocationCreatedAt(current.revocation);
         expect(
           prevCreatedAt < currentCreatedAt ||
-            (prevCreatedAt === currentCreatedAt &&
-              prev.credentialCID <= current.credentialCID),
+            (prevCreatedAt === currentCreatedAt && prev.credentialCID <= current.credentialCID),
         ).toBe(true);
       }
     });
