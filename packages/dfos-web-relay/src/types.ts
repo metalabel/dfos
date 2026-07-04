@@ -14,8 +14,7 @@ import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
  * clocks (proof v1 / document 0.x) are legible in the URL and each plane
  * mounts/proxies by prefix. Frozen with protocol v1; MUST stay in byte-sync
  * with the Go relay (proofBasePath in routes.go) and the clients. Document gateway
- * routes (/content/{id}/blob*, /documents) and .well-known stay at root on their
- * own clock.
+ * routes (/content/{id}/blob*) and .well-known stay at root on their own clock.
  */
 export const PROOF_BASE_PATH = '/proof/v1';
 
@@ -213,14 +212,6 @@ export interface StoredRevocation {
   jwsToken: string;
 }
 
-export interface StoredDocument {
-  operationCID: string;
-  documentCID: string | null;
-  document: unknown | null;
-  signerDID: string;
-  createdAt: string;
-}
-
 export interface StoredPublicCredential {
   cid: string;
   issuerDID: string;
@@ -344,14 +335,6 @@ export interface RelayStore {
   addPublicCredential(credential: StoredPublicCredential): Promise<void>;
   /** Remove a public credential (e.g., after revocation) */
   removePublicCredential(credentialCID: string): Promise<void>;
-
-  // --- documents ---
-
-  /** Get paginated documents for a content chain */
-  getDocuments(
-    contentId: string,
-    params: { after?: string; limit: number },
-  ): Promise<{ documents: StoredDocument[]; cursor: string | null }>;
 
   // --- peer sync state ---
 

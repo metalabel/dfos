@@ -146,15 +146,6 @@ type AttenuationPair struct {
 	Action   string `json:"action"`
 }
 
-// StoredDocument represents a document in the documents endpoint response.
-type StoredDocument struct {
-	OperationCID string  `json:"operationCID"`
-	DocumentCID  *string `json:"documentCID"`
-	Document     any     `json:"document"`
-	SignerDID    string  `json:"signerDID"`
-	CreatedAt    string  `json:"createdAt"`
-}
-
 // RelayPeerInfo is a configured peer surfaced in the well-known for mesh discovery.
 type RelayPeerInfo struct {
 	Endpoint string `json:"endpoint"`
@@ -290,9 +281,6 @@ type Store interface {
 	GetPublicCredentials(resource string) ([]string, error) // returns JWS tokens
 	AddPublicCredential(credential StoredPublicCredential) error
 	RemovePublicCredential(credentialCID string) error
-
-	// documents
-	GetDocuments(contentID string, after string, limit int) ([]StoredDocument, string, error)
 
 	// listing — enumerate all chains in the store
 	ListIdentityChains() ([]StoredIdentityChain, error)

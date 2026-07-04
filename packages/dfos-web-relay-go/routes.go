@@ -57,8 +57,7 @@ func newRouter(r *Relay) http.Handler {
 	// document gateway — optional, 0.x (its own version clock); routes stay at root
 	// under /content/{id} until DocumentGateway 0.2 keys on documentCID. The proof
 	// node owns the bare /proof/v1/content/{id} chain paths; the gateway owns the
-	// /blob* + /documents sub-paths — distinct namespaces, fanned by prefix when split.
-	mux.HandleFunc("GET /content/{contentId}/documents", r.handleGetDocuments)
+	// /blob* sub-paths — distinct namespaces, fanned by prefix when split.
 	mux.HandleFunc("GET /content/{contentId}/blob/{ref}", r.handleGetBlob)
 	mux.HandleFunc("GET /content/{contentId}/blob", r.handleGetBlobHead)
 	mux.HandleFunc("PUT /content/{contentId}/blob/{operationCID}", r.handlePutBlob)
@@ -748,51 +747,6 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 	w.Header().Set("X-Document-Cid", documentCID)
 	w.WriteHeader(200)
 	w.Write(blob)
-}
-
-// ---------------------------------------------------------------------------
-// documents
-// ---------------------------------------------------------------------------
-
-func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
-	if !r.contentEnabled {
-		writeError(w, 501, "content plane not available")
-		return
-	}
-	contentID := req.PathValue("contentId")
-
-	// verify chain exists
-	chain, err := r.readStore.GetContentChain(contentID)
-	if storeErr(w, err) {
-		return
-	}
-	if chain == nil {
-		writeError(w, 404, "not found")
-		return
-	}
-
-	if !r.authorizeRead(w, req, contentID, chain.State.CreatorDID) {
-		return
-	}
-
-	after := req.URL.Query().Get("after")
-	limit := parseLimit(req, 100, 1000)
-
-	docs, cursor, err := r.readStore.GetDocuments(contentID, after, limit)
-	if storeErr(w, err) {
-		return
-	}
-
-	var cursorPtr *string
-	if cursor != "" {
-		cursorPtr = &cursor
-	}
-
-	writeJSON(w, 200, map[string]any{
-		"contentId":  contentID,
-		"documents":  docs,
-		"nextCursor": cursorPtr,
-	})
 }
 
 // ---------------------------------------------------------------------------

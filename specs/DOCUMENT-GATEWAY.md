@@ -36,7 +36,7 @@ Everything that gives a document _meaning_ — which chain it belongs to, who co
 | **Proof plane**             | Signed commitments (ops, CIDs, credentials, revocations) | Integrity + authenticity + authorization, cryptographically, against any adversary |
 | **Content plane (gateway)** | Document preimages, verified by content-addressing       | Integrity (bytes → CID) cryptographically; access control _honest-host_            |
 
-A relay's content plane **is** a document gateway. The two terms name the same surface from two angles: "content plane" is the relay-internal plane (paired with the proof plane); "document gateway" is the standalone service contract on a `0.x` clock. A reverse proxy can split them across origins — the proof node owns `GET /proof/v1/content/:contentId` and `/log`; the gateway owns the `/content/:contentId/blob*` and `/documents` sub-paths.
+A relay's content plane **is** a document gateway. The two terms name the same surface from two angles: "content plane" is the relay-internal plane (paired with the proof plane); "document gateway" is the standalone service contract on a `0.x` clock. A reverse proxy can split them across origins — the proof node owns `GET /proof/v1/content/:contentId` and `/log`; the gateway owns the `/content/:contentId/blob*` sub-paths.
 
 ### Terminal and referential documents
 
@@ -116,13 +116,12 @@ The gateway's route **surface** is unchanged from what the relay serves today; o
 | ------ | ---------------------------------------- | ----------------------------------------------------------- |
 | `PUT`  | `/content/:contentId/blob/:operationCID` | Upload the document committed by a given operation          |
 | `GET`  | `/content/:contentId/blob[/:ref]`        | Download a document (`:ref` = `head` default, or an op CID) |
-| `GET`  | `/content/:contentId/documents`          | Download all documents committed to a chain, genesis→head   |
 
-These remain at the root (not under `/proof/v1`) because they belong to the gateway's `0.x` clock, not the frozen proof plane. Content-plane support is optional per relay: when `capabilities.content: false`, all three return **501 Not Implemented**.
+These remain at the root (not under `/proof/v1`) because they belong to the gateway's `0.x` clock, not the frozen proof plane. Content-plane support is optional per relay: when `capabilities.content: false`, both return **501 Not Implemented**.
 
 ### Download authorization
 
-`GET /content/:contentId/blob[/:ref]` and `GET /content/:contentId/documents` require, in order:
+`GET /content/:contentId/blob[/:ref]` requires, in order:
 
 1. A valid **auth token** (`Bearer`) proving caller identity — except where a public grant authorizes the resource, in which case no auth token is required.
 2. Then exactly one of:
@@ -256,7 +255,7 @@ It is an optional `0.x` behavior that adds **no new route** and is invisible to 
 - **Pull over the existing public blob route.** A follower fetches `GET /content/:contentId/blob/:operationCID` (or `/blob` for the head) from a source gateway. No new endpoint, no new wire field.
 - **Content-addressed, source-agnostic.** Each pulled blob is verified against the `documentCID` the chain committed — the same content-addressing check `PUT` enforces. Integrity is the CID, which is already signed in the proof plane, so a follower may pull from any source and reject anything that does not hash to its committed CID. This is what makes following trustless.
 - **Gated by the same predicate that serves.** A follower materializes a chain's bytes only while a surviving public-read grant authorizes anonymous read of it — the gateway's own download-authorization decision (see [Download authorization](#download-authorization)). A private, revoked, or deleted chain is never followed.
-- **`200 + document: null` is CONFORMANT.** Authorization (the grant) arrives on the proof plane instantly; the bytes arrive asynchronously. A follower that is authorized for a chain but has not yet materialized a document returns `200` with `document: null` on `/documents`, and `404 blob not found` on `/blob`. This is the honest **authorized-but-not-yet-materialized** state, NOT a conformance failure. A conforming follower converges to serving the bytes (it is _eventually_ consistent); a conformance test asserts eventual materialization (poll until served), never instantaneous.
+- **`404 blob not found` is CONFORMANT.** Authorization (the grant) arrives on the proof plane instantly; the bytes arrive asynchronously. A follower that is authorized for a chain but has not yet materialized a blob returns `404 blob not found` on `GET /content/:contentId/blob[/:ref]` — the honest **authorized-but-not-yet-materialized** state, NOT a conformance failure. A conforming follower converges to serving the bytes (it is _eventually_ consistent); a conformance test asserts eventual materialization (poll until served), never instantaneous.
 - **Revoke is correctness-free; GC is reclamation.** The per-request download-authorization decision is re-derived live, so revoking a grant makes any cached bytes immediately unreachable — the gate, not deletion, is what enforces revocation. Deleting the now-orphaned bytes is a separate convergent garbage-collection pass keyed on the same gate; it reclaims storage and is never load-bearing for correctness.
 
 Whether a gateway follows, which sources it pulls from, and how aggressively are deployment choices, not protocol. The reference Go relay exposes following as `CONTENT_FOLLOW=eager` (default `none`); see [WEB-RELAY.md → Content Following](https://protocol.dfos.com/web-relay#content-following).

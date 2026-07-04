@@ -5,7 +5,6 @@
 //   - revocation blocking credential use
 //   - public credential ingestion
 //   - standing authorization via public credential
-//   - documents endpoint
 //   - credential ingestion survives key rotation
 //   - per-request credential survives key rotation
 //   - chain:* wildcard standing authorization
@@ -409,99 +408,6 @@ func TestStandingAuthorizationViaPublicCredential(t *testing.T) {
 	dlBody := readBody(t, dlRes)
 	if string(dlBody) != string(blobData) {
 		t.Fatal("downloaded blob does not match uploaded data via standing auth")
-	}
-}
-
-// ===================================================================
-// documents endpoint
-// ===================================================================
-
-func TestDocumentsEndpoint(t *testing.T) {
-	base := relayURL(t)
-	id := createIdentity(t, base)
-
-	// create content chain with first document
-	doc1 := map[string]any{"type": "post", "title": "first document", "body": "v1"}
-	docCID1, _, err := dfos.DocumentCID(doc1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kid := id.did + "#" + id.auth.keyID
-	createToken, contentID, genCID, err := dfos.SignContentCreate(id.did, docCID1, kid, id.auth.priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postOperations(t, base, []string{createToken}).Body.Close()
-
-	// upload blob for first document
-	tok := authToken(t, base, id)
-	blobData1, _ := json.Marshal(doc1)
-	putBlob(t, base, contentID, genCID, tok, blobData1).Body.Close()
-
-	// update with second document
-	doc2 := map[string]any{"type": "post", "title": "second document", "body": "v2"}
-	docCID2, _, _ := dfos.DocumentCID(doc2)
-	updateToken, updateCID, err := dfos.SignContentUpdate(id.did, genCID, docCID2, kid, id.auth.priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	postOperations(t, base, []string{updateToken}).Body.Close()
-
-	// upload blob for second document
-	blobData2, _ := json.Marshal(doc2)
-	putBlob(t, base, contentID, updateCID, tok, blobData2).Body.Close()
-
-	// GET /content/<contentId>/documents
-	url := fmt.Sprintf("%s/content/%s/documents", base, contentID)
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("authorization", "Bearer "+tok)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := readBody(t, resp)
-
-	if resp.StatusCode != 200 {
-		t.Fatalf("GET documents: status %d, body: %s", resp.StatusCode, body)
-	}
-
-	var docsResp struct {
-		ContentId string `json:"contentId"`
-		Documents []struct {
-			OperationCID string `json:"operationCID"`
-			DocumentCID  string `json:"documentCID"`
-			SignerDID    string `json:"signerDID"`
-			CreatedAt    string `json:"createdAt"`
-		} `json:"documents"`
-	}
-	if err := json.Unmarshal(body, &docsResp); err != nil {
-		t.Fatalf("decode documents response: %v", err)
-	}
-
-	if docsResp.ContentId != contentID {
-		t.Fatalf("contentId: got %s, want %s", docsResp.ContentId, contentID)
-	}
-	if len(docsResp.Documents) != 2 {
-		t.Fatalf("expected 2 documents, got %d", len(docsResp.Documents))
-	}
-
-	// first document should be the create operation
-	if docsResp.Documents[0].OperationCID != genCID {
-		t.Fatalf("doc[0] operationCID: got %s, want %s", docsResp.Documents[0].OperationCID, genCID)
-	}
-	if docsResp.Documents[0].DocumentCID != docCID1 {
-		t.Fatalf("doc[0] documentCID: got %s, want %s", docsResp.Documents[0].DocumentCID, docCID1)
-	}
-	if docsResp.Documents[0].SignerDID != id.did {
-		t.Fatalf("doc[0] signerDID: got %s, want %s", docsResp.Documents[0].SignerDID, id.did)
-	}
-
-	// second document should be the update operation
-	if docsResp.Documents[1].OperationCID != updateCID {
-		t.Fatalf("doc[1] operationCID: got %s, want %s", docsResp.Documents[1].OperationCID, updateCID)
-	}
-	if docsResp.Documents[1].DocumentCID != docCID2 {
-		t.Fatalf("doc[1] documentCID: got %s, want %s", docsResp.Documents[1].DocumentCID, docCID2)
 	}
 }
 
