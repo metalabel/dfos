@@ -3411,6 +3411,50 @@ describe('web relay', () => {
       return { issuer, credential, credentialCID, revocationJws };
     };
 
+    const revokeCredentialForIssuer = async (
+      issuer: Awaited<ReturnType<typeof createIdentity>>,
+      resource: string,
+    ) => {
+      const now = Math.floor(Date.now() / 1000);
+      const credential = await createDFOSCredential({
+        issuerDID: issuer.did,
+        audienceDID: '*',
+        att: [{ resource, action: 'read' }],
+        exp: now + 3600,
+        signer: issuer.authKey.signer,
+        keyId: issuer.authKey.keyId,
+        iat: now,
+      });
+      const credentialCID = decodeDFOSCredentialUnsafe(credential)!.header.cid;
+      const { jwsToken } = await signRevocation({
+        issuerDID: issuer.did,
+        credentialCID,
+        signer: issuer.authKey.signer,
+        keyId: issuer.authKey.keyId,
+      });
+      const res = await postOps([credential, jwsToken]);
+      const body = await json(res);
+      expect(body.results[1].status).toBe('new');
+      expect(body.results[1].kind).toBe('revocation');
+      return { credentialCID, revocationJws: jwsToken };
+    };
+
+    const revocationCreatedAt = (revocationJws: string) => {
+      const createdAt = decodeJwsUnsafe(revocationJws)?.payload?.createdAt;
+      return typeof createdAt === 'string' ? createdAt : '';
+    };
+
+    const byRevocationOrder = (
+      a: { credentialCID: string; revocationJws: string },
+      b: { credentialCID: string; revocationJws: string },
+    ) => {
+      const aCreatedAt = revocationCreatedAt(a.revocationJws);
+      const bCreatedAt = revocationCreatedAt(b.revocationJws);
+      if (aCreatedAt !== bCreatedAt) return aCreatedAt < bCreatedAt ? -1 : 1;
+      if (a.credentialCID === b.credentialCID) return 0;
+      return a.credentialCID < b.credentialCID ? -1 : 1;
+    };
+
     it('returns revoked:true with the self-proving revocation JWS', async () => {
       const { issuer, credentialCID, revocationJws } = await revokeFreshCredential();
 
@@ -3442,35 +3486,13 @@ describe('web relay', () => {
       expect((await json(res)).error).toBe('invalid credential CID');
     });
 
-    it('lists all revocations for an issuer, sorted by credentialCID', async () => {
+    it('lists all revocations for an issuer, sorted by revocation createdAt then credentialCID', async () => {
       const issuer = await createIdentity();
       await postOps([issuer.jwsToken]);
 
-      // two credentials, both revoked
-      const now = Math.floor(Date.now() / 1000);
-      const revoke = async (resource: string) => {
-        const credential = await createDFOSCredential({
-          issuerDID: issuer.did,
-          audienceDID: '*',
-          att: [{ resource, action: 'read' }],
-          exp: now + 3600,
-          signer: issuer.authKey.signer,
-          keyId: issuer.authKey.keyId,
-          iat: now,
-        });
-        const credentialCID = decodeDFOSCredentialUnsafe(credential)!.header.cid;
-        const { jwsToken } = await signRevocation({
-          issuerDID: issuer.did,
-          credentialCID,
-          signer: issuer.authKey.signer,
-          keyId: issuer.authKey.keyId,
-        });
-        await postOps([jwsToken]);
-        return { credentialCID, revocationJws: jwsToken };
-      };
-      const revA = await revoke('chain:contentA');
-      const revB = await revoke('chain:contentB');
-      const expected = [revA, revB].sort((a, b) => (a.credentialCID < b.credentialCID ? -1 : 1));
+      const revA = await revokeCredentialForIssuer(issuer, 'chain:contentA');
+      const revB = await revokeCredentialForIssuer(issuer, 'chain:contentB');
+      const expected = [revA, revB].sort(byRevocationOrder);
 
       const res = await req(`/revocations/v1/issuer/${issuer.did}`);
       expect(res.status).toBe(200);
@@ -3481,14 +3503,59 @@ describe('web relay', () => {
           credentialCID: r.credentialCID,
           revocation: r.revocationJws,
         })),
+        next: null,
       });
+    });
+
+    it('paginates issuer revocations with credentialCID cursors', async () => {
+      const issuer = await createIdentity();
+      await postOps([issuer.jwsToken]);
+
+      const revocations = [
+        await revokeCredentialForIssuer(issuer, 'chain:pageA'),
+        await revokeCredentialForIssuer(issuer, 'chain:pageB'),
+        await revokeCredentialForIssuer(issuer, 'chain:pageC'),
+      ].sort(byRevocationOrder);
+
+      const firstRes = await req(`/revocations/v1/issuer/${issuer.did}?limit=2`);
+      expect(firstRes.status).toBe(200);
+      const firstPage = await json(firstRes);
+      expect(firstPage.revocations).toHaveLength(2);
+      expect(typeof firstPage.next).toBe('string');
+      expect(firstPage.next).toBe(firstPage.revocations[1].credentialCID);
+
+      const secondRes = await req(
+        `/revocations/v1/issuer/${issuer.did}?after=${firstPage.next}&limit=2`,
+      );
+      expect(secondRes.status).toBe(200);
+      const secondPage = await json(secondRes);
+      expect(secondPage.revocations).toHaveLength(1);
+      expect(secondPage.next).toBeNull();
+
+      const paged = [...firstPage.revocations, ...secondPage.revocations];
+      expect(paged.map((r) => r.credentialCID)).toEqual(revocations.map((r) => r.credentialCID));
+      expect([...new Set(paged.map((r) => r.credentialCID))].sort()).toEqual(
+        revocations.map((r) => r.credentialCID).sort(),
+      );
+
+      for (let i = 1; i < paged.length; i++) {
+        const prev = paged[i - 1]!;
+        const current = paged[i]!;
+        const prevCreatedAt = revocationCreatedAt(prev.revocation);
+        const currentCreatedAt = revocationCreatedAt(current.revocation);
+        expect(
+          prevCreatedAt < currentCreatedAt ||
+            (prevCreatedAt === currentCreatedAt &&
+              prev.credentialCID <= current.credentialCID),
+        ).toBe(true);
+      }
     });
 
     it('returns an empty array for an issuer with no revocations', async () => {
       const issuer = await createIdentity(); // never revoked anything
       const res = await req(`/revocations/v1/issuer/${issuer.did}`);
       expect(res.status).toBe(200);
-      expect(await json(res)).toEqual({ did: issuer.did, revocations: [] });
+      expect(await json(res)).toEqual({ did: issuer.did, revocations: [], next: null });
     });
 
     it('returns 400 for a malformed DID', async () => {

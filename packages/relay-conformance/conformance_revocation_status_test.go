@@ -1,11 +1,11 @@
-// Revocation-status conformance (/revocations/v1 — additive, own 0.x clock).
+// Revocation-status conformance (/revocations/v1 — frozen v1, own clock).
 //
 // A relay MAY expose a read-only projection of its revocation set. When it
 // does, it advertises `capabilities.revocations: true` in the well-known and
 // serves:
 //
 //	GET /revocations/v1/credential/{credentialCID} → { credentialCID, revoked, revocation? }
-//	GET /revocations/v1/issuer/{did}               → { did, revocations: [...] }
+//	GET /revocations/v1/issuer/{did}               → { did, revocations: [...], next }
 //
 // The revocation JWS itself rides every positive answer, so these tests
 // re-verify the proof (decode → typ, credentialCID, issuer did) rather than
@@ -45,10 +45,14 @@ func requireRevocationsCapability(t *testing.T, base string) {
 // ingests both. Returns the credential CID and the revocation JWS.
 func revokeCredential(t *testing.T, base string, id identity) (credentialCID, revToken string) {
 	t.Helper()
+	return revokeCredentialForResource(t, base, id, "chain:someContentId")
+}
 
+func revokeCredentialForResource(t *testing.T, base string, id identity, resource string) (credentialCID, revToken string) {
+	t.Helper()
 	issuerKid := id.did + "#" + id.auth.keyID
 	cred, err := dfos.CreateCredential(
-		id.did, "did:dfos:somereader00000000000000000000", issuerKid, "chain:someContentId", "read",
+		id.did, "did:dfos:somereader00000000000000000000", issuerKid, resource, "read",
 		5*time.Minute, id.auth.priv,
 	)
 	if err != nil {
@@ -165,6 +169,90 @@ func TestRevocationStatusIssuerListing(t *testing.T) {
 	}
 	if body.Revocations[0].CredentialCID != credentialCID || body.Revocations[0].Revocation != revToken {
 		t.Fatalf("entry = %+v", body.Revocations[0])
+	}
+}
+
+func TestRevocationStatusIssuerPagination(t *testing.T) {
+	base := relayURL(t)
+	requireRevocationsCapability(t, base)
+	id := createIdentity(t, base)
+
+	credentialCIDs := make(map[string]bool)
+	for _, resource := range []string{"chain:pageA", "chain:pageB", "chain:pageC"} {
+		credentialCID, _ := revokeCredentialForResource(t, base, id, resource)
+		credentialCIDs[credentialCID] = true
+	}
+
+	type revocationEntry struct {
+		CredentialCID string `json:"credentialCID"`
+		Revocation    string `json:"revocation"`
+	}
+	var firstPage struct {
+		DID         string            `json:"did"`
+		Revocations []revocationEntry `json:"revocations"`
+		Next        *string           `json:"next"`
+	}
+	resp := getJSON(t, base+"/revocations/v1/issuer/"+id.did+"?limit=2", &firstPage)
+	if resp.StatusCode != 200 {
+		t.Fatalf("issuer pagination page 1: status %d", resp.StatusCode)
+	}
+	if firstPage.DID != id.did {
+		t.Fatalf("page 1 did = %s, want %s", firstPage.DID, id.did)
+	}
+	if len(firstPage.Revocations) != 2 {
+		t.Fatalf("page 1 revocations = %+v, want 2 entries", firstPage.Revocations)
+	}
+	if firstPage.Next == nil || *firstPage.Next != firstPage.Revocations[1].CredentialCID {
+		t.Fatalf("page 1 next = %v, want second entry credentialCID", firstPage.Next)
+	}
+
+	var secondPage struct {
+		DID         string            `json:"did"`
+		Revocations []revocationEntry `json:"revocations"`
+		Next        *string           `json:"next"`
+	}
+	resp = getJSON(t, base+"/revocations/v1/issuer/"+id.did+"?after="+*firstPage.Next+"&limit=2", &secondPage)
+	if resp.StatusCode != 200 {
+		t.Fatalf("issuer pagination page 2: status %d", resp.StatusCode)
+	}
+	if len(secondPage.Revocations) != 1 {
+		t.Fatalf("page 2 revocations = %+v, want 1 entry", secondPage.Revocations)
+	}
+	if secondPage.Next != nil {
+		t.Fatalf("page 2 next = %v, want nil", *secondPage.Next)
+	}
+
+	paged := append(append([]revocationEntry{}, firstPage.Revocations...), secondPage.Revocations...)
+	seen := make(map[string]bool)
+	for _, entry := range paged {
+		seen[entry.CredentialCID] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("paged credential CIDs = %v, want 3 unique entries", seen)
+	}
+	for credentialCID := range credentialCIDs {
+		if !seen[credentialCID] {
+			t.Fatalf("paged credential CIDs missing %s; got %v", credentialCID, seen)
+		}
+	}
+
+	createdAt := func(entry revocationEntry) string {
+		t.Helper()
+		_, payload, err := dfos.DecodeJWSUnsafe(entry.Revocation)
+		if err != nil {
+			t.Fatalf("decode revocation %s: %v", entry.CredentialCID, err)
+		}
+		value, _ := payload["createdAt"].(string)
+		return value
+	}
+	for i := 1; i < len(paged); i++ {
+		prev := paged[i-1]
+		current := paged[i]
+		prevCreatedAt := createdAt(prev)
+		currentCreatedAt := createdAt(current)
+		if prevCreatedAt > currentCreatedAt || (prevCreatedAt == currentCreatedAt && prev.CredentialCID > current.CredentialCID) {
+			t.Fatalf("revocations not sorted by createdAt, credentialCID: prev=%+v current=%+v", prev, current)
+		}
 	}
 }
 

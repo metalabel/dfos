@@ -132,12 +132,21 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]> {
-    const revs: StoredRevocation[] = [];
+    const revs: { revocation: StoredRevocation; createdAt: string }[] = [];
     for (const rev of this.revocations.values()) {
-      if (rev.issuerDID === issuerDID) revs.push(rev);
+      if (rev.issuerDID !== issuerDID) continue;
+      const createdAt = decodeJwsUnsafe(rev.jwsToken)?.payload?.createdAt;
+      revs.push({
+        revocation: rev,
+        createdAt: typeof createdAt === 'string' ? createdAt : '',
+      });
     }
-    revs.sort((a, b) => (a.credentialCID < b.credentialCID ? -1 : 1));
-    return revs;
+    revs.sort((a, b) => {
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+      if (a.revocation.credentialCID === b.revocation.credentialCID) return 0;
+      return a.revocation.credentialCID < b.revocation.credentialCID ? -1 : 1;
+    });
+    return revs.map((entry) => entry.revocation);
   }
 
   // --- public credentials ---

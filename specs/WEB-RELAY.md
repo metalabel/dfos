@@ -65,7 +65,7 @@ Four route families deliberately stay at the root, on their own clocks:
 - **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and the relay's own release version.
 - **Content plane routes** (`/content/:contentId/blob[/:ref]`, `/content/:contentId/documents`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` and `/content/:contentId/documents` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
 - **Universal resolver** (`GET /1.0/identifiers/:did`) — the DID-core / DIF Universal Resolver binding on its own `1.0` clock (the DIF driver interface version, [DID-METHOD.md](https://protocol.dfos.com/did-method) §5.2.4). It is an additive, read-only projection of the same self-certified terminal state the proof plane serves at `/proof/v1/identities/:did`, rendered as a W3C DID Document. It stays at the root because it tracks the DIF driver clock, not the frozen proof plane.
-- **Revocation status** (`GET /revocations/v1/credential/:credentialCID`, `GET /revocations/v1/issuer/:did`) — an indexed, read-only projection of the relay's revocation set on its own `0.x` clock. Revocations still _enter_ through the frozen proof plane (`POST /proof/v1/operations`); this family only exposes a read over the index the relay already maintains for its own credential enforcement. See [Revocation Status](#revocation-status-0x).
+- **Revocation status** (`GET /revocations/v1/credential/:credentialCID`, `GET /revocations/v1/issuer/:did`) — an indexed, read-only projection of the relay's revocation set on its own frozen `v1` clock. Revocations still _enter_ through the frozen proof plane (`POST /proof/v1/operations`); this family only exposes a read over the index the relay already maintains for its own credential enforcement. See [Revocation Status](#revocation-status-v1).
 
 ---
 
@@ -317,7 +317,7 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 | `capabilities.write`       | boolean       | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                         |
 | `capabilities.content`     | boolean       | Whether the relay supports the content plane (blob upload/download _and_ the documents endpoint, which rides this same flag — there is no separate one)  |
 | `capabilities.log`         | boolean       | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                      |
-| `capabilities.revocations` | boolean       | Whether the [revocation status](#revocation-status-0x) index is served (`GET /revocations/v1/*`). Both reference relays always serve it                  |
+| `capabilities.revocations` | boolean       | Whether the [revocation status](#revocation-status-v1) index is served (`GET /revocations/v1/*`). Both reference relays always serve it                  |
 | `profile`                  | string        | The relay's profile artifact as a compact JWS token — self-proving payload                                                                               |
 | `peers`                    | array         | OPTIONAL additive telemetry. Configured peer relays surfaced for mesh discovery; reference relays emit `[]` when no peers are configured                 |
 | `peers[].endpoint`         | string        | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                               |
@@ -511,7 +511,7 @@ Revocation artifacts (`typ: did:dfos:revocation`) are ingested via `POST /proof/
 3. Future content chain operations embedding the revoked credential as `authorization` are rejected
 4. Future content plane requests presenting the revoked credential are rejected
 
-Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the revocation payload format. A relay MAY additionally expose a read over the revocation index it keeps for this enforcement — see [Revocation Status](#revocation-status-0x).
+Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the revocation payload format. A relay MAY additionally expose a read over the revocation index it keeps for this enforcement — see [Revocation Status](#revocation-status-v1).
 
 ### Content Following
 
@@ -528,11 +528,11 @@ Following is a per-relay, optional behavior on the content plane's own `0.x` clo
 
 ---
 
-## Revocation Status (0.x)
+## Revocation Status (v1)
 
 A relay that enforces revocation already maintains an `(issuerDID, credentialCID)` revocation set (see [Revocation Ingestion](#revocation-ingestion)). The **revocation status** route family exposes an indexed, read-only projection of that set, so a client can ask "has this credential been revoked?" or "what has this issuer revoked?" with one GET instead of replaying the operation log.
 
-Like the universal resolver, this family rides its **own `0.x` version clock at the relay root** — it is NOT part of the frozen `/proof/v1` proof plane, and nothing about ingestion changes: revocations remain ordinary proof-plane operations (`typ: did:dfos:revocation`), submitted via `POST /proof/v1/operations` and gossiped like everything else. A relay advertises support via `capabilities.revocations` in the well-known; when unsupported, the routes return **501 Not Implemented** (capability not supported, consistent with `content`/`log`). Both reference relays serve the index unconditionally.
+Like the universal resolver, this family is a **frozen `v1` contract at the relay root** on its own v1 clock — it is NOT part of, and is not mounted under, the frozen `/proof/v1` proof plane. Nothing about ingestion changes: revocations remain ordinary proof-plane operations (`typ: did:dfos:revocation`), submitted via `POST /proof/v1/operations` and gossiped like everything else. A relay advertises support via `capabilities.revocations` in the well-known; when unsupported, the routes return **501 Not Implemented** (capability not supported, consistent with `content`/`log`). Both reference relays serve the index unconditionally.
 
 ### Credential Status (`GET /revocations/v1/credential/:credentialCID`)
 
@@ -544,6 +544,8 @@ Like the universal resolver, this family rides its **own `0.x` version clock at 
 }
 ```
 
+This credential-status route is frozen AS-IS.
+
 - **`200` revoked** — includes `revocation`, the full revocation JWS token.
 - **`200` not revoked** — `{ "credentialCID": "…", "revoked": false }`, no `revocation` key.
 - **`400`** — the param is not a well-formed credential CID (CIDv1 dag-cbor + sha256, `bafyrei` + 52 base32 chars).
@@ -554,16 +556,17 @@ Like the universal resolver, this family rides its **own `0.x` version clock at 
 
 If more than one issuer has revoked the same credential CID (possible, since the set is scoped per issuer and the issuer-only rule is enforced at credential verification rather than ingest), the relay MUST answer deterministically: the revocation with the lexicographically smallest `issuerDID`. Callers re-verifying the JWS against the credential's actual issuer are unaffected either way.
 
-### Issuer Revocations (`GET /revocations/v1/issuer/:did`)
+### Issuer Revocations (`GET /revocations/v1/issuer/:did?after={cid}&limit=N`)
 
 ```json
 {
   "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
-  "revocations": [{ "credentialCID": "bafyrei…", "revocation": "eyJhbGciOiJFZERTQSIs…" }]
+  "revocations": [{ "credentialCID": "bafyrei…", "revocation": "eyJhbGciOiJFZERTQSIs…" }],
+  "next": null
 }
 ```
 
-- **`200`** — every revocation this relay has ingested for the issuer, sorted by `credentialCID` ascending (deterministic across implementations). An issuer with none returns an empty array — same honest-absence semantics as above.
+- **`200`** — every revocation this relay has ingested for the issuer, sorted by revocation `createdAt` ascending (tiebreak `credentialCID`), forward-only cursor-paginated: `after` (a `credentialCID` cursor, omit to start from the first) and `limit` (default 100, max 1000); the response carries `next` — the `credentialCID` to pass as `after` for the next page, `null` when caught up. An issuer with none returns an empty array — same honest-absence semantics as above.
 - **`400`** — the param is not a canonical 31-char `did:dfos` identifier.
 
 ---

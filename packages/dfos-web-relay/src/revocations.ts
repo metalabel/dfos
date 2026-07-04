@@ -4,11 +4,11 @@
 
   Pure, read-only projection of the relay's revocation set — the
   (issuerDID, credentialCID) index it already maintains for its own credential
-  enforcement — into the `/revocations/v1` route family. Revocations remain
-  ordinary proof-plane ops (kind "revocation", ingested via
-  POST /proof/v1/operations, gossiped); this is an additive read surface at the
-  relay ROOT on its own version clock, exactly like the universal resolver at
-  /1.0/identifiers/:did.
+  enforcement — into the frozen `/revocations/v1` route family. Revocations
+  remain ordinary proof-plane ops (kind "revocation", ingested via
+  POST /proof/v1/operations, gossiped); this is a frozen v1 contract at the
+  relay ROOT on its own version clock, alongside but not under the frozen
+  proof plane, exactly like the universal resolver at /1.0/identifiers/:did.
 
   Key principle: every positive answer carries the revocation JWS itself, so a
   zero-trust caller re-verifies (signature, CID integrity, kid-DID == payload
@@ -29,10 +29,9 @@ import type { StoredRevocation } from './types';
 // -----------------------------------------------------------------------------
 
 /**
- * Namespaces the revocation-status routes on their own 0.x clock (NOT the
- * frozen /proof/v1 proof plane). Additive relay reference-implementation
- * surface; MUST stay in byte-sync with the Go relay (revocationsBasePath in
- * revocations.go).
+ * Namespaces the revocation-status routes on their own frozen v1 clock (NOT
+ * the /proof/v1 proof plane). Root-mounted v1 contract; MUST stay in byte-sync
+ * with the Go relay (revocationsBasePath in revocations.go).
  */
 export const REVOCATIONS_BASE_PATH = '/revocations/v1';
 
@@ -72,6 +71,7 @@ export interface IssuerRevocationEntry {
 export interface IssuerRevocationList {
   did: string;
   revocations: IssuerRevocationEntry[];
+  next: string | null;
 }
 
 /**
@@ -90,10 +90,12 @@ export const credentialRevocationStatus = (
 export const issuerRevocationList = (
   did: string,
   revocations: StoredRevocation[],
+  next: string | null,
 ): IssuerRevocationList => ({
   did,
   revocations: revocations.map((rev) => ({
     credentialCID: rev.credentialCID,
     revocation: rev.jwsToken,
   })),
+  next,
 });
