@@ -63,7 +63,7 @@ The prefix encodes the plane and its version (`{plane}/{version}`), so the proof
 Four route families deliberately stay at the root, on their own clocks:
 
 - **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and the relay's own release version.
-- **Content plane routes** (`/content/:contentId/blob[/:ref]`, `/content/:contentId/documents`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` and `/content/:contentId/documents` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
+- **Content plane routes** (`/content/:contentId/blob[/:ref]`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
 - **Universal resolver** (`GET /1.0/identifiers/:did`) — the DID-core / DIF Universal Resolver binding on its own `1.0` clock (the DIF driver interface version, [DID-METHOD.md](https://protocol.dfos.com/did-method) §5.2.4). It is an additive, read-only projection of the same self-certified terminal state the proof plane serves at `/proof/v1/identities/:did`, rendered as a W3C DID Document. It stays at the root because it tracks the DIF driver clock, not the frozen proof plane.
 - **Revocation status** (`GET /revocations/v1/credential/:credentialCID`, `GET /revocations/v1/issuer/:did`) — an indexed, read-only projection of the relay's revocation set on its own frozen `v1` clock. Revocations still _enter_ through the frozen proof plane (`POST /proof/v1/operations`); this family only exposes a read over the index the relay already maintains for its own credential enforcement. See [Revocation Status](#revocation-status-v1).
 
@@ -315,7 +315,7 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 | `capabilities`             | object        | Capability flags for optional features                                                                                                                   |
 | `capabilities.proof`       | boolean       | MUST be `true`. A relay without proof plane capability is not a relay                                                                                    |
 | `capabilities.write`       | boolean       | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                         |
-| `capabilities.content`     | boolean       | Whether the relay supports the content plane (blob upload/download _and_ the documents endpoint, which rides this same flag — there is no separate one)  |
+| `capabilities.content`     | boolean       | Whether the relay supports the content plane (blob upload/download)                                                                                      |
 | `capabilities.log`         | boolean       | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                      |
 | `capabilities.revocations` | boolean       | Whether the [revocation status](#revocation-status-v1) index is served (`GET /revocations/v1/*`). Both reference relays always serve it                  |
 | `profile`                  | string        | The relay's profile artifact as a compact JWS token — self-proving payload                                                                               |
@@ -476,15 +476,9 @@ The optional `:ref` parameter selects which operation's document to return:
 - `head` (default): the current document at chain head
 - An operation CID: the document committed by that specific operation
 
-### Documents Endpoint (`GET /content/:contentId/documents?after={cid}&limit=N`)
+### Enumerating a Chain's Documents
 
-Returns documents committed to a content chain as an ordered list, from genesis to head. Like the log routes, this endpoint is **forward-only cursor-paginated**: it takes `after` (CID cursor, omit to start from genesis) and `limit` (default 100, max 1000) query params, and returns `{ contentId, documents[], nextCursor }` where `nextCursor` is the CID to pass as `after` for the next page (`null` when caught up).
-
-Each `documents[]` entry includes `operationCID` (the operation that committed the document), `documentCID` (the content-addressed CID of the document, nullable), `document` (the resolved document content, nullable), `signerDID`, and `createdAt`.
-
-This endpoint requires the same authorization as blob download — standing authorization grants access without authentication, otherwise the caller must be the chain creator or present a valid DFOS credential with `action: "read"`.
-
-The documents endpoint is part of the content plane: it rides `capabilities.content`, with no separate flag. When `capabilities.content: false`, this route returns **501 Not Implemented** (`content plane not available`).
+The former relay-side list route was removed because it was only a relay-decoded convenience over state the client can re-derive verifiably. Fetch `GET /content/:contentId/blob` for the document at head, `GET /content/:contentId/blob/:opCID` for the document any specific operation committed (immutable), and `GET /proof/v1/content/:contentId/log` to enumerate the chain's operations, each carrying its `documentCID`. This composition is strictly more verifiable: every blob is checked against its committed `documentCID`, and the op log is the frozen proof-plane enumeration.
 
 ### Standing Authorization
 
@@ -522,7 +516,7 @@ Following is a per-relay, optional behavior on the content plane's own `0.x` clo
 - **Pull, not push.** A follower fetches blobs from its peers over the existing public blob route (`GET /content/:contentId/blob[/:ref]`). Blobs are never gossiped; there is no new endpoint.
 - **The materialize gate is the serve gate.** A follower materializes a chain's bytes only while a standing public-read grant authorizes anonymous read of it — the same predicate (`hasPublicStandingAuth`) the serve path checks. So a chain that is private, revoked, or deleted is never followed.
 - **Verified by hash, trustless in source.** Every pulled blob is checked against the `documentCID` the chain committed (its content address) before it is stored. A follower may therefore pull from any peer; a byte that does not hash to its committed CID is rejected.
-- **Eventually consistent.** Authorization arrives instantly (the grant rides the log); the bytes arrive asynchronously. Between the two, a follower that is authorized but has not yet materialized a blob returns `200` with `document: null` on `/documents` (and `404 blob not found` on `/blob`) — the **honest "authorized-but-not-yet-materialized" state**, not an error. A conforming follower converges to serving the bytes; it need not do so instantaneously. See [DOCUMENT-GATEWAY.md → Follower materialization](https://protocol.dfos.com/document-gateway#follower-materialization-0x).
+- **Eventually consistent.** Authorization arrives instantly (the grant rides the log); the bytes arrive asynchronously. Between the two, a follower that is authorized but has not yet materialized a blob returns `404 blob not found` on `GET /content/:contentId/blob[/:ref]` — the **honest "authorized-but-not-yet-materialized" state**, not an error. A conforming follower converges to serving the bytes; it need not do so instantaneously. See [DOCUMENT-GATEWAY.md → Follower materialization](https://protocol.dfos.com/document-gateway#follower-materialization-0x).
 - **Convergent, ordering-immune.** Following is driven by a sweep over the chains the follower already holds in local state, so it cannot be raced by op-ingest ordering (a credential op sequences before the content op it grants). The sweep is the correctness backbone; low-latency triggers, if any, are an optimization over it.
 - **Revoke is correctness-free; GC is reclamation.** When a grant is revoked, the per-request serve gate immediately makes any cached bytes unreachable — correctness needs nothing more. Reclaiming the now-orphaned bytes (deleting them) is a separate, convergent garbage-collection pass keyed on the same gate, and is purely a storage concern.
 
@@ -672,7 +666,6 @@ The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFrom
 | `GET`  | `/proof/v1/content/:contentId`                | proof   | none                                      |
 | `GET`  | `/proof/v1/content/:contentId/log`            | proof   | none                                      |
 | `GET`  | `/proof/v1/log`                               | proof   | none                                      |
-| `GET`  | `/content/:contentId/documents`               | content | standing auth, or auth token + credential |
 | `PUT`  | `/content/:contentId/blob/:opCID`             | content | auth token                                |
 | `GET`  | `/content/:contentId/blob[/:ref]`             | content | standing auth, or auth token + credential |
 

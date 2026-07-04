@@ -535,53 +535,6 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return c.json({ entries: page, cursor });
   });
 
-  /** Get documents for a content chain — paginated, auth-gated */
-  app.get('/content/:contentId/documents', async (c) => {
-    if (!contentEnabled) return c.json({ error: 'content plane not available' }, 501);
-    const contentId = c.req.param('contentId');
-
-    // verify chain exists
-    const chain = await store.getContentChain(contentId);
-    if (!chain) return c.json({ error: 'not found' }, 404);
-
-    // check for public standing authorization (no auth needed)
-    const publicAccess = await hasPublicStandingAuth(contentId, 'read', store);
-    if (!publicAccess) {
-      // require auth token
-      const auth = await authenticateRequest(
-        c.req.header('authorization'),
-        relayDID,
-        store,
-        maxAuthTokenTTLSeconds,
-      );
-      if (!auth) return c.json({ error: 'authentication required' }, 401);
-
-      // verify read access
-      const accessError = await verifyReadAccess(
-        auth,
-        chain,
-        contentId,
-        c.req.header('x-credential'),
-        store,
-      );
-      if (accessError) return accessError;
-    }
-
-    const after = c.req.query('after');
-    const limit = parseLimit(c.req.query('limit'), 100, 1000);
-
-    const result = await store.getDocuments(contentId, {
-      ...(after ? { after } : {}),
-      limit,
-    });
-
-    return c.json({
-      contentId,
-      documents: result.documents,
-      nextCursor: result.cursor,
-    });
-  });
-
   /** Get a content chain by content ID */
   app.get(`${PROOF_BASE_PATH}/content/:contentId`, async (c) => {
     const contentId = c.req.param('contentId');
