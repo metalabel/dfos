@@ -73,8 +73,9 @@ const AvailableHint = (props: { available: number | undefined; localCount: numbe
   if (available === undefined || available <= props.localCount) return null;
   return (
     <div class="ck-note" style={{ marginBottom: 8 }}>
-      ~{fmtCount(available)} advertised across your relays (relay-asserted) — <b>sync the full log</b>{' '}
-      to browse them locally. Completeness is never proven; this is a hint, not a promise.
+      ~{fmtCount(available)} advertised across your relays (relay-asserted) —{' '}
+      <b>sync the full log</b> to browse them locally. Completeness is never proven; this is a hint,
+      not a promise.
     </div>
   );
 };
@@ -123,17 +124,17 @@ export const BrowseIdentities = () => {
     <Panel
       title={
         <>
-          public identities{' '}
-          {result ? <Pill state="ok">{fmtCount(result.publicCount)}</Pill> : null}
+          public identities {result ? <Pill state="ok">{fmtCount(result.publicCount)}</Pill> : null}
         </>
       }
       right={<span class="lbl">who · from local index</span>}
       orient={
         <>
-          Identities with a publicly-readable profile, <Term word="attributed" def={GLOSSARY['attributed'] ?? ''} />{' '}
-          to the DID that signed the profile chain's genesis op. Search is a substring over names in
-          your <Term word="local index" def={GLOSSARY['localIndex'] ?? ''} /> — <b>attributed, not
-          verified</b>; open a row to fold the rigorous proof.
+          Identities with a publicly-readable profile,{' '}
+          <Term word="attributed" def={GLOSSARY['attributed'] ?? ''} /> to the DID that signed the
+          profile chain's genesis op. Search is a substring over names in your{' '}
+          <Term word="local index" def={GLOSSARY['localIndex'] ?? ''} /> —{' '}
+          <b>attributed, not verified</b>; open a row to fold the rigorous proof.
         </>
       }
     >
@@ -188,8 +189,8 @@ export const BrowseIdentities = () => {
           </table>
           {result.matched > result.rows.length ? (
             <div class="ck-note" style={{ marginTop: 8 }}>
-              showing {fmtCount(result.rows.length)} of {fmtCount(result.matched)} — narrow the search
-              to see more.
+              showing {fmtCount(result.rows.length)} of {fmtCount(result.matched)} — narrow the
+              search to see more.
             </div>
           ) : null}
         </>
@@ -222,23 +223,22 @@ export const BrowseDocuments = () => {
 
   const syncing = sync.phase === 'syncing';
   const resolving = sync.phase === 'resolving';
-  const hasLocal = !!result && (result.publicCount + result.gatedCount + result.unresolvedCount) > 0;
+  const hasLocal = !!result && result.publicCount + result.gatedCount + result.unresolvedCount > 0;
 
   return (
     <Panel
       title={
         <>
-          public documents{' '}
-          {result ? <Pill state="ok">{fmtCount(result.publicCount)}</Pill> : null}
+          public documents {result ? <Pill state="ok">{fmtCount(result.publicCount)}</Pill> : null}
         </>
       }
       right={<span class="lbl">what · from local index</span>}
       orient={
         <>
           Content chains whose document bytes were served to an anonymous fetch and{' '}
-          <Term word="re-hashed" def={GLOSSARY['publicProjection'] ?? ''} /> to the on-chain committed
-          CID — typed by the document's <code>$schema</code>. The view is type-agnostic; today every
-          public doc is a <code>profile/v1</code>.
+          <Term word="re-hashed" def={GLOSSARY['publicProjection'] ?? ''} /> to the on-chain
+          committed CID — typed by the document's <code>$schema</code>. The view is type-agnostic;
+          today every public doc is a <code>profile/v1</code>.
         </>
       }
     >
@@ -366,11 +366,7 @@ export const BrowseArtifacts = () => {
 
   return (
     <Panel
-      title={
-        <>
-          public artifacts {rows ? <Pill state="ok">{fmtCount(rows.length)}</Pill> : null}
-        </>
-      }
+      title={<>public artifacts {rows ? <Pill state="ok">{fmtCount(rows.length)}</Pill> : null}</>}
       right={<span class="lbl">signed claims · from local index</span>}
       orient={
         <>

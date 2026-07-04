@@ -132,7 +132,12 @@ describe('explorer db', () => {
       [],
       [
         rollup({ chainId: 'did:dfos:a', name: 'Alice', nameLower: 'alice', publicRead: true }),
-        rollup({ chainId: 'did:dfos:b', name: 'Bob Loblaw', nameLower: 'bob loblaw', publicRead: true }),
+        rollup({
+          chainId: 'did:dfos:b',
+          name: 'Bob Loblaw',
+          nameLower: 'bob loblaw',
+          publicRead: true,
+        }),
         // no resolved profile — hidden unless includeGated
         rollup({ chainId: 'did:dfos:c' }),
       ],

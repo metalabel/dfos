@@ -166,10 +166,18 @@ export interface ExplorerDb {
   chainsQuery(q: ChainsQuery): Promise<BrowseResult<ChainRollup>>;
   /** Public identities — identity rollups with an attributed profile name,
    *  substring-searched over nameLower (getAll + JS filter, per the corpus). */
-  browseIdentities(q: { query?: string; limit: number; includeGated?: boolean }): Promise<IdentitiesBrowse>;
+  browseIdentities(q: {
+    query?: string;
+    limit: number;
+    includeGated?: boolean;
+  }): Promise<IdentitiesBrowse>;
   /** Public documents — content rollups carrying a resolved docSchema, optionally
    *  filtered to one schema (type). Gated + not-yet-resolved chains are counted. */
-  browseDocuments(q: { schema?: string; limit: number; includeGated?: boolean }): Promise<DocumentsBrowse>;
+  browseDocuments(q: {
+    schema?: string;
+    limit: number;
+    includeGated?: boolean;
+  }): Promise<DocumentsBrowse>;
   getCursor(relay: string): Promise<SyncCursor | undefined>;
   setCursor(cursor: SyncCursor): Promise<void>;
   wipe(): Promise<void>;
@@ -347,8 +355,7 @@ export const openExplorerDb = async (
         const cursor = cursorReq.result;
         // stopping at the limit is ordinary pagination; stopping at MAX_SCAN with
         // the cursor still live means we cut the corpus short — report that.
-        if (!cursor || out.length >= q.limit)
-          return resolve({ rows: out, truncated: false });
+        if (!cursor || out.length >= q.limit) return resolve({ rows: out, truncated: false });
         if (scanned >= MAX_SCAN) return resolve({ rows: out, truncated: true });
         scanned += 1;
         const row = cursor.value as ChainRollup;
@@ -378,9 +385,7 @@ export const openExplorerDb = async (
     const needle = (q.query ?? '').trim().toLowerCase();
     // opaque (no-name) rows only surface with the toggle AND no active search
     const pool = q.includeGated && !needle ? all : withName;
-    const matches = needle
-      ? pool.filter((r) => (r.nameLower ?? '').includes(needle))
-      : pool;
+    const matches = needle ? pool.filter((r) => (r.nameLower ?? '').includes(needle)) : pool;
     matches.sort((a, b) => (a.nameLower ?? '').localeCompare(b.nameLower ?? ''));
     return {
       rows: matches.slice(0, q.limit),

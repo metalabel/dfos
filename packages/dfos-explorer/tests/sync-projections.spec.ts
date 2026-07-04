@@ -62,7 +62,12 @@ const publicChain = async (
 };
 
 const bytesOf = (obj: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(obj));
-const served = (bytes: Uint8Array): BlobResult => ({ relay: 'r', status: 200, gated: false, bytes });
+const served = (bytes: Uint8Array): BlobResult => ({
+  relay: 'r',
+  status: 200,
+  gated: false,
+  bytes,
+});
 const gated: BlobResult = { relay: 'r', status: 403, gated: true };
 
 const freshDb = () => openExplorerDb('proj-test', new IDBFactory());
@@ -77,7 +82,17 @@ describe('resolvePublicProjections', () => {
     // the attributed identity must already be in the index for the name to land
     await db.putBatch(
       [op],
-      [rollup, { chainId: 'did:dfos:creator', kind: 'identity-op', opCount: 1, firstCreatedAt: '', lastCreatedAt: '', headCid: 'g' }],
+      [
+        rollup,
+        {
+          chainId: 'did:dfos:creator',
+          kind: 'identity-op',
+          opCount: 1,
+          firstCreatedAt: '',
+          lastCreatedAt: '',
+          headCid: 'g',
+        },
+      ],
     );
 
     const result = await resolvePublicProjections({
@@ -104,7 +119,11 @@ describe('resolvePublicProjections', () => {
     const { op, rollup } = await publicChain('c-gated', 'did:dfos:x#k', doc);
     await db.putBatch([op], [rollup]);
 
-    const result = await resolvePublicProjections({ db, relays: ['r'], fetchBlob: async () => gated });
+    const result = await resolvePublicProjections({
+      db,
+      relays: ['r'],
+      fetchBlob: async () => gated,
+    });
     expect(result.publicDocs).toBe(0);
     const content = await db.getChain('c-gated');
     expect(content?.publicRead).toBe(false);
@@ -167,7 +186,10 @@ describe('resolvePublicProjections', () => {
     const doc = { $schema: PROFILE_SCHEMA, name: 'Once' };
     const { op, rollup } = await publicChain('c-once', 'did:dfos:x#k', doc);
     // pre-mark as already resolved at this head
-    await db.putBatch([op], [{ ...rollup, resolvedHead: op.cid, publicRead: true, docSchema: PROFILE_SCHEMA }]);
+    await db.putBatch(
+      [op],
+      [{ ...rollup, resolvedHead: op.cid, publicRead: true, docSchema: PROFILE_SCHEMA }],
+    );
 
     let calls = 0;
     const result = await resolvePublicProjections({
@@ -190,24 +212,46 @@ describe('resolvePublicProjections', () => {
     const { op: genesis, rollup } = await publicChain('c-drift', kid, doc, created);
     await db.putBatch(
       [genesis],
-      [rollup, { chainId: 'did:dfos:creator', kind: 'identity-op', opCount: 1, firstCreatedAt: '', lastCreatedAt: '', headCid: 'g' }],
+      [
+        rollup,
+        {
+          chainId: 'did:dfos:creator',
+          kind: 'identity-op',
+          opCount: 1,
+          firstCreatedAt: '',
+          lastCreatedAt: '',
+          headCid: 'g',
+        },
+      ],
     );
 
     // first resolve: attributes "Alice" to did:dfos:creator
-    await resolvePublicProjections({ db, relays: ['r'], fetchBlob: async () => served(bytesOf(doc)) });
+    await resolvePublicProjections({
+      db,
+      relays: ['r'],
+      fetchBlob: async () => served(bytesOf(doc)),
+    });
     expect((await db.getChain('did:dfos:creator'))?.name).toBe('Alice');
 
     // the profile chain drifts: a delete op (documentCID cleared) becomes the head
     const deletedAt = '2026-02-01T00:00:00.000Z';
     const del = await contentOp({
       chainId: 'c-drift',
-      payload: { type: 'delete', createdAt: deletedAt, documentCID: null, previousOperationCID: genesis.cid },
+      payload: {
+        type: 'delete',
+        createdAt: deletedAt,
+        documentCID: null,
+        previousOperationCID: genesis.cid,
+      },
       kid,
       createdAt: deletedAt,
       seq: 1,
     });
     const drifted = await db.getChain('c-drift');
-    await db.putBatch([del], [{ ...drifted!, headCid: del.cid, lastCreatedAt: deletedAt, opCount: 2 }]);
+    await db.putBatch(
+      [del],
+      [{ ...drifted!, headCid: del.cid, lastCreatedAt: deletedAt, opCount: 2 }],
+    );
 
     // re-resolve: the chain is no longer a public profile → attribution cleared
     let fetched = false;

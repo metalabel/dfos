@@ -112,7 +112,9 @@ const resolveOne = async (
     attributedDid ? { ...r, attributedDid } : r;
 
   const committedDocCid =
-    typeof head.payload['documentCID'] === 'string' ? (head.payload['documentCID'] as string) : null;
+    typeof head.payload['documentCID'] === 'string'
+      ? (head.payload['documentCID'] as string)
+      : null;
 
   // the committed doc CID must come from an op whose bytes actually hash to its
   // own CID — not a relay-fabricated {cid, payload} pair. Also covers a deleted
@@ -161,10 +163,18 @@ const resolveOne = async (
 
 /** Merge a content chain's resolved projection onto its rollup (clears stale
  *  docSchema when a head-drift made a once-public chain gated). */
-const writeContentProjection = async (db: ExplorerDb, chainId: string, r: OneResult): Promise<void> => {
+const writeContentProjection = async (
+  db: ExplorerDb,
+  chainId: string,
+  r: OneResult,
+): Promise<void> => {
   const existing = await db.getChain(chainId);
   if (!existing) return;
-  const merged: ChainRollup = { ...existing, resolvedHead: r.resolvedHead, publicRead: r.publicRead };
+  const merged: ChainRollup = {
+    ...existing,
+    resolvedHead: r.resolvedHead,
+    publicRead: r.publicRead,
+  };
   if (r.docSchema) merged.docSchema = r.docSchema;
   else delete merged.docSchema;
   await db.putBatch([], [merged]);
