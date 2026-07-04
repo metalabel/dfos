@@ -95,6 +95,9 @@ export interface ChainRollup {
   nameLower?: string;
   /** identity rollup: the profile avatar's media `uri` ref (display hint only). */
   avatarRef?: string;
+  /** identity rollup: the content chain whose profile set `name` — so a later
+   *  re-resolve of THAT chain (gated / deleted) can clear the stale attribution. */
+  profileSource?: string;
 }
 
 /** A browse result that never lies about being cut short. */
@@ -220,11 +223,23 @@ export const openExplorerDb = async (
 
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
     const open = idb.open(name, DB_VERSION);
-    open.onupgradeneeded = () => {
+    open.onupgradeneeded = (event) => {
       const d = open.result;
       // schema changed since the spike (cursor shape, seq semantics) — the
       // local index is a disposable cache, so upgrades rebuild from scratch
       for (const store of Array.from(d.objectStoreNames)) d.deleteObjectStore(store);
+      // an UPGRADE (not first-create) just wiped the index + its sync cursors; a
+      // stale lastSyncAt in localStorage would make auto-sync think it's fresh and
+      // never rebuild. Reset it so the emptied index is treated as never-synced.
+      // (key mirrors LS_LAST_SYNC in sync-store.ts — kept a literal to avoid a
+      // db ⇄ sync-store import cycle.)
+      if (event.oldVersion > 0) {
+        try {
+          globalThis.localStorage?.removeItem('dfos.explorer.lastSyncAt');
+        } catch {
+          // storage unavailable — nothing to reset
+        }
+      }
       const ops = d.createObjectStore('ops', { keyPath: 'cid' });
       ops.createIndex('chainId', 'chainId');
       ops.createIndex('kind', 'kind');

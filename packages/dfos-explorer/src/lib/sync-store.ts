@@ -166,6 +166,14 @@ export const startSync = async (trigger: 'manual' | 'auto' = 'manual'): Promise<
     // Phase 2 (decision C): auto-continue into public-projection resolution
     const proj = await runProjections(db, relays, signal);
 
+    // aborted mid-Phase-2 — resolvePublicProjections breaks its loop and returns
+    // partial tallies rather than throwing, so re-check before claiming "done"
+    // (else we'd persist a false lastSyncAt and hide the interrupted resolution)
+    if (signal.aborted) {
+      set({ phase: 'idle', status: 'stopped' });
+      return;
+    }
+
     const now = Date.now();
     persistLastSync(now);
     const projLine = proj ? ` · ${fmtCount(proj.publicDocs)} public docs` : '';
@@ -305,7 +313,9 @@ export const nextAutoSyncAt = (): number => {
 
 const autoTick = (): void => {
   const minutes = getAutoSyncMinutes();
-  if (minutes <= 0 || isSyncing()) return;
+  // skip while EITHER phase runs — a full sync holds the controller across Phase
+  // 2, but guarding on the phase directly avoids relying on that as the only lock
+  if (minutes <= 0 || isSyncing() || isResolving()) return;
   const due = state.lastSyncAt === 0 || Date.now() >= state.lastSyncAt + minutes * 60_000;
   if (due) void startSync('auto');
 };

@@ -85,6 +85,8 @@ export const LocalIndex = () => {
   const [storageBytes, setStorageBytes] = useState<number | null>(null);
   const sync = useSyncState();
   const syncing = sync.phase === 'syncing';
+  // either phase streams dbEpoch bumps per page/chain — throttle refreshes for both
+  const busy = syncing || sync.phase === 'resolving';
   const [wiped, setWiped] = useState('');
   const [autoMin, setAutoMin] = useState(getAutoSyncMinutes());
   const lastPaint = useRef(0);
@@ -119,7 +121,7 @@ export const LocalIndex = () => {
   // live-refresh the rows as the global sync makes progress (throttled), and a
   // final refresh whenever a run settles
   useEffect(() => {
-    if (syncing) {
+    if (busy) {
       const now = performance.now();
       if (now - lastPaint.current > 500) {
         lastPaint.current = now;

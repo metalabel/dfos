@@ -4,6 +4,12 @@
 
 */
 
+/** kid (`did:dfos:xxx#key`) → the DID prefix, '' when there is no `#` fragment. */
+export const didOfKid = (kid: string): string => {
+  const i = kid.indexOf('#');
+  return i > 0 ? kid.slice(0, i) : '';
+};
+
 /** Ellipsize the middle of a long identifier. */
 export const short = (value: string | null | undefined, head = 10, tail = 6): string => {
   if (!value) return '';

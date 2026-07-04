@@ -29,11 +29,42 @@ import { startProjections, startSync, stopSync, useSyncState } from '../lib/sync
 
 const BROWSE_LIMIT = 300;
 
+// stable references so useAvailable's effect runs once, not every render
+const ID_KEYS = ['identity', 'identity-op'];
+const DOC_KEYS = ['content', 'content-op'];
+const ART_KEYS = ['artifact'];
+
 /** Short, human label for a doc/artifact $schema URL (…/profile/v1 → profile/v1). */
 const schemaLabel = (schema: string | undefined): string => {
   if (!schema) return 'untyped';
   const m = /schemas\.dfos\.com\/(.+)$/.exec(schema);
   return m?.[1] ?? schema;
+};
+
+/**
+ * Relay-advertised count for a browse kind (max across relays), or undefined when
+ * no relay advertises it. Takes fallback keys because a relay may key
+ * countsByKind by primitive ('identity') or op-kind ('identity-op').
+ */
+const useAvailable = (keys: string[]): number | undefined => {
+  const [n, setN] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    let dead = false;
+    void fetchRelayHint().then((h) => {
+      if (dead) return;
+      for (const k of keys) {
+        const v = h.countsByKind?.[k];
+        if (typeof v === 'number') {
+          setN(v);
+          return;
+        }
+      }
+    });
+    return () => {
+      dead = true;
+    };
+  }, [keys]);
+  return n;
 };
 
 /** Relay-asserted "~N available — sync to browse" hint; silent when absent. */
@@ -71,7 +102,7 @@ export const BrowseIdentities = () => {
   const [query, setQuery] = useState('');
   const [includeGated, setIncludeGated] = useState(false);
   const [result, setResult] = useState<IdentitiesBrowse | null>(null);
-  const [available, setAvailable] = useState<number | undefined>(undefined);
+  const available = useAvailable(ID_KEYS);
 
   useEffect(() => {
     let dead = false;
@@ -84,16 +115,6 @@ export const BrowseIdentities = () => {
       dead = true;
     };
   }, [query, includeGated, sync.dbEpoch, sync.phase]);
-
-  useEffect(() => {
-    let dead = false;
-    void fetchRelayHint().then((h) => {
-      if (!dead) setAvailable(h.countsByKind?.['identity'] ?? h.countsByKind?.['identity-op']);
-    });
-    return () => {
-      dead = true;
-    };
-  }, []);
 
   const total = (result?.publicCount ?? 0) + (result?.gatedCount ?? 0);
   const syncing = sync.phase === 'syncing';
@@ -185,7 +206,7 @@ export const BrowseDocuments = () => {
   const sync = useSyncState();
   const [includeGated, setIncludeGated] = useState(false);
   const [result, setResult] = useState<DocumentsBrowse | null>(null);
-  const [available, setAvailable] = useState<number | undefined>(undefined);
+  const available = useAvailable(DOC_KEYS);
 
   useEffect(() => {
     let dead = false;
@@ -198,16 +219,6 @@ export const BrowseDocuments = () => {
       dead = true;
     };
   }, [includeGated, sync.dbEpoch, sync.phase]);
-
-  useEffect(() => {
-    let dead = false;
-    void fetchRelayHint().then((h) => {
-      if (!dead) setAvailable(h.countsByKind?.['content'] ?? h.countsByKind?.['content-op']);
-    });
-    return () => {
-      dead = true;
-    };
-  }, []);
 
   const syncing = sync.phase === 'syncing';
   const resolving = sync.phase === 'resolving';
@@ -233,7 +244,9 @@ export const BrowseDocuments = () => {
     >
       <AvailableHint
         available={available}
-        localCount={(result?.publicCount ?? 0) + (result?.gatedCount ?? 0)}
+        localCount={
+          (result?.publicCount ?? 0) + (result?.gatedCount ?? 0) + (result?.unresolvedCount ?? 0)
+        }
       />
 
       {result && result.unresolvedCount > 0 ? (
@@ -327,29 +340,27 @@ const artifactType = (op: ExplorerOp): string => {
 export const BrowseArtifacts = () => {
   const sync = useSyncState();
   const [rows, setRows] = useState<ExplorerOp[] | null>(null);
-  const [available, setAvailable] = useState<number | undefined>(undefined);
+  // the rows list is capped at BROWSE_LIMIT; the TRUE synced count drives the
+  // relay-hint comparison so it doesn't nag "sync more" once the cap is hit
+  const [total, setTotal] = useState(0);
+  const available = useAvailable(ART_KEYS);
 
   useEffect(() => {
     let dead = false;
     void getDb()
-      .then((db) => db.opsOfKind('artifact', BROWSE_LIMIT))
-      .then((r) => {
-        if (!dead) setRows(r);
+      .then(async (db) => ({
+        rows: await db.opsOfKind('artifact', BROWSE_LIMIT),
+        counts: await db.counts(),
+      }))
+      .then(({ rows: r, counts }) => {
+        if (dead) return;
+        setRows(r);
+        setTotal(counts.byKind['artifact'] ?? 0);
       });
     return () => {
       dead = true;
     };
   }, [sync.dbEpoch, sync.phase]);
-
-  useEffect(() => {
-    let dead = false;
-    void fetchRelayHint().then((h) => {
-      if (!dead) setAvailable(h.countsByKind?.['artifact']);
-    });
-    return () => {
-      dead = true;
-    };
-  }, []);
 
   const syncing = sync.phase === 'syncing';
 
@@ -370,7 +381,7 @@ export const BrowseArtifacts = () => {
         </>
       }
     >
-      <AvailableHint available={available} localCount={rows?.length ?? 0} />
+      <AvailableHint available={available} localCount={total} />
       {!rows || rows.length === 0 ? (
         <SyncPrompt syncing={syncing} />
       ) : (

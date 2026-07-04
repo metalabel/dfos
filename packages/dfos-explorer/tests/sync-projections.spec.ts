@@ -182,6 +182,51 @@ describe('resolvePublicProjections', () => {
     expect(result.resolved).toBe(0);
   });
 
+  it('clears a stale identity attribution when its profile chain drifts to deleted', async () => {
+    const db = await freshDb();
+    const kid = 'did:dfos:creator#k';
+    const doc = { $schema: PROFILE_SCHEMA, name: 'Alice' };
+    const created = '2026-01-01T00:00:00.000Z';
+    const { op: genesis, rollup } = await publicChain('c-drift', kid, doc, created);
+    await db.putBatch(
+      [genesis],
+      [rollup, { chainId: 'did:dfos:creator', kind: 'identity-op', opCount: 1, firstCreatedAt: '', lastCreatedAt: '', headCid: 'g' }],
+    );
+
+    // first resolve: attributes "Alice" to did:dfos:creator
+    await resolvePublicProjections({ db, relays: ['r'], fetchBlob: async () => served(bytesOf(doc)) });
+    expect((await db.getChain('did:dfos:creator'))?.name).toBe('Alice');
+
+    // the profile chain drifts: a delete op (documentCID cleared) becomes the head
+    const deletedAt = '2026-02-01T00:00:00.000Z';
+    const del = await contentOp({
+      chainId: 'c-drift',
+      payload: { type: 'delete', createdAt: deletedAt, documentCID: null, previousOperationCID: genesis.cid },
+      kid,
+      createdAt: deletedAt,
+      seq: 1,
+    });
+    const drifted = await db.getChain('c-drift');
+    await db.putBatch([del], [{ ...drifted!, headCid: del.cid, lastCreatedAt: deletedAt, opCount: 2 }]);
+
+    // re-resolve: the chain is no longer a public profile → attribution cleared
+    let fetched = false;
+    await resolvePublicProjections({
+      db,
+      relays: ['r'],
+      fetchBlob: async () => {
+        fetched = true;
+        return served(bytesOf(doc));
+      },
+    });
+    expect(fetched).toBe(false); // deleted head never reaches the blob fetch
+    const identity = await db.getChain('did:dfos:creator');
+    expect(identity?.name).toBeUndefined();
+    expect(identity?.nameLower).toBeUndefined();
+    expect(identity?.publicRead).toBe(false);
+    expect((await db.getChain('c-drift'))?.docSchema).toBeUndefined();
+  });
+
   it('stops promptly when the signal is already aborted', async () => {
     const db = await freshDb();
     const doc = { $schema: PROFILE_SCHEMA, name: 'Never' };

@@ -27,6 +27,7 @@
 
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { ChainRollup, ExplorerDb, ExplorerOp } from './db';
+import { didOfKid } from './format';
 import { parseMediaObject } from './media';
 import { isProfileContent } from './profile';
 import { fetchBlobRaw, type BlobResult } from './relay-raw';
@@ -51,18 +52,11 @@ export interface ResolveOptions {
   signal?: AbortSignal;
 }
 
-/** kid (`did:dfos:xxx#key`) → the DID prefix, '' when there is no fragment. */
-const didOfKid = (kid: string): string => {
-  const i = kid.indexOf('#');
-  return i > 0 ? kid.slice(0, i) : '';
-};
-
 /** The DID that authored a content op — its signer kid, falling back to payload.did. */
-const creatorDidOf = (op: ExplorerOp): string => {
-  const fromKid = didOfKid(op.kid);
+const creatorDid = (kid: string, payload: Record<string, unknown>): string => {
+  const fromKid = didOfKid(kid);
   if (fromKid) return fromKid;
-  const decoded = decodeJwsUnsafe(op.jwsToken);
-  return typeof decoded?.payload['did'] === 'string' ? (decoded.payload['did'] as string) : '';
+  return typeof payload['did'] === 'string' ? (payload['did'] as string) : '';
 };
 
 interface OneResult {
@@ -70,7 +64,18 @@ interface OneResult {
   resolvedHead: string;
   publicRead: boolean;
   docSchema?: string;
-  attribution?: { did: string; name: string; avatarRef?: string };
+  /** the chain's genesis signer, when derivable — the DID a profile attributes to
+   *  (present on BOTH the public and gated paths so a drift can clear a stale name). */
+  attributedDid?: string;
+  /** set only when the resolved public doc is a profile/v1 (→ write attribution). */
+  profileName?: string;
+  avatarRef?: string;
+}
+
+/** decoded op payload paired with its row — decode each JWS once per chain. */
+interface DecodedOp {
+  op: ExplorerOp;
+  payload: Record<string, unknown>;
 }
 
 const encodeCid = async (value: Record<string, unknown>): Promise<string | null> => {
@@ -91,57 +96,64 @@ const resolveOne = async (
 ): Promise<OneResult | null> => {
   const ops = await db.chainOps(rollup.chainId, 'content-op');
   if (ops.length === 0) return null;
-  const headOp = ops.find((o) => o.cid === rollup.headCid) ?? ops[ops.length - 1];
-  if (!headOp) return null;
+  // decode each op's payload once and reuse (head self-CID + genesis detection)
+  const decoded: DecodedOp[] = ops.map((op) => ({
+    op,
+    payload: decodeJwsUnsafe(op.jwsToken)?.payload ?? {},
+  }));
+  const head = decoded.find((d) => d.op.cid === rollup.headCid) ?? decoded[decoded.length - 1];
+  if (!head) return null;
 
-  const headDecoded = decodeJwsUnsafe(headOp.jwsToken);
+  // the genesis signer attributes any profile on this chain — derived on EVERY
+  // path (public or not) so a drift to gated/deleted can clear a stale name.
+  const genesis = decoded.find((d) => !d.payload['previousOperationCID']) ?? decoded[0];
+  const attributedDid = genesis ? creatorDid(genesis.op.kid, genesis.payload) : '';
+  const withDid = (r: Omit<OneResult, 'attributedDid'>): OneResult =>
+    attributedDid ? { ...r, attributedDid } : r;
+
   const committedDocCid =
-    typeof headDecoded?.payload['documentCID'] === 'string'
-      ? (headDecoded.payload['documentCID'] as string)
-      : null;
+    typeof head.payload['documentCID'] === 'string' ? (head.payload['documentCID'] as string) : null;
 
   // the committed doc CID must come from an op whose bytes actually hash to its
   // own CID — not a relay-fabricated {cid, payload} pair. Also covers a deleted
   // head (documentCID cleared → no public doc).
-  const selfCid = headDecoded ? await encodeCid(headDecoded.payload) : null;
-  if (selfCid !== headOp.cid || !committedDocCid) {
-    return { resolvedHead: headOp.cid, publicRead: false };
+  const selfCid = await encodeCid(head.payload);
+  if (selfCid !== head.op.cid || !committedDocCid) {
+    return withDid({ resolvedHead: head.op.cid, publicRead: false });
   }
 
   const blob = await fetchBlob(rollup.chainId, relays);
-  if (!blob.bytes) return { resolvedHead: headOp.cid, publicRead: false }; // gated / absent
+  if (!blob.bytes) return withDid({ resolvedHead: head.op.cid, publicRead: false }); // gated / absent
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(new TextDecoder('utf-8', { fatal: false }).decode(blob.bytes));
   } catch {
-    return { resolvedHead: headOp.cid, publicRead: false }; // not a JSON document
+    return withDid({ resolvedHead: head.op.cid, publicRead: false }); // not a JSON document
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return { resolvedHead: headOp.cid, publicRead: false };
+    return withDid({ resolvedHead: head.op.cid, publicRead: false });
   }
   const derived = await encodeCid(parsed as Record<string, unknown>);
   if (derived !== committedDocCid) {
-    return { resolvedHead: headOp.cid, publicRead: false }; // served bytes ≠ committed CID
+    return withDid({ resolvedHead: head.op.cid, publicRead: false }); // served bytes ≠ committed CID
   }
 
   const rec = parsed as Record<string, unknown>;
   const docSchema = typeof rec['$schema'] === 'string' ? rec['$schema'] : undefined;
-  const out: OneResult = {
-    resolvedHead: headOp.cid,
+  const out: OneResult = withDid({
+    resolvedHead: head.op.cid,
     publicRead: true,
     ...(docSchema ? { docSchema } : {}),
-  };
+  });
 
   // profile/v1 → attribute to the genesis signer (cheap creator-heuristic)
   if (isProfileContent(parsed)) {
-    const genesis =
-      ops.find((o) => !decodeJwsUnsafe(o.jwsToken)?.payload['previousOperationCID']) ?? ops[0];
-    const did = genesis ? creatorDidOf(genesis) : '';
     const name = typeof parsed.name === 'string' ? parsed.name.trim() : '';
-    if (did && name) {
+    if (attributedDid && name) {
+      out.profileName = name;
       const avatarRef = parseMediaObject(parsed.avatar)?.uri;
-      out.attribution = { did, name, ...(avatarRef ? { avatarRef } : {}) };
+      if (avatarRef) out.avatarRef = avatarRef;
     }
   }
   return out;
@@ -159,23 +171,46 @@ const writeContentProjection = async (db: ExplorerDb, chainId: string, r: OneRes
 };
 
 /** Patch the attributed identity rollup with the profile name/avatar — only if
- *  that identity is itself in the index (never fabricate a phantom rollup). */
+ *  that identity is itself in the index (never fabricate a phantom rollup). The
+ *  source content chain is recorded so a later drift can clear a stale name. */
 const writeAttribution = async (
   db: ExplorerDb,
-  attribution: NonNullable<OneResult['attribution']>,
+  did: string,
+  sourceContentId: string,
+  name: string,
+  avatarRef: string | undefined,
 ): Promise<boolean> => {
-  const idRollup = await db.getChain(attribution.did);
+  const idRollup = await db.getChain(did);
   if (!idRollup || idRollup.kind !== 'identity-op') return false;
   const merged: ChainRollup = {
     ...idRollup,
-    name: attribution.name,
-    nameLower: attribution.name.toLowerCase(),
+    name,
+    nameLower: name.toLowerCase(),
     publicRead: true,
+    profileSource: sourceContentId,
   };
-  if (attribution.avatarRef) merged.avatarRef = attribution.avatarRef;
+  if (avatarRef) merged.avatarRef = avatarRef;
   else delete merged.avatarRef;
   await db.putBatch([], [merged]);
   return true;
+};
+
+/** Clear a stale attribution when the profile chain that set it is no longer a
+ *  public profile — but ONLY if THIS chain is the recorded source (another
+ *  chain may since have attributed a different name to the same DID). */
+const clearAttribution = async (
+  db: ExplorerDb,
+  did: string,
+  sourceContentId: string,
+): Promise<void> => {
+  const idRollup = await db.getChain(did);
+  if (!idRollup || idRollup.profileSource !== sourceContentId) return;
+  const merged: ChainRollup = { ...idRollup, publicRead: false };
+  delete merged.name;
+  delete merged.nameLower;
+  delete merged.avatarRef;
+  delete merged.profileSource;
+  await db.putBatch([], [merged]);
 };
 
 /**
@@ -205,7 +240,23 @@ export const resolvePublicProjections = async (
     await writeContentProjection(db, rollup.chainId, result);
     resolved += 1;
     if (result.publicRead) publicDocs += 1;
-    if (result.attribution && (await writeAttribution(db, result.attribution))) attributed += 1;
+
+    // attribute a public profile to its genesis signer; on any other outcome,
+    // clear a stale name this chain previously set (deleted / gated / retyped)
+    if (result.attributedDid) {
+      if (result.profileName) {
+        const ok = await writeAttribution(
+          db,
+          result.attributedDid,
+          rollup.chainId,
+          result.profileName,
+          result.avatarRef,
+        );
+        if (ok) attributed += 1;
+      } else {
+        await clearAttribution(db, result.attributedDid, rollup.chainId);
+      }
+    }
 
     onProgress?.({ resolved, publicDocs, attributed, total });
   }
