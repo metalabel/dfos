@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
@@ -229,6 +228,40 @@ func (s *MemoryStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	}
 
 	return result, cursor, nil
+}
+
+func (s *MemoryStore) RelayStats() (*RelayStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	opCount := len(s.operationLog)
+	counts := newKindCounts()
+	for _, e := range s.operationLog {
+		if b := kindBucket(e.Kind); b != "" {
+			counts[b]++
+		}
+	}
+
+	var headCID *string
+	var oldestOpAt *string
+	if opCount > 0 {
+		head := s.operationLog[opCount-1].CID
+		headCID = &head
+
+		_, payload, err := dfos.DecodeJWSUnsafe(s.operationLog[0].JWSToken)
+		if err == nil {
+			if createdAt, ok := payload["createdAt"].(string); ok {
+				oldestOpAt = &createdAt
+			}
+		}
+	}
+
+	return &RelayStats{
+		OpCount:      opCount,
+		CountsByKind: counts,
+		OldestOpAt:   oldestOpAt,
+		HeadCID:      headCID,
+	}, nil
 }
 
 func (s *MemoryStore) GetIdentityStateAtCID(did, cid string) (*IdentityStateAtCID, error) {
@@ -461,14 +494,34 @@ func (s *MemoryStore) GetRevocationForCredential(credentialCID string) (*StoredR
 func (s *MemoryStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	revs := []StoredRevocation{}
-	for _, rev := range s.revocations {
-		if rev.IssuerDID == issuerDID {
-			revs = append(revs, rev)
-		}
+	type revocationWithCreatedAt struct {
+		revocation StoredRevocation
+		createdAt  string
 	}
-	sort.Slice(revs, func(i, j int) bool { return revs[i].CredentialCID < revs[j].CredentialCID })
-	return revs, nil
+	revs := []revocationWithCreatedAt{}
+	for _, rev := range s.revocations {
+		if rev.IssuerDID != issuerDID {
+			continue
+		}
+		createdAt := ""
+		if _, payload, err := dfos.DecodeJWSUnsafe(rev.JWSToken); err == nil {
+			if value, ok := payload["createdAt"].(string); ok {
+				createdAt = value
+			}
+		}
+		revs = append(revs, revocationWithCreatedAt{revocation: rev, createdAt: createdAt})
+	}
+	sort.Slice(revs, func(i, j int) bool {
+		if revs[i].createdAt != revs[j].createdAt {
+			return revs[i].createdAt < revs[j].createdAt
+		}
+		return revs[i].revocation.CredentialCID < revs[j].revocation.CredentialCID
+	})
+	result := make([]StoredRevocation, 0, len(revs))
+	for _, rev := range revs {
+		result = append(result, rev.revocation)
+	}
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -510,97 +563,6 @@ func (s *MemoryStore) RemovePublicCredential(credentialCID string) error {
 	defer s.mu.Unlock()
 	delete(s.publicCredentials, credentialCID)
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// documents
-// ---------------------------------------------------------------------------
-
-func (s *MemoryStore) GetDocuments(contentID string, after string, limit int) ([]StoredDocument, string, error) {
-	s.mu.RLock()
-	chain, ok := s.contentChains[contentID]
-	s.mu.RUnlock()
-	if !ok {
-		return []StoredDocument{}, "", nil
-	}
-
-	// build entries from chain log
-	type docEntry struct {
-		operationCID string
-		documentCID  *string
-		signerDID    string
-		createdAt    string
-	}
-	var entries []docEntry
-	for _, jws := range chain.Log {
-		header, payload, err := dfos.DecodeJWSUnsafe(jws)
-		if err != nil || header == nil {
-			continue
-		}
-		opCID := header.CID
-		signerDID, _ := payload["did"].(string)
-		createdAt, _ := payload["createdAt"].(string)
-		var docCID *string
-		if d, ok := payload["documentCID"].(string); ok {
-			docCID = &d
-		}
-		entries = append(entries, docEntry{
-			operationCID: opCID,
-			documentCID:  docCID,
-			signerDID:    signerDID,
-			createdAt:    createdAt,
-		})
-	}
-
-	// apply cursor pagination
-	startIdx := 0
-	if after != "" {
-		found := false
-		for i, e := range entries {
-			if e.operationCID == after {
-				startIdx = i + 1
-				found = true
-				break
-			}
-		}
-		if !found {
-			startIdx = len(entries)
-		}
-	}
-
-	end := startIdx + limit
-	if end > len(entries) {
-		end = len(entries)
-	}
-	page := entries[startIdx:end]
-
-	// build StoredDocument slice, reading blobs for each entry
-	docs := make([]StoredDocument, 0, len(page))
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, e := range page {
-		var document any
-		if e.documentCID != nil {
-			blobKey := blobKeyStr(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: *e.documentCID})
-			if data, ok := s.blobs[blobKey]; ok {
-				_ = json.Unmarshal(data, &document)
-			}
-		}
-		docs = append(docs, StoredDocument{
-			OperationCID: e.operationCID,
-			DocumentCID:  e.documentCID,
-			Document:     document,
-			SignerDID:    e.signerDID,
-			CreatedAt:    e.createdAt,
-		})
-	}
-
-	var cursor string
-	if len(page) == limit {
-		cursor = page[len(page)-1].operationCID
-	}
-
-	return docs, cursor, nil
 }
 
 func (s *MemoryStore) ResetPeerCursors() error {

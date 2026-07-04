@@ -40,9 +40,6 @@ func contentDisabledBase(t *testing.T) string {
 	if meta.Capabilities.Content {
 		t.Skip("relay advertises capabilities.content: true — skipping content-disabled conformance")
 	}
-	// The documents endpoint rides capabilities.content (there is no separate
-	// flag; WEB-RELAY.md). With content disabled, GET /content/{id}/documents
-	// returns 501 — asserted directly in TestContentDisabledRoutes501 below.
 	return base
 }
 
@@ -60,9 +57,9 @@ func assert501(t *testing.T, route string, resp *http.Response) {
 }
 
 // TestContentDisabledRoutes501 asserts every content-plane route returns 501 on
-// a content-disabled relay. The four routes are the document-gateway sub-paths
-// (GET .../documents, GET/HEAD .../blob, GET .../blob/{ref}, PUT
-// .../blob/{operationCID}). The bare proof-plane chain routes
+// a content-disabled relay. The three routes are the document-gateway sub-paths
+// (GET/HEAD .../blob, GET .../blob/{ref}, PUT .../blob/{operationCID}).
+// The bare proof-plane chain routes
 // (GET /proof/v1/content/{id} and .../log) are deliberately NOT asserted here —
 // those belong to the proof plane, are always served, and return 404 on a miss.
 func TestContentDisabledRoutes501(t *testing.T) {
@@ -79,11 +76,6 @@ func TestContentDisabledRoutes501(t *testing.T) {
 	// on the relay — the capability gate precedes existence checks.
 	const contentID = "cv7n8vkvr64cctf3294h9k4eanhff8z"
 	const opCID = "bafyreib4dsummyopcidforthe501gatetestxxxxxxxxxxxxxxxxx"
-
-	t.Run("GET /content/{id}/documents", func(t *testing.T) {
-		resp := getJSON(t, base+"/content/"+contentID+"/documents", nil)
-		assert501(t, "GET /content/{id}/documents", resp)
-	})
 
 	t.Run("GET /content/{id}/blob (head)", func(t *testing.T) {
 		resp := getBlob(t, base, contentID, tok)
@@ -105,7 +97,7 @@ func TestContentDisabledRoutes501(t *testing.T) {
 // content-disabled relay still serves the proof plane in full. The bare
 // /proof/v1/content/{id} chain route is proof-plane, not content-plane, so it
 // MUST NOT 501 — it returns 404 for a non-existent chain (route reached). This
-// pins the boundary: 501 is scoped to the content (blob/documents) plane only.
+// pins the boundary: 501 is scoped to the content (blob) plane only.
 func TestContentDisabledProofRoutesUnaffected(t *testing.T) {
 	base := contentDisabledBase(t)
 

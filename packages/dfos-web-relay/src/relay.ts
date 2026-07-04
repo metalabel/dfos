@@ -37,7 +37,14 @@ import {
 } from './revocations';
 import { computeOpCID, sequenceOps } from './sequencer';
 import { PROOF_BASE_PATH } from './types';
-import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
+import type {
+  PeerClient,
+  PeerConfig,
+  RelayOptions,
+  RelayStats,
+  RelayStore,
+  StoredContentChain,
+} from './types';
 
 // -----------------------------------------------------------------------------
 // relay result type
@@ -251,6 +258,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     } catch {
       pendingOps = -1;
     }
+    let stats: RelayStats | undefined;
+    try {
+      stats = store.getStats ? await store.getStats() : undefined;
+    } catch {
+      stats = undefined;
+    }
+    const peerInfos = peers.map((p) => ({ endpoint: p.url }));
     return c.json({
       did: relayDID,
       protocol: 'dfos-web-relay',
@@ -266,8 +280,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         revocations: true,
       },
       profile: profileArtifactJws,
+      peers: peerInfos,
       stats: {
         pendingOps,
+        ...(stats ?? {}),
       },
     });
   });
@@ -443,11 +459,11 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   // ---------------------------------------------------------------------------
-  // revocation status (additive, own clock)
+  // revocation status (frozen v1, own clock)
   //
   // Read-only projection of the relay's revocation set — the same
   // (issuerDID, credentialCID) index credential enforcement already consults.
-  // Mounts at ROOT under REVOCATIONS_BASE_PATH (not the frozen proof plane).
+  // Mounts at ROOT under REVOCATIONS_BASE_PATH (not under the proof plane).
   // Every positive answer carries the revocation JWS so a zero-trust caller
   // re-verifies it instead of trusting the relay's boolean; `revoked: false`
   // only means THIS relay has not ingested a revocation (honest absence — not
@@ -478,7 +494,19 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
 
     const revocations = await store.getRevocationsByIssuer(did);
-    return c.json(issuerRevocationList(did, revocations));
+    const after = c.req.query('after');
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+
+    let startIdx = 0;
+    if (after) {
+      const idx = revocations.findIndex((rev) => rev.credentialCID === after);
+      startIdx = idx >= 0 ? idx + 1 : revocations.length;
+    }
+
+    const page = revocations.slice(startIdx, startIdx + limit);
+    const next = page.length === limit ? page[page.length - 1]!.credentialCID : null;
+
+    return c.json(issuerRevocationList(did, page, next));
   });
 
   /** Get a content chain log */
@@ -505,53 +533,6 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
 
     return c.json({ entries: page, cursor });
-  });
-
-  /** Get documents for a content chain — paginated, auth-gated */
-  app.get('/content/:contentId/documents', async (c) => {
-    if (!contentEnabled) return c.json({ error: 'content plane not available' }, 501);
-    const contentId = c.req.param('contentId');
-
-    // verify chain exists
-    const chain = await store.getContentChain(contentId);
-    if (!chain) return c.json({ error: 'not found' }, 404);
-
-    // check for public standing authorization (no auth needed)
-    const publicAccess = await hasPublicStandingAuth(contentId, 'read', store);
-    if (!publicAccess) {
-      // require auth token
-      const auth = await authenticateRequest(
-        c.req.header('authorization'),
-        relayDID,
-        store,
-        maxAuthTokenTTLSeconds,
-      );
-      if (!auth) return c.json({ error: 'authentication required' }, 401);
-
-      // verify read access
-      const accessError = await verifyReadAccess(
-        auth,
-        chain,
-        contentId,
-        c.req.header('x-credential'),
-        store,
-      );
-      if (accessError) return accessError;
-    }
-
-    const after = c.req.query('after');
-    const limit = parseLimit(c.req.query('limit'), 100, 1000);
-
-    const result = await store.getDocuments(contentId, {
-      ...(after ? { after } : {}),
-      limit,
-    });
-
-    return c.json({
-      contentId,
-      documents: result.documents,
-      nextCursor: result.cursor,
-    });
   });
 
   /** Get a content chain by content ID */
@@ -592,27 +573,29 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   app.get(`${PROOF_BASE_PATH}/countersignatures/:cid`, async (c) => {
     const cid = c.req.param('cid');
 
-    // check if it's a known operation CID
     const op = await store.getOperation(cid);
-    if (!op) {
-      // not a known operation — fall back to any countersignatures stored for this CID
-      const countersigs = await store.getCountersignatures(cid);
-      if (countersigs.length === 0) return c.json({ error: 'not found' }, 404);
-      return c.json({ cid, countersignatures: countersigs });
+    const all = await store.getCountersignatures(cid);
+    if (!op && all.length === 0) return c.json({ error: 'not found' }, 404);
+
+    const decorated = all.map((jws) => ({
+      jws,
+      csCid: decodeJwsUnsafe(jws)?.header.cid ?? '',
+    }));
+    decorated.sort((a, b) => (a.csCid < b.csCid ? -1 : a.csCid > b.csCid ? 1 : 0));
+
+    const after = c.req.query('after');
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+
+    let startIdx = 0;
+    if (after) {
+      const idx = decorated.findIndex((d) => d.csCid === after);
+      startIdx = idx >= 0 ? idx + 1 : decorated.length;
     }
 
-    const countersigs = await store.getCountersignatures(cid);
-    return c.json({ operationCID: cid, countersignatures: countersigs });
-  });
+    const page = decorated.slice(startIdx, startIdx + limit);
+    const next = page.length === limit ? page[page.length - 1]!.csCid : null;
 
-  /** Get countersignatures for an operation CID (legacy path) */
-  app.get(`${PROOF_BASE_PATH}/operations/:cid/countersignatures`, async (c) => {
-    const cid = c.req.param('cid');
-    const op = await store.getOperation(cid);
-    if (!op) return c.json({ error: 'not found' }, 404);
-
-    const countersigs = await store.getCountersignatures(cid);
-    return c.json({ operationCID: cid, countersignatures: countersigs });
+    return c.json({ cid, countersignatures: page.map((d) => d.jws), next });
   });
 
   // -------------------------------------------------------------------------

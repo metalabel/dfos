@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
@@ -549,6 +550,67 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	return entries, cursor, nil
 }
 
+func (s *SQLiteStore) RelayStats() (*RelayStats, error) {
+	db := s.readerDB()
+
+	var opCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM operation_log").Scan(&opCount); err != nil {
+		return nil, err
+	}
+
+	counts := newKindCounts()
+	rows, err := db.Query("SELECT kind, COUNT(*) FROM operation_log GROUP BY kind")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kind string
+		var count int
+		if err := rows.Scan(&kind, &count); err != nil {
+			return nil, err
+		}
+		if b := kindBucket(kind); b != "" {
+			counts[b] = count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var headCID *string
+	var head string
+	if err := db.QueryRow("SELECT cid FROM operation_log ORDER BY seq DESC LIMIT 1").Scan(&head); err != nil {
+		if err != sql.ErrNoRows {
+			return nil, err
+		}
+	} else {
+		headCID = &head
+	}
+
+	var oldestOpAt *string
+	var jwsToken string
+	if err := db.QueryRow("SELECT jws_token FROM operation_log ORDER BY seq ASC LIMIT 1").Scan(&jwsToken); err != nil {
+		if err != sql.ErrNoRows {
+			return nil, err
+		}
+	} else {
+		_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+		if err == nil {
+			if createdAt, ok := payload["createdAt"].(string); ok {
+				oldestOpAt = &createdAt
+			}
+		}
+	}
+
+	return &RelayStats{
+		OpCount:      opCount,
+		CountsByKind: counts,
+		OldestOpAt:   oldestOpAt,
+		HeadCID:      headCID,
+	}, nil
+}
+
 // GetIdentityStateAtCID replays the identity chain from genesis to the target CID.
 // For SQLite, this could use snapshots in the future; for now it replays fully.
 func (s *SQLiteStore) GetIdentityStateAtCID(did, cid string) (*IdentityStateAtCID, error) {
@@ -826,7 +888,7 @@ func (s *SQLiteStore) GetRevocationForCredential(credentialCID string) (*StoredR
 
 func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
 	rows, err := s.readerDB().Query(
-		"SELECT cid, issuer_did, credential_cid, jws_token FROM revocations WHERE issuer_did = ? ORDER BY credential_cid ASC",
+		"SELECT cid, issuer_did, credential_cid, jws_token FROM revocations WHERE issuer_did = ?",
 		issuerDID,
 	)
 	if err != nil {
@@ -841,7 +903,35 @@ func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocati
 		}
 		revs = append(revs, rev)
 	}
-	return revs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	type revocationWithCreatedAt struct {
+		revocation StoredRevocation
+		createdAt  string
+	}
+	decorated := make([]revocationWithCreatedAt, 0, len(revs))
+	for _, rev := range revs {
+		createdAt := ""
+		if _, payload, err := dfos.DecodeJWSUnsafe(rev.JWSToken); err == nil {
+			if value, ok := payload["createdAt"].(string); ok {
+				createdAt = value
+			}
+		}
+		decorated = append(decorated, revocationWithCreatedAt{revocation: rev, createdAt: createdAt})
+	}
+	sort.Slice(decorated, func(i, j int) bool {
+		if decorated[i].createdAt != decorated[j].createdAt {
+			return decorated[i].createdAt < decorated[j].createdAt
+		}
+		return decorated[i].revocation.CredentialCID < decorated[j].revocation.CredentialCID
+	})
+	result := make([]StoredRevocation, 0, len(decorated))
+	for _, rev := range decorated {
+		result = append(result, rev.revocation)
+	}
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -898,99 +988,6 @@ func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) err
 func (s *SQLiteStore) RemovePublicCredential(credentialCID string) error {
 	_, err := s.writerDB().Exec("DELETE FROM public_credentials WHERE cid = ?", credentialCID)
 	return err
-}
-
-// ---------------------------------------------------------------------------
-// documents
-// ---------------------------------------------------------------------------
-
-func (s *SQLiteStore) GetDocuments(contentID string, after string, limit int) ([]StoredDocument, string, error) {
-	chain, err := s.GetContentChain(contentID)
-	if err != nil {
-		return nil, "", err
-	}
-	if chain == nil {
-		return []StoredDocument{}, "", nil
-	}
-
-	// build entries from chain log
-	type docEntry struct {
-		operationCID string
-		documentCID  *string
-		signerDID    string
-		createdAt    string
-	}
-	var entries []docEntry
-	for _, jws := range chain.Log {
-		header, payload, err := dfos.DecodeJWSUnsafe(jws)
-		if err != nil || header == nil {
-			continue
-		}
-		opCID := header.CID
-		signerDID, _ := payload["did"].(string)
-		createdAt, _ := payload["createdAt"].(string)
-		var docCID *string
-		if d, ok := payload["documentCID"].(string); ok {
-			docCID = &d
-		}
-		entries = append(entries, docEntry{
-			operationCID: opCID,
-			documentCID:  docCID,
-			signerDID:    signerDID,
-			createdAt:    createdAt,
-		})
-	}
-
-	// apply cursor pagination
-	startIdx := 0
-	if after != "" {
-		found := false
-		for i, e := range entries {
-			if e.operationCID == after {
-				startIdx = i + 1
-				found = true
-				break
-			}
-		}
-		if !found {
-			startIdx = len(entries)
-		}
-	}
-
-	end := startIdx + limit
-	if end > len(entries) {
-		end = len(entries)
-	}
-	page := entries[startIdx:end]
-
-	// build StoredDocument slice, reading blobs for each entry
-	docs := make([]StoredDocument, 0, len(page))
-	for _, e := range page {
-		var document any
-		if e.documentCID != nil {
-			data, err := s.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: *e.documentCID})
-			if err != nil {
-				return nil, "", fmt.Errorf("read blob: %w", err)
-			}
-			if data != nil {
-				_ = json.Unmarshal(data, &document)
-			}
-		}
-		docs = append(docs, StoredDocument{
-			OperationCID: e.operationCID,
-			DocumentCID:  e.documentCID,
-			Document:     document,
-			SignerDID:    e.signerDID,
-			CreatedAt:    e.createdAt,
-		})
-	}
-
-	var cursor string
-	if len(page) == limit {
-		cursor = page[len(page)-1].operationCID
-	}
-
-	return docs, cursor, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -38,21 +38,20 @@ serve({ port: 4444 });
 
 ## Routes
 
-| Method | Path                                          | Description                                                 |
-| ------ | --------------------------------------------- | ----------------------------------------------------------- |
-| `GET`  | `/.well-known/dfos-relay`                     | Relay metadata (DID, protocol version)                      |
-| `POST` | `/proof/v1/operations`                        | Submit signed operations (identity, content, countersig)    |
-| `GET`  | `/proof/v1/identities/:did`                   | Get identity chain state and operation log                  |
-| `GET`  | `/proof/v1/content/:contentId`                | Get content chain state and operation log                   |
-| `GET`  | `/proof/v1/operations/:cid`                   | Get a single operation by CID                               |
-| `GET`  | `/proof/v1/countersignatures/:cid`            | Get countersignatures for an operation                      |
-| `GET`  | `/proof/v1/operations/:cid/countersignatures` | Same as above (alias)                                       |
-| `GET`  | `/1.0/identifiers/:did`                       | Resolve a `did:dfos` to a W3C DID Document (DIF-compat)     |
-| `GET`  | `/revocations/v1/credential/:credentialCID`   | Revocation status for a credential (self-proving JWS)       |
-| `GET`  | `/revocations/v1/issuer/:did`                 | All revocations ingested for an issuer                      |
-| `PUT`  | `/content/:contentId/blob/:operationCID`      | Upload blob (auth required)                                 |
-| `GET`  | `/content/:contentId/blob`                    | Download blob at head (standing auth, or auth + credential) |
-| `GET`  | `/content/:contentId/blob/:ref`               | Download blob at specific operation ref                     |
+| Method | Path                                        | Description                                                 |
+| ------ | ------------------------------------------- | ----------------------------------------------------------- |
+| `GET`  | `/.well-known/dfos-relay`                   | Relay metadata (DID, protocol version)                      |
+| `POST` | `/proof/v1/operations`                      | Submit signed operations (identity, content, countersig)    |
+| `GET`  | `/proof/v1/identities/:did`                 | Get identity chain state and operation log                  |
+| `GET`  | `/proof/v1/content/:contentId`              | Get content chain state and operation log                   |
+| `GET`  | `/proof/v1/operations/:cid`                 | Get a single operation by CID                               |
+| `GET`  | `/proof/v1/countersignatures/:cid`          | Get countersignatures for any CID (operations, artifacts)   |
+| `GET`  | `/1.0/identifiers/:did`                     | Resolve a `did:dfos` to a W3C DID Document (DIF-compat)     |
+| `GET`  | `/revocations/v1/credential/:credentialCID` | Revocation status for a credential (self-proving JWS)       |
+| `GET`  | `/revocations/v1/issuer/:did`               | All revocations ingested for an issuer                      |
+| `PUT`  | `/content/:contentId/blob/:operationCID`    | Upload blob (auth required)                                 |
+| `GET`  | `/content/:contentId/blob`                  | Download blob at head (standing auth, or auth + credential) |
+| `GET`  | `/content/:contentId/blob/:ref`             | Download blob at specific operation ref                     |
 
 ## DID Resolution
 

@@ -13,9 +13,9 @@ import { createKeyResolver } from './ingest';
 import type {
   BlobKey,
   LogEntry,
+  RelayStats,
   RelayStore,
   StoredContentChain,
-  StoredDocument,
   StoredIdentityChain,
   StoredOperation,
   StoredPublicCredential,
@@ -131,12 +131,21 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]> {
-    const revs: StoredRevocation[] = [];
+    const revs: { revocation: StoredRevocation; createdAt: string }[] = [];
     for (const rev of this.revocations.values()) {
-      if (rev.issuerDID === issuerDID) revs.push(rev);
+      if (rev.issuerDID !== issuerDID) continue;
+      const createdAt = decodeJwsUnsafe(rev.jwsToken)?.payload?.createdAt;
+      revs.push({
+        revocation: rev,
+        createdAt: typeof createdAt === 'string' ? createdAt : '',
+      });
     }
-    revs.sort((a, b) => (a.credentialCID < b.credentialCID ? -1 : 1));
-    return revs;
+    revs.sort((a, b) => {
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+      if (a.revocation.credentialCID === b.revocation.credentialCID) return 0;
+      return a.revocation.credentialCID < b.revocation.credentialCID ? -1 : 1;
+    });
+    return revs.map((entry) => entry.revocation);
   }
 
   // --- public credentials ---
@@ -168,73 +177,6 @@ export class MemoryRelayStore implements RelayStore {
     this.publicCredentials.delete(credentialCID);
   }
 
-  // --- documents ---
-
-  async getDocuments(
-    contentId: string,
-    params: { after?: string; limit: number },
-  ): Promise<{ documents: StoredDocument[]; cursor: string | null }> {
-    const chain = this.contentChains.get(contentId);
-    if (!chain) return { documents: [], cursor: null };
-
-    // build ordered entries with metadata
-    const entries: {
-      cid: string;
-      documentCID: string | null;
-      signerDID: string;
-      createdAt: string;
-    }[] = [];
-    for (const jws of chain.log) {
-      const decoded = decodeJwsUnsafe(jws);
-      if (!decoded) continue;
-      const payload = decoded.payload as Record<string, unknown>;
-      const cid = typeof decoded.header.cid === 'string' ? decoded.header.cid : '';
-      const documentCID =
-        typeof payload['documentCID'] === 'string' ? payload['documentCID'] : null;
-      const signerDID = typeof payload['did'] === 'string' ? payload['did'] : '';
-      const createdAt = typeof payload['createdAt'] === 'string' ? payload['createdAt'] : '';
-      entries.push({ cid, documentCID, signerDID, createdAt });
-    }
-
-    // find start position
-    let startIdx = 0;
-    if (params.after) {
-      const idx = entries.findIndex((e) => e.cid === params.after);
-      startIdx = idx >= 0 ? idx + 1 : entries.length;
-    }
-
-    const page = entries.slice(startIdx, startIdx + params.limit);
-
-    // resolve documents from blobs
-    const documents: StoredDocument[] = [];
-    for (const entry of page) {
-      let document: unknown | null = null;
-      if (entry.documentCID) {
-        const blob = await this.getBlob({
-          creatorDID: chain.state.creatorDID,
-          documentCID: entry.documentCID,
-        });
-        if (blob) {
-          try {
-            document = JSON.parse(new TextDecoder().decode(blob));
-          } catch {
-            document = null;
-          }
-        }
-      }
-      documents.push({
-        operationCID: entry.cid,
-        documentCID: entry.documentCID,
-        document,
-        signerDID: entry.signerDID,
-        createdAt: entry.createdAt,
-      });
-    }
-
-    const cursor = page.length === params.limit ? page[page.length - 1]!.cid : null;
-    return { documents, cursor };
-  }
-
   // --- operation log ---
 
   async appendToLog(entry: LogEntry): Promise<void> {
@@ -259,6 +201,46 @@ export class MemoryRelayStore implements RelayStore {
     // cursor returns an empty page and it stops. Mirrors the Go twin's ReadLog.
     const cursor = entries.length > 0 ? entries[entries.length - 1]!.cid : null;
     return { entries, cursor };
+  }
+
+  async getStats(): Promise<RelayStats> {
+    const countsByKind: RelayStats['countsByKind'] = {
+      identity: 0,
+      content: 0,
+      artifact: 0,
+      credential: 0,
+      countersign: 0,
+      revocation: 0,
+    };
+
+    for (const entry of this.operationLog) {
+      switch (entry.kind) {
+        case 'identity-op':
+          countsByKind.identity++;
+          break;
+        case 'content-op':
+          countsByKind.content++;
+          break;
+        case 'artifact':
+        case 'credential':
+        case 'countersign':
+        case 'revocation':
+          countsByKind[entry.kind]++;
+          break;
+      }
+    }
+
+    const first = this.operationLog[0];
+    const last = this.operationLog[this.operationLog.length - 1];
+    const decoded = first ? decodeJwsUnsafe(first.jwsToken) : null;
+    const createdAt = decoded?.payload?.createdAt;
+
+    return {
+      opCount: this.operationLog.length,
+      countsByKind,
+      oldestOpAt: typeof createdAt === 'string' ? createdAt : null,
+      headCid: last?.cid ?? null,
+    };
   }
 
   async getIdentityStateAtCID(

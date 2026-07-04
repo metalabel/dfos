@@ -988,7 +988,7 @@ describe('web relay', () => {
       expect(body.results[0].chainId).toBe(content.operationCID);
 
       // query countersignatures
-      const csRes = await req(`/proof/v1/operations/${content.operationCID}/countersignatures`);
+      const csRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       expect(csRes.status).toBe(200);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(1);
@@ -1020,7 +1020,7 @@ describe('web relay', () => {
       await postOps([csToken]);
 
       // should still only have one
-      const csRes = await req(`/proof/v1/operations/${content.operationCID}/countersignatures`);
+      const csRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(1);
     });
@@ -1064,6 +1064,7 @@ describe('web relay', () => {
       // should have exactly 2 distinct countersignatures
       const csRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       const csBody = await json(csRes);
+      expect(csBody.cid).toBe(content.operationCID);
       expect(csBody.countersignatures).toHaveLength(2);
 
       // resubmit both — count must not change
@@ -1071,6 +1072,56 @@ describe('web relay', () => {
       const csRes2 = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       const csBody2 = await json(csRes2);
       expect(csBody2.countersignatures).toHaveLength(2);
+    });
+
+    it('paginates countersignatures by countersignature CID', async () => {
+      const author = await createIdentity();
+      const witnesses = await Promise.all([createIdentity(), createIdentity(), createIdentity()]);
+      const content = await createContentOp(author);
+
+      await postOps([author.jwsToken, ...witnesses.map((w) => w.jwsToken), content.jwsToken]);
+
+      const tokens: string[] = [];
+      for (const [i, witness] of witnesses.entries()) {
+        const { jwsToken } = await signCountersignature({
+          payload: {
+            version: 1,
+            type: 'countersign',
+            did: witness.did,
+            targetCID: content.operationCID,
+            createdAt: ts(2 + i),
+          },
+          signer: witness.authKey.signer,
+          kid: `${witness.did}#${witness.authKey.keyId}`,
+        });
+        tokens.push(jwsToken);
+      }
+
+      await postOps(tokens);
+
+      const page1 = await json(
+        await req(`/proof/v1/countersignatures/${content.operationCID}?limit=2`),
+      );
+      expect(page1.countersignatures).toHaveLength(2);
+      expect(typeof page1.next).toBe('string');
+      expect(page1.next.length).toBeGreaterThan(0);
+
+      const page2 = await json(
+        await req(
+          `/proof/v1/countersignatures/${content.operationCID}?after=${encodeURIComponent(
+            page1.next,
+          )}&limit=2`,
+        ),
+      );
+      expect(page2.countersignatures).toHaveLength(1);
+      expect(page2.next).toBeNull();
+
+      const all = [...page1.countersignatures, ...page2.countersignatures];
+      expect(new Set(all).size).toBe(3);
+
+      const cids = all.map((token) => decodeJwsUnsafe(token)?.header.cid ?? '');
+      expect(new Set(cids).size).toBe(3);
+      expect(cids).toEqual([...cids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
     });
 
     it('should accept a countersignature targeting an identity operation CID', async () => {
@@ -1111,52 +1162,9 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('countersignature query', () => {
-    it('should return same results from both countersig query paths', async () => {
-      const author = await createIdentity();
-      const witness = await createIdentity();
-      const content = await createContentOp(author);
-      await postOps([author.jwsToken, witness.jwsToken, content.jwsToken]);
-
-      const witnessKid = `${witness.did}#${witness.authKey.keyId}`;
-      const { jwsToken: csToken } = await signCountersignature({
-        payload: {
-          version: 1,
-          type: 'countersign',
-          did: witness.did,
-          targetCID: content.operationCID,
-          createdAt: ts(2),
-        },
-        signer: witness.authKey.signer,
-        kid: witnessKid,
-      });
-      await postOps([csToken]);
-
-      // query via general path
-      const generalRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
-      expect(generalRes.status).toBe(200);
-      const generalBody = await json(generalRes);
-
-      // query via legacy per-operation path
-      const legacyRes = await req(`/proof/v1/operations/${content.operationCID}/countersignatures`);
-      expect(legacyRes.status).toBe(200);
-      const legacyBody = await json(legacyRes);
-
-      // both should return the same countersignatures
-      expect(generalBody.countersignatures).toHaveLength(1);
-      expect(legacyBody.countersignatures).toHaveLength(1);
-      expect(generalBody.countersignatures[0]).toBe(legacyBody.countersignatures[0]);
-    });
-
     it('should return 404 for countersigs on unknown CID', async () => {
       const res = await req(
         '/proof/v1/countersignatures/bafyreibogus000000000000000000000000000000000000000000000',
-      );
-      expect(res.status).toBe(404);
-    });
-
-    it('should return 404 for operation countersigs on unknown operation', async () => {
-      const res = await req(
-        '/proof/v1/operations/bafyreibogus000000000000000000000000000000000000000000000/countersignatures',
       );
       expect(res.status).toBe(404);
     });
@@ -1170,6 +1178,7 @@ describe('web relay', () => {
       expect(csRes.status).toBe(200);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(0);
+      expect(csBody.next).toBeNull();
     });
   });
 
@@ -3453,6 +3462,50 @@ describe('web relay', () => {
       return { issuer, credential, credentialCID, revocationJws };
     };
 
+    const revokeCredentialForIssuer = async (
+      issuer: Awaited<ReturnType<typeof createIdentity>>,
+      resource: string,
+    ) => {
+      const now = Math.floor(Date.now() / 1000);
+      const credential = await createDFOSCredential({
+        issuerDID: issuer.did,
+        audienceDID: '*',
+        att: [{ resource, action: 'read' }],
+        exp: now + 3600,
+        signer: issuer.authKey.signer,
+        keyId: issuer.authKey.keyId,
+        iat: now,
+      });
+      const credentialCID = decodeDFOSCredentialUnsafe(credential)!.header.cid;
+      const { jwsToken } = await signRevocation({
+        issuerDID: issuer.did,
+        credentialCID,
+        signer: issuer.authKey.signer,
+        keyId: issuer.authKey.keyId,
+      });
+      const res = await postOps([credential, jwsToken]);
+      const body = await json(res);
+      expect(body.results[1].status).toBe('new');
+      expect(body.results[1].kind).toBe('revocation');
+      return { credentialCID, revocationJws: jwsToken };
+    };
+
+    const revocationCreatedAt = (revocationJws: string) => {
+      const createdAt = decodeJwsUnsafe(revocationJws)?.payload?.createdAt;
+      return typeof createdAt === 'string' ? createdAt : '';
+    };
+
+    const byRevocationOrder = (
+      a: { credentialCID: string; revocationJws: string },
+      b: { credentialCID: string; revocationJws: string },
+    ) => {
+      const aCreatedAt = revocationCreatedAt(a.revocationJws);
+      const bCreatedAt = revocationCreatedAt(b.revocationJws);
+      if (aCreatedAt !== bCreatedAt) return aCreatedAt < bCreatedAt ? -1 : 1;
+      if (a.credentialCID === b.credentialCID) return 0;
+      return a.credentialCID < b.credentialCID ? -1 : 1;
+    };
+
     it('returns revoked:true with the self-proving revocation JWS', async () => {
       const { issuer, credentialCID, revocationJws } = await revokeFreshCredential();
 
@@ -3484,35 +3537,13 @@ describe('web relay', () => {
       expect((await json(res)).error).toBe('invalid credential CID');
     });
 
-    it('lists all revocations for an issuer, sorted by credentialCID', async () => {
+    it('lists all revocations for an issuer, sorted by revocation createdAt then credentialCID', async () => {
       const issuer = await createIdentity();
       await postOps([issuer.jwsToken]);
 
-      // two credentials, both revoked
-      const now = Math.floor(Date.now() / 1000);
-      const revoke = async (resource: string) => {
-        const credential = await createDFOSCredential({
-          issuerDID: issuer.did,
-          audienceDID: '*',
-          att: [{ resource, action: 'read' }],
-          exp: now + 3600,
-          signer: issuer.authKey.signer,
-          keyId: issuer.authKey.keyId,
-          iat: now,
-        });
-        const credentialCID = decodeDFOSCredentialUnsafe(credential)!.header.cid;
-        const { jwsToken } = await signRevocation({
-          issuerDID: issuer.did,
-          credentialCID,
-          signer: issuer.authKey.signer,
-          keyId: issuer.authKey.keyId,
-        });
-        await postOps([jwsToken]);
-        return { credentialCID, revocationJws: jwsToken };
-      };
-      const revA = await revoke('chain:contentA');
-      const revB = await revoke('chain:contentB');
-      const expected = [revA, revB].sort((a, b) => (a.credentialCID < b.credentialCID ? -1 : 1));
+      const revA = await revokeCredentialForIssuer(issuer, 'chain:contentA');
+      const revB = await revokeCredentialForIssuer(issuer, 'chain:contentB');
+      const expected = [revA, revB].sort(byRevocationOrder);
 
       const res = await req(`/revocations/v1/issuer/${issuer.did}`);
       expect(res.status).toBe(200);
@@ -3523,14 +3554,58 @@ describe('web relay', () => {
           credentialCID: r.credentialCID,
           revocation: r.revocationJws,
         })),
+        next: null,
       });
+    });
+
+    it('paginates issuer revocations with credentialCID cursors', async () => {
+      const issuer = await createIdentity();
+      await postOps([issuer.jwsToken]);
+
+      const revocations = [
+        await revokeCredentialForIssuer(issuer, 'chain:pageA'),
+        await revokeCredentialForIssuer(issuer, 'chain:pageB'),
+        await revokeCredentialForIssuer(issuer, 'chain:pageC'),
+      ].sort(byRevocationOrder);
+
+      const firstRes = await req(`/revocations/v1/issuer/${issuer.did}?limit=2`);
+      expect(firstRes.status).toBe(200);
+      const firstPage = await json(firstRes);
+      expect(firstPage.revocations).toHaveLength(2);
+      expect(typeof firstPage.next).toBe('string');
+      expect(firstPage.next).toBe(firstPage.revocations[1].credentialCID);
+
+      const secondRes = await req(
+        `/revocations/v1/issuer/${issuer.did}?after=${firstPage.next}&limit=2`,
+      );
+      expect(secondRes.status).toBe(200);
+      const secondPage = await json(secondRes);
+      expect(secondPage.revocations).toHaveLength(1);
+      expect(secondPage.next).toBeNull();
+
+      const paged = [...firstPage.revocations, ...secondPage.revocations];
+      expect(paged.map((r) => r.credentialCID)).toEqual(revocations.map((r) => r.credentialCID));
+      expect([...new Set(paged.map((r) => r.credentialCID))].sort()).toEqual(
+        revocations.map((r) => r.credentialCID).sort(),
+      );
+
+      for (let i = 1; i < paged.length; i++) {
+        const prev = paged[i - 1]!;
+        const current = paged[i]!;
+        const prevCreatedAt = revocationCreatedAt(prev.revocation);
+        const currentCreatedAt = revocationCreatedAt(current.revocation);
+        expect(
+          prevCreatedAt < currentCreatedAt ||
+            (prevCreatedAt === currentCreatedAt && prev.credentialCID <= current.credentialCID),
+        ).toBe(true);
+      }
     });
 
     it('returns an empty array for an issuer with no revocations', async () => {
       const issuer = await createIdentity(); // never revoked anything
       const res = await req(`/revocations/v1/issuer/${issuer.did}`);
       expect(res.status).toBe(200);
-      expect(await json(res)).toEqual({ did: issuer.did, revocations: [] });
+      expect(await json(res)).toEqual({ did: issuer.did, revocations: [], next: null });
     });
 
     it('returns 400 for a malformed DID', async () => {
@@ -3755,115 +3830,6 @@ describe('web relay', () => {
         headers: { authorization: `Bearer ${readerToken}` },
       });
       expect(downloadRes.status).toBe(403);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // documents endpoint
-  // ---------------------------------------------------------------------------
-
-  describe('documents endpoint', () => {
-    it('should return documents for a content chain', async () => {
-      const creator = await createIdentity();
-      const content = await createContentOp(creator);
-      await postOps([creator.jwsToken, content.jwsToken]);
-
-      const ingestRes = await postOps([content.jwsToken]);
-      const contentId = (await json(ingestRes)).results[0].chainId;
-
-      // upload blob
-      const creatorToken = await createTestAuthToken(creator);
-      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
-
-      // fetch documents
-      const res = await req(`/content/${contentId}/documents`, {
-        headers: { authorization: `Bearer ${creatorToken}` },
-      });
-      expect(res.status).toBe(200);
-      const body = await json(res);
-      expect(body.contentId).toBe(contentId);
-      expect(body.documents).toBeDefined();
-      expect(body.documents.length).toBe(1);
-      expect(body.documents[0].operationCID).toBe(content.operationCID);
-      expect(body.documents[0].document).toEqual(content.document);
-    });
-
-    it('should require authentication', async () => {
-      const creator = await createIdentity();
-      const content = await createContentOp(creator);
-      await postOps([creator.jwsToken, content.jwsToken]);
-
-      const ingestRes = await postOps([content.jwsToken]);
-      const contentId = (await json(ingestRes)).results[0].chainId;
-
-      const res = await req(`/content/${contentId}/documents`);
-      expect(res.status).toBe(401);
-    });
-
-    it('should return 404 for unknown content', async () => {
-      const creator = await createIdentity();
-      await postOps([creator.jwsToken]);
-      const creatorToken = await createTestAuthToken(creator);
-
-      const res = await req(`/content/nonexistent/documents`, {
-        headers: { authorization: `Bearer ${creatorToken}` },
-      });
-      expect(res.status).toBe(404);
-    });
-
-    it('should require read credential for non-creator', async () => {
-      const creator = await createIdentity();
-      const reader = await createIdentity();
-      const content = await createContentOp(creator);
-      await postOps([creator.jwsToken, reader.jwsToken, content.jwsToken]);
-
-      const ingestRes = await postOps([content.jwsToken]);
-      const contentId = (await json(ingestRes)).results[0].chainId;
-
-      const readerToken = await createTestAuthToken(reader);
-      const res = await req(`/content/${contentId}/documents`, {
-        headers: { authorization: `Bearer ${readerToken}` },
-      });
-      expect(res.status).toBe(403);
-    });
-
-    it('should allow access with read credential', async () => {
-      const creator = await createIdentity();
-      const reader = await createIdentity();
-      const content = await createContentOp(creator);
-      await postOps([creator.jwsToken, reader.jwsToken, content.jwsToken]);
-
-      const ingestRes = await postOps([content.jwsToken]);
-      const contentId = (await json(ingestRes)).results[0].chainId;
-
-      // upload blob
-      const creatorToken = await createTestAuthToken(creator);
-      const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
-
-      // create read credential
-      const now = Math.floor(Date.now() / 1000);
-      const readCred = await createDFOSCredential({
-        issuerDID: creator.did,
-        audienceDID: reader.did,
-        att: [{ resource: `chain:${contentId}`, action: 'read' }],
-        exp: now + 300,
-        signer: creator.authKey.signer,
-        keyId: creator.authKey.keyId,
-        iat: now,
-      });
-
-      const readerToken = await createTestAuthToken(reader);
-      const res = await req(`/content/${contentId}/documents`, {
-        headers: {
-          authorization: `Bearer ${readerToken}`,
-          'x-credential': readCred,
-        },
-      });
-      expect(res.status).toBe(200);
-      const body = await json(res);
-      expect(body.documents.length).toBe(1);
     });
   });
 

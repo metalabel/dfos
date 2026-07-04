@@ -14,8 +14,7 @@ import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
  * clocks (proof v1 / document 0.x) are legible in the URL and each plane
  * mounts/proxies by prefix. Frozen with protocol v1; MUST stay in byte-sync
  * with the Go relay (proofBasePath in routes.go) and the clients. Document gateway
- * routes (/content/{id}/blob*, /documents) and .well-known stay at root on their
- * own clock.
+ * routes (/content/{id}/blob*) and .well-known stay at root on their own clock.
  */
 export const PROOF_BASE_PATH = '/proof/v1';
 
@@ -168,6 +167,31 @@ export interface LogEntry {
   chainId: string;
 }
 
+/** A peer this relay is configured to talk to, surfaced in the well-known for mesh discovery. */
+export interface RelayPeerInfo {
+  /** The peer relay's base URL. */
+  endpoint: string;
+}
+
+/** Optional operational statistics a store MAY compute for the well-known response. */
+export interface RelayStats {
+  /** Total operations in the global log. */
+  opCount: number;
+  /** Operation counts bucketed by primitive kind (all six keys always present). */
+  countsByKind: {
+    identity: number;
+    content: number;
+    artifact: number;
+    credential: number;
+    countersign: number;
+    revocation: number;
+  };
+  /** createdAt of the oldest operation in the log (log position), or null when empty. */
+  oldestOpAt: string | null;
+  /** CID of the newest operation in the log (the tip), or null when empty. */
+  headCid: string | null;
+}
+
 /** All operation kinds in the protocol */
 export type OperationKind =
   | 'identity-op'
@@ -186,14 +210,6 @@ export interface StoredRevocation {
   issuerDID: string;
   credentialCID: string;
   jwsToken: string;
-}
-
-export interface StoredDocument {
-  operationCID: string;
-  documentCID: string | null;
-  document: unknown | null;
-  signerDID: string;
-  createdAt: string;
 }
 
 export interface StoredPublicCredential {
@@ -254,6 +270,12 @@ export interface RelayStore {
     after?: string;
     limit: number;
   }): Promise<{ entries: LogEntry[]; cursor: string | null }>;
+  /**
+   * Optional: compute operational statistics over the global log for the well-known
+   * response. A store that omits this leaves opCount/countsByKind/oldestOpAt/headCid
+   * out of the well-known (pendingOps still reports). Reference stores implement it.
+   */
+  getStats?(): Promise<RelayStats>;
 
   // --- chain state at arbitrary CID (snapshot-backed) ---
 
@@ -313,14 +335,6 @@ export interface RelayStore {
   addPublicCredential(credential: StoredPublicCredential): Promise<void>;
   /** Remove a public credential (e.g., after revocation) */
   removePublicCredential(credentialCID: string): Promise<void>;
-
-  // --- documents ---
-
-  /** Get paginated documents for a content chain */
-  getDocuments(
-    contentId: string,
-    params: { after?: string; limit: number },
-  ): Promise<{ documents: StoredDocument[]; cursor: string | null }>;
 
   // --- peer sync state ---
 

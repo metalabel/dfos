@@ -4,10 +4,11 @@ package relay
 //
 // Pure, read-only projection of the relay's revocation set — the same
 // (issuerDID, credentialCID) index credential enforcement already consults —
-// into the `/revocations/v1` route family. Revocations remain ordinary
+// into the frozen `/revocations/v1` route family. Revocations remain ordinary
 // proof-plane ops (kind "revocation", ingested via POST /proof/v1/operations,
-// gossiped); this is an additive read surface at the relay ROOT on its own
-// version clock, exactly like the universal resolver at /1.0/identifiers/{did}.
+// gossiped); this is a frozen v1 contract at the relay ROOT on its own version
+// clock, alongside but not under the frozen proof plane, exactly like the
+// universal resolver at /1.0/identifiers/{did}.
 // Byte twin of the TS reference in packages/dfos-web-relay/src/revocations.ts —
 // keep the two in lockstep.
 //
@@ -30,10 +31,10 @@ import (
 	"regexp"
 )
 
-// revocationsBasePath namespaces the revocation-status routes on their own 0.x
-// clock (NOT the frozen /proof/v1 proof plane). Additive relay
-// reference-implementation surface; MUST stay in byte-sync with the TS relay
-// (REVOCATIONS_BASE_PATH in revocations.ts).
+// revocationsBasePath namespaces the revocation-status routes on their own
+// frozen v1 clock (NOT the /proof/v1 proof plane). Root-mounted v1 contract;
+// MUST stay in byte-sync with the TS relay (REVOCATIONS_BASE_PATH in
+// revocations.ts).
 const revocationsBasePath = "/revocations/v1"
 
 // credentialCidRe mirrors revocations.ts CREDENTIAL_CID_RE: a credential CID is
@@ -68,6 +69,7 @@ type issuerRevocationEntry struct {
 type issuerRevocationList struct {
 	DID         string                  `json:"did"`
 	Revocations []issuerRevocationEntry `json:"revocations"`
+	Next        *string                 `json:"next"`
 }
 
 // -----------------------------------------------------------------------------
@@ -103,8 +105,8 @@ func (r *Relay) handleRevocationStatus(w http.ResponseWriter, req *http.Request)
 }
 
 // handleIssuerRevocations serves GET /revocations/v1/issuer/{did}. Byte twin of
-// the TS route: 400 on a non-canonical did:dfos, 200 with the full (possibly
-// empty) revocation list sorted by credentialCID otherwise.
+// the TS route: 400 on a non-canonical did:dfos, 200 with a cursor-paginated
+// (possibly empty) revocation list sorted by createdAt then credentialCID.
 func (r *Relay) handleIssuerRevocations(w http.ResponseWriter, req *http.Request) {
 	did := req.PathValue("did")
 
@@ -119,12 +121,42 @@ func (r *Relay) handleIssuerRevocations(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	entries := make([]issuerRevocationEntry, 0, len(revs))
-	for _, rev := range revs {
+	after := req.URL.Query().Get("after")
+	limit := parseLimit(req, 100, 1000)
+
+	startIdx := 0
+	if after != "" {
+		found := false
+		for i, rev := range revs {
+			if rev.CredentialCID == after {
+				startIdx = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			startIdx = len(revs)
+		}
+	}
+
+	end := startIdx + limit
+	if end > len(revs) {
+		end = len(revs)
+	}
+	page := revs[startIdx:end]
+
+	var next *string
+	if len(page) == limit {
+		n := page[len(page)-1].CredentialCID
+		next = &n
+	}
+
+	entries := make([]issuerRevocationEntry, 0, len(page))
+	for _, rev := range page {
 		entries = append(entries, issuerRevocationEntry{
 			CredentialCID: rev.CredentialCID,
 			Revocation:    rev.JWSToken,
 		})
 	}
-	writeJSON(w, 200, issuerRevocationList{DID: did, Revocations: entries})
+	writeJSON(w, 200, issuerRevocationList{DID: did, Revocations: entries, Next: next})
 }

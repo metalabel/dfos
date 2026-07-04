@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
@@ -30,7 +31,6 @@ func newRouter(r *Relay) http.Handler {
 
 	// proof plane — public, frozen with protocol v1, namespaced under proofBasePath
 	mux.HandleFunc("POST "+proofBasePath+"/operations", r.handlePostOperations)
-	mux.HandleFunc("GET "+proofBasePath+"/operations/{cid}/countersignatures", r.handleOperationCountersignatures)
 	mux.HandleFunc("GET "+proofBasePath+"/operations/{cid}", r.handleGetOperation)
 	mux.HandleFunc("GET "+proofBasePath+"/identities/{did}/log", r.handleIdentityLog)
 	mux.HandleFunc("GET "+proofBasePath+"/identities/{did...}", r.handleGetIdentity)
@@ -58,8 +58,7 @@ func newRouter(r *Relay) http.Handler {
 	// document gateway — optional, 0.x (its own version clock); routes stay at root
 	// under /content/{id} until DocumentGateway 0.2 keys on documentCID. The proof
 	// node owns the bare /proof/v1/content/{id} chain paths; the gateway owns the
-	// /blob* + /documents sub-paths — distinct namespaces, fanned by prefix when split.
-	mux.HandleFunc("GET /content/{contentId}/documents", r.handleGetDocuments)
+	// /blob* sub-paths — distinct namespaces, fanned by prefix when split.
 	mux.HandleFunc("GET /content/{contentId}/blob/{ref}", r.handleGetBlob)
 	mux.HandleFunc("GET /content/{contentId}/blob", r.handleGetBlobHead)
 	mux.HandleFunc("PUT /content/{contentId}/blob/{operationCID}", r.handlePutBlob)
@@ -125,6 +124,19 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 	if n, err := r.readStore.CountUnsequenced(); err == nil {
 		pendingOps = n
 	}
+	statsBlock := map[string]any{"pendingOps": pendingOps}
+	if sp, ok := r.readStore.(StatsProvider); ok {
+		if st, err := sp.RelayStats(); err == nil && st != nil {
+			statsBlock["opCount"] = st.OpCount
+			statsBlock["countsByKind"] = st.CountsByKind
+			statsBlock["oldestOpAt"] = st.OldestOpAt
+			statsBlock["headCid"] = st.HeadCID
+		}
+	}
+	peers := make([]RelayPeerInfo, 0, len(r.peers))
+	for _, p := range r.peers {
+		peers = append(peers, RelayPeerInfo{Endpoint: p.URL})
+	}
 	writeJSON(w, 200, map[string]any{
 		"did":      r.did,
 		"protocol": "dfos-web-relay",
@@ -140,9 +152,8 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 			"revocations": true,
 		},
 		"profile": r.profileArtifactJWS,
-		"stats": map[string]any{
-			"pendingOps": pendingOps,
-		},
+		"peers":   peers,
+		"stats":   statsBlock,
 	})
 }
 
@@ -494,51 +505,71 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 	if storeErr(w, err) {
 		return
 	}
-	if op == nil {
-		cs, csErr := r.readStore.GetCountersignatures(cid)
-		if storeErr(w, csErr) {
-			return
-		}
-		if len(cs) == 0 {
-			writeError(w, 404, "not found")
-			return
-		}
-		writeJSON(w, 200, map[string]any{
-			"cid":               cid,
-			"countersignatures": cs,
-		})
-		return
-	}
-
 	cs, csErr := r.readStore.GetCountersignatures(cid)
 	if storeErr(w, csErr) {
 		return
 	}
-	writeJSON(w, 200, map[string]any{
-		"operationCID":      cid,
-		"countersignatures": cs,
-	})
-}
-
-func (r *Relay) handleOperationCountersignatures(w http.ResponseWriter, req *http.Request) {
-	cid := req.PathValue("cid")
-
-	op, err := r.readStore.GetOperation(cid)
-	if storeErr(w, err) {
-		return
-	}
-	if op == nil {
+	if op == nil && len(cs) == 0 {
 		writeError(w, 404, "not found")
 		return
 	}
 
-	cs, csErr := r.readStore.GetCountersignatures(cid)
-	if storeErr(w, csErr) {
-		return
+	type countersignatureEntry struct {
+		jws   string
+		csCid string
 	}
+	decorated := make([]countersignatureEntry, 0, len(cs))
+	for _, token := range cs {
+		header, _, err := dfos.DecodeJWSUnsafe(token)
+		csCid := ""
+		if err == nil && header != nil {
+			csCid = header.CID
+		}
+		decorated = append(decorated, countersignatureEntry{jws: token, csCid: csCid})
+	}
+	sort.Slice(decorated, func(i, j int) bool {
+		return decorated[i].csCid < decorated[j].csCid
+	})
+
+	after := req.URL.Query().Get("after")
+	limit := parseLimit(req, 100, 1000)
+
+	startIdx := 0
+	if after != "" {
+		found := false
+		for i, e := range decorated {
+			if e.csCid == after {
+				startIdx = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			startIdx = len(decorated)
+		}
+	}
+
+	end := startIdx + limit
+	if end > len(decorated) {
+		end = len(decorated)
+	}
+	page := decorated[startIdx:end]
+
+	var next *string
+	if len(page) == limit {
+		n := page[len(page)-1].csCid
+		next = &n
+	}
+
+	tokens := []string{}
+	for _, entry := range page {
+		tokens = append(tokens, entry.jws)
+	}
+
 	writeJSON(w, 200, map[string]any{
-		"operationCID":      cid,
-		"countersignatures": cs,
+		"cid":               cid,
+		"countersignatures": tokens,
+		"next":              next,
 	})
 }
 
@@ -759,51 +790,6 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 	w.Header().Set("X-Document-Cid", documentCID)
 	w.WriteHeader(200)
 	w.Write(blob)
-}
-
-// ---------------------------------------------------------------------------
-// documents
-// ---------------------------------------------------------------------------
-
-func (r *Relay) handleGetDocuments(w http.ResponseWriter, req *http.Request) {
-	if !r.contentEnabled {
-		writeError(w, 501, "content plane not available")
-		return
-	}
-	contentID := req.PathValue("contentId")
-
-	// verify chain exists
-	chain, err := r.readStore.GetContentChain(contentID)
-	if storeErr(w, err) {
-		return
-	}
-	if chain == nil {
-		writeError(w, 404, "not found")
-		return
-	}
-
-	if !r.authorizeRead(w, req, contentID, chain.State.CreatorDID) {
-		return
-	}
-
-	after := req.URL.Query().Get("after")
-	limit := parseLimit(req, 100, 1000)
-
-	docs, cursor, err := r.readStore.GetDocuments(contentID, after, limit)
-	if storeErr(w, err) {
-		return
-	}
-
-	var cursorPtr *string
-	if cursor != "" {
-		cursorPtr = &cursor
-	}
-
-	writeJSON(w, 200, map[string]any{
-		"contentId":  contentID,
-		"documents":  docs,
-		"nextCursor": cursorPtr,
-	})
 }
 
 // ---------------------------------------------------------------------------
