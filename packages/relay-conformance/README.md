@@ -21,7 +21,7 @@ Tests covering:
 - Content lifecycle (create, update, delete, fork acceptance, DAG logs, deterministic head selection, post-delete rejection, notes, long chains)
 - Content update after auth key rotation, multiple independent chains
 - Operations by CID, operation log pagination
-- Countersignatures (dedup, empty result, multi-witness, self-countersign, non-existent operation)
+- Countersignatures (dedup, empty result, multi-witness, self-countersign, non-existent operation, cursor pagination over `/proof/v1/countersignatures/:cid`)
 - Blob upload/download (CID verification, auth, credential-based access, multi-version, idempotent upload)
 - Delegated content operations (write credentials, delegated blob upload, delegated delete)
 - Credentials (expiry, scope mismatch, type enforcement, deleted issuer behavior)
@@ -31,7 +31,7 @@ Tests covering:
 - Input validation (malformed JSON, empty operations, invalid JWS)
 - Future timestamp guard (reject identity/content ops >24h ahead)
 - Artifact ingestion and sequencer cross-batch dependency resolution
-- Revocation status routes (`/revocations/v1` — self-proving JWS answers, honest absence, malformed-param 400s, capability-gated)
+- Revocation status routes (`/revocations/v1` — self-proving JWS answers, honest absence, malformed-param 400s, capability-gated, paginated issuer feed with `limit`/`after`/`next` cursor draining)
 
 ## Dependencies
 

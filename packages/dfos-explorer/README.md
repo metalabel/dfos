@@ -17,7 +17,13 @@ verified — or MISMATCH, loudly).
   first full consumer.
 - **Local index** — the full relay operation log syncs into a normalized IndexedDB store
   (`ops` / `chains` / `sync`); chains fold offline and the index persists across visits.
-  The op pool is a union across relays (CIDs are content-addressed).
+  The op pool is a union across relays (CIDs are content-addressed). Sync runs in two
+  phases — log paging, then public-projection resolution (separately abortable) that
+  materializes the metadata the browse index renders.
+- **Browse** — public identities, documents, and artifacts sections with name search,
+  served entirely from the local index. Public-only by default with an honest
+  hidden-count toggle for gated chains; creator attribution is labeled _attributed_,
+  not verified (the detail pages carry the rigorous proof).
 - **Untrusted relay set** — relays are parameters, like RPC endpoints. Reads fan out
   across the set; provenance (who answered, whether the set agreed) is part of the UI.
 

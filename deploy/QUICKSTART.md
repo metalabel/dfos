@@ -105,7 +105,7 @@ relay's identity and all synced operations.
 Confirm the relay is healthy:
 
 ```bash
-# Relay info (DID, profile, peer count)
+# Relay info (DID, capabilities, profile, peers, stats)
 curl https://relay.yourdomain.com/.well-known/dfos-relay
 
 # Latest operations

@@ -429,7 +429,7 @@ dfos api GET /content/abc123/blob --auth
 dfos api POST /proof/v1/operations --body '{"operations":["eyJ..."]}'
 
 # custom headers
-dfos api PUT /content/abc123/blob --auth -H "X-Document-CID: bafyrei..." --body-file doc.bin
+dfos api PUT /content/abc123/blob/bafyop... --auth -H "Content-Type: application/octet-stream" --body-file doc.bin
 
 # response headers
 dfos api GET /proof/v1/identities/did:dfos:xxx -i
