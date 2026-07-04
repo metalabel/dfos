@@ -4,6 +4,8 @@ An HTTP relay for the DFOS protocol — receives, verifies, stores, and serves i
 
 The **proof plane** (`/proof/v1/*`) is **frozen with Protocol v1** — see the [core protocol status](https://protocol.dfos.com/spec). The relay's other surfaces — ingestion ergonomics, peering, and the content plane — are reference-implementation behavior on their own clock, not frozen. Discuss in the [DFOS](https://nce.dfos.com) space.
 
+> **Wire stability.** The non-frozen relay surfaces — well-known, countersignature reads, `/revocations/v1`, and the content plane — went through one deliberate pre-adoption breaking amendment to close the window on breaking changes. Countersignature reads now use one route, `/revocations/v1` is frozen at v1 with a bounded issuer feed, the redundant documents route is removed, and every list route uses one `limit` + `after` + `next` cursor paradigm. Breaking once now, while there are no external adopters, protects future adopters from integrating against transient shapes.
+
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-web-relay) · [npm](https://www.npmjs.com/package/@metalabel/dfos-web-relay) · [Protocol](https://protocol.dfos.com)
 
 ---
@@ -245,7 +247,7 @@ The relay enforces semantic rules beyond cryptographic validity:
 
 One route serves countersignature data:
 
-- **`GET /proof/v1/countersignatures/:cid`** — Primary lookup. Returns all countersignatures for the given CID. Works for any CID-addressable target (operations, artifacts). Returns `{ cid, countersignatures: string[] }` where each entry is a compact JWS token. Returns 404 if no countersignatures exist for the CID.
+- **`GET /proof/v1/countersignatures/:cid?after={cid}&limit=N`** — Primary lookup. Returns `{ cid, countersignatures: string[], next }`, sorted by each countersignature's own CID ascending and forward-only cursor-paginated. `after` is a countersignature CID, `limit` defaults to 100 and maxes at 1000, and `next` is the countersignature CID to resume from or `null` when caught up. Works for any CID-addressable target (operations, artifacts). Returns 404 only when the CID is neither a known operation nor has stored countersignatures.
 
 ---
 

@@ -1074,6 +1074,56 @@ describe('web relay', () => {
       expect(csBody2.countersignatures).toHaveLength(2);
     });
 
+    it('paginates countersignatures by countersignature CID', async () => {
+      const author = await createIdentity();
+      const witnesses = await Promise.all([createIdentity(), createIdentity(), createIdentity()]);
+      const content = await createContentOp(author);
+
+      await postOps([author.jwsToken, ...witnesses.map((w) => w.jwsToken), content.jwsToken]);
+
+      const tokens: string[] = [];
+      for (const [i, witness] of witnesses.entries()) {
+        const { jwsToken } = await signCountersignature({
+          payload: {
+            version: 1,
+            type: 'countersign',
+            did: witness.did,
+            targetCID: content.operationCID,
+            createdAt: ts(2 + i),
+          },
+          signer: witness.authKey.signer,
+          kid: `${witness.did}#${witness.authKey.keyId}`,
+        });
+        tokens.push(jwsToken);
+      }
+
+      await postOps(tokens);
+
+      const page1 = await json(
+        await req(`/proof/v1/countersignatures/${content.operationCID}?limit=2`),
+      );
+      expect(page1.countersignatures).toHaveLength(2);
+      expect(typeof page1.next).toBe('string');
+      expect(page1.next.length).toBeGreaterThan(0);
+
+      const page2 = await json(
+        await req(
+          `/proof/v1/countersignatures/${content.operationCID}?after=${encodeURIComponent(
+            page1.next,
+          )}&limit=2`,
+        ),
+      );
+      expect(page2.countersignatures).toHaveLength(1);
+      expect(page2.next).toBeNull();
+
+      const all = [...page1.countersignatures, ...page2.countersignatures];
+      expect(new Set(all).size).toBe(3);
+
+      const cids = all.map((token) => decodeJwsUnsafe(token)?.header.cid ?? '');
+      expect(new Set(cids).size).toBe(3);
+      expect(cids).toEqual([...cids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+    });
+
     it('should accept a countersignature targeting an identity operation CID', async () => {
       const subject = await createIdentity();
       const witness = await createIdentity();
@@ -1128,6 +1178,7 @@ describe('web relay', () => {
       expect(csRes.status).toBe(200);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(0);
+      expect(csBody.next).toBeNull();
     });
   });
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
@@ -504,29 +505,71 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 	if storeErr(w, err) {
 		return
 	}
-	if op == nil {
-		cs, csErr := r.readStore.GetCountersignatures(cid)
-		if storeErr(w, csErr) {
-			return
-		}
-		if len(cs) == 0 {
-			writeError(w, 404, "not found")
-			return
-		}
-		writeJSON(w, 200, map[string]any{
-			"cid":               cid,
-			"countersignatures": cs,
-		})
-		return
-	}
-
 	cs, csErr := r.readStore.GetCountersignatures(cid)
 	if storeErr(w, csErr) {
 		return
 	}
+	if op == nil && len(cs) == 0 {
+		writeError(w, 404, "not found")
+		return
+	}
+
+	type countersignatureEntry struct {
+		jws   string
+		csCid string
+	}
+	decorated := make([]countersignatureEntry, 0, len(cs))
+	for _, token := range cs {
+		header, _, err := dfos.DecodeJWSUnsafe(token)
+		csCid := ""
+		if err == nil && header != nil {
+			csCid = header.CID
+		}
+		decorated = append(decorated, countersignatureEntry{jws: token, csCid: csCid})
+	}
+	sort.Slice(decorated, func(i, j int) bool {
+		return decorated[i].csCid < decorated[j].csCid
+	})
+
+	after := req.URL.Query().Get("after")
+	limit := parseLimit(req, 100, 1000)
+
+	startIdx := 0
+	if after != "" {
+		found := false
+		for i, e := range decorated {
+			if e.csCid == after {
+				startIdx = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			startIdx = len(decorated)
+		}
+	}
+
+	end := startIdx + limit
+	if end > len(decorated) {
+		end = len(decorated)
+	}
+	page := decorated[startIdx:end]
+
+	var next *string
+	if len(page) == limit {
+		n := page[len(page)-1].csCid
+		next = &n
+	}
+
+	tokens := []string{}
+	for _, entry := range page {
+		tokens = append(tokens, entry.jws)
+	}
+
 	writeJSON(w, 200, map[string]any{
 		"cid":               cid,
-		"countersignatures": cs,
+		"countersignatures": tokens,
+		"next":              next,
 	})
 }
 

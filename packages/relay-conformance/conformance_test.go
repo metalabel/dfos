@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -823,6 +824,78 @@ func TestCountersignatureMultiWitness(t *testing.T) {
 	getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if len(csResult.Countersignatures) != 2 {
 		t.Fatalf("expected 2 countersigs from different witnesses, got %d", len(csResult.Countersignatures))
+	}
+}
+
+func TestCountersignaturePagination(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	cc := createContent(t, base, id)
+
+	for i := 0; i < 3; i++ {
+		w := createIdentity(t, base)
+		wKid := w.did + "#" + w.auth.keyID
+		cs, _, err := dfos.SignCountersign(w.did, cc.genCID, wKid, w.auth.priv)
+		if err != nil {
+			t.Fatalf("SignCountersign: %v", err)
+		}
+		postOperations(t, base, []string{cs}).Body.Close()
+	}
+
+	var page1 struct {
+		Countersignatures []string `json:"countersignatures"`
+		Next              *string  `json:"next"`
+	}
+	resp := getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID+"?limit=2", &page1)
+	if resp.StatusCode != 200 {
+		t.Fatalf("page1: expected 200, got %d", resp.StatusCode)
+	}
+	if len(page1.Countersignatures) != 2 {
+		t.Fatalf("page1: expected 2 countersigs, got %d", len(page1.Countersignatures))
+	}
+	if page1.Next == nil || *page1.Next == "" {
+		t.Fatal("page1: expected next cursor")
+	}
+
+	var page2 struct {
+		Countersignatures []string `json:"countersignatures"`
+		Next              *string  `json:"next"`
+	}
+	getJSON(t, fmt.Sprintf("%s/proof/v1/countersignatures/%s?after=%s&limit=2", base, cc.genCID, *page1.Next), &page2)
+	if len(page2.Countersignatures) != 1 {
+		t.Fatalf("page2: expected 1 countersig, got %d", len(page2.Countersignatures))
+	}
+	if page2.Next != nil {
+		t.Fatalf("page2: expected nil next, got %s", *page2.Next)
+	}
+
+	all := append(append([]string{}, page1.Countersignatures...), page2.Countersignatures...)
+	if len(all) != 3 {
+		t.Fatalf("expected 3 countersigs across pages, got %d", len(all))
+	}
+
+	cids := make([]string, 0, len(all))
+	seen := map[string]bool{}
+	for _, token := range all {
+		header, _, err := dfos.DecodeJWSUnsafe(token)
+		if err != nil {
+			t.Fatalf("DecodeJWSUnsafe: %v", err)
+		}
+		if header == nil || header.CID == "" {
+			t.Fatal("countersig missing header cid")
+		}
+		if seen[header.CID] {
+			t.Fatalf("duplicate countersig cid %s", header.CID)
+		}
+		seen[header.CID] = true
+		cids = append(cids, header.CID)
+	}
+	sorted := append([]string{}, cids...)
+	sort.Strings(sorted)
+	for i := range cids {
+		if cids[i] != sorted[i] {
+			t.Fatalf("countersigs not sorted by header cid: got %v, want %v", cids, sorted)
+		}
 	}
 }
 

@@ -11,7 +11,32 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
-Nothing yet.
+The last pre-adoption breaking amendment to the reference relay wire — a single,
+deliberate break that freezes the non-proof surfaces before external adoption, so
+the freeze protects adopters (there are none yet).
+
+### Added
+
+- **Well-known enrichment** — `peers[]` plus `stats.{opCount,countsByKind,oldestOpAt,headCid}`
+  via an optional store capability. Additive and non-breaking.
+
+### Changed
+
+- **`/revocations/v1` frozen at v1** — the revocation status family is promoted
+  to a frozen v1 contract, and its issuer feed is now bounded with a
+  `limit` + `after` + `next` cursor ordered by revocation `createdAt`
+  (tiebreak `credentialCID`). Every list route now uses one cursor paradigm; the
+  countersignature read returns `{ cid, countersignatures, next }`.
+
+### Removed
+
+- **Operation-scoped countersignature route** —
+  `GET /proof/v1/operations/:cid/countersignatures`; the primary
+  `/proof/v1/countersignatures/:cid` route serves any CID-addressable target.
+- **Documents route and store surface** — `GET /content/:contentId/documents`
+  is removed; compose `/proof/v1/content/:contentId/log` with the blob routes
+  instead. `getDocuments` / `StoredDocument` are removed from the store
+  interface.
 
 ## [0.16.0] — 2026-07-03
 

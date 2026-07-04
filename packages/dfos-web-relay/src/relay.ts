@@ -573,15 +573,29 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   app.get(`${PROOF_BASE_PATH}/countersignatures/:cid`, async (c) => {
     const cid = c.req.param('cid');
 
-    // check if it's a known operation CID
     const op = await store.getOperation(cid);
-    const countersigs = await store.getCountersignatures(cid);
-    if (!op) {
-      // not a known operation — fall back to any countersignatures stored for this CID
-      if (countersigs.length === 0) return c.json({ error: 'not found' }, 404);
+    const all = await store.getCountersignatures(cid);
+    if (!op && all.length === 0) return c.json({ error: 'not found' }, 404);
+
+    const decorated = all.map((jws) => ({
+      jws,
+      csCid: decodeJwsUnsafe(jws)?.header.cid ?? '',
+    }));
+    decorated.sort((a, b) => (a.csCid < b.csCid ? -1 : a.csCid > b.csCid ? 1 : 0));
+
+    const after = c.req.query('after');
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+
+    let startIdx = 0;
+    if (after) {
+      const idx = decorated.findIndex((d) => d.csCid === after);
+      startIdx = idx >= 0 ? idx + 1 : decorated.length;
     }
 
-    return c.json({ cid, countersignatures: countersigs });
+    const page = decorated.slice(startIdx, startIdx + limit);
+    const next = page.length === limit ? page[page.length - 1]!.csCid : null;
+
+    return c.json({ cid, countersignatures: page.map((d) => d.jws), next });
   });
 
   // -------------------------------------------------------------------------

@@ -15,6 +15,7 @@ const PROOF = '/proof/v1';
 // hard cap on any relay-served body the explorer buffers into memory — a
 // hostile relay must not be able to OOM the tab with a giant blob/document
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
+const MAX_PAGES = 10_000;
 
 /** Read a response body with a hard size cap (declared + actual). Throws over cap. */
 const boundedBytes = async (res: Response): Promise<Uint8Array> => {
@@ -102,13 +103,35 @@ export const fetchOpRaw = async (
 export const fetchCountersigs = async (cid: string, relays: string[]): Promise<string[]> => {
   for (const relay of relays) {
     try {
-      const res = await tryJson(
-        `${relay}${PROOF}/countersignatures/${encodeURIComponent(cid)}`,
-      );
-      if (!res.ok) continue;
-      const body = (await res.json()) as { countersignatures?: unknown };
-      if (Array.isArray(body.countersignatures))
-        return body.countersignatures.filter((v): v is string => typeof v === 'string');
+      const countersignatures: string[] = [];
+      let after: string | undefined;
+      let failed = false;
+
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const url = `${relay}${PROOF}/countersignatures/${encodeURIComponent(cid)}${
+          after ? `?after=${encodeURIComponent(after)}` : ''
+        }`;
+        const res = await tryJson(url);
+        if (!res.ok) {
+          failed = true;
+          break;
+        }
+
+        const body = (await res.json()) as { countersignatures?: unknown; next?: unknown };
+        if (Array.isArray(body.countersignatures)) {
+          countersignatures.push(
+            ...body.countersignatures.filter((v): v is string => typeof v === 'string'),
+          );
+        }
+
+        if (typeof body.next === 'string' && body.next.length > 0) {
+          after = body.next;
+          continue;
+        }
+
+        return countersignatures;
+      }
+      if (failed) continue;
     } catch {
       continue;
     }
