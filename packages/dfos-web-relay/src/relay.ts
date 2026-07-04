@@ -610,25 +610,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
     // check if it's a known operation CID
     const op = await store.getOperation(cid);
+    const countersigs = await store.getCountersignatures(cid);
     if (!op) {
       // not a known operation — fall back to any countersignatures stored for this CID
-      const countersigs = await store.getCountersignatures(cid);
       if (countersigs.length === 0) return c.json({ error: 'not found' }, 404);
-      return c.json({ cid, countersignatures: countersigs });
     }
 
-    const countersigs = await store.getCountersignatures(cid);
-    return c.json({ operationCID: cid, countersignatures: countersigs });
-  });
-
-  /** Get countersignatures for an operation CID (legacy path) */
-  app.get(`${PROOF_BASE_PATH}/operations/:cid/countersignatures`, async (c) => {
-    const cid = c.req.param('cid');
-    const op = await store.getOperation(cid);
-    if (!op) return c.json({ error: 'not found' }, 404);
-
-    const countersigs = await store.getCountersignatures(cid);
-    return c.json({ operationCID: cid, countersignatures: countersigs });
+    return c.json({ cid, countersignatures: countersigs });
   });
 
   // -------------------------------------------------------------------------

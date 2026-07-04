@@ -103,7 +103,7 @@ export const fetchCountersigs = async (cid: string, relays: string[]): Promise<s
   for (const relay of relays) {
     try {
       const res = await tryJson(
-        `${relay}${PROOF}/operations/${encodeURIComponent(cid)}/countersignatures`,
+        `${relay}${PROOF}/countersignatures/${encodeURIComponent(cid)}`,
       );
       if (!res.ok) continue;
       const body = (await res.json()) as { countersignatures?: unknown };

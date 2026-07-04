@@ -729,11 +729,15 @@ func TestCountersignature(t *testing.T) {
 
 	// query countersigs
 	var csResult struct {
+		Cid               string   `json:"cid"`
 		Countersignatures []string `json:"countersignatures"`
 	}
 	resp := getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET countersigs: status %d", resp.StatusCode)
+	}
+	if csResult.Cid != cc.genCID {
+		t.Fatalf("expected cid %q, got %q", cc.genCID, csResult.Cid)
 	}
 	if len(csResult.Countersignatures) != 1 {
 		t.Fatalf("expected 1 countersig, got %d", len(csResult.Countersignatures))
@@ -816,36 +820,9 @@ func TestCountersignatureMultiWitness(t *testing.T) {
 	var csResult struct {
 		Countersignatures []string `json:"countersignatures"`
 	}
-	getJSON(t, base+"/proof/v1/operations/"+cc.genCID+"/countersignatures", &csResult)
+	getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if len(csResult.Countersignatures) != 2 {
 		t.Fatalf("expected 2 countersigs from different witnesses, got %d", len(csResult.Countersignatures))
-	}
-}
-
-func TestCountersignatureQueryPaths(t *testing.T) {
-	base := relayURL(t)
-	id := createIdentity(t, base)
-	cc := createContent(t, base, id)
-
-	witness := createIdentity(t, base)
-	witnessKid := witness.did + "#" + witness.auth.keyID
-
-	csToken, _, _ := dfos.SignCountersign(witness.did, cc.genCID, witnessKid, witness.auth.priv)
-	postOperations(t, base, []string{csToken}).Body.Close()
-
-	// both query paths should return the same data
-	var r1 struct {
-		Countersignatures []string `json:"countersignatures"`
-	}
-	var r2 struct {
-		Countersignatures []string `json:"countersignatures"`
-	}
-	getJSON(t, base+"/proof/v1/operations/"+cc.genCID+"/countersignatures", &r1)
-	getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &r2)
-
-	if len(r1.Countersignatures) != len(r2.Countersignatures) {
-		t.Fatalf("query paths returned different counts: %d vs %d",
-			len(r1.Countersignatures), len(r2.Countersignatures))
 	}
 }
 

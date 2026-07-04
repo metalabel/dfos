@@ -45,8 +45,7 @@ serve({ port: 4444 });
 | `GET`  | `/proof/v1/identities/:did`                   | Get identity chain state and operation log                  |
 | `GET`  | `/proof/v1/content/:contentId`                | Get content chain state and operation log                   |
 | `GET`  | `/proof/v1/operations/:cid`                   | Get a single operation by CID                               |
-| `GET`  | `/proof/v1/countersignatures/:cid`            | Get countersignatures for an operation                      |
-| `GET`  | `/proof/v1/operations/:cid/countersignatures` | Same as above (alias)                                       |
+| `GET`  | `/proof/v1/countersignatures/:cid`            | Get countersignatures for any CID (operations, artifacts)   |
 | `GET`  | `/1.0/identifiers/:did`                       | Resolve a `did:dfos` to a W3C DID Document (DIF-compat)     |
 | `GET`  | `/revocations/v1/credential/:credentialCID`   | Revocation status for a credential (self-proving JWS)       |
 | `GET`  | `/revocations/v1/issuer/:did`                 | All revocations ingested for an issuer                      |

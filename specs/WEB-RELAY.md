@@ -50,7 +50,6 @@ Every proof plane route is namespaced under a single prefix, **`/proof/v1`**:
 ```
 /proof/v1/operations
 /proof/v1/operations/:cid
-/proof/v1/operations/:cid/countersignatures
 /proof/v1/countersignatures/:cid
 /proof/v1/identities/:did
 /proof/v1/identities/:did/log
@@ -244,10 +243,9 @@ The relay enforces semantic rules beyond cryptographic validity:
 
 ### Endpoints
 
-Two routes serve countersignature data:
+One route serves countersignature data:
 
 - **`GET /proof/v1/countersignatures/:cid`** — Primary lookup. Returns all countersignatures for the given CID. Works for any CID-addressable target (operations, artifacts). Returns `{ cid, countersignatures: string[] }` where each entry is a compact JWS token. Returns 404 if no countersignatures exist for the CID.
-- **`GET /proof/v1/operations/:cid/countersignatures`** — Operation-scoped lookup. Returns countersignatures only if `:cid` is a known operation. Returns `{ operationCID, countersignatures: string[] }`. Returns 404 if the operation doesn't exist.
 
 ---
 
@@ -665,7 +663,6 @@ The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFrom
 | `GET`  | `/.well-known/dfos-relay`                     | meta    | none                                      |
 | `POST` | `/proof/v1/operations`                        | proof   | none                                      |
 | `GET`  | `/proof/v1/operations/:cid`                   | proof   | none                                      |
-| `GET`  | `/proof/v1/operations/:cid/countersignatures` | proof   | none                                      |
 | `GET`  | `/proof/v1/countersignatures/:cid`            | proof   | none                                      |
 | `GET`  | `/proof/v1/identities/:did`                   | proof   | none                                      |
 | `GET`  | `/proof/v1/identities/:did/log`               | proof   | none                                      |
