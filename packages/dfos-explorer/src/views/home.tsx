@@ -61,6 +61,7 @@ const SyncHero = () => {
   }, [sync.dbEpoch, sync.phase]);
 
   const syncing = sync.phase === 'syncing';
+  const resolving = sync.phase === 'resolving';
   const populated = (counts?.chains ?? 0) > 0;
 
   const kindLine = (() => {
@@ -110,11 +111,21 @@ const SyncHero = () => {
             <b>{fmtCount(counts?.ops ?? 0)} ops</b>
             <span class="muted">{kindLine}</span>
           </div>
+          {resolving ? (
+            <div class="hero-row">
+              <span class="spin">◍</span>
+              <span class="muted">
+                resolving public projections — {fmtCount(sync.resolved)} chains ·{' '}
+                {fmtCount(sync.publicDocs)} public docs
+              </span>
+            </div>
+          ) : null}
           <div class="hero-actions">
             <button onClick={() => void startSync('manual')}>re-sync</button>
             <span class="muted">
-              Browse chains in the <b>index</b> panel, or paste an identifier above. Everything
-              folds offline from your local db and re-verifies in-tab.
+              Browse <a href="#/identities">identities</a>, <a href="#/documents">documents</a>, and{' '}
+              <a href="#/artifacts">artifacts</a>, or paste an identifier above. Everything folds
+              offline from your local db and re-verifies in-tab.
             </span>
           </div>
         </div>

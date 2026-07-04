@@ -60,7 +60,16 @@ export interface ExplorerOp {
   seq: number;
 }
 
-/** Derived per-chain rollup — a browsing index, recomputed incrementally on sync. */
+/**
+ * Derived per-chain rollup — a browsing index, recomputed incrementally on sync.
+ *
+ * The head fields (chainId…headCid) are Phase-1 routing metadata, relay-asserted
+ * and cheap. The `projection` block below is Phase-2 material: locally-verified
+ * (bytes re-hashed to the committed doc CID) but ONLY as far as a discovery index
+ * needs — the detail pages remain the rigorous proof. Every projection field is
+ * absent until Phase 2 resolves the chain, and null/false when it resolved but
+ * the bytes were gated / absent / mismatched.
+ */
 export interface ChainRollup {
   chainId: string;
   kind: OpKind;
@@ -68,6 +77,54 @@ export interface ChainRollup {
   firstCreatedAt: string;
   lastCreatedAt: string;
   headCid: string;
+
+  // --- Phase-2 materialized projections (see sync-projections.ts) ---
+  /** content rollup: the resolved public document's `$schema` (its "type"). */
+  docSchema?: string;
+  /** the bytes were served to an UNAUTHENTICATED fetch (empirical public-read). */
+  publicRead?: boolean;
+  /** content rollup: headCid at resolve time — re-resolve only when the head drifts. */
+  resolvedHead?: string;
+  /**
+   * identity rollup: name from a profile/v1 doc ATTRIBUTED to this DID via the
+   * cheap creator-heuristic (profile content chain genesis-op signer → DID).
+   * "attributed", not "verified" — author == subject by convention, not proof.
+   */
+  name?: string;
+  /** identity rollup: lowercased `name` for case-insensitive substring search. */
+  nameLower?: string;
+  /** identity rollup: the profile avatar's media `uri` ref (display hint only). */
+  avatarRef?: string;
+}
+
+/** A browse result that never lies about being cut short. */
+export interface BrowseResult<T> {
+  rows: T[];
+  /** a scan ceiling (MAX_SCAN) stopped the query short of the full corpus. */
+  truncated: boolean;
+}
+
+/** Public-identities browse: attributed public profiles + honest hidden counts. */
+export interface IdentitiesBrowse {
+  rows: ChainRollup[];
+  /** total rows matching the current filter (before the display limit). */
+  matched: number;
+  /** identity chains carrying a resolved public profile name. */
+  publicCount: number;
+  /** identity chains with no publicly-attributed profile (hidden unless toggled). */
+  gatedCount: number;
+}
+
+/** Public-documents browse: typed public docs + honest hidden/pending counts. */
+export interface DocumentsBrowse {
+  rows: ChainRollup[];
+  matched: number;
+  /** content chains resolved to a public, integrity-checked document. */
+  publicCount: number;
+  /** content chains resolved but NOT publicly readable (gated / absent / mismatch). */
+  gatedCount: number;
+  /** content chains Phase 2 has not resolved yet (run "resolve public projections"). */
+  unresolvedCount: number;
 }
 
 /** Per-relay sync cursor. `count` doubles as the next arrival seq. */
@@ -103,16 +160,27 @@ export interface ExplorerDb {
    * with its issuer's identity chain is still counted.
    */
   counts(): Promise<{ ops: number; chains: number; byKind: Partial<Record<OpKind, number>> }>;
-  chainsQuery(q: ChainsQuery): Promise<ChainRollup[]>;
+  chainsQuery(q: ChainsQuery): Promise<BrowseResult<ChainRollup>>;
+  /** Public identities — identity rollups with an attributed profile name,
+   *  substring-searched over nameLower (getAll + JS filter, per the corpus). */
+  browseIdentities(q: { query?: string; limit: number; includeGated?: boolean }): Promise<IdentitiesBrowse>;
+  /** Public documents — content rollups carrying a resolved docSchema, optionally
+   *  filtered to one schema (type). Gated + not-yet-resolved chains are counted. */
+  browseDocuments(q: { schema?: string; limit: number; includeGated?: boolean }): Promise<DocumentsBrowse>;
   getCursor(relay: string): Promise<SyncCursor | undefined>;
   setCursor(cursor: SyncCursor): Promise<void>;
   wipe(): Promise<void>;
   close(): void;
 }
 
-const DB_VERSION = 2;
+// bumped 2→3: ChainRollup gained Phase-2 projection fields. The local index is a
+// disposable cache, so the upgrade wipes+rebuilds (see onupgradeneeded) — a
+// re-sync repopulates rollups and Phase 2 re-resolves projections.
+const DB_VERSION = 3;
 
-// scan ceiling for filtered index-cursor queries — keeps worst case bounded
+// scan ceiling for filtered index-cursor queries — keeps worst case bounded.
+// When a query stops here before the cursor is exhausted, it reports
+// `truncated: true` rather than silently dropping the tail of the corpus.
 const MAX_SCAN = 8000;
 
 const req = <T>(r: IDBRequest<T>): Promise<T> =>
@@ -253,7 +321,7 @@ export const openExplorerDb = async (
     return rows.slice(0, limit);
   };
 
-  const chainsQuery = (q: ChainsQuery): Promise<ChainRollup[]> => {
+  const chainsQuery = (q: ChainsQuery): Promise<BrowseResult<ChainRollup>> => {
     const store = db.transaction('chains').objectStore('chains');
     const index = q.sort === 'ops' ? store.index('opCount') : store.index('lastCreatedAt');
     const out: ChainRollup[] = [];
@@ -262,7 +330,11 @@ export const openExplorerDb = async (
       const cursorReq = index.openCursor(null, 'prev');
       cursorReq.onsuccess = () => {
         const cursor = cursorReq.result;
-        if (!cursor || out.length >= q.limit || scanned >= MAX_SCAN) return resolve(out);
+        // stopping at the limit is ordinary pagination; stopping at MAX_SCAN with
+        // the cursor still live means we cut the corpus short — report that.
+        if (!cursor || out.length >= q.limit)
+          return resolve({ rows: out, truncated: false });
+        if (scanned >= MAX_SCAN) return resolve({ rows: out, truncated: true });
         scanned += 1;
         const row = cursor.value as ChainRollup;
         if (!q.kind || row.kind === q.kind) out.push(row);
@@ -270,6 +342,64 @@ export const openExplorerDb = async (
       };
       cursorReq.onerror = () => reject(cursorReq.error ?? new Error('chains query failed'));
     });
+  };
+
+  const kindRollups = async (kind: OpKind): Promise<ChainRollup[]> =>
+    (await req(
+      db.transaction('chains').objectStore('chains').index('kind').getAll(kind),
+    )) as ChainRollup[];
+
+  const browseIdentities = async (q: {
+    query?: string;
+    limit: number;
+    includeGated?: boolean;
+  }): Promise<IdentitiesBrowse> => {
+    const all = await kindRollups('identity-op');
+    // a resolved public profile is what makes an identity browsable by name
+    const withName = all.filter((r) => typeof r.name === 'string' && r.name.length > 0);
+    const publicCount = withName.length;
+    const gatedCount = all.length - publicCount;
+
+    const needle = (q.query ?? '').trim().toLowerCase();
+    // opaque (no-name) rows only surface with the toggle AND no active search
+    const pool = q.includeGated && !needle ? all : withName;
+    const matches = needle
+      ? pool.filter((r) => (r.nameLower ?? '').includes(needle))
+      : pool;
+    matches.sort((a, b) => (a.nameLower ?? '').localeCompare(b.nameLower ?? ''));
+    return {
+      rows: matches.slice(0, q.limit),
+      matched: matches.length,
+      publicCount,
+      gatedCount,
+    };
+  };
+
+  const browseDocuments = async (q: {
+    schema?: string;
+    limit: number;
+    includeGated?: boolean;
+  }): Promise<DocumentsBrowse> => {
+    const all = await kindRollups('content-op');
+    const resolved = all.filter((r) => typeof r.resolvedHead === 'string');
+    const publicDocs = resolved.filter((r) => typeof r.docSchema === 'string');
+    const publicCount = publicDocs.length;
+    const gatedCount = resolved.length - publicCount;
+    const unresolvedCount = all.length - resolved.length;
+
+    const pool = q.includeGated ? resolved : publicDocs;
+    const matches = q.schema ? pool.filter((r) => r.docSchema === q.schema) : pool;
+    // newest-first by last activity — same order the side panel uses
+    matches.sort((a, b) =>
+      a.lastCreatedAt < b.lastCreatedAt ? 1 : a.lastCreatedAt > b.lastCreatedAt ? -1 : 0,
+    );
+    return {
+      rows: matches.slice(0, q.limit),
+      matched: matches.length,
+      publicCount,
+      gatedCount,
+      unresolvedCount,
+    };
   };
 
   const getCursor = async (relay: string): Promise<SyncCursor | undefined> =>
@@ -299,6 +429,8 @@ export const openExplorerDb = async (
     opsOfKind,
     counts,
     chainsQuery,
+    browseIdentities,
+    browseDocuments,
     getCursor,
     setCursor,
     wipe,

@@ -80,6 +80,8 @@ export const LocalIndex = () => {
   const [credRows, setCredRows] = useState<ExplorerOp[]>([]);
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('recent');
+  // true when chainsQuery hit its scan ceiling — the corpus outgrew the browse
+  const [truncated, setTruncated] = useState(false);
   const [storageBytes, setStorageBytes] = useState<number | null>(null);
   const sync = useSyncState();
   const syncing = sync.phase === 'syncing';
@@ -95,10 +97,15 @@ export const LocalIndex = () => {
     if (filter === 'credential') {
       setCredRows(await db.opsOfKind('credential', 300));
       setRows([]);
+      setTruncated(false);
     } else {
-      setRows(
-        await db.chainsQuery({ sort, kind: filter === 'all' ? undefined : filter, limit: 300 }),
-      );
+      const res = await db.chainsQuery({
+        sort,
+        kind: filter === 'all' ? undefined : filter,
+        limit: 300,
+      });
+      setRows(res.rows);
+      setTruncated(res.truncated);
       setCredRows([]);
     }
     setStorageBytes(await estimateStorageBytes());
@@ -247,6 +254,13 @@ export const LocalIndex = () => {
           </table>
         )}
       </div>
+      {truncated ? (
+        <div class="ck-note" style={{ marginTop: 6 }}>
+          scan truncated — the corpus exceeds the browse ceiling; some chains of this kind aren't
+          listed. Use the dedicated <a href="#/identities">identities</a> /{' '}
+          <a href="#/documents">documents</a> browse or a narrower filter.
+        </div>
+      ) : null}
     </Panel>
   );
 };

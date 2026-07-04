@@ -121,6 +121,16 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     term: 'local index',
     def: 'Your browser’s own copy of every operation it has synced from relay logs, stored in IndexedDB — chains fold offline from it, and it persists across visits.',
   },
+  {
+    key: 'publicProjection',
+    term: 'public projection',
+    def: 'A browse field (a content chain’s type, an identity’s name) materialized once at sync time by fetching the content-plane blob and re-hashing its bytes to the on-chain committed document CID — so browse is instant and offline, and only PUBLIC (anonymously served) documents ever appear.',
+  },
+  {
+    key: 'attributed',
+    term: 'attributed',
+    def: 'A cheap discovery heuristic: a public profile is attributed to the DID that signed its content chain’s genesis op (author == subject by convention, not by proof). Browse rows are labelled "attributed"; open the identity to fold the rigorous services→anchor→profile proof.',
+  },
 ];
 
 export const GLOSSARY: Record<string, string> = Object.fromEntries(
