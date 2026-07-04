@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
@@ -887,7 +888,7 @@ func (s *SQLiteStore) GetRevocationForCredential(credentialCID string) (*StoredR
 
 func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
 	rows, err := s.readerDB().Query(
-		"SELECT cid, issuer_did, credential_cid, jws_token FROM revocations WHERE issuer_did = ? ORDER BY credential_cid ASC",
+		"SELECT cid, issuer_did, credential_cid, jws_token FROM revocations WHERE issuer_did = ?",
 		issuerDID,
 	)
 	if err != nil {
@@ -902,7 +903,35 @@ func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocati
 		}
 		revs = append(revs, rev)
 	}
-	return revs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	type revocationWithCreatedAt struct {
+		revocation StoredRevocation
+		createdAt  string
+	}
+	decorated := make([]revocationWithCreatedAt, 0, len(revs))
+	for _, rev := range revs {
+		createdAt := ""
+		if _, payload, err := dfos.DecodeJWSUnsafe(rev.JWSToken); err == nil {
+			if value, ok := payload["createdAt"].(string); ok {
+				createdAt = value
+			}
+		}
+		decorated = append(decorated, revocationWithCreatedAt{revocation: rev, createdAt: createdAt})
+	}
+	sort.Slice(decorated, func(i, j int) bool {
+		if decorated[i].createdAt != decorated[j].createdAt {
+			return decorated[i].createdAt < decorated[j].createdAt
+		}
+		return decorated[i].revocation.CredentialCID < decorated[j].revocation.CredentialCID
+	})
+	result := make([]StoredRevocation, 0, len(decorated))
+	for _, rev := range decorated {
+		result = append(result, rev.revocation)
+	}
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------

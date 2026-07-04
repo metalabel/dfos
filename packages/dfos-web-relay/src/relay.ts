@@ -459,11 +459,11 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   });
 
   // ---------------------------------------------------------------------------
-  // revocation status (additive, own clock)
+  // revocation status (frozen v1, own clock)
   //
   // Read-only projection of the relay's revocation set — the same
   // (issuerDID, credentialCID) index credential enforcement already consults.
-  // Mounts at ROOT under REVOCATIONS_BASE_PATH (not the frozen proof plane).
+  // Mounts at ROOT under REVOCATIONS_BASE_PATH (not under the proof plane).
   // Every positive answer carries the revocation JWS so a zero-trust caller
   // re-verifies it instead of trusting the relay's boolean; `revoked: false`
   // only means THIS relay has not ingested a revocation (honest absence — not
@@ -494,7 +494,19 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
 
     const revocations = await store.getRevocationsByIssuer(did);
-    return c.json(issuerRevocationList(did, revocations));
+    const after = c.req.query('after');
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+
+    let startIdx = 0;
+    if (after) {
+      const idx = revocations.findIndex((rev) => rev.credentialCID === after);
+      startIdx = idx >= 0 ? idx + 1 : revocations.length;
+    }
+
+    const page = revocations.slice(startIdx, startIdx + limit);
+    const next = page.length === limit ? page[page.length - 1]!.credentialCID : null;
+
+    return c.json(issuerRevocationList(did, page, next));
   });
 
   /** Get a content chain log */

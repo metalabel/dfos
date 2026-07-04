@@ -495,14 +495,34 @@ func (s *MemoryStore) GetRevocationForCredential(credentialCID string) (*StoredR
 func (s *MemoryStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	revs := []StoredRevocation{}
-	for _, rev := range s.revocations {
-		if rev.IssuerDID == issuerDID {
-			revs = append(revs, rev)
-		}
+	type revocationWithCreatedAt struct {
+		revocation StoredRevocation
+		createdAt  string
 	}
-	sort.Slice(revs, func(i, j int) bool { return revs[i].CredentialCID < revs[j].CredentialCID })
-	return revs, nil
+	revs := []revocationWithCreatedAt{}
+	for _, rev := range s.revocations {
+		if rev.IssuerDID != issuerDID {
+			continue
+		}
+		createdAt := ""
+		if _, payload, err := dfos.DecodeJWSUnsafe(rev.JWSToken); err == nil {
+			if value, ok := payload["createdAt"].(string); ok {
+				createdAt = value
+			}
+		}
+		revs = append(revs, revocationWithCreatedAt{revocation: rev, createdAt: createdAt})
+	}
+	sort.Slice(revs, func(i, j int) bool {
+		if revs[i].createdAt != revs[j].createdAt {
+			return revs[i].createdAt < revs[j].createdAt
+		}
+		return revs[i].revocation.CredentialCID < revs[j].revocation.CredentialCID
+	})
+	result := make([]StoredRevocation, 0, len(revs))
+	for _, rev := range revs {
+		result = append(result, rev.revocation)
+	}
+	return result, nil
 }
 
 // ---------------------------------------------------------------------------
