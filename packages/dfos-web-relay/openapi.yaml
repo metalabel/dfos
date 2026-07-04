@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DFOS Web Relay
-  version: 0.15.0
+  version: 0.16.0
   description: |
     HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves
     identity chains, content chains, countersignatures, and content blobs.
@@ -19,7 +19,9 @@ paths:
     get:
       operationId: getRelayMetadata
       summary: Relay metadata
-      description: Returns the relay's DID, protocol identifier, and version.
+      description: |
+        Returns the relay's DID, protocol identifier, version, capabilities,
+        profile artifact, configured peers, and operational stats.
       tags: [Meta]
       responses:
         '200':
@@ -28,7 +30,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [did, protocol, version, capabilities, profile, stats]
+                required: [did, protocol, version, capabilities, profile, peers, stats]
                 properties:
                   did:
                     type: string
@@ -39,7 +41,7 @@ paths:
                     enum: [dfos-web-relay]
                   version:
                     type: string
-                    example: '0.15.0'
+                    example: '0.16.0'
                   capabilities:
                     type: object
                     required: [proof, write, content, log, revocations]
@@ -52,7 +54,7 @@ paths:
                         description: Whether the relay accepts writes via POST /proof/v1/operations (false = lite pull-only node)
                       content:
                         type: boolean
-                        description: Whether the relay supports content plane (blob upload/download and the documents endpoint, which rides this same flag — there is no separate one)
+                        description: Whether the relay supports the content plane (blob upload/download; enumerate a chain's documents via GET /proof/v1/content/{contentId}/log)
                       log:
                         type: boolean
                         description: Whether the global operation log is available (GET /proof/v1/log)
@@ -62,13 +64,55 @@ paths:
                   profile:
                     type: string
                     description: The relay's profile artifact as a compact JWS token
+                  peers:
+                    type: array
+                    description: Peers this relay is configured to sync from, for mesh discovery
+                    items:
+                      type: object
+                      required: [endpoint]
+                      properties:
+                        endpoint:
+                          type: string
+                          description: The peer relay's base URL
                   stats:
                     type: object
+                    description: >-
+                      Operational statistics. pendingOps is always present; the
+                      remaining fields appear when the store computes them
+                      (getStats is an optional store surface).
                     required: [pendingOps]
                     properties:
                       pendingOps:
                         type: integer
                         description: Count of operations pending processing (-1 if unavailable)
+                      opCount:
+                        type: integer
+                        description: Total operations in the global log
+                      countsByKind:
+                        type: object
+                        description: Operation counts bucketed by primitive kind (all six keys present)
+                        required: [identity, content, artifact, credential, countersign, revocation]
+                        properties:
+                          identity:
+                            type: integer
+                          content:
+                            type: integer
+                          artifact:
+                            type: integer
+                          credential:
+                            type: integer
+                          countersign:
+                            type: integer
+                          revocation:
+                            type: integer
+                      oldestOpAt:
+                        type: string
+                        nullable: true
+                        description: createdAt of the oldest operation in the log, or null when empty
+                      headCid:
+                        type: string
+                        nullable: true
+                        description: CID of the newest operation in the log (the tip), or null when empty
 
   /proof/v1/operations:
     post:
@@ -134,36 +178,6 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /proof/v1/operations/{cid}/countersignatures:
-    get:
-      operationId: getCountersignatures
-      summary: Get countersignatures for an operation
-      tags: [Proof Plane]
-      parameters:
-        - name: cid
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Countersignatures
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [operationCID, countersignatures]
-                properties:
-                  operationCID:
-                    type: string
-                  countersignatures:
-                    type: array
-                    items:
-                      type: string
-                      description: JWS compact serialization (witness signature)
-        '404':
-          $ref: '#/components/responses/NotFound'
-
   /proof/v1/identities/{did}:
     get:
       operationId: getIdentityChain
@@ -178,7 +192,7 @@ paths:
           description: 'DID of the identity (e.g., did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr)'
       responses:
         '200':
-          description: Identity chain state and log
+          description: Identity chain terminal state (the operation log is served by /proof/v1/identities/{did}/log)
           content:
             application/json:
               schema:
@@ -331,9 +345,9 @@ paths:
       summary: Revocation status for a credential
       description: |
         Read-only projection of the relay's revocation set — the same
-        (issuerDID, credentialCID) index credential enforcement consults. On its
-        own 0.x clock at the relay root; revocations still enter through
-        POST /proof/v1/operations. Every positive answer carries the full
+        (issuerDID, credentialCID) index credential enforcement consults. A
+        frozen v1 contract at the relay root on its own version clock;
+        revocations still enter through POST /proof/v1/operations. Every positive answer carries the full
         revocation JWS so a zero-trust caller re-verifies the proof instead of
         trusting the boolean. `revoked: false` is an honest known-nothing answer
         — absence is NOT proof of non-revocation. Relays without the index
@@ -378,10 +392,11 @@ paths:
   /revocations/v1/issuer/{did}:
     get:
       operationId: getIssuerRevocations
-      summary: All revocations ingested for an issuer
+      summary: Paginated feed of all revocations ingested for an issuer
       description: |
-        Every revocation this relay has ingested for the issuer, sorted by
-        credentialCID ascending. Each entry carries the full revocation JWS
+        Every revocation this relay has ingested for the issuer, ordered by
+        revocation createdAt ascending (tiebreak credentialCID) and
+        cursor-paginated. Each entry carries the full revocation JWS
         (self-proving). An issuer with none returns an empty array — same honest
         absence semantics as the credential route.
       tags: [Revocation Status]
@@ -392,14 +407,27 @@ paths:
           schema:
             type: string
           description: 'Issuer DID (canonical 31-char did:dfos)'
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Cursor — start after this credentialCID (from a prior page's next)
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
       responses:
         '200':
-          description: Issuer revocation list (possibly empty)
+          description: Issuer revocation list page (possibly empty)
           content:
             application/json:
               schema:
                 type: object
-                required: [did, revocations]
+                required: [did, revocations, next]
                 properties:
                   did:
                     type: string
@@ -414,6 +442,10 @@ paths:
                         revocation:
                           type: string
                           description: The full revocation JWS token — self-proving
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page (pass as `after`), or null on the last page
         '400':
           description: Malformed did:dfos identifier
           content:
@@ -441,7 +473,7 @@ paths:
           description: Content identifier (31-char hash)
       responses:
         '200':
-          description: Content chain state and log
+          description: Content chain terminal state (the operation log is served by /proof/v1/content/{contentId}/log)
           content:
             application/json:
               schema:
@@ -486,7 +518,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [status, contentId, documentCID]
+                required: [status, contentId, documentCID, operationCID]
                 properties:
                   status:
                     type: string
@@ -494,6 +526,8 @@ paths:
                   contentId:
                     type: string
                   documentCID:
+                    type: string
+                  operationCID:
                     type: string
         '400':
           $ref: '#/components/responses/BadRequest'
@@ -592,82 +626,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-
-  /content/{contentId}/documents:
-    get:
-      operationId: getDocuments
-      summary: List documents in a content chain
-      description: |
-        Returns all documents committed to a content chain as an ordered list,
-        from genesis to head. Cursor-based pagination.
-      tags: [Content Plane]
-      security:
-        - BearerAuth: []
-      parameters:
-        - name: contentId
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: after
-          in: query
-          required: false
-          schema:
-            type: string
-          description: CID cursor — start after this operation CID
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            default: 100
-            maximum: 1000
-        - name: X-Credential
-          in: header
-          required: false
-          schema:
-            type: string
-          description: DFOS read credential JWS (required for non-creators)
-      responses:
-        '200':
-          description: Document list
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [contentId, documents, nextCursor]
-                properties:
-                  contentId:
-                    type: string
-                  documents:
-                    type: array
-                    items:
-                      type: object
-                      required: [operationCID, documentCID, document, signerDID, createdAt]
-                      properties:
-                        operationCID:
-                          type: string
-                        documentCID:
-                          type: string
-                          nullable: true
-                        document:
-                          nullable: true
-                        signerDID:
-                          type: string
-                        createdAt:
-                          type: string
-                          format: date-time
-                  nextCursor:
-                    type: string
-                    nullable: true
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '501':
-          description: Content plane not enabled (the documents endpoint is part of the content plane)
 
   /proof/v1/log:
     get:
@@ -834,7 +792,11 @@ paths:
   /proof/v1/countersignatures/{cid}:
     get:
       operationId: getCountersignaturesByCID
-      summary: Get countersignatures for an operation CID
+      summary: Get countersignatures targeting any CID
+      description: |
+        Countersignatures targeting any countersignable CID — operations AND
+        artifacts. Cursor-paginated. Returns 404 only when the CID is not a
+        known operation and no countersignatures target it.
       tags: [Proof Plane]
       parameters:
         - name: cid
@@ -842,15 +804,28 @@ paths:
           required: true
           schema:
             type: string
-          description: CIDv1 of the operation
+          description: CIDv1 of the countersigned target (operation or artifact)
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Cursor — start after this countersignature CID (from a prior page's next)
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
       responses:
         '200':
-          description: Countersignatures
+          description: Countersignatures page
           content:
             application/json:
               schema:
                 type: object
-                required: [cid, countersignatures]
+                required: [cid, countersignatures, next]
                 properties:
                   cid:
                     type: string
@@ -859,6 +834,10 @@ paths:
                     items:
                       type: string
                       description: JWS compact serialization (witness signature)
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page (pass as `after`), or null on the last page
         '404':
           $ref: '#/components/responses/NotFound'
 

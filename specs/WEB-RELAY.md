@@ -657,19 +657,22 @@ setInterval(() => relay.syncFromPeers(), 30_000);
 
 The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFromPeers` (async function). The Hono app exposes:
 
-| Method | Path                               | Plane   | Auth                                      |
-| ------ | ---------------------------------- | ------- | ----------------------------------------- |
-| `GET`  | `/.well-known/dfos-relay`          | meta    | none                                      |
-| `POST` | `/proof/v1/operations`             | proof   | none                                      |
-| `GET`  | `/proof/v1/operations/:cid`        | proof   | none                                      |
-| `GET`  | `/proof/v1/countersignatures/:cid` | proof   | none                                      |
-| `GET`  | `/proof/v1/identities/:did`        | proof   | none                                      |
-| `GET`  | `/proof/v1/identities/:did/log`    | proof   | none                                      |
-| `GET`  | `/proof/v1/content/:contentId`     | proof   | none                                      |
-| `GET`  | `/proof/v1/content/:contentId/log` | proof   | none                                      |
-| `GET`  | `/proof/v1/log`                    | proof   | none                                      |
-| `PUT`  | `/content/:contentId/blob/:opCID`  | content | auth token                                |
-| `GET`  | `/content/:contentId/blob[/:ref]`  | content | standing auth, or auth token + credential |
+| Method | Path                                        | Plane       | Auth                                      |
+| ------ | ------------------------------------------- | ----------- | ----------------------------------------- |
+| `GET`  | `/.well-known/dfos-relay`                   | meta        | none                                      |
+| `POST` | `/proof/v1/operations`                      | proof       | none                                      |
+| `GET`  | `/proof/v1/operations/:cid`                 | proof       | none                                      |
+| `GET`  | `/proof/v1/countersignatures/:cid`          | proof       | none                                      |
+| `GET`  | `/proof/v1/identities/:did`                 | proof       | none                                      |
+| `GET`  | `/proof/v1/identities/:did/log`             | proof       | none                                      |
+| `GET`  | `/proof/v1/content/:contentId`              | proof       | none                                      |
+| `GET`  | `/proof/v1/content/:contentId/log`          | proof       | none                                      |
+| `GET`  | `/proof/v1/log`                             | proof       | none                                      |
+| `GET`  | `/1.0/identifiers/:did`                     | meta        | none                                      |
+| `GET`  | `/revocations/v1/credential/:credentialCID` | revocations | none                                      |
+| `GET`  | `/revocations/v1/issuer/:did`               | revocations | none                                      |
+| `PUT`  | `/content/:contentId/blob/:opCID`           | content     | auth token                                |
+| `GET`  | `/content/:contentId/blob[/:ref]`           | content     | standing auth, or auth token + credential |
 
 ---
 

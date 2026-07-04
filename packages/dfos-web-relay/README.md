@@ -40,15 +40,18 @@ serve({ port: 4444 });
 
 | Method | Path                                        | Description                                                 |
 | ------ | ------------------------------------------- | ----------------------------------------------------------- |
-| `GET`  | `/.well-known/dfos-relay`                   | Relay metadata (DID, protocol version)                      |
+| `GET`  | `/.well-known/dfos-relay`                   | Relay metadata (DID, capabilities, profile, peers, stats)   |
 | `POST` | `/proof/v1/operations`                      | Submit signed operations (identity, content, countersig)    |
-| `GET`  | `/proof/v1/identities/:did`                 | Get identity chain state and operation log                  |
-| `GET`  | `/proof/v1/content/:contentId`              | Get content chain state and operation log                   |
+| `GET`  | `/proof/v1/identities/:did`                 | Get identity chain terminal state                           |
+| `GET`  | `/proof/v1/identities/:did/log`             | Paginated identity chain operation log                      |
+| `GET`  | `/proof/v1/content/:contentId`              | Get content chain terminal state                            |
+| `GET`  | `/proof/v1/content/:contentId/log`          | Paginated content chain operation log                       |
+| `GET`  | `/proof/v1/log`                             | Paginated global operation log (`log` capability)           |
 | `GET`  | `/proof/v1/operations/:cid`                 | Get a single operation by CID                               |
-| `GET`  | `/proof/v1/countersignatures/:cid`          | Get countersignatures for any CID (operations, artifacts)   |
+| `GET`  | `/proof/v1/countersignatures/:cid`          | Paginated countersignatures for any CID (ops, artifacts)    |
 | `GET`  | `/1.0/identifiers/:did`                     | Resolve a `did:dfos` to a W3C DID Document (DIF-compat)     |
 | `GET`  | `/revocations/v1/credential/:credentialCID` | Revocation status for a credential (self-proving JWS)       |
-| `GET`  | `/revocations/v1/issuer/:did`               | All revocations ingested for an issuer                      |
+| `GET`  | `/revocations/v1/issuer/:did`               | Paginated feed of all revocations ingested for an issuer    |
 | `PUT`  | `/content/:contentId/blob/:operationCID`    | Upload blob (auth required)                                 |
 | `GET`  | `/content/:contentId/blob`                  | Download blob at head (standing auth, or auth + credential) |
 | `GET`  | `/content/:contentId/blob/:ref`             | Download blob at specific operation ref                     |
@@ -77,8 +80,10 @@ frozen v1 surface without touching the wire or the proof plane. See
 ingested a revocation for a credential —
 `{ credentialCID, revoked, revocation? }` — and
 `GET /revocations/v1/issuer/:did` lists every revocation ingested for an issuer,
-sorted by `credentialCID`. Like the universal resolver, the family rides its own
-`0.x` clock at the relay root; revocations still _enter_ through
+ordered by revocation `createdAt` ascending (tiebreak `credentialCID`) and
+cursor-paginated with the standard `limit`/`after` query params and a `next`
+cursor in the response. The family is a **frozen `v1` contract** at the relay
+root on its own version clock; revocations still _enter_ through
 `POST /proof/v1/operations` as ordinary proof-plane operations.
 
 Every positive answer carries the **full revocation JWS**, so a zero-trust
