@@ -988,7 +988,7 @@ describe('web relay', () => {
       expect(body.results[0].chainId).toBe(content.operationCID);
 
       // query countersignatures
-      const csRes = await req(`/proof/v1/operations/${content.operationCID}/countersignatures`);
+      const csRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       expect(csRes.status).toBe(200);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(1);
@@ -1020,7 +1020,7 @@ describe('web relay', () => {
       await postOps([csToken]);
 
       // should still only have one
-      const csRes = await req(`/proof/v1/operations/${content.operationCID}/countersignatures`);
+      const csRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       const csBody = await json(csRes);
       expect(csBody.countersignatures).toHaveLength(1);
     });
@@ -1064,6 +1064,7 @@ describe('web relay', () => {
       // should have exactly 2 distinct countersignatures
       const csRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       const csBody = await json(csRes);
+      expect(csBody.cid).toBe(content.operationCID);
       expect(csBody.countersignatures).toHaveLength(2);
 
       // resubmit both — count must not change
@@ -1111,52 +1112,9 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('countersignature query', () => {
-    it('should return same results from both countersig query paths', async () => {
-      const author = await createIdentity();
-      const witness = await createIdentity();
-      const content = await createContentOp(author);
-      await postOps([author.jwsToken, witness.jwsToken, content.jwsToken]);
-
-      const witnessKid = `${witness.did}#${witness.authKey.keyId}`;
-      const { jwsToken: csToken } = await signCountersignature({
-        payload: {
-          version: 1,
-          type: 'countersign',
-          did: witness.did,
-          targetCID: content.operationCID,
-          createdAt: ts(2),
-        },
-        signer: witness.authKey.signer,
-        kid: witnessKid,
-      });
-      await postOps([csToken]);
-
-      // query via general path
-      const generalRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
-      expect(generalRes.status).toBe(200);
-      const generalBody = await json(generalRes);
-
-      // query via legacy per-operation path
-      const legacyRes = await req(`/proof/v1/operations/${content.operationCID}/countersignatures`);
-      expect(legacyRes.status).toBe(200);
-      const legacyBody = await json(legacyRes);
-
-      // both should return the same countersignatures
-      expect(generalBody.countersignatures).toHaveLength(1);
-      expect(legacyBody.countersignatures).toHaveLength(1);
-      expect(generalBody.countersignatures[0]).toBe(legacyBody.countersignatures[0]);
-    });
-
     it('should return 404 for countersigs on unknown CID', async () => {
       const res = await req(
         '/proof/v1/countersignatures/bafyreibogus000000000000000000000000000000000000000000000',
-      );
-      expect(res.status).toBe(404);
-    });
-
-    it('should return 404 for operation countersigs on unknown operation', async () => {
-      const res = await req(
-        '/proof/v1/operations/bafyreibogus000000000000000000000000000000000000000000000/countersignatures',
       );
       expect(res.status).toBe(404);
     });

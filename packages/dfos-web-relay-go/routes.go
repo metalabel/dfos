@@ -30,7 +30,6 @@ func newRouter(r *Relay) http.Handler {
 
 	// proof plane — public, frozen with protocol v1, namespaced under proofBasePath
 	mux.HandleFunc("POST "+proofBasePath+"/operations", r.handlePostOperations)
-	mux.HandleFunc("GET "+proofBasePath+"/operations/{cid}/countersignatures", r.handleOperationCountersignatures)
 	mux.HandleFunc("GET "+proofBasePath+"/operations/{cid}", r.handleGetOperation)
 	mux.HandleFunc("GET "+proofBasePath+"/identities/{did}/log", r.handleIdentityLog)
 	mux.HandleFunc("GET "+proofBasePath+"/identities/{did...}", r.handleGetIdentity)
@@ -527,29 +526,7 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 		return
 	}
 	writeJSON(w, 200, map[string]any{
-		"operationCID":      cid,
-		"countersignatures": cs,
-	})
-}
-
-func (r *Relay) handleOperationCountersignatures(w http.ResponseWriter, req *http.Request) {
-	cid := req.PathValue("cid")
-
-	op, err := r.readStore.GetOperation(cid)
-	if storeErr(w, err) {
-		return
-	}
-	if op == nil {
-		writeError(w, 404, "not found")
-		return
-	}
-
-	cs, csErr := r.readStore.GetCountersignatures(cid)
-	if storeErr(w, csErr) {
-		return
-	}
-	writeJSON(w, 200, map[string]any{
-		"operationCID":      cid,
+		"cid":               cid,
 		"countersignatures": cs,
 	})
 }
