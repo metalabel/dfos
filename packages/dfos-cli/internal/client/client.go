@@ -258,7 +258,30 @@ func (c *Client) GetOperation(cid string) (map[string]any, error) {
 
 // GetCountersignatures fetches countersignatures for an operation CID.
 func (c *Client) GetCountersignatures(cid string) (map[string]any, error) {
-	return c.getJSON(proofBasePath + "/countersignatures/" + url.PathEscape(cid))
+	const maxPages = 10000
+
+	countersignatures := []any{}
+	after := ""
+	path := proofBasePath + "/countersignatures/" + url.PathEscape(cid)
+	for page := 0; page < maxPages; page++ {
+		pagePath := path
+		if after != "" {
+			pagePath += "?after=" + url.QueryEscape(after)
+		}
+		resp, err := c.getJSON(pagePath)
+		if err != nil {
+			return nil, err
+		}
+		if pageCountersignatures, ok := resp["countersignatures"].([]any); ok {
+			countersignatures = append(countersignatures, pageCountersignatures...)
+		}
+		next, ok := resp["next"].(string)
+		if !ok || next == "" {
+			return map[string]any{"cid": cid, "countersignatures": countersignatures}, nil
+		}
+		after = next
+	}
+	return nil, fmt.Errorf("countersignatures pagination exceeded %d pages", maxPages)
 }
 
 // UploadBlob uploads a content blob, keyed by the operation CID that
