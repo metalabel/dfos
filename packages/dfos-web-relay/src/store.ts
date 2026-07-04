@@ -13,6 +13,7 @@ import { createKeyResolver } from './ingest';
 import type {
   BlobKey,
   LogEntry,
+  RelayStats,
   RelayStore,
   StoredContentChain,
   StoredDocument,
@@ -259,6 +260,46 @@ export class MemoryRelayStore implements RelayStore {
     // cursor returns an empty page and it stops. Mirrors the Go twin's ReadLog.
     const cursor = entries.length > 0 ? entries[entries.length - 1]!.cid : null;
     return { entries, cursor };
+  }
+
+  async getStats(): Promise<RelayStats> {
+    const countsByKind: RelayStats['countsByKind'] = {
+      identity: 0,
+      content: 0,
+      artifact: 0,
+      credential: 0,
+      countersign: 0,
+      revocation: 0,
+    };
+
+    for (const entry of this.operationLog) {
+      switch (entry.kind) {
+        case 'identity-op':
+          countsByKind.identity++;
+          break;
+        case 'content-op':
+          countsByKind.content++;
+          break;
+        case 'artifact':
+        case 'credential':
+        case 'countersign':
+        case 'revocation':
+          countsByKind[entry.kind]++;
+          break;
+      }
+    }
+
+    const first = this.operationLog[0];
+    const last = this.operationLog[this.operationLog.length - 1];
+    const decoded = first ? decodeJwsUnsafe(first.jwsToken) : null;
+    const createdAt = decoded?.payload?.createdAt;
+
+    return {
+      opCount: this.operationLog.length,
+      countsByKind,
+      oldestOpAt: typeof createdAt === 'string' ? createdAt : null,
+      headCid: last?.cid ?? null,
+    };
   }
 
   async getIdentityStateAtCID(

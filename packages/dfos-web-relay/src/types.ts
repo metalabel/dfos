@@ -168,6 +168,31 @@ export interface LogEntry {
   chainId: string;
 }
 
+/** A peer this relay is configured to talk to, surfaced in the well-known for mesh discovery. */
+export interface RelayPeerInfo {
+  /** The peer relay's base URL. */
+  endpoint: string;
+}
+
+/** Optional operational statistics a store MAY compute for the well-known response. */
+export interface RelayStats {
+  /** Total operations in the global log. */
+  opCount: number;
+  /** Operation counts bucketed by primitive kind (all six keys always present). */
+  countsByKind: {
+    identity: number;
+    content: number;
+    artifact: number;
+    credential: number;
+    countersign: number;
+    revocation: number;
+  };
+  /** createdAt of the oldest operation in the log (log position), or null when empty. */
+  oldestOpAt: string | null;
+  /** CID of the newest operation in the log (the tip), or null when empty. */
+  headCid: string | null;
+}
+
 /** All operation kinds in the protocol */
 export type OperationKind =
   | 'identity-op'
@@ -254,6 +279,12 @@ export interface RelayStore {
     after?: string;
     limit: number;
   }): Promise<{ entries: LogEntry[]; cursor: string | null }>;
+  /**
+   * Optional: compute operational statistics over the global log for the well-known
+   * response. A store that omits this leaves opCount/countsByKind/oldestOpAt/headCid
+   * out of the well-known (pendingOps still reports). Reference stores implement it.
+   */
+  getStats?(): Promise<RelayStats>;
 
   // --- chain state at arbitrary CID (snapshot-backed) ---
 

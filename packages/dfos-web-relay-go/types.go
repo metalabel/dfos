@@ -155,6 +155,11 @@ type StoredDocument struct {
 	CreatedAt    string  `json:"createdAt"`
 }
 
+// RelayPeerInfo is a configured peer surfaced in the well-known for mesh discovery.
+type RelayPeerInfo struct {
+	Endpoint string `json:"endpoint"`
+}
+
 // BlobKey uniquely identifies a blob by creator and document CID.
 type BlobKey struct {
 	CreatorDID  string
@@ -167,6 +172,42 @@ type LogEntry struct {
 	JWSToken string `json:"jwsToken"`
 	Kind     string `json:"kind"`
 	ChainID  string `json:"chainId"`
+}
+
+// RelayStats is optional operational telemetry a store MAY compute for the well-known.
+// Byte twin of the TS RelayStats. oldestOpAt/headCid are pointers WITHOUT omitempty so
+// an empty log serializes them as JSON null (parity with the TS `string | null`).
+type RelayStats struct {
+	OpCount      int            `json:"opCount"`
+	CountsByKind map[string]int `json:"countsByKind"`
+	OldestOpAt   *string        `json:"oldestOpAt"`
+	HeadCID      *string        `json:"headCid"`
+}
+
+// StatsProvider is an OPTIONAL store capability (type-asserted like BatchableStore).
+// A store implementing it lets the well-known report opCount/countsByKind/oldestOpAt/headCid.
+type StatsProvider interface {
+	RelayStats() (*RelayStats, error)
+}
+
+// newKindCounts returns a countsByKind map pre-seeded with all six buckets at 0, so the
+// well-known always emits every key (parity with the TS object literal).
+func newKindCounts() map[string]int {
+	return map[string]int{"identity": 0, "content": 0, "artifact": 0, "credential": 0, "countersign": 0, "revocation": 0}
+}
+
+// kindBucket maps a global-log kind to its countsByKind bucket ("" = ignore).
+func kindBucket(kind string) string {
+	switch kind {
+	case "identity-op":
+		return "identity"
+	case "content-op":
+		return "content"
+	case "artifact", "credential", "countersign", "revocation":
+		return kind
+	default:
+		return ""
+	}
 }
 
 // IngestionResult reports the outcome of ingesting a single operation.
