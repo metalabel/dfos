@@ -549,6 +549,67 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	return entries, cursor, nil
 }
 
+func (s *SQLiteStore) RelayStats() (*RelayStats, error) {
+	db := s.readerDB()
+
+	var opCount int
+	if err := db.QueryRow("SELECT COUNT(*) FROM operation_log").Scan(&opCount); err != nil {
+		return nil, err
+	}
+
+	counts := newKindCounts()
+	rows, err := db.Query("SELECT kind, COUNT(*) FROM operation_log GROUP BY kind")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kind string
+		var count int
+		if err := rows.Scan(&kind, &count); err != nil {
+			return nil, err
+		}
+		if b := kindBucket(kind); b != "" {
+			counts[b] = count
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var headCID *string
+	var head string
+	if err := db.QueryRow("SELECT cid FROM operation_log ORDER BY seq DESC LIMIT 1").Scan(&head); err != nil {
+		if err != sql.ErrNoRows {
+			return nil, err
+		}
+	} else {
+		headCID = &head
+	}
+
+	var oldestOpAt *string
+	var jwsToken string
+	if err := db.QueryRow("SELECT jws_token FROM operation_log ORDER BY seq ASC LIMIT 1").Scan(&jwsToken); err != nil {
+		if err != sql.ErrNoRows {
+			return nil, err
+		}
+	} else {
+		_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+		if err == nil {
+			if createdAt, ok := payload["createdAt"].(string); ok {
+				oldestOpAt = &createdAt
+			}
+		}
+	}
+
+	return &RelayStats{
+		OpCount:      opCount,
+		CountsByKind: counts,
+		OldestOpAt:   oldestOpAt,
+		HeadCID:      headCID,
+	}, nil
+}
+
 // GetIdentityStateAtCID replays the identity chain from genesis to the target CID.
 // For SQLite, this could use snapshots in the future; for now it replays fully.
 func (s *SQLiteStore) GetIdentityStateAtCID(did, cid string) (*IdentityStateAtCID, error) {

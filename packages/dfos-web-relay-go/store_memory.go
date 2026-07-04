@@ -231,6 +231,40 @@ func (s *MemoryStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	return result, cursor, nil
 }
 
+func (s *MemoryStore) RelayStats() (*RelayStats, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	opCount := len(s.operationLog)
+	counts := newKindCounts()
+	for _, e := range s.operationLog {
+		if b := kindBucket(e.Kind); b != "" {
+			counts[b]++
+		}
+	}
+
+	var headCID *string
+	var oldestOpAt *string
+	if opCount > 0 {
+		head := s.operationLog[opCount-1].CID
+		headCID = &head
+
+		_, payload, err := dfos.DecodeJWSUnsafe(s.operationLog[0].JWSToken)
+		if err == nil {
+			if createdAt, ok := payload["createdAt"].(string); ok {
+				oldestOpAt = &createdAt
+			}
+		}
+	}
+
+	return &RelayStats{
+		OpCount:      opCount,
+		CountsByKind: counts,
+		OldestOpAt:   oldestOpAt,
+		HeadCID:      headCID,
+	}, nil
+}
+
 func (s *MemoryStore) GetIdentityStateAtCID(did, cid string) (*IdentityStateAtCID, error) {
 	s.mu.RLock()
 	chain, ok := s.identityChains[did]

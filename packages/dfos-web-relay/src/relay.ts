@@ -37,7 +37,14 @@ import {
 } from './revocations';
 import { computeOpCID, sequenceOps } from './sequencer';
 import { PROOF_BASE_PATH } from './types';
-import type { PeerClient, PeerConfig, RelayOptions, RelayStore, StoredContentChain } from './types';
+import type {
+  PeerClient,
+  PeerConfig,
+  RelayOptions,
+  RelayStats,
+  RelayStore,
+  StoredContentChain,
+} from './types';
 
 // -----------------------------------------------------------------------------
 // relay result type
@@ -251,6 +258,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     } catch {
       pendingOps = -1;
     }
+    let stats: RelayStats | undefined;
+    try {
+      stats = store.getStats ? await store.getStats() : undefined;
+    } catch {
+      stats = undefined;
+    }
+    const peerInfos = peers.map((p) => ({ endpoint: p.url }));
     return c.json({
       did: relayDID,
       protocol: 'dfos-web-relay',
@@ -266,8 +280,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         revocations: true,
       },
       profile: profileArtifactJws,
+      peers: peerInfos,
       stats: {
         pendingOps,
+        ...(stats ?? {}),
       },
     });
   });

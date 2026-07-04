@@ -125,6 +125,19 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 	if n, err := r.readStore.CountUnsequenced(); err == nil {
 		pendingOps = n
 	}
+	statsBlock := map[string]any{"pendingOps": pendingOps}
+	if sp, ok := r.readStore.(StatsProvider); ok {
+		if st, err := sp.RelayStats(); err == nil && st != nil {
+			statsBlock["opCount"] = st.OpCount
+			statsBlock["countsByKind"] = st.CountsByKind
+			statsBlock["oldestOpAt"] = st.OldestOpAt
+			statsBlock["headCid"] = st.HeadCID
+		}
+	}
+	peers := make([]RelayPeerInfo, 0, len(r.peers))
+	for _, p := range r.peers {
+		peers = append(peers, RelayPeerInfo{Endpoint: p.URL})
+	}
 	writeJSON(w, 200, map[string]any{
 		"did":      r.did,
 		"protocol": "dfos-web-relay",
@@ -140,9 +153,8 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 			"revocations": true,
 		},
 		"profile": r.profileArtifactJWS,
-		"stats": map[string]any{
-			"pendingOps": pendingOps,
-		},
+		"peers":   peers,
+		"stats":   statsBlock,
 	})
 }
 

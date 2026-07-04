@@ -32,6 +32,8 @@ export type {
   RelayIdentity,
   RelayOptions,
   RelayStore,
+  RelayPeerInfo,
+  RelayStats,
   StoredIdentityChain,
   StoredContentChain,
   StoredOperation,
