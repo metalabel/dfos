@@ -98,13 +98,19 @@ export const fetchOpRaw = async (
   return null;
 };
 
-/** Countersignatures targeting an op CID — a list of JWS tokens. */
+/**
+ * Countersignatures targeting any CID — a list of JWS tokens.
+ *
+ * Uses the PRIMARY `/proof/v1/countersignatures/:cid` route, which resolves for
+ * ANY countersignable target (operations AND artifacts). The operation-scoped
+ * `/operations/:cid/countersignatures` route 404s on non-operation CIDs, so an
+ * artifact's witnesses were invisible here before — the op view renders
+ * artifacts too. Parser is response-shape-agnostic (reads body.countersignatures).
+ */
 export const fetchCountersigs = async (cid: string, relays: string[]): Promise<string[]> => {
   for (const relay of relays) {
     try {
-      const res = await tryJson(
-        `${relay}${PROOF}/operations/${encodeURIComponent(cid)}/countersignatures`,
-      );
+      const res = await tryJson(`${relay}${PROOF}/countersignatures/${encodeURIComponent(cid)}`);
       if (!res.ok) continue;
       const body = (await res.json()) as { countersignatures?: unknown };
       if (Array.isArray(body.countersignatures))

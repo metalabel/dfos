@@ -29,7 +29,7 @@ import {
 } from '../components/ui';
 import { getClient } from '../lib/client';
 import { getDb } from '../lib/db-instance';
-import { short } from '../lib/format';
+import { didOfKid, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { KIND_OF_TYP, PAYLOAD_NOTES } from '../lib/op-annotations';
 import { toOpRows, type OpRow } from '../lib/op-rows';
@@ -67,11 +67,6 @@ interface WitnessRow {
   targetsThis: boolean;
   sig: CheckState;
 }
-
-const didOfKid = (kid: string): string => {
-  const i = kid.indexOf('#');
-  return i > 0 ? kid.slice(0, i) : '';
-};
 
 export const Op = (props: { cid: string }) => {
   const [op, setOp] = useState<OpState | null>(null);

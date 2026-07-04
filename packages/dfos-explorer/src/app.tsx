@@ -12,6 +12,7 @@ import { getRelays, subscribeRelays } from './lib/relays';
 import { dispatchInput, routeFor } from './lib/resolve-input';
 import { startAutoSyncScheduler, useSyncState } from './lib/sync-store';
 import { navigate, useRoute } from './router';
+import { BrowseArtifacts, BrowseDocuments, BrowseIdentities } from './views/browse';
 import { Content } from './views/content';
 import { Credential } from './views/credential';
 import { Glossary } from './views/glossary';
@@ -23,13 +24,19 @@ import { Relays } from './views/relays';
 
 const SyncTicker = () => {
   const sync = useSyncState();
-  if (sync.phase !== 'syncing') return null;
+  const active = sync.phase === 'syncing' || sync.phase === 'resolving';
+  if (!active) return null;
   const auto = sync.trigger === 'auto';
+  const resolving = sync.phase === 'resolving';
   return (
-    <a class="synctick" href="#/" title={`${auto ? 'auto-' : ''}syncing — ${sync.status}`}>
+    <a
+      class="synctick"
+      href="#/"
+      title={`${auto ? 'auto-' : ''}${resolving ? 'resolving projections' : 'syncing'} — ${sync.status}`}
+    >
       <span class="spin">◍</span>
       {auto ? <span class="synctick-auto">auto</span> : null}
-      <span class="synctick-n">{fmtCount(sync.ops)}</span>
+      <span class="synctick-n">{resolving ? fmtCount(sync.resolved) : fmtCount(sync.ops)}</span>
     </a>
   );
 };
@@ -73,6 +80,9 @@ const Header = (props: { onToggleIndex: () => void; indexOpen: boolean }) => {
           </a>
         </div>
         <div class="hnav">
+          <a href="#/identities">identities</a>
+          <a href="#/documents">documents</a>
+          <a href="#/artifacts">artifacts</a>
           <a href="#/relays">relays</a>
           <a href="#/glossary">glossary</a>
         </div>
@@ -166,6 +176,12 @@ export const App = () => {
         return <Glossary />;
       case 'relays':
         return <Relays />;
+      case 'identities':
+        return <BrowseIdentities />;
+      case 'documents':
+        return <BrowseDocuments />;
+      case 'artifacts':
+        return <BrowseArtifacts />;
       case 'did':
         return <Identity did={route.id} />;
       case 'content':

@@ -86,13 +86,108 @@ describe('explorer db', () => {
       ],
     );
     const recent = await db.chainsQuery({ sort: 'recent', limit: 10 });
-    expect(recent[0]?.chainId).toBe('new');
+    expect(recent.rows[0]?.chainId).toBe('new');
+    expect(recent.truncated).toBe(false);
     const byOps = await db.chainsQuery({ sort: 'ops', limit: 10 });
-    expect(byOps[0]?.chainId).toBe('old');
+    expect(byOps.rows[0]?.chainId).toBe('old');
     const contentOnly = await db.chainsQuery({ sort: 'recent', kind: 'content-op', limit: 10 });
-    expect(contentOnly.map((c) => c.chainId)).toEqual(['content1']);
+    expect(contentOnly.rows.map((c) => c.chainId)).toEqual(['content1']);
     const limited = await db.chainsQuery({ sort: 'recent', limit: 2 });
-    expect(limited).toHaveLength(2);
+    expect(limited.rows).toHaveLength(2);
+    // hitting the limit is ordinary pagination, not a truncated scan
+    expect(limited.truncated).toBe(false);
+  });
+
+  it('round-trips Phase-2 projection fields on a rollup', async () => {
+    const db = await freshDb();
+    await db.putBatch(
+      [],
+      [
+        rollup({
+          chainId: 'content-profile',
+          kind: 'content-op',
+          docSchema: 'https://schemas.dfos.com/profile/v1',
+          publicRead: true,
+          resolvedHead: 'bafy-head',
+        }),
+        rollup({
+          chainId: 'did:dfos:named',
+          kind: 'identity-op',
+          name: 'Alice',
+          nameLower: 'alice',
+          publicRead: true,
+        }),
+      ],
+    );
+    const doc = await db.getChain('content-profile');
+    expect(doc?.docSchema).toBe('https://schemas.dfos.com/profile/v1');
+    expect(doc?.resolvedHead).toBe('bafy-head');
+    const id = await db.getChain('did:dfos:named');
+    expect(id?.name).toBe('Alice');
+  });
+
+  it('browseIdentities filters by resolved name and substring search', async () => {
+    const db = await freshDb();
+    await db.putBatch(
+      [],
+      [
+        rollup({ chainId: 'did:dfos:a', name: 'Alice', nameLower: 'alice', publicRead: true }),
+        rollup({
+          chainId: 'did:dfos:b',
+          name: 'Bob Loblaw',
+          nameLower: 'bob loblaw',
+          publicRead: true,
+        }),
+        // no resolved profile — hidden unless includeGated
+        rollup({ chainId: 'did:dfos:c' }),
+      ],
+    );
+    const all = await db.browseIdentities({ limit: 10 });
+    expect(all.publicCount).toBe(2);
+    expect(all.gatedCount).toBe(1);
+    expect(all.rows.map((r) => r.chainId)).toEqual(['did:dfos:a', 'did:dfos:b']); // name-sorted
+
+    const search = await db.browseIdentities({ query: 'lob', limit: 10 });
+    expect(search.rows.map((r) => r.name)).toEqual(['Bob Loblaw']);
+    expect(search.matched).toBe(1);
+
+    const gated = await db.browseIdentities({ includeGated: true, limit: 10 });
+    expect(gated.rows).toHaveLength(3);
+  });
+
+  it('browseDocuments partitions public / gated / unresolved', async () => {
+    const db = await freshDb();
+    await db.putBatch(
+      [],
+      [
+        rollup({
+          chainId: 'pub',
+          kind: 'content-op',
+          docSchema: 'https://schemas.dfos.com/profile/v1',
+          publicRead: true,
+          resolvedHead: 'h1',
+          lastCreatedAt: '2026-02-01T00:00:00.000Z',
+        }),
+        // resolved but gated (no schema, publicRead false)
+        rollup({ chainId: 'gated', kind: 'content-op', publicRead: false, resolvedHead: 'h2' }),
+        // never resolved
+        rollup({ chainId: 'pending', kind: 'content-op' }),
+      ],
+    );
+    const pub = await db.browseDocuments({ limit: 10 });
+    expect(pub.publicCount).toBe(1);
+    expect(pub.gatedCount).toBe(1);
+    expect(pub.unresolvedCount).toBe(1);
+    expect(pub.rows.map((r) => r.chainId)).toEqual(['pub']);
+
+    const withGated = await db.browseDocuments({ includeGated: true, limit: 10 });
+    expect(withGated.rows.map((r) => r.chainId).sort()).toEqual(['gated', 'pub']);
+
+    const bySchema = await db.browseDocuments({
+      schema: 'https://schemas.dfos.com/profile/v1',
+      limit: 10,
+    });
+    expect(bySchema.rows.map((r) => r.chainId)).toEqual(['pub']);
   });
 
   it('tracks per-relay cursors and wipes everything', async () => {

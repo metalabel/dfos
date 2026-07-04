@@ -25,8 +25,10 @@ import { fmtCount, short } from './format';
 import { getRelays } from './relays';
 import { getAutoSyncMinutes } from './settings';
 import { indexChainOps, syncAll, type SyncProgress } from './sync';
+import { resolvePublicProjections } from './sync-projections';
 
-export type SyncPhase = 'idle' | 'syncing' | 'done' | 'error';
+// 'syncing' = Phase 1 (log paging); 'resolving' = Phase 2 (public projections).
+export type SyncPhase = 'idle' | 'syncing' | 'resolving' | 'done' | 'error';
 
 export interface SyncState {
   phase: SyncPhase;
@@ -48,6 +50,10 @@ export interface SyncState {
   lastSyncAt: number;
   /** how it was kicked off — surfaced so the indicator can read 'auto' quietly */
   trigger: 'manual' | 'auto' | null;
+  /** Phase-2: content chains resolved this run */
+  resolved: number;
+  /** Phase-2: of those, resolved to a public integrity-checked document */
+  publicDocs: number;
   /** bumped on any local-db mutation (sync page, wipe, JIT write) so every
    *  subscriber re-reads counts — the single "the index changed" signal */
   dbEpoch: number;
@@ -76,6 +82,8 @@ let state: SyncState = {
   startedAt: 0,
   lastSyncAt: loadLastSync(),
   trigger: null,
+  resolved: 0,
+  publicDocs: 0,
   dbEpoch: 0,
 };
 
@@ -115,12 +123,15 @@ export const startSync = async (trigger: 'manual' | 'auto' = 'manual'): Promise<
   if (controller) return; // one at a time — a second click is a no-op
   const relays = getRelays();
   controller = new AbortController();
+  const signal = controller.signal;
   set({
     phase: 'syncing',
     relay: '',
     ops: 0,
     chains: 0,
     added: 0,
+    resolved: 0,
+    publicDocs: 0,
     error: '',
     status: 'starting…',
     startedAt: Date.now(),
@@ -133,7 +144,7 @@ export const startSync = async (trigger: 'manual' | 'auto' = 'manual'): Promise<
       db,
       client: getClient(),
       relays,
-      signal: controller.signal,
+      signal,
       onProgress: (p: SyncProgress) => {
         set({
           relay: short(p.relay.replace(/^https?:\/\//, ''), 22, 0),
@@ -145,8 +156,27 @@ export const startSync = async (trigger: 'manual' | 'auto' = 'manual'): Promise<
         });
       },
     });
+
+    // aborted during Phase 1 — leave what landed, do NOT auto-continue Phase 2
+    if (signal.aborted) {
+      set({ phase: 'idle', status: 'stopped' });
+      return;
+    }
+
+    // Phase 2 (decision C): auto-continue into public-projection resolution
+    const proj = await runProjections(db, relays, signal);
+
+    // aborted mid-Phase-2 — resolvePublicProjections breaks its loop and returns
+    // partial tallies rather than throwing, so re-check before claiming "done"
+    // (else we'd persist a false lastSyncAt and hide the interrupted resolution)
+    if (signal.aborted) {
+      set({ phase: 'idle', status: 'stopped' });
+      return;
+    }
+
     const now = Date.now();
     persistLastSync(now);
+    const projLine = proj ? ` · ${fmtCount(proj.publicDocs)} public docs` : '';
     set({
       phase: 'done',
       lastSyncAt: now,
@@ -154,11 +184,11 @@ export const startSync = async (trigger: 'manual' | 'auto' = 'manual'): Promise<
         ? `done · ${result.errors.length} relay error(s): ${result.errors
             .map((e) => e.error)
             .join('; ')}`
-        : `done · +${fmtCount(result.added)} new ops`,
+        : `done · +${fmtCount(result.added)} new ops${projLine}`,
       error: result.errors.length ? result.errors.map((e) => e.error).join('; ') : '',
     });
   } catch (e) {
-    if (controller?.signal.aborted) {
+    if (signal.aborted) {
       set({ phase: 'idle', status: 'stopped' });
     } else {
       const msg = e instanceof Error ? e.message : String(e);
@@ -169,9 +199,72 @@ export const startSync = async (trigger: 'manual' | 'auto' = 'manual'): Promise<
   }
 };
 
+/**
+ * Phase 2 — resolve public projections. Sets `phase: 'resolving'` and streams
+ * progress; returns the tallies (or null if aborted before it began). Shared by
+ * the auto-continue path and the standalone `startProjections` re-run.
+ */
+const runProjections = async (
+  db: Awaited<ReturnType<typeof getDb>>,
+  relays: string[],
+  signal: AbortSignal,
+): Promise<{ publicDocs: number; attributed: number } | null> => {
+  if (signal.aborted) return null;
+  set({ phase: 'resolving', resolved: 0, publicDocs: 0, status: 'resolving public projections…' });
+  const proj = await resolvePublicProjections({
+    db,
+    relays,
+    signal,
+    onProgress: (p) => {
+      set({
+        resolved: p.resolved,
+        publicDocs: p.publicDocs,
+        status: `resolving ${fmtCount(p.resolved)}/${fmtCount(p.total)} chains · ${fmtCount(
+          p.publicDocs,
+        )} public`,
+        dbEpoch: state.dbEpoch + 1,
+      });
+    },
+  });
+  return proj;
+};
+
+/**
+ * Run ONLY Phase 2, resuming from where prior resolutions left off (chains whose
+ * head hasn't drifted are skipped). Separately abortable from a full sync — the
+ * op log stays as it is; this only fills in the browse projections.
+ */
+export const startProjections = async (): Promise<void> => {
+  if (controller) return;
+  const relays = getRelays();
+  controller = new AbortController();
+  const signal = controller.signal;
+  set({ startedAt: Date.now(), trigger: 'manual', error: '' });
+  try {
+    const db = await getDb();
+    await runProjections(db, relays, signal);
+    set({
+      phase: signal.aborted ? 'idle' : 'done',
+      status: signal.aborted ? 'stopped' : `done · resolved projections`,
+    });
+  } catch (e) {
+    if (signal.aborted) {
+      set({ phase: 'idle', status: 'stopped' });
+    } else {
+      const msg = e instanceof Error ? e.message : String(e);
+      set({ phase: 'error', error: msg, status: `resolve failed: ${msg}` });
+    }
+  } finally {
+    controller = null;
+  }
+};
+
 export const stopSync = (): void => {
   controller?.abort();
 };
+
+/** True while Phase 2 (public projections) is resolving. */
+export const isResolving = (): boolean => state.phase === 'resolving';
 
 /**
  * Just-in-time index a single chain the detail view already fetched + verified.
@@ -220,7 +313,9 @@ export const nextAutoSyncAt = (): number => {
 
 const autoTick = (): void => {
   const minutes = getAutoSyncMinutes();
-  if (minutes <= 0 || isSyncing()) return;
+  // skip while EITHER phase runs — a full sync holds the controller across Phase
+  // 2, but guarding on the phase directly avoids relying on that as the only lock
+  if (minutes <= 0 || isSyncing() || isResolving()) return;
   const due = state.lastSyncAt === 0 || Date.now() >= state.lastSyncAt + minutes * 60_000;
   if (due) void startSync('auto');
 };
