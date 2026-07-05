@@ -801,6 +801,13 @@ func parseLimit(req *http.Request, defaultLimit, maxLimit int) int {
 	if limitStr == "" {
 		return defaultLimit
 	}
+	// strconv.Atoi accepts a leading '+' (e.g. "+50" → 50), but the TS twin's
+	// parseLimit gates on /^-?\d+$/, which rejects it → default. Reject it here
+	// too so a percent-encoded plus (?limit=%2B50) clamps identically on both
+	// relays instead of diverging the page size.
+	if limitStr[0] == '+' {
+		return defaultLimit
+	}
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || limit < 1 {
 		return defaultLimit

@@ -50,6 +50,10 @@ type Fixture struct {
 	// cases (/revocations/v1).
 	QueryRevokedCredentialCID string `json:"queryRevokedCredentialCid"`
 	QueryRevocationIssuerDID  string `json:"queryRevocationIssuerDid"`
+	// QueryCountersignedCID is the CID of an op (A's content-create) that carries
+	// one countersignature (witnessed by user B). Drives the countersignatures
+	// route parity cases (/proof/v1/countersignatures).
+	QueryCountersignedCID string `json:"queryCountersignedCid"`
 }
 
 // seededKey returns a deterministic ed25519 keypair from a single seed byte.
@@ -215,6 +219,20 @@ func revocation(issuerDID, credentialCID, kid, createdAt string, priv ed25519.Pr
 	return signJWS("did:dfos:revocation", kid, payload, priv)
 }
 
+// countersign builds a pinned-createdAt standalone countersignature by a witness
+// over a target op/artifact CID. Payload shape matches SignCountersign, which
+// stamps wall-clock createdAt and so cannot be byte-pinned.
+func countersign(witnessDID, targetCID, kid, createdAt string, priv ed25519.PrivateKey) (token, cid string) {
+	payload := map[string]any{
+		"version":   1,
+		"type":      "countersign",
+		"did":       witnessDID,
+		"targetCID": targetCID,
+		"createdAt": createdAt,
+	}
+	return signJWS("did:dfos:countersign", kid, payload, priv)
+}
+
 func publicCredential(issuerDID, kid string, priv ed25519.PrivateKey) (token, cid string) {
 	payload := map[string]any{
 		"version": 1,
@@ -287,6 +305,12 @@ func main() {
 	bCred, bCredCID := publicCredential(bDID, bKid, bPriv)
 	bRevocation, _ := revocation(bDID, bCredCID, bKid, pinnedTimeAt(3), bPriv)
 
+	// --- countersignature by B over A's content-create CID (countersign parity) ---
+	// A witnesses nothing of its own; B (an already-ingested identity) attests to
+	// A's content-create op, so /proof/v1/countersignatures/{cCreateCID} returns
+	// exactly one countersignature on both twins.
+	bCountersign, _ := countersign(bDID, cCreateCID, bKid, pinnedTimeAt(4), bPriv)
+
 	// --- user C (seed 4): genesis WITH a services set (DfosRelay + ContentAnchor) ---
 	// The ContentAnchor points at A's 31-char content chain id, which satisfies the
 	// contentId anchor shape validated at ingest.
@@ -321,6 +345,7 @@ func main() {
 			cred,
 			bCred,
 			bRevocation,
+			bCountersign,
 			cGenesis,
 			dGenesis,
 			dDelete,
@@ -331,6 +356,7 @@ func main() {
 		QueryDeletedDID:           dDID,
 		QueryRevokedCredentialCID: bCredCID,
 		QueryRevocationIssuerDID:  bDID,
+		QueryCountersignedCID:     cCreateCID,
 	}
 
 	data, err := json.MarshalIndent(fixture, "", "  ")

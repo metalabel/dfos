@@ -42,6 +42,7 @@ type parityFixture struct {
 	QueryDeletedDID           string   `json:"queryDeletedDid"`
 	QueryRevokedCredentialCID string   `json:"queryRevokedCredentialCid"`
 	QueryRevocationIssuerDID  string   `json:"queryRevocationIssuerDid"`
+	QueryCountersignedCID     string   `json:"queryCountersignedCid"`
 }
 
 func loadParityEnv(t *testing.T) (tsURL, goURL string, fix parityFixture) {
