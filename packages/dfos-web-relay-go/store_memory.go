@@ -184,6 +184,23 @@ func (s *MemoryStore) AddCountersignature(operationCID string, jwsToken string) 
 	return nil
 }
 
+func (s *MemoryStore) GetCountersignaturesByWitness(witnessDID string) ([]StoredCountersignature, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows := []StoredCountersignature{}
+	for targetCID, tokens := range s.countersignatures {
+		for _, token := range tokens {
+			row := countersignatureFromToken(targetCID, token)
+			if row == nil || row.WitnessDID != witnessDID {
+				continue
+			}
+			rows = append(rows, *row)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].CID < rows[j].CID })
+	return rows, nil
+}
+
 func (s *MemoryStore) AppendToLog(entry LogEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

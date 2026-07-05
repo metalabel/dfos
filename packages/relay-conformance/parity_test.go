@@ -205,6 +205,9 @@ func TestDualRelayParity(t *testing.T) {
 		"/proof/v1/identities/" + fix.QueryDID + "/log?limit=1000",
 		"/proof/v1/content/" + fix.QueryContentID + "/log?limit=1000",
 		"/.well-known/dfos-relay",
+		"/index/v0/identities?limit=1000",
+		"/index/v0/content?limit=1000",
+		"/index/v0/countersignatures?witness=" + fix.QueryRevocationIssuerDID + "&limit=1000",
 	}
 
 	for _, route := range routes {

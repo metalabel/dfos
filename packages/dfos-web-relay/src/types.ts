@@ -38,6 +38,8 @@ export interface RelayOptions {
   content?: boolean;
   /** Whether the global operation log is enabled (default: true) */
   log?: boolean;
+  /** Whether the index query family is enabled (default: true) */
+  index?: boolean;
   /**
    * Whether this relay accepts writes (default: true). When false, it is a LITE
    * pull-only proof node: POST /proof/v1/operations is rejected (501), so neither
@@ -220,6 +222,14 @@ export interface StoredPublicCredential {
   jwsToken: string;
 }
 
+export interface StoredCountersignature {
+  cid: string;
+  targetCID: string;
+  witnessDID: string;
+  relation: string | null;
+  jwsToken: string;
+}
+
 // -----------------------------------------------------------------------------
 // relay store interface
 // -----------------------------------------------------------------------------
@@ -327,6 +337,12 @@ export interface RelayStore {
    * `/revocations/v1/issuer/:did` listing route.
    */
   getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]>;
+
+  // --- index queries ---
+
+  getIndexIdentityChains(): Promise<StoredIdentityChain[]>;
+  getIndexContentChains(): Promise<StoredContentChain[]>;
+  getIndexCountersignaturesByWitness(witnessDID: string): Promise<StoredCountersignature[]>;
 
   // --- public credentials (standing authorization) ---
 

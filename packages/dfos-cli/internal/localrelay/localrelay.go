@@ -26,6 +26,7 @@ type Options struct {
 	ProfileName string       // relay profile name (default: "DFOS CLI")
 	ExtraPeers  []string     // additional peer URLs beyond config.toml
 	Write       *bool        // nil/true = accept writes; false = LITE pull-only node
+	Index       *bool        // nil/true = serve /index/v0; false = advertise false + 501
 	Logger      *slog.Logger // nil = relay's slog.Default(); CLI passes a quiet one
 	// ContentFollow: "eager" = eagerly materialize the document bytes of content
 	// chains this relay holds a standing public-read grant for (a follower / cache
@@ -86,6 +87,7 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 		Peers:         peers,
 		PeerClient:    peerClient,
 		Write:         opts.Write,
+		Index:         opts.Index,
 		Logger:        opts.Logger,
 		ContentFollow: opts.ContentFollow,
 	})

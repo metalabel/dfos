@@ -24,6 +24,7 @@ type Relay struct {
 	profileArtifactJWS string
 	contentEnabled     bool
 	logEnabled         bool
+	indexEnabled       bool
 	writeEnabled       bool   // false = LITE pull-only node (POST /operations rejected)
 	contentFollow      string // "eager" = materialize granted public content blobs; else off
 	logger             *slog.Logger
@@ -75,6 +76,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 
 	contentEnabled := opts.Content == nil || *opts.Content
 	logEnabled := opts.Log == nil || *opts.Log
+	indexEnabled := opts.Index == nil || *opts.Index
 	writeEnabled := opts.Write == nil || *opts.Write
 
 	identity := opts.Identity
@@ -111,6 +113,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		profileArtifactJWS: identity.ProfileArtifactJWS,
 		contentEnabled:     contentEnabled,
 		logEnabled:         logEnabled,
+		indexEnabled:       indexEnabled,
 		writeEnabled:       writeEnabled,
 		contentFollow:      opts.ContentFollow,
 		logger:             logger,
