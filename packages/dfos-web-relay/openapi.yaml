@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DFOS Web Relay
-  version: 0.17.0
+  version: 0.18.0
   description: |
     HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves
     identity chains, content chains, countersignatures, and content blobs.
