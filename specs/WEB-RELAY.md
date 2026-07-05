@@ -615,7 +615,7 @@ Extracted values are **attribution-tier claims**: the anchor is controller-signe
 
 ### Determinism and Coverage
 
-- **Deterministic enumeration.** Every index list is ordered lexicographically ascending by its cursor key (identity rows by `did`, content rows by `contentId`, countersign rows by countersignature `cid`). Two relays holding the same operations serve byte-identical pages — the same convergence property the proof plane guarantees for head state, extended to enumeration.
+- **Deterministic enumeration.** Every index list is ordered lexicographically ascending by its cursor key (identity rows by `did`, content rows by `contentId`, countersign rows by countersignature `cid`). Two relays holding the same operations serve identical page ordering and identical structural fields — the same convergence property the proof plane guarantees for head state, extended to enumeration. Held-bytes-dependent fields (`docSchema`, projected values) additionally require the same held blobs to agree, per coverage below.
 - **Coverage is bounded by held bytes.** `docSchema` and projected fields are computable only for chains whose current head document bytes the relay holds (uploaded, or pulled via [content following](#content-following)). A chain whose bytes are absent reports `docSchema: null` — honest unknown, not a claim of schemalessness. A `docSchema` filter therefore matches only chains with held, decodable head bytes; callers MUST treat the result as a lower bound.
 - **Timestamps are author-claimed.** `genesisAt` / `headAt` surface the `createdAt` fields signed inside the operations — the same values head selection uses — not relay receipt times.
 - **Maintenance.** The index is fully re-derivable from the operation log plus held blobs. Reference implementations maintain it incrementally at ingestion and expose a rebuild path for pre-existing corpora; either way the serving contract is identical.
@@ -656,7 +656,7 @@ Enumerates identity chains, `did` ascending.
 | `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                            |
 | `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker                                                                                        |
 
-Parameters: `hasPublicProfile` (optional boolean — `true` keeps only rows where `profile` is non-null and `profile.publicRead` is true), `after` (a `did` cursor), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
+Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `after` (a `did` cursor), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
 
 ### Content Chains (`GET /index/v0/content?creator={did}&docSchema=&publicRead=&after={contentId}&limit=N`)
 
