@@ -68,6 +68,7 @@ Four route families deliberately stay at the root, on their own clocks:
 - **Content plane routes** (`/content/:contentId/blob[/:ref]`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
 - **Universal resolver** (`GET /1.0/identifiers/:did`) — the DID-core / DIF Universal Resolver binding on its own `1.0` clock (the DIF driver interface version, [DID-METHOD.md](https://protocol.dfos.com/did-method) §5.2.4). It is an additive, read-only projection of the same self-certified terminal state the proof plane serves at `/proof/v1/identities/:did`, rendered as a W3C DID Document. It stays at the root because it tracks the DIF driver clock, not the frozen proof plane.
 - **Revocation status** (`GET /revocations/v1/credential/:credentialCID`, `GET /revocations/v1/issuer/:did`) — an indexed, read-only projection of the relay's revocation set on its own frozen `v1` clock. Revocations still _enter_ through the frozen proof plane (`POST /proof/v1/operations`); this family only exposes a read over the index the relay already maintains for its own credential enforcement. See [Revocation Status](#revocation-status-v1).
+- **Index** (`GET /index/v0/*`) — an optional, non-authoritative query surface over the current-state projections the relay already folds: enumerate identities, filter content chains, reverse-look-up countersignatures by witness. On its own unfrozen `0.x` clock, gated by `capabilities.index`. See [Index (v0)](#index-v0).
 
 ---
 
@@ -288,7 +289,8 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
     "write": true,
     "content": true,
     "log": true,
-    "revocations": true
+    "revocations": true,
+    "index": true
   },
   "profile": "eyJhbGciOiJFZERTQSIs...",
   "peers": [{ "endpoint": "https://peer.relay.example.com" }],
@@ -320,6 +322,7 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 | `capabilities.content`     | boolean        | Whether the relay supports the content plane (blob upload/download)                                                                                                  |
 | `capabilities.log`         | boolean        | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                                  |
 | `capabilities.revocations` | boolean        | Whether the [revocation status](#revocation-status-v1) index is served (`GET /revocations/v1/*`). Both reference relays always serve it                              |
+| `capabilities.index`       | boolean        | Whether the [index](#index-v0) query family is served (`GET /index/v0/*`). An absent flag (a relay predating the family) reads as `false`                            |
 | `profile`                  | string         | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                           |
 | `peers`                    | array          | OPTIONAL additive telemetry. Configured peer relays surfaced for mesh discovery; reference relays emit `[]` when no peers are configured                             |
 | `peers[].endpoint`         | string         | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                                            |
@@ -329,7 +332,7 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 | `stats.oldestOpAt`         | string \| null | OPTIONAL additive telemetry. `createdAt` of the oldest-position global-log entry, or `null` when the log is empty                                                    |
 | `stats.headCid`            | string \| null | OPTIONAL additive telemetry. CID of the global-log tip, or `null` when the log is empty                                                                              |
 
-`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. When `capabilities.revocations: false`, the `/revocations/v1/*` routes return **501 Not Implemented** — the same capability-not-supported semantics. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
+`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. When `capabilities.revocations: false`, the `/revocations/v1/*` routes return **501 Not Implemented** — the same capability-not-supported semantics. When `capabilities.index` is `false` or absent, the `/index/v0/*` routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
 
 ### Lite (pull-only) node — `capabilities.write: false`
 
@@ -567,6 +570,150 @@ If more than one issuer has revoked the same credential CID (possible, since the
 
 ---
 
+## Index (v0)
+
+A relay that verifies and folds chains already holds current-state projections — terminal states, standing public-read grants, per-chain logs. The **index** route family exposes read-only, cursor-paginated _queries_ over those projections: enumerate identities, filter content chains, reverse-look-up countersignatures by witness. It exists so a light client can browse and discover without replaying the global operation log — the same role the revocation status family plays for credential state, generalized.
+
+The family lives at **`/index/v0/*`** on its own **`0.x` clock** — NOT part of the frozen `/proof/v1` proof plane, and (unlike `/revocations/v1`) not yet frozen itself. A relay advertises support via `capabilities.index` in the well-known; when unsupported (or when the flag is absent — relays predating this family), the routes return **501 Not Implemented**. Nothing about ingestion changes.
+
+### Hints, Not Authority
+
+Index responses are **discovery hints, never authority**. Every row carries the identifiers needed to re-derive its claims from the frozen proof plane — a client that cares fetches `GET /proof/v1/identities/:did` / `GET /proof/v1/content/:contentId` (and the per-chain logs) and folds the chain itself. The trust posture is asymmetric and worth stating precisely:
+
+- **The index cannot lie by assertion.** Every claim in a row is verifiable against the proof plane. A fabricated row fails the client's fold.
+- **The index CAN lie by omission.** A relay can be behind, partitioned, or adversarially withholding rows — and a light client cannot detect a recall gap. Absence of a row is NOT proof of absence. A caller that needs stronger recall queries a quorum of independent relays, or replays `GET /proof/v1/log` and folds locally — the full-log replay remains the audit posture that keeps every index honest.
+- **Index output MUST NOT be used as an authorization input.** The `publicRead` field is a discovery hint; content plane access is always re-derived live by the gateway's unified verifier (see [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway)).
+
+### The Structural Seam
+
+The index is bounded by one invariant:
+
+> **Every index field and filter MUST be computable from protocol-defined fields and verification outcomes alone. Document payloads are opaque**, except the [well-known projections](#well-known-projections) below.
+
+Concretely, the index may serve:
+
+- **Structural facts** the relay already computes to verify: chain kind, genesis/head CIDs, op counts, creator DIDs, deletion state, countersign witnesses and targets, credential issuer/subject/scope, revocation status, standing public-read grants, identity service entries.
+- **Declared labels, matched as opaque strings**: an artifact or document `$schema`, a `ContentAnchor` `label`. The relay matches these byte-for-byte the way an HTTP server serves a `Content-Type` — it never interprets what they mean.
+
+What the index MUST NOT do: interpret document payloads, join across application semantics, rank, or reify application concepts. There is no "posts" endpoint and never will be — an application-level notion like _post_ is a **client-composed filter expression** over structural parts (`docSchema=… & publicRead=true & creator=…`), not an index concept. This keeps the relay's query vocabulary closed while the application vocabulary composed on top stays open.
+
+### Well-Known Projections
+
+Exactly one exception to payload opacity exists, and it is enumerated here rather than left to implementations:
+
+| #   | Projection          | Definition                                                                                                                                                                                                                                                                                                                                                                                         |
+| --- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `profile/v1 → name` | For an identity whose terminal `services` contain a `ContentAnchor` whose `label`, lowercased, equals `"profile"` and whose `anchor` is a content-chain identifier: if the relay holds the bytes of that chain's current head document, and the decoded document declares `$schema: "https://schemas.dfos.com/profile/v1"`, and its `name` is a non-empty string — the index surfaces that `name`. |
+
+The projection carries structural **circuit breakers** — every escape hatch resolves to the honest unknown, never a guess:
+
+- A document under any `$schema` NOT in this table is never field-extracted, no matter how tempting its shape.
+- A listed schema whose document is malformed, whose extracted field is missing, empty, or not a string — `name: null`. No partial parses, no coercion.
+- Bytes the relay does not hold — `docSchema: null`, `name: null` (see coverage, below).
+
+Extracted values are **attribution-tier claims**: the anchor is controller-signed (strong), but the name is whatever the document says. Clients verify by fetching the chain and re-hashing the served bytes to the committed `documentCID`. Additions to this table require an amendment to this spec — a relay MUST NOT ship extraction rules that are not listed here.
+
+### Determinism and Coverage
+
+- **Deterministic enumeration.** Every index list is ordered lexicographically ascending by its cursor key (identity rows by `did`, content rows by `contentId`, countersign rows by countersignature `cid`). Two relays holding the same operations serve identical page ordering and identical structural fields — the same convergence property the proof plane guarantees for head state, extended to enumeration. Held-bytes-dependent fields (`docSchema`, projected values) additionally require the same held blobs to agree, per coverage below.
+- **Coverage is bounded by held bytes.** `docSchema` and projected fields are computable only for chains whose current head document bytes the relay holds (uploaded, or pulled via [content following](#content-following)). A chain whose bytes are absent reports `docSchema: null` — honest unknown, not a claim of schemalessness. A `docSchema` filter therefore matches only chains with held, decodable head bytes; callers MUST treat the result as a lower bound.
+- **Timestamps are author-claimed.** `genesisAt` / `headAt` surface the `createdAt` fields signed inside the operations — the same values head selection uses — not relay receipt times.
+- **Maintenance.** The index is fully re-derivable from the operation log plus held blobs. Reference implementations maintain it incrementally at ingestion and expose a rebuild path for pre-existing corpora; either way the serving contract is identical.
+
+### Identities (`GET /index/v0/identities?hasPublicProfile=&after={did}&limit=N`)
+
+Enumerates identity chains, `did` ascending.
+
+```json
+{
+  "identities": [
+    {
+      "did": "did:dfos:hd34z9a4tf6h62864nh4f7at6hr36r4",
+      "headCID": "bafyrei…",
+      "opCount": 4,
+      "genesisAt": "2026-03-25T00:00:00.000Z",
+      "headAt": "2026-04-02T00:00:00.000Z",
+      "isDeleted": false,
+      "profile": {
+        "anchor": "a3n7r3nde8e4keeak92rr3aeztftvc2",
+        "publicRead": true,
+        "docSchema": "https://schemas.dfos.com/profile/v1",
+        "name": "asha"
+      }
+    }
+  ],
+  "next": null
+}
+```
+
+| Field                  | Type           | Description                                                                                                                                              |
+| ---------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opCount`              | number         | Operations stored for this chain, branch-inclusive (log length, not head-branch length)                                                                  |
+| `genesisAt` / `headAt` | string         | Author-claimed `createdAt` of the genesis and current head operations                                                                                    |
+| `profile`              | object \| null | The [well-known projection](#well-known-projections), or `null` when the identity declares no profile-labeled content-chain anchor                       |
+| `profile.anchor`       | string         | The anchored contentId — the client's verification pointer                                                                                               |
+| `profile.publicRead`   | boolean        | Whether a standing public-read grant currently authorizes anonymous read of the anchored chain, per this relay's fold — a hint, never an access decision |
+| `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                            |
+| `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker                                                                                        |
+
+Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `after` (a `did` cursor), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
+
+### Content Chains (`GET /index/v0/content?creator={did}&docSchema=&publicRead=&after={contentId}&limit=N`)
+
+Enumerates content chains, `contentId` ascending. All filters are ANDed exact matches.
+
+```json
+{
+  "content": [
+    {
+      "contentId": "a3n7r3nde8e4keeak92rr3aeztftvc2",
+      "genesisCID": "bafyrei…",
+      "headCID": "bafyrei…",
+      "creatorDID": "did:dfos:hd34z9a4tf6h62864nh4f7at6hr36r4",
+      "isDeleted": false,
+      "opCount": 3,
+      "genesisAt": "2026-03-25T00:00:00.000Z",
+      "headAt": "2026-04-02T00:00:00.000Z",
+      "currentDocumentCID": "bafyrei…",
+      "publicRead": true,
+      "docSchema": "https://schemas.dfos.com/profile/v1"
+    }
+  ],
+  "next": null
+}
+```
+
+Parameters: `creator` (exact DID — the chain's genesis signer; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `publicRead` (boolean), `after` (a `contentId` cursor), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, composed client-side.
+
+### Countersignatures by Witness (`GET /index/v0/countersignatures?witness={did}&after={cid}&limit=N`)
+
+The reverse of the proof plane's by-target route: every countersignature this relay has ingested **signed by** the given witness DID, ordered by countersignature CID ascending.
+
+```json
+{
+  "witness": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+  "countersignatures": [
+    {
+      "cid": "bafyrei…",
+      "targetCID": "bafyrei…",
+      "relation": "endorses",
+      "jwsToken": "eyJhbGciOiJFZERTQSIs…"
+    }
+  ],
+  "next": null
+}
+```
+
+`witness` is required (`400` when missing or malformed). `relation` is the countersign's open-namespace tag, `null` when omitted by the signer. Each entry carries the full JWS — self-proving, same posture as the issuer revocations feed: the caller re-verifies the token rather than trusting the row.
+
+### Deferred from v0
+
+- **`/search`** — fuzzy or tokenized name search. Search semantics (normalization, ranking) are deliberately kept off this clock; if they ship, they ship as their own explicitly-unstable family, never frozen into the index contract.
+- **Credentials by subject** — a reverse lookup with the same shape as the witness feed; deferred until a consumer exists.
+- **Fork/tips visibility** — remains deferred at the proof-plane level (see [What's Deferred](#whats-deferred)).
+
+---
+
 ## Key Resolution
 
 The relay uses two key resolution strategies:
@@ -671,6 +818,9 @@ The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFrom
 | `GET`  | `/1.0/identifiers/:did`                     | meta        | none                                      |
 | `GET`  | `/revocations/v1/credential/:credentialCID` | revocations | none                                      |
 | `GET`  | `/revocations/v1/issuer/:did`               | revocations | none                                      |
+| `GET`  | `/index/v0/identities`                      | index       | none                                      |
+| `GET`  | `/index/v0/content`                         | index       | none                                      |
+| `GET`  | `/index/v0/countersignatures`               | index       | none                                      |
 | `PUT`  | `/content/:contentId/blob/:opCID`           | content     | auth token                                |
 | `GET`  | `/content/:contentId/blob[/:ref]`           | content     | standing auth, or auth token + credential |
 
@@ -812,6 +962,7 @@ resetSequencer(): Promise<void>;
 - **Peer discovery**: Static configuration only — no dynamic discovery
 - **SSE/realtime push**: Polling `GET /proof/v1/log` for now, SSE in the future
 - **Fork visibility API**: Dedicated endpoint to list tips/branches
+- **Search**: fuzzy/tokenized name queries — deliberately excluded from the [index](#index-v0) contract; would ship as its own explicitly-unstable family
 - **Branch termination op**: Protocol-level operation to explicitly kill fork branches
 - **Rate limiting / anti-spam**: Operational concern, not protocol concern
 - **Blob size limits**: No enforcement yet — production deployments should add limits at the middleware layer
