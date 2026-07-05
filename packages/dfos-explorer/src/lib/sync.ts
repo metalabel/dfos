@@ -14,7 +14,14 @@
 
 import type { Client } from '@metalabel/dfos-client';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import { isOpKind, type ChainRollup, type ExplorerDb, type ExplorerOp, type OpKind } from './db';
+import {
+  CHAIN_KINDS,
+  isOpKind,
+  type ChainRollup,
+  type ExplorerDb,
+  type ExplorerOp,
+  type OpKind,
+} from './db';
 
 export interface SyncProgress {
   relay: string;
@@ -90,7 +97,8 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
       count += 1;
 
       if (!known.has(entry.cid)) {
-        const rollup = rollups.get(chainId) ?? {
+        const existing = rollups.get(chainId);
+        const rollup = existing ?? {
           chainId,
           kind,
           opCount: 0,
@@ -98,13 +106,34 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
           lastCreatedAt: '',
           headCid: '',
         };
-        rollup.opCount += 1;
-        rollup.kind = kind;
-        if (!rollup.firstCreatedAt || (createdAt && createdAt < rollup.firstCreatedAt))
+        // KIND precedence: identity/content ops define a chain and OWN its
+        // rollup. A credential/countersign/revocation op rides a SHARED chainId
+        // (a credential chains under its ISSUER's identity chain — see db.ts
+        // CHAIN_KINDS) and must never relabel that chain's rollup nor pollute
+        // its head/opCount. A chain op reclaims a rollup previously seen only as
+        // a non-chain primitive, restarting its chain-history fields.
+        const opIsChain = CHAIN_KINDS.includes(kind);
+        const rollupIsChain = CHAIN_KINDS.includes(rollup.kind);
+        if (opIsChain && existing && !rollupIsChain) {
+          rollup.kind = kind;
+          rollup.opCount = 0;
           rollup.firstCreatedAt = createdAt;
-        if (createdAt >= rollup.lastCreatedAt) {
-          rollup.lastCreatedAt = createdAt;
-          rollup.headCid = entry.cid;
+          rollup.lastCreatedAt = '';
+          rollup.headCid = '';
+        } else if (opIsChain || !rollupIsChain) {
+          rollup.kind = kind;
+        }
+        // fold into the chain-history fields only for ops of the rollup's
+        // settled kind — foreign primitives sharing the chainId live in the ops
+        // index (counted there per-kind), never in this rollup's length/head.
+        if (kind === rollup.kind) {
+          rollup.opCount += 1;
+          if (!rollup.firstCreatedAt || (createdAt && createdAt < rollup.firstCreatedAt))
+            rollup.firstCreatedAt = createdAt;
+          if (createdAt >= rollup.lastCreatedAt) {
+            rollup.lastCreatedAt = createdAt;
+            rollup.headCid = entry.cid;
+          }
         }
         rollups.set(chainId, rollup);
         touched.set(chainId, rollup);
