@@ -181,25 +181,6 @@ const resolveOne = async (
   return out;
 };
 
-/** Merge a content chain's resolved projection onto its rollup (clears stale
- *  docSchema when a head-drift made a once-public chain gated). */
-const writeContentProjection = async (
-  db: ExplorerDb,
-  chainId: string,
-  r: OneResult,
-): Promise<void> => {
-  const existing = await db.getChain(chainId);
-  if (!existing) return;
-  const merged: ChainRollup = {
-    ...existing,
-    resolvedHead: r.resolvedHead,
-    publicRead: r.publicRead,
-  };
-  if (r.docSchema) merged.docSchema = r.docSchema;
-  else delete merged.docSchema;
-  await db.putBatch([], [merged]);
-};
-
 /** Patch the attributed identity rollup with the profile name/avatar — only if
  *  that identity is itself in the index (never fabricate a phantom rollup). The
  *  source content chain is recorded so a later drift can clear a stale name. */
@@ -247,10 +228,16 @@ const clearAttribution = async (
  *  so overlapping them is nearly free; bounded to stay polite to relays. */
 const CONCURRENCY = 8;
 
+/** Content-projection writes are BATCHED. With fetches prefiltered away, the
+ *  per-chain readwrite transaction (plus a progress render per chain) is what
+ *  dominates wall-clock — thousands of one-row transactions is minutes; a few
+ *  dozen batched ones is seconds. Progress ticks once per flush. */
+const FLUSH_EVERY = 200;
+
 /**
  * Resolve every unresolved (or head-drifted) public content chain's projection.
- * Bounded-parallel and abortable; persists per chain so a stop/refresh resumes
- * cleanly (workers finish their in-flight chain and stop picking up new ones).
+ * Bounded-parallel and abortable; persists in batched flushes (an aborted run
+ * flushes its tail, so a stop/refresh resumes from what was already resolved).
  */
 export const resolvePublicProjections = async (
   opts: ResolveOptions,
@@ -288,6 +275,36 @@ export const resolvePublicProjections = async (
     return run;
   };
 
+  // projections accumulate here and land in batched putBatch transactions;
+  // flushes are serialized (workers keep resolving while one is in flight)
+  const pending: { chainId: string; result: OneResult }[] = [];
+  let flushLock: Promise<unknown> = Promise.resolve();
+  const flush = (force: boolean): Promise<unknown> => {
+    flushLock = flushLock.then(async () => {
+      if (!force && pending.length < FLUSH_EVERY) return;
+      const batch = pending.splice(0);
+      if (batch.length === 0) return;
+      // re-read each rollup (attribution may have touched shared rows meanwhile)
+      const rows = await Promise.all(batch.map((b) => db.getChain(b.chainId)));
+      const merged: ChainRollup[] = [];
+      batch.forEach((b, i) => {
+        const row = rows[i];
+        if (!row) return;
+        const m: ChainRollup = {
+          ...row,
+          resolvedHead: b.result.resolvedHead,
+          publicRead: b.result.publicRead,
+        };
+        if (b.result.docSchema) m.docSchema = b.result.docSchema;
+        else delete m.docSchema;
+        merged.push(m);
+      });
+      await db.putBatch([], merged);
+      onProgress?.({ resolved, publicDocs, attributed, total });
+    });
+    return flushLock;
+  };
+
   let next = 0;
   const worker = async (): Promise<void> => {
     while (!signal?.aborted) {
@@ -304,7 +321,7 @@ export const resolvePublicProjections = async (
       );
       if (!result) continue;
 
-      await writeContentProjection(db, rollup.chainId, result);
+      pending.push({ chainId: rollup.chainId, result });
       resolved += 1;
       if (result.publicRead) publicDocs += 1;
 
@@ -322,12 +339,14 @@ export const resolvePublicProjections = async (
         }
       }
 
-      onProgress?.({ resolved, publicDocs, attributed, total });
+      if (pending.length >= FLUSH_EVERY) await flush(false);
     }
   };
 
   const pool = Math.min(CONCURRENCY, content.length);
   await Promise.all(Array.from({ length: pool }, () => worker()));
+  // persist the tail (also the partial progress of an aborted run)
+  await flush(true);
 
   return { resolved, publicDocs, attributed };
 };
