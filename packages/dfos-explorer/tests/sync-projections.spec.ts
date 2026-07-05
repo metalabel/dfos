@@ -292,4 +292,90 @@ describe('resolvePublicProjections', () => {
     expect(calls).toBe(0);
     expect(result.resolved).toBe(0);
   });
+
+  it('overlaps blob fetches through the worker pool and still resolves every chain', async () => {
+    const db = await freshDb();
+    const docs = new Map<string, Record<string, unknown>>();
+    const ops: ExplorerOp[] = [];
+    const rollups: ChainRollup[] = [];
+    for (let i = 0; i < 24; i++) {
+      const doc = { $schema: 'https://schemas.dfos.com/index/v1', n: i };
+      const { op, rollup } = await publicChain(`c-par-${i}`, `did:dfos:w${i}#k`, doc);
+      docs.set(`c-par-${i}`, doc);
+      ops.push(op);
+      rollups.push(rollup);
+    }
+    await db.putBatch(ops, rollups);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const result = await resolvePublicProjections({
+      db,
+      relays: ['r'],
+      fetchBlob: async (contentId) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return served(bytesOf(docs.get(contentId)));
+      },
+    });
+
+    expect(result.resolved).toBe(24);
+    expect(result.publicDocs).toBe(24);
+    expect(maxInFlight).toBeGreaterThan(1); // fetches genuinely overlapped
+    for (let i = 0; i < 24; i++) {
+      expect((await db.getChain(`c-par-${i}`))?.publicRead).toBe(true);
+    }
+  });
+
+  it('serializes same-DID attributions so concurrent profile chains do not lose updates', async () => {
+    const db = await freshDb();
+    const kid = 'did:dfos:shared#k';
+    // two public profile chains attributing the SAME identity, resolved concurrently
+    const a = await publicChain('c-att-a', kid, { $schema: PROFILE_SCHEMA, name: 'First' });
+    const b = await publicChain(
+      'c-att-b',
+      kid,
+      { $schema: PROFILE_SCHEMA, name: 'Second' },
+      '2026-01-02T00:00:00.000Z',
+    );
+    await db.putBatch(
+      [a.op, b.op],
+      [
+        a.rollup,
+        b.rollup,
+        {
+          chainId: 'did:dfos:shared',
+          kind: 'identity-op',
+          opCount: 1,
+          firstCreatedAt: '',
+          lastCreatedAt: '',
+          headCid: 'g',
+        },
+      ],
+    );
+
+    const result = await resolvePublicProjections({
+      db,
+      relays: ['r'],
+      fetchBlob: async (contentId) => {
+        await new Promise((r) => setTimeout(r, 5));
+        return served(
+          bytesOf(
+            contentId === 'c-att-a'
+              ? { $schema: PROFILE_SCHEMA, name: 'First' }
+              : { $schema: PROFILE_SCHEMA, name: 'Second' },
+          ),
+        );
+      },
+    });
+
+    expect(result.attributed).toBe(2); // both writes landed (no lost update)
+    const identity = await db.getChain('did:dfos:shared');
+    expect(identity?.name).toBeDefined();
+    expect(identity?.profileSource).toBeDefined();
+    // the surviving name must be consistent with its recorded source chain
+    expect(identity?.name).toBe(identity?.profileSource === 'c-att-a' ? 'First' : 'Second');
+  });
 });

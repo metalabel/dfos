@@ -23,6 +23,12 @@
   so re-runs only touch chains whose head drifted. Abortable via `signal`. This is
   the "rich requires-full-download UX" — paid once per head, then browse is instant.
 
+  Chains resolve through a bounded worker pool: each chain is independent (one
+  fetch, one rollup write), so the network waits overlap. The one shared surface
+  is the ATTRIBUTION write — two content chains can attribute the same identity
+  DID, and its read-modify-write would lose updates under interleaving — so those
+  writes alone are serialized through a mutex.
+
 */
 
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
@@ -223,9 +229,14 @@ const clearAttribution = async (
   await db.putBatch([], [merged]);
 };
 
+/** In-flight resolves at once. Each is one blob fetch + a hash — network-bound,
+ *  so overlapping them is nearly free; bounded to stay polite to relays. */
+const CONCURRENCY = 8;
+
 /**
  * Resolve every unresolved (or head-drifted) public content chain's projection.
- * Sequential and abortable; persists per chain so a stop/refresh resumes cleanly.
+ * Bounded-parallel and abortable; persists per chain so a stop/refresh resumes
+ * cleanly (workers finish their in-flight chain and stop picking up new ones).
  */
 export const resolvePublicProjections = async (
   opts: ResolveOptions,
@@ -242,34 +253,49 @@ export const resolvePublicProjections = async (
   let publicDocs = 0;
   let attributed = 0;
 
-  for (const rollup of content) {
-    if (signal?.aborted) break;
-    const result = await resolveOne(db, rollup, relays, fetchBlob);
-    if (!result) continue;
+  // identity-rollup attribution is a read-modify-write over a SHARED row (two
+  // chains can attribute the same DID) — serialize just those writes.
+  let attributionLock: Promise<unknown> = Promise.resolve();
+  const withAttributionLock = <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = attributionLock.then(fn, fn);
+    attributionLock = run.catch(() => undefined);
+    return run;
+  };
 
-    await writeContentProjection(db, rollup.chainId, result);
-    resolved += 1;
-    if (result.publicRead) publicDocs += 1;
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (!signal?.aborted) {
+      const i = next;
+      next += 1;
+      if (i >= content.length) return;
+      const rollup = content[i]!;
+      const result = await resolveOne(db, rollup, relays, fetchBlob);
+      if (!result) continue;
 
-    // attribute a public profile to its genesis signer; on any other outcome,
-    // clear a stale name this chain previously set (deleted / gated / retyped)
-    if (result.attributedDid) {
-      if (result.profileName) {
-        const ok = await writeAttribution(
-          db,
-          result.attributedDid,
-          rollup.chainId,
-          result.profileName,
-          result.avatarRef,
-        );
-        if (ok) attributed += 1;
-      } else {
-        await clearAttribution(db, result.attributedDid, rollup.chainId);
+      await writeContentProjection(db, rollup.chainId, result);
+      resolved += 1;
+      if (result.publicRead) publicDocs += 1;
+
+      // attribute a public profile to its genesis signer; on any other outcome,
+      // clear a stale name this chain previously set (deleted / gated / retyped)
+      const { attributedDid, profileName, avatarRef } = result;
+      if (attributedDid) {
+        if (profileName) {
+          const ok = await withAttributionLock(() =>
+            writeAttribution(db, attributedDid, rollup.chainId, profileName, avatarRef),
+          );
+          if (ok) attributed += 1;
+        } else {
+          await withAttributionLock(() => clearAttribution(db, attributedDid, rollup.chainId));
+        }
       }
-    }
 
-    onProgress?.({ resolved, publicDocs, attributed, total });
-  }
+      onProgress?.({ resolved, publicDocs, attributed, total });
+    }
+  };
+
+  const pool = Math.min(CONCURRENCY, content.length);
+  await Promise.all(Array.from({ length: pool }, () => worker()));
 
   return { resolved, publicDocs, attributed };
 };
