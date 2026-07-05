@@ -35,7 +35,11 @@ import {
 } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { compareHeadPreference } from '@metalabel/dfos-protocol/fold';
-import { maintainIndexAfterOp } from './index-maintenance';
+import {
+  collectIndexDirtyAfterOp,
+  createIndexDirtySet,
+  flushIndexMaintenance,
+} from './index-maintenance';
 import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityChain } from './types';
 
 // -----------------------------------------------------------------------------
@@ -1241,6 +1245,15 @@ export const ingestOperations = async (
   // process in dependency order, then re-sort results to submission order
   const indexedResults: { index: number; result: IngestionResult }[] = [];
 
+  // Collect the /index/v0 materialized-projection dirtiness across the whole
+  // batch and flush it ONCE below. This is the single choke point for every
+  // apply path (local POST, the sequencer fixed-point loop, and peer sync all
+  // funnel here). Per-op collection keeps the fan-out triggers (a `chain:*`
+  // grant, a revocation, an identity deletion) from each running a full sweep;
+  // the batch flush runs at most one. Non-authoritative and self-isolating: it
+  // never throws back into ingestion.
+  const dirty = createIndexDirtySet();
+
   for (const op of sorted) {
     try {
       let result: IngestionResult;
@@ -1270,12 +1283,7 @@ export const ingestOperations = async (
             error: 'unrecognized operation type',
           };
       }
-      // Maintain the /index/v0 materialized projection synchronously, in
-      // dependency order, right after the op is applied to the store. This is
-      // the single choke point for every apply path (local POST, the sequencer
-      // fixed-point loop, and peer sync all funnel here). Non-authoritative and
-      // self-isolating: it never throws back into ingestion.
-      await maintainIndexAfterOp(result, op.jwsToken, store);
+      await collectIndexDirtyAfterOp(result, op.jwsToken, store, dirty);
       indexedResults.push({ index: op.originalIndex, result });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unexpected error';
@@ -1285,6 +1293,8 @@ export const ingestOperations = async (
       });
     }
   }
+
+  await flushIndexMaintenance(dirty, store);
 
   // return results in original submission order
   return indexedResults.sort((a, b) => a.index - b.index).map((r) => r.result);

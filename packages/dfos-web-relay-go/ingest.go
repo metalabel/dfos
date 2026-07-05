@@ -1089,6 +1089,15 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 	}
 	results := make([]indexedResult, 0, len(sorted))
 
+	// Collect the /index/v0 materialized-projection dirtiness across the whole
+	// batch and flush it ONCE below. This is the single choke point for every
+	// apply path (local POST, the sequencer fixed-point loop, and peer sync all
+	// funnel through IngestOperations). Per-op collection keeps the fan-out
+	// triggers (a chain:* grant, a revocation, an identity deletion) from each
+	// running a full sweep; the batch flush runs at most one. Non-authoritative
+	// and self-isolating: it never throws back into ingestion.
+	dirty := newIndexDirtySet()
+
 	for _, op := range sorted {
 		var result IngestionResult
 		func() {
@@ -1119,7 +1128,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 		// the single choke point for every apply path (local POST, the sequencer
 		// fixed-point loop, and peer sync all funnel through IngestOperations).
 		// Non-authoritative and self-isolating: it never throws back into ingestion.
-		maintainIndexAfterOp(result, op.jwsToken, store)
+		collectIndexDirtyAfterOp(result, op.jwsToken, store, dirty)
 		results = append(results, indexedResult{index: op.originalIndex, result: result})
 	}
 
@@ -1152,7 +1161,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 				// succeeds on retry must still maintain the projection — the main
 				// pass ran maintenance on its "rejected" result (a no-op). Mirror
 				// the choke-point call here so a retried identity/content row lands.
-				maintainIndexAfterOp(result, tokens[p.index], store)
+				collectIndexDirtyAfterOp(result, tokens[p.index], store, dirty)
 				// find and update the result
 				for i, ir := range results {
 					if ir.index == p.index {
@@ -1167,6 +1176,10 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 			break
 		}
 	}
+
+	// Flush the batch's collected projection dirtiness once, against the final
+	// post-batch store state.
+	flushIndexMaintenance(dirty, store)
 
 	// return in original submission order
 	sort.Slice(results, func(i, j int) bool {
