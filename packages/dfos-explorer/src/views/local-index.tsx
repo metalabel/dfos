@@ -44,6 +44,26 @@ const SORTS: { key: Sort; label: string }[] = [
   { key: 'ops', label: 'most ops' },
 ];
 
+// The sidebar is a bounded ACTIVITY panel, not the whole corpus — rendering all
+// ~20k rollups as DOM rows was a real perf bug (pages measured in thousands of
+// px). Cap what we paint and route "browse all" into the dedicated index pages.
+const SIDEBAR_LIMIT = 50;
+
+/** The dedicated index page + total for a filter, for the "browse all N →" link. */
+const browseAllTarget = (
+  filter: Filter,
+  counts: { chains: number; byKind: Partial<Record<OpKind, number>> },
+): { href: string; total: number } | null => {
+  switch (filter) {
+    case 'identity-op':
+      return { href: '#/identities', total: counts.byKind['identity-op'] ?? 0 };
+    case 'content-op':
+      return { href: '#/documents', total: counts.byKind['content-op'] ?? 0 };
+    default:
+      return null; // 'all' and 'credential' have no single dedicated index page
+  }
+};
+
 /** "next auto-sync" hint from a due ms-epoch: "~4m", "soon", "now". */
 const autoSyncHint = (dueAt: number): string => {
   if (!dueAt) return '';
@@ -97,14 +117,14 @@ export const LocalIndex = () => {
     const db = await getDb();
     setCounts(await db.counts());
     if (filter === 'credential') {
-      setCredRows(await db.opsOfKind('credential', 300));
+      setCredRows(await db.opsOfKind('credential', SIDEBAR_LIMIT));
       setRows([]);
       setTruncated(false);
     } else {
       const res = await db.chainsQuery({
         sort,
         kind: filter === 'all' ? undefined : filter,
-        limit: 300,
+        limit: SIDEBAR_LIMIT,
       });
       setRows(res.rows);
       setTruncated(res.truncated);
@@ -152,6 +172,7 @@ export const LocalIndex = () => {
   };
 
   const status = wiped || sync.status;
+  const browseAll = filter === 'credential' ? null : browseAllTarget(filter, counts);
 
   const summary = useMemo(() => {
     const k = counts.byKind;
@@ -248,13 +269,18 @@ export const LocalIndex = () => {
                   <td>
                     <span class={`kind ${row.kind}`}>{row.kind.replace('-op', '')}</span>
                   </td>
-                  <td>{short(row.chainId, 13, 5)}</td>
-                  <td class="n">{row.opCount}</td>
+                  <td>{row.name ? <b>{row.name}</b> : short(row.chainId, 13, 5)}</td>
+                  <td class="n">{fmtCount(row.opCount)} ops</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+        {browseAll && browseAll.total > rows.length ? (
+          <div class="lbl" style={{ marginTop: 6 }}>
+            <a href={browseAll.href}>browse all {fmtCount(browseAll.total)} →</a>
+          </div>
+        ) : null}
       </div>
       {truncated ? (
         <div class="ck-note" style={{ marginTop: 6 }}>
