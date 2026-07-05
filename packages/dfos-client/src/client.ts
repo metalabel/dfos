@@ -18,6 +18,7 @@ import {
 import { verifyDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { createHttpPeerClient } from '@metalabel/dfos-web-relay/peer-client';
+import { createIndexQueries } from './index-query';
 import { createResolvers, type Resolvers } from './resolvers';
 import { createRevocationChecker } from './revocation';
 import { memoryStore } from './store/memory';
@@ -342,6 +343,11 @@ export const createClient = (config: ClientConfig): Client => {
 
   const callbacks = (): Callbacks => resolvers.callbacks();
 
+  // index (v0) — the non-authoritative discovery seam, bound to the same relay
+  // set + policy-wrapped fetch. Hints only; callers verify by folding.
+  const { indexIdentities, indexContent, indexCountersignatures, capabilities } =
+    createIndexQueries(relays, fetchImpl);
+
   return {
     callbacks,
     resolve,
@@ -353,6 +359,10 @@ export const createClient = (config: ClientConfig): Client => {
     log,
     globalLog,
     health,
+    capabilities,
+    indexIdentities,
+    indexContent,
+    indexCountersignatures,
   };
 };
 

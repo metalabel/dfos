@@ -3,7 +3,7 @@ import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 import { IDBFactory } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { openExplorerDb } from '../src/lib/db';
-import { syncAll, syncFromRelay } from '../src/lib/sync';
+import { indexChainOps, syncAll, syncFromRelay } from '../src/lib/sync';
 
 // unsigned JWS-shaped token — decodeJwsUnsafe only decodes, never verifies
 const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -138,6 +138,21 @@ describe('sync engine', () => {
     const result = await syncFromRelay({ db, client: second, relay: 'http://fake' });
     expect(result.added).toBe(1);
     expect((await db.counts()).ops).toBe(2);
+  });
+
+  it('JIT indexing never writes a sync cursor (the index-light gate signal)', async () => {
+    // the light-mode gate (index-light.ts useLightMode) keys on per-relay sync
+    // CURSOR existence, not corpus emptiness — so the verify queue's JIT folds
+    // (which land ops in the corpus) must never mint a cursor, or verifying
+    // light rows would end light mode out from under itself.
+    const db = await freshDb();
+    const op = entry('bafy-j1', 'did:dfos:jjj', 'identity-op', '2026-01-01T00:00:00.000Z');
+    const { added } = await indexChainOps(db, 'did:dfos:jjj', 'identity-op', [
+      { cid: op.cid, jwsToken: op.jwsToken },
+    ]);
+    expect(added).toBe(1);
+    expect((await db.counts()).ops).toBe(1); // corpus populated…
+    expect(await db.getCursor('http://fake')).toBeUndefined(); // …but never "synced"
   });
 
   it('throws when the relay is unreachable, and syncAll isolates the failure', async () => {

@@ -17,15 +17,19 @@
 
 */
 
+import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
+import { IndexLightNote, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { Badge, Panel, Pill, Term } from '../components/ui';
 import type { ChainRollup, DocumentsBrowse, ExplorerOp, IdentitiesBrowse } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtCount, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
+import { useIndexContent, useIndexIdentities, useLightMode } from '../lib/index-light';
 import { fetchRelayHint } from '../lib/relay-hint';
 import { startProjections, startSync, stopSync, useSyncState } from '../lib/sync-store';
+import { useVerifyStatus } from '../lib/verify-queue';
 
 const BROWSE_LIMIT = 300;
 
@@ -95,15 +99,153 @@ const SyncPrompt = (props: { syncing: boolean }) => (
 );
 
 // -----------------------------------------------------------------------------
+// index light — instant attributed rows straight off a relay's /index/v0, each
+// promoted to verified as it scrolls into view (see lib/index-light.ts). Gated
+// by useLightMode: active while a relay advertises the capability AND no full
+// log sync has ever run against the configured relays (per-relay cursor state —
+// NOT corpus emptiness, which the verify queue's own JIT folds would destroy).
+// After a real sync, every surface below resumes its pre-index local behavior.
+// -----------------------------------------------------------------------------
+
+/** One identity index row: name (attributed) + a live verify badge; opCount and
+ *  deletion reconcile to the fold once it lands (the fold wins over the hint). */
+const IndexIdentityRowView = (props: { row: IndexIdentityRow }) => {
+  const { row } = props;
+  const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did);
+  const rec = useVerifyStatus('identity', row.did);
+  const name = row.profile?.name ?? '';
+  const opCount = rec.facts?.opCount ?? row.opCount;
+  return (
+    <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>
+      <td>
+        {name ? <b>{name}</b> : <span class="muted">— no public profile</span>}{' '}
+        <VerifyBadge kind="identity" chainId={row.did} />
+        {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
+      </td>
+      <td class="cid">{short(row.did, 16, 6)}</td>
+      <td class="n">{opCount}</td>
+    </tr>
+  );
+};
+
+const IndexIdentitiesLight = (props: {
+  rows: IndexIdentityRow[];
+  loading: boolean;
+  query: string;
+}) => {
+  const { rows, loading } = props;
+  const needle = props.query.trim().toLowerCase();
+  const filtered = needle
+    ? rows.filter((r) => (r.profile?.name ?? '').toLowerCase().includes(needle))
+    : rows;
+  const shown = filtered.slice(0, BROWSE_LIMIT);
+  return (
+    <>
+      <IndexLightNote />
+      {loading && rows.length === 0 ? (
+        <span class="muted">loading identities from the relay index…</span>
+      ) : shown.length === 0 ? (
+        <span class="muted">
+          {needle
+            ? `no loaded identities match “${props.query}”.`
+            : 'the relay index returned no public identities.'}
+        </span>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>name</th>
+              <th>identity (DID)</th>
+              <th>ops</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((row) => (
+              <IndexIdentityRowView key={row.did} row={row} />
+            ))}
+          </tbody>
+        </table>
+      )}
+      {needle ? (
+        <div class="ck-note" style={{ marginTop: 8 }}>
+          searching {fmtCount(rows.length)} loaded index rows — the relay has no name search; sync
+          the full log to search the whole corpus.
+        </div>
+      ) : null}
+    </>
+  );
+};
+
+/** One content index row: type ($schema, held-bytes only) + a live verify badge. */
+const IndexContentRowView = (props: { row: IndexContentRow }) => {
+  const { row } = props;
+  const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId);
+  const rec = useVerifyStatus('content', row.contentId);
+  const opCount = rec.facts?.opCount ?? row.opCount;
+  const gated = !(row.docSchema && row.publicRead);
+  return (
+    <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
+      <td>
+        <span class="muted">—</span> <VerifyBadge kind="content" chainId={row.contentId} />
+        {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
+      </td>
+      <td>
+        {row.docSchema ? (
+          <span class="k-role">{schemaLabel(row.docSchema)}</span>
+        ) : (
+          <span class="muted">untyped</span>
+        )}
+        {gated ? <span class="err"> gated</span> : null}
+      </td>
+      <td class="cid">{short(row.contentId, 16, 6)}</td>
+      <td class="n">{opCount}</td>
+    </tr>
+  );
+};
+
+const IndexDocumentsLight = (props: { rows: IndexContentRow[]; loading: boolean }) => {
+  const { rows, loading } = props;
+  const shown = rows.slice(0, BROWSE_LIMIT);
+  return (
+    <>
+      <IndexLightNote />
+      {loading && rows.length === 0 ? (
+        <span class="muted">loading content chains from the relay index…</span>
+      ) : shown.length === 0 ? (
+        <span class="muted">the relay index returned no public content chains.</span>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>name / title</th>
+              <th>type</th>
+              <th>content chain</th>
+              <th>ops</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((row) => (
+              <IndexContentRowView key={row.contentId} row={row} />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+};
+
+// -----------------------------------------------------------------------------
 // identities
 // -----------------------------------------------------------------------------
 
 export const BrowseIdentities = () => {
   const sync = useSyncState();
+  const light = useLightMode();
   const [query, setQuery] = useState('');
   const [includeGated, setIncludeGated] = useState(false);
   const [result, setResult] = useState<IdentitiesBrowse | null>(null);
   const available = useAvailable(ID_KEYS);
+  const index = useIndexIdentities(light === true, true);
 
   useEffect(() => {
     let dead = false;
@@ -124,21 +266,35 @@ export const BrowseIdentities = () => {
     <Panel
       title={
         <>
-          public identities {result ? <Pill state="ok">{fmtCount(result.publicCount)}</Pill> : null}
+          public identities{' '}
+          {light === true ? (
+            <Pill state="warn">{fmtCount(index.rows.length)}</Pill>
+          ) : result ? (
+            <Pill state="ok">{fmtCount(result.publicCount)}</Pill>
+          ) : null}
         </>
       }
-      right={<span class="lbl">who · from local index</span>}
+      right={<span class="lbl">who · from {light === true ? 'relay index' : 'local index'}</span>}
       orient={
-        <>
-          Identities with a publicly-readable profile,{' '}
-          <Term word="attributed" def={GLOSSARY['attributed'] ?? ''} /> to the DID that signed the
-          profile chain's genesis op. Search is a substring over names in your{' '}
-          <Term word="local index" def={GLOSSARY['localIndex'] ?? ''} /> —{' '}
-          <b>attributed, not verified</b>; open a row to fold the rigorous proof.
-        </>
+        light === true ? (
+          <>
+            Identities with a publicly-readable profile, straight off the relay's{' '}
+            <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — every row is an{' '}
+            <b>attributed</b> relay hint, promoted to <b>verified</b> as your tab folds its chain.
+            Search filters the loaded rows only.
+          </>
+        ) : (
+          <>
+            Identities with a publicly-readable profile,{' '}
+            <Term word="attributed" def={GLOSSARY['attributed'] ?? ''} /> to the DID that signed the
+            profile chain's genesis op. Search is a substring over names in your{' '}
+            <Term word="local index" def={GLOSSARY['localIndex'] ?? ''} /> —{' '}
+            <b>attributed, not verified</b>; open a row to fold the rigorous proof.
+          </>
+        )
       }
     >
-      <AvailableHint available={available} localCount={total} />
+      {light !== true ? <AvailableHint available={available} localCount={total} /> : null}
       <div class="bar" style={{ marginBottom: 8 }}>
         <input
           placeholder="search names…"
@@ -147,7 +303,7 @@ export const BrowseIdentities = () => {
           onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
         />
       </div>
-      {result && result.gatedCount > 0 ? (
+      {light !== true && result && result.gatedCount > 0 ? (
         <div class="filters" style={{ marginBottom: 8 }}>
           <button class={includeGated ? 'on' : ''} onClick={() => setIncludeGated((v) => !v)}>
             {includeGated ? 'hide' : 'show'} {fmtCount(result.gatedCount)} without a public profile
@@ -155,8 +311,14 @@ export const BrowseIdentities = () => {
         </div>
       ) : null}
 
-      {!result || total === 0 ? (
-        <SyncPrompt syncing={syncing} />
+      {light === true ? (
+        <IndexIdentitiesLight rows={index.rows} loading={index.loading} query={query} />
+      ) : !result || total === 0 ? (
+        light === null ? (
+          <span class="muted">checking relay capabilities…</span>
+        ) : (
+          <SyncPrompt syncing={syncing} />
+        )
       ) : result.rows.length === 0 ? (
         <span class="muted">no identities match “{query}”.</span>
       ) : (
@@ -205,9 +367,11 @@ export const BrowseIdentities = () => {
 
 export const BrowseDocuments = () => {
   const sync = useSyncState();
+  const light = useLightMode();
   const [includeGated, setIncludeGated] = useState(false);
   const [result, setResult] = useState<DocumentsBrowse | null>(null);
   const available = useAvailable(DOC_KEYS);
+  const index = useIndexContent(light === true, true);
 
   useEffect(() => {
     let dead = false;
@@ -229,27 +393,43 @@ export const BrowseDocuments = () => {
     <Panel
       title={
         <>
-          public documents {result ? <Pill state="ok">{fmtCount(result.publicCount)}</Pill> : null}
+          public documents{' '}
+          {light === true ? (
+            <Pill state="warn">{fmtCount(index.rows.length)}</Pill>
+          ) : result ? (
+            <Pill state="ok">{fmtCount(result.publicCount)}</Pill>
+          ) : null}
         </>
       }
-      right={<span class="lbl">what · from local index</span>}
+      right={<span class="lbl">what · from {light === true ? 'relay index' : 'local index'}</span>}
       orient={
-        <>
-          Content chains whose document bytes were served to an anonymous fetch and{' '}
-          <Term word="re-hashed" def={GLOSSARY['publicProjection'] ?? ''} /> to the on-chain
-          committed CID — typed by the document's <code>$schema</code>. The view is type-agnostic;
-          today every public doc is a <code>profile/v1</code>.
-        </>
+        light === true ? (
+          <>
+            Public content chains straight off the relay's{' '}
+            <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — <code>$schema</code> and
+            public-read are <b>attributed</b> relay projections over the bytes it holds, promoted to{' '}
+            <b>verified</b> as your tab folds each chain.
+          </>
+        ) : (
+          <>
+            Content chains whose document bytes were served to an anonymous fetch and{' '}
+            <Term word="re-hashed" def={GLOSSARY['publicProjection'] ?? ''} /> to the on-chain
+            committed CID — typed by the document's <code>$schema</code>. The view is type-agnostic;
+            today every public doc is a <code>profile/v1</code>.
+          </>
+        )
       }
     >
-      <AvailableHint
-        available={available}
-        localCount={
-          (result?.publicCount ?? 0) + (result?.gatedCount ?? 0) + (result?.unresolvedCount ?? 0)
-        }
-      />
+      {light !== true ? (
+        <AvailableHint
+          available={available}
+          localCount={
+            (result?.publicCount ?? 0) + (result?.gatedCount ?? 0) + (result?.unresolvedCount ?? 0)
+          }
+        />
+      ) : null}
 
-      {result && result.unresolvedCount > 0 ? (
+      {light !== true && result && result.unresolvedCount > 0 ? (
         <div class="ck-note" style={{ marginBottom: 8 }}>
           {fmtCount(result.unresolvedCount)} content chain(s) not yet resolved.{' '}
           {resolving ? (
@@ -262,7 +442,7 @@ export const BrowseDocuments = () => {
         </div>
       ) : null}
 
-      {result && result.gatedCount > 0 ? (
+      {light !== true && result && result.gatedCount > 0 ? (
         <div class="filters" style={{ marginBottom: 8 }}>
           <button class={includeGated ? 'on' : ''} onClick={() => setIncludeGated((v) => !v)}>
             {includeGated ? 'hide' : 'show'} {fmtCount(result.gatedCount)} gated / private
@@ -270,8 +450,14 @@ export const BrowseDocuments = () => {
         </div>
       ) : null}
 
-      {!hasLocal ? (
-        <SyncPrompt syncing={syncing} />
+      {light === true ? (
+        <IndexDocumentsLight rows={index.rows} loading={index.loading} />
+      ) : !hasLocal ? (
+        light === null ? (
+          <span class="muted">checking relay capabilities…</span>
+        ) : (
+          <SyncPrompt syncing={syncing} />
+        )
       ) : result && result.rows.length === 0 ? (
         <span class="muted">
           no public documents resolved yet
