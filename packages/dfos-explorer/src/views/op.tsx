@@ -520,7 +520,10 @@ export const Op = (props: { cid: string }) => {
           {
             k: 'next op',
             v:
-              chain && chain.present && chain.position < chain.total && chain.rows[chain.position] ? (
+              chain &&
+              chain.present &&
+              chain.position < chain.total &&
+              chain.rows[chain.position] ? (
                 <OpLink cid={chain.rows[chain.position]?.cid ?? ''} />
               ) : null,
           },

@@ -532,7 +532,12 @@ export const Credential = (props: { cid: string }) => {
           { k: 'issuer', v: <DidLink did={p.iss} full /> },
           {
             k: 'audience',
-            v: p.aud === '*' ? <span class="k-role">public · anyone</span> : <DidLink did={p.aud} full />,
+            v:
+              p.aud === '*' ? (
+                <span class="k-role">public · anyone</span>
+              ) : (
+                <DidLink did={p.aud} full />
+              ),
           },
           {
             k: 'granted chain',
