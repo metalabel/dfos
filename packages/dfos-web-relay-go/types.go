@@ -253,7 +253,10 @@ type Store interface {
 	// countersignatures — implementations MUST dedup by witness DID per target CID
 	GetCountersignatures(operationCID string) ([]string, error)
 	AddCountersignature(operationCID string, jwsToken string) error
-	GetCountersignaturesByWitness(witnessDID string) ([]StoredCountersignature, error)
+	// ListCountersignatures enumerates every stored countersignature (all
+	// witnesses). Used ONLY by the index-projection rebuild path — the serving
+	// hot path reads the materialized index_countersign projection instead.
+	ListCountersignatures() ([]StoredCountersignature, error)
 
 	// operation log — global append-only, CID-based cursor pagination
 	AppendToLog(entry LogEntry) error
@@ -298,7 +301,100 @@ type Store interface {
 	ListIdentityChains() ([]StoredIdentityChain, error)
 	ListContentChains() ([]StoredContentChain, error)
 
+	// --- index (v0) materialized projection ---
+	//
+	// The /index/v0 query family is served from materialized projection rows that
+	// the ingestion pipeline maintains incrementally (see index_maintenance.go).
+	// Queries push their filters and keyset cursor into the store so a page costs
+	// O(page), never O(corpus): rows come back ascending by natural key, strictly
+	// greater than After (bytewise), and capped at Limit. The route layer computes
+	// next = len(rows) == limit ? key(last) : null. Row VALUES are a pure function
+	// of chain state + held blobs + standing credentials, so a recompute always
+	// converges to the same row regardless of when it runs — that is what makes
+	// incremental maintenance and a full rebuild interchangeable.
+
+	// QueryIndexIdentities pages identity projection rows ascending by DID,
+	// did > After, length <= Limit. HasPublicProfile (≡ profile != nil &&
+	// profile.publicRead) filters to identities exposing a public profile.
+	QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error)
+	// QueryIndexContent pages content projection rows ascending by contentId,
+	// contentId > After, length <= Limit, filtered by any provided
+	// Creator / DocSchema / PublicRead.
+	QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error)
+	// QueryIndexCountersignatures pages countersignature projection rows for one
+	// witness ascending by cid, cid > After, length <= Limit. Reflects the
+	// store's ACCEPTED countersign set (deduped one-per-witness-per-target).
+	QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error)
+
+	// PutIndexIdentityRow upserts an identity projection row by DID.
+	PutIndexIdentityRow(row indexIdentityRow) error
+	// PutIndexContentRow upserts a content projection row by contentId.
+	PutIndexContentRow(row indexContentRow) error
+	// PutIndexCountersignatureRow upserts a countersignature projection row by
+	// cid. The WitnessDID column is stored (never echoed in the wire row) so
+	// witness-scoped queries stay O(page).
+	PutIndexCountersignatureRow(row storedIndexCountersignature) error
+
+	// GetIndexIdentityDIDsByProfileAnchor is the reverse lookup for the "content
+	// changed → recompute the identities anchored on it" cascade: DIDs of
+	// identity projection rows whose profile.anchor equals contentID.
+	GetIndexIdentityDIDsByProfileAnchor(contentID string) ([]string, error)
+	// GetIndexContentIDsByDocumentCID is the reverse lookup for the "blob landed
+	// → recompute the content rows that project that document" cascade: contentIds
+	// of content projection rows whose currentDocumentCID equals documentCID.
+	GetIndexContentIDsByDocumentCID(documentCID string) ([]string, error)
+
 	// admin
 	ResetPeerCursors() error
 	ResetSequencer() error
+}
+
+// IndexIdentityQuery is the keyset-paged filter for identity projection rows.
+type IndexIdentityQuery struct {
+	HasPublicProfile *bool // nil = no filter
+	After            string
+	Limit            int
+}
+
+// IndexContentQuery is the keyset-paged filter for content projection rows.
+type IndexContentQuery struct {
+	Creator    string  // "" = no filter
+	DocSchema  *string // nil = no filter
+	PublicRead *bool   // nil = no filter
+	After      string
+	Limit      int
+}
+
+// IndexCountersignatureQuery is the keyset-paged filter for countersignature
+// projection rows scoped to a single witness.
+type IndexCountersignatureQuery struct {
+	Witness string
+	After   string
+	Limit   int
+}
+
+// storedIndexCountersignature is a countersignature projection row plus the
+// witness_did column that scopes witness queries. WitnessDID is never part of the
+// wire row (the witness is echoed at the response top level).
+type storedIndexCountersignature struct {
+	CID        string
+	TargetCID  string
+	Relation   *string
+	JWSToken   string
+	WitnessDID string
+}
+
+// RebuildableIndexStore is an OPTIONAL store capability (type-asserted like
+// BatchableStore). A durable store implements it so the relay can detect a
+// projection-schema version bump on boot and rebuild all projection rows from the
+// authoritative chain/countersign tables before serving.
+type RebuildableIndexStore interface {
+	// GetIndexProjectionVersion returns the projection_version stamped in the
+	// store's index_meta, or 0 when never stamped (a fresh or pre-projection DB).
+	GetIndexProjectionVersion() (int, error)
+	// SetIndexProjectionVersion stamps the projection_version after a rebuild.
+	SetIndexProjectionVersion(v int) error
+	// ClearIndexProjection truncates all projection rows so a rebuild starts from
+	// a clean slate (a schema change may have altered row shape).
+	ClearIndexProjection() error
 }

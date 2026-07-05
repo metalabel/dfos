@@ -494,7 +494,7 @@ paths:
           required: false
           schema:
             type: string
-          description: Cursor — start after this DID (from a prior page's next)
+          description: Keyset cursor — returns rows with `did` strictly greater than this value (from a prior page's next). Need not be a present key; a value between keys resumes at the next greater DID.
         - name: limit
           in: query
           required: false
@@ -609,7 +609,7 @@ paths:
           required: false
           schema:
             type: string
-          description: Cursor — start after this contentId (from a prior page's next)
+          description: Keyset cursor — returns rows with `contentId` strictly greater than this value (from a prior page's next). Need not be a present key; a value between keys resumes at the next greater contentId.
         - name: limit
           in: query
           required: false
@@ -711,7 +711,7 @@ paths:
           required: false
           schema:
             type: string
-          description: Cursor — start after this countersignature CID (from a prior page's next)
+          description: Keyset cursor — returns rows with countersignature `cid` strictly greater than this value (from a prior page's next). Need not be a present key; a value between keys resumes at the next greater cid.
         - name: limit
           in: query
           required: false

@@ -13,6 +13,14 @@ import (
 const (
 	indexBasePath = "/index/v0"
 	profileSchema = "https://schemas.dfos.com/profile/v1"
+
+	// IndexProjectionVersion is the schema version of the materialized /index/v0
+	// projection. A durable store stamps this in index_meta after a rebuild; when
+	// the stored value differs from this const on boot (a fresh DB stamps 0), the
+	// relay rebuilds all projection rows from the authoritative chain/countersign
+	// tables before serving. Bump this whenever the projection row shape or a
+	// row-value computation changes.
+	IndexProjectionVersion = 1
 )
 
 var contentIDRe = regexp.MustCompile(`^[2346789acdefhknrtvz]{31}$`)
@@ -77,24 +85,17 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	chains, err := r.readStore.ListIdentityChains()
+	hasPublicProfile := parseBooleanQuery(req.URL.Query().Get("hasPublicProfile"))
+	limit := parseLimit(req, 100, 1000)
+	rows, err := r.readStore.QueryIndexIdentities(IndexIdentityQuery{
+		HasPublicProfile: hasPublicProfile,
+		After:            req.URL.Query().Get("after"),
+		Limit:            limit,
+	})
 	if storeErr(w, err) {
 		return
 	}
-	sort.Slice(chains, func(i, j int) bool { return chains[i].DID < chains[j].DID })
-
-	hasPublicProfile := parseBooleanQuery(req.URL.Query().Get("hasPublicProfile"))
-	rows := make([]indexIdentityRow, 0, len(chains))
-	for _, chain := range chains {
-		row := r.identityIndexRow(chain)
-		if hasPublicProfile != nil && (row.Profile != nil && row.Profile.PublicRead) != *hasPublicProfile {
-			continue
-		}
-		rows = append(rows, row)
-	}
-
-	page, next := pageByKey(rows, func(row indexIdentityRow) string { return row.DID }, req.URL.Query().Get("after"), parseLimit(req, 100, 1000))
-	writeJSON(w, 200, indexIdentityPage{Identities: page, Next: next})
+	writeJSON(w, 200, indexIdentityPage{Identities: rows, Next: nextCursor(len(rows), limit, func() string { return rows[len(rows)-1].DID })})
 }
 
 func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
@@ -109,32 +110,24 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 		writeError(w, 400, "invalid DID")
 		return
 	}
-	docSchema, hasDocSchema := firstQueryValue(query, "docSchema")
+	var docSchema *string
+	if value, ok := firstQueryValue(query, "docSchema"); ok {
+		docSchema = &value
+	}
 	publicRead := parseBooleanQuery(query.Get("publicRead"))
+	limit := parseLimit(req, 100, 1000)
 
-	chains, err := r.readStore.ListContentChains()
+	rows, err := r.readStore.QueryIndexContent(IndexContentQuery{
+		Creator:    creator,
+		DocSchema:  docSchema,
+		PublicRead: publicRead,
+		After:      query.Get("after"),
+		Limit:      limit,
+	})
 	if storeErr(w, err) {
 		return
 	}
-	sort.Slice(chains, func(i, j int) bool { return chains[i].ContentID < chains[j].ContentID })
-
-	rows := make([]indexContentRow, 0, len(chains))
-	for _, chain := range chains {
-		row := r.contentIndexRow(chain)
-		if creator != "" && row.CreatorDID != creator {
-			continue
-		}
-		if hasDocSchema && (row.DocSchema == nil || *row.DocSchema != docSchema) {
-			continue
-		}
-		if publicRead != nil && row.PublicRead != *publicRead {
-			continue
-		}
-		rows = append(rows, row)
-	}
-
-	page, next := pageByKey(rows, func(row indexContentRow) string { return row.ContentID }, query.Get("after"), parseLimit(req, 100, 1000))
-	writeJSON(w, 200, indexContentPage{Content: page, Next: next})
+	writeJSON(w, 200, indexContentPage{Content: rows, Next: nextCursor(len(rows), limit, func() string { return rows[len(rows)-1].ContentID })})
 }
 
 func (r *Relay) handleIndexCountersignatures(w http.ResponseWriter, req *http.Request) {
@@ -149,25 +142,37 @@ func (r *Relay) handleIndexCountersignatures(w http.ResponseWriter, req *http.Re
 		return
 	}
 
-	stored, err := r.readStore.GetCountersignaturesByWitness(witness)
+	limit := parseLimit(req, 100, 1000)
+	rows, err := r.readStore.QueryIndexCountersignatures(IndexCountersignatureQuery{
+		Witness: witness,
+		After:   req.URL.Query().Get("after"),
+		Limit:   limit,
+	})
 	if storeErr(w, err) {
 		return
 	}
-	rows := make([]indexCountersignatureRow, 0, len(stored))
-	for _, row := range stored {
-		rows = append(rows, indexCountersignatureRow{
-			CID:       row.CID,
-			TargetCID: row.TargetCID,
-			Relation:  row.Relation,
-			JWSToken:  row.JWSToken,
-		})
-	}
-
-	page, next := pageByKey(rows, func(row indexCountersignatureRow) string { return row.CID }, req.URL.Query().Get("after"), parseLimit(req, 100, 1000))
-	writeJSON(w, 200, indexCountersignaturePage{Witness: witness, Countersignatures: page, Next: next})
+	writeJSON(w, 200, indexCountersignaturePage{Witness: witness, Countersignatures: rows, Next: nextCursor(len(rows), limit, func() string { return rows[len(rows)-1].CID })})
 }
 
-func (r *Relay) identityIndexRow(chain StoredIdentityChain) indexIdentityRow {
+// nextCursor returns the keyset continuation cursor: the last row's key when the
+// page filled to limit (there may be more), else null. Mirrors the TS route rule
+// next = rows.length === limit ? key(last) : null.
+func nextCursor(rowCount, limit int, lastKey func() string) *string {
+	if rowCount == limit && rowCount > 0 {
+		key := lastKey()
+		return &key
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// row builders — the single source of row-value truth, run at maintenance time
+// (index_maintenance.go) and by the projection rebuild. Store-scoped so they can
+// run against either the ingestion store (within-batch, uncommitted-visible) or
+// the HTTP read store. Byte-identical to the TS twins in index-routes.ts.
+// ---------------------------------------------------------------------------
+
+func identityIndexRow(chain StoredIdentityChain, store Store) indexIdentityRow {
 	return indexIdentityRow{
 		DID:       chain.DID,
 		HeadCID:   chain.HeadCID,
@@ -175,12 +180,12 @@ func (r *Relay) identityIndexRow(chain StoredIdentityChain) indexIdentityRow {
 		GenesisAt: createdAtOf(chain.Log),
 		HeadAt:    chain.LastCreatedAt,
 		IsDeleted: chain.State.IsDeleted,
-		Profile:   r.profileProjection(chain),
+		Profile:   profileProjection(chain, store),
 	}
 }
 
-func (r *Relay) contentIndexRow(chain StoredContentChain) indexContentRow {
-	_, docSchema := r.headDocumentProjection(chain)
+func contentIndexRow(chain StoredContentChain, store Store) indexContentRow {
+	_, docSchema := headDocumentProjection(chain, store)
 	return indexContentRow{
 		ContentID:          chain.ContentID,
 		GenesisCID:         chain.GenesisCID,
@@ -191,12 +196,22 @@ func (r *Relay) contentIndexRow(chain StoredContentChain) indexContentRow {
 		GenesisAt:          createdAtOf(chain.Log),
 		HeadAt:             chain.LastCreatedAt,
 		CurrentDocumentCID: chain.State.CurrentDocumentCID,
-		PublicRead:         r.hasPublicStandingAuth(chain.ContentID, "read"),
+		PublicRead:         hasPublicStandingAuth(chain.ContentID, "read", store),
 		DocSchema:          docSchema,
 	}
 }
 
-func (r *Relay) profileProjection(chain StoredIdentityChain) *indexProfile {
+// countersignatureIndexRow projects a stored countersignature to its wire row.
+func countersignatureIndexRow(row StoredCountersignature) indexCountersignatureRow {
+	return indexCountersignatureRow{
+		CID:       row.CID,
+		TargetCID: row.TargetCID,
+		Relation:  row.Relation,
+		JWSToken:  row.JWSToken,
+	}
+}
+
+func profileProjection(chain StoredIdentityChain, store Store) *indexProfile {
 	candidates := make([]dfos.ServiceEntry, 0)
 	for _, service := range chain.State.Services {
 		if service["type"] != "ContentAnchor" {
@@ -227,8 +242,8 @@ func (r *Relay) profileProjection(chain StoredIdentityChain) *indexProfile {
 
 	var doc map[string]any
 	var docSchema *string
-	if content, _ := r.readStore.GetContentChain(anchor); content != nil {
-		doc, docSchema = r.headDocumentProjection(*content)
+	if content, _ := store.GetContentChain(anchor); content != nil {
+		doc, docSchema = headDocumentProjection(*content, store)
 	}
 
 	var name *string
@@ -239,18 +254,18 @@ func (r *Relay) profileProjection(chain StoredIdentityChain) *indexProfile {
 	}
 	return &indexProfile{
 		Anchor:     anchor,
-		PublicRead: r.hasPublicStandingAuth(anchor, "read"),
+		PublicRead: hasPublicStandingAuth(anchor, "read", store),
 		DocSchema:  docSchema,
 		Name:       name,
 	}
 }
 
-func (r *Relay) headDocumentProjection(chain StoredContentChain) (map[string]any, *string) {
+func headDocumentProjection(chain StoredContentChain, store Store) (map[string]any, *string) {
 	documentCID := chain.State.CurrentDocumentCID
 	if documentCID == nil {
 		return nil, nil
 	}
-	blob, err := r.readStore.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: *documentCID})
+	blob, err := store.GetBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: *documentCID})
 	if err != nil || blob == nil {
 		return nil, nil
 	}
@@ -280,29 +295,6 @@ func parseBooleanQuery(raw string) *bool {
 	default:
 		return nil
 	}
-}
-
-func pageByKey[T any](rows []T, keyOf func(T) string, after string, limit int) ([]T, *string) {
-	startIdx := 0
-	if after != "" {
-		startIdx = len(rows)
-		for i, row := range rows {
-			if keyOf(row) == after {
-				startIdx = i + 1
-				break
-			}
-		}
-	}
-	end := startIdx + limit
-	if end > len(rows) {
-		end = len(rows)
-	}
-	page := rows[startIdx:end]
-	if len(page) == limit {
-		next := keyOf(page[len(page)-1])
-		return page, &next
-	}
-	return page, nil
 }
 
 func createdAtOf(log []string) string {

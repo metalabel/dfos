@@ -77,7 +77,7 @@ func TestContentFollowingOverHTTP(t *testing.T) {
 	// AUTHORIZED BUT NOT MATERIALIZED: the grant synced, so the chain is authorized,
 	// but the bytes haven't been pulled yet → a client read of the follower is a 404
 	// "blob not found" (NOT a 401 — the read is authorized; NOT a 200 — no bytes).
-	if !follower.hasPublicStandingAuth(contentID, "read") {
+	if !hasPublicStandingAuth(contentID, "read", follower.readStore) {
 		t.Fatal("grant did not sync over HTTP")
 	}
 	if code := httpGetStatus(t, blobURL); code != 404 {
@@ -113,7 +113,7 @@ func TestContentFollowingOverHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	follower.RunSequencerAndGossip()
-	if follower.hasPublicStandingAuth(contentID, "read") {
+	if hasPublicStandingAuth(contentID, "read", follower.readStore) {
 		t.Fatal("grant should be revoked on the follower")
 	}
 	// Even though the bytes are still cached, the serve gate now denies anonymous

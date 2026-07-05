@@ -124,7 +124,7 @@ func TestMaterializeFollowedContentPullsGrantedBlob(t *testing.T) {
 	key := BlobKey{CreatorDID: creator.did, DocumentCID: docCID}
 
 	// preconditions: grant synced (authorized) but blob absent.
-	if !follower.hasPublicStandingAuth(contentID, "read") {
+	if !hasPublicStandingAuth(contentID, "read", follower.readStore) {
 		t.Fatal("precondition: follower did not sync the public-read grant")
 	}
 	if b, _ := follower.readStore.GetBlob(key); b != nil {
@@ -178,7 +178,7 @@ func TestMaterializeSkipsUngrantedChain(t *testing.T) {
 	store.PutBlob(BlobKey{CreatorDID: creator.did, DocumentCID: docCID}, blobBytes)
 
 	follower := newFollower(t, store, "eager")
-	if follower.hasPublicStandingAuth(contentID, "read") {
+	if hasPublicStandingAuth(contentID, "read", follower.readStore) {
 		t.Fatal("precondition: ungranted chain should not be publicly authorized")
 	}
 	follower.MaterializeFollowedContent()
@@ -222,7 +222,7 @@ func TestGCReclaimsRevokedContentBlob(t *testing.T) {
 		t.Fatal(err)
 	}
 	follower.RunSequencerAndGossip()
-	if follower.hasPublicStandingAuth(contentID, "read") {
+	if hasPublicStandingAuth(contentID, "read", follower.readStore) {
 		t.Fatal("precondition: grant should be revoked on the follower")
 	}
 

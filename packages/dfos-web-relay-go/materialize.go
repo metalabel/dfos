@@ -145,7 +145,7 @@ func (r *Relay) materializeAllGrantedChains() {
 		}
 		// The gate is the gate: only follow chains a standing public-read grant
 		// authorizes anonymous read of. Revoked → falls out here automatically.
-		if !r.hasPublicStandingAuth(chain.ContentID, "read") {
+		if !hasPublicStandingAuth(chain.ContentID, "read", r.readStore) {
 			continue
 		}
 		chain := chain
@@ -172,7 +172,7 @@ func (r *Relay) materializeOneChain(contentID string) {
 	if chain.State.IsDeleted {
 		return
 	}
-	if !r.hasPublicStandingAuth(chain.ContentID, "read") {
+	if !hasPublicStandingAuth(chain.ContentID, "read", r.readStore) {
 		return
 	}
 	r.materializeChainBlobs(*chain)
@@ -248,6 +248,11 @@ func (r *Relay) pullAndStoreBlob(contentID, operationCID string, key BlobKey) {
 		}
 		r.ingestMu.Lock()
 		err = r.store.PutBlob(key, bytes)
+		if err == nil {
+			// The followed blob landed — recompute content rows that project this
+			// documentCID (docSchema/name/profile) + their anchored identities.
+			maintainIndexAfterBlob(key.DocumentCID, r.store)
+		}
 		r.ingestMu.Unlock()
 		if err != nil {
 			r.logger.Warn("materialize: persist blob failed", "documentCID", key.DocumentCID, "error", err)
@@ -321,7 +326,7 @@ func (r *Relay) GCRevokedContent() {
 		return
 	}
 	for _, chain := range chains {
-		publiclyReadable := !chain.State.IsDeleted && r.hasPublicStandingAuth(chain.ContentID, "read")
+		publiclyReadable := !chain.State.IsDeleted && hasPublicStandingAuth(chain.ContentID, "read", r.readStore)
 		if publiclyReadable {
 			continue
 		}

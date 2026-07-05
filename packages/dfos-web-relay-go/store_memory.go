@@ -21,6 +21,10 @@ type MemoryStore struct {
 	rawOps            map[string]rawOpEntry             // cid → entry
 	revocations       map[string]StoredRevocation       // key: "issuerDID::credentialCID"
 	publicCredentials map[string]StoredPublicCredential // key: credential CID
+	// --- index (v0) materialized projection rows ---
+	indexIdentityRows    map[string]indexIdentityRow            // keyed by DID
+	indexContentRows     map[string]indexContentRow             // keyed by contentId
+	indexCountersignRows map[string]storedIndexCountersignature // keyed by cid (carry witness_did)
 }
 
 type rawOpEntry struct {
@@ -40,6 +44,10 @@ func NewMemoryStore() *MemoryStore {
 		rawOps:            make(map[string]rawOpEntry),
 		revocations:       make(map[string]StoredRevocation),
 		publicCredentials: make(map[string]StoredPublicCredential),
+
+		indexIdentityRows:    make(map[string]indexIdentityRow),
+		indexContentRows:     make(map[string]indexContentRow),
+		indexCountersignRows: make(map[string]storedIndexCountersignature),
 	}
 }
 
@@ -184,14 +192,16 @@ func (s *MemoryStore) AddCountersignature(operationCID string, jwsToken string) 
 	return nil
 }
 
-func (s *MemoryStore) GetCountersignaturesByWitness(witnessDID string) ([]StoredCountersignature, error) {
+// ListCountersignatures enumerates every stored countersignature (all
+// witnesses), sorted by CID. Used ONLY by the index-projection rebuild path.
+func (s *MemoryStore) ListCountersignatures() ([]StoredCountersignature, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rows := []StoredCountersignature{}
 	for targetCID, tokens := range s.countersignatures {
 		for _, token := range tokens {
 			row := countersignatureFromToken(targetCID, token)
-			if row == nil || row.WitnessDID != witnessDID {
+			if row == nil {
 				continue
 			}
 			rows = append(rows, *row)
@@ -199,6 +209,129 @@ func (s *MemoryStore) GetCountersignaturesByWitness(witnessDID string) ([]Stored
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].CID < rows[j].CID })
 	return rows, nil
+}
+
+// ---------------------------------------------------------------------------
+// index (v0) materialized projection
+// ---------------------------------------------------------------------------
+
+// pageIndexRows sorts rows ascending by keyOf, gates strictly greater than after
+// (keyset semantics — deterministic and resumable even when the cursor row was
+// mutated or filtered out between pages), and caps at limit. Bytewise string
+// order over ASCII DIDs/CIDs == the SQL BINARY-collation twin.
+func pageIndexRows[T any](rows []T, keyOf func(T) string, after string, limit int) []T {
+	sort.Slice(rows, func(i, j int) bool { return keyOf(rows[i]) < keyOf(rows[j]) })
+	out := []T{}
+	for _, row := range rows {
+		if after != "" && keyOf(row) <= after {
+			continue
+		}
+		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows := make([]indexIdentityRow, 0, len(s.indexIdentityRows))
+	for _, row := range s.indexIdentityRows {
+		if q.HasPublicProfile != nil {
+			isPublic := row.Profile != nil && row.Profile.PublicRead
+			if isPublic != *q.HasPublicProfile {
+				continue
+			}
+		}
+		rows = append(rows, row)
+	}
+	return pageIndexRows(rows, func(row indexIdentityRow) string { return row.DID }, q.After, q.Limit), nil
+}
+
+func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows := make([]indexContentRow, 0, len(s.indexContentRows))
+	for _, row := range s.indexContentRows {
+		if q.Creator != "" && row.CreatorDID != q.Creator {
+			continue
+		}
+		if q.DocSchema != nil && (row.DocSchema == nil || *row.DocSchema != *q.DocSchema) {
+			continue
+		}
+		if q.PublicRead != nil && row.PublicRead != *q.PublicRead {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return pageIndexRows(rows, func(row indexContentRow) string { return row.ContentID }, q.After, q.Limit), nil
+}
+
+func (s *MemoryStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows := []indexCountersignatureRow{}
+	for _, row := range s.indexCountersignRows {
+		if row.WitnessDID != q.Witness {
+			continue
+		}
+		// Strip the witness_did column — the wire row never carries it (the witness
+		// is echoed at the response top level).
+		rows = append(rows, indexCountersignatureRow{
+			CID:       row.CID,
+			TargetCID: row.TargetCID,
+			Relation:  row.Relation,
+			JWSToken:  row.JWSToken,
+		})
+	}
+	return pageIndexRows(rows, func(row indexCountersignatureRow) string { return row.CID }, q.After, q.Limit), nil
+}
+
+func (s *MemoryStore) PutIndexIdentityRow(row indexIdentityRow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexIdentityRows[row.DID] = row
+	return nil
+}
+
+func (s *MemoryStore) PutIndexContentRow(row indexContentRow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexContentRows[row.ContentID] = row
+	return nil
+}
+
+func (s *MemoryStore) PutIndexCountersignatureRow(row storedIndexCountersignature) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexCountersignRows[row.CID] = row
+	return nil
+}
+
+func (s *MemoryStore) GetIndexIdentityDIDsByProfileAnchor(contentID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	dids := []string{}
+	for _, row := range s.indexIdentityRows {
+		if row.Profile != nil && row.Profile.Anchor == contentID {
+			dids = append(dids, row.DID)
+		}
+	}
+	return dids, nil
+}
+
+func (s *MemoryStore) GetIndexContentIDsByDocumentCID(documentCID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	contentIds := []string{}
+	for _, row := range s.indexContentRows {
+		if row.CurrentDocumentCID != nil && *row.CurrentDocumentCID == documentCID {
+			contentIds = append(contentIds, row.ContentID)
+		}
+	}
+	return contentIds, nil
 }
 
 func (s *MemoryStore) AppendToLog(entry LogEntry) error {

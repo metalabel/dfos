@@ -28,14 +28,8 @@ import {
 } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { isValidDfosDid, resolveDidDocument } from './did-document';
-import {
-  contentIndexRow,
-  countersignatureIndexRow,
-  identityIndexRow,
-  INDEX_BASE_PATH,
-  pageByKey,
-  parseBooleanQuery,
-} from './index-routes';
+import { maintainIndexAfterBlob } from './index-maintenance';
+import { INDEX_BASE_PATH, parseBooleanQuery } from './index-routes';
 import { ingestOperations } from './ingest';
 import {
   credentialRevocationStatus,
@@ -527,23 +521,16 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
 
     const hasPublicProfile = parseBooleanQuery(c.req.query('hasPublicProfile'));
-    const rows = await Promise.all(
-      (await store.getIndexIdentityChains()).map((chain) => identityIndexRow(chain, store)),
-    );
-    const filtered =
-      hasPublicProfile === undefined
-        ? rows
-        : rows.filter(
-            (row) => (row.profile !== null && row.profile.publicRead) === hasPublicProfile,
-          );
-    const { page, next } = pageByKey(
-      filtered,
-      (row) => row.did,
-      c.req.query('after'),
-      parseLimit(c.req.query('limit'), 100, 1000),
-    );
+    const after = c.req.query('after');
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+    const rows = await store.queryIndexIdentities({
+      ...(hasPublicProfile !== undefined ? { hasPublicProfile } : {}),
+      ...(after ? { after } : {}),
+      limit,
+    });
+    const next = rows.length === limit ? rows[rows.length - 1]!.did : null;
 
-    return c.json({ identities: page, next });
+    return c.json({ identities: rows, next });
   });
 
   app.get(`${INDEX_BASE_PATH}/content`, async (c) => {
@@ -556,23 +543,18 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
     const docSchema = c.req.query('docSchema');
     const publicRead = parseBooleanQuery(c.req.query('publicRead'));
-    const rows = await Promise.all(
-      (await store.getIndexContentChains()).map((chain) => contentIndexRow(chain, store)),
-    );
-    const filtered = rows.filter((row) => {
-      if (creator && row.creatorDID !== creator) return false;
-      if (docSchema !== undefined && row.docSchema !== docSchema) return false;
-      if (publicRead !== undefined && row.publicRead !== publicRead) return false;
-      return true;
+    const after = c.req.query('after');
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+    const rows = await store.queryIndexContent({
+      ...(creator ? { creator } : {}),
+      ...(docSchema !== undefined ? { docSchema } : {}),
+      ...(publicRead !== undefined ? { publicRead } : {}),
+      ...(after ? { after } : {}),
+      limit,
     });
-    const { page, next } = pageByKey(
-      filtered,
-      (row) => row.contentId,
-      c.req.query('after'),
-      parseLimit(c.req.query('limit'), 100, 1000),
-    );
+    const next = rows.length === limit ? rows[rows.length - 1]!.contentId : null;
 
-    return c.json({ content: page, next });
+    return c.json({ content: rows, next });
   });
 
   app.get(`${INDEX_BASE_PATH}/countersignatures`, async (c) => {
@@ -583,17 +565,16 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'invalid DID' }, 400);
     }
 
-    const rows = (await store.getIndexCountersignaturesByWitness(witness)).map(
-      countersignatureIndexRow,
-    );
-    const { page, next } = pageByKey(
-      rows,
-      (row) => row.cid,
-      c.req.query('after'),
-      parseLimit(c.req.query('limit'), 100, 1000),
-    );
+    const after = c.req.query('after');
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+    const rows = await store.queryIndexCountersignatures({
+      witness,
+      ...(after ? { after } : {}),
+      limit,
+    });
+    const next = rows.length === limit ? rows[rows.length - 1]!.cid : null;
 
-    return c.json({ witness, countersignatures: page, next });
+    return c.json({ witness, countersignatures: rows, next });
   });
 
   /** Get a content chain log */
@@ -767,6 +748,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
 
     await store.putBlob({ creatorDID: chain.state.creatorDID, documentCID }, bytes);
+    // A document blob just landed — often out of band, after the content op that
+    // referenced it. Recompute the content rows that project this documentCID
+    // (docSchema/name/profile), cascading to their anchored identities.
+    await maintainIndexAfterBlob(documentCID, store);
 
     return c.json({ status: 'stored', contentId, documentCID, operationCID });
   });

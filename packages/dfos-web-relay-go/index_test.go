@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -121,7 +122,9 @@ func createIndexedContent(t *testing.T, r *Relay, store *MemoryStore, id testIde
 	return testContent{contentID: contentID, operationCID: opCID, documentCID: documentCID, document: document}
 }
 
-func addPublicRead(t *testing.T, r *Relay, id testIdentity, contentID string) {
+// addPublicRead grants public read and returns the credential CID (so the grant
+// can later be revoked to exercise the publicRead true→false cascade).
+func addPublicRead(t *testing.T, r *Relay, id testIdentity, contentID string) string {
 	t.Helper()
 	kid := id.did + "#" + id.auth.keyID
 	credential, err := dfos.CreateCredential(id.did, "*", kid, "chain:"+contentID, "read", time.Hour, id.auth.priv)
@@ -131,6 +134,71 @@ func addPublicRead(t *testing.T, r *Relay, id testIdentity, contentID string) {
 	if res := r.Ingest([]string{credential}); res[0].Status != "new" {
 		t.Fatalf("ingest public read credential: %+v", res[0])
 	}
+	header, _, err := dfos.DecodeJWSUnsafe(credential)
+	if err != nil || header == nil {
+		t.Fatalf("decode credential CID: %v", err)
+	}
+	return header.CID
+}
+
+func revokeGrant(t *testing.T, r *Relay, id testIdentity, credentialCID string) {
+	t.Helper()
+	kid := id.did + "#" + id.auth.keyID
+	token, _, err := dfos.SignRevocation(id.did, credentialCID, kid, id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{token}); res[0].Status != "new" {
+		t.Fatalf("ingest revocation: %+v", res[0])
+	}
+}
+
+// uploadBlobViaRoute PUTs a document blob through the relay's content-plane route
+// (authenticated as the content creator), which fires maintainIndexAfterBlob —
+// unlike a direct store.PutBlob, this exercises the late-arrival recompute hook.
+func uploadBlobViaRoute(t *testing.T, r *Relay, id testIdentity, c testContent) {
+	t.Helper()
+	kid := id.did + "#" + id.auth.keyID
+	authToken, err := dfos.CreateAuthToken(id.did, r.DID(), kid, time.Minute, id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(c.document)
+	req := httptest.NewRequest("PUT", "http://localhost/content/"+c.contentID+"/blob/"+c.operationCID, strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rec := httptest.NewRecorder()
+	r.Handler().ServeHTTP(rec, req)
+	if rec.Result().StatusCode != 200 {
+		raw, _ := io.ReadAll(rec.Result().Body)
+		t.Fatalf("upload blob via route: status %d body %s", rec.Result().StatusCode, raw)
+	}
+}
+
+// indexIdentityRowByDID fetches a single identity projection row via the route.
+func indexIdentityRowByDID(t *testing.T, handler http.Handler, did string) map[string]any {
+	t.Helper()
+	_, body, _ := getIndexJSONBody(t, handler, "/index/v0/identities?limit=1000")
+	for _, raw := range body["identities"].([]any) {
+		row := raw.(map[string]any)
+		if row["did"] == did {
+			return row
+		}
+	}
+	return nil
+}
+
+// indexContentRowByID fetches a single content projection row via the route.
+func indexContentRowByID(t *testing.T, handler http.Handler, contentID string) map[string]any {
+	t.Helper()
+	_, body, _ := getIndexJSONBody(t, handler, "/index/v0/content?limit=1000")
+	for _, raw := range body["content"].([]any) {
+		row := raw.(map[string]any)
+		if row["contentId"] == contentID {
+			return row
+		}
+	}
+	return nil
 }
 
 func TestIndexCapabilityAndDisabledRoutes(t *testing.T) {
@@ -251,9 +319,12 @@ func TestIndexIdentitiesProjectionFiltersPaginationAndDeleted(t *testing.T) {
 			t.Fatalf("page2 repeated page1 row: %v", page2)
 		}
 	}
-	status, empty, _ := getIndexJSONBody(t, handler, "/index/v0/identities?after=did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr")
+	// Keyset semantics: a cursor that sorts at or beyond the last key yields an
+	// empty page (all keys are <= after). "did:dfos:z...z" is > every real DID (z
+	// is the max char in the id alphabet).
+	status, empty, _ := getIndexJSONBody(t, handler, "/index/v0/identities?after=did:dfos:"+strings.Repeat("z", 31))
 	if status != 200 || len(empty["identities"].([]any)) != 0 {
-		t.Fatalf("absent cursor page = %v status=%d", empty, status)
+		t.Fatalf("beyond-last cursor page = %v status=%d", empty, status)
 	}
 }
 
@@ -442,5 +513,392 @@ func TestIndexCountersignaturesByWitness(t *testing.T) {
 	status, malformed, _ := getIndexJSONBody(t, handler, "/index/v0/countersignatures?witness=did:dfos:tooshort")
 	if status != 400 || malformed["error"] != "invalid DID" {
 		t.Fatalf("malformed witness = %v status=%d", malformed, status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// materialized projection: keyset cursor + recompute-on-change
+// ---------------------------------------------------------------------------
+
+func didsFromIdentities(body map[string]any) []string {
+	rows := body["identities"].([]any)
+	dids := make([]string, 0, len(rows))
+	for _, raw := range rows {
+		dids = append(dids, raw.(map[string]any)["did"].(string))
+	}
+	return dids
+}
+
+// A cursor that is NOT a stored key but sorts strictly between dids[1] and
+// dids[2] must resume at dids[2] — the old exact-match cursor returned an empty
+// page here (silent enumeration truncation); keyset (> after) is deterministic.
+func TestIndexKeysetResumesOnUnknownCursor(t *testing.T) {
+	r, _ := indexRelay(t)
+	handler := r.Handler()
+	for i := 0; i < 4; i++ {
+		ingestIdentity(t, r)
+	}
+
+	_, all, _ := getIndexJSONBody(t, handler, "/index/v0/identities?limit=1000")
+	dids := didsFromIdentities(all)
+	if len(dids) < 4 || !sort.StringsAreSorted(dids) {
+		t.Fatalf("dids not sorted or too few: %v", dids)
+	}
+
+	// append a char ⇒ longer than dids[1] so > dids[1]; the shared prefix with
+	// dids[2] diverges before the appended char so < dids[2].
+	between := dids[1] + "0"
+	if !(between > dids[1] && between < dids[2]) {
+		t.Fatalf("cursor %q not strictly between %q and %q", between, dids[1], dids[2])
+	}
+
+	_, page, _ := getIndexJSONBody(t, handler, "/index/v0/identities?after="+url.QueryEscape(between)+"&limit=1000")
+	pageDids := didsFromIdentities(page)
+	if len(pageDids) == 0 || pageDids[0] != dids[2] {
+		t.Fatalf("keyset resume: got %v, want first=%s", pageDids, dids[2])
+	}
+	for _, d := range pageDids {
+		if d == dids[0] || d == dids[1] {
+			t.Fatalf("keyset page leaked an already-enumerated key: %v", pageDids)
+		}
+	}
+}
+
+// When the cursor ROW is mutated out of the filtered set between pages (a
+// publicRead=true content whose grant is revoked), keyset resume still returns
+// the remaining rows > cursor. The old exact-match cursor findIndex(-1)'d and
+// truncated to an empty page.
+func TestIndexContentCursorMutatedOutOfFilter(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+
+	type made struct {
+		contentID     string
+		credentialCID string
+	}
+	entries := []made{}
+	for i := 0; i < 3; i++ {
+		doc := map[string]any{"$schema": "example/post", "title": "p"}
+		c := createIndexedContent(t, r, store, creator, doc, true)
+		cid := addPublicRead(t, r, creator, c.contentID)
+		entries = append(entries, made{contentID: c.contentID, credentialCID: cid})
+	}
+
+	_, page1, _ := getIndexJSONBody(t, handler, "/index/v0/content?publicRead=true&limit=1")
+	rows := page1["content"].([]any)
+	if len(rows) != 1 || page1["next"] == nil {
+		t.Fatalf("page1 = %v", page1)
+	}
+	cursor := page1["next"].(string)
+
+	// revoke the CURSOR row's grant → publicRead flips false → it drops out of the
+	// publicRead=true set entirely.
+	var cursorCred string
+	for _, e := range entries {
+		if e.contentID == cursor {
+			cursorCred = e.credentialCID
+		}
+	}
+	revokeGrant(t, r, creator, cursorCred)
+
+	_, page2, _ := getIndexJSONBody(t, handler, "/index/v0/content?publicRead=true&after="+url.QueryEscape(cursor)+"&limit=1000")
+	remaining := []string{}
+	for _, raw := range page2["content"].([]any) {
+		remaining = append(remaining, raw.(map[string]any)["contentId"].(string))
+	}
+	// still-public contents whose contentId > cursor
+	expected := []string{}
+	for _, e := range entries {
+		if e.contentID > cursor {
+			expected = append(expected, e.contentID)
+		}
+	}
+	sort.Strings(expected)
+	if len(remaining) != len(expected) {
+		t.Fatalf("keyset remaining = %v, want %v", remaining, expected)
+	}
+	for i := range expected {
+		if remaining[i] != expected[i] {
+			t.Fatalf("keyset remaining = %v, want %v", remaining, expected)
+		}
+	}
+	// the mutated cursor row is now private in the projection
+	if row := indexContentRowByID(t, handler, cursor); row == nil || row["publicRead"] != false {
+		t.Fatalf("revoked cursor row = %v, want publicRead false", row)
+	}
+}
+
+// A blob arriving LATE (via the content-plane route, after the content op + the
+// anchoring identity op) must recompute the content row's docSchema and cascade
+// to the anchored identity's profile projection.
+func TestIndexBlobLateArrivalRecompute(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	subject := ingestIdentity(t, r)
+	profileDoc := map[string]any{"$schema": testProfileSchema, "name": "lena"}
+	// holdBlob=false ⇒ the blob is NOT present when the content + identity rows are
+	// first projected.
+	profile := createIndexedContent(t, r, store, subject, profileDoc, false)
+	addPublicRead(t, r, subject, profile.contentID)
+	updateIdentityServices(t, r, subject, []dfos.ServiceEntry{
+		{"id": "profile", "type": "ContentAnchor", "label": "profile", "anchor": profile.contentID},
+	})
+
+	before := indexContentRowByID(t, handler, profile.contentID)
+	if before["currentDocumentCID"] != profile.documentCID || before["docSchema"] != nil {
+		t.Fatalf("pre-blob content row = %v, want docSchema nil", before)
+	}
+	beforeID := indexIdentityRowByDID(t, handler, subject.did)
+	if p := beforeID["profile"].(map[string]any); p["docSchema"] != nil || p["name"] != nil {
+		t.Fatalf("pre-blob profile = %v, want docSchema/name nil", p)
+	}
+
+	// blob lands late → recompute cascades content → anchored identity
+	uploadBlobViaRoute(t, r, subject, profile)
+
+	after := indexContentRowByID(t, handler, profile.contentID)
+	if after["docSchema"] != testProfileSchema {
+		t.Fatalf("post-blob content row = %v, want docSchema %s", after, testProfileSchema)
+	}
+	afterID := indexIdentityRowByDID(t, handler, subject.did)
+	p := afterID["profile"].(map[string]any)
+	if p["anchor"] != profile.contentID || p["publicRead"] != true || p["docSchema"] != testProfileSchema || p["name"] != "lena" {
+		t.Fatalf("post-blob profile = %v", p)
+	}
+}
+
+// Granting then revoking public read flips publicRead on the content row AND the
+// anchored profile row (both directions), including the hasPublicProfile filter.
+func TestIndexPublicReadFlipCascade(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	subject := ingestIdentity(t, r)
+	profileDoc := map[string]any{"$schema": testProfileSchema, "name": "ravi"}
+	profile := createIndexedContent(t, r, store, subject, profileDoc, true)
+	updateIdentityServices(t, r, subject, []dfos.ServiceEntry{
+		{"id": "profile", "type": "ContentAnchor", "label": "profile", "anchor": profile.contentID},
+	})
+
+	hasInPublicFilter := func() bool {
+		_, body, _ := getIndexJSONBody(t, handler, "/index/v0/identities?hasPublicProfile=true")
+		for _, d := range didsFromIdentities(body) {
+			if d == subject.did {
+				return true
+			}
+		}
+		return false
+	}
+
+	// before any grant: private on both, absent from hasPublicProfile=true
+	if indexContentRowByID(t, handler, profile.contentID)["publicRead"] != false {
+		t.Fatalf("pre-grant content publicRead != false")
+	}
+	if indexIdentityRowByDID(t, handler, subject.did)["profile"].(map[string]any)["publicRead"] != false {
+		t.Fatalf("pre-grant profile publicRead != false")
+	}
+	if hasInPublicFilter() {
+		t.Fatalf("pre-grant subject leaked into hasPublicProfile=true")
+	}
+
+	// grant flips both true
+	credentialCID := addPublicRead(t, r, subject, profile.contentID)
+	if indexContentRowByID(t, handler, profile.contentID)["publicRead"] != true {
+		t.Fatalf("post-grant content publicRead != true")
+	}
+	if indexIdentityRowByDID(t, handler, subject.did)["profile"].(map[string]any)["publicRead"] != true {
+		t.Fatalf("post-grant profile publicRead != true")
+	}
+	if !hasInPublicFilter() {
+		t.Fatalf("post-grant subject missing from hasPublicProfile=true")
+	}
+
+	// revoke flips both back to false
+	revokeGrant(t, r, subject, credentialCID)
+	if indexContentRowByID(t, handler, profile.contentID)["publicRead"] != false {
+		t.Fatalf("post-revoke content publicRead != false")
+	}
+	if indexIdentityRowByDID(t, handler, subject.did)["profile"].(map[string]any)["publicRead"] != false {
+		t.Fatalf("post-revoke profile publicRead != false")
+	}
+	if hasInPublicFilter() {
+		t.Fatalf("post-revoke subject leaked into hasPublicProfile=true")
+	}
+}
+
+// Deleting the identity that issued a public-read grant flips the granted
+// content's publicRead true→false in the projection — even though the only op is
+// on the IDENTITY chain, not the content chain. hasPublicStandingAuth
+// re-verifies the grant's issuer live and rejects a deleted identity, so the
+// content row (and the deleted identity's own anchored profile) must converge.
+func TestIndexPublicReadFlipsWhenGrantingIdentityDeleted(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	profileDoc := map[string]any{"$schema": testProfileSchema, "name": "mara"}
+	content := createIndexedContent(t, r, store, creator, profileDoc, true)
+	addPublicRead(t, r, creator, content.contentID)
+	updateOpCID := updateIdentityServices(t, r, creator, []dfos.ServiceEntry{
+		{"id": "profile", "type": "ContentAnchor", "label": "profile", "anchor": content.contentID},
+	})
+
+	// grant + anchor in place: public on both the content row and the profile
+	if indexContentRowByID(t, handler, content.contentID)["publicRead"] != true {
+		t.Fatalf("pre-delete content publicRead != true")
+	}
+	if indexIdentityRowByDID(t, handler, creator.did)["profile"].(map[string]any)["publicRead"] != true {
+		t.Fatalf("pre-delete profile publicRead != true")
+	}
+
+	// delete the granting identity (terminal op on its own chain)
+	deleteToken, _, err := dfos.SignIdentityDelete(updateOpCID, creator.did+"#"+creator.controller.keyID, creator.controller.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{deleteToken}); res[0].Status != "new" {
+		t.Fatalf("ingest delete: %+v", res[0])
+	}
+
+	// content row's publicRead must reflect the now-invalid issuer
+	if indexContentRowByID(t, handler, content.contentID)["publicRead"] != false {
+		t.Fatalf("post-delete content publicRead != false")
+	}
+	deletedRow := indexIdentityRowByDID(t, handler, creator.did)
+	if deletedRow["isDeleted"] != true {
+		t.Fatalf("post-delete identity isDeleted != true")
+	}
+	if deletedRow["profile"].(map[string]any)["publicRead"] != false {
+		t.Fatalf("post-delete profile publicRead != false")
+	}
+	// and it drops out of the publicRead=true content set
+	_, body, _ := getIndexJSONBody(t, handler, "/index/v0/content?publicRead=true&limit=1000")
+	for _, raw := range body["content"].([]any) {
+		if raw.(map[string]any)["contentId"] == content.contentID {
+			t.Fatalf("deleted-issuer content still in publicRead=true set")
+		}
+	}
+}
+
+// A second countersign from the same witness on the same target is deduped by
+// the store (status "duplicate"); the projection must NOT gain a second row and
+// must keep the ACCEPTED (first) row's cid + relation.
+func TestIndexCountersignDedupReflected(t *testing.T) {
+	r, _ := indexRelay(t)
+	handler := r.Handler()
+	author := ingestIdentity(t, r)
+	witness := ingestIdentity(t, r)
+	content := createIndexedContent(t, r, NewMemoryStore(), author, map[string]any{"$schema": "example/post", "title": "dedup"}, false)
+
+	witnessKid := witness.did + "#" + witness.auth.keyID
+	first, firstCID, err := dfos.SignCountersignWithRelation(witness.did, content.operationCID, "endorses", witnessKid, witness.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{first}); res[0].Status != "new" {
+		t.Fatalf("first countersign: %+v", res[0])
+	}
+
+	q := "/index/v0/countersignatures?witness=" + url.QueryEscape(witness.did) + "&limit=100"
+	_, afterFirst, _ := getIndexJSONBody(t, handler, q)
+	rows := afterFirst["countersignatures"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["cid"] != firstCID || rows[0].(map[string]any)["relation"] != "endorses" {
+		t.Fatalf("after first = %v", afterFirst)
+	}
+
+	// second countersign, same witness + target, no relation ⇒ store dedups it.
+	second, _, err := dfos.SignCountersign(witness.did, content.operationCID, witnessKid, witness.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := r.Ingest([]string{second})
+	if res[0].Status != "duplicate" {
+		t.Fatalf("second countersign status = %q, want duplicate", res[0].Status)
+	}
+
+	_, afterSecond, _ := getIndexJSONBody(t, handler, q)
+	rows = afterSecond["countersignatures"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["cid"] != firstCID || rows[0].(map[string]any)["relation"] != "endorses" {
+		t.Fatalf("after second (deduped) = %v", afterSecond)
+	}
+}
+
+// On boot, a durable store whose stamped projection_version differs from
+// IndexProjectionVersion (a bumped schema, or a pre-existing corpus ingested
+// while a stale/absent projection) is rebuilt from the authoritative chain +
+// countersign tables — synchronously, before serving.
+func TestIndexRebuildOnVersionBump(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "rebuild.db")
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	r, err := NewRelay(RelayOptions{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := r.Handler()
+
+	author := ingestIdentity(t, r)
+	witness := ingestIdentity(t, r)
+	content := createIndexedContent(t, r, NewMemoryStore(), author, map[string]any{"$schema": "example/post", "title": "seed"}, false)
+	uploadBlobViaRoute(t, r, author, content)
+	witnessKid := witness.did + "#" + witness.auth.keyID
+	cs, csCID, err := dfos.SignCountersign(witness.did, content.operationCID, witnessKid, witness.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{cs}); res[0].Status != "new" {
+		t.Fatalf("countersign: %+v", res[0])
+	}
+
+	// projection currently populated
+	if indexContentRowByID(t, handler, content.contentID) == nil {
+		t.Fatal("seed content row missing before rebuild")
+	}
+
+	// Simulate a stale projection: wipe the rows and reset the stamped version, as
+	// if the DB predates this projection schema (or was ingested index-off).
+	if err := store.ClearIndexProjection(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetIndexProjectionVersion(0); err != nil {
+		t.Fatal(err)
+	}
+	if indexContentRowByID(t, handler, content.contentID) != nil {
+		t.Fatal("expected empty projection after clear")
+	}
+
+	// Boot a fresh relay on the SAME store (same identity ⇒ no re-bootstrap). The
+	// version mismatch (0 != IndexProjectionVersion) triggers a synchronous rebuild.
+	r2, err := NewRelay(RelayOptions{
+		Store:    store,
+		Identity: &RelayIdentity{DID: r.DID(), ProfileArtifactJWS: r.ProfileArtifactJWS()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler2 := r2.Handler()
+
+	// version stamped current again
+	if v, _ := store.GetIndexProjectionVersion(); v != IndexProjectionVersion {
+		t.Fatalf("projection_version = %d, want %d", v, IndexProjectionVersion)
+	}
+	// content row rebuilt WITH the late blob's docSchema (rebuild reads current
+	// chain + held blob + standing credentials)
+	row := indexContentRowByID(t, handler2, content.contentID)
+	if row == nil || row["docSchema"] != "example/post" {
+		t.Fatalf("rebuilt content row = %v", row)
+	}
+	// countersign projection rebuilt and queryable by witness
+	_, csBody, _ := getIndexJSONBody(t, handler2, "/index/v0/countersignatures?witness="+url.QueryEscape(witness.did)+"&limit=100")
+	csRows := csBody["countersignatures"].([]any)
+	if len(csRows) != 1 || csRows[0].(map[string]any)["cid"] != csCID {
+		t.Fatalf("rebuilt countersign rows = %v, want cid %s", csBody, csCID)
+	}
+	// identity rows rebuilt
+	if indexIdentityRowByDID(t, handler2, author.did) == nil {
+		t.Fatal("author identity row missing after rebuild")
 	}
 }

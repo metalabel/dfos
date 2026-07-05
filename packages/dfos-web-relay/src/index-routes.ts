@@ -66,22 +66,6 @@ export const parseBooleanQuery = (raw: string | undefined): boolean | undefined 
   return undefined;
 };
 
-export const pageByKey = <T>(
-  rows: T[],
-  keyOf: (row: T) => string,
-  after: string | undefined,
-  limit: number,
-): { page: T[]; next: string | null } => {
-  let startIdx = 0;
-  if (after) {
-    const idx = rows.findIndex((row) => keyOf(row) === after);
-    startIdx = idx >= 0 ? idx + 1 : rows.length;
-  }
-  const page = rows.slice(startIdx, startIdx + limit);
-  const next = page.length === limit ? keyOf(page[page.length - 1]!) : null;
-  return { page, next };
-};
-
 export const identityIndexRow = async (
   chain: StoredIdentityChain,
   store: RelayStore,

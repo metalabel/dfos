@@ -3,13 +3,18 @@ import {
   signContentOperation,
   signCountersignature,
   signIdentityOperation,
+  signRevocation,
   type ContentOperation,
   type CountersignPayload,
   type IdentityOperation,
   type MultikeyPublicKey,
   type ServiceEntry,
 } from '@metalabel/dfos-protocol/chain';
-import { createAuthToken, createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
+import {
+  createAuthToken,
+  createDFOSCredential,
+  decodeDFOSCredentialUnsafe,
+} from '@metalabel/dfos-protocol/credentials';
 import {
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
@@ -192,6 +197,44 @@ describe('index v0', () => {
     });
     const res = await postOps([credential]);
     expect(res.status).toBe(200);
+  };
+
+  /** Grant public read and return the credential CID (so the grant can be revoked). */
+  const grantPublicRead = async (identity: TestIdentity, contentId: string): Promise<string> => {
+    const now = Math.floor(Date.now() / 1000);
+    const credential = await createDFOSCredential({
+      issuerDID: identity.did,
+      audienceDID: '*',
+      att: [{ resource: `chain:${contentId}`, action: 'read' }],
+      exp: now + 3600,
+      signer: identity.authKey.signer,
+      keyId: identity.authKey.keyId,
+      iat: now,
+    });
+    const res = await postOps([credential]);
+    expect(res.status).toBe(200);
+    return decodeDFOSCredentialUnsafe(credential)!.header.cid as string;
+  };
+
+  const revokeGrant = async (identity: TestIdentity, credentialCID: string) => {
+    const { jwsToken } = await signRevocation({
+      issuerDID: identity.did,
+      credentialCID,
+      signer: identity.authKey.signer,
+      keyId: identity.authKey.keyId,
+    });
+    const res = await postOps([jwsToken]);
+    expect(res.status).toBe(200);
+  };
+
+  const identityRow = async (did: string) => {
+    const body = await json(await req('/index/v0/identities?limit=1000'));
+    return body.identities.find((row: { did: string }) => row.did === did);
+  };
+
+  const contentRow = async (contentId: string) => {
+    const body = await json(await req('/index/v0/content?limit=1000'));
+    return body.content.find((row: { contentId: string }) => row.contentId === contentId);
   };
 
   it('advertises the index capability by default and can disable it', async () => {
@@ -526,5 +569,243 @@ describe('index v0', () => {
 
     expect((await req('/index/v0/countersignatures')).status).toBe(400);
     expect((await req('/index/v0/countersignatures?witness=did:dfos:tooshort')).status).toBe(400);
+  });
+
+  // ---------------------------------------------------------------------------
+  // materialized projection: keyset cursor + recompute-on-change
+  // ---------------------------------------------------------------------------
+
+  it('resumes at the next key on an unknown/mutated cursor (strictly-greater keyset)', async () => {
+    await Promise.all([createIdentity(), createIdentity(), createIdentity(), createIdentity()]);
+    const all = await json(await req('/index/v0/identities?limit=1000'));
+    const dids: string[] = all.identities.map((row: { did: string }) => row.did);
+    expect(dids.length).toBeGreaterThanOrEqual(4);
+    expect(dids).toEqual([...dids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+
+    // A cursor that is NOT a stored key but sorts strictly between dids[1] and
+    // dids[2] (append a char ⇒ longer than dids[1] so > dids[1]; the shared
+    // prefix with dids[2] diverges before the appended char so < dids[2]).
+    const between = `${dids[1]}x`;
+    expect(between > dids[1]!).toBe(true);
+    expect(between < dids[2]!).toBe(true);
+
+    const page = await json(
+      await req(`/index/v0/identities?after=${encodeURIComponent(between)}&limit=1000`),
+    );
+    const pageDids: string[] = page.identities.map((row: { did: string }) => row.did);
+    // The old exact-match cursor returned an EMPTY page here (silent truncation);
+    // keyset resumes at the next key.
+    expect(pageDids.length).toBeGreaterThan(0);
+    expect(pageDids[0]).toBe(dids[2]);
+    expect(pageDids).not.toContain(dids[0]);
+    expect(pageDids).not.toContain(dids[1]);
+  });
+
+  it('resumes correctly when the cursor row is mutated out of the filter between pages', async () => {
+    // three public-read contents from one creator
+    const creator = await createIdentity();
+    const made = [];
+    for (let i = 0; i < 3; i++) {
+      const doc = { $schema: 'example/post', title: `p${i}` };
+      const content = await createContent(creator, doc, i + 1);
+      await uploadBlob(creator, content.contentId, content.operationCID, doc);
+      const credentialCID = await grantPublicRead(creator, content.contentId);
+      made.push({ ...content, credentialCID });
+    }
+    const sorted = [...made].sort((a, b) =>
+      a.contentId < b.contentId ? -1 : a.contentId > b.contentId ? 1 : 0,
+    );
+
+    const page1 = await json(await req('/index/v0/content?publicRead=true&limit=1'));
+    expect(page1.content).toHaveLength(1);
+    const cursor: string = page1.next;
+    expect(cursor).toBe(page1.content[0].contentId);
+
+    // Revoke the CURSOR row's grant → publicRead flips false → it drops out of the
+    // publicRead=true filtered set entirely. The old exact-match cursor would
+    // findIndex(-1) and return an empty page (enumeration truncation).
+    const cursorEntry = made.find((m) => m.contentId === cursor)!;
+    await revokeGrant(creator, cursorEntry.credentialCID);
+
+    const page2 = await json(
+      await req(`/index/v0/content?publicRead=true&after=${encodeURIComponent(cursor)}&limit=1000`),
+    );
+    const remaining: string[] = page2.content.map((row: { contentId: string }) => row.contentId);
+    // still-public contents whose contentId > cursor
+    const expected = sorted
+      .filter((m) => m.contentId > cursor && m.contentId !== cursor)
+      .map((m) => m.contentId);
+    expect(remaining.length).toBeGreaterThan(0);
+    expect(remaining).toEqual(expected);
+    // the mutated cursor row is now absent from the publicRead=true projection
+    const revokedRow = await contentRow(cursor);
+    expect(revokedRow.publicRead).toBe(false);
+  });
+
+  it('recomputes content + anchored identity rows when a blob lands late', async () => {
+    const subject = await createIdentity();
+    const profileDoc = { $schema: PROFILE_SCHEMA, name: 'lena' };
+    const profileContent = await createContent(subject, profileDoc);
+    await grantPublicRead(subject, profileContent.contentId);
+    await updateServices(subject, [
+      { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: profileContent.contentId },
+    ]);
+
+    // blob not yet uploaded → docSchema/name unknown on both rows
+    const beforeContent = await contentRow(profileContent.contentId);
+    expect(beforeContent.currentDocumentCID).toBe(profileContent.documentCID);
+    expect(beforeContent.docSchema).toBeNull();
+    const beforeIdentity = await identityRow(subject.did);
+    expect(beforeIdentity.profile).toMatchObject({
+      anchor: profileContent.contentId,
+      docSchema: null,
+      name: null,
+    });
+
+    // blob lands late → recompute cascades content → anchored identity
+    await uploadBlob(subject, profileContent.contentId, profileContent.operationCID, profileDoc);
+
+    const afterContent = await contentRow(profileContent.contentId);
+    expect(afterContent.docSchema).toBe(PROFILE_SCHEMA);
+    const afterIdentity = await identityRow(subject.did);
+    expect(afterIdentity.profile).toMatchObject({
+      anchor: profileContent.contentId,
+      publicRead: true,
+      docSchema: PROFILE_SCHEMA,
+      name: 'lena',
+    });
+  });
+
+  it('flips publicRead on a content row AND an anchored profile when a grant is added then revoked', async () => {
+    const subject = await createIdentity();
+    const profileDoc = { $schema: PROFILE_SCHEMA, name: 'ravi' };
+    const profileContent = await createContent(subject, profileDoc);
+    await uploadBlob(subject, profileContent.contentId, profileContent.operationCID, profileDoc);
+    await updateServices(subject, [
+      { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: profileContent.contentId },
+    ]);
+
+    // before any grant: private on both the content row and the anchored profile
+    expect((await contentRow(profileContent.contentId)).publicRead).toBe(false);
+    expect((await identityRow(subject.did)).profile.publicRead).toBe(false);
+    expect(
+      (await json(await req('/index/v0/identities?hasPublicProfile=true'))).identities.map(
+        (row: { did: string }) => row.did,
+      ),
+    ).not.toContain(subject.did);
+
+    // grant flips both true
+    const credentialCID = await grantPublicRead(subject, profileContent.contentId);
+    expect((await contentRow(profileContent.contentId)).publicRead).toBe(true);
+    expect((await identityRow(subject.did)).profile.publicRead).toBe(true);
+    expect(
+      (await json(await req('/index/v0/identities?hasPublicProfile=true'))).identities.map(
+        (row: { did: string }) => row.did,
+      ),
+    ).toContain(subject.did);
+
+    // revoke flips both back to false
+    await revokeGrant(subject, credentialCID);
+    expect((await contentRow(profileContent.contentId)).publicRead).toBe(false);
+    expect((await identityRow(subject.did)).profile.publicRead).toBe(false);
+    expect(
+      (await json(await req('/index/v0/identities?hasPublicProfile=true'))).identities.map(
+        (row: { did: string }) => row.did,
+      ),
+    ).not.toContain(subject.did);
+  });
+
+  it('flips publicRead false when the identity that granted it is deleted (issuer no longer a valid credential hop)', async () => {
+    // Creator self-issues a public-read grant on its own content, anchors its
+    // profile there, then deletes its own identity. hasPublicStandingAuth
+    // re-verifies the grant's issuer live and rejects a deleted identity, so the
+    // materialized content row (and the anchored profile) MUST flip true→false —
+    // even though the only op is on the IDENTITY chain, not the content chain.
+    const creator = await createIdentity();
+    const profileDoc = { $schema: PROFILE_SCHEMA, name: 'mara' };
+    const content = await createContent(creator, profileDoc);
+    await uploadBlob(creator, content.contentId, content.operationCID, profileDoc);
+    await grantPublicRead(creator, content.contentId);
+    const update = await updateServices(creator, [
+      { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: content.contentId },
+    ]);
+
+    // grant + anchor in place: public on both the content row and the profile
+    expect((await contentRow(content.contentId)).publicRead).toBe(true);
+    expect((await identityRow(creator.did)).profile.publicRead).toBe(true);
+
+    // delete the granting identity (terminal op on its own chain)
+    const deleteOp: IdentityOperation = {
+      version: 1,
+      type: 'delete',
+      previousOperationCID: update.operationCID,
+      createdAt: ts(4),
+    };
+    const { jwsToken: deleteToken } = await signIdentityOperation({
+      operation: deleteOp,
+      signer: creator.controller.signer,
+      keyId: creator.controller.keyId,
+      identityDID: creator.did,
+    });
+    expect((await postOps([deleteToken])).status).toBe(200);
+
+    // the content row's publicRead must reflect the now-invalid issuer, and the
+    // deleted identity's own profile projection likewise
+    expect((await contentRow(content.contentId)).publicRead).toBe(false);
+    const deletedRow = await identityRow(creator.did);
+    expect(deletedRow.isDeleted).toBe(true);
+    expect(deletedRow.profile.publicRead).toBe(false);
+    expect(
+      (await json(await req('/index/v0/content?publicRead=true&limit=1000'))).content.map(
+        (row: { contentId: string }) => row.contentId,
+      ),
+    ).not.toContain(content.contentId);
+  });
+
+  it('reflects the ACCEPTED (deduped) countersign set in the projection, not raw ops', async () => {
+    const author = await createIdentity();
+    const witness = await createIdentity();
+    const content = await createContent(author, { $schema: 'example/post', title: 'dedup' });
+
+    const signCs = async (relation: string | undefined, offset: number) => {
+      const payload: CountersignPayload = {
+        version: 1,
+        type: 'countersign',
+        did: witness.did,
+        targetCID: content.operationCID,
+        ...(relation ? { relation } : {}),
+        createdAt: ts(offset),
+      };
+      const { jwsToken } = await signCountersignature({
+        payload,
+        signer: witness.authKey.signer,
+        kid: `${witness.did}#${witness.authKey.keyId}`,
+      });
+      return jwsToken;
+    };
+
+    const first = await signCs('endorses', 3);
+    await postOps([first]);
+
+    const afterFirst = await json(
+      await req(`/index/v0/countersignatures?witness=${encodeURIComponent(witness.did)}&limit=100`),
+    );
+    expect(afterFirst.countersignatures).toHaveLength(1);
+    const acceptedCid = afterFirst.countersignatures[0].cid;
+    expect(afterFirst.countersignatures[0].relation).toBe('endorses');
+
+    // second countersign, same witness + same target, different createdAt ⇒ the
+    // store dedups it (status 'duplicate'). The projection must NOT gain a row.
+    const second = await signCs('revised', 6);
+    const res = await postOps([second]);
+    const body = await json(res);
+    expect(body.results[0].status).toBe('duplicate');
+
+    const afterSecond = await json(
+      await req(`/index/v0/countersignatures?witness=${encodeURIComponent(witness.did)}&limit=100`),
+    );
+    expect(afterSecond.countersignatures).toHaveLength(1);
+    expect(afterSecond.countersignatures[0].cid).toBe(acceptedCid);
+    expect(afterSecond.countersignatures[0].relation).toBe('endorses');
   });
 });
