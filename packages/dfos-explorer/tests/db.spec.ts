@@ -190,6 +190,34 @@ describe('explorer db', () => {
     expect(bySchema.rows.map((r) => r.chainId)).toEqual(['pub']);
   });
 
+  it('browseDocuments joins the attributed profile name via profileSource', async () => {
+    const db = await freshDb();
+    await db.putBatch(
+      [],
+      [
+        rollup({
+          chainId: 'profile-chain',
+          kind: 'content-op',
+          docSchema: 'https://schemas.dfos.com/profile/v1',
+          publicRead: true,
+          resolvedHead: 'h1',
+        }),
+        // the identity whose profile lives on profile-chain — carries the name
+        rollup({
+          chainId: 'did:dfos:alice',
+          kind: 'identity-op',
+          name: 'Alice',
+          nameLower: 'alice',
+          profileSource: 'profile-chain',
+        }),
+      ],
+    );
+    const res = await db.browseDocuments({ limit: 10 });
+    expect(res.names['profile-chain']).toBe('Alice');
+    // a content chain with no attributing identity gets no title
+    expect(res.names['unknown']).toBeUndefined();
+  });
+
   it('tracks per-relay cursors and wipes everything', async () => {
     const db = await freshDb();
     await db.setCursor({
