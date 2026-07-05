@@ -23,6 +23,18 @@
   so re-runs only touch chains whose head drifted. Abortable via `signal`. This is
   the "rich requires-full-download UX" — paid once per head, then browse is instant.
 
+  Chains resolve through a bounded worker pool: each chain is independent (one
+  fetch, one rollup write), so the network waits overlap. The one shared surface
+  is the ATTRIBUTION write — two content chains can attribute the same identity
+  DID, and its read-modify-write would lose updates under interleaving — so those
+  writes alone are serialized through a mutex.
+
+  The blob fetch is PREFILTERED by the standing public-read grant set folded from
+  local credential + revocation ops (public-grants.ts): a chain with no standing
+  grant is stamped gated straight from the log — no fetch, no guaranteed-401.
+  A chain whose stored publicness DISAGREES with the grant fold (a grant issued
+  or revoked since) is re-resolved even without head drift.
+
 */
 
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
@@ -30,6 +42,7 @@ import type { ChainRollup, ExplorerDb, ExplorerOp } from './db';
 import { didOfKid } from './format';
 import { parseMediaObject } from './media';
 import { isProfileContent } from './profile';
+import { isFetchEligible, publicGrantSet } from './public-grants';
 import { fetchBlobRaw, type BlobResult } from './relay-raw';
 
 export interface ProjectionProgress {
@@ -93,6 +106,7 @@ const resolveOne = async (
   rollup: ChainRollup,
   relays: string[],
   fetchBlob: (contentId: string, relays: string[]) => Promise<BlobResult>,
+  fetchEligible: boolean,
 ): Promise<OneResult | null> => {
   const ops = await db.chainOps(rollup.chainId, 'content-op');
   if (ops.length === 0) return null;
@@ -121,6 +135,12 @@ const resolveOne = async (
   // head (documentCID cleared → no public doc).
   const selfCid = await encodeCid(head.payload);
   if (selfCid !== head.op.cid || !committedDocCid) {
+    return withDid({ resolvedHead: head.op.cid, publicRead: false });
+  }
+
+  // no standing public grant in the log → an anonymous fetch is denied by
+  // construction; stamp gated straight from the math (no network round-trip)
+  if (!fetchEligible) {
     return withDid({ resolvedHead: head.op.cid, publicRead: false });
   }
 
@@ -159,25 +179,6 @@ const resolveOne = async (
     }
   }
   return out;
-};
-
-/** Merge a content chain's resolved projection onto its rollup (clears stale
- *  docSchema when a head-drift made a once-public chain gated). */
-const writeContentProjection = async (
-  db: ExplorerDb,
-  chainId: string,
-  r: OneResult,
-): Promise<void> => {
-  const existing = await db.getChain(chainId);
-  if (!existing) return;
-  const merged: ChainRollup = {
-    ...existing,
-    resolvedHead: r.resolvedHead,
-    publicRead: r.publicRead,
-  };
-  if (r.docSchema) merged.docSchema = r.docSchema;
-  else delete merged.docSchema;
-  await db.putBatch([], [merged]);
 };
 
 /** Patch the attributed identity rollup with the profile name/avatar — only if
@@ -223,9 +224,20 @@ const clearAttribution = async (
   await db.putBatch([], [merged]);
 };
 
+/** In-flight resolves at once. Each is one blob fetch + a hash — network-bound,
+ *  so overlapping them is nearly free; bounded to stay polite to relays. */
+const CONCURRENCY = 8;
+
+/** Content-projection writes are BATCHED. With fetches prefiltered away, the
+ *  per-chain readwrite transaction (plus a progress render per chain) is what
+ *  dominates wall-clock — thousands of one-row transactions is minutes; a few
+ *  dozen batched ones is seconds. Progress ticks once per flush. */
+const FLUSH_EVERY = 200;
+
 /**
  * Resolve every unresolved (or head-drifted) public content chain's projection.
- * Sequential and abortable; persists per chain so a stop/refresh resumes cleanly.
+ * Bounded-parallel and abortable; persists in batched flushes (an aborted run
+ * flushes its tail, so a stop/refresh resumes from what was already resolved).
  */
 export const resolvePublicProjections = async (
   opts: ResolveOptions,
@@ -233,8 +245,20 @@ export const resolvePublicProjections = async (
   const { db, relays, signal, onProgress } = opts;
   const fetchBlob = opts.fetchBlob ?? fetchBlobRaw;
 
+  // fold the standing public-read grant set once per run (public-grants.ts)
+  const [credentialOps, revocationOps] = await Promise.all([
+    db.opsOfKind('credential', 100000),
+    db.opsOfKind('revocation', 100000),
+  ]);
+  const grants = publicGrantSet(credentialOps, revocationOps, Math.floor(Date.now() / 1000));
+
+  // eligible: head drifted since last resolve, OR the grant fold disagrees with
+  // the stored publicness (a grant was issued or revoked under an unmoved head)
   const content = (await db.allChains()).filter(
-    (c) => c.kind === 'content-op' && c.resolvedHead !== c.headCid,
+    (c) =>
+      c.kind === 'content-op' &&
+      (c.resolvedHead !== c.headCid ||
+        isFetchEligible(grants, c.chainId) !== (c.publicRead === true)),
   );
   const total = content.length;
 
@@ -242,34 +266,87 @@ export const resolvePublicProjections = async (
   let publicDocs = 0;
   let attributed = 0;
 
-  for (const rollup of content) {
-    if (signal?.aborted) break;
-    const result = await resolveOne(db, rollup, relays, fetchBlob);
-    if (!result) continue;
+  // identity-rollup attribution is a read-modify-write over a SHARED row (two
+  // chains can attribute the same DID) — serialize just those writes.
+  let attributionLock: Promise<unknown> = Promise.resolve();
+  const withAttributionLock = <T>(fn: () => Promise<T>): Promise<T> => {
+    const run = attributionLock.then(fn, fn);
+    attributionLock = run.catch(() => undefined);
+    return run;
+  };
 
-    await writeContentProjection(db, rollup.chainId, result);
-    resolved += 1;
-    if (result.publicRead) publicDocs += 1;
+  // projections accumulate here and land in batched putBatch transactions;
+  // flushes are serialized (workers keep resolving while one is in flight)
+  const pending: { chainId: string; result: OneResult }[] = [];
+  let flushLock: Promise<unknown> = Promise.resolve();
+  const flush = (force: boolean): Promise<unknown> => {
+    flushLock = flushLock.then(async () => {
+      if (!force && pending.length < FLUSH_EVERY) return;
+      const batch = pending.splice(0);
+      if (batch.length === 0) return;
+      // re-read each rollup (attribution may have touched shared rows meanwhile)
+      const rows = await Promise.all(batch.map((b) => db.getChain(b.chainId)));
+      const merged: ChainRollup[] = [];
+      batch.forEach((b, i) => {
+        const row = rows[i];
+        if (!row) return;
+        const m: ChainRollup = {
+          ...row,
+          resolvedHead: b.result.resolvedHead,
+          publicRead: b.result.publicRead,
+        };
+        if (b.result.docSchema) m.docSchema = b.result.docSchema;
+        else delete m.docSchema;
+        merged.push(m);
+      });
+      await db.putBatch([], merged);
+      onProgress?.({ resolved, publicDocs, attributed, total });
+    });
+    return flushLock;
+  };
 
-    // attribute a public profile to its genesis signer; on any other outcome,
-    // clear a stale name this chain previously set (deleted / gated / retyped)
-    if (result.attributedDid) {
-      if (result.profileName) {
-        const ok = await writeAttribution(
-          db,
-          result.attributedDid,
-          rollup.chainId,
-          result.profileName,
-          result.avatarRef,
-        );
-        if (ok) attributed += 1;
-      } else {
-        await clearAttribution(db, result.attributedDid, rollup.chainId);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (!signal?.aborted) {
+      const i = next;
+      next += 1;
+      if (i >= content.length) return;
+      const rollup = content[i]!;
+      const result = await resolveOne(
+        db,
+        rollup,
+        relays,
+        fetchBlob,
+        isFetchEligible(grants, rollup.chainId),
+      );
+      if (!result) continue;
+
+      pending.push({ chainId: rollup.chainId, result });
+      resolved += 1;
+      if (result.publicRead) publicDocs += 1;
+
+      // attribute a public profile to its genesis signer; on any other outcome,
+      // clear a stale name this chain previously set (deleted / gated / retyped)
+      const { attributedDid, profileName, avatarRef } = result;
+      if (attributedDid) {
+        if (profileName) {
+          const ok = await withAttributionLock(() =>
+            writeAttribution(db, attributedDid, rollup.chainId, profileName, avatarRef),
+          );
+          if (ok) attributed += 1;
+        } else {
+          await withAttributionLock(() => clearAttribution(db, attributedDid, rollup.chainId));
+        }
       }
-    }
 
-    onProgress?.({ resolved, publicDocs, attributed, total });
-  }
+      if (pending.length >= FLUSH_EVERY) await flush(false);
+    }
+  };
+
+  const pool = Math.min(CONCURRENCY, content.length);
+  await Promise.all(Array.from({ length: pool }, () => worker()));
+  // persist the tail (also the partial progress of an aborted run)
+  await flush(true);
 
   return { resolved, publicDocs, attributed };
 };
