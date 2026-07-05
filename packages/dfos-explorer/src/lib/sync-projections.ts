@@ -29,6 +29,12 @@
   DID, and its read-modify-write would lose updates under interleaving — so those
   writes alone are serialized through a mutex.
 
+  The blob fetch is PREFILTERED by the standing public-read grant set folded from
+  local credential + revocation ops (public-grants.ts): a chain with no standing
+  grant is stamped gated straight from the log — no fetch, no guaranteed-401.
+  A chain whose stored publicness DISAGREES with the grant fold (a grant issued
+  or revoked since) is re-resolved even without head drift.
+
 */
 
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
@@ -36,6 +42,7 @@ import type { ChainRollup, ExplorerDb, ExplorerOp } from './db';
 import { didOfKid } from './format';
 import { parseMediaObject } from './media';
 import { isProfileContent } from './profile';
+import { isFetchEligible, publicGrantSet } from './public-grants';
 import { fetchBlobRaw, type BlobResult } from './relay-raw';
 
 export interface ProjectionProgress {
@@ -99,6 +106,7 @@ const resolveOne = async (
   rollup: ChainRollup,
   relays: string[],
   fetchBlob: (contentId: string, relays: string[]) => Promise<BlobResult>,
+  fetchEligible: boolean,
 ): Promise<OneResult | null> => {
   const ops = await db.chainOps(rollup.chainId, 'content-op');
   if (ops.length === 0) return null;
@@ -127,6 +135,12 @@ const resolveOne = async (
   // head (documentCID cleared → no public doc).
   const selfCid = await encodeCid(head.payload);
   if (selfCid !== head.op.cid || !committedDocCid) {
+    return withDid({ resolvedHead: head.op.cid, publicRead: false });
+  }
+
+  // no standing public grant in the log → an anonymous fetch is denied by
+  // construction; stamp gated straight from the math (no network round-trip)
+  if (!fetchEligible) {
     return withDid({ resolvedHead: head.op.cid, publicRead: false });
   }
 
@@ -244,8 +258,20 @@ export const resolvePublicProjections = async (
   const { db, relays, signal, onProgress } = opts;
   const fetchBlob = opts.fetchBlob ?? fetchBlobRaw;
 
+  // fold the standing public-read grant set once per run (public-grants.ts)
+  const [credentialOps, revocationOps] = await Promise.all([
+    db.opsOfKind('credential', 100000),
+    db.opsOfKind('revocation', 100000),
+  ]);
+  const grants = publicGrantSet(credentialOps, revocationOps, Math.floor(Date.now() / 1000));
+
+  // eligible: head drifted since last resolve, OR the grant fold disagrees with
+  // the stored publicness (a grant was issued or revoked under an unmoved head)
   const content = (await db.allChains()).filter(
-    (c) => c.kind === 'content-op' && c.resolvedHead !== c.headCid,
+    (c) =>
+      c.kind === 'content-op' &&
+      (c.resolvedHead !== c.headCid ||
+        isFetchEligible(grants, c.chainId) !== (c.publicRead === true)),
   );
   const total = content.length;
 
@@ -269,7 +295,13 @@ export const resolvePublicProjections = async (
       next += 1;
       if (i >= content.length) return;
       const rollup = content[i]!;
-      const result = await resolveOne(db, rollup, relays, fetchBlob);
+      const result = await resolveOne(
+        db,
+        rollup,
+        relays,
+        fetchBlob,
+        isFetchEligible(grants, rollup.chainId),
+      );
       if (!result) continue;
 
       await writeContentProjection(db, rollup.chainId, result);
