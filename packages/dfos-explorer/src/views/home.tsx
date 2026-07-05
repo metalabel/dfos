@@ -124,6 +124,7 @@ const Stat = (props: {
 
 const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
   const sync = useSyncState();
+  const resolving = sync.phase === 'resolving';
   const { obs, hint } = props;
   const counts = obs?.counts ?? { ops: 0, chains: 0, byKind: {} };
   const populated = counts.chains > 0 || counts.ops > 0;
@@ -153,6 +154,13 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
         </span>
       }
     >
+      {/* The "relay asserts N" comparison subline renders ONLY on operations —
+          the one figure where local and relay counts share a unit (ops vs ops).
+          countsByKind advertises per-kind OP counts while the local identities /
+          content figures are CHAIN counts, so a subline there would imply a
+          verification delta that is really a unit artifact. Pre-sync the amber
+          asserted numerals still render for every stat (no local claim to
+          compare against — they're the only data, framed 'asserted'). */}
       <div class="statband">
         <Stat
           label="operations"
@@ -163,31 +171,33 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
         <Stat
           label="identities"
           local={populated ? (counts.byKind['identity-op'] ?? 0) : null}
-          asserted={asserted('identity-op')}
+          asserted={populated ? undefined : asserted('identity-op')}
           populated={populated}
         />
         <Stat
           label="content chains"
           local={populated ? (counts.byKind['content-op'] ?? 0) : null}
-          asserted={asserted('content-op')}
+          asserted={populated ? undefined : asserted('content-op')}
           populated={populated}
         />
         <Stat
           label="credentials"
           local={populated ? (counts.byKind['credential'] ?? 0) : null}
-          asserted={asserted('credential')}
+          asserted={populated ? undefined : asserted('credential')}
           populated={populated}
         />
         <Stat
           label="public docs"
           local={populated ? (obs?.publicDocs ?? 0) : null}
+          localText={populated && resolving ? '…' : undefined}
+          assertedText={populated && resolving ? 'resolving' : undefined}
           populated={populated}
         />
         <Stat
           label="oldest op"
           local={populated ? 0 : null}
           localText={populated ? localOldest || '—' : undefined}
-          assertedText={assertedOldest}
+          assertedText={populated ? undefined : assertedOldest}
           populated={populated}
         />
       </div>
@@ -281,6 +291,8 @@ const RecentPanel = (props: { obs: Observatory | null }) => {
 // -----------------------------------------------------------------------------
 
 const IdentitiesPanel = (props: { obs: Observatory | null }) => {
+  const sync = useSyncState();
+  const busy = sync.phase === 'resolving' || sync.phase === 'syncing';
   const ids = props.obs?.identities ?? [];
   const populated = (props.obs?.counts.chains ?? 0) > 0;
   return (
@@ -291,7 +303,13 @@ const IdentitiesPanel = (props: { obs: Observatory | null }) => {
     >
       {ids.length === 0 ? (
         <span class="muted">
-          {populated ? 'no attributed public profiles yet' : 'sync the log to surface identities'}
+          {/* only claim "none" once resolution has settled — while Phase 2 runs
+              an empty strip means "not resolved yet", not "nobody is public" */}
+          {!populated
+            ? 'sync the log to surface identities'
+            : busy
+              ? 'resolving projections…'
+              : 'no attributed public profiles yet'}
         </span>
       ) : (
         <>

@@ -61,7 +61,9 @@ const applyTheme = (t: Theme): void => {
 const ThemeToggle = () => {
   const [theme, setTheme] = useState<Theme>(currentTheme);
   const flip = (): void => {
-    const next: Theme = theme === 'dark' ? 'light' : 'dark';
+    // read the DOM attribute (the source of truth), not component state — a
+    // rapid double-click would otherwise flip against a stale snapshot
+    const next: Theme = currentTheme() === 'dark' ? 'light' : 'dark';
     applyTheme(next);
     setTheme(next);
   };

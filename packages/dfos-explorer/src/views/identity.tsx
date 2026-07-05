@@ -331,10 +331,11 @@ export const Identity = (props: { did: string }) => {
             v:
               creds && creds.length > 0 ? (
                 <>
-                  {creds.length} — see the panel above, or open one:{' '}
+                  {creds.length}
                   {creds.slice(0, 3).map((op) => (
                     <span key={op.cid}>
-                      <CredLink cid={op.cid} />{' '}
+                      {' · '}
+                      <CredLink cid={op.cid} />
                     </span>
                   ))}
                 </>

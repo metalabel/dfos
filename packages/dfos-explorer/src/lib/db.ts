@@ -349,8 +349,11 @@ export const openExplorerDb = async (
     const store = db.transaction('ops').objectStore('ops');
     return new Promise((resolve, reject) => {
       // createdAt is a fixed-width, lexicographically-chronological grammar, so
-      // the first entry of the index (ascending) is the earliest op.
-      const cursorReq = store.index('createdAt').openCursor(null, 'next');
+      // the first entry of the index (ascending) is the earliest op. Ops whose
+      // payload didn't decode carry createdAt '' and would sort first — exclude
+      // the empty key so the answer is a real timestamp.
+      const range = IDBKeyRange.lowerBound('', true);
+      const cursorReq = store.index('createdAt').openCursor(range, 'next');
       cursorReq.onsuccess = () => {
         const cursor = cursorReq.result;
         const row = cursor?.value as ExplorerOp | undefined;

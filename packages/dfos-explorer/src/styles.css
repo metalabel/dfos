@@ -1100,12 +1100,15 @@ button.primary:hover {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 1px;
-  background: var(--line2);
   border: 1px solid var(--line2);
 }
 
+/* hairlines come from per-cell outlines (drawn into the 1px gaps), NOT a
+   container background — so any unfilled grid area in a wrapped row stays
+   panel-colored instead of rendering as a flat slab. */
 .stat {
   background: var(--panel);
+  outline: 1px solid var(--line2);
   padding: 11px 12px 10px;
   display: flex;
   flex-direction: column;
