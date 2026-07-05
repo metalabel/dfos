@@ -19,7 +19,7 @@
 
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
-import { Panel, Pill, Term } from '../components/ui';
+import { Badge, Panel, Pill, Term } from '../components/ui';
 import type { ChainRollup, DocumentsBrowse, ExplorerOp, IdentitiesBrowse } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtCount, short } from '../lib/format';
@@ -175,7 +175,7 @@ export const BrowseIdentities = () => {
                   <td>
                     {row.name ? (
                       <>
-                        <b>{row.name}</b> <span class="lbl">attributed</span>
+                        <b>{row.name}</b> <Badge state="warn">attributed</Badge>
                       </>
                     ) : (
                       <span class="muted">— no public profile</span>
@@ -300,7 +300,7 @@ export const BrowseDocuments = () => {
                     <td>
                       {title ? (
                         <>
-                          <b>{title}</b> <span class="lbl">attributed</span>
+                          <b>{title}</b> <Badge state="warn">attributed</Badge>
                         </>
                       ) : (
                         <span class="muted">—</span>

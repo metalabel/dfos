@@ -19,13 +19,14 @@ import { Check, Checks, type CheckState } from '../components/checks';
 import { OpTimeline, OpType } from '../components/timeline';
 import {
   ContentLink,
-  Copyable,
   DidLink,
   KidLink,
   OpLink,
   Panel,
   Pill,
+  Related,
   Term,
+  TruncId,
 } from '../components/ui';
 import { getClient } from '../lib/client';
 import { getDb } from '../lib/db-instance';
@@ -307,7 +308,7 @@ export const Op = (props: { cid: string }) => {
         <div class="kv">
           <div class="k">cid</div>
           <div class="v">
-            <Copyable value={props.cid} head={40} tail={8} />
+            <TruncId value={props.cid} head={40} tail={8} />
           </div>
           <div class="k">envelope</div>
           <div class="v">
@@ -501,6 +502,33 @@ export const Op = (props: { cid: string }) => {
           </table>
         )}
       </Panel>
+
+      <Related
+        rows={[
+          { k: 'parent chain', v: op?.chainId ? chainLink : null },
+          {
+            k: 'signer identity',
+            v: kid && didOfKid(kid) ? <DidLink did={didOfKid(kid)} full /> : null,
+          },
+          {
+            k: 'previous op',
+            v:
+              chain && chain.position > 1 && chain.rows[chain.position - 2] ? (
+                <OpLink cid={chain.rows[chain.position - 2]?.cid ?? ''} />
+              ) : null,
+          },
+          {
+            k: 'next op',
+            v:
+              chain &&
+              chain.present &&
+              chain.position < chain.total &&
+              chain.rows[chain.position] ? (
+                <OpLink cid={chain.rows[chain.position]?.cid ?? ''} />
+              ) : null,
+          },
+        ]}
+      />
     </>
   );
 };
@@ -518,7 +546,7 @@ const PayloadRow = (props: { k: string; value: unknown; kind: string }) => {
       (k === 'documentCID' || k === 'baseDocumentCID' || k === 'credentialCID') &&
       typeof value === 'string'
     )
-      return <Copyable value={value} />;
+      return <TruncId value={value} />;
     if (k === 'documentCID' && value === null) return <span class="muted">null (cleared)</span>;
     if ((k === 'authKeys' || k === 'assertKeys' || k === 'controllerKeys') && Array.isArray(value))
       return <>{value.length} key(s)</>;

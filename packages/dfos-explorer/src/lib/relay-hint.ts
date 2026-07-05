@@ -21,13 +21,18 @@ export interface RelayHint {
   opCount?: number;
   /** max advertised per-kind counts across healthy relays (relay-asserted). */
   countsByKind?: Record<string, number>;
+  /** earliest advertised op timestamp across healthy relays (relay-asserted). */
+  oldestOpAt?: string;
 }
 
-const readStats = (h: RelayHealth): { opCount?: number; countsByKind?: Record<string, number> } => {
+const readStats = (
+  h: RelayHealth,
+): { opCount?: number; countsByKind?: Record<string, number>; oldestOpAt?: string } => {
   const stats = h['stats'];
   if (typeof stats !== 'object' || stats === null) return {};
   const rec = stats as Record<string, unknown>;
   const opCount = typeof rec['opCount'] === 'number' ? rec['opCount'] : undefined;
+  const oldestOpAt = typeof rec['oldestOpAt'] === 'string' ? rec['oldestOpAt'] : undefined;
   const raw = rec['countsByKind'];
   let countsByKind: Record<string, number> | undefined;
   if (typeof raw === 'object' && raw !== null) {
@@ -39,6 +44,7 @@ const readStats = (h: RelayHealth): { opCount?: number; countsByKind?: Record<st
   return {
     ...(opCount !== undefined ? { opCount } : {}),
     ...(countsByKind ? { countsByKind } : {}),
+    ...(oldestOpAt !== undefined ? { oldestOpAt } : {}),
   };
 };
 
@@ -64,6 +70,10 @@ export const fetchRelayHint = async (): Promise<RelayHint> => {
       for (const [k, v] of Object.entries(s.countsByKind)) {
         hint.countsByKind[k] = Math.max(hint.countsByKind[k] ?? 0, v);
       }
+    }
+    // earliest across relays — the corpus reaches at least this far back
+    if (s.oldestOpAt && (!hint.oldestOpAt || s.oldestOpAt < hint.oldestOpAt)) {
+      hint.oldestOpAt = s.oldestOpAt;
     }
   }
   return hint;

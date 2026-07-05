@@ -20,14 +20,15 @@ import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
 import {
   ContentLink,
-  Copyable,
   CredLink,
   CredStatus,
   DidLink,
   OpLink,
   Panel,
   Pill,
+  Related,
   Term,
+  TruncId,
 } from '../components/ui';
 import { getClient } from '../lib/client';
 import type { ExplorerOp } from '../lib/db';
@@ -153,6 +154,13 @@ export const Identity = (props: { did: string }) => {
 
   const services = ('services' in state ? state.services : undefined) ?? [];
 
+  // crosslinks from already-loaded state: content chains this identity anchors
+  // (ContentAnchor services) + the credentials it issued.
+  const contentAnchors = services
+    .filter((e) => e.type === 'ContentAnchor')
+    .map((e) => (e as Record<string, unknown>)['anchor'])
+    .filter((a): a is string => typeof a === 'string' && classifyAnchor(a) === 'chain');
+
   return (
     <>
       <IdentityProfile
@@ -179,7 +187,7 @@ export const Identity = (props: { did: string }) => {
         <div class="kv">
           <div class="k">did</div>
           <div class="v">
-            <Copyable value={props.did} head={40} tail={0} />
+            <TruncId value={props.did} head={40} tail={0} />
           </div>
           <div class="k">
             head <span class="lbl">{stateVerified ? 'verified fold' : 'relay-asserted'}</span>
@@ -302,6 +310,39 @@ export const Identity = (props: { did: string }) => {
           <OpTimeline rows={rows} headCid={localHead ?? claimHead} />
         )}
       </Panel>
+
+      <Related
+        rows={[
+          {
+            k: 'content chains',
+            v:
+              contentAnchors.length > 0 ? (
+                contentAnchors.map((a) => (
+                  <div key={a}>
+                    <ContentLink id={a} full />
+                  </div>
+                ))
+              ) : (
+                <span class="related-empty">none anchored on the verified chain</span>
+              ),
+          },
+          {
+            k: 'credentials issued',
+            v:
+              creds && creds.length > 0 ? (
+                <>
+                  {creds.length}
+                  {creds.slice(0, 3).map((op) => (
+                    <span key={op.cid}>
+                      {' · '}
+                      <CredLink cid={op.cid} />
+                    </span>
+                  ))}
+                </>
+              ) : null,
+          },
+        ]}
+      />
     </>
   );
 };
@@ -420,7 +461,7 @@ const KeysPanel = (props: { state: IdentityClaimState | VerifiedIdentity; verifi
                   ))}
                 </td>
                 <td>
-                  <Copyable value={row.publicKeyMultibase} />
+                  <TruncId value={row.publicKeyMultibase} />
                 </td>
               </tr>
             ))}
