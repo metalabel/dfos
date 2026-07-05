@@ -485,6 +485,35 @@ func (s *SQLiteStore) AddCountersignature(operationCID string, jwsToken string) 
 	return err
 }
 
+func (s *SQLiteStore) GetCountersignaturesByWitness(witnessDID string) ([]StoredCountersignature, error) {
+	rows, err := s.readerDB().Query(
+		"SELECT operation_cid, jws_token FROM countersignatures WHERE witness_did = ?",
+		witnessDID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []StoredCountersignature{}
+	for rows.Next() {
+		var targetCID, token string
+		if err := rows.Scan(&targetCID, &token); err != nil {
+			return nil, err
+		}
+		row := countersignatureFromToken(targetCID, token)
+		if row == nil || row.WitnessDID != witnessDID {
+			continue
+		}
+		result = append(result, *row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].CID < result[j].CID })
+	return result, nil
+}
+
 // ---------------------------------------------------------------------------
 // operation log
 // ---------------------------------------------------------------------------

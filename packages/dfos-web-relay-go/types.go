@@ -25,6 +25,7 @@ type RelayOptions struct {
 	Identity *RelayIdentity
 	Content  *bool // nil or true = enabled (default), false = disabled
 	Log      *bool // nil or true = enabled (default), false = disabled
+	Index    *bool // nil or true = enabled (default), false = disabled
 	// Write, when false, makes this a LITE pull-only proof node: POST
 	// /proof/v1/operations is rejected (501), so neither client writes nor peer
 	// gossip-in are accepted. The node still ingests by PULLING from peers
@@ -129,6 +130,15 @@ type StoredRevocation struct {
 	IssuerDID     string `json:"issuerDID"`
 	CredentialCID string `json:"credentialCID"`
 	JWSToken      string `json:"jwsToken"`
+}
+
+// StoredCountersignature represents a countersignature indexed by target and witness.
+type StoredCountersignature struct {
+	CID        string  `json:"cid"`
+	TargetCID  string  `json:"targetCID"`
+	WitnessDID string  `json:"witnessDID"`
+	Relation   *string `json:"relation"`
+	JWSToken   string  `json:"jwsToken"`
 }
 
 // StoredPublicCredential represents a public credential (standing authorization).
@@ -243,6 +253,7 @@ type Store interface {
 	// countersignatures — implementations MUST dedup by witness DID per target CID
 	GetCountersignatures(operationCID string) ([]string, error)
 	AddCountersignature(operationCID string, jwsToken string) error
+	GetCountersignaturesByWitness(witnessDID string) ([]StoredCountersignature, error)
 
 	// operation log — global append-only, CID-based cursor pagination
 	AppendToLog(entry LogEntry) error

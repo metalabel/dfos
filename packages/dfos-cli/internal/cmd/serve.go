@@ -33,6 +33,7 @@ func newServeCmd() *cobra.Command {
 	var peers string
 	var resync bool
 	var noWrite bool
+	var noIndex bool
 	var contentFollow string
 
 	cmd := &cobra.Command{
@@ -42,7 +43,7 @@ func newServeCmd() *cobra.Command {
 Your machine becomes a reachable node in the DFOS network.
 
 All flags support environment variable fallbacks for container deployment:
-  PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, SYNC_INTERVAL, CONTENT_FOLLOW`,
+  PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, SYNC_INTERVAL, CONTENT_FOLLOW, INDEX`,
 		// A long-lived daemon must not hold the process-wide state lock (it
 		// would block every other dfos invocation for its entire run).
 		Annotations: map[string]string{annNoStateLock: "true"},
@@ -83,6 +84,11 @@ All flags support environment variable fallbacks for container deployment:
 					contentFollow = v
 				}
 			}
+			if !cmd.Flags().Changed("no-index") {
+				if os.Getenv("INDEX") == "false" {
+					noIndex = true
+				}
+			}
 
 			interval, err := time.ParseDuration(syncInterval)
 			if err != nil {
@@ -119,6 +125,10 @@ All flags support environment variable fallbacks for container deployment:
 			if noWrite {
 				writeDisabled := false
 				opts.Write = &writeDisabled
+			}
+			if noIndex {
+				indexDisabled := false
+				opts.Index = &indexDisabled
 			}
 
 			// close any existing lazy-opened relay (serve uses its own opts)
@@ -272,6 +282,7 @@ All flags support environment variable fallbacks for container deployment:
 	cmd.Flags().StringVar(&peers, "peers", "", "Comma-separated peer URLs or JSON array (env: PEERS)")
 	cmd.Flags().BoolVar(&resync, "resync", false, "Reset peer cursors for full re-sync on boot (env: RESYNC)")
 	cmd.Flags().BoolVar(&noWrite, "no-write", false, "LITE pull-only node: reject POST /operations, sync from peers only")
+	cmd.Flags().BoolVar(&noIndex, "no-index", false, "Disable /index/v0 routes: advertise index:false and return 501 (env: INDEX=false)")
 	cmd.Flags().StringVar(&contentFollow, "content-follow", "none", "Materialize granted public content blobs from peers: none|eager (env: CONTENT_FOLLOW)")
 	return cmd
 }

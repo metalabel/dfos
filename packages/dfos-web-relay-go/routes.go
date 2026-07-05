@@ -55,6 +55,12 @@ func newRouter(r *Relay) http.Handler {
 	mux.HandleFunc("GET "+revocationsBasePath+"/credential/{credentialCID}", r.handleRevocationStatus)
 	mux.HandleFunc("GET "+revocationsBasePath+"/issuer/{did...}", r.handleIssuerRevocations)
 
+	// index (v0, own clock) — root-mounted, optional, read-only projections over
+	// relay-held current state. Byte twin of the TS routes in relay.ts.
+	mux.HandleFunc("GET "+indexBasePath+"/identities", r.handleIndexIdentities)
+	mux.HandleFunc("GET "+indexBasePath+"/content", r.handleIndexContent)
+	mux.HandleFunc("GET "+indexBasePath+"/countersignatures", r.handleIndexCountersignatures)
+
 	// document gateway — optional, 0.x (its own version clock); routes stay at root
 	// under /content/{id} until DocumentGateway 0.2 keys on documentCID. The proof
 	// node owns the bare /proof/v1/content/{id} chain paths; the gateway owns the
@@ -150,6 +156,7 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 			// (/revocations/v1). A relay that does not would advertise false and
 			// 501 those routes, mirroring the content/log capability semantics.
 			"revocations": true,
+			"index":       r.indexEnabled,
 		},
 		"profile": r.profileArtifactJWS,
 		"peers":   peers,
