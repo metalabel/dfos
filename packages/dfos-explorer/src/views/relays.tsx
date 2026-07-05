@@ -15,8 +15,10 @@ import type { RelayHealth } from '@metalabel/dfos-client';
 import type { VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { useEffect, useState } from 'preact/hooks';
 import { ProfileCard, type ProfileVerify } from '../components/profile';
-import { DidLink, Panel } from '../components/ui';
+import { Copyable, DidLink, Panel, Term } from '../components/ui';
 import { getClient } from '../lib/client';
+import { fmtAge, fmtCount } from '../lib/format';
+import { GLOSSARY } from '../lib/glossary';
 import { decodeRelayProfile, verifyRelayProfile, type ProfileContent } from '../lib/profile';
 import {
   addRelay,
@@ -55,6 +57,81 @@ const Caps = (props: { capabilities: Record<string, unknown> | undefined }) => {
         );
       })}
     </div>
+  );
+};
+
+// the six primitive buckets a 0.17+ relay advertises in stats.countsByKind
+const KIND_ORDER = [
+  'identity',
+  'content',
+  'artifact',
+  'credential',
+  'countersign',
+  'revocation',
+] as const;
+
+interface RelayStats {
+  pendingOps?: number;
+  opCount?: number;
+  countsByKind?: Record<string, number>;
+  oldestOpAt?: string | null;
+  headCid?: string | null;
+}
+
+/** The enriched corpus telemetry from a relay's /.well-known (0.17+). Degrades
+ *  gracefully: a pre-0.17 relay omits everything but pendingOps, so each field
+ *  is rendered only when present. */
+const RelayStatsBlock = (props: { stats: RelayStats; peers: string[] }) => {
+  const { stats } = props;
+  const counts = stats.countsByKind;
+  const hasCorpus = typeof stats.opCount === 'number';
+
+  return (
+    <>
+      {hasCorpus ? (
+        <div class="kv relay-kv">
+          <div class="k">operations</div>
+          <div class="v">{fmtCount(stats.opCount ?? 0)}</div>
+          {stats.oldestOpAt ? (
+            <>
+              <div class="k">oldest op</div>
+              <div class="v">{fmtAge(stats.oldestOpAt)} ago</div>
+            </>
+          ) : null}
+          {stats.headCid ? (
+            <>
+              <div class="k">head</div>
+              <div class="v">
+                <Copyable value={stats.headCid} head={12} tail={8} />
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      {counts ? (
+        <div class="caps" style={{ marginTop: 6 }}>
+          {KIND_ORDER.map((k) => (
+            <span key={k} class="k-role" title={`${k} operations`}>
+              {k} {fmtCount(counts[k] ?? 0)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div class="kv relay-kv">
+        <div class="k">peers</div>
+        <div class="v">
+          {props.peers.length === 0 ? (
+            <span class="muted">no peers</span>
+          ) : (
+            props.peers.map((p) => (
+              <span key={p} class="k-role">
+                {p.replace(/^https?:\/\//, '')}
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+    </>
   );
 };
 
@@ -101,7 +178,12 @@ const RelayCard = (props: { url: string; health: RelayHealth | undefined }) => {
     };
   }, [url, jws, did, health]);
 
-  const stats = health?.['stats'] as { pendingOps?: number } | undefined;
+  const stats = (health?.['stats'] as RelayStats | undefined) ?? {};
+  const peers = Array.isArray(health?.['peers'])
+    ? (health['peers'] as { endpoint?: unknown }[])
+        .map((p) => (typeof p?.endpoint === 'string' ? p.endpoint : ''))
+        .filter((p): p is string => p.length > 0)
+    : [];
   const version = typeof health?.['version'] === 'string' ? (health['version'] as string) : '';
   const host = url.replace(/^https?:\/\//, '');
 
@@ -139,26 +221,17 @@ const RelayCard = (props: { url: string; health: RelayHealth | undefined }) => {
           <div class="kv relay-kv">
             <div class="k">relay DID</div>
             <div class="v">{did ? <DidLink did={did} full /> : <span class="muted">—</span>}</div>
-            {stats && typeof stats.pendingOps === 'number' ? (
+            {typeof stats.pendingOps === 'number' && stats.pendingOps >= 0 ? (
               <>
                 <div class="k">pending ops</div>
-                <div class="v">{stats.pendingOps}</div>
+                <div class="v">
+                  {stats.pendingOps}
+                  {stats.pendingOps > 0 ? <span class="lbl"> · sequencer backlog</span> : null}
+                </div>
               </>
             ) : null}
           </div>
-          {verify === 'verified' ? (
-            <div class="ck-note">
-              Profile artifact verified — signed by a key the advertised DID holds, CID
-              self-consistent. This authenticates the <b>artifact</b>, not that this host controls
-              the DID (relays are parameters, never authorities). Open the DID to fold its identity
-              in-tab.
-            </div>
-          ) : verify === 'relay-asserted' ? (
-            <div class="ck-note">
-              Showing the relay's self-described profile — not yet bound to its identity key (open
-              the relay DID to fold its identity in-tab).
-            </div>
-          ) : null}
+          <RelayStatsBlock stats={stats} peers={peers} />
         </>
       ) : null}
     </div>
@@ -211,10 +284,9 @@ export const Relays = () => {
         right={<span class="lbl">{relays.length} configured</span>}
         orient={
           <>
-            Relays are <b>parameters, not authorities</b> — reads fan out across this set and
-            everything re-verifies locally. Each relay advertises a signed profile and a capability
-            set; the profile verifies against the relay's own self-certifying identity. Adding more
-            independent relays strengthens convergence evidence; it never changes the math.
+            Relays are <b>parameters, not authorities</b> — everything re-verifies locally (
+            <Term word="what that means" def={GLOSSARY['verifiedLocal'] ?? ''} />
+            ).
           </>
         }
       >
@@ -240,10 +312,8 @@ export const Relays = () => {
             {error}
           </div>
         ) : null}
-        <div class="ck-note" style={{ marginTop: 10 }}>
-          The default seed ({DEFAULT_RELAYS.join(', ')}) is a pragmatic starting point, not a
-          blessing — remove it any time. Each relay's local-index sync cursor is tracked
-          independently; the op pool is a union across relays.
+        <div class="lbl" style={{ marginTop: 10 }}>
+          default seed: {DEFAULT_RELAYS.join(', ')} — remove it any time.
         </div>
       </Panel>
 
@@ -261,10 +331,8 @@ export const Relays = () => {
           ))}
         </div>
         <div class="ck-note" style={{ marginTop: 8 }}>
-          How many distinct relays must return <b>byte-identical</b> answers before a read is
-          treated as agreed. 1 = first-wins (fastest). Higher thresholds need that many configured,
-          reachable relays — agreement is convergence evidence across an untrusted set, never
-          completeness proof. Every answer is still fully re-verified locally regardless.
+          How many distinct relays must return <b>byte-identical</b> answers before a read counts as
+          agreed — convergence evidence across an untrusted set, never completeness proof.
         </div>
       </Panel>
     </>

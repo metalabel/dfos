@@ -32,6 +32,25 @@ export const fmtUnixDate = (unix: number): string => {
 export const fmtCount = (n: number): string =>
   n >= 10000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
+/** ISO timestamp → coarse age like "3y" / "2mo" / "5d" / "4h" / "just now". */
+export const fmtAge = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return '';
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  const years = Math.floor(secs / 31536000);
+  if (years >= 1) return `${years}y`;
+  const months = Math.floor(secs / 2592000);
+  if (months >= 1) return `${months}mo`;
+  const days = Math.floor(secs / 86400);
+  if (days >= 1) return `${days}d`;
+  const hours = Math.floor(secs / 3600);
+  if (hours >= 1) return `${hours}h`;
+  const mins = Math.floor(secs / 60);
+  if (mins >= 1) return `${mins}m`;
+  return 'just now';
+};
+
 /** Bytes → "~92 MB" / "~1.2 GB" (binary units, browser-estimate precision). */
 export const fmtBytes = (bytes: number | null | undefined): string => {
   if (bytes == null) return '';
