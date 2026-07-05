@@ -18,7 +18,16 @@ import { IndexPanel } from '../components/index-view';
 import { MediaPanel } from '../components/media';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
-import { Copyable, CredLink, DidLink, OpLink, Panel, Pill, Term } from '../components/ui';
+import {
+  Copyable,
+  CredLink,
+  CredStatus,
+  DidLink,
+  OpLink,
+  Panel,
+  Pill,
+  Term,
+} from '../components/ui';
 import { getClient } from '../lib/client';
 import { grantsForChain, type GrantSummary } from '../lib/credentials';
 import { getDb } from '../lib/db-instance';
@@ -29,6 +38,7 @@ import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
+import { revokedByCredential } from '../lib/revocations';
 import { jitIndexChain } from '../lib/sync-store';
 import { NotFound } from './not-found';
 
@@ -47,6 +57,8 @@ export const Content = (props: { id: string }) => {
   const [rows, setRows] = useState<OpRow[]>([]);
   const [doc, setDoc] = useState<DocState | null>(null);
   const [grants, setGrants] = useState<GrantSummary[] | null>(null);
+  // credentialCID → revoking op CID, folded from synced revocation ops (local-first)
+  const [revoked, setRevoked] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -56,15 +68,21 @@ export const Content = (props: { id: string }) => {
     setRows([]);
     setDoc(null);
     setGrants(null);
+    setRevoked(new Map());
     setError('');
     const relays = getRelays();
     const client = getClient();
 
-    // related grants — scan the synced credential ops for any naming this chain
+    // related grants — scan the synced credential ops for any naming this chain,
+    // and fold local revocation ops so each grant shows active/revoked
     void getDb()
-      .then((db) => db.opsOfKind('credential', 100000))
-      .then((ops) => {
-        if (!dead) setGrants(grantsForChain(ops, props.id));
+      .then((db) =>
+        Promise.all([db.opsOfKind('credential', 100000), db.opsOfKind('revocation', 100000)]),
+      )
+      .then(([credOps, revOps]) => {
+        if (dead) return;
+        setGrants(grantsForChain(credOps, props.id));
+        setRevoked(revokedByCredential(revOps));
       })
       .catch(() => {
         if (!dead) setGrants([]);
@@ -153,7 +171,6 @@ export const Content = (props: { id: string }) => {
   const docCid = chain ? chain.currentDocumentCID : (claimState.currentDocumentCID ?? null);
   const isDeleted = chain?.isDeleted ?? claimState.isDeleted ?? false;
   const headMatch = !!chain && (!claimHead || chain.headCID === claimHead);
-  const tipAxis = resolved?.trust.unverifiable?.includes('tip') ?? false;
   const revAxis = resolved?.trust.unverifiable?.includes('revocation') ?? false;
 
   const pill = error
@@ -261,14 +278,6 @@ export const Content = (props: { id: string }) => {
                   revocation status unverifiable
                 </Check>
               ) : null}
-              {tipAxis ? (
-                <Check
-                  state="warn"
-                  note="cached head + relay empty-delta claim; freshness is never proven in v1"
-                >
-                  tip freshness unproven
-                </Check>
-              ) : null}
             </>
           )}
         </Checks>
@@ -284,7 +293,12 @@ export const Content = (props: { id: string }) => {
 
       <DocPanel doc={doc} committedCid={docCid} verified={!!chain} />
 
-      <GrantsPanel grants={grants} publicBytes={!!doc?.blob.bytes} gated={!!doc?.blob.gated} />
+      <GrantsPanel
+        grants={grants}
+        revoked={revoked}
+        publicBytes={!!doc?.blob.bytes}
+        gated={!!doc?.blob.gated}
+      />
 
       <Panel title="operation history">
         {rows.length === 0 ? (
@@ -344,6 +358,7 @@ const SchemaPanels = (props: {
  */
 const GrantsPanel = (props: {
   grants: GrantSummary[] | null;
+  revoked: Map<string, string>;
   publicBytes: boolean;
   gated: boolean;
 }) => {
@@ -367,6 +382,7 @@ const GrantsPanel = (props: {
             <thead>
               <tr>
                 <th>credential</th>
+                <th>status</th>
                 <th>audience</th>
                 <th>grants</th>
                 <th>expires</th>
@@ -377,6 +393,9 @@ const GrantsPanel = (props: {
                 <tr key={g.cid}>
                   <td>
                     <CredLink cid={g.cid} />
+                  </td>
+                  <td>
+                    <CredStatus revokedByOp={props.revoked.get(g.cid)} />
                   </td>
                   <td>
                     {g.isPublic ? (

@@ -22,6 +22,7 @@ import {
   ContentLink,
   Copyable,
   CredLink,
+  CredStatus,
   DidLink,
   OpLink,
   Panel,
@@ -38,6 +39,7 @@ import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
 import { fetchBlobRaw, fetchClaim, type ClaimResult } from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
+import { revokedByCredential } from '../lib/revocations';
 import { jitIndexChain } from '../lib/sync-store';
 import { NotFound } from './not-found';
 
@@ -54,6 +56,8 @@ export const Identity = (props: { did: string }) => {
   const [verified, setVerified] = useState<Resolved<VerifiedIdentity> | null>(null);
   const [rows, setRows] = useState<OpRow[]>([]);
   const [creds, setCreds] = useState<ExplorerOp[] | null>(null);
+  // credentialCID → revoking op CID, folded from synced revocation ops (local-first)
+  const [revoked, setRevoked] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -62,6 +66,7 @@ export const Identity = (props: { did: string }) => {
     setVerified(null);
     setRows([]);
     setCreds(null);
+    setRevoked(new Map());
     setError('');
     const relays = getRelays();
 
@@ -104,6 +109,18 @@ export const Identity = (props: { did: string }) => {
         if (!dead) setCreds([]);
       });
 
+    // fold revocation status locally: every synced revocation op names the
+    // credentialCID it invalidates, so an issued credential's active/revoked
+    // state comes from the math already in the index (no relay round-trip).
+    void getDb()
+      .then((db) => db.opsOfKind('revocation', 100000))
+      .then((ops) => {
+        if (!dead) setRevoked(revokedByCredential(ops));
+      })
+      .catch(() => {
+        if (!dead) setRevoked(new Map());
+      });
+
     return () => {
       dead = true;
     };
@@ -125,7 +142,6 @@ export const Identity = (props: { did: string }) => {
 
   const localHead = rows.length > 0 ? rows[rows.length - 1]?.cid : undefined;
   const headMatch = !!localHead && !!claimHead && localHead === claimHead;
-  const tipAxis = verified?.trust.unverifiable?.includes('tip') ?? false;
 
   const pill = error
     ? { state: 'bad' as CheckState, text: 'verification failed' }
@@ -218,14 +234,6 @@ export const Identity = (props: { did: string }) => {
                     : 'local tip differs from relay-asserted tip'}
                 </Check>
               ) : null}
-              {tipAxis ? (
-                <Check
-                  state="warn"
-                  note="cached head + relay empty-delta claim; freshness is never proven in v1"
-                >
-                  tip freshness unproven
-                </Check>
-              ) : null}
             </>
           )}
         </Checks>
@@ -247,6 +255,7 @@ export const Identity = (props: { did: string }) => {
             <thead>
               <tr>
                 <th>credential</th>
+                <th>status</th>
                 <th>audience</th>
                 <th>grants</th>
               </tr>
@@ -264,6 +273,9 @@ export const Identity = (props: { did: string }) => {
                   <tr key={op.cid}>
                     <td>
                       <CredLink cid={op.cid} />
+                    </td>
+                    <td>
+                      <CredStatus revokedByOp={revoked.get(op.cid)} />
                     </td>
                     <td>
                       {aud === '*' ? (
