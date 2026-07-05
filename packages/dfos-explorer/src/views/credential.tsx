@@ -21,7 +21,16 @@ import { dagCborCanonicalEncode } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
 import { ProvenancePanel } from '../components/provenance';
-import { ContentLink, Copyable, DidLink, KidLink, Panel, Pill, Term } from '../components/ui';
+import {
+  ContentLink,
+  DidLink,
+  KidLink,
+  Panel,
+  Pill,
+  Related,
+  Term,
+  TruncId,
+} from '../components/ui';
 import { getClient } from '../lib/client';
 import { getDb } from '../lib/db-instance';
 import { fmtUnixDate, short } from '../lib/format';
@@ -263,7 +272,7 @@ export const Credential = (props: { cid: string }) => {
         <div class="kv">
           <div class="k">credential</div>
           <div class="v">
-            <Copyable value={props.cid} head={40} tail={8} />
+            <TruncId value={props.cid} head={40} tail={8} />
           </div>
           <div class="k">issuer</div>
           <div class="v">
@@ -517,6 +526,31 @@ export const Credential = (props: { cid: string }) => {
           </>
         )}
       </Panel>
+
+      <Related
+        rows={[
+          { k: 'issuer', v: <DidLink did={p.iss} full /> },
+          {
+            k: 'audience',
+            v: p.aud === '*' ? <span class="k-role">public · anyone</span> : <DidLink did={p.aud} full />,
+          },
+          {
+            k: 'granted chain',
+            v:
+              firstAtt && /^chain:[^*]/.test(firstAtt.resource) ? (
+                <ContentLink id={firstAtt.resource.slice('chain:'.length)} full />
+              ) : null,
+          },
+          {
+            k: 'revocation',
+            v: revoked ? (
+              <span class="err">revoked by issuer</span>
+            ) : (
+              <span class="muted">not observed</span>
+            ),
+          },
+        ]}
+      />
 
       {resolved ? <ProvenancePanel provenance={resolved.provenance} /> : null}
     </>

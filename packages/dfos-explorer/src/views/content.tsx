@@ -19,14 +19,15 @@ import { MediaPanel } from '../components/media';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
 import {
-  Copyable,
   CredLink,
   CredStatus,
   DidLink,
   OpLink,
   Panel,
   Pill,
+  Related,
   Term,
+  TruncId,
 } from '../components/ui';
 import { getClient } from '../lib/client';
 import { grantsForChain, type GrantSummary } from '../lib/credentials';
@@ -200,7 +201,7 @@ export const Content = (props: { id: string }) => {
         <div class="kv">
           <div class="k">contentId</div>
           <div class="v">
-            <Copyable value={props.id} head={31} tail={0} />
+            <TruncId value={props.id} head={31} tail={0} />
           </div>
           <div class="k">creator</div>
           <div class="v">{creatorDID ? <DidLink did={creatorDID} full /> : '…'}</div>
@@ -232,7 +233,7 @@ export const Content = (props: { id: string }) => {
             document CID <span class="lbl">committed on-chain</span>
           </div>
           <div class="v">
-            {docCid ? <Copyable value={docCid} /> : <span class="muted">null (cleared)</span>}
+            {docCid ? <TruncId value={docCid} /> : <span class="muted">null (cleared)</span>}
           </div>
           <div class="k">status</div>
           <div class="v">{isDeleted ? <span class="err">deleted</span> : 'active'}</div>
@@ -307,6 +308,27 @@ export const Content = (props: { id: string }) => {
           <OpTimeline rows={rows} headCid={chain?.headCID ?? claimHead} />
         )}
       </Panel>
+
+      <Related
+        rows={[
+          {
+            k: 'attributed identity',
+            v: creatorDID ? <DidLink did={creatorDID} full /> : null,
+          },
+          {
+            k: 'genesis op',
+            v: chain?.genesisCID ? (
+              <OpLink cid={chain.genesisCID} />
+            ) : claimGenesis ? (
+              <OpLink cid={claimGenesis} />
+            ) : null,
+          },
+          {
+            k: 'head op',
+            v: chain?.headCID ? <OpLink cid={chain.headCID} /> : null,
+          },
+        ]}
+      />
     </>
   );
 };
