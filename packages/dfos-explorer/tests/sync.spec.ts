@@ -69,15 +69,41 @@ describe('sync engine', () => {
     expect(counts.chains).toBe(2);
 
     const identity = await db.getChain('did:dfos:aaa');
-    // the credential shares the identity's chainId — rollup counts every op,
-    // the fold-time kind filter is what separates them
-    expect(identity?.opCount).toBe(3);
-    expect(identity?.headCid).toBe('bafy-cred');
+    // the credential shares the identity's chainId but must NOT relabel the
+    // rollup, inflate its opCount, or (despite a later createdAt) steal its head:
+    // the rollup is the IDENTITY chain (2 ops), the credential is counted apart
+    expect(identity?.kind).toBe('identity-op');
+    expect(identity?.opCount).toBe(2);
+    expect(identity?.headCid).toBe('bafy-a2');
+
+    // the credential is still stored and counted from the ops index
+    expect(counts.byKind['credential']).toBe(1);
+    expect(counts.byKind['identity-op']).toBe(1);
 
     const identityOps = await db.chainOps('did:dfos:aaa', 'identity-op');
     expect(identityOps.map((o) => o.cid)).toEqual(['bafy-a1', 'bafy-a2']);
     expect(identityOps[0]?.type).toBe('create');
     expect(identityOps[0]?.kid).toBe('did:dfos:aaa#key1');
+  });
+
+  it('a credential landing BEFORE its issuer identity op does not inflate the rollup', async () => {
+    // pathological arrival order: the credential rides the issuer chainId and is
+    // seen first; when the identity op arrives it reclaims the rollup as a chain
+    const pages = [
+      [
+        entry('bafy-cred', 'did:dfos:zzz', 'credential', '2026-01-05T00:00:00.000Z', ''),
+        entry('bafy-z1', 'did:dfos:zzz', 'identity-op', '2026-01-01T00:00:00.000Z'),
+        entry('bafy-z2', 'did:dfos:zzz', 'identity-op', '2026-01-02T00:00:00.000Z', 'update'),
+      ],
+    ];
+    const client = createClient({ relays: ['http://fake'], peerClient: fakePeer(pages) });
+    const db = await freshDb();
+    await syncFromRelay({ db, client, relay: 'http://fake' });
+
+    const identity = await db.getChain('did:dfos:zzz');
+    expect(identity?.kind).toBe('identity-op');
+    expect(identity?.opCount).toBe(2);
+    expect(identity?.headCid).toBe('bafy-z2');
   });
 
   it('is idempotent across re-syncs (union pool, no rollup double-count)', async () => {

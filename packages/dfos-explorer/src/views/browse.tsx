@@ -282,33 +282,45 @@ export const BrowseDocuments = () => {
           <table>
             <thead>
               <tr>
+                <th>name / title</th>
                 <th>type</th>
                 <th>content chain</th>
-                <th>access</th>
                 <th>ops</th>
               </tr>
             </thead>
             <tbody>
-              {result?.rows.map((row) => (
-                <tr key={row.chainId} onClick={() => (location.hash = `#/content/${row.chainId}`)}>
-                  <td>
-                    {row.docSchema ? (
-                      <span class="k-role">{schemaLabel(row.docSchema)}</span>
-                    ) : (
-                      <span class="muted">untyped</span>
-                    )}
-                  </td>
-                  <td class="cid">{short(row.chainId, 16, 6)}</td>
-                  <td>
-                    {row.docSchema && row.publicRead ? (
-                      <span class="ck ok">✓ public</span>
-                    ) : (
-                      <span class="err">gated</span>
-                    )}
-                  </td>
-                  <td class="n">{row.opCount}</td>
-                </tr>
-              ))}
+              {result?.rows.map((row) => {
+                const title = result.names[row.chainId];
+                const gated = !(row.docSchema && row.publicRead);
+                return (
+                  <tr
+                    key={row.chainId}
+                    onClick={() => (location.hash = `#/content/${row.chainId}`)}
+                  >
+                    <td>
+                      {title ? (
+                        <>
+                          <b>{title}</b> <span class="lbl">attributed</span>
+                        </>
+                      ) : (
+                        <span class="muted">—</span>
+                      )}
+                    </td>
+                    <td>
+                      {row.docSchema ? (
+                        <span class="k-role">{schemaLabel(row.docSchema)}</span>
+                      ) : (
+                        <span class="muted">untyped</span>
+                      )}
+                      {/* access chip only when the "show gated" toggle reveals a gated row —
+                          public is the default and would just be visual noise */}
+                      {gated ? <span class="err"> gated</span> : null}
+                    </td>
+                    <td class="cid">{short(row.chainId, 16, 6)}</td>
+                    <td class="n">{row.opCount}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {result && result.matched > result.rows.length ? (
@@ -326,15 +338,27 @@ export const BrowseDocuments = () => {
 // artifacts
 // -----------------------------------------------------------------------------
 
-/** Artifact "type" = the $schema of its embedded content, read from the JWS. */
-const artifactType = (op: ExplorerOp): string => {
+/** The embedded content document of an artifact, read straight from its JWS. */
+const artifactContent = (op: ExplorerOp): Record<string, unknown> | null => {
   const decoded = decodeJwsUnsafe(op.jwsToken);
   const content = decoded?.payload['content'];
-  if (typeof content === 'object' && content !== null) {
-    const schema = (content as Record<string, unknown>)['$schema'];
-    if (typeof schema === 'string') return schemaLabel(schema);
-  }
-  return 'artifact';
+  return typeof content === 'object' && content !== null
+    ? (content as Record<string, unknown>)
+    : null;
+};
+
+/** Artifact "type" = the $schema of its embedded content, read from the JWS. */
+const artifactType = (op: ExplorerOp): string => {
+  const schema = artifactContent(op)?.['$schema'];
+  return typeof schema === 'string' ? schemaLabel(schema) : 'artifact';
+};
+
+/** Human title of an artifact from its embedded content (name → title), if any.
+ *  No projection needed — the document lives inline in the JWS. */
+const artifactTitle = (op: ExplorerOp): string => {
+  const content = artifactContent(op);
+  const name = content?.['name'] ?? content?.['title'];
+  return typeof name === 'string' ? name.trim() : '';
 };
 
 export const BrowseArtifacts = () => {
@@ -384,6 +408,7 @@ export const BrowseArtifacts = () => {
         <table>
           <thead>
             <tr>
+              <th>name / title</th>
               <th>type</th>
               <th>artifact CID</th>
               <th>signer</th>
@@ -391,16 +416,22 @@ export const BrowseArtifacts = () => {
             </tr>
           </thead>
           <tbody>
-            {rows.map((op) => (
-              <tr key={op.cid} onClick={() => (location.hash = `#/op/${op.cid}`)}>
-                <td>
-                  <span class="k-role">{artifactType(op)}</span>
-                </td>
-                <td class="cid">{short(op.cid, 14, 8)}</td>
-                <td class="cid">{op.kid ? short(op.kid, 14, 4) : <span class="muted">—</span>}</td>
-                <td class="muted">{op.createdAt ? op.createdAt.slice(0, 10) : ''}</td>
-              </tr>
-            ))}
+            {rows.map((op) => {
+              const title = artifactTitle(op);
+              return (
+                <tr key={op.cid} onClick={() => (location.hash = `#/op/${op.cid}`)}>
+                  <td>{title ? <b>{title}</b> : <span class="muted">—</span>}</td>
+                  <td>
+                    <span class="k-role">{artifactType(op)}</span>
+                  </td>
+                  <td class="cid">{short(op.cid, 14, 8)}</td>
+                  <td class="cid">
+                    {op.kid ? short(op.kid, 14, 4) : <span class="muted">—</span>}
+                  </td>
+                  <td class="muted">{op.createdAt ? op.createdAt.slice(0, 10) : ''}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

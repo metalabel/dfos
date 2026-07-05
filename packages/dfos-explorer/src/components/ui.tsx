@@ -168,6 +168,21 @@ export const KidLink = (props: { kid: string }) => {
   );
 };
 
+/**
+ * Credential active/revoked chip. `revokedByOp` is the CID of a synced
+ * revocation op that names this credential (from the local revocation fold);
+ * when present the chip is red and links to that op, else green "active".
+ * Relay-asserted until opened — the credential view re-verifies any proof.
+ */
+export const CredStatus = (props: { revokedByOp?: string | undefined }) =>
+  props.revokedByOp ? (
+    <a href={`#/op/${props.revokedByOp}`} class="ck bad" title="revoked — open the revocation op">
+      revoked
+    </a>
+  ) : (
+    <span class="ck ok">active</span>
+  );
+
 /** Click-to-copy identifier. */
 export const Copyable = (props: { value: string; head?: number; tail?: number }) => {
   const [copied, setCopied] = useState(false);

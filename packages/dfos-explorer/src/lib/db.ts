@@ -121,6 +121,12 @@ export interface IdentitiesBrowse {
 /** Public-documents browse: typed public docs + honest hidden/pending counts. */
 export interface DocumentsBrowse {
   rows: ChainRollup[];
+  /**
+   * Human-readable title per returned content chainId, where projections resolve
+   * one — today a profile/v1 doc's attributed name (joined from the identity
+   * rollup that names this chain as its `profileSource`). Absent → show the id.
+   */
+  names: Record<string, string>;
   matched: number;
   /** content chains resolved to a public, integrity-checked document. */
   publicCount: number;
@@ -184,10 +190,13 @@ export interface ExplorerDb {
   close(): void;
 }
 
-// bumped 2→3: ChainRollup gained Phase-2 projection fields. The local index is a
-// disposable cache, so the upgrade wipes+rebuilds (see onupgradeneeded) — a
-// re-sync repopulates rollups and Phase 2 re-resolves projections.
-const DB_VERSION = 3;
+// bumped 2→3: ChainRollup gained Phase-2 projection fields.
+// bumped 3→4: rollup fold semantics changed — a chain rollup's kind/opCount/head
+// now reflect ONLY its chain-forming (identity/content) ops; credential and other
+// primitives riding the shared chainId no longer relabel it or inflate its count
+// (see sync.ts). The local index is a disposable cache, so the upgrade
+// wipes+rebuilds (see onupgradeneeded) — a re-sync repopulates rollups cleanly.
+const DB_VERSION = 4;
 
 // scan ceiling for filtered index-cursor queries — keeps worst case bounded.
 // When a query stops here before the cursor is exhausted, it reports
@@ -413,8 +422,22 @@ export const openExplorerDb = async (
     matches.sort((a, b) =>
       a.lastCreatedAt < b.lastCreatedAt ? 1 : a.lastCreatedAt > b.lastCreatedAt ? -1 : 0,
     );
+    const rows = matches.slice(0, q.limit);
+
+    // JOIN the attributed profile name for each returned content chain, using
+    // ONLY existing projections: an identity rollup records the content chain
+    // whose profile set its name as `profileSource`, so profileSource → name is
+    // the title map (today profile/v1 is the only titled schema).
+    const ids = new Set(rows.map((r) => r.chainId));
+    const names: Record<string, string> = {};
+    for (const idRollup of await kindRollups('identity-op')) {
+      const src = idRollup.profileSource;
+      if (src && idRollup.name && ids.has(src)) names[src] = idRollup.name;
+    }
+
     return {
-      rows: matches.slice(0, q.limit),
+      rows,
+      names,
       matched: matches.length,
       publicCount,
       gatedCount,
