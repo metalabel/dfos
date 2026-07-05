@@ -20,6 +20,13 @@ export {
   type IssuerRevocationEntry,
   type IssuerRevocationList,
 } from './revocations';
+export {
+  INDEX_BASE_PATH,
+  type IndexContentRow,
+  type IndexCountersignatureRow,
+  type IndexIdentityRow,
+  type IndexProfile,
+} from './index-routes';
 export { MemoryRelayStore } from './store';
 export {
   ingestOperations,
@@ -37,6 +44,7 @@ export type {
   StoredIdentityChain,
   StoredContentChain,
   StoredOperation,
+  StoredCountersignature,
   StoredRevocation,
   BlobKey,
   LogEntry,

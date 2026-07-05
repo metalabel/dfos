@@ -266,6 +266,7 @@ describe('web relay', () => {
       expect(body.capabilities.write).toBe(true);
       expect(body.capabilities.content).toBe(true);
       expect(body.capabilities.log).toBe(true);
+      expect(body.capabilities.index).toBe(true);
     });
 
     it('should advertise write: false when relay created with write: false', async () => {

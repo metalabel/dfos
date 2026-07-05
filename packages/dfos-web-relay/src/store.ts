@@ -16,6 +16,7 @@ import type {
   RelayStats,
   RelayStore,
   StoredContentChain,
+  StoredCountersignature,
   StoredIdentityChain,
   StoredOperation,
   StoredPublicCredential,
@@ -146,6 +147,39 @@ export class MemoryRelayStore implements RelayStore {
       return a.revocation.credentialCID < b.revocation.credentialCID ? -1 : 1;
     });
     return revs.map((entry) => entry.revocation);
+  }
+
+  // --- index queries ---
+
+  async getIndexIdentityChains(): Promise<StoredIdentityChain[]> {
+    return [...this.identityChains.values()].sort((a, b) =>
+      a.did < b.did ? -1 : a.did > b.did ? 1 : 0,
+    );
+  }
+
+  async getIndexContentChains(): Promise<StoredContentChain[]> {
+    return [...this.contentChains.values()].sort((a, b) =>
+      a.contentId < b.contentId ? -1 : a.contentId > b.contentId ? 1 : 0,
+    );
+  }
+
+  async getIndexCountersignaturesByWitness(witnessDID: string): Promise<StoredCountersignature[]> {
+    const rows: StoredCountersignature[] = [];
+    for (const [targetCID, tokens] of this.countersignatures.entries()) {
+      for (const jwsToken of tokens) {
+        const decoded = decodeJwsUnsafe(jwsToken);
+        if (!decoded) continue;
+        const payload = decoded.payload as Record<string, unknown>;
+        const did = typeof payload['did'] === 'string' ? payload['did'] : '';
+        if (did !== witnessDID) continue;
+        const cid = typeof decoded.header.cid === 'string' ? decoded.header.cid : '';
+        const target = typeof payload['targetCID'] === 'string' ? payload['targetCID'] : targetCID;
+        const relation = typeof payload['relation'] === 'string' ? payload['relation'] : null;
+        rows.push({ cid, targetCID: target, witnessDID: did, relation, jwsToken });
+      }
+    }
+    rows.sort((a, b) => (a.cid < b.cid ? -1 : a.cid > b.cid ? 1 : 0));
+    return rows;
   }
 
   // --- public credentials ---

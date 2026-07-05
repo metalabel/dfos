@@ -28,6 +28,14 @@ import {
 } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { isValidDfosDid, resolveDidDocument } from './did-document';
+import {
+  contentIndexRow,
+  countersignatureIndexRow,
+  identityIndexRow,
+  INDEX_BASE_PATH,
+  pageByKey,
+  parseBooleanQuery,
+} from './index-routes';
 import { ingestOperations } from './ingest';
 import {
   credentialRevocationStatus,
@@ -153,6 +161,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const { store } = options;
   const contentEnabled = options.content !== false;
   const logEnabled = options.log !== false;
+  const indexEnabled = options.index !== false;
   const writeEnabled = options.write !== false;
   const maxAuthTokenTTLSeconds =
     options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS;
@@ -278,6 +287,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         // (/revocations/v1). A relay that does not would advertise false and
         // 501 those routes, mirroring the content/log capability semantics.
         revocations: true,
+        index: indexEnabled,
       },
       profile: profileArtifactJws,
       peers: peerInfos,
@@ -507,6 +517,83 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const next = page.length === limit ? page[page.length - 1]!.credentialCID : null;
 
     return c.json(issuerRevocationList(did, page, next));
+  });
+
+  // ---------------------------------------------------------------------------
+  // index (v0, own clock)
+  // ---------------------------------------------------------------------------
+
+  app.get(`${INDEX_BASE_PATH}/identities`, async (c) => {
+    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+
+    const hasPublicProfile = parseBooleanQuery(c.req.query('hasPublicProfile'));
+    const rows = await Promise.all(
+      (await store.getIndexIdentityChains()).map((chain) => identityIndexRow(chain, store)),
+    );
+    const filtered =
+      hasPublicProfile === undefined
+        ? rows
+        : rows.filter(
+            (row) => (row.profile !== null && row.profile.publicRead) === hasPublicProfile,
+          );
+    const { page, next } = pageByKey(
+      filtered,
+      (row) => row.did,
+      c.req.query('after'),
+      parseLimit(c.req.query('limit'), 100, 1000),
+    );
+
+    return c.json({ identities: page, next });
+  });
+
+  app.get(`${INDEX_BASE_PATH}/content`, async (c) => {
+    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+
+    const creator = c.req.query('creator');
+    if (creator && !isValidDfosDid(creator)) {
+      return c.json({ error: 'invalid DID' }, 400);
+    }
+
+    const docSchema = c.req.query('docSchema');
+    const publicRead = parseBooleanQuery(c.req.query('publicRead'));
+    const rows = await Promise.all(
+      (await store.getIndexContentChains()).map((chain) => contentIndexRow(chain, store)),
+    );
+    const filtered = rows.filter((row) => {
+      if (creator && row.creatorDID !== creator) return false;
+      if (docSchema !== undefined && row.docSchema !== docSchema) return false;
+      if (publicRead !== undefined && row.publicRead !== publicRead) return false;
+      return true;
+    });
+    const { page, next } = pageByKey(
+      filtered,
+      (row) => row.contentId,
+      c.req.query('after'),
+      parseLimit(c.req.query('limit'), 100, 1000),
+    );
+
+    return c.json({ content: page, next });
+  });
+
+  app.get(`${INDEX_BASE_PATH}/countersignatures`, async (c) => {
+    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+
+    const witness = c.req.query('witness');
+    if (!witness || !isValidDfosDid(witness)) {
+      return c.json({ error: 'invalid DID' }, 400);
+    }
+
+    const rows = (await store.getIndexCountersignaturesByWitness(witness)).map(
+      countersignatureIndexRow,
+    );
+    const { page, next } = pageByKey(
+      rows,
+      (row) => row.cid,
+      c.req.query('after'),
+      parseLimit(c.req.query('limit'), 100, 1000),
+    );
+
+    return c.json({ witness, countersignatures: page, next });
   });
 
   /** Get a content chain log */
