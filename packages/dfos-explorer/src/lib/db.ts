@@ -169,6 +169,9 @@ export interface ExplorerDb {
    * with its issuer's identity chain is still counted.
    */
   counts(): Promise<{ ops: number; chains: number; byKind: Partial<Record<OpKind, number>> }>;
+  /** The earliest op's createdAt (min of the createdAt index), or '' when empty.
+   *  One cursor read against the index — no scan. */
+  oldestOpAt(): Promise<string>;
   chainsQuery(q: ChainsQuery): Promise<BrowseResult<ChainRollup>>;
   /** Public identities — identity rollups with an attributed profile name,
    *  substring-searched over nameLower (getAll + JS filter, per the corpus). */
@@ -342,6 +345,21 @@ export const openExplorerDb = async (
     return { ops: await opsCount, chains: await chainsCount, byKind };
   };
 
+  const oldestOpAt = (): Promise<string> => {
+    const store = db.transaction('ops').objectStore('ops');
+    return new Promise((resolve, reject) => {
+      // createdAt is a fixed-width, lexicographically-chronological grammar, so
+      // the first entry of the index (ascending) is the earliest op.
+      const cursorReq = store.index('createdAt').openCursor(null, 'next');
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        const row = cursor?.value as ExplorerOp | undefined;
+        resolve(row?.createdAt ?? '');
+      };
+      cursorReq.onerror = () => reject(cursorReq.error ?? new Error('oldestOpAt query failed'));
+    });
+  };
+
   const opsOfKind = async (kind: OpKind, limit: number): Promise<ExplorerOp[]> => {
     const rows = (await req(
       db.transaction('ops').objectStore('ops').index('kind').getAll(kind),
@@ -469,6 +487,7 @@ export const openExplorerDb = async (
     chainOps,
     getChain,
     allChains,
+    oldestOpAt,
     opsOfKind,
     counts,
     chainsQuery,
