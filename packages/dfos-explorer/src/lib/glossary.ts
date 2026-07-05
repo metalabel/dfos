@@ -131,6 +131,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     term: 'attributed',
     def: 'A cheap discovery heuristic: a public profile is attributed to the DID that signed its content chain’s genesis op (author == subject by convention, not by proof). Browse rows are labelled "attributed"; open the identity to fold the rigorous services→anchor→profile proof.',
   },
+  {
+    key: 'indexLight',
+    term: 'relay index (hints) vs audit sync',
+    def: 'When a relay advertises an index, the explorer browses its projections instantly — every row is an ATTRIBUTED hint the relay asserts, promoted to VERIFIED as your tab folds that row’s chain (re-checking every signature and CID). An index cannot lie by assertion — a fabricated row fails the fold — but it CAN lie by omission, silently withholding rows a light client can never notice are missing. So a full-log sync, which folds every operation locally, is the audit posture: the exhaustive stance that detects what an index leaves out.',
+  },
 ];
 
 export const GLOSSARY: Record<string, string> = Object.fromEntries(

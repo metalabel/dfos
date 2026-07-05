@@ -63,7 +63,13 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
       limit: SYNC_PAGE_LIMIT,
     });
     if (!page.provenance.answeredBy) throw new Error(`relay unreachable: ${relay}`);
-    if (page.entries.length === 0) break;
+    if (page.entries.length === 0) {
+      // a zero-entry page still completes the sync — record the cursor so
+      // "has ever synced this relay" (the index-light gate) reads true even
+      // when the relay's log was empty
+      await db.setCursor({ relay, cursor, count, updatedAt: new Date().toISOString() });
+      break;
+    }
 
     const known = await db.knownOps(page.entries.map((e) => e.cid));
     const ops: ExplorerOp[] = [];

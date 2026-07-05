@@ -21,6 +21,7 @@ import { estimateStorageBytes, OP_KINDS } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtAge, fmtBytes, fmtCount, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
+import { useIndexIdentities, useLightMode } from '../lib/index-light';
 import { fetchRelayHint, type RelayHint } from '../lib/relay-hint';
 import { startSync, stopSync, useSyncState } from '../lib/sync-store';
 
@@ -292,24 +293,39 @@ const RecentPanel = (props: { obs: Observatory | null }) => {
 
 const IdentitiesPanel = (props: { obs: Observatory | null }) => {
   const sync = useSyncState();
+  const light = useLightMode();
   const busy = sync.phase === 'resolving' || sync.phase === 'syncing';
-  const ids = props.obs?.identities ?? [];
+  const localIds = props.obs?.identities ?? [];
   const populated = (props.obs?.counts.chains ?? 0) > 0;
+  // index-capable relay + no full-log sync ever run → surface attributed
+  // identities straight from the relay index (a hint, framed as such), so home
+  // is alive before any sync. The gate is sync-cursor state, NOT corpus
+  // emptiness — the verify queue's JIT folds populate the corpus and must not
+  // kick this panel back to sync-required framing (see useLightMode).
+  const lightMode = light === true;
+  const { rows: indexRows } = useIndexIdentities(lightMode, true);
+  const indexIds = indexRows
+    .filter((r) => typeof r.profile?.name === 'string' && r.profile.name.length > 0)
+    .slice(0, 12)
+    .map((r) => ({ chainId: r.did, name: r.profile?.name ?? '' }));
+  const ids = lightMode ? indexIds : localIds;
   return (
     <Panel
       title="public identities"
       accent={ids.length > 0 ? 'warn' : undefined}
-      right={<span class="lbl">attributed · from local index</span>}
+      right={<span class="lbl">attributed · from {lightMode ? 'relay index' : 'local index'}</span>}
     >
       {ids.length === 0 ? (
         <span class="muted">
           {/* only claim "none" once resolution has settled — while Phase 2 runs
               an empty strip means "not resolved yet", not "nobody is public" */}
-          {!populated
-            ? 'sync the log to surface identities'
-            : busy
-              ? 'resolving projections…'
-              : 'no attributed public profiles yet'}
+          {lightMode
+            ? 'no public identities in the relay index'
+            : !populated
+              ? 'sync the log to surface identities'
+              : busy
+                ? 'resolving projections…'
+                : 'no attributed public profiles yet'}
         </span>
       ) : (
         <>

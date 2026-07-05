@@ -181,6 +181,86 @@ export interface RelayHealth {
 }
 
 // -----------------------------------------------------------------------------
+// index (v0) — non-authoritative discovery hints (see index-query.ts)
+// -----------------------------------------------------------------------------
+
+/**
+ * The relay's capability flags this client cares about, MERGED across the relay
+ * set (true when any relay advertises it). `index` gates whether a browser can
+ * populate from `/index/v0` instead of replaying the full log.
+ */
+export interface IndexCapabilities {
+  index: boolean;
+}
+
+/**
+ * The `profile/v1 → name` well-known projection on an identity row. ATTRIBUTION
+ * TIER by construction: the `anchor` is controller-signed (strong), but `name`
+ * is whatever the anchored document says — verify by fetching + re-hashing the
+ * bytes to the committed documentCID. Fields are null on the relay's circuit
+ * breakers (unheld bytes, wrong/missing schema, non-string name).
+ */
+export interface IndexIdentityProfile {
+  anchor: string;
+  publicRead: boolean;
+  docSchema: string | null;
+  name: string | null;
+}
+
+/** One row of the identity index. Mirrors GET /index/v0/identities, nullability included. */
+export interface IndexIdentityRow {
+  did: string;
+  headCID: string;
+  opCount: number;
+  genesisAt: string;
+  headAt: string;
+  isDeleted: boolean;
+  profile: IndexIdentityProfile | null;
+}
+
+/** A page of the identity index. `next` is a `did` cursor (null on the last page). */
+export interface IndexIdentitiesPage {
+  identities: IndexIdentityRow[];
+  next: string | null;
+}
+
+/** One row of the content index. Mirrors GET /index/v0/content, nullability included. */
+export interface IndexContentRow {
+  contentId: string;
+  genesisCID: string;
+  headCID: string;
+  creatorDID: string;
+  isDeleted: boolean;
+  opCount: number;
+  genesisAt: string;
+  headAt: string;
+  currentDocumentCID: string | null;
+  publicRead: boolean;
+  docSchema: string | null;
+}
+
+/** A page of the content index. `next` is a `contentId` cursor (null on the last page). */
+export interface IndexContentPage {
+  content: IndexContentRow[];
+  next: string | null;
+}
+
+/** One row of the countersignatures-by-witness index. Carries the full self-proving JWS. */
+export interface IndexCountersignatureRow {
+  cid: string;
+  targetCID: string;
+  relation: string | null;
+  jwsToken: string;
+}
+
+/** A page of the countersignatures-by-witness index. `next` is a `cid` cursor. */
+export interface IndexCountersignaturesPage {
+  witness: string;
+  countersignatures: IndexCountersignatureRow[];
+  next: string | null;
+}
+
+// -----------------------------------------------------------------------------
 // config + client
 // -----------------------------------------------------------------------------
 
@@ -234,4 +314,30 @@ export interface Client {
   log(kind: 'identity' | 'content', id: string, options?: CallOptions): Promise<Resolved<LogOp[]>>;
   globalLog(cursor?: string, options?: GlobalLogOptions): Promise<GlobalLogPage>;
   health(options?: CallOptions): Promise<RelayHealth[]>;
+
+  /**
+   * Index (v0) — non-authoritative discovery hints. Rows are CLAIMS, not proofs:
+   * verify one by fetching its chain (`identity`/`content`/`log`) and folding.
+   * Gate on `capabilities().index` before preferring these over full-log sync.
+   */
+  capabilities(options?: CallOptions): Promise<IndexCapabilities>;
+  indexIdentities(
+    params?: { hasPublicProfile?: boolean; after?: string; limit?: number },
+    options?: CallOptions,
+  ): Promise<IndexIdentitiesPage>;
+  indexContent(
+    params?: {
+      creator?: string;
+      docSchema?: string;
+      publicRead?: boolean;
+      after?: string;
+      limit?: number;
+    },
+    options?: CallOptions,
+  ): Promise<IndexContentPage>;
+  indexCountersignatures(
+    witness: string,
+    params?: { after?: string; limit?: number },
+    options?: CallOptions,
+  ): Promise<IndexCountersignaturesPage>;
 }
