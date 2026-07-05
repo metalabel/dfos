@@ -726,6 +726,59 @@ func TestIndexPublicReadFlipCascade(t *testing.T) {
 	}
 }
 
+// Deleting the identity that issued a public-read grant flips the granted
+// content's publicRead true→false in the projection — even though the only op is
+// on the IDENTITY chain, not the content chain. hasPublicStandingAuth
+// re-verifies the grant's issuer live and rejects a deleted identity, so the
+// content row (and the deleted identity's own anchored profile) must converge.
+func TestIndexPublicReadFlipsWhenGrantingIdentityDeleted(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	profileDoc := map[string]any{"$schema": testProfileSchema, "name": "mara"}
+	content := createIndexedContent(t, r, store, creator, profileDoc, true)
+	addPublicRead(t, r, creator, content.contentID)
+	updateOpCID := updateIdentityServices(t, r, creator, []dfos.ServiceEntry{
+		{"id": "profile", "type": "ContentAnchor", "label": "profile", "anchor": content.contentID},
+	})
+
+	// grant + anchor in place: public on both the content row and the profile
+	if indexContentRowByID(t, handler, content.contentID)["publicRead"] != true {
+		t.Fatalf("pre-delete content publicRead != true")
+	}
+	if indexIdentityRowByDID(t, handler, creator.did)["profile"].(map[string]any)["publicRead"] != true {
+		t.Fatalf("pre-delete profile publicRead != true")
+	}
+
+	// delete the granting identity (terminal op on its own chain)
+	deleteToken, _, err := dfos.SignIdentityDelete(updateOpCID, creator.did+"#"+creator.controller.keyID, creator.controller.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{deleteToken}); res[0].Status != "new" {
+		t.Fatalf("ingest delete: %+v", res[0])
+	}
+
+	// content row's publicRead must reflect the now-invalid issuer
+	if indexContentRowByID(t, handler, content.contentID)["publicRead"] != false {
+		t.Fatalf("post-delete content publicRead != false")
+	}
+	deletedRow := indexIdentityRowByDID(t, handler, creator.did)
+	if deletedRow["isDeleted"] != true {
+		t.Fatalf("post-delete identity isDeleted != true")
+	}
+	if deletedRow["profile"].(map[string]any)["publicRead"] != false {
+		t.Fatalf("post-delete profile publicRead != false")
+	}
+	// and it drops out of the publicRead=true content set
+	_, body, _ := getIndexJSONBody(t, handler, "/index/v0/content?publicRead=true&limit=1000")
+	for _, raw := range body["content"].([]any) {
+		if raw.(map[string]any)["contentId"] == content.contentID {
+			t.Fatalf("deleted-issuer content still in publicRead=true set")
+		}
+	}
+}
+
 // A second countersign from the same witness on the same target is deduped by
 // the store (status "duplicate"); the projection must NOT gain a second row and
 // must keep the ACCEPTED (first) row's cid + relation.

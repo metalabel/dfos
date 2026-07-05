@@ -715,6 +715,53 @@ describe('index v0', () => {
     ).not.toContain(subject.did);
   });
 
+  it('flips publicRead false when the identity that granted it is deleted (issuer no longer a valid credential hop)', async () => {
+    // Creator self-issues a public-read grant on its own content, anchors its
+    // profile there, then deletes its own identity. hasPublicStandingAuth
+    // re-verifies the grant's issuer live and rejects a deleted identity, so the
+    // materialized content row (and the anchored profile) MUST flip true→false —
+    // even though the only op is on the IDENTITY chain, not the content chain.
+    const creator = await createIdentity();
+    const profileDoc = { $schema: PROFILE_SCHEMA, name: 'mara' };
+    const content = await createContent(creator, profileDoc);
+    await uploadBlob(creator, content.contentId, content.operationCID, profileDoc);
+    await grantPublicRead(creator, content.contentId);
+    const update = await updateServices(creator, [
+      { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: content.contentId },
+    ]);
+
+    // grant + anchor in place: public on both the content row and the profile
+    expect((await contentRow(content.contentId)).publicRead).toBe(true);
+    expect((await identityRow(creator.did)).profile.publicRead).toBe(true);
+
+    // delete the granting identity (terminal op on its own chain)
+    const deleteOp: IdentityOperation = {
+      version: 1,
+      type: 'delete',
+      previousOperationCID: update.operationCID,
+      createdAt: ts(4),
+    };
+    const { jwsToken: deleteToken } = await signIdentityOperation({
+      operation: deleteOp,
+      signer: creator.controller.signer,
+      keyId: creator.controller.keyId,
+      identityDID: creator.did,
+    });
+    expect((await postOps([deleteToken])).status).toBe(200);
+
+    // the content row's publicRead must reflect the now-invalid issuer, and the
+    // deleted identity's own profile projection likewise
+    expect((await contentRow(content.contentId)).publicRead).toBe(false);
+    const deletedRow = await identityRow(creator.did);
+    expect(deletedRow.isDeleted).toBe(true);
+    expect(deletedRow.profile.publicRead).toBe(false);
+    expect(
+      (await json(await req('/index/v0/content?publicRead=true&limit=1000'))).content.map(
+        (row: { contentId: string }) => row.contentId,
+      ),
+    ).not.toContain(content.contentId);
+  });
+
   it('reflects the ACCEPTED (deduped) countersign set in the projection, not raw ops', async () => {
     const author = await createIdentity();
     const witness = await createIdentity();
