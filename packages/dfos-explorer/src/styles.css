@@ -10,7 +10,50 @@
 
 */
 
-:root {
+/* ----------------------------------------------------------------- tokens
+
+   Dark is the DEFAULT — a chain observatory reads as an instrument, not a
+   marketing page. Light is a persisted toggle (localStorage `dfos-explorer:
+   theme`, applied pre-first-paint by an inline boot script in index.html).
+
+   The trust palette IS the brand: green = locally verified / recomputed, amber
+   = relay-asserted-only / attributed, red = mismatch / revoked. It is
+   structural (panel accent rules, chips), not decoration.
+
+   Header tokens (--hd-*) are theme-INDEPENDENT: the header band is the darkest
+   ground in both themes, so its ink stays constant. */
+
+:root,
+:root[data-theme='dark'] {
+  --bg: #0f100e; /* near-black, warm */
+  --panel: #161815;
+  --panel-hd: #1c1f1b;
+  --ink: #d8d6c9; /* warm off-white */
+  --dim: #8b8a7d;
+  --line: #3b3e37;
+  --line2: #292c27;
+  --hi: #070807; /* header band stays darkest */
+  --ok: #3fd158; /* phosphor green — verified */
+  --ok-bg: #122a18;
+  --bad: #ff5c5c; /* mismatch / revoked */
+  --bad-bg: #2e1414;
+  --warn: #e2a93d; /* attributed / relay-asserted-only */
+  --warn-bg: #2b2110;
+  --link: #82aaff;
+  --link-bg: #172138;
+  --cred: #c9a2ff;
+  --cred-bg: #241a33;
+  --chip: #22251f;
+  --accent-bg: #24261c;
+
+  /* header band — constant across themes (always the darkest ground) */
+  --hd-ink: #dcdccf;
+  --hd-dim: #8b8a7d;
+  --hd-bright: #ffffff;
+  --hd-line: #000000;
+}
+
+:root[data-theme='light'] {
   --bg: #d8d8d2;
   --panel: #f6f6f2;
   --panel-hd: #efefe8;
@@ -26,6 +69,9 @@
   --warn: #a8760a;
   --warn-bg: #f7f1e2;
   --link: #134fc4;
+  --link-bg: #e9edf6;
+  --cred: #7a4fc4;
+  --cred-bg: #efe9f6;
   --chip: #e9e9e2;
   --accent-bg: #efe9d0;
 }
@@ -94,8 +140,8 @@ code {
 
 header {
   background: var(--hi);
-  color: #eee;
-  border-bottom: 1px solid #000;
+  color: var(--hd-ink);
+  border-bottom: 1px solid var(--hd-line);
 }
 
 .hbar {
@@ -111,11 +157,11 @@ header {
 .brand {
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: #9a9a90;
+  color: var(--hd-dim);
 }
 
 .brand b {
-  color: #fff;
+  color: var(--hd-bright);
 }
 
 .brand a {
@@ -132,14 +178,14 @@ header {
 }
 
 .hnav a {
-  color: #8a8a80;
+  color: var(--hd-dim);
   font-size: 10px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
 .hnav a:hover {
-  color: #eee;
+  color: var(--hd-ink);
 }
 
 .hstatus {
@@ -148,17 +194,37 @@ header {
   gap: 8px;
   align-items: center;
   font-size: 10px;
-  color: #bdbdb2;
+  color: var(--hd-dim);
 }
 
 .hstatus a {
-  color: #bdbdb2;
+  color: var(--hd-dim);
 }
 
 .hstatus a:hover {
-  color: #eee;
+  color: var(--hd-ink);
 }
 
+/* terminal-idiom light/dark switch — sits in the header status cluster */
+.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--hd-line);
+  color: var(--hd-dim);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+
+.theme-toggle:hover {
+  color: var(--hd-bright);
+  border-color: var(--hd-dim);
+}
+
+/* status dots ride the always-dark header band, so the traffic-light hues are
+   theme-independent by design (green/amber/red read on the dark ground in both
+   themes) — deliberately literal, not palette tokens. */
 .dot {
   width: 8px;
   height: 8px;
@@ -209,7 +275,7 @@ header {
   padding: 8px 14px;
   background: var(--ink);
   color: var(--panel);
-  border: 1px solid #000;
+  border: 1px solid var(--ink);
   cursor: pointer;
 }
 
@@ -245,6 +311,14 @@ header {
   .cols {
     grid-template-columns: minmax(0, 1fr) 340px;
   }
+}
+
+/* detail pages drop the sidebar and go full width (IA: the sidebar is a
+   home/browse activity panel, detail pages get crosslink panels instead).
+   Higher specificity than the width-breakpoint rule, so it wins at every
+   width. */
+.cols.solo {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* mobile: the local index becomes a slide-in drawer toggled from the header */
@@ -370,20 +444,20 @@ header {
   bottom: 0;
   z-index: 20;
   background: var(--hi);
-  color: #eee;
-  border-top: 1px solid #000;
+  color: var(--hd-ink);
+  border-top: 1px solid var(--hd-line);
   padding: 8px 14px;
   font-size: 11px;
   line-height: 1.5;
 }
 
 .termbar b {
-  color: #fff;
+  color: var(--hd-bright);
 }
 
 .termbar-x {
   float: right;
-  color: #9a9a90;
+  color: var(--hd-dim);
   cursor: pointer;
   padding-left: 12px;
 }
@@ -587,21 +661,21 @@ tr:hover td {
 }
 
 .kind.identity-op {
-  color: #0a5d13;
-  border-color: #8fb88f;
+  color: var(--ok);
+  border-color: var(--ok);
   background: var(--ok-bg);
 }
 
 .kind.content-op {
-  color: #134fc4;
-  border-color: #8f9fb8;
-  background: #e9edf6;
+  color: var(--link);
+  border-color: var(--link);
+  background: var(--link-bg);
 }
 
 .kind.credential {
-  color: #7a4fc4;
-  border-color: #a88fb8;
-  background: #efe9f6;
+  color: var(--cred);
+  border-color: var(--cred);
+  background: var(--cred-bg);
 }
 
 .kind.artifact,
@@ -648,7 +722,8 @@ tr:hover td {
   font-size: 11px;
   padding: 3px 5px;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--panel);
+  color: var(--ink);
   min-width: 0;
 }
 
@@ -669,7 +744,7 @@ tr:hover td {
 .filters button.on {
   background: var(--ink);
   color: var(--panel);
-  border-color: #000;
+  border-color: var(--ink);
 }
 
 .progress {
@@ -753,7 +828,7 @@ tr:hover td {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  color: #cfcfae !important;
+  color: var(--hd-ink) !important;
 }
 
 .synctick .spin {
@@ -959,4 +1034,211 @@ button.primary:hover {
 .cap.off {
   color: var(--dim);
   background: var(--chip);
+}
+
+/* ------------------------------------------------------- panel accent rule */
+
+/* a 2px trust-colored leading rule on a panel header: green = the panel's
+   content is locally verified, amber = relay-asserted. The trust palette
+   becomes structural, not just chip color. */
+.panel.acc-ok > h2 {
+  box-shadow: inset 3px 0 0 var(--ok);
+}
+
+.panel.acc-warn > h2 {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
+.panel.acc-bad > h2 {
+  box-shadow: inset 3px 0 0 var(--bad);
+}
+
+/* ------------------------------------------------------------ trust badges */
+
+/* verified / active = filled ok; attributed = HOLLOW amber (asserted, not
+   proven); revoked / mismatch = filled bad. Consistent everywhere. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.badge.ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  background: var(--ok-bg);
+}
+
+.badge.bad {
+  color: var(--bad);
+  border-color: var(--bad);
+  background: var(--bad-bg);
+}
+
+.badge.warn {
+  color: var(--warn);
+  border-color: var(--warn);
+  background: transparent; /* hollow — asserted, not proven */
+}
+
+.badge.neutral {
+  color: var(--dim);
+  border-color: var(--line2);
+  background: var(--chip);
+}
+
+/* --------------------------------------------------- observatory stat band */
+
+.statband {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 1px;
+  background: var(--line2);
+  border: 1px solid var(--line2);
+}
+
+.stat {
+  background: var(--panel);
+  padding: 11px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stat-num {
+  font-size: 32px;
+  line-height: 1.1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.stat-num.asserted {
+  color: var(--warn);
+}
+
+.stat-unit {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.stat-sub {
+  font-size: 10px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
+}
+
+.stat-sub.asserted {
+  color: var(--warn);
+}
+
+/* ---------------------------------------------------------- by-kind bar */
+
+.kindbar {
+  display: flex;
+  height: 20px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  background: var(--panel-hd);
+}
+
+.kindbar-seg {
+  min-width: 2px;
+  height: 100%;
+}
+
+.kindbar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  margin-top: 9px;
+}
+
+.kindbar-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--dim);
+}
+
+.kindbar-key b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.kindbar-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  display: inline-block;
+  border: 1px solid var(--line2);
+}
+
+/* -------------------------------------------------- public-identities strip */
+
+.idstrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.idchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line2);
+  background: var(--chip);
+  padding: 4px 10px 4px 4px;
+  max-width: 100%;
+  color: var(--ink);
+}
+
+.idchip:hover {
+  border-color: var(--line);
+  text-decoration: none;
+}
+
+.idchip .av {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-hd);
+  border: 1px solid var(--line2);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--dim);
+  overflow: hidden;
+}
+
+.idchip .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+
+/* -------------------------------------------------------- related crosslinks */
+
+.related .k {
+  color: var(--dim);
+}
+
+.related-empty {
+  color: var(--dim);
 }

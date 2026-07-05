@@ -41,7 +41,46 @@ const SyncTicker = () => {
   );
 };
 
-const Header = (props: { onToggleIndex: () => void; indexOpen: boolean }) => {
+const THEME_KEY = 'dfos-explorer:theme';
+type Theme = 'dark' | 'light';
+
+const currentTheme = (): Theme =>
+  document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+
+const applyTheme = (t: Theme): void => {
+  document.documentElement.setAttribute('data-theme', t);
+  document.documentElement.style.colorScheme = t;
+  try {
+    localStorage.setItem(THEME_KEY, t);
+  } catch {
+    // storage unavailable — the in-session attribute still holds
+  }
+};
+
+/** Terminal-idiom light/dark switch: shows the theme you'd flip TO. */
+const ThemeToggle = () => {
+  const [theme, setTheme] = useState<Theme>(currentTheme);
+  const flip = (): void => {
+    const next: Theme = theme === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    setTheme(next);
+  };
+  return (
+    <button
+      class="theme-toggle"
+      onClick={flip}
+      title={`switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+    >
+      [{theme === 'dark' ? 'light' : 'dark'}]
+    </button>
+  );
+};
+
+const Header = (props: {
+  onToggleIndex: () => void;
+  indexOpen: boolean;
+  showIndexToggle: boolean;
+}) => {
   const [relays, setRelays] = useState(getRelays());
   const [status, setStatus] = useState<'probing' | 'up' | 'mixed' | 'down'>('probing');
 
@@ -92,9 +131,12 @@ const Header = (props: { onToggleIndex: () => void; indexOpen: boolean }) => {
           <a href="#/relays">
             {relays.length} relay{relays.length === 1 ? '' : 's'}
           </a>
-          <a class="index-toggle" onClick={props.onToggleIndex}>
-            {props.indexOpen ? '✕ index' : '☰ index'}
-          </a>
+          <ThemeToggle />
+          {props.showIndexToggle ? (
+            <a class="index-toggle" onClick={props.onToggleIndex}>
+              {props.indexOpen ? '✕ index' : '☰ index'}
+            </a>
+          ) : null}
         </div>
       </div>
     </header>
@@ -146,10 +188,8 @@ const SearchBar = () => {
 
 const Foot = () => (
   <div class="foot">
-    client-side only · verification via <code>@metalabel/dfos-client</code> +{' '}
-    <code>@metalabel/dfos-protocol</code> · the full log syncs into a normalized IndexedDB store —
-    chains fold offline · document bytes live on the content plane (relay-gated) · no canonical
-    state — this is the view of the relays you configured
+    client-side only · verify-in-tab via <code>@metalabel/dfos-client</code> · no canonical state —
+    the view of the relays you configured · <a href="#/glossary">glossary</a>
   </div>
 );
 
@@ -195,21 +235,36 @@ export const App = () => {
     }
   })();
 
+  // IA (D3): the local-index sidebar is a home/browse ACTIVITY panel. Detail
+  // pages (did/content/op/cred), the glossary, and the relay browser go full
+  // width and carry their own crosslink panels instead.
+  const showSidebar =
+    route.view === 'home' ||
+    route.view === 'identities' ||
+    route.view === 'documents' ||
+    route.view === 'artifacts';
+
   return (
     <>
-      <Header onToggleIndex={() => setIndexOpen((v) => !v)} indexOpen={indexOpen} />
+      <Header
+        onToggleIndex={() => setIndexOpen((v) => !v)}
+        indexOpen={indexOpen}
+        showIndexToggle={showSidebar}
+      />
       <div class="wrap">
         <SearchBar />
-        <div class="cols">
+        <div class={showSidebar ? 'cols' : 'cols solo'}>
           <main>{view}</main>
-          <aside class={indexOpen ? 'open' : ''}>
-            {indexOpen ? (
-              <div class="drawer-close">
-                <a onClick={() => setIndexOpen(false)}>✕ close</a>
-              </div>
-            ) : null}
-            <LocalIndex />
-          </aside>
+          {showSidebar ? (
+            <aside class={indexOpen ? 'open' : ''}>
+              {indexOpen ? (
+                <div class="drawer-close">
+                  <a onClick={() => setIndexOpen(false)}>✕ close</a>
+                </div>
+              ) : null}
+              <LocalIndex />
+            </aside>
+          ) : null}
         </div>
         <Foot />
       </div>

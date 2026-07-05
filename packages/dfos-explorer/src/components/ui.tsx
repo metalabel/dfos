@@ -21,9 +21,11 @@ export const Panel = (props: {
   right?: ComponentChildren;
   orient?: ComponentChildren;
   pad?: boolean;
+  /** leading trust rule on the header: ok = locally verified, warn = relay-asserted. */
+  accent?: 'ok' | 'warn' | 'bad' | undefined;
   children: ComponentChildren;
 }) => (
-  <div class="panel">
+  <div class={props.accent ? `panel acc-${props.accent}` : 'panel'}>
     <h2>
       <span>{props.title}</span>
       {props.right ? <span class="panel-right">{props.right}</span> : null}
@@ -32,6 +34,16 @@ export const Panel = (props: {
     <div class={props.pad === false ? 'body flush' : 'body'}>{props.children}</div>
   </div>
 );
+
+// -----------------------------------------------------------------------------
+// trust badge — verified/active = filled ok, attributed = hollow amber,
+// revoked/mismatch = filled bad. The one vocabulary for status labels.
+// -----------------------------------------------------------------------------
+
+export const Badge = (props: {
+  state: 'ok' | 'bad' | 'warn' | 'neutral';
+  children: ComponentChildren;
+}) => <span class={`badge ${props.state}`}>{props.children}</span>;
 
 // -----------------------------------------------------------------------------
 // verify pill
@@ -183,13 +195,17 @@ export const CredStatus = (props: { revokedByOp?: string | undefined }) =>
     <span class="ck ok">active</span>
   );
 
-/** Click-to-copy identifier. */
-export const Copyable = (props: { value: string; head?: number; tail?: number }) => {
+/**
+ * Middle-truncated identifier with click-to-copy + a full-value title. The one
+ * component for rendering a raw id (DID / CID / contentId) inline — swept across
+ * the detail views so every bare identifier copies the same way.
+ */
+export const TruncId = (props: { value: string; head?: number; tail?: number }) => {
   const [copied, setCopied] = useState(false);
   return (
     <span
       class="cid"
-      title={props.value}
+      title={`${props.value} — click to copy`}
       onClick={() => {
         copyToClipboard(props.value);
         setCopied(true);
@@ -198,5 +214,35 @@ export const Copyable = (props: { value: string; head?: number; tail?: number })
     >
       {copied ? 'copied ✓' : short(props.value, props.head ?? 12, props.tail ?? 8)}
     </span>
+  );
+};
+
+/** Back-compat alias — {@link TruncId} is the canonical name. */
+export const Copyable = TruncId;
+
+// -----------------------------------------------------------------------------
+// related — the detail-page crosslink panel. Full-width detail pages trade the
+// global sidebar for a compact navigational block built from data already
+// loaded (no new fetches): who/what this primitive connects to.
+// -----------------------------------------------------------------------------
+
+export const Related = (props: { rows: { k: ComponentChildren; v: ComponentChildren }[] }) => {
+  const rows = props.rows.filter((r) => r.v != null && r.v !== false);
+  if (rows.length === 0) return null;
+  return (
+    <Panel title="related">
+      <div class="kv related">
+        {rows.map((r, i) => (
+          <>
+            <div key={`k${i}`} class="k">
+              {r.k}
+            </div>
+            <div key={`v${i}`} class="v">
+              {r.v}
+            </div>
+          </>
+        ))}
+      </div>
+    </Panel>
   );
 };
