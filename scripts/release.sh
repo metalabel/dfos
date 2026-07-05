@@ -116,7 +116,10 @@ fi
 
 # --- commit, tag, push ---
 
-git add package.json packages/*/package.json
+# stage everything version:sync rewrites — package manifests AND the shipped
+# openapi.yaml (its info.version is synced too; leaving it unstaged cuts a tag
+# that fails the openapi version tripwire test and blocks the publish)
+git add package.json packages/*/package.json packages/dfos-web-relay/openapi.yaml
 git commit -m "release: v${VERSION}"
 git tag -a "v${VERSION}" -m "v${VERSION}"
 
