@@ -69,6 +69,15 @@ describe('parseLimit (Go twin parity)', () => {
     expect(p(' 10')).toBe(DEFAULT);
     expect(p('10 ')).toBe(DEFAULT);
   });
+
+  it('rejects a leading + (Go strconv.Atoi accepts it, so the Go twin guards against it)', () => {
+    // A percent-encoded "+" (?limit=%2B50) decodes to a literal "+50". Go's
+    // strconv.Atoi WOULD accept that as 50, so the Go parseLimit has an explicit
+    // guard rejecting a leading "+" to match this regex — keeping the page size
+    // identical across twins. (A bare "+" in a query string decodes to a space,
+    // which both sides already reject via the whitespace path above.)
+    expect(p('+50')).toBe(DEFAULT);
+  });
 });
 
 // ---------------------------------------------------------------------------

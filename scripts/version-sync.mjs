@@ -62,6 +62,19 @@ for (const pkg of packages) {
   changed++;
 }
 
+const openapiPath = resolve(root, 'packages/dfos-web-relay/openapi.yaml');
+const openapiText = readFileSync(openapiPath, 'utf8');
+const nextOpenapiText = openapiText.replace(
+  /(title: DFOS Web Relay\n  version: ).*/,
+  `$1${version}`,
+);
+
+if (nextOpenapiText !== openapiText) {
+  writeFileSync(openapiPath, nextOpenapiText);
+  console.log(`  dfos-web-relay/openapi.yaml → ${version}`);
+  changed++;
+}
+
 if (changed === 0) {
   console.log(`All packages already at ${version}`);
 } else {

@@ -274,7 +274,8 @@ type Store interface {
 	// across stores and twins).
 	GetRevocationForCredential(credentialCID string) (*StoredRevocation, error)
 	// GetRevocationsByIssuer returns all stored revocations issued by a DID,
-	// sorted by credentialCID ascending (deterministic across stores and twins).
+	// sorted by revocation createdAt ascending with credentialCID as tiebreak
+	// (deterministic across stores and twins — the frozen v1 feed order).
 	GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error)
 
 	// public credentials (standing authorization)
