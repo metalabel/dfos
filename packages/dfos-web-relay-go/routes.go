@@ -693,6 +693,13 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 	// of discarding it and returning an unconditional 200.
 	r.ingestMu.Lock()
 	putErr := r.store.PutBlob(BlobKey{CreatorDID: chain.State.CreatorDID, DocumentCID: documentCID}, bytes)
+	if putErr == nil {
+		// A document blob just landed — often out of band, after the content op
+		// that referenced it. Recompute the content rows that project this
+		// documentCID (docSchema/name/profile), cascading to anchored identities.
+		// Under ingestMu so the projection writes don't race on the ingestion tx.
+		maintainIndexAfterBlob(documentCID, r.store)
+	}
 	r.ingestMu.Unlock()
 	if storeErr(w, putErr) {
 		return
@@ -726,7 +733,7 @@ func (r *Relay) handleGetBlob(w http.ResponseWriter, req *http.Request) {
 // Returns true if authorized. Writes 401/403 error response and returns false if not.
 // Allows unauthenticated access when a valid public standing credential exists.
 func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentID string, creatorDID string) bool {
-	if r.hasPublicStandingAuth(contentID, "read") {
+	if hasPublicStandingAuth(contentID, "read", r.readStore) {
 		return true
 	}
 	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore, r.maxAuthTokenTTL)

@@ -1114,6 +1114,12 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 				result = IngestionResult{CID: computeOpCID(op.jwsToken), Status: "rejected", Error: "unrecognized operation type"}
 			}
 		}()
+		// Maintain the /index/v0 materialized projection synchronously, in
+		// dependency order, right after the op is applied to the store. This is
+		// the single choke point for every apply path (local POST, the sequencer
+		// fixed-point loop, and peer sync all funnel through IngestOperations).
+		// Non-authoritative and self-isolating: it never throws back into ingestion.
+		maintainIndexAfterOp(result, op.jwsToken, store)
 		results = append(results, indexedResult{index: op.originalIndex, result: result})
 	}
 
@@ -1142,6 +1148,11 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 				continue
 			}
 			if result.Status != "rejected" || isPermanentRejection(result) {
+				// An op that failed dependency-missing in the main pass and now
+				// succeeds on retry must still maintain the projection — the main
+				// pass ran maintenance on its "rejected" result (a no-op). Mirror
+				// the choke-point call here so a retried identity/content row lands.
+				maintainIndexAfterOp(result, tokens[p.index], store)
 				// find and update the result
 				for i, ir := range results {
 					if ir.index == p.index {

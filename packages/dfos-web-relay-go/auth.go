@@ -72,19 +72,23 @@ func AuthenticateRequest(authHeader string, relayDID string, store Store, maxAut
 
 // hasPublicStandingAuth checks if a valid public standing credential exists
 // for the given content. Verifies expiry and revocation.
-func (r *Relay) hasPublicStandingAuth(contentID string, action string) bool {
+//
+// Store-scoped (mirrors the TS twin hasPublicStandingAuth(contentId, action,
+// store)): the HTTP read path passes r.readStore (never races on the ingestion
+// tx); ingest-time index maintenance passes the ingestion store so the recompute
+// sees the same within-batch uncommitted writes the op just made.
+func hasPublicStandingAuth(contentID string, action string, store Store) bool {
 	resource := "chain:" + contentID
-	publicCreds, _ := r.readStore.GetPublicCredentials(resource)
-	// readStore: key resolution runs on the HTTP read path, never races on tx.
-	resolveKey := CreateKeyResolver(r.readStore)
+	publicCreds, _ := store.GetPublicCredentials(resource)
+	resolveKey := CreateKeyResolver(store)
 
-	chain, _ := r.readStore.GetContentChain(contentID)
+	chain, _ := store.GetContentChain(contentID)
 	if chain == nil {
 		return false
 	}
 
 	for _, credJws := range publicCreds {
-		if err := r.verifyCredentialForAccess(credJws, resolveKey, resource, action, chain.State.CreatorDID, ""); err == nil {
+		if err := verifyCredentialForAccess(credJws, resolveKey, resource, action, chain.State.CreatorDID, "", store); err == nil {
 			return true
 		}
 	}
@@ -109,19 +113,20 @@ func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requ
 	}
 
 	// readStore: key resolution runs on the HTTP read path, never races on tx.
-	resolveKey := CreateKeyResolver(r.readStore)
+	store := r.readStore
+	resolveKey := CreateKeyResolver(store)
 
 	// 2. check stored public credentials
-	publicCreds, _ := r.readStore.GetPublicCredentials(requestedResource)
+	publicCreds, _ := store.GetPublicCredentials(requestedResource)
 	for _, credJws := range publicCreds {
-		if err := r.verifyCredentialForAccess(credJws, resolveKey, requestedResource, action, creatorDID, ""); err == nil {
+		if err := verifyCredentialForAccess(credJws, resolveKey, requestedResource, action, creatorDID, "", store); err == nil {
 			return ""
 		}
 	}
 
 	// 3. check per-request credential
 	if credentialJWS != "" {
-		if err := r.verifyCredentialForAccess(credentialJWS, resolveKey, requestedResource, action, creatorDID, requesterDID); err != nil {
+		if err := verifyCredentialForAccess(credentialJWS, resolveKey, requestedResource, action, creatorDID, requesterDID, store); err != nil {
 			return err.Error()
 		}
 		return ""
@@ -136,7 +141,7 @@ func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requ
 //
 // For public credentials (aud="*"), requesterDID can be empty.
 // For per-request credentials, requesterDID is checked against aud.
-func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requestedResource string, action string, creatorDID string, requesterDID string) error {
+func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requestedResource string, action string, creatorDID string, requesterDID string, store Store) error {
 	// decode to get kid and raw payload
 	header, payload, err := dfos.DecodeJWSUnsafe(credJws)
 	if err != nil || header == nil {
@@ -151,7 +156,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 	issuerDID := kid[:strings.Index(kid, "#")]
 
 	// check issuer identity is not deleted
-	issuerIdentity, _ := r.readStore.GetIdentityChain(issuerDID)
+	issuerIdentity, _ := store.GetIdentityChain(issuerDID)
 	if issuerIdentity != nil && issuerIdentity.State.IsDeleted {
 		return fmt.Errorf("credential issuer identity is deleted")
 	}
@@ -171,7 +176,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 	}
 
 	// check leaf revocation
-	revoked, _ := r.readStore.IsCredentialRevoked(verified.Iss, verified.CID)
+	revoked, _ := store.IsCredentialRevoked(verified.Iss, verified.CID)
 	if revoked {
 		return fmt.Errorf("credential is revoked")
 	}
@@ -180,7 +185,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 	att := dfos.ParseAtt(payload)
 
 	// check resource + action match
-	if !r.matchesResource(att, requestedResource, action) {
+	if !matchesResource(att, requestedResource, action) {
 		return fmt.Errorf("credential does not cover requested resource")
 	}
 
@@ -205,11 +210,11 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 		return fmt.Errorf("credential prf invalid: %v", err)
 	}
 	isRevoked := func(issuerDID, credentialCID string) (bool, error) {
-		revoked, _ := r.readStore.IsCredentialRevoked(issuerDID, credentialCID)
+		revoked, _ := store.IsCredentialRevoked(issuerDID, credentialCID)
 		return revoked, nil
 	}
 	isDeleted := func(did string) (bool, error) {
-		idc, _ := r.readStore.GetIdentityChain(did)
+		idc, _ := store.GetIdentityChain(did)
 		return idc != nil && idc.State.IsDeleted, nil
 	}
 	if err := dfos.VerifyDelegationChain(credJws, verified, att, prf, resolveKey, creatorDID, isRevoked, isDeleted); err != nil {
@@ -224,7 +229,7 @@ func (r *Relay) verifyCredentialForAccess(credJws string, resolveKey dfos.KeyRes
 // ---------------------------------------------------------------------------
 
 // matchesResource checks if an att array covers a requested resource+action.
-func (r *Relay) matchesResource(att []dfos.AttEntry, resource string, action string) bool {
+func matchesResource(att []dfos.AttEntry, resource string, action string) bool {
 	reqType, reqID, ok := dfos.ParseResource(resource)
 	if !ok {
 		return false

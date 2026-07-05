@@ -251,9 +251,12 @@ func TestIndexIdentitiesProjectionFiltersPaginationAndDeleted(t *testing.T) {
 			t.Fatalf("page2 repeated page1 row: %v", page2)
 		}
 	}
-	status, empty, _ := getIndexJSONBody(t, handler, "/index/v0/identities?after=did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr")
+	// Keyset semantics: a cursor that sorts at or beyond the last key yields an
+	// empty page (all keys are <= after). "did:dfos:z...z" is > every real DID (z
+	// is the max char in the id alphabet).
+	status, empty, _ := getIndexJSONBody(t, handler, "/index/v0/identities?after=did:dfos:"+strings.Repeat("z", 31))
 	if status != 200 || len(empty["identities"].([]any)) != 0 {
-		t.Fatalf("absent cursor page = %v status=%d", empty, status)
+		t.Fatalf("beyond-last cursor page = %v status=%d", empty, status)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
@@ -101,6 +102,55 @@ CREATE TABLE IF NOT EXISTS public_credentials (
 );
 
 CREATE INDEX IF NOT EXISTS idx_public_credentials_exp ON public_credentials(exp);
+
+-- index (v0) materialized projection: flat-column rows the ingestion pipeline
+-- maintains incrementally so a /index/v0 page costs O(page), not O(corpus).
+CREATE TABLE IF NOT EXISTS index_identity (
+	did TEXT PRIMARY KEY,
+	head_cid TEXT NOT NULL,
+	op_count INTEGER NOT NULL,
+	genesis_at TEXT NOT NULL,
+	head_at TEXT NOT NULL,
+	is_deleted INTEGER NOT NULL,
+	profile_anchor TEXT,
+	profile_public_read INTEGER,
+	profile_doc_schema TEXT,
+	profile_name TEXT,
+	has_public_profile INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_index_identity_anchor ON index_identity(profile_anchor);
+CREATE INDEX IF NOT EXISTS idx_index_identity_public ON index_identity(has_public_profile, did);
+
+CREATE TABLE IF NOT EXISTS index_content (
+	content_id TEXT PRIMARY KEY,
+	genesis_cid TEXT NOT NULL,
+	head_cid TEXT NOT NULL,
+	creator_did TEXT NOT NULL,
+	is_deleted INTEGER NOT NULL,
+	op_count INTEGER NOT NULL,
+	genesis_at TEXT NOT NULL,
+	head_at TEXT NOT NULL,
+	current_document_cid TEXT,
+	public_read INTEGER NOT NULL,
+	doc_schema TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_index_content_creator ON index_content(creator_did, content_id);
+CREATE INDEX IF NOT EXISTS idx_index_content_schema ON index_content(doc_schema, content_id);
+CREATE INDEX IF NOT EXISTS idx_index_content_doccid ON index_content(current_document_cid);
+
+CREATE TABLE IF NOT EXISTS index_countersign (
+	cid TEXT PRIMARY KEY,
+	witness_did TEXT NOT NULL,
+	target_cid TEXT NOT NULL,
+	relation TEXT,
+	jws_token TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_index_countersign_witness ON index_countersign(witness_did, cid);
+
+CREATE TABLE IF NOT EXISTS index_meta (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
 
 // SQLiteStore is a durable Store backed by SQLite.
@@ -485,11 +535,10 @@ func (s *SQLiteStore) AddCountersignature(operationCID string, jwsToken string) 
 	return err
 }
 
-func (s *SQLiteStore) GetCountersignaturesByWitness(witnessDID string) ([]StoredCountersignature, error) {
-	rows, err := s.readerDB().Query(
-		"SELECT operation_cid, jws_token FROM countersignatures WHERE witness_did = ?",
-		witnessDID,
-	)
+// ListCountersignatures enumerates every stored countersignature (all
+// witnesses), sorted by CID. Used ONLY by the index-projection rebuild path.
+func (s *SQLiteStore) ListCountersignatures() ([]StoredCountersignature, error) {
+	rows, err := s.readerDB().Query("SELECT operation_cid, jws_token FROM countersignatures")
 	if err != nil {
 		return nil, err
 	}
@@ -502,7 +551,7 @@ func (s *SQLiteStore) GetCountersignaturesByWitness(witnessDID string) ([]Stored
 			return nil, err
 		}
 		row := countersignatureFromToken(targetCID, token)
-		if row == nil || row.WitnessDID != witnessDID {
+		if row == nil {
 			continue
 		}
 		result = append(result, *row)
@@ -512,6 +561,309 @@ func (s *SQLiteStore) GetCountersignaturesByWitness(witnessDID string) ([]Stored
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CID < result[j].CID })
 	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// index (v0) materialized projection
+// ---------------------------------------------------------------------------
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func nullStr(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// scanner is the common Scan interface between *sql.Row and *sql.Rows.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanIndexIdentityRow(sc scanner) (indexIdentityRow, error) {
+	var row indexIdentityRow
+	var isDeleted int
+	var anchor, docSchema, name sql.NullString
+	var publicRead sql.NullInt64
+	if err := sc.Scan(
+		&row.DID, &row.HeadCID, &row.OpCount, &row.GenesisAt, &row.HeadAt, &isDeleted,
+		&anchor, &publicRead, &docSchema, &name,
+	); err != nil {
+		return row, err
+	}
+	row.IsDeleted = isDeleted != 0
+	// A projected profile always carries an anchor (profileProjection returns nil
+	// otherwise), so anchor validity is exactly profile presence.
+	if anchor.Valid {
+		profile := &indexProfile{
+			Anchor:     anchor.String,
+			PublicRead: publicRead.Valid && publicRead.Int64 != 0,
+		}
+		if docSchema.Valid {
+			v := docSchema.String
+			profile.DocSchema = &v
+		}
+		if name.Valid {
+			v := name.String
+			profile.Name = &v
+		}
+		row.Profile = profile
+	}
+	return row, nil
+}
+
+const indexIdentityCols = "did, head_cid, op_count, genesis_at, head_at, is_deleted, profile_anchor, profile_public_read, profile_doc_schema, profile_name"
+
+func scanIndexContentRow(sc scanner) (indexContentRow, error) {
+	var row indexContentRow
+	var isDeleted, publicRead int
+	var currentDocCID, docSchema sql.NullString
+	if err := sc.Scan(
+		&row.ContentID, &row.GenesisCID, &row.HeadCID, &row.CreatorDID, &isDeleted,
+		&row.OpCount, &row.GenesisAt, &row.HeadAt, &currentDocCID, &publicRead, &docSchema,
+	); err != nil {
+		return row, err
+	}
+	row.IsDeleted = isDeleted != 0
+	row.PublicRead = publicRead != 0
+	if currentDocCID.Valid {
+		v := currentDocCID.String
+		row.CurrentDocumentCID = &v
+	}
+	if docSchema.Valid {
+		v := docSchema.String
+		row.DocSchema = &v
+	}
+	return row, nil
+}
+
+const indexContentCols = "content_id, genesis_cid, head_cid, creator_did, is_deleted, op_count, genesis_at, head_at, current_document_cid, public_read, doc_schema"
+
+func (s *SQLiteStore) PutIndexIdentityRow(row indexIdentityRow) error {
+	var anchor, docSchema, name any
+	var publicRead any
+	hasPublicProfile := 0
+	if row.Profile != nil {
+		anchor = row.Profile.Anchor
+		publicRead = boolToInt(row.Profile.PublicRead)
+		docSchema = nullStr(row.Profile.DocSchema)
+		name = nullStr(row.Profile.Name)
+		if row.Profile.PublicRead {
+			hasPublicProfile = 1
+		}
+	}
+	_, err := s.writerDB().Exec(
+		`INSERT OR REPLACE INTO index_identity
+		 (did, head_cid, op_count, genesis_at, head_at, is_deleted,
+		  profile_anchor, profile_public_read, profile_doc_schema, profile_name, has_public_profile)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.DID, row.HeadCID, row.OpCount, row.GenesisAt, row.HeadAt, boolToInt(row.IsDeleted),
+		anchor, publicRead, docSchema, name, hasPublicProfile,
+	)
+	return err
+}
+
+func (s *SQLiteStore) PutIndexContentRow(row indexContentRow) error {
+	_, err := s.writerDB().Exec(
+		`INSERT OR REPLACE INTO index_content
+		 (content_id, genesis_cid, head_cid, creator_did, is_deleted, op_count,
+		  genesis_at, head_at, current_document_cid, public_read, doc_schema)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.ContentID, row.GenesisCID, row.HeadCID, row.CreatorDID, boolToInt(row.IsDeleted), row.OpCount,
+		row.GenesisAt, row.HeadAt, nullStr(row.CurrentDocumentCID), boolToInt(row.PublicRead), nullStr(row.DocSchema),
+	)
+	return err
+}
+
+func (s *SQLiteStore) PutIndexCountersignatureRow(row storedIndexCountersignature) error {
+	_, err := s.writerDB().Exec(
+		`INSERT OR REPLACE INTO index_countersign (cid, witness_did, target_cid, relation, jws_token)
+		 VALUES (?, ?, ?, ?, ?)`,
+		row.CID, row.WitnessDID, row.TargetCID, nullStr(row.Relation), row.JWSToken,
+	)
+	return err
+}
+
+func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error) {
+	where := []string{}
+	args := []any{}
+	if q.HasPublicProfile != nil {
+		where = append(where, "has_public_profile = ?")
+		args = append(args, boolToInt(*q.HasPublicProfile))
+	}
+	if q.After != "" {
+		where = append(where, "did > ?")
+		args = append(args, q.After)
+	}
+	query := "SELECT " + indexIdentityCols + " FROM index_identity"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY did LIMIT ?"
+	args = append(args, q.Limit)
+
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []indexIdentityRow{}
+	for rows.Next() {
+		row, err := scanIndexIdentityRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error) {
+	where := []string{}
+	args := []any{}
+	if q.Creator != "" {
+		where = append(where, "creator_did = ?")
+		args = append(args, q.Creator)
+	}
+	if q.DocSchema != nil {
+		where = append(where, "doc_schema = ?")
+		args = append(args, *q.DocSchema)
+	}
+	if q.PublicRead != nil {
+		where = append(where, "public_read = ?")
+		args = append(args, boolToInt(*q.PublicRead))
+	}
+	if q.After != "" {
+		where = append(where, "content_id > ?")
+		args = append(args, q.After)
+	}
+	query := "SELECT " + indexContentCols + " FROM index_content"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY content_id LIMIT ?"
+	args = append(args, q.Limit)
+
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []indexContentRow{}
+	for rows.Next() {
+		row, err := scanIndexContentRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error) {
+	query := "SELECT cid, target_cid, relation, jws_token FROM index_countersign WHERE witness_did = ?"
+	args := []any{q.Witness}
+	if q.After != "" {
+		query += " AND cid > ?"
+		args = append(args, q.After)
+	}
+	query += " ORDER BY cid LIMIT ?"
+	args = append(args, q.Limit)
+
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []indexCountersignatureRow{}
+	for rows.Next() {
+		var row indexCountersignatureRow
+		var relation sql.NullString
+		if err := rows.Scan(&row.CID, &row.TargetCID, &relation, &row.JWSToken); err != nil {
+			return nil, err
+		}
+		if relation.Valid {
+			v := relation.String
+			row.Relation = &v
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) GetIndexIdentityDIDsByProfileAnchor(contentID string) ([]string, error) {
+	rows, err := s.readerDB().Query("SELECT did FROM index_identity WHERE profile_anchor = ?", contentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	dids := []string{}
+	for rows.Next() {
+		var did string
+		if err := rows.Scan(&did); err != nil {
+			return nil, err
+		}
+		dids = append(dids, did)
+	}
+	return dids, rows.Err()
+}
+
+func (s *SQLiteStore) GetIndexContentIDsByDocumentCID(documentCID string) ([]string, error) {
+	rows, err := s.readerDB().Query("SELECT content_id FROM index_content WHERE current_document_cid = ?", documentCID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	contentIds := []string{}
+	for rows.Next() {
+		var contentID string
+		if err := rows.Scan(&contentID); err != nil {
+			return nil, err
+		}
+		contentIds = append(contentIds, contentID)
+	}
+	return contentIds, rows.Err()
+}
+
+// --- RebuildableIndexStore ---
+
+func (s *SQLiteStore) GetIndexProjectionVersion() (int, error) {
+	var value string
+	err := s.readerDB().QueryRow("SELECT value FROM index_meta WHERE key = 'projection_version'").Scan(&value)
+	if err == sql.ErrNoRows {
+		return 0, nil // never stamped — fresh or pre-projection DB
+	}
+	if err != nil {
+		return 0, err
+	}
+	v, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, nil // unparseable → treat as unstamped, forcing a rebuild
+	}
+	return v, nil
+}
+
+func (s *SQLiteStore) SetIndexProjectionVersion(v int) error {
+	_, err := s.writerDB().Exec(
+		"INSERT OR REPLACE INTO index_meta (key, value) VALUES ('projection_version', ?)",
+		strconv.Itoa(v),
+	)
+	return err
+}
+
+func (s *SQLiteStore) ClearIndexProjection() error {
+	for _, table := range []string{"index_identity", "index_content", "index_countersign"} {
+		if _, err := s.writerDB().Exec("DELETE FROM " + table); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

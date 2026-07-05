@@ -106,6 +106,16 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		maxAuthTokenTTL = DefaultMaxAuthTokenTTL
 	}
 
+	// Index projection startup rebuild: when index is enabled and a durable store
+	// carries a stale (or unstamped) projection_version, rebuild all projection
+	// rows from the authoritative chain/countersign tables synchronously, before
+	// serving. Migrates a pre-existing corpus on redeploy with zero manual steps.
+	if indexEnabled {
+		if err := rebuildIndexProjection(opts.Store, logger); err != nil {
+			return nil, fmt.Errorf("rebuild index projection: %w", err)
+		}
+	}
+
 	return &Relay{
 		store:              opts.Store,
 		readStore:          readStore,
