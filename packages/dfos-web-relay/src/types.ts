@@ -8,6 +8,7 @@
 
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
+import type { IndexContentRow, IndexCountersignatureRow, IndexIdentityRow } from './index-routes';
 
 /**
  * Namespaces every frozen proof-plane route under one prefix so the two version
@@ -338,11 +339,74 @@ export interface RelayStore {
    */
   getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]>;
 
-  // --- index queries ---
+  // --- index (v0) materialized projection ---
+  //
+  // The /index/v0 query family is served from materialized projection rows that
+  // the ingestion pipeline maintains incrementally (see index-maintenance.ts).
+  // Queries push their filters and keyset cursor into the store so a page costs
+  // O(page), never O(corpus): rows come back ascending by natural key, strictly
+  // greater than `after` (bytewise), and capped at `limit`. The route layer
+  // computes `next = rows.length === limit ? key(last) : null`. Row VALUES are a
+  // pure function of chain state + held blobs + standing credentials, so a
+  // recompute always converges to the same row regardless of when it runs — that
+  // is what makes incremental maintenance and a full rebuild interchangeable.
 
-  getIndexIdentityChains(): Promise<StoredIdentityChain[]>;
-  getIndexContentChains(): Promise<StoredContentChain[]>;
-  getIndexCountersignaturesByWitness(witnessDID: string): Promise<StoredCountersignature[]>;
+  /**
+   * Page identity projection rows ascending by DID, `did > after`, length <=
+   * limit. `hasPublicProfile` (≡ profile != null && profile.publicRead) filters
+   * to identities that expose a public profile.
+   */
+  queryIndexIdentities(q: {
+    hasPublicProfile?: boolean;
+    after?: string;
+    limit: number;
+  }): Promise<IndexIdentityRow[]>;
+  /**
+   * Page content projection rows ascending by contentId, `contentId > after`,
+   * length <= limit, filtered by any provided creator / docSchema / publicRead.
+   */
+  queryIndexContent(q: {
+    creator?: string;
+    docSchema?: string;
+    publicRead?: boolean;
+    after?: string;
+    limit: number;
+  }): Promise<IndexContentRow[]>;
+  /**
+   * Page countersignature projection rows for one witness ascending by cid,
+   * `cid > after`, length <= limit. Reflects the store's ACCEPTED countersign
+   * set (deduped one-per-witness-per-target), never raw ops.
+   */
+  queryIndexCountersignatures(q: {
+    witness: string;
+    after?: string;
+    limit: number;
+  }): Promise<IndexCountersignatureRow[]>;
+
+  /** Upsert an identity projection row by DID. */
+  putIndexIdentityRow(row: IndexIdentityRow): Promise<void>;
+  /** Upsert a content projection row by contentId. */
+  putIndexContentRow(row: IndexContentRow): Promise<void>;
+  /**
+   * Upsert a countersignature projection row by cid. The `witnessDID` column is
+   * stored (never echoed in the row body) so witness-scoped queries stay O(page).
+   */
+  putIndexCountersignatureRow(
+    row: IndexCountersignatureRow & { witnessDID: string },
+  ): Promise<void>;
+
+  /**
+   * Reverse lookup: DIDs of identity projection rows whose `profile.anchor`
+   * equals the given contentId. Powers the "content changed → recompute the
+   * identities anchored on it" cascade.
+   */
+  getIndexIdentityDIDsByProfileAnchor(contentId: string): Promise<string[]>;
+  /**
+   * Reverse lookup: contentIds of content projection rows whose
+   * `currentDocumentCID` equals the given documentCID. Powers the "blob landed
+   * → recompute the content rows that project that document" cascade.
+   */
+  getIndexContentIdsByDocumentCID(documentCID: string): Promise<string[]>;
 
   // --- public credentials (standing authorization) ---
 

@@ -616,6 +616,7 @@ Extracted values are **attribution-tier claims**: the anchor is controller-signe
 ### Determinism and Coverage
 
 - **Deterministic enumeration.** Every index list is ordered lexicographically ascending by its cursor key (identity rows by `did`, content rows by `contentId`, countersign rows by countersignature `cid`). Two relays holding the same operations serve identical page ordering and identical structural fields — the same convergence property the proof plane guarantees for head state, extended to enumeration. Held-bytes-dependent fields (`docSchema`, projected values) additionally require the same held blobs to agree, per coverage below.
+- **Keyset pagination.** `after` is a **strictly-greater** cursor: a page returns the rows whose (post-filter) cursor key is lexicographically **greater than** `after`, ascending, capped at `limit`; `next` is the last returned row's key, or `null` when the page was not full (caught up). The cursor need not be a currently-present key — a value that falls between keys, or names a row that was mutated out of the active filter between pages, resumes at the next greater key rather than truncating to an empty page. This makes enumeration stable under concurrent row changes: keys are immutable natural identifiers, so a row's filtered membership or projected values may change between pages without dropping or duplicating other rows.
 - **Coverage is bounded by held bytes.** `docSchema` and projected fields are computable only for chains whose current head document bytes the relay holds (uploaded, or pulled via [content following](#content-following)). A chain whose bytes are absent reports `docSchema: null` — honest unknown, not a claim of schemalessness. A `docSchema` filter therefore matches only chains with held, decodable head bytes; callers MUST treat the result as a lower bound.
 - **Timestamps are author-claimed.** `genesisAt` / `headAt` surface the `createdAt` fields signed inside the operations — the same values head selection uses — not relay receipt times.
 - **Maintenance.** The index is fully re-derivable from the operation log plus held blobs. Reference implementations maintain it incrementally at ingestion and expose a rebuild path for pre-existing corpora; either way the serving contract is identical.
@@ -656,7 +657,7 @@ Enumerates identity chains, `did` ascending.
 | `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                            |
 | `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker                                                                                        |
 
-Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `after` (a `did` cursor), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
+Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `after` (a `did` keyset cursor — returns rows with `did` strictly greater), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
 
 ### Content Chains (`GET /index/v0/content?creator={did}&docSchema=&publicRead=&after={contentId}&limit=N`)
 
@@ -683,7 +684,7 @@ Enumerates content chains, `contentId` ascending. All filters are ANDed exact ma
 }
 ```
 
-Parameters: `creator` (exact DID — the chain's genesis signer; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `publicRead` (boolean), `after` (a `contentId` cursor), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, composed client-side.
+Parameters: `creator` (exact DID — the chain's genesis signer; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `publicRead` (boolean), `after` (a `contentId` keyset cursor — returns rows with `contentId` strictly greater), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, composed client-side.
 
 ### Countersignatures by Witness (`GET /index/v0/countersignatures?witness={did}&after={cid}&limit=N`)
 
@@ -704,7 +705,7 @@ The reverse of the proof plane's by-target route: every countersignature this re
 }
 ```
 
-`witness` is required (`400` when missing or malformed). `relation` is the countersign's open-namespace tag, `null` when omitted by the signer. Each entry carries the full JWS — self-proving, same posture as the issuer revocations feed: the caller re-verifies the token rather than trusting the row.
+`witness` is required (`400` when missing or malformed); `after` is a countersignature-`cid` keyset cursor (returns rows with `cid` strictly greater), `limit` defaults to 100 and maxes at 1000. `relation` is the countersign's open-namespace tag, `null` when omitted by the signer. Each entry carries the full JWS — self-proving, same posture as the issuer revocations feed: the caller re-verifies the token rather than trusting the row.
 
 ### Deferred from v0
 

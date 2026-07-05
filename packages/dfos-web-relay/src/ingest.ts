@@ -35,6 +35,7 @@ import {
 } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { compareHeadPreference } from '@metalabel/dfos-protocol/fold';
+import { maintainIndexAfterOp } from './index-maintenance';
 import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityChain } from './types';
 
 // -----------------------------------------------------------------------------
@@ -1269,6 +1270,12 @@ export const ingestOperations = async (
             error: 'unrecognized operation type',
           };
       }
+      // Maintain the /index/v0 materialized projection synchronously, in
+      // dependency order, right after the op is applied to the store. This is
+      // the single choke point for every apply path (local POST, the sequencer
+      // fixed-point loop, and peer sync all funnel here). Non-authoritative and
+      // self-isolating: it never throws back into ingestion.
+      await maintainIndexAfterOp(result, op.jwsToken, store);
       indexedResults.push({ index: op.originalIndex, result });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unexpected error';

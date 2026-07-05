@@ -22,6 +22,9 @@ export {
 } from './revocations';
 export {
   INDEX_BASE_PATH,
+  identityIndexRow,
+  contentIndexRow,
+  countersignatureIndexRow,
   type IndexContentRow,
   type IndexCountersignatureRow,
   type IndexIdentityRow,

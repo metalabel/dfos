@@ -9,6 +9,7 @@
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import type { IndexContentRow, IndexCountersignatureRow, IndexIdentityRow } from './index-routes';
 import { createKeyResolver } from './ingest';
 import type {
   BlobKey,
@@ -16,12 +17,30 @@ import type {
   RelayStats,
   RelayStore,
   StoredContentChain,
-  StoredCountersignature,
   StoredIdentityChain,
   StoredOperation,
   StoredPublicCredential,
   StoredRevocation,
 } from './types';
+
+/** Ascending bytewise comparator — JS UTF-16 order over ASCII DIDs/CIDs. */
+const ascending = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Page a projection: rows ascending by `keyOf`, strictly greater than `after`
+ * (keyset semantics — deterministic and resumable even when the cursor row was
+ * mutated or filtered out between pages), capped at `limit`.
+ */
+const pageRows = <T>(
+  rows: T[],
+  keyOf: (row: T) => string,
+  after: string | undefined,
+  limit: number,
+): T[] => {
+  const sorted = [...rows].sort((a, b) => ascending(keyOf(a), keyOf(b)));
+  const gated = after === undefined ? sorted : sorted.filter((row) => keyOf(row) > after);
+  return gated.slice(0, limit);
+};
 
 /** Serialize a BlobKey to a string for map indexing */
 const blobKeyString = (key: BlobKey): string => `${key.creatorDID}::${key.documentCID}`;
@@ -43,6 +62,16 @@ export class MemoryRelayStore implements RelayStore {
   private revocations = new Map<string, StoredRevocation>();
   /** Keyed by credential CID */
   private publicCredentials = new Map<string, StoredPublicCredential>();
+  // --- index (v0) materialized projection rows ---
+  /** Identity projection rows keyed by DID. */
+  private indexIdentityRows = new Map<string, IndexIdentityRow>();
+  /** Content projection rows keyed by contentId. */
+  private indexContentRows = new Map<string, IndexContentRow>();
+  /** Countersignature projection rows keyed by cid (carry witnessDID column). */
+  private indexCountersignatureRows = new Map<
+    string,
+    IndexCountersignatureRow & { witnessDID: string }
+  >();
 
   async getOperation(cid: string): Promise<StoredOperation | undefined> {
     return this.operations.get(cid);
@@ -149,37 +178,79 @@ export class MemoryRelayStore implements RelayStore {
     return revs.map((entry) => entry.revocation);
   }
 
-  // --- index queries ---
+  // --- index (v0) materialized projection ---
 
-  async getIndexIdentityChains(): Promise<StoredIdentityChain[]> {
-    return [...this.identityChains.values()].sort((a, b) =>
-      a.did < b.did ? -1 : a.did > b.did ? 1 : 0,
-    );
+  async queryIndexIdentities(q: {
+    hasPublicProfile?: boolean;
+    after?: string;
+    limit: number;
+  }): Promise<IndexIdentityRow[]> {
+    const rows = [...this.indexIdentityRows.values()].filter((row) => {
+      if (q.hasPublicProfile === undefined) return true;
+      const isPublic = row.profile !== null && row.profile.publicRead;
+      return isPublic === q.hasPublicProfile;
+    });
+    return pageRows(rows, (row) => row.did, q.after, q.limit);
   }
 
-  async getIndexContentChains(): Promise<StoredContentChain[]> {
-    return [...this.contentChains.values()].sort((a, b) =>
-      a.contentId < b.contentId ? -1 : a.contentId > b.contentId ? 1 : 0,
-    );
+  async queryIndexContent(q: {
+    creator?: string;
+    docSchema?: string;
+    publicRead?: boolean;
+    after?: string;
+    limit: number;
+  }): Promise<IndexContentRow[]> {
+    const rows = [...this.indexContentRows.values()].filter((row) => {
+      if (q.creator !== undefined && row.creatorDID !== q.creator) return false;
+      if (q.docSchema !== undefined && row.docSchema !== q.docSchema) return false;
+      if (q.publicRead !== undefined && row.publicRead !== q.publicRead) return false;
+      return true;
+    });
+    return pageRows(rows, (row) => row.contentId, q.after, q.limit);
   }
 
-  async getIndexCountersignaturesByWitness(witnessDID: string): Promise<StoredCountersignature[]> {
-    const rows: StoredCountersignature[] = [];
-    for (const [targetCID, tokens] of this.countersignatures.entries()) {
-      for (const jwsToken of tokens) {
-        const decoded = decodeJwsUnsafe(jwsToken);
-        if (!decoded) continue;
-        const payload = decoded.payload as Record<string, unknown>;
-        const did = typeof payload['did'] === 'string' ? payload['did'] : '';
-        if (did !== witnessDID) continue;
-        const cid = typeof decoded.header.cid === 'string' ? decoded.header.cid : '';
-        const target = typeof payload['targetCID'] === 'string' ? payload['targetCID'] : targetCID;
-        const relation = typeof payload['relation'] === 'string' ? payload['relation'] : null;
-        rows.push({ cid, targetCID: target, witnessDID: did, relation, jwsToken });
-      }
+  async queryIndexCountersignatures(q: {
+    witness: string;
+    after?: string;
+    limit: number;
+  }): Promise<IndexCountersignatureRow[]> {
+    const rows = [...this.indexCountersignatureRows.values()].filter(
+      (row) => row.witnessDID === q.witness,
+    );
+    // Strip the witnessDID column — the wire row never carries it (the witness
+    // is echoed at the response top level).
+    const wire = rows.map(({ witnessDID: _witnessDID, ...row }) => row);
+    return pageRows(wire, (row) => row.cid, q.after, q.limit);
+  }
+
+  async putIndexIdentityRow(row: IndexIdentityRow): Promise<void> {
+    this.indexIdentityRows.set(row.did, row);
+  }
+
+  async putIndexContentRow(row: IndexContentRow): Promise<void> {
+    this.indexContentRows.set(row.contentId, row);
+  }
+
+  async putIndexCountersignatureRow(
+    row: IndexCountersignatureRow & { witnessDID: string },
+  ): Promise<void> {
+    this.indexCountersignatureRows.set(row.cid, row);
+  }
+
+  async getIndexIdentityDIDsByProfileAnchor(contentId: string): Promise<string[]> {
+    const dids: string[] = [];
+    for (const row of this.indexIdentityRows.values()) {
+      if (row.profile?.anchor === contentId) dids.push(row.did);
     }
-    rows.sort((a, b) => (a.cid < b.cid ? -1 : a.cid > b.cid ? 1 : 0));
-    return rows;
+    return dids;
+  }
+
+  async getIndexContentIdsByDocumentCID(documentCID: string): Promise<string[]> {
+    const contentIds: string[] = [];
+    for (const row of this.indexContentRows.values()) {
+      if (row.currentDocumentCID === documentCID) contentIds.push(row.contentId);
+    }
+    return contentIds;
   }
 
   // --- public credentials ---
