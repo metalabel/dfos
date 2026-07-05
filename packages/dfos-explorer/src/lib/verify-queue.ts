@@ -112,12 +112,24 @@ const pump = (): void => {
 
 /**
  * Enqueue a row for verification. Idempotent: a chain already verifying, verified,
- * or errored is never re-folded. First enqueue flips the row to 'verifying' so the
- * badge shows progress immediately, even before a worker slot frees up.
+ * or errored is never re-folded — with one escape: a verified record whose folded
+ * opCount is LOWER than the relay hint's is stale (opCount is branch-inclusive, so
+ * any new op raises it), and letting stale fold facts win over a fresher hint would
+ * display old data labeled "verified". Such a row re-folds. First enqueue flips the
+ * row to 'verifying' so the badge shows progress immediately, even before a worker
+ * slot frees up.
  */
-export const enqueueVerify = (kind: VerifyKind, chainId: string): void => {
+export const enqueueVerify = (kind: VerifyKind, chainId: string, hintOpCount?: number): void => {
   const k = key(kind, chainId);
-  if (records.has(k)) return; // already folded / in flight — no-op
+  const existing = records.get(k);
+  if (existing) {
+    const stale =
+      existing.status === 'verified' &&
+      existing.facts !== undefined &&
+      typeof hintOpCount === 'number' &&
+      hintOpCount > existing.facts.opCount;
+    if (!stale) return; // already folded / in flight — no-op
+  }
   setRecord(k, { status: 'verifying' });
   queue.push({ kind, chainId });
   pump();

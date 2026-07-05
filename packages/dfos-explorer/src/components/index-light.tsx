@@ -20,20 +20,24 @@ import { Badge, Term } from './ui';
  * Where IntersectionObserver is unavailable, the row enqueues eagerly on mount —
  * correctness over laziness.
  */
-export const useVerifyOnVisible = <T extends HTMLElement>(kind: VerifyKind, chainId: string) => {
+export const useVerifyOnVisible = <T extends HTMLElement>(
+  kind: VerifyKind,
+  chainId: string,
+  hintOpCount?: number,
+) => {
   const ref = useRef<T | null>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     if (typeof IntersectionObserver === 'undefined') {
-      enqueueVerify(kind, chainId);
+      enqueueVerify(kind, chainId, hintOpCount);
       return;
     }
     const io = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
           if (e.isIntersecting) {
-            enqueueVerify(kind, chainId);
+            enqueueVerify(kind, chainId, hintOpCount);
             io.disconnect();
             return;
           }
@@ -43,7 +47,7 @@ export const useVerifyOnVisible = <T extends HTMLElement>(kind: VerifyKind, chai
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [kind, chainId]);
+  }, [kind, chainId, hintOpCount]);
   return ref;
 };
 

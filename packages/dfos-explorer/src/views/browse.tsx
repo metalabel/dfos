@@ -111,7 +111,7 @@ const SyncPrompt = (props: { syncing: boolean }) => (
  *  deletion reconcile to the fold once it lands (the fold wins over the hint). */
 const IndexIdentityRowView = (props: { row: IndexIdentityRow }) => {
   const { row } = props;
-  const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did);
+  const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did, row.opCount);
   const rec = useVerifyStatus('identity', row.did);
   const name = row.profile?.name ?? '';
   const opCount = rec.facts?.opCount ?? row.opCount;
@@ -179,7 +179,7 @@ const IndexIdentitiesLight = (props: {
 /** One content index row: type ($schema, held-bytes only) + a live verify badge. */
 const IndexContentRowView = (props: { row: IndexContentRow }) => {
   const { row } = props;
-  const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId);
+  const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
   const rec = useVerifyStatus('content', row.contentId);
   const opCount = rec.facts?.opCount ?? row.opCount;
   const gated = !(row.docSchema && row.publicRead);
