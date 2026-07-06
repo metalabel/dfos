@@ -9,7 +9,11 @@
 
 */
 
-import type { IndexCountersignatureRow, Resolved } from '@metalabel/dfos-client';
+import type {
+  IndexCountersignatureRow,
+  IndexCredentialRow,
+  Resolved,
+} from '@metalabel/dfos-client';
 import type { ServiceEntry, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { classifyAnchor } from '@metalabel/dfos-protocol/chain';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
@@ -35,7 +39,7 @@ import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { useIndexCapable } from '../lib/index-light';
+import { indexCredSource, useIndexCapable } from '../lib/index-light';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
@@ -59,6 +63,13 @@ export const Identity = (props: { did: string }) => {
   const [verified, setVerified] = useState<Resolved<VerifiedIdentity> | null>(null);
   const [rows, setRows] = useState<OpRow[]>([]);
   const [creds, setCreds] = useState<ExplorerOp[] | null>(null);
+  // credentials issued BY this DID off the relay's /index/v0/credentials?issuer=<did>
+  // — the always-fresh, no-sync path (relay-asserted; open a credential to fold it).
+  const [issuedIndex, setIssuedIndex] = useState<IndexCredentialRow[] | null>(null);
+  // relay advertises index but /index/v0/credentials errored (e.g. a relay predating
+  // the route): capability.index does NOT imply this sub-route, so fall back to the
+  // local scan rather than showing a false-empty "issued no credentials".
+  const [issuedIndexErr, setIssuedIndexErr] = useState(false);
   // credentialCID → revoking op CID, folded from synced revocation ops (local-first)
   const [revoked, setRevoked] = useState<Map<string, string>>(new Map());
   // operations this identity has WITNESSED — a relay-index reverse lookup by
@@ -152,6 +163,28 @@ export const Identity = (props: { did: string }) => {
     };
   }, [props.did, indexed]);
 
+  // separate index lane: credentials ISSUED by this DID (iss === did) — a relay
+  // reverse lookup that exists only on an index-capable relay, so it keys on
+  // [did, indexed]. Amber (relay-asserted); open a credential to fold it.
+  useEffect(() => {
+    let dead = false;
+    setIssuedIndex(null);
+    setIssuedIndexErr(false);
+    if (indexed !== true) return;
+    void getClient()
+      .indexCredentials({ issuer: props.did, limit: 200 })
+      .then((p) => {
+        if (!dead) setIssuedIndex(p.credentials);
+      })
+      .catch(() => {
+        // index-capable relay, but this route errored — fall back to the local scan
+        if (!dead) setIssuedIndexErr(true);
+      });
+    return () => {
+      dead = true;
+    };
+  }, [props.did, indexed]);
+
   if (claim && !claim.body && !verified && !error) {
     // relay had nothing and verification hasn't concluded — wait for the client
     // (another relay may still serve it); a hard client error renders below
@@ -178,6 +211,14 @@ export const Identity = (props: { did: string }) => {
         : { state: 'warn' as CheckState, text: 'verified · tip drift' };
 
   const services = ('services' in state ? state.services : undefined) ?? [];
+
+  // credential list source: the live relay index when the relay is index-capable AND
+  // the credentials route answered (always fresh, no sync needed), else the local
+  // synced scan. Both expose {cid, jwsToken}, so the row renders identically.
+  const credFromRelayIndex = indexCredSource(indexed, issuedIndexErr);
+  const credSource: { cid: string; jwsToken: string }[] | null = credFromRelayIndex
+    ? issuedIndex
+    : creds;
 
   // crosslinks from already-loaded state: content chains this identity anchors
   // (ContentAnchor services) + the credentials it issued.
@@ -275,13 +316,23 @@ export const Identity = (props: { did: string }) => {
       <KeysPanel state={state} verified={stateVerified} />
       <ServicesPanel services={services} />
 
-      <Panel title="credentials issued" right={<span class="lbl">from local index</span>}>
-        {creds === null ? (
-          <span class="muted">reading local index…</span>
-        ) : creds.length === 0 ? (
+      <Panel
+        title="credentials issued"
+        right={
+          <span class="lbl">
+            {credFromRelayIndex ? 'relay index · attributed' : 'from local index'}
+          </span>
+        }
+      >
+        {credSource === null ? (
           <span class="muted">
-            none in local index — sync the full log to populate (no relay endpoint lists an issuer's
-            credentials)
+            {credFromRelayIndex ? 'reading relay index…' : 'reading local index…'}
+          </span>
+        ) : credSource.length === 0 ? (
+          <span class="muted">
+            {credFromRelayIndex
+              ? 'this identity has issued no credentials the relay index surfaces.'
+              : 'none in local index — sync the full log to populate.'}
           </span>
         ) : (
           <table>
@@ -294,7 +345,7 @@ export const Identity = (props: { did: string }) => {
               </tr>
             </thead>
             <tbody>
-              {creds.map((op) => {
+              {credSource.map((op) => {
                 const decoded = decodeJwsUnsafe(op.jwsToken);
                 const aud =
                   typeof decoded?.payload['aud'] === 'string' ? decoded.payload['aud'] : '?';
@@ -325,6 +376,12 @@ export const Identity = (props: { did: string }) => {
               })}
             </tbody>
           </table>
+        )}
+        {credFromRelayIndex && credSource !== null && credSource.length > 0 && (
+          <div class="ck-note" style={{ marginTop: 8 }}>
+            relay-asserted index hints — open a credential to fold its signature and authority.
+            {credSource.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}
+          </div>
         )}
       </Panel>
 
@@ -406,10 +463,10 @@ export const Identity = (props: { did: string }) => {
           {
             k: 'credentials issued',
             v:
-              creds && creds.length > 0 ? (
+              credSource && credSource.length > 0 ? (
                 <>
-                  {creds.length}
-                  {creds.slice(0, 3).map((op) => (
+                  {credSource.length}
+                  {credSource.slice(0, 3).map((op) => (
                     <span key={op.cid}>
                       {' · '}
                       <CredLink cid={op.cid} />

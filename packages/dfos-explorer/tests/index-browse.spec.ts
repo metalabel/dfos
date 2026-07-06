@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { indexBrowseMode, indexListState } from '../src/lib/index-light';
+import { indexBrowseMode, indexCredSource, indexListState } from '../src/lib/index-light';
 
 describe('indexBrowseMode — enumeration source decision', () => {
   it('index-capable + no error → the live relay index (incl. a genuinely-empty index)', () => {
@@ -37,5 +37,24 @@ describe('indexListState — list render state (rows > error > loading > empty)'
 
   it('settled + empty → empty', () => {
     expect(indexListState(false, false, 0)).toBe('empty');
+  });
+});
+
+describe('indexCredSource — credential lane: live index vs local fold', () => {
+  it('index-capable + route answered → read from the live relay index', () => {
+    expect(indexCredSource(true, false)).toBe(true);
+  });
+
+  it('index-capable + route errored → fall back to the local fold (never false-empty)', () => {
+    // the whole point of B: a relay advertising capability.index but lacking the
+    // /index/v0/credentials sub-route must NOT blank the panel.
+    expect(indexCredSource(true, true)).toBe(false);
+  });
+
+  it('not index-capable (false/null) → local fold, regardless of the error flag', () => {
+    expect(indexCredSource(false, false)).toBe(false);
+    expect(indexCredSource(false, true)).toBe(false);
+    expect(indexCredSource(null, false)).toBe(false);
+    expect(indexCredSource(null, true)).toBe(false);
   });
 });

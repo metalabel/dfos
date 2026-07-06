@@ -95,6 +95,57 @@ describe('index (v0) client seam', () => {
     expect(page.next).toBeNull();
   });
 
+  it('credentials passes issuer/resource through and parses the page', async () => {
+    let seen: URL | undefined;
+    const client = createClient({
+      relays: [A],
+      fetch: indexFetch({
+        [A]: (path, url) => {
+          seen = url;
+          return path === '/index/v0/credentials'
+            ? json({
+                credentials: [{ cid: 'cr1', issuerDID: 'did:dfos:x', att: [], jwsToken: 't' }],
+                next: null,
+              })
+            : new Response('nope', { status: 404 });
+        },
+      }),
+    });
+    const page = await client.indexCredentials({ issuer: 'did:dfos:x', resource: 'chain:c1' });
+    expect(page.credentials).toHaveLength(1);
+    expect(seen?.pathname).toBe('/index/v0/credentials');
+    expect(seen?.searchParams.get('issuer')).toBe('did:dfos:x');
+    expect(seen?.searchParams.get('resource')).toBe('chain:c1');
+  });
+
+  it('credentials returns a genuine 200-empty page normally (no throw)', async () => {
+    const client = createClient({
+      relays: [A],
+      fetch: indexFetch({
+        [A]: (path) =>
+          path === '/index/v0/credentials'
+            ? json({ credentials: [], next: null })
+            : new Response('nope', { status: 404 }),
+      }),
+    });
+    const page = await client.indexCredentials({ resource: 'chain:c1' });
+    expect(page.credentials).toEqual([]); // a capable relay's real empty — NOT the decline floor
+  });
+
+  it('credentials THROWS when every relay declines (route newer than the index flag)', async () => {
+    // unlike the other lanes (which return empty on all-declined), the credentials
+    // lane throws so a caller falls back to its local fold instead of a false-empty —
+    // a relay can advertise capability.index yet 501 the newer /credentials route.
+    const client = createClient({
+      relays: [A, B],
+      fetch: indexFetch({
+        [A]: () => new Response('index route unknown', { status: 501 }),
+        // B absent — the fake answers 502 (unreachable)
+      }),
+    });
+    await expect(client.indexCredentials({ resource: 'chain:c1' })).rejects.toThrow();
+  });
+
   it('countersignatures-by-witness sets the required witness param and echoes it', async () => {
     let seen: URL | undefined;
     const client = createClient({

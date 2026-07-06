@@ -27,6 +27,8 @@ export type {
   IndexContentRow,
   IndexCountersignatureRow,
   IndexCountersignaturesPage,
+  IndexCredentialRow,
+  IndexCredentialsPage,
   IndexIdentitiesPage,
   IndexIdentityProfile,
   IndexIdentityRow,
