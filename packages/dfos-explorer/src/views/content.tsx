@@ -30,11 +30,12 @@ import {
   TruncId,
 } from '../components/ui';
 import { getClient } from '../lib/client';
-import { grantsForChain, type GrantSummary } from '../lib/credentials';
+import { grantsForChain, grantsFromIndex, type GrantSummary } from '../lib/credentials';
 import { getDb } from '../lib/db-instance';
 import { fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { isIndexDocument } from '../lib/index-fold';
+import { useIndexCapable } from '../lib/index-light';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
@@ -53,11 +54,15 @@ interface DocState {
 }
 
 export const Content = (props: { id: string }) => {
+  const indexed = useIndexCapable();
   const [claim, setClaim] = useState<ClaimResult | null>(null);
   const [resolved, setResolved] = useState<Resolved<ResolvedContent> | null>(null);
   const [rows, setRows] = useState<OpRow[]>([]);
   const [doc, setDoc] = useState<DocState | null>(null);
   const [grants, setGrants] = useState<GrantSummary[] | null>(null);
+  // related grants off the relay's /index/v0/credentials?resource=chain:<id> — the
+  // always-fresh, no-sync path (a superset: exact chain:<id> ∪ chain:* wildcards).
+  const [grantsIndex, setGrantsIndex] = useState<GrantSummary[] | null>(null);
   // credentialCID → revoking op CID, folded from synced revocation ops (local-first)
   const [revoked, setRevoked] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState('');
@@ -151,6 +156,26 @@ export const Content = (props: { id: string }) => {
       dead = true;
     };
   }, [props.id]);
+
+  // separate index lane: the credentials-by-resource reverse lookup only exists on
+  // an index-capable relay, so it keys on [id, indexed] and stands apart from the
+  // local-scan grants above (relay-asserted candidates, folded on open).
+  useEffect(() => {
+    let dead = false;
+    setGrantsIndex(null);
+    if (indexed !== true) return;
+    void getClient()
+      .indexCredentials({ resource: `chain:${props.id}`, limit: 200 })
+      .then((p) => {
+        if (!dead) setGrantsIndex(grantsFromIndex(p.credentials, props.id));
+      })
+      .catch(() => {
+        if (!dead) setGrantsIndex([]);
+      });
+    return () => {
+      dead = true;
+    };
+  }, [props.id, indexed]);
 
   if (claim && !claim.body && error) {
     return <NotFound kind="content" id={props.id} claim={claim} />;
@@ -295,10 +320,11 @@ export const Content = (props: { id: string }) => {
       <DocPanel doc={doc} committedCid={docCid} verified={!!chain} />
 
       <GrantsPanel
-        grants={grants}
+        grants={indexed === true ? grantsIndex : grants}
         revoked={revoked}
         publicBytes={!!doc?.blob.bytes}
         gated={!!doc?.blob.gated}
+        indexed={indexed === true}
       />
 
       <Panel title="operation history">
@@ -383,6 +409,9 @@ const GrantsPanel = (props: {
   revoked: Map<string, string>;
   publicBytes: boolean;
   gated: boolean;
+  /** true when grants came from the live relay index (amber, superset incl. chain:*
+   *  wildcards) rather than the local synced scan (exact chain:<id> only). */
+  indexed?: boolean;
 }) => {
   const { grants } = props;
   const has = grants && grants.length > 0;
@@ -426,28 +455,50 @@ const GrantsPanel = (props: {
                       <DidLink did={g.aud} />
                     )}
                   </td>
-                  <td class="muted">{g.actions.join(', ')} chain</td>
+                  <td class="muted">
+                    {g.actions.join(', ')} · {g.wildcard ? 'any-chain (chain:*)' : 'this chain'}
+                  </td>
                   <td class="muted">{g.exp ? fmtUnixDate(g.exp) : '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <div class="ck-note" style={{ marginTop: 8 }}>
-            From the local index — a standing <code>read</code> grant with audience <code>*</code>{' '}
-            is what makes the document bytes anonymously servable. Open a credential to verify its
-            signature and that it roots at this chain's creator.
+            {props.indexed ? (
+              <>
+                Relay-asserted index candidates — a standing <code>read</code> grant with audience{' '}
+                <code>*</code> is what makes the document bytes anonymously servable. This is a
+                superset: <b>any-chain (chain:*)</b> rows may not root at this chain's creator until
+                folded. Open a credential to verify its signature and that it roots at this chain's
+                creator.
+              </>
+            ) : (
+              <>
+                From the local index — a standing <code>read</code> grant with audience{' '}
+                <code>*</code> is what makes the document bytes anonymously servable. Open a
+                credential to verify its signature and that it roots at this chain's creator.
+              </>
+            )}
           </div>
         </>
       ) : props.publicBytes ? (
-        <div class="ck-note">
-          The bytes are served publicly (an anonymous read succeeded), so a standing public-read
-          grant exists on the relay — but it isn't in your local index yet. <b>Sync the full log</b>{' '}
-          to surface the credential here.
-        </div>
+        props.indexed ? (
+          <div class="ck-note">
+            The bytes are served publicly (an anonymous read succeeded), so a standing public-read
+            grant exists on the relay — the index surfaced no matching credential here (it may be
+            served via a non-credential path, or the relay's index lags its content plane).
+          </div>
+        ) : (
+          <div class="ck-note">
+            The bytes are served publicly (an anonymous read succeeded), so a standing public-read
+            grant exists on the relay — but it isn't in your local index yet. <b>Sync the full log</b>{' '}
+            to surface the credential here.
+          </div>
+        )
       ) : (
         <div class="ck-note">
-          No public-read grant in your local index. The document bytes are gated — reads need a
-          credential or an auth token.
+          No public-read grant {props.indexed ? 'surfaced by the relay index' : 'in your local index'}
+          . The document bytes are gated — reads need a credential or an auth token.
         </div>
       )}
     </Panel>

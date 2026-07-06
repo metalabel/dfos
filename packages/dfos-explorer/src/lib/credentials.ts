@@ -14,6 +14,7 @@
 
 */
 
+import type { IndexCredentialRow } from '@metalabel/dfos-client';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { ExplorerOp } from './db';
 
@@ -28,6 +29,11 @@ export interface GrantSummary {
   exp?: number | undefined;
   /** aud === '*' — the standing public-read grant that makes bytes anon-servable */
   isPublic: boolean;
+  /** true when this grant reaches the chain via a `chain:*` wildcard (any-chain,
+   *  rooted at the ISSUER's authority — NOT proven to root at THIS chain's creator
+   *  until folded) rather than naming the chain exactly. Only set on index-derived
+   *  grants; the local-scan path matches exact `chain:<id>` only. */
+  wildcard?: boolean;
 }
 
 /**
@@ -57,6 +63,42 @@ export const grantsForChain = (ops: ExplorerOp[], contentId: string): GrantSumma
       actions,
       exp: typeof payload['exp'] === 'number' ? payload['exp'] : undefined,
       isPublic: aud === '*',
+    });
+  }
+  return [...byCid.values()].sort((a, b) => Number(b.isPublic) - Number(a.isPublic));
+};
+
+/**
+ * Grants for a chain built from the relay's `/index/v0/credentials?resource=chain:<id>`
+ * projection — the always-fresh, no-sync-required path. The index returns a SUPERSET
+ * of candidates: creds naming this chain exactly UNION any `chain:*` wildcard cred (a
+ * wildcard MAY authorize this chain, but only once folded to prove it roots at the
+ * chain's creator). Each candidate is AMBER (relay-asserted); opening the credential
+ * folds its signature + root authority. Wildcard candidates are flagged so the UI can
+ * distinguish "this chain" from "any-chain (chain:*)". Deduped by CID, public first.
+ */
+export const grantsFromIndex = (rows: IndexCredentialRow[], contentId: string): GrantSummary[] => {
+  if (!contentId) return [];
+  const want = `chain:${contentId}`;
+  const byCid = new Map<string, GrantSummary>();
+  for (const row of rows) {
+    if (byCid.has(row.cid)) continue;
+    const exact = row.att.filter((a) => a.resource === want).map((a) => a.action);
+    const wild = row.att.filter((a) => a.resource === 'chain:*').map((a) => a.action);
+    const actions = exact.length > 0 ? exact : wild;
+    if (actions.length === 0) continue;
+    // The index stores only public creds (aud '*'); decode the self-proving token to
+    // read aud rather than trusting the row shape.
+    const decoded = decodeJwsUnsafe(row.jwsToken);
+    const payload = (decoded?.payload ?? {}) as Record<string, unknown>;
+    const aud = typeof payload['aud'] === 'string' ? payload['aud'] : '*';
+    byCid.set(row.cid, {
+      cid: row.cid,
+      aud,
+      actions,
+      exp: typeof row.exp === 'number' ? row.exp : undefined,
+      isPublic: aud === '*',
+      wildcard: exact.length === 0,
     });
   }
   return [...byCid.values()].sort((a, b) => Number(b.isPublic) - Number(a.isPublic));
