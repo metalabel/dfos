@@ -37,6 +37,9 @@ const CAP_LABELS: { key: string; label: string }[] = [
   // revocation-status query routes (/revocations/v1) — a relay advertising this
   // serves the credential/issuer revocation feeds the credential view consults.
   { key: 'revocations', label: 'revocations' },
+  // materialized enumeration projection (/index/v0) — a relay advertising this
+  // serves the instant attributed browse the explorer's light mode reads from.
+  { key: 'index', label: 'index' },
   { key: 'write', label: 'write' },
 ];
 
