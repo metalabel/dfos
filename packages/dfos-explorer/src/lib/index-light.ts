@@ -1,43 +1,44 @@
 /*
 
-  INDEX LIGHT — browse straight off a relay's /index/v0, no full sync
+  INDEX BROWSE — the primary enumeration path, straight off a relay's /index/v0
 
-  When a relay advertises capabilities.index, the explorer can populate browse
-  and home surfaces INSTANTLY from the relay's index projections instead of
-  waiting for a full-log sync. These rows are relay-asserted discovery hints —
-  ATTRIBUTED, never authority — and the verify-queue promotes the visible ones to
-  VERIFIED by folding their chains in the tab. Full-corpus sync stays untouched
-  and is the audit posture (it can detect a relay's omissions; a light client
-  cannot). A relay WITHOUT the capability yields `false` here and every surface
-  falls back to exactly its pre-index behavior.
+  When a relay advertises capabilities.index, the explorer ALWAYS enumerates
+  browse and home from the relay's index projections — instantly, and even after
+  a full deep sync. These rows are relay-asserted discovery hints — ATTRIBUTED,
+  never authority — and the verify-queue promotes the visible ones to VERIFIED by
+  folding their chains in the tab (the fold wins over the hint). The local index
+  is the verified-overlay + offline cache + audit corpus, NOT the enumeration
+  source: the live index is always fresher than a past sync.
 
-  The gate is SYNC COMPLETION, not corpus emptiness: verifying light rows lands
-  their chains in the local index (jitIndexChain), so an emptiness gate would be
-  destroyed by its own verify queue. Light mode instead ends only when a real
-  full-log sync has run against the configured relays (see useLightMode).
+  A relay WITHOUT the capability yields `false` here and every surface falls back
+  to browsing the LOCAL index (which needs a full-log sync first) — byte-for-byte
+  the pre-index behavior.
+
+  Full-corpus deep sync stays as the AUDIT posture: it folds every operation
+  locally and so can detect a relay index's omissions (a light client cannot). It
+  no longer gates enumeration — it is an explicit "audit completeness" action.
 
   Enumeration is intrinsically incomplete under "completeness is outside the
-  proof": these loaders page up to a cap, and any name search filters the LOADED
-  rows only — the relay has no search, and this never pretends otherwise.
+  proof": these loaders page on demand (load-more), and any name search filters
+  the LOADED rows only — the relay has no search, and this never pretends
+  otherwise.
 
 */
 
 import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { getClient } from './client';
-import { getDb } from './db-instance';
-import { getRelays } from './relays';
-import { useSyncState } from './sync-store';
 
-/** Per-page size and a hard page ceiling — the light view is a fast first look,
- *  not an exhaustive mirror; the audit stance (full sync) is the exhaustive path. */
+/** Per-page size for the index loaders — one page is the initial browse, and
+ *  "load more" pulls the next page on demand (no silent whole-corpus cap). */
 const PAGE = 200;
-const MAX_PAGES = 5;
 
 /**
  * Whether any configured relay advertises the index capability. `null` while the
  * well-known is still being read (callers hold today's behavior until it settles),
- * then a stable boolean. Recomputed on mount — a relay switch re-navigates.
+ * then a stable boolean. When true, browse/home enumerate from /index/v0 always;
+ * when false, they fall back to the local synced index. Recomputed on mount — a
+ * relay switch re-navigates.
  */
 export const useIndexCapable = (): boolean | null => {
   const [capable, setCapable] = useState<boolean | null>(null);
@@ -58,127 +59,166 @@ export const useIndexCapable = (): boolean | null => {
   return capable;
 };
 
-/**
- * The one light-mode gate every index-light surface shares. Light mode is active
- * when a relay advertises the index capability AND no full-log sync has ever run
- * against the currently-configured relays.
- *
- * The "has synced" signal is per-relay sync-CURSOR existence (sync.ts writes a
- * cursor only while paging the global log) — NOT corpus emptiness. A JIT-folded
- * chain (a detail visit, the verify queue promoting a light row) lands ops in
- * the corpus but never writes a cursor, so verifying light rows cannot flip this
- * gate out from under itself. A wipe clears the cursors, so light mode returns
- * over an emptied index. `null` while either probe is still settling — callers
- * hold their current framing until it resolves. Recomputed on every db epoch.
- */
-export const useLightMode = (): boolean | null => {
-  const cap = useIndexCapable();
-  const sync = useSyncState();
-  const [synced, setSynced] = useState<boolean | null>(null);
-  useEffect(() => {
-    let dead = false;
-    void (async () => {
-      const db = await getDb();
-      const cursors = await Promise.all(getRelays().map((r) => db.getCursor(r)));
-      if (!dead) setSynced(cursors.some((c) => c !== undefined));
-    })().catch(() => {
-      if (!dead) setSynced(false);
-    });
-    return () => {
-      dead = true;
-    };
-  }, [sync.dbEpoch, sync.phase]);
-  if (cap === false) return false;
-  if (synced === true) return false;
-  if (cap === null || synced === null) return null;
-  return true;
-};
-
 export interface IndexLoad<T> {
   rows: T[];
   loading: boolean;
+  /** the relay index has a next page — `loadMore` will pull it. */
+  hasMore: boolean;
+  /** pull the next page and append it (no-op while loading or exhausted). */
+  loadMore: () => void;
+  /** the INITIAL index load REJECTED (relay unreachable / index errored) — this
+   *  is distinct from a successful but genuinely-empty page (rows [], error
+   *  false). Consumers use it to fall back to the local corpus / show an honest
+   *  error instead of a false "the index returned nothing". */
+  error: boolean;
+  /** re-run the initial load — a retry after an error, or a refresh from head. */
+  retry: () => void;
 }
 
-/** Drain up to MAX_PAGES of the identity index (optionally public-profile-only). */
+/** What a browse surface should render given the index capability + whether the
+ *  index load errored + whether a local synced corpus exists. Pure so it unit-
+ *  tests without a DOM: `index` = live index rows; `index-unavailable` = index
+ *  errored and no local fallback (honest error + retry); `index-fell-back` =
+ *  index errored but a local corpus exists (show local, note the fallback);
+ *  `local` = no index-capable relay (the pre-index path: checking / sync / local). */
+export type IndexBrowseMode = 'index' | 'index-unavailable' | 'index-fell-back' | 'local';
+
+export const indexBrowseMode = (
+  indexed: boolean | null,
+  indexError: boolean,
+  localHasRows: boolean,
+): IndexBrowseMode => {
+  if (indexed === true && !indexError) return 'index';
+  if (indexed === true && indexError) return localHasRows ? 'index-fell-back' : 'index-unavailable';
+  return 'local';
+};
+
+/** The render state of an index-sourced list: rows win; else honest error over
+ *  loading over empty — so an errored or settled-empty list never shows a
+ *  permanent "loading…". Pure, unit-tested. */
+export type IndexListState = 'rows' | 'error' | 'loading' | 'empty';
+
+export const indexListState = (loading: boolean, error: boolean, count: number): IndexListState => {
+  if (count > 0) return 'rows';
+  if (error) return 'error';
+  if (loading) return 'loading';
+  return 'empty';
+};
+
+/**
+ * Generic cursor pager over an index projection. Loads the first page when
+ * enabled, exposes `loadMore` to append the next page via the relay's `next`
+ * cursor. `resetKey` bumps to reload from scratch (e.g. a filter toggle).
+ *
+ * A `run` id invalidates in-flight loads across a reset/unmount so a slow first
+ * page can't clobber a fresh one; `busy` guards against overlapping fetches.
+ */
+const useIndexPager = <T>(
+  enabled: boolean,
+  resetKey: string,
+  fetchPage: (after?: string) => Promise<{ items: T[]; next: string | null }>,
+): IndexLoad<T> => {
+  const [rows, setRows] = useState<T[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [next, setNext] = useState<string | undefined>(undefined);
+  const [hasMore, setHasMore] = useState(false);
+  const [error, setError] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
+  const runRef = useRef(0);
+  const busyRef = useRef(false);
+  // hold the latest fetch closure without making it an effect dependency
+  const fetchRef = useRef(fetchPage);
+  fetchRef.current = fetchPage;
+
+  const loadPage = (after: string | undefined, run: number, reset: boolean): void => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setLoading(true);
+    void fetchRef
+      .current(after)
+      .then((page) => {
+        if (run !== runRef.current) return; // superseded by a reset/unmount
+        setError(false); // reachable — a genuinely-empty page is NOT an error
+        setRows((prev) => (reset ? page.items : [...prev, ...page.items]));
+        setNext(page.next ?? undefined);
+        setHasMore(!!page.next);
+      })
+      .catch(() => {
+        if (run !== runRef.current) return;
+        // only the INITIAL load flags error — a failed load-more leaves the rows
+        // already shown intact (and its own button handles the retry affordance)
+        if (reset) {
+          setError(true);
+          setRows([]);
+          setNext(undefined);
+          setHasMore(false);
+        }
+      })
+      .finally(() => {
+        busyRef.current = false;
+        if (run === runRef.current) setLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    if (!enabled) {
+      setRows([]);
+      setNext(undefined);
+      setHasMore(false);
+      setError(false);
+      return;
+    }
+    const run = ++runRef.current;
+    setRows([]);
+    setNext(undefined);
+    setHasMore(false);
+    setError(false);
+    loadPage(undefined, run, true);
+    return () => {
+      runRef.current += 1; // invalidate any in-flight load on dep change / unmount
+    };
+    // fetchPage is read via fetchRef so it is intentionally not a dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, resetKey, reloadTick]);
+
+  const loadMore = (): void => {
+    if (!enabled || !hasMore || loading || busyRef.current) return;
+    loadPage(next, runRef.current, false);
+  };
+
+  // retry re-runs the INITIAL load via the effect (a failed first page leaves
+  // hasMore false, so loadMore can't recover it — reloadTick can).
+  const retry = (): void => setReloadTick((t) => t + 1);
+
+  return { rows, loading, hasMore, loadMore, error, retry };
+};
+
+/** Page the identity index (optionally public-profile-only) with load-more. */
 export const useIndexIdentities = (
   enabled: boolean,
   publicOnly: boolean,
-): IndexLoad<IndexIdentityRow> => {
-  const [rows, setRows] = useState<IndexIdentityRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    if (!enabled) return;
-    let dead = false;
-    setLoading(true);
-    void (async () => {
-      const client = getClient();
-      const out: IndexIdentityRow[] = [];
-      let after: string | undefined;
-      for (let p = 0; p < MAX_PAGES; p++) {
-        const page = await client.indexIdentities({
-          ...(publicOnly ? { hasPublicProfile: true } : {}),
-          ...(after ? { after } : {}),
-          limit: PAGE,
-        });
-        out.push(...page.identities);
-        if (!page.next) break;
-        after = page.next;
-      }
-      if (!dead) {
-        setRows(out);
-        setLoading(false);
-      }
-    })().catch(() => {
-      if (!dead) {
-        setRows([]);
-        setLoading(false);
-      }
-    });
-    return () => {
-      dead = true;
-    };
-  }, [enabled, publicOnly]);
-  return { rows, loading };
-};
+): IndexLoad<IndexIdentityRow> =>
+  useIndexPager(enabled, `identities:${publicOnly}`, (after) =>
+    getClient()
+      .indexIdentities({
+        ...(publicOnly ? { hasPublicProfile: true } : {}),
+        ...(after ? { after } : {}),
+        limit: PAGE,
+      })
+      .then((p) => ({ items: p.identities, next: p.next })),
+  );
 
-/** Drain up to MAX_PAGES of the content index (optionally public-read-only). */
+/** Page the content index (optionally public-read-only) with load-more. */
 export const useIndexContent = (
   enabled: boolean,
   publicOnly: boolean,
-): IndexLoad<IndexContentRow> => {
-  const [rows, setRows] = useState<IndexContentRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  useEffect(() => {
-    if (!enabled) return;
-    let dead = false;
-    setLoading(true);
-    void (async () => {
-      const client = getClient();
-      const out: IndexContentRow[] = [];
-      let after: string | undefined;
-      for (let p = 0; p < MAX_PAGES; p++) {
-        const page = await client.indexContent({
-          ...(publicOnly ? { publicRead: true } : {}),
-          ...(after ? { after } : {}),
-          limit: PAGE,
-        });
-        out.push(...page.content);
-        if (!page.next) break;
-        after = page.next;
-      }
-      if (!dead) {
-        setRows(out);
-        setLoading(false);
-      }
-    })().catch(() => {
-      if (!dead) {
-        setRows([]);
-        setLoading(false);
-      }
-    });
-    return () => {
-      dead = true;
-    };
-  }, [enabled, publicOnly]);
-  return { rows, loading };
-};
+): IndexLoad<IndexContentRow> =>
+  useIndexPager(enabled, `content:${publicOnly}`, (after) =>
+    getClient()
+      .indexContent({
+        ...(publicOnly ? { publicRead: true } : {}),
+        ...(after ? { after } : {}),
+        limit: PAGE,
+      })
+      .then((p) => ({ items: p.content, next: p.next })),
+  );

@@ -230,10 +230,39 @@ describe('explorer db', () => {
     expect(await db.getCursor('https://r2')).toBeUndefined();
 
     await db.putBatch([op({ cid: 'bafy1' })], [rollup({ chainId: 'did:dfos:aaa' })]);
+    await db.putVerify({
+      key: 'identity:did:dfos:aaa',
+      opCount: 3,
+      isDeleted: false,
+      verifiedAt: 1,
+    });
     await db.wipe();
     expect(await db.getOp('bafy1')).toBeUndefined();
     expect(await db.getCursor('https://r1')).toBeUndefined();
+    expect(await db.getVerify('identity:did:dfos:aaa')).toBeUndefined();
     expect((await db.counts()).chains).toBe(0);
+  });
+
+  it('persists and retrieves durable verify verdicts by key', async () => {
+    const db = await freshDb();
+    expect(await db.getVerify('identity:did:dfos:zzz')).toBeUndefined();
+    await db.putVerify({
+      key: 'identity:did:dfos:zzz',
+      opCount: 7,
+      isDeleted: true,
+      verifiedAt: 1700000000000,
+    });
+    const v = await db.getVerify('identity:did:dfos:zzz');
+    expect(v?.opCount).toBe(7);
+    expect(v?.isDeleted).toBe(true);
+    // put is an upsert — a fresher fold overwrites in place
+    await db.putVerify({
+      key: 'identity:did:dfos:zzz',
+      opCount: 9,
+      isDeleted: false,
+      verifiedAt: 1700000000001,
+    });
+    expect((await db.getVerify('identity:did:dfos:zzz'))?.opCount).toBe(9);
   });
 
   it('counts credentials from OPS even when they collide with an identity chainId', async () => {

@@ -51,13 +51,15 @@ export const useVerifyOnVisible = <T extends HTMLElement>(
   return ref;
 };
 
-/** The honest framing shown atop an index-light browse surface: rows are relay
- *  hints, promoted as your tab folds them, and full sync is the audit stance. */
+/** The honest framing shown atop an index browse surface: rows stream live from
+ *  the relay index, promoted as your tab folds them, and deep sync is the audit
+ *  stance that detects omission. */
 export const IndexLightNote = () => (
   <div class="ck-note" style={{ marginBottom: 8 }}>
-    Instant rows from the relay’s <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — each is
-    an <b>attributed</b> hint, promoted to <b>verified</b> as it scrolls into view and your tab
-    folds its chain. Completeness is never proven; <b>sync the full log</b> for the audit stance.
+    Live rows from the relay’s <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — each is an{' '}
+    <b>attributed</b> hint, promoted to <b>verified</b> as it scrolls into view and your tab folds
+    its chain. Completeness is never proven; a <b>deep sync</b> folds the whole log for the audit
+    stance (it alone catches omission).
   </div>
 );
 

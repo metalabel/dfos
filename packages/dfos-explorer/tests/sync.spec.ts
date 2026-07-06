@@ -140,11 +140,12 @@ describe('sync engine', () => {
     expect((await db.counts()).ops).toBe(2);
   });
 
-  it('JIT indexing never writes a sync cursor (the index-light gate signal)', async () => {
-    // the light-mode gate (index-light.ts useLightMode) keys on per-relay sync
-    // CURSOR existence, not corpus emptiness — so the verify queue's JIT folds
-    // (which land ops in the corpus) must never mint a cursor, or verifying
-    // light rows would end light mode out from under itself.
+  it('JIT indexing never writes a sync cursor (only a deep sync does)', async () => {
+    // a per-relay sync CURSOR means an audit-grade full-log sweep ran against
+    // that relay. The verify queue's JIT folds (which land ops in the corpus)
+    // must never mint one — they sparsely populate the local index off what the
+    // relay index surfaced, but folding a row is not an audit and must not claim
+    // to be one.
     const db = await freshDb();
     const op = entry('bafy-j1', 'did:dfos:jjj', 'identity-op', '2026-01-01T00:00:00.000Z');
     const { added } = await indexChainOps(db, 'did:dfos:jjj', 'identity-op', [
