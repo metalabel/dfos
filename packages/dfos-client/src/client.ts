@@ -345,7 +345,7 @@ export const createClient = (config: ClientConfig): Client => {
 
   // index (v0) — the non-authoritative discovery seam, bound to the same relay
   // set + policy-wrapped fetch. Hints only; callers verify by folding.
-  const { indexIdentities, indexContent, indexCountersignatures, capabilities } =
+  const { indexIdentities, indexContent, indexCountersignatures, indexCredentials, capabilities } =
     createIndexQueries(relays, fetchImpl);
 
   return {
@@ -363,6 +363,7 @@ export const createClient = (config: ClientConfig): Client => {
     indexIdentities,
     indexContent,
     indexCountersignatures,
+    indexCredentials,
   };
 };
 

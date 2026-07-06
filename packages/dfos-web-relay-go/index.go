@@ -79,6 +79,19 @@ type indexCountersignaturePage struct {
 	Next              *string                    `json:"next"`
 }
 
+type indexCredentialRow struct {
+	CID       string            `json:"cid"`
+	IssuerDID string            `json:"issuerDID"`
+	Att       []AttenuationPair `json:"att"`
+	Exp       int64             `json:"exp"`
+	JWSToken  string            `json:"jwsToken"`
+}
+
+type indexCredentialPage struct {
+	Credentials []indexCredentialRow `json:"credentials"`
+	Next        *string              `json:"next"`
+}
+
 func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) {
 	if !r.indexEnabled {
 		writeError(w, 501, "index not available")
@@ -157,6 +170,36 @@ func (r *Relay) handleIndexCountersignatures(w http.ResponseWriter, req *http.Re
 		return
 	}
 	writeJSON(w, 200, indexCountersignaturePage{Witness: witness, Countersignatures: rows, Next: nextCursor(len(rows), limit, func() string { return rows[len(rows)-1].CID })})
+}
+
+func (r *Relay) handleIndexCredentials(w http.ResponseWriter, req *http.Request) {
+	if !r.indexEnabled {
+		writeError(w, 501, "index not available")
+		return
+	}
+
+	query := req.URL.Query()
+	issuer := query.Get("issuer")
+	if issuer != "" && !isValidDfosDid(issuer) {
+		writeError(w, 400, "invalid DID")
+		return
+	}
+
+	var resource *string
+	if value, ok := firstQueryValue(query, "resource"); ok {
+		resource = &value
+	}
+	limit := parseLimit(req, 100, 1000)
+	rows, err := r.readStore.QueryIndexCredentials(IndexCredentialQuery{
+		Issuer:   issuer,
+		Resource: resource,
+		After:    query.Get("after"),
+		Limit:    limit,
+	})
+	if storeErr(w, err) {
+		return
+	}
+	writeJSON(w, 200, indexCredentialPage{Credentials: rows, Next: nextCursor(len(rows), limit, func() string { return rows[len(rows)-1].CID })})
 }
 
 // nextCursor returns the keyset continuation cursor: the last row's key when the

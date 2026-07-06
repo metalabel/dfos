@@ -708,10 +708,34 @@ The reverse of the proof plane's by-target route: every countersignature this re
 
 `witness` is required (`400` when missing or malformed); `after` is a countersignature-`cid` keyset cursor (returns rows with `cid` strictly greater), `limit` defaults to 100 and maxes at 1000. `relation` is the countersign's open-namespace tag, `null` when omitted by the signer. Each entry carries the full JWS — self-proving, same posture as the issuer revocations feed: the caller re-verifies the token rather than trusting the row.
 
+### Credentials (`GET /index/v0/credentials?issuer={did}&resource=&after={cid}&limit=N`)
+
+Enumerates the relay's held public credentials, `cid` ascending.
+
+```json
+{
+  "credentials": [
+    {
+      "cid": "bafyrei…",
+      "issuerDID": "did:dfos:hd34z9a4tf6h62864nh4f7at6hr36r4",
+      "att": [{ "resource": "chain:a3n7r3nde8e4keeak92rr3aeztftvc2", "action": "read" }],
+      "exp": 1775088000,
+      "jwsToken": "eyJhbGciOiJFZERTQSIs…"
+    }
+  ],
+  "next": null
+}
+```
+
+Parameters: `issuer` (optional exact DID — `400` when malformed), `resource` (optional exact match against an `att[].resource`; when the requested resource starts with `chain:`, the `chain:*` wildcard bucket is always unioned in because a `chain:*` grant may authorize the named chain), `after` (a credential-`cid` keyset cursor — returns rows with `cid` strictly greater), `limit` (default 100, max 1000). Filters are ANDed.
+
+Only public credentials (`aud: "*"`) are ever held by the relay. Targeted bearer credentials never enter relay storage, so they are neither enumerable nor leakable here.
+
+This route is amber and relay-asserted: `resource=chain:Y` returns a superset of candidates (exact `chain:Y` plus any `chain:*`). Each entry carries the full JWS — self-proving, same posture as the issuer revocations feed. The caller folds each token against the proof plane (delegation roots at Y's creator, revocation, expiry) before treating it as authorization; the relay makes no authorization claim in this index row.
+
 ### Deferred from v0
 
 - **`/search`** — fuzzy or tokenized name search. Search semantics (normalization, ranking) are deliberately kept off this clock; if they ship, they ship as their own explicitly-unstable family, never frozen into the index contract.
-- **Credentials by subject** — a reverse lookup with the same shape as the witness feed; deferred until a consumer exists.
 - **Fork/tips visibility** — remains deferred at the proof-plane level (see [What's Deferred](#whats-deferred)).
 
 ---
@@ -823,6 +847,7 @@ The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFrom
 | `GET`  | `/index/v0/identities`                      | index       | none                                      |
 | `GET`  | `/index/v0/content`                         | index       | none                                      |
 | `GET`  | `/index/v0/countersignatures`               | index       | none                                      |
+| `GET`  | `/index/v0/credentials`                     | index       | none                                      |
 | `PUT`  | `/content/:contentId/blob/:opCID`           | content     | auth token                                |
 | `GET`  | `/content/:contentId/blob[/:ref]`           | content     | standing auth, or auth token + credential |
 

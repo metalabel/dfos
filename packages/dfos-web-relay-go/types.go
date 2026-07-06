@@ -325,6 +325,10 @@ type Store interface {
 	// witness ascending by cid, cid > After, length <= Limit. Reflects the
 	// store's ACCEPTED countersign set (deduped one-per-witness-per-target).
 	QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error)
+	// QueryIndexCredentials pages held public credentials ascending by cid,
+	// cid > After, length <= Limit, filtered by issuer and/or resource exact
+	// match. For chain resources, the chain:* bucket is unioned.
+	QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error)
 
 	// PutIndexIdentityRow upserts an identity projection row by DID.
 	PutIndexIdentityRow(row indexIdentityRow) error
@@ -372,6 +376,14 @@ type IndexCountersignatureQuery struct {
 	Witness string
 	After   string
 	Limit   int
+}
+
+// IndexCredentialQuery is the keyset-paged filter for held public credentials.
+type IndexCredentialQuery struct {
+	Issuer   string
+	Resource *string // nil = no filter
+	After    string
+	Limit    int
 }
 
 // storedIndexCountersignature is a countersignature projection row plus the

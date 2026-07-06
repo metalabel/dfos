@@ -801,6 +801,60 @@ func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 	return result, rows.Err()
 }
 
+func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error) {
+	where := []string{}
+	args := []any{}
+	if q.Issuer != "" {
+		where = append(where, "issuer_did = ?")
+		args = append(args, q.Issuer)
+	}
+	if q.Resource != nil {
+		if strings.HasPrefix(*q.Resource, "chain:") {
+			where = append(where, `EXISTS (
+				SELECT 1 FROM json_each(public_credentials.att) je
+				WHERE json_extract(je.value, '$.resource') = ?
+				   OR json_extract(je.value, '$.resource') = 'chain:*'
+			)`)
+			args = append(args, *q.Resource)
+		} else {
+			where = append(where, `EXISTS (
+				SELECT 1 FROM json_each(public_credentials.att) je
+				WHERE json_extract(je.value, '$.resource') = ?
+			)`)
+			args = append(args, *q.Resource)
+		}
+	}
+	if q.After != "" {
+		where = append(where, "cid > ?")
+		args = append(args, q.After)
+	}
+	query := "SELECT cid, issuer_did, att, exp, jws_token FROM public_credentials"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY cid LIMIT ?"
+	args = append(args, q.Limit)
+
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []indexCredentialRow{}
+	for rows.Next() {
+		var row indexCredentialRow
+		var attJSON string
+		if err := rows.Scan(&row.CID, &row.IssuerDID, &attJSON, &row.Exp, &row.JWSToken); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(attJSON), &row.Att); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
 func (s *SQLiteStore) GetIndexIdentityDIDsByProfileAnchor(contentID string) ([]string, error) {
 	rows, err := s.readerDB().Query("SELECT did FROM index_identity WHERE profile_anchor = ?", contentID)
 	if err != nil {

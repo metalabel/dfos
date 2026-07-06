@@ -23,6 +23,7 @@ import type {
   IndexCapabilities,
   IndexContentPage,
   IndexCountersignaturesPage,
+  IndexCredentialsPage,
   IndexIdentitiesPage,
 } from './types';
 
@@ -132,6 +133,24 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
       { witness, countersignatures: [], next: null },
     );
 
+  const indexCredentials = (
+    params?: { issuer?: string; resource?: string; after?: string; limit?: number },
+    options?: CallOptions,
+  ): Promise<IndexCredentialsPage> =>
+    fetchIndexPage(
+      relaysFor(options),
+      fetchImpl,
+      (base) => {
+        const url = new URL(`${INDEX_BASE_PATH}/credentials`, base);
+        setParam(url, 'issuer', params?.issuer);
+        setParam(url, 'resource', params?.resource);
+        setParam(url, 'after', params?.after);
+        setParam(url, 'limit', params?.limit);
+        return url;
+      },
+      { credentials: [], next: null },
+    );
+
   /**
    * Merged capability view across the relay set: a capability reads `true` when
    * ANY relay in the set advertises it, since the family is served with failover.
@@ -153,5 +172,5 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
     return merged;
   };
 
-  return { indexIdentities, indexContent, indexCountersignatures, capabilities };
+  return { indexIdentities, indexContent, indexCountersignatures, indexCredentials, capabilities };
 };

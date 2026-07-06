@@ -8,7 +8,12 @@
 
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
-import type { IndexContentRow, IndexCountersignatureRow, IndexIdentityRow } from './index-routes';
+import type {
+  IndexContentRow,
+  IndexCountersignatureRow,
+  IndexCredentialRow,
+  IndexIdentityRow,
+} from './index-routes';
 
 /**
  * Namespaces every frozen proof-plane route under one prefix so the two version
@@ -383,6 +388,17 @@ export interface RelayStore {
     after?: string;
     limit: number;
   }): Promise<IndexCountersignatureRow[]>;
+  /**
+   * Page held public credentials ascending by cid, `cid > after`, length <=
+   * limit, filtered by issuer and/or resource exact match. For chain resources,
+   * the `chain:*` bucket is unioned as an amber discovery hint.
+   */
+  queryIndexCredentials(q: {
+    issuer?: string;
+    resource?: string;
+    after?: string;
+    limit: number;
+  }): Promise<IndexCredentialRow[]>;
 
   /** Upsert an identity projection row by DID. */
   putIndexIdentityRow(row: IndexIdentityRow): Promise<void>;

@@ -9,7 +9,12 @@
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import type { IndexContentRow, IndexCountersignatureRow, IndexIdentityRow } from './index-routes';
+import type {
+  IndexContentRow,
+  IndexCountersignatureRow,
+  IndexCredentialRow,
+  IndexIdentityRow,
+} from './index-routes';
 import { createKeyResolver } from './ingest';
 import type {
   BlobKey,
@@ -223,6 +228,40 @@ export class MemoryRelayStore implements RelayStore {
     // is echoed at the response top level).
     const wire = rows.map(({ witnessDID: _witnessDID, ...row }) => row);
     return pageRows(wire, (row) => row.cid, q.after, q.limit);
+  }
+
+  async queryIndexCredentials(q: {
+    issuer?: string;
+    resource?: string;
+    after?: string;
+    limit: number;
+  }): Promise<IndexCredentialRow[]> {
+    const rows = [...this.publicCredentials.values()]
+      .filter((cred) => {
+        if (q.issuer !== undefined && cred.issuerDID !== q.issuer) return false;
+        if (q.resource !== undefined) {
+          const isChainRequest = q.resource.startsWith('chain:');
+          return cred.att.some(
+            (entry) =>
+              entry.resource === q.resource || (isChainRequest && entry.resource === 'chain:*'),
+          );
+        }
+        return true;
+      })
+      .map((cred) => ({
+        cid: cred.cid,
+        issuerDID: cred.issuerDID,
+        // Project att down to {resource, action} only. The Attenuation schema is a
+        // looseObject, so a credential MAY carry extra att keys — but the Go relay
+        // rebuilds att as a fixed {resource, action} pair at ingest, so emitting
+        // extras here would break byte-parity on this (the first route to serialize
+        // att structurally). The full-fidelity att lives in the self-proving
+        // jwsToken; this decoded projection is an amber convenience.
+        att: cred.att.map((a) => ({ resource: a.resource, action: a.action })),
+        exp: cred.exp,
+        jwsToken: cred.jwsToken,
+      }));
+    return pageRows(rows, (row) => row.cid, q.after, q.limit);
   }
 
   async putIndexIdentityRow(row: IndexIdentityRow): Promise<void> {
