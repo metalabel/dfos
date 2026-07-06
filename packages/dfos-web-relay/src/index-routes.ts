@@ -8,6 +8,7 @@
 
 */
 
+import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { hasPublicStandingAuth } from './auth';
 import type {
@@ -57,6 +58,14 @@ export interface IndexCountersignatureRow {
   cid: string;
   targetCID: string;
   relation: string | null;
+  jwsToken: string;
+}
+
+export interface IndexCredentialRow {
+  cid: string;
+  issuerDID: string;
+  att: Attenuation[];
+  exp: number;
   jwsToken: string;
 }
 

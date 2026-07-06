@@ -579,6 +579,28 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return c.json({ witness, countersignatures: rows, next });
   });
 
+  app.get(`${INDEX_BASE_PATH}/credentials`, async (c) => {
+    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+
+    const issuer = c.req.query('issuer');
+    if (issuer && !isValidDfosDid(issuer)) {
+      return c.json({ error: 'invalid DID' }, 400);
+    }
+
+    const resource = c.req.query('resource');
+    const after = c.req.query('after');
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+    const rows = await store.queryIndexCredentials({
+      ...(issuer ? { issuer } : {}),
+      ...(resource !== undefined ? { resource } : {}),
+      ...(after ? { after } : {}),
+      limit,
+    });
+    const next = rows.length === limit ? rows[rows.length - 1]!.cid : null;
+
+    return c.json({ credentials: rows, next });
+  });
+
   /** Get a content chain log */
   app.get(`${PROOF_BASE_PATH}/content/:contentId/log`, async (c) => {
     const contentId = c.req.param('contentId');

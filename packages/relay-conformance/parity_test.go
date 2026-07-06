@@ -210,6 +210,7 @@ func TestDualRelayParity(t *testing.T) {
 		"/index/v0/content?limit=1000",
 		"/index/v0/content?documentCID=" + fix.QueryDocumentCID + "&limit=1000",
 		"/index/v0/countersignatures?witness=" + fix.QueryRevocationIssuerDID + "&limit=1000",
+		"/index/v0/credentials?resource=chain:*&limit=1000",
 	}
 
 	for _, route := range routes {

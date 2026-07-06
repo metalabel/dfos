@@ -7,6 +7,7 @@ package conformance
 import (
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -328,6 +329,348 @@ func TestIndexContentPublicReadFilter(t *testing.T) {
 	}
 	_ = publicBody.Next
 	_ = privateBody.Next
+}
+
+// A spec-valid credential MAY carry att keys beyond {resource, action} — the
+// Attenuation schema is a loose object. The index att projection must be exactly
+// {resource, action} on BOTH relays (the Go relay drops extras when it rebuilds
+// att at ingest; the TS relay normalizes at projection), because this is the first
+// route to serialize att structurally over the wire. The full-fidelity att lives
+// in the self-proving jwsToken; the decoded row att is an amber convenience.
+func TestIndexCredentialsAttProjection(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	issuer := createIdentity(t, base)
+	kid := issuer.did + "#" + issuer.auth.keyID
+	exp := time.Now().Add(5 * time.Minute).Unix()
+	resource := "chain:" + createContent(t, base, issuer).contentID
+	token := signCredentialV(t, 1, issuer.did, "*", kid, []map[string]string{
+		{"resource": resource, "action": "read", "caveat": "before-2027"},
+	}, []string{}, exp, issuer.auth.priv)
+	credCID := postPublicCredential(t, base, token)
+
+	var body struct {
+		Credentials []struct {
+			CID string           `json:"cid"`
+			Att []map[string]any `json:"att"`
+		} `json:"credentials"`
+	}
+	resp := getJSON(t, base+"/index/v0/credentials?resource="+url.QueryEscape(resource)+"&limit=1000", &body)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("credentials att projection: status %d", resp.StatusCode)
+	}
+	found := false
+	for _, row := range body.Credentials {
+		if row.CID != credCID {
+			continue
+		}
+		found = true
+		for _, entry := range row.Att {
+			if _, ok := entry["resource"]; !ok {
+				t.Fatalf("att entry missing resource: %+v", entry)
+			}
+			if _, ok := entry["action"]; !ok {
+				t.Fatalf("att entry missing action: %+v", entry)
+			}
+			if len(entry) != 2 {
+				t.Fatalf("att entry has %d keys, want exactly {resource, action} (extension keys must be dropped): %+v", len(entry), entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("att projection test did not find credential %s", credCID)
+	}
+}
+
+type indexCredentialTestRow struct {
+	CID       string `json:"cid"`
+	IssuerDID string `json:"issuerDID"`
+	Att       []struct {
+		Resource string `json:"resource"`
+		Action   string `json:"action"`
+	} `json:"att"`
+	Exp      int64  `json:"exp"`
+	JWSToken string `json:"jwsToken"`
+}
+
+func credentialCID(t *testing.T, token string) string {
+	t.Helper()
+	header, _, err := dfos.DecodeJWSUnsafe(token)
+	if err != nil {
+		t.Fatalf("decode credential JWS: %v", err)
+	}
+	return header.CID
+}
+
+func postPublicCredential(t *testing.T, base string, token string) string {
+	t.Helper()
+	cid := credentialCID(t, token)
+	res := postOperations(t, base, []string{token})
+	if res.StatusCode != 200 {
+		t.Fatalf("submit public credential: status %d, body: %s", res.StatusCode, readBody(t, res))
+	}
+	res.Body.Close()
+	return cid
+}
+
+func rowHasAttResource(row indexCredentialTestRow, resource string) bool {
+	for _, att := range row.Att {
+		if att.Resource == resource {
+			return true
+		}
+	}
+	return false
+}
+
+func rowMatchesCredentialResource(row indexCredentialTestRow, resource string) bool {
+	if rowHasAttResource(row, resource) {
+		return true
+	}
+	return strings.HasPrefix(resource, "chain:") && rowHasAttResource(row, "chain:*")
+}
+
+func TestIndexCredentialsIssuerFilter(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	issuer := createIdentity(t, base)
+	cc := createContent(t, base, issuer)
+	kid := issuer.did + "#" + issuer.auth.keyID
+	credToken := createPublicCredential(t, issuer.did, kid, "read", cc.contentID, 5*time.Minute, issuer.auth.priv)
+	credCID := postPublicCredential(t, base, credToken)
+
+	var body struct {
+		Credentials []indexCredentialTestRow `json:"credentials"`
+		Next        *string                  `json:"next"`
+	}
+	resp := getJSON(t, base+"/index/v0/credentials?issuer="+url.QueryEscape(issuer.did)+"&limit=1000", &body)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("credentials issuer filter: status %d", resp.StatusCode)
+	}
+	found := false
+	for _, row := range body.Credentials {
+		if row.IssuerDID != issuer.did {
+			t.Fatalf("issuer-filtered credential row has issuerDID %s, want %s: %+v", row.IssuerDID, issuer.did, row)
+		}
+		if row.CID == credCID {
+			found = true
+			if row.JWSToken != credToken || row.Exp == 0 || !rowHasAttResource(row, "chain:"+cc.contentID) {
+				t.Fatalf("credential row has incomplete stored shape: %+v", row)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("issuer filter did not include credential %s", credCID)
+	}
+	_ = body.Next
+}
+
+func TestIndexCredentialsResourceExactFilter(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	issuer := createIdentity(t, base)
+	cc := createContent(t, base, issuer)
+	kid := issuer.did + "#" + issuer.auth.keyID
+	credToken := createPublicCredential(t, issuer.did, kid, "read", cc.contentID, 5*time.Minute, issuer.auth.priv)
+	credCID := postPublicCredential(t, base, credToken)
+	resource := "chain:" + cc.contentID
+
+	var body struct {
+		Credentials []indexCredentialTestRow `json:"credentials"`
+		Next        *string                  `json:"next"`
+	}
+	resp := getJSON(t, base+"/index/v0/credentials?resource="+url.QueryEscape(resource)+"&limit=1000", &body)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("credentials resource filter: status %d", resp.StatusCode)
+	}
+	found := false
+	for _, row := range body.Credentials {
+		if !rowMatchesCredentialResource(row, resource) {
+			t.Fatalf("resource-filtered credential row does not match %s or chain:*: %+v", resource, row)
+		}
+		if row.CID == credCID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("resource filter did not include credential %s", credCID)
+	}
+	_ = body.Next
+}
+
+func TestIndexCredentialsWildcardUnion(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	issuer := createIdentity(t, base)
+	other := createIdentity(t, base)
+	otherContent := createContent(t, base, other)
+	kid := issuer.did + "#" + issuer.auth.keyID
+	exp := time.Now().Add(5 * time.Minute).Unix()
+	credToken := signCredentialV(t, 1, issuer.did, "*", kid, []map[string]string{
+		{"resource": "chain:*", "action": "read"},
+	}, []string{}, exp, issuer.auth.priv)
+	credCID := postPublicCredential(t, base, credToken)
+	resource := "chain:" + otherContent.contentID
+
+	var body struct {
+		Credentials []indexCredentialTestRow `json:"credentials"`
+		Next        *string                  `json:"next"`
+	}
+	resp := getJSON(t, base+"/index/v0/credentials?resource="+url.QueryEscape(resource)+"&limit=1000", &body)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("credentials wildcard-union filter: status %d", resp.StatusCode)
+	}
+	found := false
+	for _, row := range body.Credentials {
+		if !rowMatchesCredentialResource(row, resource) {
+			t.Fatalf("wildcard-union row does not match %s or chain:*: %+v", resource, row)
+		}
+		if row.CID == credCID {
+			found = true
+			if !rowHasAttResource(row, "chain:*") {
+				t.Fatalf("wildcard credential row missing chain:* att: %+v", row)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("wildcard union did not include chain:* credential %s for resource %s", credCID, resource)
+	}
+	_ = body.Next
+}
+
+func TestIndexCredentialsIssuerAndResourceFilter(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	issuer := createIdentity(t, base)
+	otherIssuer := createIdentity(t, base)
+	cc := createContent(t, base, issuer)
+	resource := "chain:" + cc.contentID
+
+	issuerKid := issuer.did + "#" + issuer.auth.keyID
+	issuerCred := createPublicCredential(t, issuer.did, issuerKid, "read", cc.contentID, 5*time.Minute, issuer.auth.priv)
+	issuerCID := postPublicCredential(t, base, issuerCred)
+
+	otherKid := otherIssuer.did + "#" + otherIssuer.auth.keyID
+	otherCred := createPublicCredential(t, otherIssuer.did, otherKid, "read", cc.contentID, 5*time.Minute, otherIssuer.auth.priv)
+	otherCID := postPublicCredential(t, base, otherCred)
+
+	var body struct {
+		Credentials []indexCredentialTestRow `json:"credentials"`
+		Next        *string                  `json:"next"`
+	}
+	resp := getJSON(t, base+"/index/v0/credentials?issuer="+url.QueryEscape(issuer.did)+"&resource="+url.QueryEscape(resource)+"&limit=1000", &body)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("credentials issuer+resource filter: status %d", resp.StatusCode)
+	}
+	found := false
+	for _, row := range body.Credentials {
+		if row.IssuerDID != issuer.did || !rowMatchesCredentialResource(row, resource) {
+			t.Fatalf("issuer+resource row violates filter: %+v", row)
+		}
+		if row.CID == issuerCID {
+			found = true
+		}
+		if row.CID == otherCID {
+			t.Fatalf("issuer+resource filter leaked other issuer credential %s", otherCID)
+		}
+	}
+	if !found {
+		t.Fatalf("issuer+resource filter did not include credential %s", issuerCID)
+	}
+	_ = body.Next
+}
+
+func TestIndexCredentialsKeysetPagination(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	issuer := createIdentity(t, base)
+	kid := issuer.did + "#" + issuer.auth.keyID
+	created := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		cc := createContent(t, base, issuer)
+		credToken := createPublicCredential(t, issuer.did, kid, "read", cc.contentID, 5*time.Minute, issuer.auth.priv)
+		created[postPublicCredential(t, base, credToken)] = false
+	}
+
+	seen := map[string]bool{}
+	after := ""
+	firstPage := true
+	for pages := 0; ; pages++ {
+		if pages > 20 {
+			t.Fatal("issuer-scoped credentials keyset pagination exceeded 20 pages")
+		}
+		u := base + "/index/v0/credentials?issuer=" + url.QueryEscape(issuer.did) + "&limit=1"
+		if after != "" {
+			u += "&after=" + url.QueryEscape(after)
+		}
+		var body struct {
+			Credentials []indexCredentialTestRow `json:"credentials"`
+			Next        *string                  `json:"next"`
+		}
+		resp := getJSON(t, u, &body)
+		skipIndex501(t, resp.StatusCode)
+		if resp.StatusCode != 200 {
+			t.Fatalf("credential keyset page: status %d", resp.StatusCode)
+		}
+		if len(body.Credentials) > 1 {
+			t.Fatalf("limit=1 returned %d credential rows", len(body.Credentials))
+		}
+		if firstPage {
+			if len(body.Credentials) != 1 || body.Next == nil {
+				t.Fatalf("first credential page = %+v, want one row and non-null next", body)
+			}
+			firstPage = false
+		}
+		if len(body.Credentials) == 1 {
+			row := body.Credentials[0]
+			if row.IssuerDID != issuer.did {
+				t.Fatalf("issuer-scoped credential page returned row for %s, want %s", row.IssuerDID, issuer.did)
+			}
+			if seen[row.CID] {
+				t.Fatalf("credential keyset pagination returned duplicate cid %s", row.CID)
+			}
+			seen[row.CID] = true
+			if _, ok := created[row.CID]; ok {
+				created[row.CID] = true
+			}
+		}
+		if body.Next == nil {
+			if len(body.Credentials) != 0 {
+				t.Fatalf("limit=1 final credential page had one row but next was null: %+v", body)
+			}
+			break
+		}
+		if len(body.Credentials) != 1 || *body.Next != body.Credentials[0].CID {
+			t.Fatalf("credential next cursor = %v, page = %+v", body.Next, body)
+		}
+		after = *body.Next
+	}
+	for cid, found := range created {
+		if !found {
+			t.Fatalf("credential keyset walk did not include created credential %s", cid)
+		}
+	}
+}
+
+func TestIndexCredentialsBadIssuer(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+
+	var body struct {
+		Error string `json:"error"`
+	}
+	resp := getJSON(t, base+"/index/v0/credentials?issuer=not-a-did", &body)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 400 {
+		t.Fatalf("credentials invalid issuer: status %d, want 400", resp.StatusCode)
+	}
+	if body.Error != "invalid DID" {
+		t.Fatalf("credentials invalid issuer: error = %q, want invalid DID", body.Error)
+	}
 }
 
 func TestIndexIdentitiesHasPublicProfileFilter(t *testing.T) {

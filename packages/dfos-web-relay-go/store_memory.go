@@ -292,6 +292,41 @@ func (s *MemoryStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 	return pageIndexRows(rows, func(row indexCountersignatureRow) string { return row.CID }, q.After, q.Limit), nil
 }
 
+func (s *MemoryStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows := []indexCredentialRow{}
+	for _, cred := range s.publicCredentials {
+		if q.Issuer != "" && cred.IssuerDID != q.Issuer {
+			continue
+		}
+		if q.Resource != nil {
+			found := false
+			for _, att := range cred.Att {
+				if att.Resource == *q.Resource {
+					found = true
+					break
+				}
+				if strings.HasPrefix(*q.Resource, "chain:") && att.Resource == "chain:*" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+		rows = append(rows, indexCredentialRow{
+			CID:       cred.CID,
+			IssuerDID: cred.IssuerDID,
+			Att:       cred.Att,
+			Exp:       cred.Exp,
+			JWSToken:  cred.JWSToken,
+		})
+	}
+	return pageIndexRows(rows, func(row indexCredentialRow) string { return row.CID }, q.After, q.Limit), nil
+}
+
 func (s *MemoryStore) PutIndexIdentityRow(row indexIdentityRow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

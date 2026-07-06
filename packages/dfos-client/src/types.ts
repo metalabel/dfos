@@ -10,7 +10,7 @@
 */
 
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
-import type { VerifiedDFOSCredential } from '@metalabel/dfos-protocol/credentials';
+import type { Attenuation, VerifiedDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
 
 // -----------------------------------------------------------------------------
@@ -260,6 +260,21 @@ export interface IndexCountersignaturesPage {
   next: string | null;
 }
 
+/** One row of the public-credentials index. Carries the full self-proving JWS. */
+export interface IndexCredentialRow {
+  cid: string;
+  issuerDID: string;
+  att: Attenuation[];
+  exp: number;
+  jwsToken: string;
+}
+
+/** A page of the public-credentials index. `next` is a `cid` cursor. */
+export interface IndexCredentialsPage {
+  credentials: IndexCredentialRow[];
+  next: string | null;
+}
+
 // -----------------------------------------------------------------------------
 // config + client
 // -----------------------------------------------------------------------------
@@ -341,4 +356,8 @@ export interface Client {
     params?: { after?: string; limit?: number },
     options?: CallOptions,
   ): Promise<IndexCountersignaturesPage>;
+  indexCredentials(
+    params?: { issuer?: string; resource?: string; after?: string; limit?: number },
+    options?: CallOptions,
+  ): Promise<IndexCredentialsPage>;
 }
