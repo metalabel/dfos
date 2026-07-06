@@ -188,7 +188,7 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     format: 'short-post',
     title: 'Hello World',
     body: 'First post on the protocol.',
-    createdByDID: identity2.did,
+    credits: [{ did: identity2.did, label: 'author' }],
   };
   const docBlock = await dagCborCanonicalEncode(document);
   const documentCID = docBlock.cid.toString();
@@ -218,7 +218,7 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     format: 'short-post',
     title: 'Hello World (edited)',
     body: 'Updated content.',
-    createdByDID: identity2.did,
+    credits: [{ did: identity2.did, label: 'author' }],
   };
   const doc2Block = await dagCborCanonicalEncode(document2);
   const documentCID2 = doc2Block.cid.toString();
@@ -490,11 +490,11 @@ describe('protocol reference artifacts', () => {
     expectInSpec('content update CID', a.contentUpdateCID);
     expectInSpec('content id', a.contentId);
 
-    expect(a.documentCID).toBe('bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy');
-    expect(a.documentCID2).toBe('bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy');
-    expect(a.contentCreateCID).toBe('bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy');
-    expect(a.contentUpdateCID).toBe('bafyreia2llpluo7i2slh752ipwbsqwkvazivjbvzd7m66isfmzhboh3l6y');
-    expect(a.contentId).toBe('a3n7r3nde8e4keeak92rr3aeztftvc2');
+    expect(a.documentCID).toBe('bafyreihq7b6wbpexepxnmm25rscds5punnw3kngdj3vm2h5wzuoiqlteri');
+    expect(a.documentCID2).toBe('bafyreiblhw7eeuebukut5p5xenkczuce6t7xu2r3uvzqc2vmk77sn4rmnu');
+    expect(a.contentCreateCID).toBe('bafyreifwemrntupov3wleuboze322bp3btpbfsd2ywjpfrdkudjwr4jqoe');
+    expect(a.contentUpdateCID).toBe('bafyreih4cy6x2nahxt7vt66ynrvx7ggnwz3flvzfylb3fud5espuvb74oa');
+    expect(a.contentId).toBe('943v8rzdr9fdr4z77tf8de8hn3afed4');
 
     // --- cross-check the examples/ fixtures (a second golden source) ---
     // identity-genesis.json: chain[0] is the genesis JWS, expected pins DID/keys.

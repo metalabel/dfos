@@ -47,7 +47,7 @@ cd packages/dfos-cli && make build
 dfos identity create --name myname
 
 # publish your first post
-echo '{"body":"gm"}' | dfos content create -
+echo '{"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"gm"}' | dfos content create -
 
 # see it
 dfos content list

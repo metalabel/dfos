@@ -650,12 +650,12 @@ identically to a service-less operation (CID-neutral).
 content anchors (one content-chain, one artifact). Signed by reference key 1:
 
 ```
-did:          did:dfos:hd34z9a4tf6h62864nh4f7at6hr36r4
+did:          did:dfos:4ve48tvhnvzd9zt9n3tctr93afzczvz
 typ:          did:dfos:identity-op
-cid:          bafyreighuvzitfa7ofyyrwyvyuakmqfefzmuphi7fafawox3ahxdh3tsa4
+cid:          bafyreibvqd7f3hj327dodmplx53xhv4wgevb63faiueqtyoj6irolu7nji
 services:     [ { id: "relay",   type: "DfosRelay",     endpoint: "https://relay.dfos.com" },
-                { id: "profile", type: "ContentAnchor", label: "profile", anchor: "a3n7r3nde8e4keeak92rr3aeztftvc2" },
-                { id: "avatar",  type: "ContentAnchor", label: "avatar",  anchor: "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy" } ]
+                { id: "profile", type: "ContentAnchor", label: "profile", anchor: "943v8rzdr9fdr4z77tf8de8hn3afed4" },
+                { id: "avatar",  type: "ContentAnchor", label: "avatar",  anchor: "bafyreihq7b6wbpexepxnmm25rscds5punnw3kngdj3vm2h5wzuoiqlteri" } ]
 ```
 
 The full JWS token is in [`examples/identity-services.json`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/examples/identity-services.json).
@@ -951,14 +951,19 @@ Document (flat content object):
   "format": "short-post",
   "title": "Hello World",
   "body": "First post on the protocol.",
-  "createdByDID": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
+  "credits": [
+    {
+      "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+      "label": "author"
+    }
+  ]
 }
 ```
 
 Document CID:
 
 ```
-bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy
+bafyreihq7b6wbpexepxnmm25rscds5punnw3kngdj3vm2h5wzuoiqlteri
 ```
 
 Content Create JWS Header:
@@ -968,7 +973,7 @@ Content Create JWS Header:
   "alg": "EdDSA",
   "typ": "did:dfos:content-op",
   "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
-  "cid": "bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy"
+  "cid": "bafyreifwemrntupov3wleuboze322bp3btpbfsd2ywjpfrdkudjwr4jqoe"
 }
 ```
 
@@ -979,7 +984,7 @@ Content Create Payload:
   "version": 1,
   "type": "create",
   "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
-  "documentCID": "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy",
+  "documentCID": "bafyreihq7b6wbpexepxnmm25rscds5punnw3kngdj3vm2h5wzuoiqlteri",
   "baseDocumentCID": null,
   "createdAt": "2026-03-07T00:02:00.000Z"
 }
@@ -988,19 +993,19 @@ Content Create Payload:
 Content Create JWS Signature (hex):
 
 ```
-993442bcf81af3d8557aefa0368c2b2fc4c0a68189971550070dc2cebbc403e2f1010692a74dd4ca7d09c1d84f5a1db652dc194ded9ddbb208b89ecffb93ed00
+87045d6db39dca5e27a044455b6f187eeacd17ee6d969b96063fe09bff6ed22288d7bafdf2cd263bfec349d0fb6f8074af071f9ce1f25583d4087b6d99461d0a
 ```
 
 Content Create JWS Token:
 
 ```
-eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWQyNmJhZ241Y2ZlZTN4cHRhZmptYmx4d3VkdzQzNXA2cms1ZzNwNGdqdGtudXlscnhzc3kifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.mTRCvPga89hVeu-gNowrL8TApoGJlxVQBw3CzrvEA-LxAQaSp03Uyn0JwdhPWh22UtwZTe2d27IIuJ7P-5PtAA
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWZ3ZW1ybnR1cG92M3dsZXVib3plMzIyYnAzYnRwYmZzZDJ5d2pwZnJka3VkandyNGpxb2UifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWhxN2I2d2JwZXhlcHhubW0yNXJzY2RzNXB1bm53M2tuZ2RqM3ZtMmg1d3p1b2lxbHRlcmkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.hwRdbbOdyl4noERFW28YfurNF-5tlpuWBj_gm_9u0iKI17r98s0mO_7DSdD7b4B0rwcfnOHyVYPUCHttmUYdCg
 ```
 
 Content Operation CID:
 
 ```
-bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy
+bafyreifwemrntupov3wleuboze322bp3btpbfsd2ywjpfrdkudjwr4jqoe
 ```
 
 ### Content Chain: Update
@@ -1012,9 +1017,9 @@ Content Update Payload:
   "version": 1,
   "type": "update",
   "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
-  "previousOperationCID": "bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy",
-  "documentCID": "bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy",
-  "baseDocumentCID": "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy",
+  "previousOperationCID": "bafyreifwemrntupov3wleuboze322bp3btpbfsd2ywjpfrdkudjwr4jqoe",
+  "documentCID": "bafyreiblhw7eeuebukut5p5xenkczuce6t7xu2r3uvzqc2vmk77sn4rmnu",
+  "baseDocumentCID": "bafyreihq7b6wbpexepxnmm25rscds5punnw3kngdj3vm2h5wzuoiqlteri",
   "createdAt": "2026-03-07T00:03:00.000Z"
 }
 ```
@@ -1027,28 +1032,33 @@ Updated document (flat content object):
   "format": "short-post",
   "title": "Hello World (edited)",
   "body": "Updated content.",
-  "createdByDID": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
+  "credits": [
+    {
+      "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+      "label": "author"
+    }
+  ]
 }
 ```
 
 Document CID (edited):
 
 ```
-bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy
+bafyreiblhw7eeuebukut5p5xenkczuce6t7xu2r3uvzqc2vmk77sn4rmnu
 ```
 
 Content Update CID:
 
 ```
-bafyreia2llpluo7i2slh752ipwbsqwkvazivjbvzd7m66isfmzhboh3l6y
+bafyreih4cy6x2nahxt7vt66ynrvx7ggnwz3flvzfylb3fud5espuvb74oa
 ```
 
 ### Content Chain Verified State
 
 ```
-Content ID:   a3n7r3nde8e4keeak92rr3aeztftvc2
-Genesis CID:  bafyreid26bagn5cfee3xptafjmblxwudw435p6rk5g3p4gjtknuylrxssy
-Head CID:     bafyreia2llpluo7i2slh752ipwbsqwkvazivjbvzd7m66isfmzhboh3l6y
+Content ID:   943v8rzdr9fdr4z77tf8de8hn3afed4
+Genesis CID:  bafyreifwemrntupov3wleuboze322bp3btpbfsd2ywjpfrdkudjwr4jqoe
+Head CID:     bafyreih4cy6x2nahxt7vt66ynrvx7ggnwz3flvzfylb3fud5espuvb74oa
 ```
 
 ---
@@ -1091,7 +1101,7 @@ Given the artifacts above, verify:
 8. **Document CID**: dag-cbor canonical encode the flat content object → SHA-256 → CIDv1 → should be:
 
    ```
-   bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy
+   bafyreihq7b6wbpexepxnmm25rscds5punnw3kngdj3vm2h5wzuoiqlteri
    ```
 
 9. **Content operation `did` field**: verify the `did` field in each content operation matches the `kid` DID in the JWS header

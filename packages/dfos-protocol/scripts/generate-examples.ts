@@ -134,7 +134,7 @@ const main = async () => {
     format: 'short-post',
     title: 'Hello World',
     body: 'First post on the protocol.',
-    createdByDID: identityRotated.did,
+    credits: [{ did: identityRotated.did, label: 'author' }],
   };
   const doc1Block = await dagCborCanonicalEncode(document1);
   const documentCID1 = doc1Block.cid.toString();
@@ -157,7 +157,7 @@ const main = async () => {
     format: 'short-post',
     title: 'Hello World (edited)',
     body: 'Updated content.',
-    createdByDID: identityRotated.did,
+    credits: [{ did: identityRotated.did, label: 'author' }],
   };
   const doc2Block = await dagCborCanonicalEncode(document2);
   const documentCID2 = doc2Block.cid.toString();
@@ -312,7 +312,7 @@ const main = async () => {
     format: 'short-post',
     title: 'Original Post',
     body: 'Content created by the chain owner.',
-    createdByDID: identity.did,
+    credits: [{ did: identity.did, label: 'author' }],
   };
   const delegatedDoc1Block = await dagCborCanonicalEncode(delegatedDoc1);
   const delegatedDocCID1 = delegatedDoc1Block.cid.toString();
@@ -357,7 +357,7 @@ const main = async () => {
     format: 'short-post',
     title: 'Delegated Edit',
     body: 'Content updated by an authorized delegate.',
-    createdByDID: identity3.did,
+    credits: [{ did: identity3.did, label: 'author' }],
   };
   const delegatedDoc2Block = await dagCborCanonicalEncode(delegatedDoc2);
   const delegatedDocCID2 = delegatedDoc2Block.cid.toString();
@@ -440,13 +440,13 @@ const main = async () => {
       {
         content: document1,
         baseDocumentCID: null,
-        createdByDID: identityRotated.did,
+        credits: [{ did: identityRotated.did, label: 'author' }],
         createdAt: '2026-03-07T00:02:00.000Z',
       },
       {
         content: document2,
         baseDocumentCID: documentCID1,
-        createdByDID: identityRotated.did,
+        credits: [{ did: identityRotated.did, label: 'author' }],
         createdAt: '2026-03-07T00:03:00.000Z',
       },
     ],
@@ -467,7 +467,7 @@ const main = async () => {
       {
         content: document1,
         baseDocumentCID: null,
-        createdByDID: identityRotated.did,
+        credits: [{ did: identityRotated.did, label: 'author' }],
         createdAt: '2026-03-07T00:02:00.000Z',
       },
     ],
@@ -530,13 +530,13 @@ const main = async () => {
       {
         content: delegatedDoc1,
         baseDocumentCID: null,
-        createdByDID: identity.did,
+        credits: [{ did: identity.did, label: 'author' }],
         createdAt: '2026-03-07T00:10:00.000Z',
       },
       {
         content: delegatedDoc2,
         baseDocumentCID: delegatedDocCID1,
-        createdByDID: identity3.did,
+        credits: [{ did: identity3.did, label: 'author' }],
         createdAt: '2026-03-07T00:11:00.000Z',
       },
     ],

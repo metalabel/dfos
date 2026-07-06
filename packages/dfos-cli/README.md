@@ -42,7 +42,7 @@ dfos use alice@local
 dfos content create post.json --peer local
 
 # create content from stdin
-echo '{"$schema":"https://schemas.dfos.com/post/v1","body":"hello"}' | dfos content create - --peer local
+echo '{"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"hello"}' | dfos content create - --peer local
 
 # show content chain
 dfos content show <contentId>

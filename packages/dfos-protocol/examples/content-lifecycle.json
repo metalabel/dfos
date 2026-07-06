@@ -2,8 +2,8 @@
   "description": "Content chain: create + update (with both documents)",
   "type": "content",
   "chain": [
-    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWQyNmJhZ241Y2ZlZTN4cHRhZmptYmx4d3VkdzQzNXA2cms1ZzNwNGdqdGtudXlscnhzc3kifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.mTRCvPga89hVeu-gNowrL8TApoGJlxVQBw3CzrvEA-LxAQaSp03Uyn0JwdhPWh22UtwZTe2d27IIuJ7P-5PtAA",
-    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWEybGxwbHVvN2kyc2xoNzUyaXB3YnNxd2t2YXppdmpidnpkN202NmlzZm16aGJvaDNsNnkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWQyNmJhZ241Y2ZlZTN4cHRhZmptYmx4d3VkdzQzNXA2cms1ZzNwNGdqdGtudXlscnhzc3kiLCJkb2N1bWVudENJRCI6ImJhZnlyZWlmZXRwdXRreTRmbnp2N3NyZzdsN3luaWg2ajR5dHplcWlicmNwNXVpZXB2b2x4cWhjYmN5IiwiYmFzZURvY3VtZW50Q0lEIjoiYmFmeXJlaWV2Y3FybXZ0ejJwaXM1dGRpenQ3c2pvdG9xcW9nbDZ2cnJxZ2E2NHcydG53a3Eycm51ZHkiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ._1k6S9qAFJeS7Ti1CmF32PhPjIxNTAiA63rSo9oF88Nf7ksKc1ENLLYgjkJcb6YOZ-C7O_3i_noJfnFsrX1xBQ"
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWZ3ZW1ybnR1cG92M3dsZXVib3plMzIyYnAzYnRwYmZzZDJ5d2pwZnJka3VkandyNGpxb2UifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWhxN2I2d2JwZXhlcHhubW0yNXJzY2RzNXB1bm53M2tuZ2RqM3ZtMmg1d3p1b2lxbHRlcmkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.hwRdbbOdyl4noERFW28YfurNF-5tlpuWBj_gm_9u0iKI17r98s0mO_7DSdD7b4B0rwcfnOHyVYPUCHttmUYdCg",
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWg0Y3k2eDJuYWh4dDd2dDY2eW5ydng3Z2dud3ozZmx2emZ5bGIzZnVkNWVzcHV2Yjc0b2EifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoidXBkYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWZ3ZW1ybnR1cG92M3dsZXVib3plMzIyYnAzYnRwYmZzZDJ5d2pwZnJka3VkandyNGpxb2UiLCJkb2N1bWVudENJRCI6ImJhZnlyZWlibGh3N2VldWVidWt1dDVwNXhlbmtjenVjZTZ0N3h1MnIzdXZ6cWMydm1rNzdzbjRybW51IiwiYmFzZURvY3VtZW50Q0lEIjoiYmFmeXJlaWhxN2I2d2JwZXhlcHhubW0yNXJzY2RzNXB1bm53M2tuZ2RqM3ZtMmg1d3p1b2lxbHRlcmkiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.-UVkJPgoW9gc1s4P967cut6-PKbMkWMWzx7lw02Z9Up2gQlFELFpJfxVPJVjVZUMjTtxjtCHZJRgmdzRRws6AQ"
   ],
   "signerPublicKey": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK",
   "documents": [
@@ -13,10 +13,20 @@
         "format": "short-post",
         "title": "Hello World",
         "body": "First post on the protocol.",
-        "createdByDID": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
+        "credits": [
+          {
+            "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+            "label": "author"
+          }
+        ]
       },
       "baseDocumentCID": null,
-      "createdByDID": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+      "credits": [
+        {
+          "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+          "label": "author"
+        }
+      ],
       "createdAt": "2026-03-07T00:02:00.000Z"
     },
     {
@@ -25,17 +35,27 @@
         "format": "short-post",
         "title": "Hello World (edited)",
         "body": "Updated content.",
-        "createdByDID": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr"
+        "credits": [
+          {
+            "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+            "label": "author"
+          }
+        ]
       },
-      "baseDocumentCID": "bafyreievcqrmvtz2pis5tdizt7sjotoqqogl6vrrqga64w2tnwkq2rnudy",
-      "createdByDID": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+      "baseDocumentCID": "bafyreihq7b6wbpexepxnmm25rscds5punnw3kngdj3vm2h5wzuoiqlteri",
+      "credits": [
+        {
+          "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+          "label": "author"
+        }
+      ],
       "createdAt": "2026-03-07T00:03:00.000Z"
     }
   ],
   "expected": {
-    "contentId": "a3n7r3nde8e4keeak92rr3aeztftvc2",
+    "contentId": "943v8rzdr9fdr4z77tf8de8hn3afed4",
     "isDeleted": false,
-    "currentDocumentCID": "bafyreifetputky4fnzv7srg7l7ynih6j4ytzeqibrcp5uiepvolxqhcbcy",
+    "currentDocumentCID": "bafyreiblhw7eeuebukut5p5xenkczuce6t7xu2r3uvzqc2vmk77sn4rmnu",
     "length": 2
   }
 }

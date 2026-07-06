@@ -43,6 +43,7 @@ describe('schema compilation', () => {
 
 describe('post schema validation', () => {
   const validate = ajv.compile(postSchema);
+  const mediaCid = 'bafkreibovzpnn2y6dquvxhidhx64hg7smduemox7drjs4vprjhlbmivfli';
 
   it('accepts a minimal short-post', () => {
     expect(
@@ -53,37 +54,151 @@ describe('post schema validation', () => {
     ).toBe(true);
   });
 
-  it('accepts a full long-post', () => {
+  it('accepts a full long-post with Media objects', () => {
     expect(
       validate({
         $schema: 'https://schemas.dfos.com/post/v1',
         format: 'long-post',
         title: 'Hello World',
         body: 'This is a long post with content.',
-        cover: { id: 'media_abc', uri: 'https://cdn.example.com/img.jpg' },
-        attachments: [{ id: 'media_def' }],
+        cover: {
+          uri: 'attachment://media_abc123',
+          cid: mediaCid,
+          href: 'https://cdn.example.com/media/abc123.jpg',
+        },
+        attachments: [
+          { uri: 'attachment://media_def456' },
+          { uri: 'attachment://media_ghi789', cid: mediaCid },
+        ],
         topics: ['announcements', 'engineering'],
       }),
     ).toBe(true);
   });
 
-  it('accepts a post with createdByDID', () => {
+  it('accepts post media with only uri (cid and href truly optional)', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        cover: { uri: 'attachment://media_abc123' },
+        attachments: [{ uri: 'attachment://media_def456' }],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts a post with one credit', () => {
     expect(
       validate({
         $schema: 'https://schemas.dfos.com/post/v1',
         format: 'short-post',
         body: 'Hello world.',
-        createdByDID: 'did:dfos:abc123',
+        credits: [{ did: 'did:dfos:abc123' }],
       }),
     ).toBe(true);
   });
 
-  it('rejects createdByDID without did: prefix', () => {
+  it('accepts ordered labeled credits', () => {
     expect(
       validate({
         $schema: 'https://schemas.dfos.com/post/v1',
         format: 'short-post',
-        createdByDID: 'not-a-did',
+        credits: [
+          { did: 'did:dfos:abc123', label: 'author' },
+          { did: 'did:dfos:def456', label: 'editor' },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts empty credits', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        credits: [],
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects legacy media shape', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        cover: { id: 'media_abc' },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects media with additional properties', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        cover: { uri: 'attachment://media_abc123', extra: true },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects media missing uri', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        cover: { cid: mediaCid },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects media cid that is not a raw-codec CIDv1', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        cover: {
+          uri: 'attachment://media_abc123',
+          cid: 'bafyreibovzpnn2y6dquvxhidhx64hg7smduemox7drjs4vprjhlbmivfli',
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects createdByDID', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        createdByDID: 'did:dfos:abc123',
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects credit missing did', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        credits: [{ label: 'author' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects credit did without did: prefix', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        credits: [{ did: 'not-a-did' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects credit with additional properties', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        credits: [{ did: 'did:dfos:abc123', extra: true }],
       }),
     ).toBe(false);
   });
@@ -145,16 +260,6 @@ describe('post schema validation', () => {
         $schema: 'https://schemas.dfos.com/post/v1',
         format: 'short-post',
         extra: 'not allowed',
-      }),
-    ).toBe(false);
-  });
-
-  it('rejects media with additional properties', () => {
-    expect(
-      validate({
-        $schema: 'https://schemas.dfos.com/post/v1',
-        format: 'short-post',
-        cover: { id: 'media_abc', extra: true },
       }),
     ).toBe(false);
   });

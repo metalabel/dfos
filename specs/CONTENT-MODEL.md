@@ -57,18 +57,22 @@ Schema files live in [`schemas/`](https://github.com/metalabel/dfos/tree/main/pa
 
 The primary content type. Covers short posts, long-form posts, comments, and replies via the `format` discriminator.
 
-| Field          | Type     | Required | Description                                                                                                       |
-| -------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `$schema`      | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                                                              |
-| `format`       | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — fixed at chain genesis and not changed by later revisions |
-| `title`        | string   | no       | Post title (typically for long-post format)                                                                       |
-| `body`         | string   | no       | Post body content                                                                                                 |
-| `cover`        | media    | no       | Cover image                                                                                                       |
-| `attachments`  | media[]  | no       | Attached media objects                                                                                            |
-| `topics`       | string[] | no       | Topic names (stored as names for portability)                                                                     |
-| `createdByDID` | string   | no       | DID of the content author — distinct from the chain operation signer                                              |
+| Field         | Type     | Required | Description                                                                                                       |
+| ------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                                                              |
+| `format`      | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — fixed at chain genesis and not changed by later revisions |
+| `title`       | string   | no       | Post title (typically for long-post format)                                                                       |
+| `body`        | string   | no       | Post body content                                                                                                 |
+| `cover`       | media    | no       | Cover image as a [Media object](#media-object)                                                                    |
+| `attachments` | media[]  | no       | Attached media as [Media objects](#media-object)                                                                  |
+| `topics`      | string[] | no       | Topic names this post belongs to (stored as names for portability)                                                |
+| `credits`     | credit[] | no       | Ordered authorship credits — `{ did, label? }` entries; see below and [Authorship](#authorship)                   |
 
-`createdByDID` is a content-layer authorship convention, distinct from the operation signer. The `kid` DID in the JWS header identifies who cryptographically signed the operation — this is the protocol-level signer with key authority. `createdByDID` records who authored the content at the application layer. These often differ: an agent, bot, or delegate may sign the operation on behalf of a human author. The protocol verifies the signer; applications display `createdByDID`.
+**Credits.** Each credit is `{ did, label? }`: `did` (REQUIRED) is the credited identity; `label` (OPTIONAL) is a free-text role — display vocabulary, not an enum (`"author"`, `"editor"`, `"photography"`, …), the same display-string register as the `label` in [index](#index-httpsschemasdfoscomindexv1) entry metadata. Array order is display order, and the **first entry is the primary author**. Omit `credits` entirely for unattributed content (system or imported posts). Credits are the **assertion tier** of the [authorship lattice](#authorship): the operation signer asserts them, and the protocol verifies the signer, never the credits. A credited DID can upgrade its credit from assertion to proof with a [claim operation](#authorship).
+
+**Body ↔ attachment binding.** A post body MAY embed `attachment://<id>` refs inline (for example, an image reference inside markdown). Each inline ref SHOULD have a corresponding entry in `attachments` whose `uri` is that same `attachment://<id>` ref — the Media object is where the integrity commitment (`cid`) for an inline ref lives. The body names media; `attachments` carries the verifiable reference.
+
+> **Pre-adoption amendment (2026-07).** This shape replaces an earlier draft of `post/v1` — a `createdByDID` string in place of `credits`, and a legacy `{ id, uri? }` media shape predating the [Media object](#media-object) — as a breaking amendment made **in place**, deliberately without minting `post/v2`, while zero `post/v1` documents existed on any chain. That breaking window is now closed: from here `post/v1` evolves only additively, and any further breaking change is a `post/v2`.
 
 ### Profile (`https://schemas.dfos.com/profile/v1`)
 
@@ -144,7 +148,7 @@ The `index/v1` fold is implemented as `foldIndexV1(ops)` in [`@metalabel/dfos-pr
 
 ### Media Object
 
-The standard representation of a reference to external media bytes. Defined once here; schemas that carry media reference this shape (the first consumer is the `profile/v1` `avatar` field above).
+The standard representation of a reference to external media bytes. Defined once here; schemas that carry media reference this shape (consumed by the `profile/v1` `avatar` field above and the `post/v1` `cover` and `attachments` fields).
 
 ```json
 {
@@ -170,7 +174,35 @@ The standard representation of a reference to external media bytes. Defined once
 
 A media object is the canonical **referential** case: a document is either _terminal_ (the `{ $schema, … }` blob _is_ the content) or _referential_ (it describes how to fetch external bytes). A media object is a pointer, and resolving it (delivery of the actual media bytes) is **outside the protocol**. The document gateway serves the document that _contains_ the media object as opaque bytes; it never dereferences the pointer. There is no "media gateway": media lives at the application/delivery layer, bound to the proof plane only by the signed reference — with `cid` as the optional content hash that lets a consumer verify the bytes it ultimately receives.
 
-> **Legacy shape (`post/v1`).** The `cover` and `attachments` fields of `post/v1` predate this definition and use an earlier `{ id, uri? }` media shape (`id` required, `uri` optional). Per the schema-evolution rules, that shape is unchanged within `post/v1`; a future post version adopts the Media object defined here.
+---
+
+## Authorship
+
+Who _wrote_ a thing and who _signed_ a thing are different claims. The protocol verifies **signers** — the `kid` DID in every operation's JWS header is cryptographic fact. Authorship is a content-layer statement, and the content model expresses it as a lattice of three tiers, each strictly additive over the one below. The tiers are custody-agnostic by construction: nothing changes shape when key custody moves from a host to the author.
+
+### 1. Assertion — `credits`
+
+The document says who made it: the `credits` array in `post/v1` (and analogous authorship fields in other schemas). Costless and unverified — liner notes. The trust anchor is the operation signer: _the identity that signed this revision asserts these credits._ Nothing more is claimed, and consumers SHOULD display it as an assertion of the signer, not a verified fact. This is often exactly right: a custodial host or space signs content on behalf of the people it credits.
+
+### 2. Proof — the claim operation
+
+A credited DID converts its credit into a verifiable, portable fact by **signing the chain itself**:
+
+1. The chain creator (or a credential holder with grant authority) issues the credited DID a **write credential** scoped to that chain (see [CREDENTIALS.md](https://protocol.dfos.com/credentials)).
+2. The credited DID appends an `update` operation that **re-commits the chain's current head `documentCID`** — a deliberate no-op revision (committing the same document again is legal; the operation's meaning is its signature, not a content change).
+3. The operation carries the credential embedded in its `authorization` field, so verification is self-contained on replay: a consumer verifies the signature, the embedded credential's delegation chain rooting at the chain creator, and the timestamps — no out-of-band lookups.
+
+The claim proves, permanently and portably: _this DID, authorized by the chain's owner, signed onto this chain at this time._ Structural notes:
+
+- Genesis is undelegable — `create` operations never carry `authorization` — so a claim is always an `update`, and the earliest possible claim is the operation immediately after genesis.
+- Multiple credited DIDs claim independently; each claim is its own operation, each independently verifiable.
+- A claim binds the signer to the **chain** (and, via the re-committed `documentCID`, to a specific document state) — not to any single `label` in the credits.
+
+**Claims are forever.** Operations gossip: a signed operation served to even one peer must be assumed permanently copied. An author-signed claim is therefore an **irrevocable public link** between the author DID and the chain. Revoking the write credential afterward stops future writes but does not — and cannot — unwind a committed claim. A DID should sign a claim only when that permanent association is intended, and deployments SHOULD say so plainly at the moment of claiming.
+
+### 3. Sovereign proof — reserved
+
+When authors hold their own keys, the same credentials and the same claim operations apply unchanged — the proof tier simply gains the strength of self-custody. No additional vocabulary is defined yet; future extensions (for example, embedded author-signed artifacts for content whose bytes are not publicly readable) are additive.
 
 ---
 

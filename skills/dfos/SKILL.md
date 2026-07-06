@@ -109,7 +109,7 @@ dfos identity create --name alice          # generate keys + sign genesis (no re
 dfos use alice                             # set active identity (local-only context)
 
 dfos content create - <<'EOF'
-{"$schema":"https://schemas.dfos.com/post/v1","body":"hello world"}
+{"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"hello world"}
 EOF
 
 dfos content list
@@ -223,7 +223,7 @@ dfos identity create --name alice --peer prod
 dfos use alice@prod
 
 CONTENT=$(dfos content create - --peer prod --json <<'EOF' | jq -r .contentId
-{"$schema":"https://schemas.dfos.com/post/v1","body":"hello world"}
+{"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"hello world"}
 EOF
 )
 dfos content show "$CONTENT"

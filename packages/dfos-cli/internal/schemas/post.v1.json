@@ -20,7 +20,7 @@
     },
     "body": {
       "type": "string",
-      "description": "Post body content."
+      "description": "Post body content. May embed attachment://<id> refs inline; each should have a corresponding attachments entry carrying the verifiable reference."
     },
     "cover": {
       "$ref": "#/$defs/media",
@@ -36,26 +36,48 @@
       "items": { "type": "string" },
       "description": "Topic names this post belongs to. Stored as names for portability."
     },
-    "createdByDID": {
-      "type": "string",
-      "pattern": "^did:",
-      "description": "DID of the identity that authored this content. Optional — omit when the signer IS the author."
+    "credits": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/credit" },
+      "description": "Ordered authorship credits. Array order is display order; the first entry is the primary author. Omit entirely for unattributed content. Credits are the assertion tier of the authorship lattice — the operation signer asserts them; a credited DID may upgrade its credit to proof via a claim operation."
     }
   },
   "additionalProperties": false,
   "$defs": {
     "media": {
       "type": "object",
-      "required": ["id"],
+      "required": ["uri"],
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Opaque media object identifier."
-        },
         "uri": {
           "type": "string",
           "format": "uri",
-          "description": "Optional URI for the media object."
+          "description": "Canonical reference to the media — an attachment://<id> ref (opaque, host-scoped) or any other URI. Always present."
+        },
+        "cid": {
+          "type": "string",
+          "pattern": "^bafkrei[a-z2-7]{52}$",
+          "description": "Optional content commitment — CIDv1, raw codec (0x55), sha2-256, base32 lowercase, computed over the media bytes exactly as stored/served. May be absent when no cid has been computed for the media."
+        },
+        "href": {
+          "type": "string",
+          "format": "uri",
+          "description": "Optional resolution hint — a plain URL where the bytes may currently be fetched. Implementation-dependent and non-normative; carries no integrity promise."
+        }
+      },
+      "additionalProperties": false
+    },
+    "credit": {
+      "type": "object",
+      "required": ["did"],
+      "properties": {
+        "did": {
+          "type": "string",
+          "pattern": "^did:",
+          "description": "DID of the credited identity."
+        },
+        "label": {
+          "type": "string",
+          "description": "Free-text role label — display vocabulary, not an enum (e.g. \"author\", \"editor\", \"photography\")."
         }
       },
       "additionalProperties": false
