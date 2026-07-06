@@ -2,15 +2,15 @@
 
   HOME — the network observatory
 
-  Not a landing page: a live instrument. The local index (relay-asserted
-  routing metadata, honestly counted) is the "verified index"; where a relay
-  advertises more in its /.well-known, the delta is shown as amber "asserted"
-  — that gap IS the thesis (speed from the relay, truth from the math). Before
-  any sync the page still reads: relay-asserted figures render in amber with a
-  sync CTA, so it is alive from the first paint.
+  Not a landing page: a live instrument. Two sources, one honest palette:
+  RELAY-ASSERTED figures (the relay's /.well-known claim) are the amber
+  headline; VERIFIED-LOCALLY figures (folded in your tab) are green. The gap
+  between them IS the thesis — speed from the relay, truth from the math. As
+  you browse, rows verify locally and the verified-ops figure climbs toward the
+  relay's assertion; a deep sync closes it entirely (and audits for omissions).
 
-  Everything reads from the LOCAL db + the optional relay hint. No new network
-  fetches; nothing here is a verification input.
+  Everything reads from the LOCAL db + the relay hint. No new verification
+  inputs here — the figures reflect what's already been folded.
 
 */
 
@@ -83,41 +83,45 @@ const chainRoute = (row: ChainRollup): string =>
   row.kind === 'content-op' ? `#/content/${row.chainId}` : `#/did/${row.chainId}`;
 
 // -----------------------------------------------------------------------------
-// one stat cell — local verified figure, with a dim "relay asserts N" subline
-// where a relay advertises more. Pre-sync (no local corpus) the asserted figure
-// takes the numeral in amber.
+// one stat cell. Trust palette: amber = RELAY-ASSERTED (the network's claim, a
+// hint), green = VERIFIED LOCALLY (folded in your tab). The headline numeral is
+// the relay-asserted figure in amber; a green subline shows how much of it your
+// tab has verified. When the whole figure is verified locally the numeral goes
+// green. `verifiedText` overrides the subline for figures that are inherently
+// local (e.g. public docs resolved in-tab).
 // -----------------------------------------------------------------------------
 
 const Stat = (props: {
   label: string;
-  local: number | null;
-  localText?: string | undefined;
-  asserted?: number | undefined;
+  asserted: number | null;
   assertedText?: string | undefined;
-  populated: boolean;
+  verified?: number | null | undefined;
+  verifiedText?: string | undefined;
+  fullyVerified?: boolean | undefined;
+  // amber/dim subline override for a figure with no relay assertion to verify
+  // against (e.g. a local-only count that needs a deep sync to compute).
+  noteText?: string | undefined;
 }) => {
-  const hasLocal = props.localText != null || props.local != null;
-  if (props.populated && hasLocal) {
-    const main = props.localText ?? fmtCount(props.local ?? 0);
-    const showAsserted =
-      props.assertedText != null || (props.asserted != null && props.asserted > (props.local ?? 0));
-    const sub = props.assertedText ?? `relay asserts ${fmtCount(props.asserted ?? 0)}`;
-    return (
-      <div class="stat">
-        <div class="stat-num">{main}</div>
-        <div class="stat-unit">{props.label}</div>
-        {showAsserted ? <div class="stat-sub">{sub}</div> : null}
-      </div>
-    );
-  }
-  // pre-sync (or a stat with no local value): relay-asserted, amber, honest.
-  const amain = props.assertedText ?? (props.asserted != null ? fmtCount(props.asserted) : '—');
   const known = props.assertedText != null || props.asserted != null;
+  const main = props.assertedText ?? (props.asserted != null ? fmtCount(props.asserted) : '—');
+  const verified = props.verified ?? 0;
+  const green = props.verifiedText != null || props.fullyVerified === true || verified > 0;
+  const sub =
+    props.verifiedText ??
+    (props.fullyVerified === true
+      ? 'verified locally'
+      : verified > 0
+        ? `${fmtCount(verified)} verified`
+        : (props.noteText ?? (known ? 'relay-asserted' : 'no relay hint')));
+  // the NUMERAL goes green only when the whole figure is verified locally
+  // (a deep audit, or an inherently-local resolved figure); a partial verified
+  // delta greens only the SUBLINE, leaving the relay-asserted headline amber.
+  const numGreen = props.fullyVerified === true || props.verifiedText != null;
   return (
     <div class="stat">
-      <div class="stat-num asserted">{amain}</div>
+      <div class={`stat-num ${numGreen ? 'ok' : 'asserted'}`}>{main}</div>
       <div class="stat-unit">{props.label}</div>
-      <div class="stat-sub asserted">{known ? 'asserted' : 'no relay hint'}</div>
+      <div class={`stat-sub ${green ? 'ok' : 'asserted'}`}>{sub}</div>
     </div>
   );
 };
@@ -129,87 +133,98 @@ const Stat = (props: {
 const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
   const sync = useSyncState();
   const resolving = sync.phase === 'resolving';
+  const syncing = sync.phase === 'syncing';
   const { obs, hint } = props;
   const counts = obs?.counts ?? { ops: 0, chains: 0, byKind: {} };
-  const populated = counts.chains > 0 || counts.ops > 0;
   const hk = hint.countsByKind ?? {};
-  const asserted = (k: OpKind): number | undefined => {
+  const asserted = (k: OpKind): number | null => {
     const key = HINT_KEY[k];
-    return key ? hk[key] : undefined;
+    return key ? (hk[key] ?? null) : null;
   };
 
-  const localOldest = obs?.oldestOpAt ? fmtAge(obs.oldestOpAt) : '';
-  const assertedOldest = hint.oldestOpAt ? fmtAge(hint.oldestOpAt) : undefined;
+  // the one unit-safe local-vs-network comparison: OPERATIONS folded in your tab
+  // (JIT folds as you browse + any deep sync) vs the ops the relay asserts. This
+  // is the honest "how much of the network have I verified" figure; it grows as
+  // you browse and completes on a deep sync. Per-kind identity/content figures
+  // are CHAIN counts locally but OP counts in the hint, so they carry no verified
+  // delta — they stay relay-asserted headline figures.
+  const localOps = counts.ops;
+  const assertedOps = hint.opCount ?? 0;
+  const fullyVerified = assertedOps > 0 && localOps >= assertedOps;
 
-  // by-kind segments from the local corpus (or the relay hint pre-sync)
-  const kindCounts: [OpKind, number][] = OP_KINDS.map((k) => [
-    k,
-    (populated ? (counts.byKind[k] ?? 0) : (asserted(k) ?? 0)) as number,
-  ]);
+  const assertedOldest = hint.oldestOpAt ? fmtAge(hint.oldestOpAt) : undefined;
+  const localOldest = obs?.oldestOpAt ? fmtAge(obs.oldestOpAt) : undefined;
+  const publicDocs = obs?.publicDocs ?? null;
+
+  // by-kind: relay-asserted proportions — the network's shape, always available.
+  const kindCounts: [OpKind, number][] = OP_KINDS.map((k) => [k, asserted(k) ?? 0]);
   const total = kindCounts.reduce((n, [, c]) => n + c, 0);
+
+  const right = fullyVerified
+    ? 'fully verified locally'
+    : localOps > 0
+      ? `relay-asserted · ${fmtCount(localOps)} ops verified locally`
+      : 'relay-asserted';
 
   return (
     <Panel
       title="network"
-      accent={populated ? 'ok' : 'warn'}
-      right={
-        <span class="lbl">
-          {populated ? 'local verified index' : 'relay-asserted — nothing synced'}
-        </span>
-      }
+      accent={fullyVerified ? 'ok' : 'warn'}
+      right={<span class="lbl">{right}</span>}
     >
-      {/* The "relay asserts N" comparison subline renders ONLY on operations —
-          the one figure where local and relay counts share a unit (ops vs ops).
-          countsByKind advertises per-kind OP counts while the local identities /
-          content figures are CHAIN counts, so a subline there would imply a
-          verification delta that is really a unit artifact. Pre-sync the amber
-          asserted numerals still render for every stat (no local claim to
-          compare against — they're the only data, framed 'asserted'). */}
+      {/* Headline numerals are the relay's assertion (amber = hint); a green
+          subline shows what your tab has folded (verified locally). Only
+          operations carries a numeric verified delta — it is the one figure
+          where local and relay share a unit (ops vs ops). */}
       <div class="statband">
         <Stat
           label="operations"
-          local={populated ? counts.ops : null}
-          asserted={hint.opCount}
-          populated={populated}
+          asserted={assertedOps}
+          verified={localOps}
+          fullyVerified={fullyVerified}
         />
-        <Stat
-          label="identities"
-          local={populated ? (counts.byKind['identity-op'] ?? 0) : null}
-          asserted={populated ? undefined : asserted('identity-op')}
-          populated={populated}
-        />
+        <Stat label="identities" asserted={asserted('identity-op')} fullyVerified={fullyVerified} />
         <Stat
           label="content chains"
-          local={populated ? (counts.byKind['content-op'] ?? 0) : null}
-          asserted={populated ? undefined : asserted('content-op')}
-          populated={populated}
+          asserted={asserted('content-op')}
+          fullyVerified={fullyVerified}
         />
-        <Stat
-          label="credentials"
-          local={populated ? (counts.byKind['credential'] ?? 0) : null}
-          asserted={populated ? undefined : asserted('credential')}
-          populated={populated}
-        />
+        <Stat label="credentials" asserted={asserted('credential')} fullyVerified={fullyVerified} />
         <Stat
           label="public docs"
-          local={populated ? (obs?.publicDocs ?? 0) : null}
-          localText={populated && resolving ? '…' : undefined}
-          assertedText={populated && resolving ? 'resolving' : undefined}
-          populated={populated}
+          asserted={null}
+          assertedText={
+            resolving
+              ? 'resolving'
+              : publicDocs != null && publicDocs > 0
+                ? fmtCount(publicDocs)
+                : '—'
+          }
+          verifiedText={
+            publicDocs != null && publicDocs > 0 && !resolving ? 'verified locally' : undefined
+          }
+          noteText={
+            resolving
+              ? 'resolving'
+              : publicDocs && publicDocs > 0
+                ? undefined
+                : 'local · deep-sync to count'
+          }
         />
         <Stat
           label="oldest op"
-          local={populated ? 0 : null}
-          localText={populated ? localOldest || '—' : undefined}
-          assertedText={populated ? undefined : assertedOldest}
-          populated={populated}
+          asserted={null}
+          assertedText={
+            (fullyVerified && localOldest ? localOldest : assertedOldest) ?? localOldest ?? '—'
+          }
+          verifiedText={fullyVerified && localOldest ? 'verified locally' : undefined}
         />
       </div>
 
       {total > 0 ? (
         <div style={{ marginTop: 12 }}>
           <div class="lbl" style={{ marginBottom: 6 }}>
-            by kind {populated ? '' : '· relay-asserted'}
+            by kind · relay-asserted
           </div>
           <div class="kindbar">
             {kindCounts.map(([k, c]) =>
@@ -234,21 +249,20 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
         </div>
       ) : null}
 
-      {!populated ? (
-        <div class="hero-actions" style={{ marginTop: 12 }}>
-          {sync.phase === 'syncing' ? (
-            <button onClick={() => stopSync()}>stop</button>
-          ) : (
-            <button class="primary" onClick={() => void startSync('manual')}>
-              sync full log
-            </button>
-          )}
-          <span class="muted">
-            Pull the operation log from your relays into a local IndexedDB store — then every figure
-            above is counted from the math in your tab, not taken on faith.
-          </span>
-        </div>
-      ) : null}
+      <div class="hero-actions" style={{ marginTop: 12 }}>
+        {syncing ? (
+          <button onClick={() => stopSync()}>stop</button>
+        ) : (
+          <button class={fullyVerified ? '' : 'primary'} onClick={() => void startSync('manual')}>
+            {fullyVerified ? 're-audit full log' : 'deep-sync · verify the full log'}
+          </button>
+        )}
+        <span class="muted">
+          {fullyVerified
+            ? 'Every figure above is counted from the math in your tab. A deep sync re-audits the full log for completeness — it can detect a relay index’s omissions.'
+            : 'Headline figures are relay-asserted hints; rows you browse verify locally as you view them. Deep-sync folds the entire operation log into your tab — every figure then counted from math, not taken on faith, and relay omissions become detectable.'}
+        </span>
+      </div>
     </Panel>
   );
 };
