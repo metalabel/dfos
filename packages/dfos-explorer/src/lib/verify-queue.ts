@@ -90,7 +90,9 @@ const loadVerdict = async (k: string): Promise<VerifyVerdict | undefined> => {
 /** Best-effort persist of a fold verdict so a reload trusts it without a fold. */
 const persistVerdict = async (k: string, facts: VerifiedFacts): Promise<void> => {
   try {
-    await (await getDb()).putVerify({
+    await (
+      await getDb()
+    ).putVerify({
       key: k,
       opCount: facts.opCount,
       isDeleted: facts.isDeleted,

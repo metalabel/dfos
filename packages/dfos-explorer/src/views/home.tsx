@@ -306,9 +306,7 @@ const RecentPanel = (props: {
         title="identities · head of relay index"
         accent="warn"
         right={
-          <span class="lbl">
-            head {fmtCount(head.length)} · from relay index · verifying live
-          </span>
+          <span class="lbl">head {fmtCount(head.length)} · from relay index · verifying live</span>
         }
       >
         {state === 'rows' ? (

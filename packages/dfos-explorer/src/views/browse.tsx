@@ -220,7 +220,12 @@ const IndexIdentitiesLight = (props: {
           more (or deep-sync the full log) to search a wider set.
         </div>
       ) : null}
-      <LoadMore hasMore={props.hasMore} loading={loading} onMore={props.loadMore} noun="identities" />
+      <LoadMore
+        hasMore={props.hasMore}
+        loading={loading}
+        onMore={props.loadMore}
+        noun="identities"
+      />
     </>
   );
 };
@@ -285,7 +290,12 @@ const IndexDocumentsLight = (props: {
           </tbody>
         </table>
       )}
-      <LoadMore hasMore={props.hasMore} loading={loading} onMore={props.loadMore} noun="documents" />
+      <LoadMore
+        hasMore={props.hasMore}
+        loading={loading}
+        onMore={props.loadMore}
+        noun="documents"
+      />
     </>
   );
 };
@@ -468,7 +478,9 @@ export const BrowseDocuments = () => {
           ) : null}
         </>
       }
-      right={<span class="lbl">what · from {mode === 'index' ? 'relay index' : 'local index'}</span>}
+      right={
+        <span class="lbl">what · from {mode === 'index' ? 'relay index' : 'local index'}</span>
+      }
       orient={
         mode === 'index' ? (
           <>

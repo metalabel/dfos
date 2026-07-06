@@ -194,7 +194,10 @@ const useIndexPager = <T>(
 };
 
 /** Page the identity index (optionally public-profile-only) with load-more. */
-export const useIndexIdentities = (enabled: boolean, publicOnly: boolean): IndexLoad<IndexIdentityRow> =>
+export const useIndexIdentities = (
+  enabled: boolean,
+  publicOnly: boolean,
+): IndexLoad<IndexIdentityRow> =>
   useIndexPager(enabled, `identities:${publicOnly}`, (after) =>
     getClient()
       .indexIdentities({
@@ -206,7 +209,10 @@ export const useIndexIdentities = (enabled: boolean, publicOnly: boolean): Index
   );
 
 /** Page the content index (optionally public-read-only) with load-more. */
-export const useIndexContent = (enabled: boolean, publicOnly: boolean): IndexLoad<IndexContentRow> =>
+export const useIndexContent = (
+  enabled: boolean,
+  publicOnly: boolean,
+): IndexLoad<IndexContentRow> =>
   useIndexPager(enabled, `content:${publicOnly}`, (after) =>
     getClient()
       .indexContent({
