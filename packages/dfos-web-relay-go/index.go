@@ -114,15 +114,20 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 	if value, ok := firstQueryValue(query, "docSchema"); ok {
 		docSchema = &value
 	}
+	var documentCID *string
+	if value, ok := firstQueryValue(query, "documentCID"); ok {
+		documentCID = &value
+	}
 	publicRead := parseBooleanQuery(query.Get("publicRead"))
 	limit := parseLimit(req, 100, 1000)
 
 	rows, err := r.readStore.QueryIndexContent(IndexContentQuery{
-		Creator:    creator,
-		DocSchema:  docSchema,
-		PublicRead: publicRead,
-		After:      query.Get("after"),
-		Limit:      limit,
+		Creator:     creator,
+		DocSchema:   docSchema,
+		DocumentCID: documentCID,
+		PublicRead:  publicRead,
+		After:       query.Get("after"),
+		Limit:       limit,
 	})
 	if storeErr(w, err) {
 		return

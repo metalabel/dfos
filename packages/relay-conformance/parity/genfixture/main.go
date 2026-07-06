@@ -38,8 +38,9 @@ type Fixture struct {
 	BootstrapOps    []string `json:"bootstrapOps"`   // relay genesis + profile, replayed
 	Ops             []string `json:"ops"`            // fixed user op set
 	// QueryDIDs / QueryContentIDs let the test hit per-chain log routes.
-	QueryDID       string `json:"queryDid"`
-	QueryContentID string `json:"queryContentId"`
+	QueryDID         string `json:"queryDid"`
+	QueryContentID   string `json:"queryContentId"`
+	QueryDocumentCID string `json:"queryDocumentCid"`
 	// QueryServiceDID resolves to an identity carrying a DfosRelay + ContentAnchor
 	// services set; QueryDeletedDID resolves to a deactivated (create+delete)
 	// identity. Both drive the universal-resolver parity cases.
@@ -352,6 +353,7 @@ func main() {
 		},
 		QueryDID:                  aDID,
 		QueryContentID:            contentID,
+		QueryDocumentCID:          doc2,
 		QueryServiceDID:           cDID,
 		QueryDeletedDID:           dDID,
 		QueryRevokedCredentialCID: bCredCID,
