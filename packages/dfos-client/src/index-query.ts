@@ -44,12 +44,22 @@ const setParam = (url: URL, key: string, value: string | number | boolean | unde
  * fails over to the next relay; when no relay answers 200 the caller gets the
  * supplied `empty` page. Callers gate on `capabilities()` first, so the empty
  * fallback is the "every candidate declined" floor, not the common path.
+ *
+ * `throwOnDecline` flips the all-declined floor from empty-success to a throw. It
+ * exists because `capabilities.index` is a SINGLE flag that does not imply every
+ * `/index/v0` sub-route: a relay can advertise index yet 501 a newer route (e.g.
+ * `/credentials`). Swallowing that into an empty page is indistinguishable from a
+ * genuine 200-empty, so a caller that wants to fall back to a local source on
+ * route-absence (rather than render a false-empty) opts into the throw. A genuine
+ * 200-empty from a capable relay still returns normally — only the every-candidate-
+ * declined floor throws.
  */
 const fetchIndexPage = async <T>(
   relays: string[],
   fetchImpl: typeof fetch,
   build: (base: string) => URL,
   empty: T,
+  throwOnDecline = false,
 ): Promise<T> => {
   for (const url of relays) {
     try {
@@ -60,6 +70,7 @@ const fetchIndexPage = async <T>(
       continue;
     }
   }
+  if (throwOnDecline) throw new Error('no index-capable relay served the requested route');
   return empty;
 };
 
@@ -149,6 +160,10 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
         return url;
       },
       { credentials: [], next: null },
+      // route is newer than the `index` capability flag: throw on all-declined so a
+      // relay that advertises index but predates /credentials makes the caller fall
+      // back to its local fold instead of rendering a false-empty.
+      true,
     );
 
   /**

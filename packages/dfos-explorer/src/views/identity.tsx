@@ -39,7 +39,7 @@ import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { useIndexCapable } from '../lib/index-light';
+import { indexCredSource, useIndexCapable } from '../lib/index-light';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
@@ -66,6 +66,10 @@ export const Identity = (props: { did: string }) => {
   // credentials issued BY this DID off the relay's /index/v0/credentials?issuer=<did>
   // — the always-fresh, no-sync path (relay-asserted; open a credential to fold it).
   const [issuedIndex, setIssuedIndex] = useState<IndexCredentialRow[] | null>(null);
+  // relay advertises index but /index/v0/credentials errored (e.g. a relay predating
+  // the route): capability.index does NOT imply this sub-route, so fall back to the
+  // local scan rather than showing a false-empty "issued no credentials".
+  const [issuedIndexErr, setIssuedIndexErr] = useState(false);
   // credentialCID → revoking op CID, folded from synced revocation ops (local-first)
   const [revoked, setRevoked] = useState<Map<string, string>>(new Map());
   // operations this identity has WITNESSED — a relay-index reverse lookup by
@@ -165,6 +169,7 @@ export const Identity = (props: { did: string }) => {
   useEffect(() => {
     let dead = false;
     setIssuedIndex(null);
+    setIssuedIndexErr(false);
     if (indexed !== true) return;
     void getClient()
       .indexCredentials({ issuer: props.did, limit: 200 })
@@ -172,7 +177,8 @@ export const Identity = (props: { did: string }) => {
         if (!dead) setIssuedIndex(p.credentials);
       })
       .catch(() => {
-        if (!dead) setIssuedIndex([]);
+        // index-capable relay, but this route errored — fall back to the local scan
+        if (!dead) setIssuedIndexErr(true);
       });
     return () => {
       dead = true;
@@ -206,11 +212,13 @@ export const Identity = (props: { did: string }) => {
 
   const services = ('services' in state ? state.services : undefined) ?? [];
 
-  // credential list source: the live relay index when the relay is index-capable
-  // (always fresh, no sync needed), else the local synced scan. Both expose
-  // {cid, jwsToken}, so the row renders identically from either.
-  const credSource: { cid: string; jwsToken: string }[] | null =
-    indexed === true ? issuedIndex : creds;
+  // credential list source: the live relay index when the relay is index-capable AND
+  // the credentials route answered (always fresh, no sync needed), else the local
+  // synced scan. Both expose {cid, jwsToken}, so the row renders identically.
+  const credFromRelayIndex = indexCredSource(indexed, issuedIndexErr);
+  const credSource: { cid: string; jwsToken: string }[] | null = credFromRelayIndex
+    ? issuedIndex
+    : creds;
 
   // crosslinks from already-loaded state: content chains this identity anchors
   // (ContentAnchor services) + the credentials it issued.
@@ -312,17 +320,17 @@ export const Identity = (props: { did: string }) => {
         title="credentials issued"
         right={
           <span class="lbl">
-            {indexed === true ? 'relay index · attributed' : 'from local index'}
+            {credFromRelayIndex ? 'relay index · attributed' : 'from local index'}
           </span>
         }
       >
         {credSource === null ? (
           <span class="muted">
-            {indexed === true ? 'reading relay index…' : 'reading local index…'}
+            {credFromRelayIndex ? 'reading relay index…' : 'reading local index…'}
           </span>
         ) : credSource.length === 0 ? (
           <span class="muted">
-            {indexed === true
+            {credFromRelayIndex
               ? 'this identity has issued no credentials the relay index surfaces.'
               : 'none in local index — sync the full log to populate.'}
           </span>
@@ -369,7 +377,7 @@ export const Identity = (props: { did: string }) => {
             </tbody>
           </table>
         )}
-        {indexed === true && credSource !== null && credSource.length > 0 && (
+        {credFromRelayIndex && credSource !== null && credSource.length > 0 && (
           <div class="ck-note" style={{ marginTop: 8 }}>
             relay-asserted index hints — open a credential to fold its signature and authority.
             {credSource.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}

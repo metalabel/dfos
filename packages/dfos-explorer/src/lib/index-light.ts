@@ -106,6 +106,17 @@ export const indexListState = (loading: boolean, error: boolean, count: number):
 };
 
 /**
+ * Whether a credential surface should read from the live relay index or fall back to
+ * the local fold. `capabilities.index` is a SINGLE flag — it does not imply the
+ * `/index/v0/credentials` sub-route exists (a relay can advertise index yet predate
+ * that route). So the index credential lane is authoritative only when the relay is
+ * index-capable AND the route did not error; on error we degrade to the local scan
+ * rather than render a false-empty panel. Pure so both views test it without a DOM.
+ */
+export const indexCredSource = (indexed: boolean | null, indexError: boolean): boolean =>
+  indexed === true && !indexError;
+
+/**
  * Generic cursor pager over an index projection. Loads the first page when
  * enabled, exposes `loadMore` to append the next page via the relay's `next`
  * cursor. `resetKey` bumps to reload from scratch (e.g. a filter toggle).

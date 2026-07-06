@@ -35,7 +35,7 @@ import { getDb } from '../lib/db-instance';
 import { fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { isIndexDocument } from '../lib/index-fold';
-import { useIndexCapable } from '../lib/index-light';
+import { indexCredSource, useIndexCapable } from '../lib/index-light';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
@@ -63,6 +63,10 @@ export const Content = (props: { id: string }) => {
   // related grants off the relay's /index/v0/credentials?resource=chain:<id> — the
   // always-fresh, no-sync path (a superset: exact chain:<id> ∪ chain:* wildcards).
   const [grantsIndex, setGrantsIndex] = useState<GrantSummary[] | null>(null);
+  // the relay advertises index but /index/v0/credentials errored (e.g. a relay that
+  // predates the route): capability.index does NOT imply this sub-route exists, so on
+  // error we fall back to the local fold rather than showing a false-empty panel.
+  const [grantsIndexErr, setGrantsIndexErr] = useState(false);
   // credentialCID → revoking op CID, folded from synced revocation ops (local-first)
   const [revoked, setRevoked] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState('');
@@ -163,6 +167,7 @@ export const Content = (props: { id: string }) => {
   useEffect(() => {
     let dead = false;
     setGrantsIndex(null);
+    setGrantsIndexErr(false);
     if (indexed !== true) return;
     void getClient()
       .indexCredentials({ resource: `chain:${props.id}`, limit: 200 })
@@ -170,7 +175,8 @@ export const Content = (props: { id: string }) => {
         if (!dead) setGrantsIndex(grantsFromIndex(p.credentials, props.id));
       })
       .catch(() => {
-        if (!dead) setGrantsIndex([]);
+        // index-capable relay, but this route errored — fall back to the local fold
+        if (!dead) setGrantsIndexErr(true);
       });
     return () => {
       dead = true;
@@ -198,6 +204,9 @@ export const Content = (props: { id: string }) => {
   const isDeleted = chain?.isDeleted ?? claimState.isDeleted ?? false;
   const headMatch = !!chain && (!claimHead || chain.headCID === claimHead);
   const revAxis = resolved?.trust.unverifiable?.includes('revocation') ?? false;
+  // access grants come from the live index only when the relay is index-capable AND
+  // the credentials route answered; otherwise the local fold (which always exists).
+  const grantsFromRelayIndex = indexCredSource(indexed, grantsIndexErr);
 
   const pill = error
     ? { state: 'bad' as const, text: 'verification failed' }
@@ -320,11 +329,11 @@ export const Content = (props: { id: string }) => {
       <DocPanel doc={doc} committedCid={docCid} verified={!!chain} />
 
       <GrantsPanel
-        grants={indexed === true ? grantsIndex : grants}
+        grants={grantsFromRelayIndex ? grantsIndex : grants}
         revoked={revoked}
         publicBytes={!!doc?.blob.bytes}
         gated={!!doc?.blob.gated}
-        indexed={indexed === true}
+        indexed={grantsFromRelayIndex}
       />
 
       <Panel title="operation history">
