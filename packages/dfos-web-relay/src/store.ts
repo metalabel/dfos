@@ -196,6 +196,7 @@ export class MemoryRelayStore implements RelayStore {
   async queryIndexContent(q: {
     creator?: string;
     docSchema?: string;
+    documentCID?: string;
     publicRead?: boolean;
     after?: string;
     limit: number;
@@ -203,6 +204,7 @@ export class MemoryRelayStore implements RelayStore {
     const rows = [...this.indexContentRows.values()].filter((row) => {
       if (q.creator !== undefined && row.creatorDID !== q.creator) return false;
       if (q.docSchema !== undefined && row.docSchema !== q.docSchema) return false;
+      if (q.documentCID !== undefined && row.currentDocumentCID !== q.documentCID) return false;
       if (q.publicRead !== undefined && row.publicRead !== q.publicRead) return false;
       return true;
     });

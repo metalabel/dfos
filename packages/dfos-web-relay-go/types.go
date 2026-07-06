@@ -358,11 +358,12 @@ type IndexIdentityQuery struct {
 
 // IndexContentQuery is the keyset-paged filter for content projection rows.
 type IndexContentQuery struct {
-	Creator    string  // "" = no filter
-	DocSchema  *string // nil = no filter
-	PublicRead *bool   // nil = no filter
-	After      string
-	Limit      int
+	Creator     string  // "" = no filter
+	DocSchema   *string // nil = no filter
+	DocumentCID *string // nil = no filter
+	PublicRead  *bool   // nil = no filter
+	After       string
+	Limit       int
 }
 
 // IndexCountersignatureQuery is the keyset-paged filter for countersignature

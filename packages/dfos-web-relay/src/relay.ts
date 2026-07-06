@@ -542,12 +542,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
 
     const docSchema = c.req.query('docSchema');
+    const documentCID = c.req.query('documentCID');
     const publicRead = parseBooleanQuery(c.req.query('publicRead'));
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = await store.queryIndexContent({
       ...(creator ? { creator } : {}),
       ...(docSchema !== undefined ? { docSchema } : {}),
+      ...(documentCID !== undefined ? { documentCID } : {}),
       ...(publicRead !== undefined ? { publicRead } : {}),
       ...(after ? { after } : {}),
       limit,

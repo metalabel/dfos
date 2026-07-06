@@ -91,6 +91,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
     params?: {
       creator?: string;
       docSchema?: string;
+      documentCID?: string;
       publicRead?: boolean;
       after?: string;
       limit?: number;
@@ -104,6 +105,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
         const url = new URL(`${INDEX_BASE_PATH}/content`, base);
         setParam(url, 'creator', params?.creator);
         setParam(url, 'docSchema', params?.docSchema);
+        setParam(url, 'documentCID', params?.documentCID);
         setParam(url, 'publicRead', params?.publicRead);
         setParam(url, 'after', params?.after);
         setParam(url, 'limit', params?.limit);

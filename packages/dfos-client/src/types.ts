@@ -329,6 +329,7 @@ export interface Client {
     params?: {
       creator?: string;
       docSchema?: string;
+      documentCID?: string;
       publicRead?: boolean;
       after?: string;
       limit?: number;

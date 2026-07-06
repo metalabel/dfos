@@ -735,6 +735,10 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		where = append(where, "doc_schema = ?")
 		args = append(args, *q.DocSchema)
 	}
+	if q.DocumentCID != nil {
+		where = append(where, "current_document_cid = ?")
+		args = append(args, *q.DocumentCID)
+	}
 	if q.PublicRead != nil {
 		where = append(where, "public_read = ?")
 		args = append(args, boolToInt(*q.PublicRead))

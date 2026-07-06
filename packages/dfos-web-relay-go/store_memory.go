@@ -261,6 +261,9 @@ func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		if q.DocSchema != nil && (row.DocSchema == nil || *row.DocSchema != *q.DocSchema) {
 			continue
 		}
+		if q.DocumentCID != nil && (row.CurrentDocumentCID == nil || *row.CurrentDocumentCID != *q.DocumentCID) {
+			continue
+		}
 		if q.PublicRead != nil && row.PublicRead != *q.PublicRead {
 			continue
 		}

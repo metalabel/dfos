@@ -38,6 +38,7 @@ type parityFixture struct {
 	Ops                       []string `json:"ops"`
 	QueryDID                  string   `json:"queryDid"`
 	QueryContentID            string   `json:"queryContentId"`
+	QueryDocumentCID          string   `json:"queryDocumentCid"`
 	QueryServiceDID           string   `json:"queryServiceDid"`
 	QueryDeletedDID           string   `json:"queryDeletedDid"`
 	QueryRevokedCredentialCID string   `json:"queryRevokedCredentialCid"`
@@ -207,6 +208,7 @@ func TestDualRelayParity(t *testing.T) {
 		"/.well-known/dfos-relay",
 		"/index/v0/identities?limit=1000",
 		"/index/v0/content?limit=1000",
+		"/index/v0/content?documentCID=" + fix.QueryDocumentCID + "&limit=1000",
 		"/index/v0/countersignatures?witness=" + fix.QueryRevocationIssuerDID + "&limit=1000",
 	}
 

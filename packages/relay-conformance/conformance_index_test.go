@@ -201,6 +201,51 @@ func TestIndexContentDocSchemaFilter(t *testing.T) {
 	_ = body.Next
 }
 
+func TestIndexContentDocumentCIDFilter(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	creator := createIdentity(t, base)
+	matching := createContentWithDocument(t, base, creator, map[string]any{
+		"$schema": "urn:dfos-conformance:index-document-cid-filter",
+		"type":    "index-conformance-document-cid-filter",
+		"title":   "matching",
+	}, true)
+	nonMatching := createContentWithDocument(t, base, creator, map[string]any{
+		"$schema": "urn:dfos-conformance:index-document-cid-filter",
+		"type":    "index-conformance-document-cid-filter",
+		"title":   "other",
+	}, true)
+
+	var body struct {
+		Content []struct {
+			ContentID          string  `json:"contentId"`
+			CurrentDocumentCID *string `json:"currentDocumentCID"`
+		} `json:"content"`
+		Next *string `json:"next"`
+	}
+	resp := getJSON(t, base+"/index/v0/content?documentCID="+url.QueryEscape(matching.documentCID)+"&limit=1000", &body)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("content documentCID filter: status %d", resp.StatusCode)
+	}
+	found := false
+	for _, row := range body.Content {
+		if row.CurrentDocumentCID == nil || *row.CurrentDocumentCID != matching.documentCID {
+			t.Fatalf("documentCID-filtered row has currentDocumentCID %v, want %s: %+v", row.CurrentDocumentCID, matching.documentCID, row)
+		}
+		if row.ContentID == matching.contentID {
+			found = true
+		}
+		if row.ContentID == nonMatching.contentID {
+			t.Fatalf("documentCID filter leaked non-matching content %s", nonMatching.contentID)
+		}
+	}
+	if !found {
+		t.Fatalf("documentCID filter did not include created content %s", matching.contentID)
+	}
+	_ = body.Next
+}
+
 func TestIndexContentPublicReadFilter(t *testing.T) {
 	base := relayURL(t)
 	requireIndexCapability(t, base)

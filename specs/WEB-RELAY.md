@@ -660,7 +660,7 @@ Enumerates identity chains, `did` ascending.
 
 Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `after` (a `did` keyset cursor — returns rows with `did` strictly greater), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
 
-### Content Chains (`GET /index/v0/content?creator={did}&docSchema=&publicRead=&after={contentId}&limit=N`)
+### Content Chains (`GET /index/v0/content?creator={did}&docSchema=&documentCID=&publicRead=&after={contentId}&limit=N`)
 
 Enumerates content chains, `contentId` ascending. All filters are ANDed exact matches.
 
@@ -685,7 +685,7 @@ Enumerates content chains, `contentId` ascending. All filters are ANDed exact ma
 }
 ```
 
-Parameters: `creator` (exact DID — the chain's genesis signer; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `publicRead` (boolean), `after` (a `contentId` keyset cursor — returns rows with `contentId` strictly greater), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, composed client-side.
+Parameters: `creator` (exact DID — the chain's genesis signer; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `documentCID` (exact match against the projected `currentDocumentCID` — the reverse lookup "who published this document"), `publicRead` (boolean), `after` (a `contentId` keyset cursor — returns rows with `contentId` strictly greater), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, composed client-side.
 
 ### Countersignatures by Witness (`GET /index/v0/countersignatures?witness={did}&after={cid}&limit=N`)
 
