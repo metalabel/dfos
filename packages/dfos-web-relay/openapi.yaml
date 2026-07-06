@@ -760,6 +760,97 @@ paths:
         '501':
           description: Index capability not supported by this relay
 
+  /index/v0/credentials:
+    get:
+      operationId: indexCredentials
+      summary: Public credentials held by the relay (non-authoritative index)
+      description: |
+        Enumerates the relay's held PUBLIC credentials (aud "*"), filterable by
+        issuer and/or resource, ordered by credential CID ascending and
+        cursor-paginated. When the requested `resource` is a chain resource, the
+        `chain:*` wildcard bucket is always unioned in (a chain:* grant may
+        authorize the named chain). Amber and relay-asserted: the result is a
+        superset of candidates carrying the full self-proving JWS; the caller
+        folds each token against the proof plane (delegation roots at the chain
+        creator, revocation, expiry) before treating it as authorization — the
+        relay makes no authorization claim. Only public credentials are ever
+        stored, so targeted bearer credentials are neither enumerable nor
+        leakable. Relays without the capability return 501.
+      tags: [Index]
+      parameters:
+        - name: issuer
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'Issuer DID (canonical 31-char did:dfos); 400 when malformed'
+        - name: resource
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'Exact match against an att[].resource. For a chain resource the chain:* wildcard bucket is unioned in.'
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Keyset cursor — returns rows with credential `cid` strictly greater than this value (from a prior page's next).
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+      responses:
+        '200':
+          description: Public-credentials page (possibly empty)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credentials, next]
+                properties:
+                  credentials:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, issuerDID, att, exp, jwsToken]
+                      properties:
+                        cid:
+                          type: string
+                        issuerDID:
+                          type: string
+                        att:
+                          type: array
+                          items:
+                            type: object
+                            required: [resource, action]
+                            properties:
+                              resource:
+                                type: string
+                              action:
+                                type: string
+                        exp:
+                          type: integer
+                          description: Expiry (unix seconds)
+                        jwsToken:
+                          type: string
+                          description: The full credential JWS — self-proving, full-fidelity att
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page (pass as `after`), or null on the last page
+        '400':
+          description: Malformed issuer DID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: Index capability not supported by this relay
+
   /proof/v1/content/{contentId}:
     get:
       operationId: getContentChain
