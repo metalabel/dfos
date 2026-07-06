@@ -11,6 +11,7 @@
     ops    (keyPath cid)      source of truth. idx: chainId, kind, createdAt
     chains (keyPath chainId)  derived rollup / materialized view. idx: kind, lastCreatedAt, opCount
     sync   (keyPath relay)    per-relay forward cursor
+    verify (keyPath key)      durable JIT-fold verdicts (`${kind}:${chainId}`)
 
 */
 
@@ -144,6 +145,23 @@ export interface SyncCursor {
   updatedAt: string;
 }
 
+/**
+ * A durable verify verdict: the result of a viewport JIT fold, keyed by
+ * `${kind}:${chainId}`. Persisting it lets a reload show a previously-folded row
+ * GREEN instantly (its ops are already local) instead of re-folding — the queue
+ * re-folds only when the relay index's hint opCount exceeds the recorded one
+ * (opCount is branch-inclusive and monotonic). Disposable like the rest of the
+ * local index; an upgrade wipes it.
+ */
+export interface VerifyVerdict {
+  /** `${kind}:${chainId}` */
+  key: string;
+  opCount: number;
+  isDeleted: boolean;
+  /** ms epoch the fold landed — informational (freshness is decided by opCount). */
+  verifiedAt: number;
+}
+
 export interface ChainsQuery {
   sort: 'recent' | 'ops';
   kind?: OpKind | undefined;
@@ -189,6 +207,10 @@ export interface ExplorerDb {
   }): Promise<DocumentsBrowse>;
   getCursor(relay: string): Promise<SyncCursor | undefined>;
   setCursor(cursor: SyncCursor): Promise<void>;
+  /** A durable JIT-fold verdict for `${kind}:${chainId}`, or undefined. */
+  getVerify(key: string): Promise<VerifyVerdict | undefined>;
+  /** Persist a JIT-fold verdict so a reload can trust it without re-folding. */
+  putVerify(verdict: VerifyVerdict): Promise<void>;
   wipe(): Promise<void>;
   close(): void;
 }
@@ -199,7 +221,9 @@ export interface ExplorerDb {
 // primitives riding the shared chainId no longer relabel it or inflate its count
 // (see sync.ts). The local index is a disposable cache, so the upgrade
 // wipes+rebuilds (see onupgradeneeded) — a re-sync repopulates rollups cleanly.
-const DB_VERSION = 4;
+// bumped 4→5: added the `verify` store — durable viewport-fold verdicts so a
+// reload shows already-verified rows green without re-folding (see verify-queue).
+const DB_VERSION = 5;
 
 // scan ceiling for filtered index-cursor queries — keeps worst case bounded.
 // When a query stops here before the cursor is exhausted, it reports
@@ -269,6 +293,7 @@ export const openExplorerDb = async (
       chains.createIndex('lastCreatedAt', 'lastCreatedAt');
       chains.createIndex('opCount', 'opCount');
       d.createObjectStore('sync', { keyPath: 'relay' });
+      d.createObjectStore('verify', { keyPath: 'key' });
     };
     open.onsuccess = () => resolve(open.result);
     open.onerror = () => reject(open.error ?? new Error('indexeddb open failed'));
@@ -475,11 +500,21 @@ export const openExplorerDb = async (
     await done(t);
   };
 
+  const getVerify = async (k: string): Promise<VerifyVerdict | undefined> =>
+    (await req(db.transaction('verify').objectStore('verify').get(k))) as VerifyVerdict | undefined;
+
+  const putVerify = async (verdict: VerifyVerdict): Promise<void> => {
+    const t = db.transaction('verify', 'readwrite');
+    t.objectStore('verify').put(verdict);
+    await done(t);
+  };
+
   const wipe = async (): Promise<void> => {
-    const t = db.transaction(['ops', 'chains', 'sync'], 'readwrite');
+    const t = db.transaction(['ops', 'chains', 'sync', 'verify'], 'readwrite');
     t.objectStore('ops').clear();
     t.objectStore('chains').clear();
     t.objectStore('sync').clear();
+    t.objectStore('verify').clear();
     await done(t);
   };
 
@@ -498,6 +533,8 @@ export const openExplorerDb = async (
     browseDocuments,
     getCursor,
     setCursor,
+    getVerify,
+    putVerify,
     wipe,
     close: () => db.close(),
   };

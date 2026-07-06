@@ -2,18 +2,22 @@
 
   BROWSE — public identities / documents / artifacts
 
-  Three sections over the LOCAL index (never a query-for-list against a relay —
-  enumeration is intrinsically sync-local in a "completeness is outside the proof"
-  trust model). Each is a different primitive:
+  Identities and documents enumerate LIVE from the relay's /index/v0 whenever a
+  relay advertises the index capability — always, even after a deep sync (the live
+  index is fresher than a past sync). Each row is an ATTRIBUTED relay hint,
+  promoted to VERIFIED as it scrolls into view and its chain folds (the fold
+  wins). Where no relay advertises the index, these fall back to the LOCAL synced
+  index. Artifacts have no index projection (their type is inline in the JWS), so
+  they always browse from the local log. Each is a different primitive:
 
     identities — who. Attributed public profiles, substring-searchable by name.
     documents  — what content. Public content chains, typed by their doc $schema.
     artifacts  — signed claims. Standalone statements, type read from the JWS.
 
-  Identities and documents need Phase-2 projections (name / type materialized from
-  the content-plane blob); artifacts carry their type in the op itself, so they
-  browse straight from the log with no resolution step. Public-only by default,
-  with an honest count of what's hidden and a toggle (decision D).
+  Enumeration is never a completeness claim ("completeness is outside the proof");
+  a deep sync is the exhaustive AUDIT stance that alone detects a relay's
+  omissions. Public-only by default, with an honest count of what's hidden and a
+  toggle (decision D).
 
 */
 
@@ -26,7 +30,7 @@ import type { ChainRollup, DocumentsBrowse, ExplorerOp, IdentitiesBrowse } from 
 import { getDb } from '../lib/db-instance';
 import { fmtCount, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { useIndexContent, useIndexIdentities, useLightMode } from '../lib/index-light';
+import { useIndexCapable, useIndexContent, useIndexIdentities } from '../lib/index-light';
 import { fetchRelayHint } from '../lib/relay-hint';
 import { startProjections, startSync, stopSync, useSyncState } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
@@ -99,13 +103,28 @@ const SyncPrompt = (props: { syncing: boolean }) => (
 );
 
 // -----------------------------------------------------------------------------
-// index light — instant attributed rows straight off a relay's /index/v0, each
-// promoted to verified as it scrolls into view (see lib/index-light.ts). Gated
-// by useLightMode: active while a relay advertises the capability AND no full
-// log sync has ever run against the configured relays (per-relay cursor state —
-// NOT corpus emptiness, which the verify queue's own JIT folds would destroy).
-// After a real sync, every surface below resumes its pre-index local behavior.
+// index browse — live attributed rows straight off a relay's /index/v0, each
+// promoted to verified as it scrolls into view (see lib/index-light.ts). Active
+// whenever a relay advertises the index capability (useIndexCapable), ALWAYS —
+// the live index is the enumeration source even after a deep sync. Where no relay
+// advertises it, the surfaces below fall back to the local synced index.
 // -----------------------------------------------------------------------------
+
+/** Pull the next index page on demand — enumeration pages instead of a silent
+ *  whole-corpus cap; the relay's `next` cursor drives it. */
+const LoadMore = (props: {
+  hasMore: boolean;
+  loading: boolean;
+  onMore: () => void;
+  noun: string;
+}) =>
+  props.hasMore ? (
+    <div class="ck-note" style={{ marginTop: 8 }}>
+      <button onClick={props.onMore} disabled={props.loading}>
+        {props.loading ? 'loading…' : `load more ${props.noun}`}
+      </button>
+    </div>
+  ) : null;
 
 /** One identity index row: name (attributed) + a live verify badge; opCount and
  *  deletion reconcile to the fold once it lands (the fold wins over the hint). */
@@ -131,6 +150,8 @@ const IndexIdentityRowView = (props: { row: IndexIdentityRow }) => {
 const IndexIdentitiesLight = (props: {
   rows: IndexIdentityRow[];
   loading: boolean;
+  hasMore: boolean;
+  loadMore: () => void;
   query: string;
 }) => {
   const { rows, loading } = props;
@@ -168,10 +189,11 @@ const IndexIdentitiesLight = (props: {
       )}
       {needle ? (
         <div class="ck-note" style={{ marginTop: 8 }}>
-          searching {fmtCount(rows.length)} loaded index rows — the relay has no name search; sync
-          the full log to search the whole corpus.
+          searching {fmtCount(rows.length)} loaded index rows — the relay has no name search; load
+          more (or deep-sync the full log) to search a wider set.
         </div>
       ) : null}
+      <LoadMore hasMore={props.hasMore} loading={loading} onMore={props.loadMore} noun="identities" />
     </>
   );
 };
@@ -203,7 +225,12 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
   );
 };
 
-const IndexDocumentsLight = (props: { rows: IndexContentRow[]; loading: boolean }) => {
+const IndexDocumentsLight = (props: {
+  rows: IndexContentRow[];
+  loading: boolean;
+  hasMore: boolean;
+  loadMore: () => void;
+}) => {
   const { rows, loading } = props;
   const shown = rows.slice(0, BROWSE_LIMIT);
   return (
@@ -230,6 +257,7 @@ const IndexDocumentsLight = (props: { rows: IndexContentRow[]; loading: boolean 
           </tbody>
         </table>
       )}
+      <LoadMore hasMore={props.hasMore} loading={loading} onMore={props.loadMore} noun="documents" />
     </>
   );
 };
@@ -240,12 +268,12 @@ const IndexDocumentsLight = (props: { rows: IndexContentRow[]; loading: boolean 
 
 export const BrowseIdentities = () => {
   const sync = useSyncState();
-  const light = useLightMode();
+  const indexed = useIndexCapable();
   const [query, setQuery] = useState('');
   const [includeGated, setIncludeGated] = useState(false);
   const [result, setResult] = useState<IdentitiesBrowse | null>(null);
   const available = useAvailable(ID_KEYS);
-  const index = useIndexIdentities(light === true, true);
+  const index = useIndexIdentities(indexed === true, true);
 
   useEffect(() => {
     let dead = false;
@@ -267,16 +295,16 @@ export const BrowseIdentities = () => {
       title={
         <>
           public identities{' '}
-          {light === true ? (
+          {indexed === true ? (
             <Pill state="warn">{fmtCount(index.rows.length)}</Pill>
           ) : result ? (
             <Pill state="ok">{fmtCount(result.publicCount)}</Pill>
           ) : null}
         </>
       }
-      right={<span class="lbl">who · from {light === true ? 'relay index' : 'local index'}</span>}
+      right={<span class="lbl">who · from {indexed === true ? 'relay index' : 'local index'}</span>}
       orient={
-        light === true ? (
+        indexed === true ? (
           <>
             Identities with a publicly-readable profile, straight off the relay's{' '}
             <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — every row is an{' '}
@@ -294,7 +322,7 @@ export const BrowseIdentities = () => {
         )
       }
     >
-      {light !== true ? <AvailableHint available={available} localCount={total} /> : null}
+      {indexed !== true ? <AvailableHint available={available} localCount={total} /> : null}
       <div class="bar" style={{ marginBottom: 8 }}>
         <input
           placeholder="search names…"
@@ -303,7 +331,7 @@ export const BrowseIdentities = () => {
           onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
         />
       </div>
-      {light !== true && result && result.gatedCount > 0 ? (
+      {indexed !== true && result && result.gatedCount > 0 ? (
         <div class="filters" style={{ marginBottom: 8 }}>
           <button class={includeGated ? 'on' : ''} onClick={() => setIncludeGated((v) => !v)}>
             {includeGated ? 'hide' : 'show'} {fmtCount(result.gatedCount)} without a public profile
@@ -311,10 +339,16 @@ export const BrowseIdentities = () => {
         </div>
       ) : null}
 
-      {light === true ? (
-        <IndexIdentitiesLight rows={index.rows} loading={index.loading} query={query} />
+      {indexed === true ? (
+        <IndexIdentitiesLight
+          rows={index.rows}
+          loading={index.loading}
+          hasMore={index.hasMore}
+          loadMore={index.loadMore}
+          query={query}
+        />
       ) : !result || total === 0 ? (
-        light === null ? (
+        indexed === null ? (
           <span class="muted">checking relay capabilities…</span>
         ) : (
           <SyncPrompt syncing={syncing} />
@@ -367,11 +401,11 @@ export const BrowseIdentities = () => {
 
 export const BrowseDocuments = () => {
   const sync = useSyncState();
-  const light = useLightMode();
+  const indexed = useIndexCapable();
   const [includeGated, setIncludeGated] = useState(false);
   const [result, setResult] = useState<DocumentsBrowse | null>(null);
   const available = useAvailable(DOC_KEYS);
-  const index = useIndexContent(light === true, true);
+  const index = useIndexContent(indexed === true, true);
 
   useEffect(() => {
     let dead = false;
@@ -394,16 +428,16 @@ export const BrowseDocuments = () => {
       title={
         <>
           public documents{' '}
-          {light === true ? (
+          {indexed === true ? (
             <Pill state="warn">{fmtCount(index.rows.length)}</Pill>
           ) : result ? (
             <Pill state="ok">{fmtCount(result.publicCount)}</Pill>
           ) : null}
         </>
       }
-      right={<span class="lbl">what · from {light === true ? 'relay index' : 'local index'}</span>}
+      right={<span class="lbl">what · from {indexed === true ? 'relay index' : 'local index'}</span>}
       orient={
-        light === true ? (
+        indexed === true ? (
           <>
             Public content chains straight off the relay's{' '}
             <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — <code>$schema</code> and
@@ -420,7 +454,7 @@ export const BrowseDocuments = () => {
         )
       }
     >
-      {light !== true ? (
+      {indexed !== true ? (
         <AvailableHint
           available={available}
           localCount={
@@ -429,7 +463,7 @@ export const BrowseDocuments = () => {
         />
       ) : null}
 
-      {light !== true && result && result.unresolvedCount > 0 ? (
+      {indexed !== true && result && result.unresolvedCount > 0 ? (
         <div class="ck-note" style={{ marginBottom: 8 }}>
           {fmtCount(result.unresolvedCount)} content chain(s) not yet resolved.{' '}
           {resolving ? (
@@ -442,7 +476,7 @@ export const BrowseDocuments = () => {
         </div>
       ) : null}
 
-      {light !== true && result && result.gatedCount > 0 ? (
+      {indexed !== true && result && result.gatedCount > 0 ? (
         <div class="filters" style={{ marginBottom: 8 }}>
           <button class={includeGated ? 'on' : ''} onClick={() => setIncludeGated((v) => !v)}>
             {includeGated ? 'hide' : 'show'} {fmtCount(result.gatedCount)} gated / private
@@ -450,10 +484,15 @@ export const BrowseDocuments = () => {
         </div>
       ) : null}
 
-      {light === true ? (
-        <IndexDocumentsLight rows={index.rows} loading={index.loading} />
+      {indexed === true ? (
+        <IndexDocumentsLight
+          rows={index.rows}
+          loading={index.loading}
+          hasMore={index.hasMore}
+          loadMore={index.loadMore}
+        />
       ) : !hasLocal ? (
-        light === null ? (
+        indexed === null ? (
           <span class="muted">checking relay capabilities…</span>
         ) : (
           <SyncPrompt syncing={syncing} />

@@ -14,16 +14,19 @@
 
 */
 
+import type { IndexIdentityRow } from '@metalabel/dfos-client';
 import { useEffect, useState } from 'preact/hooks';
+import { useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { Panel, Term } from '../components/ui';
 import type { ChainRollup, OpKind } from '../lib/db';
 import { estimateStorageBytes, OP_KINDS } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtAge, fmtBytes, fmtCount, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { useIndexIdentities, useLightMode } from '../lib/index-light';
+import { useIndexCapable, useIndexIdentities } from '../lib/index-light';
 import { fetchRelayHint, type RelayHint } from '../lib/relay-hint';
 import { startSync, stopSync, useSyncState } from '../lib/sync-store';
+import { useVerifyStatus } from '../lib/verify-queue';
 
 const SAMPLES: { label: string; q: string }[] = [
   { label: 'identity', q: 'did:dfos:tn7kkfz7ehzvv6fzvate9rz2874nc3e' },
@@ -254,7 +257,70 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
 // RECENT ACTIVITY — latest chains by last op
 // -----------------------------------------------------------------------------
 
-const RecentPanel = (props: { obs: Observatory | null }) => {
+// how many head-of-index rows home shows and verifies live
+const HEAD_N = 100;
+
+/** One head-of-index identity row on home: attributed name + a live verify badge
+ *  that flips to verified as the row enters view and its chain folds in the tab.
+ *  opCount reconciles to the fold (the fold wins over the relay hint). */
+const IndexHeadRow = (props: { row: IndexIdentityRow }) => {
+  const { row } = props;
+  const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did, row.opCount);
+  const rec = useVerifyStatus('identity', row.did);
+  const name = row.profile?.name ?? '';
+  const opCount = rec.facts?.opCount ?? row.opCount;
+  return (
+    <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>
+      <td>
+        <span class="kind identity-op">identity</span>
+      </td>
+      <td>
+        {name ? <b>{name}</b> : short(row.did, 14, 5)}{' '}
+        <VerifyBadge kind="identity" chainId={row.did} />
+        {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
+      </td>
+      <td class="n">{fmtCount(opCount)} ops</td>
+    </tr>
+  );
+};
+
+const RecentPanel = (props: {
+  obs: Observatory | null;
+  indexed: boolean | null;
+  indexRows: IndexIdentityRow[];
+}) => {
+  // index-capable → show the HEAD of the live relay index, every row verifying in
+  // real time (attributed → verified) right on the landing page. Otherwise fall
+  // back to the local recent-activity view (post-sync, no index-capable relay).
+  if (props.indexed === true) {
+    const head = props.indexRows.slice(0, HEAD_N);
+    return (
+      <Panel
+        title="recent activity"
+        accent="warn"
+        right={
+          <span class="lbl">
+            head {fmtCount(head.length)} · from relay index · verifying live
+          </span>
+        }
+      >
+        {head.length === 0 ? (
+          <span class="muted">loading the head of the relay index…</span>
+        ) : (
+          <div class="index-rows">
+            <table>
+              <tbody>
+                {head.map((row) => (
+                  <IndexHeadRow key={row.did} row={row} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    );
+  }
+
   const rows = props.obs?.recent ?? [];
   const populated = (props.obs?.counts.chains ?? 0) > 0;
   return (
@@ -291,35 +357,35 @@ const RecentPanel = (props: { obs: Observatory | null }) => {
 // PUBLIC IDENTITIES — attributed profile chips
 // -----------------------------------------------------------------------------
 
-const IdentitiesPanel = (props: { obs: Observatory | null }) => {
+const IdentitiesPanel = (props: {
+  obs: Observatory | null;
+  indexed: boolean | null;
+  indexRows: IndexIdentityRow[];
+}) => {
   const sync = useSyncState();
-  const light = useLightMode();
   const busy = sync.phase === 'resolving' || sync.phase === 'syncing';
   const localIds = props.obs?.identities ?? [];
   const populated = (props.obs?.counts.chains ?? 0) > 0;
-  // index-capable relay + no full-log sync ever run → surface attributed
-  // identities straight from the relay index (a hint, framed as such), so home
-  // is alive before any sync. The gate is sync-cursor state, NOT corpus
-  // emptiness — the verify queue's JIT folds populate the corpus and must not
-  // kick this panel back to sync-required framing (see useLightMode).
-  const lightMode = light === true;
-  const { rows: indexRows } = useIndexIdentities(lightMode, true);
-  const indexIds = indexRows
+  // index-capable relay → surface attributed identities straight from the live
+  // relay index (a hint, framed as such), so home is alive before/without any
+  // sync. Where no relay advertises the index, fall back to the local synced set.
+  const indexed = props.indexed === true;
+  const indexIds = props.indexRows
     .filter((r) => typeof r.profile?.name === 'string' && r.profile.name.length > 0)
     .slice(0, 12)
     .map((r) => ({ chainId: r.did, name: r.profile?.name ?? '' }));
-  const ids = lightMode ? indexIds : localIds;
+  const ids = indexed ? indexIds : localIds;
   return (
     <Panel
       title="public identities"
       accent={ids.length > 0 ? 'warn' : undefined}
-      right={<span class="lbl">attributed · from {lightMode ? 'relay index' : 'local index'}</span>}
+      right={<span class="lbl">attributed · from {indexed ? 'relay index' : 'local index'}</span>}
     >
       {ids.length === 0 ? (
         <span class="muted">
           {/* only claim "none" once resolution has settled — while Phase 2 runs
               an empty strip means "not resolved yet", not "nobody is public" */}
-          {lightMode
+          {indexed
             ? 'no public identities in the relay index'
             : !populated
               ? 'sync the log to surface identities'
@@ -423,6 +489,9 @@ export const Home = (props: { onSample: (q: string) => void }) => {
   const sync = useSyncState();
   const [obs, setObs] = useState<Observatory | null>(null);
   const [hint, setHint] = useState<RelayHint>({});
+  // one live index-identities fetch, shared by the head panel and the id strip
+  const indexed = useIndexCapable();
+  const idIndex = useIndexIdentities(indexed === true, true);
 
   useEffect(() => {
     let dead = false;
@@ -480,8 +549,8 @@ export const Home = (props: { onSample: (q: string) => void }) => {
       </div>
 
       <NetworkPanel obs={obs} hint={hint} />
-      <RecentPanel obs={obs} />
-      <IdentitiesPanel obs={obs} />
+      <RecentPanel obs={obs} indexed={indexed} indexRows={idIndex.rows} />
+      <IdentitiesPanel obs={obs} indexed={indexed} indexRows={idIndex.rows} />
       <SyncInstrument obs={obs} />
 
       <Panel title="what this is">

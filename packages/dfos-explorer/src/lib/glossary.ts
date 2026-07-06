@@ -134,7 +134,7 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   {
     key: 'indexLight',
     term: 'relay index (hints) vs audit sync',
-    def: 'When a relay advertises an index, the explorer browses its projections instantly — every row is an ATTRIBUTED hint the relay asserts, promoted to VERIFIED as your tab folds that row’s chain (re-checking every signature and CID). An index cannot lie by assertion — a fabricated row fails the fold — but it CAN lie by omission, silently withholding rows a light client can never notice are missing. So a full-log sync, which folds every operation locally, is the audit posture: the exhaustive stance that detects what an index leaves out.',
+    def: 'When a relay advertises an index, the explorer ALWAYS enumerates browse and home from it — instantly, and even after a deep sync, because the live index is fresher than any past sync. Every row is an ATTRIBUTED hint the relay asserts, promoted to VERIFIED as your tab folds that row’s chain (re-checking every signature and CID); the local index is a sparse verified cache that catches up to whatever you look at. An index cannot lie by assertion — a fabricated row fails the fold — but it CAN lie by omission, silently withholding rows you can never notice are missing. So a deep sync, which folds every operation locally, is the audit posture: the exhaustive stance that detects what an index leaves out.',
   },
 ];
 

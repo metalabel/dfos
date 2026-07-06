@@ -16,10 +16,17 @@
   sync-projections' pool) so a relay is never hammered. Each chain is folded at
   most once — an already-verified/errored chain is a no-op on re-enqueue.
 
+  Verdicts are DURABLE: a successful fold is persisted (db `verify` store, keyed
+  by `${kind}:${chainId}`), so a reload trusts a prior fold and shows the row
+  green WITHOUT re-folding — re-folding only when the relay's hint opCount exceeds
+  the recorded one (verdictIsFresh). Errors are never persisted (transient).
+
 */
 
 import { useEffect, useState } from 'preact/hooks';
 import { getClient } from './client';
+import type { VerifyVerdict } from './db';
+import { getDb } from './db-instance';
 import { jitIndexChain } from './sync-store';
 
 /** The chain kinds a browse row can carry — the only two that fold as a history. */
@@ -49,8 +56,41 @@ const CONCURRENCY = 8;
 
 const key = (kind: VerifyKind, chainId: string): string => `${kind}:${chainId}`;
 
+/**
+ * A durable verdict is fresh enough to trust WITHOUT re-folding when its folded
+ * opCount is at least the relay index's current hint. opCount is branch-inclusive
+ * and monotonic, so a hint ABOVE the recorded count means a newer op the verdict
+ * predates — re-fold. No hint (undefined) → trust the durable verdict.
+ */
+export const verdictIsFresh = (verdictOpCount: number, hintOpCount?: number): boolean =>
+  hintOpCount === undefined || verdictOpCount >= hintOpCount;
+
+/** Best-effort read of a durable verdict — never throws (persistence is an
+ *  optimization; a miss just means we fold). */
+const loadVerdict = async (k: string): Promise<VerifyVerdict | undefined> => {
+  try {
+    return await (await getDb()).getVerify(k);
+  } catch {
+    return undefined;
+  }
+};
+
+/** Best-effort persist of a fold verdict so a reload trusts it without a fold. */
+const persistVerdict = async (k: string, facts: VerifiedFacts): Promise<void> => {
+  try {
+    await (await getDb()).putVerify({
+      key: k,
+      opCount: facts.opCount,
+      isDeleted: facts.isDeleted,
+      verifiedAt: Date.now(),
+    });
+  } catch {
+    // durable verdicts are an optimization, never a correctness requirement
+  }
+};
+
 const records = new Map<string, VerifyRecord>();
-const queue: { kind: VerifyKind; chainId: string }[] = [];
+const queue: { kind: VerifyKind; chainId: string; hintOpCount?: number }[] = [];
 let active = 0;
 
 type Listener = () => void;
@@ -64,11 +104,24 @@ const setRecord = (k: string, rec: VerifyRecord): void => {
   emit();
 };
 
-/** Fold one chain through dfos-client, land it in the local index, and record the
- *  verified facts. A throw (unreachable, tampered, contradiction) → status error. */
-const run = async (kind: VerifyKind, chainId: string): Promise<void> => {
+/** Hydrate-then-fold one chain: trust a fresh durable verdict without a network
+ *  fold, else fold through dfos-client, land it in the local index, record the
+ *  verified facts, and persist them. A throw (unreachable, tampered,
+ *  contradiction) → status error (NOT persisted — errors are transient). */
+const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Promise<void> => {
   const k = key(kind, chainId);
   try {
+    // durable verdict first: a prior fold recorded at an opCount >= the relay's
+    // current hint is trusted with NO network fold — the ops are already local,
+    // only the verdict was ephemeral. Reload shows the row green instantly.
+    const durable = await loadVerdict(k);
+    if (durable && verdictIsFresh(durable.opCount, hintOpCount)) {
+      setRecord(k, {
+        status: 'verified',
+        facts: { isDeleted: durable.isDeleted, opCount: durable.opCount },
+      });
+      return;
+    }
     const client = getClient();
     // client.identity/content re-fold the whole chain in the tab; client.log
     // returns the same verified op log we hand to jitIndexChain (fire-and-forget
@@ -79,20 +132,21 @@ const run = async (kind: VerifyKind, chainId: string): Promise<void> => {
         client.log('identity', chainId),
       ]);
       void jitIndexChain(chainId, 'identity-op', log.value);
-      setRecord(k, {
-        status: 'verified',
-        facts: { isDeleted: res.value.isDeleted, opCount: log.value.length },
-      });
+      const facts: VerifiedFacts = { isDeleted: res.value.isDeleted, opCount: log.value.length };
+      setRecord(k, { status: 'verified', facts });
+      void persistVerdict(k, facts);
     } else {
       const [res, log] = await Promise.all([
         client.content(chainId),
         client.log('content', chainId),
       ]);
       void jitIndexChain(chainId, 'content-op', log.value);
-      setRecord(k, {
-        status: 'verified',
-        facts: { isDeleted: res.value.chain.isDeleted, opCount: log.value.length },
-      });
+      const facts: VerifiedFacts = {
+        isDeleted: res.value.chain.isDeleted,
+        opCount: log.value.length,
+      };
+      setRecord(k, { status: 'verified', facts });
+      void persistVerdict(k, facts);
     }
   } catch (e) {
     setRecord(k, { status: 'error', error: e instanceof Error ? e.message : String(e) });
@@ -106,7 +160,7 @@ const pump = (): void => {
   while (active < CONCURRENCY && queue.length > 0) {
     const job = queue.shift()!;
     active += 1;
-    void run(job.kind, job.chainId);
+    void run(job.kind, job.chainId, job.hintOpCount);
   }
 };
 
@@ -131,7 +185,7 @@ export const enqueueVerify = (kind: VerifyKind, chainId: string, hintOpCount?: n
     if (!stale) return; // already folded / in flight — no-op
   }
   setRecord(k, { status: 'verifying' });
-  queue.push({ kind, chainId });
+  queue.push({ kind, chainId, ...(hintOpCount !== undefined ? { hintOpCount } : {}) });
   pump();
 };
 
