@@ -22,6 +22,14 @@ the freeze protects adopters (there are none yet).
 
 ### Changed
 
+- **`post/v1` pre-adoption amendment** — amended in place while zero `post/v1`
+  documents existed on any chain. `createdByDID` is replaced by ordered
+  `credits: [{did, label?}]` (first entry = primary author), `cover` and
+  `attachments` now use the standard Media object `{ uri, cid?, href? }`, and the
+  legacy `{ id, uri? }` post-media shape is removed. `CONTENT-MODEL.md` now
+  documents the Authorship lattice (assertion -> claim-operation proof ->
+  sovereign). This closes the breaking window; `post/v1` evolves
+  additively from here.
 - **`/revocations/v1` frozen at v1** — the revocation status family is promoted
   to a frozen v1 contract, and its issuer feed is now bounded with a
   `limit` + `after` + `next` cursor ordered by revocation `createdAt`
