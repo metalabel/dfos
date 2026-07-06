@@ -7,11 +7,20 @@
   AUTHORIZED, whether the op sits on canonical history, whether it was
   superseded — that takes folding the whole chain, which happens here too.
 
+  Standalone statements (artifact, countersignature, revocation) carry no
+  container chain — their authority is that the signing key was authorized on
+  its OWN identity chain, folded JIT here via resolveKey, then the canonical
+  protocol verify runs under that key.
+
   Credentials get their own richer view; this one forwards.
 
 */
 
-import { verifyCountersignature } from '@metalabel/dfos-protocol/chain';
+import {
+  verifyArtifact,
+  verifyCountersignature,
+  verifyRevocation,
+} from '@metalabel/dfos-protocol/chain';
 import { decodeDFOSCredentialUnsafe } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
@@ -69,11 +78,47 @@ interface WitnessRow {
   sig: CheckState;
 }
 
+/*
+  Standalone statements — artifact, countersignature, revocation — carry no
+  container chain of their own. Their AUTHORITY is that the signing key was
+  authorized on its OWN identity chain at fold time. We prove that JIT: fold the
+  signer's owning identity chain (resolveKey), then run the canonical protocol
+  verify (signature + payload schema + issuer binding + CID) under that key.
+*/
+type ResolveKey = (kid: string) => Promise<Uint8Array>;
+
+const STANDALONE_VERIFY: Record<
+  string,
+  (input: { jwsToken: string; resolveKey: ResolveKey }) => Promise<unknown>
+> = {
+  artifact: verifyArtifact,
+  countersign: verifyCountersignature,
+  revocation: verifyRevocation,
+};
+
+const STANDALONE_LABEL: Record<string, string> = {
+  artifact: 'artifact',
+  countersign: 'countersignature',
+  revocation: 'revocation',
+};
+
+interface Standalone {
+  /** resolveKey folded the signer's owning identity chain and authorized the key. */
+  authorized: CheckState;
+  authNote?: string;
+  /** the canonical protocol verify: signature + schema + issuer binding + CID. */
+  proof: CheckState;
+  proofNote?: string;
+  /** the identity that owns the signing key. */
+  signer: string;
+}
+
 export const Op = (props: { cid: string }) => {
   const [op, setOp] = useState<OpState | null>(null);
   const [chain, setChain] = useState<ChainVerify | null>(null);
   const [chainPending, setChainPending] = useState(false);
   const [witnesses, setWitnesses] = useState<WitnessRow[] | null>(null);
+  const [standalone, setStandalone] = useState<Standalone | null>(null);
 
   useEffect(() => {
     let dead = false;
@@ -81,6 +126,7 @@ export const Op = (props: { cid: string }) => {
     setChain(null);
     setChainPending(false);
     setWitnesses(null);
+    setStandalone(null);
     const relays = getRelays();
     const client = getClient();
 
@@ -195,6 +241,47 @@ export const Op = (props: { cid: string }) => {
         } finally {
           if (!dead) setChainPending(false);
         }
+      } else if (jwsToken) {
+        // standalone statement (artifact / countersign / revocation): prove
+        // authority by folding the SIGNER's own identity chain JIT — the key must
+        // be authorized there — then run the canonical protocol verify under it.
+        const verify = STANDALONE_VERIFY[kind];
+        if (verify) {
+          const resolveKey = client.callbacks().resolveKey;
+          const signerKid = typeof decoded?.header.kid === 'string' ? decoded.header.kid : '';
+          const signer = didOfKid(signerKid);
+          let authorized: CheckState = 'warn';
+          let authNote: string | undefined;
+          try {
+            await resolveKey(signerKid);
+            authorized = 'ok';
+          } catch (e) {
+            authNote = e instanceof Error ? e.message : String(e);
+          }
+          if (dead) return;
+          let proof: CheckState;
+          let proofNote: string | undefined;
+          if (authorized === 'ok') {
+            try {
+              await verify({ jwsToken, resolveKey });
+              proof = 'ok';
+            } catch (e) {
+              proof = 'bad';
+              proofNote = e instanceof Error ? e.message : String(e);
+            }
+          } else {
+            proof = 'warn';
+            proofNote = 'signer unresolved — cannot assess the statement';
+          }
+          if (dead) return;
+          setStandalone({
+            authorized,
+            ...(authNote ? { authNote } : {}),
+            proof,
+            ...(proofNote ? { proofNote } : {}),
+            signer,
+          });
+        }
       }
     })();
 
@@ -241,27 +328,36 @@ export const Op = (props: { cid: string }) => {
   const kid = typeof op?.header?.['kid'] === 'string' ? (op.header['kid'] as string) : '';
   const selfCidOk = op?.selfCidOk ?? false;
   const payload = op?.payload ?? {};
+  const isStandalone = op ? STANDALONE_LABEL[op.kind] !== undefined : false;
 
   const pill = !op
     ? { state: 'pending' as const, text: 'decoding…' }
     : !op.jwsToken
       ? { state: 'warn' as const, text: 'not resolvable' }
-      : chainPending
-        ? { state: 'pending' as const, text: 'verifying in chain…' }
-        : !chain
-          ? // no fold ran: honest terminal state keyed on the real self-CID check
-            selfCidOk
-            ? { state: 'warn' as const, text: 'bytes verified · chain not placed' }
-            : { state: 'bad' as const, text: 'cid mismatch' }
-          : chain.note
-            ? { state: 'warn' as const, text: 'decoded · chain verify failed' }
-            : !chain.present
-              ? op.chainSource === 'relay-hint'
-                ? { state: 'warn' as const, text: 'not in relay-asserted chain' }
-                : { state: 'bad' as const, text: 'not in chain' }
-              : chain.isHead
-                ? { state: 'ok' as const, text: 'verified in chain' }
-                : { state: 'warn' as const, text: 'verified · superseded' };
+      : isStandalone
+        ? !standalone
+          ? { state: 'pending' as const, text: 'proving authorization…' }
+          : standalone.authorized !== 'ok'
+            ? { state: 'warn' as const, text: 'signer authorization unproven' }
+            : standalone.proof === 'ok'
+              ? { state: 'ok' as const, text: 'authorized signer · verified' }
+              : { state: 'bad' as const, text: 'signer authorized · statement invalid' }
+        : chainPending
+          ? { state: 'pending' as const, text: 'verifying in chain…' }
+          : !chain
+            ? // no fold ran: honest terminal state keyed on the real self-CID check
+              selfCidOk
+              ? { state: 'warn' as const, text: 'bytes verified · chain not placed' }
+              : { state: 'bad' as const, text: 'cid mismatch' }
+            : chain.note
+              ? { state: 'warn' as const, text: 'decoded · chain verify failed' }
+              : !chain.present
+                ? op.chainSource === 'relay-hint'
+                  ? { state: 'warn' as const, text: 'not in relay-asserted chain' }
+                  : { state: 'bad' as const, text: 'not in chain' }
+                : chain.isHead
+                  ? { state: 'ok' as const, text: 'verified in chain' }
+                  : { state: 'warn' as const, text: 'verified · superseded' };
 
   const chainLink = op?.chainId ? (
     op.kind === 'content-op' ? (
@@ -285,14 +381,33 @@ export const Op = (props: { cid: string }) => {
           <>
             One signed <Term word="operation" def={GLOSSARY['operation'] ?? ''} />, named by the{' '}
             <Term word="CID" def={GLOSSARY['cid'] ?? ''} /> of its own bytes.{' '}
-            <b>Alone it proves little — fold the chain for authority.</b>
+            <b>
+              {isStandalone
+                ? "Alone it proves a signature — fold its signer's chain for authority."
+                : 'Alone it proves little — fold the chain for authority.'}
+            </b>
           </>
         }
       >
         <div style={{ marginBottom: 8 }}>
-          {typeof payload['type'] === 'string' ? <OpType type={payload['type']} /> : null}{' '}
+          {typeof payload['type'] === 'string' && payload['type'] !== op?.kind ? (
+            <OpType type={payload['type']} />
+          ) : null}{' '}
           {op?.kind ? <span class={`kind ${op.kind}`}>{op.kind.replace('-op', '')}</span> : null}{' '}
-          <span class="lbl">in chain</span> {chainLink}
+          {isStandalone ? (
+            <>
+              <span class="lbl">by</span>{' '}
+              {kid && didOfKid(kid) ? (
+                <DidLink did={didOfKid(kid)} />
+              ) : (
+                <span class="muted">unknown signer</span>
+              )}
+            </>
+          ) : (
+            <>
+              <span class="lbl">in chain</span> {chainLink}
+            </>
+          )}
           {chain?.present ? (
             <>
               {' '}
@@ -362,12 +477,31 @@ export const Op = (props: { cid: string }) => {
       ) : null}
 
       {op?.jwsToken ? (
-        <Panel title="verification" right={<span class="lbl">op alone vs whole chain</span>}>
+        <Panel
+          title="verification"
+          right={
+            <span class="lbl">
+              {isStandalone ? 'signature + owning-chain fold' : 'op alone vs whole chain'}
+            </span>
+          }
+        >
           <div class="ck-note" style={{ marginBottom: 8 }}>
-            Alone, an operation proves only that its payload hashes to this CID (recomputed here).
-            It cannot prove the signer's key was authorized, that the op sits on canonical history,
-            or that it wasn't superseded — that takes folding the whole chain. The signature itself
-            is checked only via the chain fold, where the signing key resolves.
+            {isStandalone ? (
+              <>
+                A standalone statement carries a signature and a self-certifying CID. To prove the
+                signing key was <b>authorized</b>, its owning identity chain is folded here (JIT) —
+                the key must appear in that identity's authorized set. The signature and payload are
+                then verified under that key. There is no container chain to place it on.
+              </>
+            ) : (
+              <>
+                Alone, an operation proves only that its payload hashes to this CID (recomputed
+                here). It cannot prove the signer's key was authorized, that the op sits on
+                canonical history, or that it wasn't superseded — that takes folding the whole
+                chain. The signature itself is checked only via the chain fold, where the signing
+                key resolves.
+              </>
+            )}
           </div>
           <Checks>
             <Check state="ok" note={typ}>
@@ -413,6 +547,32 @@ export const Op = (props: { cid: string }) => {
                       </Check>
                     </>
                   ) : null}
+                </>
+              )
+            ) : isStandalone ? (
+              !standalone ? (
+                <Check state="pend">folding the signer's identity chain…</Check>
+              ) : (
+                <>
+                  <Check
+                    state={standalone.authorized}
+                    note={
+                      standalone.authorized === 'ok'
+                        ? `owning identity chain folded here — key authorized on ${short(standalone.signer)}`
+                        : (standalone.authNote ?? 'could not resolve the signing key')
+                    }
+                  >
+                    {standalone.authorized === 'ok'
+                      ? 'signer authorized — owning chain folded'
+                      : 'signer authorization unproven'}
+                  </Check>
+                  <Check state={standalone.proof} note={standalone.proofNote}>
+                    {standalone.proof === 'ok'
+                      ? `${STANDALONE_LABEL[op.kind] ?? 'statement'} verified`
+                      : standalone.proof === 'bad'
+                        ? `${STANDALONE_LABEL[op.kind] ?? 'statement'} failed verification`
+                        : 'statement unverified'}
+                  </Check>
                 </>
               )
             ) : (
