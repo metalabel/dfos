@@ -208,15 +208,19 @@ export const useIndexIdentities = (
       .then((p) => ({ items: p.identities, next: p.next })),
   );
 
-/** Page the content index (optionally public-read-only) with load-more. */
+/** Page the content index (optionally public-read-only), optionally narrowed to a
+ *  single `$schema` server-side. Changing `docSchema` re-pages from the relay (it
+ *  bumps the resetKey), so the facet always reflects the live filtered corpus. */
 export const useIndexContent = (
   enabled: boolean,
   publicOnly: boolean,
+  docSchema?: string,
 ): IndexLoad<IndexContentRow> =>
-  useIndexPager(enabled, `content:${publicOnly}`, (after) =>
+  useIndexPager(enabled, `content:${publicOnly}:${docSchema ?? ''}`, (after) =>
     getClient()
       .indexContent({
         ...(publicOnly ? { publicRead: true } : {}),
+        ...(docSchema ? { docSchema } : {}),
         ...(after ? { after } : {}),
         limit: PAGE,
       })

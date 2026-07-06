@@ -9,7 +9,7 @@
 
 */
 
-import type { Resolved } from '@metalabel/dfos-client';
+import type { IndexCountersignatureRow, Resolved } from '@metalabel/dfos-client';
 import type { ServiceEntry, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { classifyAnchor } from '@metalabel/dfos-protocol/chain';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
@@ -35,6 +35,7 @@ import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
+import { useIndexCapable } from '../lib/index-light';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
@@ -53,12 +54,16 @@ interface IdentityClaimState {
 }
 
 export const Identity = (props: { did: string }) => {
+  const indexed = useIndexCapable();
   const [claim, setClaim] = useState<ClaimResult | null>(null);
   const [verified, setVerified] = useState<Resolved<VerifiedIdentity> | null>(null);
   const [rows, setRows] = useState<OpRow[]>([]);
   const [creds, setCreds] = useState<ExplorerOp[] | null>(null);
   // credentialCID → revoking op CID, folded from synced revocation ops (local-first)
   const [revoked, setRevoked] = useState<Map<string, string>>(new Map());
+  // operations this identity has WITNESSED — a relay-index reverse lookup by
+  // witness DID (attributed hint; open a target op to fold the real proof)
+  const [witnessed, setWitnessed] = useState<IndexCountersignatureRow[] | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -126,6 +131,26 @@ export const Identity = (props: { did: string }) => {
       dead = true;
     };
   }, [props.did]);
+
+  // separate lane: the countersignatures-by-witness reverse lookup only exists on
+  // an index-capable relay, so it keys on [did, indexed] and stands apart from the
+  // proof-plane fold above (never gates it).
+  useEffect(() => {
+    let dead = false;
+    setWitnessed(null);
+    if (indexed !== true) return;
+    void getClient()
+      .indexCountersignatures(props.did, { limit: 200 })
+      .then((p) => {
+        if (!dead) setWitnessed(p.countersignatures);
+      })
+      .catch(() => {
+        if (!dead) setWitnessed([]);
+      });
+    return () => {
+      dead = true;
+    };
+  }, [props.did, indexed]);
 
   if (claim && !claim.body && !verified && !error) {
     // relay had nothing and verification hasn't concluded — wait for the client
@@ -300,6 +325,58 @@ export const Identity = (props: { did: string }) => {
               })}
             </tbody>
           </table>
+        )}
+      </Panel>
+
+      <Panel
+        title="countersignatures witnessed"
+        right={<span class="lbl">relay index · attributed</span>}
+      >
+        {indexed === null ? (
+          <span class="muted">checking relay capabilities…</span>
+        ) : indexed !== true ? (
+          <span class="muted">requires an index-capable relay.</span>
+        ) : witnessed === null ? (
+          <span class="muted">reading relay index…</span>
+        ) : witnessed.length === 0 ? (
+          <span class="muted">
+            this identity has witnessed no operations the relay index surfaces.
+          </span>
+        ) : (
+          <>
+            <table>
+              <thead>
+                <tr>
+                  <th>relation</th>
+                  <th>witnessed op</th>
+                  <th>countersignature</th>
+                </tr>
+              </thead>
+              <tbody>
+                {witnessed.map((r) => (
+                  <tr key={r.cid}>
+                    <td>
+                      {r.relation ? (
+                        <span class="k-role">{r.relation}</span>
+                      ) : (
+                        <span class="muted">—</span>
+                      )}
+                    </td>
+                    <td>
+                      <OpLink cid={r.targetCID} />
+                    </td>
+                    <td class="cid">
+                      <OpLink cid={r.cid} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div class="ck-note" style={{ marginTop: 8 }}>
+              relay-asserted index hints — open a witnessed op to fold its countersignature proof.
+              {witnessed.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}
+            </div>
+          </>
         )}
       </Panel>
 

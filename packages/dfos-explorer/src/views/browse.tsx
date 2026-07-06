@@ -445,9 +445,21 @@ export const BrowseDocuments = () => {
   const sync = useSyncState();
   const indexed = useIndexCapable();
   const [includeGated, setIncludeGated] = useState(false);
+  const [schema, setSchema] = useState<string | null>(null);
   const [result, setResult] = useState<DocumentsBrowse | null>(null);
   const available = useAvailable(DOC_KEYS);
-  const index = useIndexContent(indexed === true, true);
+  const index = useIndexContent(indexed === true, true, schema ?? undefined);
+
+  // monotonic set of $schemas seen across loaded rows — so the facet bar stays
+  // stable even after a filter narrows the live rows down to one schema
+  const [schemas, setSchemas] = useState<string[]>([]);
+  useEffect(() => {
+    setSchemas((prev) => {
+      const set = new Set(prev);
+      for (const r of index.rows) if (r.docSchema) set.add(r.docSchema);
+      return set.size === prev.length ? prev : [...set];
+    });
+  }, [index.rows]);
 
   useEffect(() => {
     let dead = false;
@@ -526,6 +538,27 @@ export const BrowseDocuments = () => {
           <button class={includeGated ? 'on' : ''} onClick={() => setIncludeGated((v) => !v)}>
             {includeGated ? 'hide' : 'show'} {fmtCount(result.gatedCount)} gated / private
           </button>
+        </div>
+      ) : null}
+
+      {/* $schema facet — only once the corpus shows more than one type (a single-
+          schema corpus needs no filter). Chips gate exactly like the toggle above. */}
+      {mode === 'index' && schemas.length > 1 ? (
+        <div class="filters" style={{ marginBottom: 8 }}>
+          <button class={schema === null ? 'on' : ''} onClick={() => setSchema(null)}>
+            all types
+          </button>
+          {schemas.map((s) => (
+            <button key={s} class={schema === s ? 'on' : ''} onClick={() => setSchema(s)}>
+              {schemaLabel(s)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {mode === 'index' && schema !== null ? (
+        <div class="ck-note" style={{ marginBottom: 8 }}>
+          filtering by <code>$schema</code> server-side — options are the schemas seen so far;
+          select one to page all of that type.
         </div>
       ) : null}
 
