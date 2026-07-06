@@ -103,7 +103,10 @@ describe('index (v0) client seam', () => {
         [A]: (path, url) => {
           seen = url;
           return path === '/index/v0/credentials'
-            ? json({ credentials: [{ cid: 'cr1', issuerDID: 'did:dfos:x', att: [], jwsToken: 't' }], next: null })
+            ? json({
+                credentials: [{ cid: 'cr1', issuerDID: 'did:dfos:x', att: [], jwsToken: 't' }],
+                next: null,
+              })
             : new Response('nope', { status: 404 });
         },
       }),

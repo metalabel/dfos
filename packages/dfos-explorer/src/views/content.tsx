@@ -500,14 +500,15 @@ const GrantsPanel = (props: {
         ) : (
           <div class="ck-note">
             The bytes are served publicly (an anonymous read succeeded), so a standing public-read
-            grant exists on the relay — but it isn't in your local index yet. <b>Sync the full log</b>{' '}
-            to surface the credential here.
+            grant exists on the relay — but it isn't in your local index yet.{' '}
+            <b>Sync the full log</b> to surface the credential here.
           </div>
         )
       ) : (
         <div class="ck-note">
-          No public-read grant {props.indexed ? 'surfaced by the relay index' : 'in your local index'}
-          . The document bytes are gated — reads need a credential or an auth token.
+          No public-read grant{' '}
+          {props.indexed ? 'surfaced by the relay index' : 'in your local index'}. The document
+          bytes are gated — reads need a credential or an auth token.
         </div>
       )}
     </Panel>
