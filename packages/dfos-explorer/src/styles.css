@@ -1129,6 +1129,10 @@ button.primary:hover {
   color: var(--warn);
 }
 
+.stat-num.ok {
+  color: var(--ok);
+}
+
 .stat-unit {
   font-size: 10px;
   letter-spacing: 0.12em;
@@ -1145,6 +1149,10 @@ button.primary:hover {
 
 .stat-sub.asserted {
   color: var(--warn);
+}
+
+.stat-sub.ok {
+  color: var(--ok);
 }
 
 /* ---------------------------------------------------------- by-kind bar */
