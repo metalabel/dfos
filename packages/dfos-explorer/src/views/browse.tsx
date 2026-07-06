@@ -30,7 +30,12 @@ import type { ChainRollup, DocumentsBrowse, ExplorerOp, IdentitiesBrowse } from 
 import { getDb } from '../lib/db-instance';
 import { fmtCount, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { useIndexCapable, useIndexContent, useIndexIdentities } from '../lib/index-light';
+import {
+  indexBrowseMode,
+  useIndexCapable,
+  useIndexContent,
+  useIndexIdentities,
+} from '../lib/index-light';
 import { fetchRelayHint } from '../lib/relay-hint';
 import { startProjections, startSync, stopSync, useSyncState } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
@@ -126,6 +131,25 @@ const LoadMore = (props: {
     </div>
   ) : null;
 
+/** The relay index couldn't be reached and there's no local corpus to fall back
+ *  on — an honest error with a retry, never a false "the index returned nothing". */
+const IndexUnavailable = (props: { noun: string; loading: boolean; onRetry: () => void }) => (
+  <div class="ck-note">
+    couldn’t reach the relay index for {props.noun}.{' '}
+    <button onClick={props.onRetry} disabled={props.loading}>
+      {props.loading ? 'retrying…' : 'retry'}
+    </button>
+  </div>
+);
+
+/** The relay index errored but a synced local corpus exists — show the local
+ *  table and say so, rather than a blank or a false-empty. */
+const FellBackNote = () => (
+  <div class="ck-note" style={{ marginBottom: 8 }}>
+    relay index unavailable — showing your synced local index.
+  </div>
+);
+
 /** One identity index row: name (attributed) + a live verify badge; opCount and
  *  deletion reconcile to the fold once it lands (the fold wins over the hint). */
 const IndexIdentityRowView = (props: { row: IndexIdentityRow }) => {
@@ -159,7 +183,10 @@ const IndexIdentitiesLight = (props: {
   const filtered = needle
     ? rows.filter((r) => (r.profile?.name ?? '').toLowerCase().includes(needle))
     : rows;
-  const shown = filtered.slice(0, BROWSE_LIMIT);
+  // render ALL loaded (filtered) index rows — load-more appends past any fixed
+  // cap, and PAGE + user-driven load-more already bound growth (FIX: a slice here
+  // would hide everything load-more pulled)
+  const shown = filtered;
   return (
     <>
       <IndexLightNote />
@@ -232,7 +259,8 @@ const IndexDocumentsLight = (props: {
   loadMore: () => void;
 }) => {
   const { rows, loading } = props;
-  const shown = rows.slice(0, BROWSE_LIMIT);
+  // render ALL loaded index rows — load-more appends past any fixed cap (FIX)
+  const shown = rows;
   return (
     <>
       <IndexLightNote />
@@ -289,22 +317,23 @@ export const BrowseIdentities = () => {
 
   const total = (result?.publicCount ?? 0) + (result?.gatedCount ?? 0);
   const syncing = sync.phase === 'syncing';
+  const mode = indexBrowseMode(indexed, index.error, total > 0);
 
   return (
     <Panel
       title={
         <>
           public identities{' '}
-          {indexed === true ? (
+          {mode === 'index' ? (
             <Pill state="warn">{fmtCount(index.rows.length)}</Pill>
           ) : result ? (
             <Pill state="ok">{fmtCount(result.publicCount)}</Pill>
           ) : null}
         </>
       }
-      right={<span class="lbl">who · from {indexed === true ? 'relay index' : 'local index'}</span>}
+      right={<span class="lbl">who · from {mode === 'index' ? 'relay index' : 'local index'}</span>}
       orient={
-        indexed === true ? (
+        mode === 'index' ? (
           <>
             Identities with a publicly-readable profile, straight off the relay's{' '}
             <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — every row is an{' '}
@@ -339,7 +368,7 @@ export const BrowseIdentities = () => {
         </div>
       ) : null}
 
-      {indexed === true ? (
+      {mode === 'index' ? (
         <IndexIdentitiesLight
           rows={index.rows}
           loading={index.loading}
@@ -347,6 +376,8 @@ export const BrowseIdentities = () => {
           loadMore={index.loadMore}
           query={query}
         />
+      ) : mode === 'index-unavailable' ? (
+        <IndexUnavailable noun="identities" loading={index.loading} onRetry={index.retry} />
       ) : !result || total === 0 ? (
         indexed === null ? (
           <span class="muted">checking relay capabilities…</span>
@@ -357,6 +388,7 @@ export const BrowseIdentities = () => {
         <span class="muted">no identities match “{query}”.</span>
       ) : (
         <>
+          {mode === 'index-fell-back' ? <FellBackNote /> : null}
           <table>
             <thead>
               <tr>
@@ -422,22 +454,23 @@ export const BrowseDocuments = () => {
   const syncing = sync.phase === 'syncing';
   const resolving = sync.phase === 'resolving';
   const hasLocal = !!result && result.publicCount + result.gatedCount + result.unresolvedCount > 0;
+  const mode = indexBrowseMode(indexed, index.error, hasLocal);
 
   return (
     <Panel
       title={
         <>
           public documents{' '}
-          {indexed === true ? (
+          {mode === 'index' ? (
             <Pill state="warn">{fmtCount(index.rows.length)}</Pill>
           ) : result ? (
             <Pill state="ok">{fmtCount(result.publicCount)}</Pill>
           ) : null}
         </>
       }
-      right={<span class="lbl">what · from {indexed === true ? 'relay index' : 'local index'}</span>}
+      right={<span class="lbl">what · from {mode === 'index' ? 'relay index' : 'local index'}</span>}
       orient={
-        indexed === true ? (
+        mode === 'index' ? (
           <>
             Public content chains straight off the relay's{' '}
             <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — <code>$schema</code> and
@@ -484,13 +517,15 @@ export const BrowseDocuments = () => {
         </div>
       ) : null}
 
-      {indexed === true ? (
+      {mode === 'index' ? (
         <IndexDocumentsLight
           rows={index.rows}
           loading={index.loading}
           hasMore={index.hasMore}
           loadMore={index.loadMore}
         />
+      ) : mode === 'index-unavailable' ? (
+        <IndexUnavailable noun="documents" loading={index.loading} onRetry={index.retry} />
       ) : !hasLocal ? (
         indexed === null ? (
           <span class="muted">checking relay capabilities…</span>
@@ -504,6 +539,7 @@ export const BrowseDocuments = () => {
         </span>
       ) : (
         <>
+          {mode === 'index-fell-back' ? <FellBackNote /> : null}
           <table>
             <thead>
               <tr>

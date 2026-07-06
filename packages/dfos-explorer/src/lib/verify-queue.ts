@@ -61,6 +61,18 @@ const key = (kind: VerifyKind, chainId: string): string => `${kind}:${chainId}`;
  * opCount is at least the relay index's current hint. opCount is branch-inclusive
  * and monotonic, so a hint ABOVE the recorded count means a newer op the verdict
  * predates — re-fold. No hint (undefined) → trust the durable verdict.
+ *
+ * DELIBERATE THREAT-MODEL CHOICE (not an oversight): freshness is keyed on the
+ * op COUNT (+ isDeleted), NOT the head CID. A relay could in principle serve a
+ * DIFFERENT branch with the SAME opCount and this would reuse the prior verdict
+ * without a re-fold. That's accepted, and matches the existing in-session stale
+ * check (also opCount-based — non-regression), because: (a) the fold that PRODUCED
+ * the verdict already re-checked every signature and CID, so a fabricated chain
+ * never becomes a verdict in the first place; (b) opCount is branch-inclusive and
+ * only grows, so real new activity always trips a re-fold; (c) this drives a
+ * browse-row hint, and the detail page is always the rigorous, head-bound proof.
+ * A head-CID-bound verdict would be strictly stronger — a candidate hardening, not
+ * a bug — if browse rows ever become a verification input.
  */
 export const verdictIsFresh = (verdictOpCount: number, hintOpCount?: number): boolean =>
   hintOpCount === undefined || verdictOpCount >= hintOpCount;

@@ -66,7 +66,44 @@ export interface IndexLoad<T> {
   hasMore: boolean;
   /** pull the next page and append it (no-op while loading or exhausted). */
   loadMore: () => void;
+  /** the INITIAL index load REJECTED (relay unreachable / index errored) — this
+   *  is distinct from a successful but genuinely-empty page (rows [], error
+   *  false). Consumers use it to fall back to the local corpus / show an honest
+   *  error instead of a false "the index returned nothing". */
+  error: boolean;
+  /** re-run the initial load — a retry after an error, or a refresh from head. */
+  retry: () => void;
 }
+
+/** What a browse surface should render given the index capability + whether the
+ *  index load errored + whether a local synced corpus exists. Pure so it unit-
+ *  tests without a DOM: `index` = live index rows; `index-unavailable` = index
+ *  errored and no local fallback (honest error + retry); `index-fell-back` =
+ *  index errored but a local corpus exists (show local, note the fallback);
+ *  `local` = no index-capable relay (the pre-index path: checking / sync / local). */
+export type IndexBrowseMode = 'index' | 'index-unavailable' | 'index-fell-back' | 'local';
+
+export const indexBrowseMode = (
+  indexed: boolean | null,
+  indexError: boolean,
+  localHasRows: boolean,
+): IndexBrowseMode => {
+  if (indexed === true && !indexError) return 'index';
+  if (indexed === true && indexError) return localHasRows ? 'index-fell-back' : 'index-unavailable';
+  return 'local';
+};
+
+/** The render state of an index-sourced list: rows win; else honest error over
+ *  loading over empty — so an errored or settled-empty list never shows a
+ *  permanent "loading…". Pure, unit-tested. */
+export type IndexListState = 'rows' | 'error' | 'loading' | 'empty';
+
+export const indexListState = (loading: boolean, error: boolean, count: number): IndexListState => {
+  if (count > 0) return 'rows';
+  if (error) return 'error';
+  if (loading) return 'loading';
+  return 'empty';
+};
 
 /**
  * Generic cursor pager over an index projection. Loads the first page when
@@ -85,6 +122,8 @@ const useIndexPager = <T>(
   const [loading, setLoading] = useState(false);
   const [next, setNext] = useState<string | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
+  const [error, setError] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
   const runRef = useRef(0);
   const busyRef = useRef(false);
   // hold the latest fetch closure without making it an effect dependency
@@ -99,13 +138,17 @@ const useIndexPager = <T>(
       .current(after)
       .then((page) => {
         if (run !== runRef.current) return; // superseded by a reset/unmount
+        setError(false); // reachable — a genuinely-empty page is NOT an error
         setRows((prev) => (reset ? page.items : [...prev, ...page.items]));
         setNext(page.next ?? undefined);
         setHasMore(!!page.next);
       })
       .catch(() => {
         if (run !== runRef.current) return;
+        // only the INITIAL load flags error — a failed load-more leaves the rows
+        // already shown intact (and its own button handles the retry affordance)
         if (reset) {
+          setError(true);
           setRows([]);
           setNext(undefined);
           setHasMore(false);
@@ -122,26 +165,32 @@ const useIndexPager = <T>(
       setRows([]);
       setNext(undefined);
       setHasMore(false);
+      setError(false);
       return;
     }
     const run = ++runRef.current;
     setRows([]);
     setNext(undefined);
     setHasMore(false);
+    setError(false);
     loadPage(undefined, run, true);
     return () => {
       runRef.current += 1; // invalidate any in-flight load on dep change / unmount
     };
     // fetchPage is read via fetchRef so it is intentionally not a dependency
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, resetKey]);
+  }, [enabled, resetKey, reloadTick]);
 
   const loadMore = (): void => {
     if (!enabled || !hasMore || loading || busyRef.current) return;
     loadPage(next, runRef.current, false);
   };
 
-  return { rows, loading, hasMore, loadMore };
+  // retry re-runs the INITIAL load via the effect (a failed first page leaves
+  // hasMore false, so loadMore can't recover it — reloadTick can).
+  const retry = (): void => setReloadTick((t) => t + 1);
+
+  return { rows, loading, hasMore, loadMore, error, retry };
 };
 
 /** Page the identity index (optionally public-profile-only) with load-more. */

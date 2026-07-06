@@ -23,7 +23,7 @@ import { estimateStorageBytes, OP_KINDS } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtAge, fmtBytes, fmtCount, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { useIndexCapable, useIndexIdentities } from '../lib/index-light';
+import { indexListState, useIndexCapable, useIndexIdentities } from '../lib/index-light';
 import { fetchRelayHint, type RelayHint } from '../lib/relay-hint';
 import { startSync, stopSync, useSyncState } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
@@ -254,7 +254,11 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
 };
 
 // -----------------------------------------------------------------------------
-// RECENT ACTIVITY — latest chains by last op
+// RECENT ACTIVITY / INDEX HEAD
+//   local (non-indexed) path: latest chains by last op — genuinely recency-ordered.
+//   index-capable path: the HEAD of the relay index — the /index/v0 identities
+//   endpoint pages by DID ascending (lexicographic), NOT recency, so this panel
+//   is titled "head of relay index", never "recent", and each row verifies live.
 // -----------------------------------------------------------------------------
 
 // how many head-of-index rows home shows and verifies live
@@ -288,15 +292,18 @@ const RecentPanel = (props: {
   obs: Observatory | null;
   indexed: boolean | null;
   indexRows: IndexIdentityRow[];
+  indexLoading: boolean;
+  indexError: boolean;
 }) => {
-  // index-capable → show the HEAD of the live relay index, every row verifying in
-  // real time (attributed → verified) right on the landing page. Otherwise fall
-  // back to the local recent-activity view (post-sync, no index-capable relay).
+  // index-capable → show the HEAD of the live relay index (DID-ordered, NOT
+  // recency), every row verifying in real time (attributed → verified) right on
+  // the landing page. Otherwise fall back to the local recent-activity view.
   if (props.indexed === true) {
     const head = props.indexRows.slice(0, HEAD_N);
+    const state = indexListState(props.indexLoading, props.indexError, head.length);
     return (
       <Panel
-        title="recent activity"
+        title="identities · head of relay index"
         accent="warn"
         right={
           <span class="lbl">
@@ -304,9 +311,7 @@ const RecentPanel = (props: {
           </span>
         }
       >
-        {head.length === 0 ? (
-          <span class="muted">loading the head of the relay index…</span>
-        ) : (
+        {state === 'rows' ? (
           <div class="index-rows">
             <table>
               <tbody>
@@ -316,6 +321,12 @@ const RecentPanel = (props: {
               </tbody>
             </table>
           </div>
+        ) : state === 'error' ? (
+          <span class="muted">couldn’t reach the relay index.</span>
+        ) : state === 'loading' ? (
+          <span class="muted">loading the head of the relay index…</span>
+        ) : (
+          <span class="muted">no public identities in the relay index</span>
         )}
       </Panel>
     );
@@ -361,6 +372,8 @@ const IdentitiesPanel = (props: {
   obs: Observatory | null;
   indexed: boolean | null;
   indexRows: IndexIdentityRow[];
+  indexLoading: boolean;
+  indexError: boolean;
 }) => {
   const sync = useSyncState();
   const busy = sync.phase === 'resolving' || sync.phase === 'syncing';
@@ -375,6 +388,9 @@ const IdentitiesPanel = (props: {
     .slice(0, 12)
     .map((r) => ({ chainId: r.did, name: r.profile?.name ?? '' }));
   const ids = indexed ? indexIds : localIds;
+  // distinguish index error / still-loading / settled-empty so an unreachable or
+  // loading index never shows a false "nobody is public"
+  const idxState = indexListState(props.indexLoading, props.indexError, indexIds.length);
   return (
     <Panel
       title="public identities"
@@ -386,7 +402,11 @@ const IdentitiesPanel = (props: {
           {/* only claim "none" once resolution has settled — while Phase 2 runs
               an empty strip means "not resolved yet", not "nobody is public" */}
           {indexed
-            ? 'no public identities in the relay index'
+            ? idxState === 'error'
+              ? 'couldn’t reach the relay index.'
+              : idxState === 'loading'
+                ? 'loading identities from the relay index…'
+                : 'no public identities in the relay index'
             : !populated
               ? 'sync the log to surface identities'
               : busy
@@ -549,8 +569,20 @@ export const Home = (props: { onSample: (q: string) => void }) => {
       </div>
 
       <NetworkPanel obs={obs} hint={hint} />
-      <RecentPanel obs={obs} indexed={indexed} indexRows={idIndex.rows} />
-      <IdentitiesPanel obs={obs} indexed={indexed} indexRows={idIndex.rows} />
+      <RecentPanel
+        obs={obs}
+        indexed={indexed}
+        indexRows={idIndex.rows}
+        indexLoading={idIndex.loading}
+        indexError={idIndex.error}
+      />
+      <IdentitiesPanel
+        obs={obs}
+        indexed={indexed}
+        indexRows={idIndex.rows}
+        indexLoading={idIndex.loading}
+        indexError={idIndex.error}
+      />
       <SyncInstrument obs={obs} />
 
       <Panel title="what this is">
