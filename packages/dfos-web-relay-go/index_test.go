@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 )
 
 const testProfileSchema = "https://schemas.dfos.com/profile/v1"
+const testPostSchema = "https://schemas.dfos.com/post/v1"
 
 var testArtifactAnchor = "bafyrei" + strings.Repeat("a", 52)
 
@@ -199,6 +201,83 @@ func indexContentRowByID(t *testing.T, handler http.Handler, contentID string) m
 		}
 	}
 	return nil
+}
+
+func contentBodyHasID(body map[string]any, contentID string) bool {
+	for _, raw := range body["content"].([]any) {
+		if raw.(map[string]any)["contentId"] == contentID {
+			return true
+		}
+	}
+	return false
+}
+
+func identityDIDs(body map[string]any) []string {
+	rows := body["identities"].([]any)
+	dids := make([]string, 0, len(rows))
+	for _, raw := range rows {
+		dids = append(dids, raw.(map[string]any)["did"].(string))
+	}
+	return dids
+}
+
+func contentIDs(body map[string]any) []string {
+	rows := body["content"].([]any)
+	ids := make([]string, 0, len(rows))
+	for _, raw := range rows {
+		ids = append(ids, raw.(map[string]any)["contentId"].(string))
+	}
+	return ids
+}
+
+func walkIdentityPages(t *testing.T, handler http.Handler, basePath string) []string {
+	t.Helper()
+	out := []string{}
+	after := ""
+	for pages := 0; ; pages++ {
+		if pages > 20 {
+			t.Fatalf("identity ordered walk exceeded 20 pages")
+		}
+		path := basePath
+		if after != "" {
+			path += "&after=" + url.QueryEscape(after)
+		}
+		status, body, _ := getIndexJSONBody(t, handler, path)
+		if status != 200 {
+			t.Fatalf("%s status = %d body=%v", path, status, body)
+		}
+		out = append(out, identityDIDs(body)...)
+		next, _ := body["next"].(string)
+		if next == "" {
+			return out
+		}
+		after = next
+	}
+}
+
+func walkContentPages(t *testing.T, handler http.Handler, basePath string) []string {
+	t.Helper()
+	out := []string{}
+	after := ""
+	for pages := 0; ; pages++ {
+		if pages > 20 {
+			t.Fatalf("content ordered walk exceeded 20 pages")
+		}
+		path := basePath
+		if after != "" {
+			path += "&after=" + url.QueryEscape(after)
+		}
+		status, body, _ := getIndexJSONBody(t, handler, path)
+		if status != 200 {
+			t.Fatalf("%s status = %d body=%v", path, status, body)
+		}
+		out = append(out, contentIDs(body)...)
+		next, _ := body["next"].(string)
+		if next == "" {
+			return out
+		}
+		after = next
+	}
 }
 
 func TestIndexCapabilityAndDisabledRoutes(t *testing.T) {
@@ -448,6 +527,222 @@ func TestIndexContentFiltersPaginationAndMalformedCreator(t *testing.T) {
 	status, malformed, _ := getIndexJSONBody(t, handler, "/index/v0/content?creator=did:dfos:tooshort")
 	if status != 400 || malformed["error"] != "invalid DID" {
 		t.Fatalf("malformed creator = %v status=%d", malformed, status)
+	}
+}
+
+func TestIndexContentTitleProjectionCircuitBreakersAndLateBlob(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+
+	post := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": "hello"}, false)
+	nonRegistry := createIndexedContent(t, r, store, creator, map[string]any{"$schema": "example/post", "title": "no"}, false)
+	missing := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema}, false)
+	empty := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": ""}, false)
+	nonString := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": 123}, false)
+	late := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": "late"}, false)
+	for _, c := range []testContent{post, nonRegistry, missing, empty, nonString} {
+		uploadBlobViaRoute(t, r, creator, c)
+	}
+
+	if row := indexContentRowByID(t, handler, post.contentID); row["title"] != "hello" {
+		t.Fatalf("post title row = %v", row)
+	}
+	for _, c := range []testContent{nonRegistry, missing, empty, nonString, late} {
+		if row := indexContentRowByID(t, handler, c.contentID); row["title"] != nil {
+			t.Fatalf("breaker row %s title = %v, want nil", c.contentID, row["title"])
+		}
+	}
+	uploadBlobViaRoute(t, r, creator, late)
+	if row := indexContentRowByID(t, handler, late.contentID); row["title"] != "late" {
+		t.Fatalf("late title row = %v", row)
+	}
+}
+
+func TestIndexIdentitiesOrderedEnumeration(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+
+	first := ingestIdentity(t, r)
+	time.Sleep(time.Millisecond)
+	second := ingestIdentity(t, r)
+
+	status, genesis, _ := getIndexJSONBody(t, handler, "/index/v0/identities?order=genesisAt.desc&limit=1000")
+	if status != 200 {
+		t.Fatalf("identity genesisAt.desc status = %d", status)
+	}
+	gotGenesis := identityDIDs(genesis)
+	if len(gotGenesis) == 0 || gotGenesis[0] != second.did {
+		t.Fatalf("genesisAt.desc first DID = %v, want %s", gotGenesis, second.did)
+	}
+
+	time.Sleep(time.Millisecond)
+	updateIdentityServices(t, r, first, []dfos.ServiceEntry{
+		{"id": "identity-order-head", "type": "ContentAnchor", "label": "noop", "anchor": strings.Repeat("2", 31)},
+	})
+	status, head, _ := getIndexJSONBody(t, handler, "/index/v0/identities?order=headAt.desc&limit=1000")
+	if status != 200 {
+		t.Fatalf("identity headAt.desc status = %d", status)
+	}
+	gotHead := identityDIDs(head)
+	if len(gotHead) == 0 || gotHead[0] != first.did {
+		t.Fatalf("headAt.desc first DID = %v, want %s", gotHead, first.did)
+	}
+
+	status, all, _ := getIndexJSONBody(t, handler, "/index/v0/identities?order=headAt.desc&limit=1000")
+	if status != 200 {
+		t.Fatalf("identity ordered all status = %d", status)
+	}
+	expected := identityDIDs(all)
+	walked := walkIdentityPages(t, handler, "/index/v0/identities?order=headAt.desc&limit=1")
+	if !reflect.DeepEqual(walked, expected) {
+		t.Fatalf("identity ordered cursor walk = %v, want %v", walked, expected)
+	}
+
+	tieA := "did:dfos:identity-tie-a"
+	tieB := "did:dfos:identity-tie-b"
+	ts := "2999-01-01T00:00:00.000Z"
+	for _, did := range []string{tieB, tieA} {
+		if err := store.PutIndexIdentityRow(indexIdentityRow{DID: did, HeadCID: "h", GenesisAt: ts, HeadAt: ts}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status, tied, _ := getIndexJSONBody(t, handler, "/index/v0/identities?order=genesisAt.desc&limit=2")
+	if status != 200 {
+		t.Fatalf("identity tie status = %d", status)
+	}
+	gotTie := identityDIDs(tied)
+	wantTie := []string{tieA, tieB}
+	if !reflect.DeepEqual(gotTie, wantTie) {
+		t.Fatalf("identity equal-timestamp tie order = %v, want %v", gotTie, wantTie)
+	}
+
+	status, malformed, _ := getIndexJSONBody(t, handler, "/index/v0/identities?order=genesisAt.desc&after=not-a-cursor")
+	if status != 400 || malformed["error"] != "invalid cursor" {
+		t.Fatalf("identity malformed ordered cursor = %v status=%d", malformed, status)
+	}
+}
+
+func TestIndexOrderAndSignerFilters(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	delegate := ingestIdentity(t, r)
+	never := ingestIdentity(t, r)
+
+	c1 := createIndexedContent(t, r, store, creator, map[string]any{"$schema": "example/order", "title": "a"}, false)
+	time.Sleep(time.Millisecond)
+	c2 := createIndexedContent(t, r, store, creator, map[string]any{"$schema": "example/order", "title": "b"}, false)
+	time.Sleep(time.Millisecond)
+	c3 := createIndexedContent(t, r, store, delegate, map[string]any{"$schema": "example/order", "title": "c"}, false)
+
+	status, ordered, _ := getIndexJSONBody(t, handler, "/index/v0/content?order=genesisAt.desc&limit=1000")
+	if status != 200 {
+		t.Fatalf("ordered content status = %d", status)
+	}
+	gotScoped := []string{}
+	for _, raw := range ordered["content"].([]any) {
+		id := raw.(map[string]any)["contentId"].(string)
+		if id == c1.contentID || id == c2.contentID || id == c3.contentID {
+			gotScoped = append(gotScoped, id)
+		}
+	}
+	if len(gotScoped) != 3 || gotScoped[0] != c3.contentID || gotScoped[1] != c2.contentID || gotScoped[2] != c1.contentID {
+		t.Fatalf("genesisAt.desc scoped order = %v", gotScoped)
+	}
+	expectedAll := contentIDs(ordered)
+	walkedAll := walkContentPages(t, handler, "/index/v0/content?order=genesisAt.desc&limit=1")
+	if !reflect.DeepEqual(walkedAll, expectedAll) {
+		t.Fatalf("content ordered cursor walk = %v, want %v", walkedAll, expectedAll)
+	}
+
+	updateDoc := map[string]any{"$schema": testPostSchema, "title": "delegate"}
+	updateCID, _, err := dfos.DocumentCID(updateDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	creatorKid := creator.did + "#" + creator.auth.keyID
+	writeCred, err := dfos.CreateCredential(creator.did, delegate.did, creatorKid, "chain:"+c1.contentID, "write", time.Hour, creator.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegateKid := delegate.did + "#" + delegate.auth.keyID
+	updateToken, updateOpCID, err := dfos.SignContentUpdateWithOptions(delegate.did, c1.operationCID, updateCID, delegateKid, delegate.auth.priv, dfos.ContentUpdateOptions{Authorization: writeCred})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{updateToken}); res[0].Status != "new" {
+		t.Fatalf("delegated update: %+v", res[0])
+	}
+	uploadBlobViaRoute(t, r, delegate, testContent{contentID: c1.contentID, operationCID: updateOpCID, documentCID: updateCID, document: updateDoc})
+	addPublicRead(t, r, creator, c1.contentID)
+
+	status, head, _ := getIndexJSONBody(t, handler, "/index/v0/content?order=headAt.desc&limit=1000")
+	if status != 200 || head["content"].([]any)[0].(map[string]any)["contentId"] != c1.contentID {
+		t.Fatalf("headAt.desc after update = %v status=%d", head, status)
+	}
+	filteredCreator := walkContentPages(t, handler, "/index/v0/content?order=headAt.desc&creator="+url.QueryEscape(creator.did)+"&limit=1")
+	wantCreator := []string{c1.contentID, c2.contentID}
+	if !reflect.DeepEqual(filteredCreator, wantCreator) {
+		t.Fatalf("ordered creator-filter cursor walk = %v, want %v", filteredCreator, wantCreator)
+	}
+
+	status, byCreator, _ := getIndexJSONBody(t, handler, "/index/v0/content?signer="+url.QueryEscape(creator.did)+"&limit=1000")
+	if status != 200 || !contentBodyHasID(byCreator, c1.contentID) {
+		t.Fatalf("creator signer body = %v status=%d", byCreator, status)
+	}
+	status, byDelegate, _ := getIndexJSONBody(t, handler, "/index/v0/content?signer="+url.QueryEscape(delegate.did)+"&creator="+url.QueryEscape(creator.did)+"&docSchema="+url.QueryEscape(testPostSchema)+"&publicRead=true&limit=1000")
+	if status != 200 || !contentBodyHasID(byDelegate, c1.contentID) {
+		t.Fatalf("delegate signer body = %v status=%d", byDelegate, status)
+	}
+	status, orderedByDelegate, _ := getIndexJSONBody(t, handler, "/index/v0/content?order=headAt.desc&signer="+url.QueryEscape(delegate.did)+"&docSchema="+url.QueryEscape(testPostSchema)+"&limit=1000")
+	if status != 200 || !reflect.DeepEqual(contentIDs(orderedByDelegate), []string{c1.contentID}) {
+		t.Fatalf("ordered signer/docSchema body = %v status=%d", orderedByDelegate, status)
+	}
+	status, byNever, _ := getIndexJSONBody(t, handler, "/index/v0/content?signer="+url.QueryEscape(never.did)+"&limit=1000")
+	if status != 200 || contentBodyHasID(byNever, c1.contentID) {
+		t.Fatalf("never signer body = %v status=%d", byNever, status)
+	}
+
+	status, badOrder, _ := getIndexJSONBody(t, handler, "/index/v0/content?order=bogus")
+	if status != 400 || badOrder["error"] != "invalid order" {
+		t.Fatalf("bad order = %v status=%d", badOrder, status)
+	}
+	status, badCursor, _ := getIndexJSONBody(t, handler, "/index/v0/content?order=genesisAt.desc&after=not-a-cursor")
+	if status != 400 || badCursor["error"] != "invalid cursor" {
+		t.Fatalf("bad cursor = %v status=%d", badCursor, status)
+	}
+	status, badSigner, _ := getIndexJSONBody(t, handler, "/index/v0/content?signer=not-a-did")
+	if status != 400 || badSigner["error"] != "invalid DID" {
+		t.Fatalf("bad signer = %v status=%d", badSigner, status)
+	}
+}
+
+func TestIndexOrderedTieBreaksByKey(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	a := "2346789acdefhknrtvz2346789acdef"
+	b := "2346789acdefhknrtvz2346789acdee"
+	ts := "2026-01-01T00:00:00.000Z"
+	for _, id := range []string{a, b} {
+		if err := store.PutIndexContentRow(indexContentRow{ContentID: id, GenesisCID: "g", HeadCID: "h", CreatorDID: r.DID(), GenesisAt: ts, HeadAt: ts}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status, body, _ := getIndexJSONBody(t, handler, "/index/v0/content?order=genesisAt.desc&limit=1000")
+	if status != 200 {
+		t.Fatalf("ordered tiebreak status = %d", status)
+	}
+	got := []string{}
+	for _, raw := range body["content"].([]any) {
+		id := raw.(map[string]any)["contentId"].(string)
+		if id == a || id == b {
+			got = append(got, id)
+		}
+	}
+	want := []string{b, a}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("tie order = %v, want %v", got, want)
 	}
 }
 
@@ -842,7 +1137,7 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 
 	author := ingestIdentity(t, r)
 	witness := ingestIdentity(t, r)
-	content := createIndexedContent(t, r, NewMemoryStore(), author, map[string]any{"$schema": "example/post", "title": "seed"}, false)
+	content := createIndexedContent(t, r, NewMemoryStore(), author, map[string]any{"$schema": testPostSchema, "title": "seed"}, false)
 	uploadBlobViaRoute(t, r, author, content)
 	witnessKid := witness.did + "#" + witness.auth.keyID
 	cs, csCID, err := dfos.SignCountersign(witness.did, content.operationCID, witnessKid, witness.auth.priv)
@@ -888,8 +1183,12 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 	// content row rebuilt WITH the late blob's docSchema (rebuild reads current
 	// chain + held blob + standing credentials)
 	row := indexContentRowByID(t, handler2, content.contentID)
-	if row == nil || row["docSchema"] != "example/post" {
+	if row == nil || row["docSchema"] != testPostSchema || row["title"] != "seed" {
 		t.Fatalf("rebuilt content row = %v", row)
+	}
+	_, signerBody, _ := getIndexJSONBody(t, handler2, "/index/v0/content?signer="+url.QueryEscape(author.did)+"&limit=1000")
+	if !contentBodyHasID(signerBody, content.contentID) {
+		t.Fatalf("rebuilt signer rows = %v, want content %s", signerBody, content.contentID)
 	}
 	// countersign projection rebuilt and queryable by witness
 	_, csBody, _ := getIndexJSONBody(t, handler2, "/index/v0/countersignatures?witness="+url.QueryEscape(witness.did)+"&limit=100")

@@ -13,6 +13,8 @@ import type {
   IndexCountersignatureRow,
   IndexCredentialRow,
   IndexIdentityRow,
+  IndexOrder,
+  IndexOrderedCursor,
 } from './index-routes';
 
 /**
@@ -366,6 +368,8 @@ export interface RelayStore {
     hasPublicProfile?: boolean;
     nameContains?: string;
     after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexOrder;
     limit: number;
   }): Promise<IndexIdentityRow[]>;
   /**
@@ -374,10 +378,13 @@ export interface RelayStore {
    */
   queryIndexContent(q: {
     creator?: string;
+    signer?: string;
     docSchema?: string;
     documentCID?: string;
     publicRead?: boolean;
     after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexOrder;
     limit: number;
   }): Promise<IndexContentRow[]>;
   /**
@@ -406,6 +413,8 @@ export interface RelayStore {
   putIndexIdentityRow(row: IndexIdentityRow): Promise<void>;
   /** Upsert a content projection row by contentId. */
   putIndexContentRow(row: IndexContentRow): Promise<void>;
+  /** Add one accepted content-operation signer to a chain's signer set. */
+  putIndexContentSigner(contentId: string, did: string): Promise<void>;
   /**
    * Upsert a countersignature projection row by cid. The `witnessDID` column is
    * stored (never echoed in the row body) so witness-scoped queries stay O(page).

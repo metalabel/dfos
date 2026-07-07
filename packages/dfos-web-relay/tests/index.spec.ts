@@ -27,6 +27,7 @@ import { bootstrapRelayIdentity, createRelay, MemoryRelayStore } from '../src';
 import type { RelayIdentity } from '../src';
 
 const PROFILE_SCHEMA = 'https://schemas.dfos.com/profile/v1';
+const POST_SCHEMA = 'https://schemas.dfos.com/post/v1';
 const ARTIFACT_ANCHOR = `bafyrei${'a'.repeat(52)}`;
 
 const makeKey = () => {
@@ -152,6 +153,57 @@ describe('index v0', () => {
       documentCID,
       document,
     };
+  };
+
+  const updateContent = async (
+    signer: TestIdentity,
+    previousOperationCID: string,
+    document: Record<string, unknown>,
+    offset = 2,
+    authorization?: string,
+  ) => {
+    const encoded = await dagCborCanonicalEncode(document);
+    const op: ContentOperation = {
+      version: 1,
+      type: 'update',
+      did: signer.did,
+      previousOperationCID,
+      documentCID: encoded.cid.toString(),
+      baseDocumentCID: null,
+      createdAt: ts(offset),
+      note: null,
+      ...(authorization ? { authorization } : {}),
+    };
+    const { jwsToken, operationCID } = await signContentOperation({
+      operation: op,
+      signer: signer.authKey.signer,
+      kid: `${signer.did}#${signer.authKey.keyId}`,
+    });
+    const res = await postOps([jwsToken]);
+    expect(res.status).toBe(200);
+    const body = await json(res);
+    expect(body.results[0].status).toBe('new');
+    return { jwsToken, operationCID, documentCID: encoded.cid.toString(), document };
+  };
+
+  const createWriteGrant = async (
+    creator: TestIdentity,
+    delegate: TestIdentity,
+    contentId: string,
+  ) => {
+    const now = Math.floor(Date.now() / 1000);
+    const credential = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: `chain:${contentId}`, action: 'write' }],
+      exp: now + 3600,
+      signer: creator.authKey.signer,
+      keyId: creator.authKey.keyId,
+      iat: now,
+    });
+    const res = await postOps([credential]);
+    expect(res.status).toBe(200);
+    return credential;
   };
 
   const authToken = async (identity: TestIdentity) => {
@@ -533,6 +585,255 @@ describe('index v0', () => {
 
     const malformed = await req('/index/v0/content?creator=did:dfos:tooshort');
     expect(malformed.status).toBe(400);
+  });
+
+  it('projects post titles with circuit breakers and late blob recompute', async () => {
+    const creator = await createIdentity();
+    const post = await createContent(creator, { $schema: POST_SCHEMA, title: 'hello' });
+    await uploadBlob(creator, post.contentId, post.operationCID, post.document);
+
+    const nonRegistry = await createContent(creator, { $schema: 'example/post', title: 'no' });
+    const missing = await createContent(creator, { $schema: POST_SCHEMA });
+    const empty = await createContent(creator, { $schema: POST_SCHEMA, title: '' });
+    const nonString = await createContent(creator, { $schema: POST_SCHEMA, title: 123 });
+    const late = await createContent(creator, { $schema: POST_SCHEMA, title: 'late' });
+    for (const content of [nonRegistry, missing, empty, nonString]) {
+      await uploadBlob(creator, content.contentId, content.operationCID, content.document);
+    }
+
+    expect((await contentRow(post.contentId)).title).toBe('hello');
+    for (const content of [nonRegistry, missing, empty, nonString, late]) {
+      expect((await contentRow(content.contentId)).title).toBeNull();
+    }
+
+    await uploadBlob(creator, late.contentId, late.operationCID, late.document);
+    expect((await contentRow(late.contentId)).title).toBe('late');
+  });
+
+  it('orders identity and content pages by time with opaque cursors', async () => {
+    const a = await createIdentity();
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const b = await createIdentity();
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const c = await createIdentity();
+    const c1 = await createContent(a, { $schema: 'example/order', title: 'a' }, 1);
+    const c2 = await createContent(a, { $schema: 'example/order', title: 'b' }, 3);
+    const c3 = await createContent(b, { $schema: 'example/order', title: 'c' }, 2);
+
+    const walkIdentityDids = async (path: string): Promise<string[]> => {
+      const walked: string[] = [];
+      let next: string | null = null;
+      for (let pages = 0; ; pages++) {
+        expect(pages).toBeLessThanOrEqual(20);
+        const page = await json(
+          await req(`${path}${next ? `&after=${encodeURIComponent(next)}` : ''}`),
+        );
+        walked.push(...page.identities.map((row: { did: string }) => row.did));
+        if (page.next === null) break;
+        next = page.next;
+      }
+      return walked;
+    };
+
+    const walkContentIds = async (path: string): Promise<string[]> => {
+      const walked: string[] = [];
+      let next: string | null = null;
+      for (let pages = 0; ; pages++) {
+        expect(pages).toBeLessThanOrEqual(20);
+        const page = await json(
+          await req(`${path}${next ? `&after=${encodeURIComponent(next)}` : ''}`),
+        );
+        walked.push(...page.content.map((row: { contentId: string }) => row.contentId));
+        if (page.next === null) break;
+        next = page.next;
+      }
+      return walked;
+    };
+
+    const genesis = await json(await req('/index/v0/content?order=genesisAt.desc&limit=1000'));
+    const scoped = genesis.content.filter((row: { contentId: string }) =>
+      [c1.contentId, c2.contentId, c3.contentId].includes(row.contentId),
+    );
+    expect(scoped.map((row: { contentId: string }) => row.contentId)).toEqual([
+      c2.contentId,
+      c3.contentId,
+      c1.contentId,
+    ]);
+
+    const expectedContent = genesis.content.map((row: { contentId: string }) => row.contentId);
+    const walkedContent = await walkContentIds('/index/v0/content?order=genesisAt.desc&limit=1');
+    expect(walkedContent).toEqual(expectedContent);
+    expect(walkedContent.length).toBeGreaterThanOrEqual(3);
+
+    const update = await updateContent(
+      a,
+      c1.operationCID,
+      { $schema: POST_SCHEMA, title: 'new' },
+      10,
+    );
+    await uploadBlob(a, c1.contentId, update.operationCID, update.document);
+    expect(update.operationCID).toEqual(expect.any(String));
+    const head = await json(await req('/index/v0/content?order=headAt.desc&limit=1000'));
+    expect(head.content[0].contentId).toBe(c1.contentId);
+
+    const creatorHead = await json(
+      await req(
+        `/index/v0/content?order=headAt.desc&creator=${encodeURIComponent(a.did)}&limit=1000`,
+      ),
+    );
+    expect(creatorHead.content.map((row: { contentId: string }) => row.contentId)).toEqual([
+      c1.contentId,
+      c2.contentId,
+    ]);
+    const walkedCreatorHead = await walkContentIds(
+      `/index/v0/content?order=headAt.desc&creator=${encodeURIComponent(a.did)}&limit=1`,
+    );
+    expect(walkedCreatorHead).toEqual([c1.contentId, c2.contentId]);
+
+    const orderedBySignerSchema = await json(
+      await req(
+        `/index/v0/content?order=headAt.desc&signer=${encodeURIComponent(
+          a.did,
+        )}&docSchema=${encodeURIComponent(POST_SCHEMA)}&limit=1000`,
+      ),
+    );
+    expect(
+      orderedBySignerSchema.content.map((row: { contentId: string }) => row.contentId),
+    ).toEqual([c1.contentId]);
+
+    const identityPage = await json(await req('/index/v0/identities?order=genesisAt.desc&limit=1'));
+    expect(identityPage.identities).toHaveLength(1);
+    expect(identityPage.identities[0].did).toBe(c.did);
+    expect(identityPage.next).toEqual(expect.any(String));
+
+    const allIdentities = await json(
+      await req('/index/v0/identities?order=headAt.desc&limit=1000'),
+    );
+    const expectedDids = allIdentities.identities.map((row: { did: string }) => row.did);
+    const walkedDids = await walkIdentityDids('/index/v0/identities?order=headAt.desc&limit=1');
+    expect(walkedDids).toEqual(expectedDids);
+    expect(walkedDids.length).toBeGreaterThanOrEqual(3);
+
+    await updateServices(a, [
+      { id: 'identity-order-head', type: 'ContentAnchor', label: 'noop', anchor: ARTIFACT_ANCHOR },
+    ]);
+    const identityHead = await json(await req('/index/v0/identities?order=headAt.desc&limit=1'));
+    expect(identityHead.identities[0].did).toBe(a.did);
+
+    await store.putIndexIdentityRow({
+      did: 'did:dfos:identity-tie-b',
+      headCID: 'h',
+      opCount: 1,
+      genesisAt: '2999-01-01T00:00:00.000Z',
+      headAt: '2999-01-01T00:00:00.000Z',
+      isDeleted: false,
+      profile: null,
+    });
+    await store.putIndexIdentityRow({
+      did: 'did:dfos:identity-tie-a',
+      headCID: 'h',
+      opCount: 1,
+      genesisAt: '2999-01-01T00:00:00.000Z',
+      headAt: '2999-01-01T00:00:00.000Z',
+      isDeleted: false,
+      profile: null,
+    });
+    const identityTied = await json(await req('/index/v0/identities?order=genesisAt.desc&limit=2'));
+    expect(identityTied.identities.map((row: { did: string }) => row.did)).toEqual([
+      'did:dfos:identity-tie-a',
+      'did:dfos:identity-tie-b',
+    ]);
+
+    await store.putIndexContentRow({
+      contentId: 'tie-a',
+      genesisCID: 'g',
+      headCID: 'h',
+      creatorDID: a.did,
+      isDeleted: false,
+      opCount: 1,
+      genesisAt: '2999-01-01T00:00:00.000Z',
+      headAt: '2999-01-01T00:00:00.000Z',
+      currentDocumentCID: null,
+      publicRead: false,
+      docSchema: null,
+      title: null,
+    });
+    await store.putIndexContentRow({
+      contentId: 'tie-b',
+      genesisCID: 'g',
+      headCID: 'h',
+      creatorDID: a.did,
+      isDeleted: false,
+      opCount: 1,
+      genesisAt: '2999-01-01T00:00:00.000Z',
+      headAt: '2999-01-01T00:00:00.000Z',
+      currentDocumentCID: null,
+      publicRead: false,
+      docSchema: null,
+      title: null,
+    });
+    const tied = await json(await req('/index/v0/content?order=genesisAt.desc&limit=2'));
+    expect(tied.content.map((row: { contentId: string }) => row.contentId)).toEqual([
+      'tie-a',
+      'tie-b',
+    ]);
+
+    expect((await req('/index/v0/content?order=bogus')).status).toBe(400);
+    expect((await req('/index/v0/identities?order=bogus')).status).toBe(400);
+    expect((await req('/index/v0/content?order=genesisAt.desc&after=not-a-cursor')).status).toBe(
+      400,
+    );
+    expect((await req('/index/v0/identities?order=genesisAt.desc&after=not-a-token')).status).toBe(
+      400,
+    );
+  });
+
+  it('filters content by accepted signer and composes with other filters', async () => {
+    const creator = await createIdentity();
+    const delegate = await createIdentity();
+    const never = await createIdentity();
+    const doc = { $schema: POST_SCHEMA, title: 'signed' };
+    const content = await createContent(creator, doc);
+    await uploadBlob(creator, content.contentId, content.operationCID, doc);
+    await addPublicReadGrant(creator, content.contentId);
+
+    const credential = await createWriteGrant(creator, delegate, content.contentId);
+    const update = await updateContent(
+      delegate,
+      content.operationCID,
+      { $schema: POST_SCHEMA, title: 'delegate' },
+      2,
+      credential,
+    );
+    await uploadBlob(delegate, content.contentId, update.operationCID, update.document);
+
+    const byCreator = await json(
+      await req(`/index/v0/content?signer=${encodeURIComponent(creator.did)}&limit=1000`),
+    );
+    expect(byCreator.content.map((row: { contentId: string }) => row.contentId)).toContain(
+      content.contentId,
+    );
+
+    const byDelegate = await json(
+      await req(
+        `/index/v0/content?signer=${encodeURIComponent(
+          delegate.did,
+        )}&creator=${encodeURIComponent(creator.did)}&docSchema=${encodeURIComponent(
+          POST_SCHEMA,
+        )}&publicRead=true&limit=1000`,
+      ),
+    );
+    expect(byDelegate.content.map((row: { contentId: string }) => row.contentId)).toContain(
+      content.contentId,
+    );
+
+    const byNever = await json(
+      await req(`/index/v0/content?signer=${encodeURIComponent(never.did)}&limit=1000`),
+    );
+    expect(byNever.content.map((row: { contentId: string }) => row.contentId)).not.toContain(
+      content.contentId,
+    );
+    expect((await req('/index/v0/content?signer=not-a-did')).status).toBe(400);
   });
 
   it('enumerates countersignatures by witness', async () => {

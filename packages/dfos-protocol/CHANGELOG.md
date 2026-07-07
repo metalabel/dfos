@@ -11,6 +11,23 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
+### Added
+
+- **Index v0 iteration 2 — "actor, clock, name"** (#190, spec; implementation
+  in TS + Go + conformance). The `/index/v0` contract gains its fence — _the
+  index knows who acted, when, and what things call themselves; nothing
+  else_ — and three surfaces inside it: the well-known projections table is
+  reframed as the **display-name registry** with row 2 `post/v1 → title`
+  (nullable `title` on content rows, circuit breakers identical to profile
+  `name`); **`order=genesisAt.desc|headAt.desc`** time-ordered enumeration on
+  `/index/v0/identities` and `/index/v0/content` (composite keyset, opaque
+  cursor tokens, lexical default unchanged); and a **`signer=`** actor filter
+  on `/index/v0/content` (chains where the DID signed ≥1 accepted operation,
+  branch-inclusive, includes the creator). Go SQLite schema adds
+  `index_content.title`, a `content_signers` table, and ordering indexes;
+  `IndexProjectionVersion` bumps to 2, so SQLite relays rebuild the index on
+  first boot after upgrading.
+
 ## [0.21.0] — 2026-07-07
 
 The second (and last planned) pre-adoption amendment to `post/v1`, plus

@@ -29,7 +29,13 @@ import {
 import { bootstrapRelayIdentity } from './bootstrap';
 import { isValidDfosDid, resolveDidDocument } from './did-document';
 import { maintainIndexAfterBlob } from './index-maintenance';
-import { INDEX_BASE_PATH, parseBooleanQuery } from './index-routes';
+import {
+  decodeIndexOrderedCursor,
+  encodeIndexOrderedCursor,
+  INDEX_BASE_PATH,
+  parseBooleanQuery,
+  parseIndexOrder,
+} from './index-routes';
 import { ingestOperations } from './ingest';
 import {
   credentialRevocationStatus,
@@ -522,15 +528,28 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
     const hasPublicProfile = parseBooleanQuery(c.req.query('hasPublicProfile'));
     const nameContains = c.req.query('nameContains');
+    const order = parseIndexOrder(c.req.query('order'));
+    if (order === null) return c.json({ error: 'invalid order' }, 400);
     const after = c.req.query('after');
+    const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
+    if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = await store.queryIndexIdentities({
       ...(hasPublicProfile !== undefined ? { hasPublicProfile } : {}),
       ...(nameContains ? { nameContains } : {}),
-      ...(after ? { after } : {}),
+      ...(order ? { order } : {}),
+      ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
       limit,
     });
-    const next = rows.length === limit ? rows[rows.length - 1]!.did : null;
+    const next =
+      rows.length === limit
+        ? order
+          ? encodeIndexOrderedCursor(
+              rows[rows.length - 1]![order === 'genesisAt.desc' ? 'genesisAt' : 'headAt'],
+              rows[rows.length - 1]!.did,
+            )
+          : rows[rows.length - 1]!.did
+        : null;
 
     return c.json({ identities: rows, next });
   });
@@ -542,21 +561,39 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (creator && !isValidDfosDid(creator)) {
       return c.json({ error: 'invalid DID' }, 400);
     }
+    const signer = c.req.query('signer');
+    if (signer && !isValidDfosDid(signer)) {
+      return c.json({ error: 'invalid DID' }, 400);
+    }
 
     const docSchema = c.req.query('docSchema');
     const documentCID = c.req.query('documentCID');
     const publicRead = parseBooleanQuery(c.req.query('publicRead'));
+    const order = parseIndexOrder(c.req.query('order'));
+    if (order === null) return c.json({ error: 'invalid order' }, 400);
     const after = c.req.query('after');
+    const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
+    if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = await store.queryIndexContent({
       ...(creator ? { creator } : {}),
+      ...(signer ? { signer } : {}),
       ...(docSchema !== undefined ? { docSchema } : {}),
       ...(documentCID !== undefined ? { documentCID } : {}),
       ...(publicRead !== undefined ? { publicRead } : {}),
-      ...(after ? { after } : {}),
+      ...(order ? { order } : {}),
+      ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
       limit,
     });
-    const next = rows.length === limit ? rows[rows.length - 1]!.contentId : null;
+    const next =
+      rows.length === limit
+        ? order
+          ? encodeIndexOrderedCursor(
+              rows[rows.length - 1]![order === 'genesisAt.desc' ? 'genesisAt' : 'headAt'],
+              rows[rows.length - 1]!.contentId,
+            )
+          : rows[rows.length - 1]!.contentId
+        : null;
 
     return c.json({ content: rows, next });
   });
