@@ -4,20 +4,14 @@
   "title": "Post",
   "description": "A post \u2014 the primary content type in DFOS. Covers short posts and long-form posts via the format discriminator.",
   "type": "object",
-  "required": [
-    "$schema",
-    "format"
-  ],
+  "required": ["$schema", "format"],
   "properties": {
     "$schema": {
       "const": "https://schemas.dfos.com/post/v1"
     },
     "format": {
       "type": "string",
-      "enum": [
-        "short-post",
-        "long-post"
-      ],
+      "enum": ["short-post", "long-post"],
       "description": "Immutable content format \u2014 set at creation, never changes. Determines rendering and interaction semantics. Comments and replies are deliberately NOT post/v1 surface \u2014 threaded content arrives as its own schema (with signed target linkage), not as additional format values."
     },
     "publishedAt": {
@@ -56,9 +50,7 @@
   "$defs": {
     "media": {
       "type": "object",
-      "required": [
-        "uri"
-      ],
+      "required": ["uri"],
       "properties": {
         "uri": {
           "type": "string",
@@ -80,9 +72,7 @@
     },
     "credit": {
       "type": "object",
-      "required": [
-        "did"
-      ],
+      "required": ["did"],
       "properties": {
         "did": {
           "type": "string",
