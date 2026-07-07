@@ -355,7 +355,8 @@ type Store interface {
 
 // IndexIdentityQuery is the keyset-paged filter for identity projection rows.
 type IndexIdentityQuery struct {
-	HasPublicProfile *bool // nil = no filter
+	HasPublicProfile *bool  // nil = no filter
+	NameContains     string // "" = no filter
 	After            string
 	Limit            int
 }

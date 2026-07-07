@@ -697,6 +697,10 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 		where = append(where, "has_public_profile = ?")
 		args = append(args, boolToInt(*q.HasPublicProfile))
 	}
+	if q.NameContains != "" {
+		where = append(where, "profile_name IS NOT NULL AND instr(lower(profile_name), lower(?)) > 0")
+		args = append(args, q.NameContains)
+	}
 	if q.After != "" {
 		where = append(where, "did > ?")
 		args = append(args, q.After)

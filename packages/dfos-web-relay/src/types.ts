@@ -359,10 +359,12 @@ export interface RelayStore {
   /**
    * Page identity projection rows ascending by DID, `did > after`, length <=
    * limit. `hasPublicProfile` (≡ profile != null && profile.publicRead) filters
-   * to identities that expose a public profile.
+   * to identities that expose a public profile; `nameContains` filters by
+   * case-insensitive substring over projected `profile.name`.
    */
   queryIndexIdentities(q: {
     hasPublicProfile?: boolean;
+    nameContains?: string;
     after?: string;
     limit: number;
   }): Promise<IndexIdentityRow[]>;

@@ -489,6 +489,12 @@ paths:
             Boolean filter on the predicate "profile is non-null AND
             profile.publicRead is true" — true keeps rows where it holds, false
             keeps rows where it does not, absent applies no filter
+        - name: nameContains
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Case-insensitive substring filter over the projected profile name. Non-authoritative (index hint).
         - name: after
           in: query
           required: false

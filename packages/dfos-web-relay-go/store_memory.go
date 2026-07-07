@@ -245,6 +245,11 @@ func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 				continue
 			}
 		}
+		if q.NameContains != "" {
+			if row.Profile == nil || row.Profile.Name == nil || !strings.Contains(strings.ToLower(*row.Profile.Name), strings.ToLower(q.NameContains)) {
+				continue
+			}
+		}
 		rows = append(rows, row)
 	}
 	return pageIndexRows(rows, func(row indexIdentityRow) string { return row.DID }, q.After, q.Limit), nil

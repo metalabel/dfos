@@ -332,6 +332,49 @@ describe('index v0', () => {
     );
   });
 
+  it('filters identities by nameContains (case-insensitive substring over profile.name)', async () => {
+    const seed = async (name: string): Promise<string> => {
+      const id = await createIdentity();
+      const doc = { $schema: PROFILE_SCHEMA, name };
+      const content = await createContent(id, doc);
+      await uploadBlob(id, content.contentId, content.operationCID, doc);
+      await addPublicReadGrant(id, content.contentId);
+      await updateServices(id, [
+        { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: content.contentId },
+      ]);
+      return id.did;
+    };
+    const asha = await seed('Asha'); // contains 'sh'
+    const boris = await seed('Boris'); // contains 'or'
+
+    const dids = async (path: string): Promise<string[]> =>
+      (await json(await req(path))).identities.map((row: { did: string }) => row.did);
+
+    // positive substring, case-insensitive (stored 'Asha' vs lowercase query 'sh')
+    const sh = await dids('/index/v0/identities?nameContains=sh');
+    expect(sh).toContain(asha);
+    expect(sh).not.toContain(boris);
+
+    // an uppercase query returns the same row
+    expect(await dids('/index/v0/identities?nameContains=SH')).toContain(asha);
+
+    // a different substring selects the other row
+    const or = await dids('/index/v0/identities?nameContains=or');
+    expect(or).toContain(boris);
+    expect(or).not.toContain(asha);
+
+    // every returned row genuinely contains the needle — no non-matching row leaks
+    const shBody = await json(await req('/index/v0/identities?nameContains=sh'));
+    for (const row of shBody.identities) {
+      expect(row.profile?.name?.toLowerCase()).toContain('sh');
+    }
+
+    // a no-match query returns neither
+    const none = await dids('/index/v0/identities?nameContains=zzq-no-such');
+    expect(none).not.toContain(asha);
+    expect(none).not.toContain(boris);
+  });
+
   it('applies profile projection circuit breakers', async () => {
     const nonProfile = await createIdentity();
     const nonProfileContent = await createContent(nonProfile, {

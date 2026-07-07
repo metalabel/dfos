@@ -99,9 +99,11 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 	}
 
 	hasPublicProfile := parseBooleanQuery(req.URL.Query().Get("hasPublicProfile"))
+	nameContains := req.URL.Query().Get("nameContains")
 	limit := parseLimit(req, 100, 1000)
 	rows, err := r.readStore.QueryIndexIdentities(IndexIdentityQuery{
 		HasPublicProfile: hasPublicProfile,
+		NameContains:     nameContains,
 		After:            req.URL.Query().Get("after"),
 		Limit:            limit,
 	})

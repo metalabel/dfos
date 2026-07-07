@@ -337,7 +337,7 @@ export interface Client {
    */
   capabilities(options?: CallOptions): Promise<IndexCapabilities>;
   indexIdentities(
-    params?: { hasPublicProfile?: boolean; after?: string; limit?: number },
+    params?: { hasPublicProfile?: boolean; nameContains?: string; after?: string; limit?: number },
     options?: CallOptions,
   ): Promise<IndexIdentitiesPage>;
   indexContent(
