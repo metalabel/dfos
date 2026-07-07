@@ -59,6 +59,7 @@ describe('post schema validation', () => {
       validate({
         $schema: 'https://schemas.dfos.com/post/v1',
         format: 'long-post',
+        publishedAt: '2026-03-07T00:02:00.000Z',
         title: 'Hello World',
         body: 'This is a long post with content.',
         cover: {
@@ -70,9 +71,18 @@ describe('post schema validation', () => {
           { uri: 'attachment://media_def456' },
           { uri: 'attachment://media_ghi789', cid: mediaCid },
         ],
-        topics: ['announcements', 'engineering'],
       }),
     ).toBe(true);
+  });
+
+  it('rejects invalid publishedAt date-time', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        publishedAt: '2026-03-07',
+      }),
+    ).toBe(false);
   });
 
   it('accepts post media with only uri (cid and href truly optional)', () => {
@@ -203,24 +213,34 @@ describe('post schema validation', () => {
     ).toBe(false);
   });
 
-  it('accepts a comment', () => {
+  it('rejects topics', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        topics: ['announcements'],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects comment format', () => {
     expect(
       validate({
         $schema: 'https://schemas.dfos.com/post/v1',
         format: 'comment',
         body: 'Great post!',
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it('accepts a reply', () => {
+  it('rejects reply format', () => {
     expect(
       validate({
         $schema: 'https://schemas.dfos.com/post/v1',
         format: 'reply',
         body: 'Thanks!',
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('rejects missing format', () => {

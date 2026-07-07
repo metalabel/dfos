@@ -2,8 +2,8 @@
   "description": "Content chain: create + delete",
   "type": "content",
   "chain": [
-    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWZ3ZW1ybnR1cG92M3dsZXVib3plMzIyYnAzYnRwYmZzZDJ5d2pwZnJka3VkandyNGpxb2UifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWhxN2I2d2JwZXhlcHhubW0yNXJzY2RzNXB1bm53M2tuZ2RqM3ZtMmg1d3p1b2lxbHRlcmkiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.hwRdbbOdyl4noERFW28YfurNF-5tlpuWBj_gm_9u0iKI17r98s0mO_7DSdD7b4B0rwcfnOHyVYPUCHttmUYdCg",
-    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWFiMzY2NmFianBrcmJud3h1NjVpY29vZnZsNHpxbnp4enRwdXBsYWRpY283cGp2NWsyZHkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWZ3ZW1ybnR1cG92M3dsZXVib3plMzIyYnAzYnRwYmZzZDJ5d2pwZnJka3VkandyNGpxb2UiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.M2PbijnX9_eRP3N92vS5BySzsWVonju1a2SvvkJdNIgHrqtIsgdpGGvrOwYSSqCQWrUp0j3nDIt37ESJN1fKDQ"
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWJzM3ZsdmFpbmZqZnVldDZ4NHVkczNwaXZibWJvaHk3ZjY0aWVnYnV3M2dwc3VxdG1hNmkifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiY3JlYXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsImRvY3VtZW50Q0lEIjoiYmFmeXJlaWU2eGZrcnR3YXgyZHE1Z2R3M3Jwc3VyejJnbHNkdXh5Y2ZoazdqamxsZXdpd2l2a2thZnUiLCJiYXNlRG9jdW1lbnRDSUQiOm51bGwsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.BpUjMx3_zq5q-bxOQN0pl4tfgf_uZIt97r7fM_dukJr--zB0g7sxG9IcBsy0RR3P_DtIK4GB17ikwDUDDHnuAw",
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmNvbnRlbnQtb3AiLCJraWQiOiJkaWQ6ZGZvczpjbm5uZnQ5ZjhhMnJuOTM4ZDZua3ozOHI4NDd2MmtyI2tleV9lejlhODc0dGNrcjNkdjkzM2QzY2tkbjd6NnpyY3Q4IiwiY2lkIjoiYmFmeXJlaWduM3R6aHJjNmF0cmhlNWVicGx2aWF3eHVveTJyeDdmdmhybWpibWRybXZzYjZiZWx6dW0ifQ.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwiZGlkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWJzM3ZsdmFpbmZqZnVldDZ4NHVkczNwaXZibWJvaHk3ZjY0aWVnYnV3M2dwc3VxdG1hNmkiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.8PRYCKWhT-s-5rfmLY_TZtJpHIoSBt86i7HgSzmdBn3Se0cggCdb3pGWV-l6_tCVY7vZXy3clUWrD6NT14PZBQ"
   ],
   "signerPublicKey": "z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK",
   "documents": [
@@ -11,6 +11,7 @@
       "content": {
         "$schema": "https://schemas.dfos.com/post/v1",
         "format": "short-post",
+        "publishedAt": "2026-03-07T00:02:00.000Z",
         "title": "Hello World",
         "body": "First post on the protocol.",
         "credits": [
@@ -31,7 +32,7 @@
     }
   ],
   "expected": {
-    "contentId": "943v8rzdr9fdr4z77tf8de8hn3afed4",
+    "contentId": "8n8fnzhrrefkrde6h72kfvff43r8c63",
     "isDeleted": true,
     "currentDocumentCID": null,
     "length": 2
