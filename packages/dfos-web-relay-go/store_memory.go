@@ -24,6 +24,7 @@ type MemoryStore struct {
 	// --- index (v0) materialized projection rows ---
 	indexIdentityRows    map[string]indexIdentityRow            // keyed by DID
 	indexContentRows     map[string]indexContentRow             // keyed by contentId
+	indexContentSigners  map[string]map[string]struct{}         // contentId → signer DID set
 	indexCountersignRows map[string]storedIndexCountersignature // keyed by cid (carry witness_did)
 }
 
@@ -47,6 +48,7 @@ func NewMemoryStore() *MemoryStore {
 
 		indexIdentityRows:    make(map[string]indexIdentityRow),
 		indexContentRows:     make(map[string]indexContentRow),
+		indexContentSigners:  make(map[string]map[string]struct{}),
 		indexCountersignRows: make(map[string]storedIndexCountersignature),
 	}
 }
@@ -234,6 +236,30 @@ func pageIndexRows[T any](rows []T, keyOf func(T) string, after string, limit in
 	return out
 }
 
+func pageOrderedIndexRows[T any](rows []T, keyOf func(T) string, timestampOf func(T) string, after *indexOrderedCursor, limit int) []T {
+	sort.Slice(rows, func(i, j int) bool {
+		its := timestampOf(rows[i])
+		jts := timestampOf(rows[j])
+		if its != jts {
+			return its > jts
+		}
+		return keyOf(rows[i]) < keyOf(rows[j])
+	})
+	out := []T{}
+	for _, row := range rows {
+		ts := timestampOf(row)
+		key := keyOf(row)
+		if after != nil && !(ts < after.Timestamp || (ts == after.Timestamp && key > after.Key)) {
+			continue
+		}
+		out = append(out, row)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
 func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -252,6 +278,14 @@ func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 		}
 		rows = append(rows, row)
 	}
+	if q.Order != "" {
+		return pageOrderedIndexRows(rows, func(row indexIdentityRow) string { return row.DID }, func(row indexIdentityRow) string {
+			if q.Order == "genesisAt.desc" {
+				return row.GenesisAt
+			}
+			return row.HeadAt
+		}, q.OrderedAfter, q.Limit), nil
+	}
 	return pageIndexRows(rows, func(row indexIdentityRow) string { return row.DID }, q.After, q.Limit), nil
 }
 
@@ -263,6 +297,15 @@ func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		if q.Creator != "" && row.CreatorDID != q.Creator {
 			continue
 		}
+		if q.Signer != "" {
+			signers := s.indexContentSigners[row.ContentID]
+			if signers == nil {
+				continue
+			}
+			if _, ok := signers[q.Signer]; !ok {
+				continue
+			}
+		}
 		if q.DocSchema != nil && (row.DocSchema == nil || *row.DocSchema != *q.DocSchema) {
 			continue
 		}
@@ -273,6 +316,14 @@ func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 			continue
 		}
 		rows = append(rows, row)
+	}
+	if q.Order != "" {
+		return pageOrderedIndexRows(rows, func(row indexContentRow) string { return row.ContentID }, func(row indexContentRow) string {
+			if q.Order == "genesisAt.desc" {
+				return row.GenesisAt
+			}
+			return row.HeadAt
+		}, q.OrderedAfter, q.Limit), nil
 	}
 	return pageIndexRows(rows, func(row indexContentRow) string { return row.ContentID }, q.After, q.Limit), nil
 }
@@ -343,6 +394,18 @@ func (s *MemoryStore) PutIndexContentRow(row indexContentRow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexContentRows[row.ContentID] = row
+	return nil
+}
+
+func (s *MemoryStore) PutIndexContentSigner(contentID string, did string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	signers := s.indexContentSigners[contentID]
+	if signers == nil {
+		signers = map[string]struct{}{}
+		s.indexContentSigners[contentID] = signers
+	}
+	signers[did] = struct{}{}
 	return nil
 }
 

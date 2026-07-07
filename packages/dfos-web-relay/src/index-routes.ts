@@ -22,6 +22,14 @@ export const INDEX_BASE_PATH = '/index/v0';
 
 const CONTENT_ID_RE = /^[2346789acdefhknrtvz]{31}$/;
 const PROFILE_SCHEMA = 'https://schemas.dfos.com/profile/v1';
+const POST_SCHEMA = 'https://schemas.dfos.com/post/v1';
+
+export type IndexOrder = 'genesisAt.desc' | 'headAt.desc';
+
+export interface IndexOrderedCursor {
+  timestamp: string;
+  key: string;
+}
 
 export interface IndexProfile {
   anchor: string;
@@ -52,6 +60,7 @@ export interface IndexContentRow {
   currentDocumentCID: string | null;
   publicRead: boolean;
   docSchema: string | null;
+  title: string | null;
 }
 
 export interface IndexCountersignatureRow {
@@ -75,6 +84,29 @@ export const parseBooleanQuery = (raw: string | undefined): boolean | undefined 
   return undefined;
 };
 
+export const parseIndexOrder = (raw: string | undefined): IndexOrder | undefined | null => {
+  if (raw === undefined || raw === '') return undefined;
+  if (raw === 'genesisAt.desc' || raw === 'headAt.desc') return raw;
+  return null;
+};
+
+export const encodeIndexOrderedCursor = (timestamp: string, key: string): string =>
+  Buffer.from(`${timestamp}~${key}`, 'utf8').toString('base64url');
+
+export const decodeIndexOrderedCursor = (raw: string): IndexOrderedCursor | null => {
+  try {
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    const sep = decoded.indexOf('~');
+    if (sep <= 0 || sep !== decoded.lastIndexOf('~') || sep === decoded.length - 1) return null;
+    const timestamp = decoded.slice(0, sep);
+    const key = decoded.slice(sep + 1);
+    if (!/^\d{4}-\d{2}-\d{2}T/.test(timestamp)) return null;
+    return { timestamp, key };
+  } catch {
+    return null;
+  }
+};
+
 export const identityIndexRow = async (
   chain: StoredIdentityChain,
   store: RelayStore,
@@ -95,7 +127,11 @@ export const contentIndexRow = async (
   chain: StoredContentChain,
   store: RelayStore,
 ): Promise<IndexContentRow> => {
-  const { docSchema } = await headDocumentProjection(chain, store);
+  const { doc, docSchema } = await headDocumentProjection(chain, store);
+  const title =
+    docSchema === POST_SCHEMA && doc && typeof doc['title'] === 'string' && doc['title'].length > 0
+      ? doc['title']
+      : null;
   return {
     contentId: chain.contentId,
     genesisCID: chain.genesisCID,
@@ -108,6 +144,7 @@ export const contentIndexRow = async (
     currentDocumentCID: chain.state.currentDocumentCID,
     publicRead: await hasPublicStandingAuth(chain.contentId, 'read', store),
     docSchema,
+    title,
   };
 };
 

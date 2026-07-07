@@ -981,6 +981,238 @@ func TestIndexBadRequestSurface(t *testing.T) {
 	}
 }
 
+func TestIndexOrderTitleAndSignerIteration2(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	creator := createIdentity(t, base)
+	delegate := createIdentity(t, base)
+
+	postDoc := map[string]any{"$schema": "https://schemas.dfos.com/post/v1", "title": "conformance post"}
+	post := createContentWithDocument(t, base, creator, postDoc, true)
+	time.Sleep(time.Millisecond)
+	nonPost := createContentWithDocument(t, base, creator, map[string]any{
+		"$schema": "https://schemas.example.com/dfos/conformance/index/non-post",
+		"title":   "not projected",
+	}, true)
+	time.Sleep(time.Millisecond)
+	third := createContentWithDocument(t, base, creator, map[string]any{
+		"$schema": "https://schemas.example.com/dfos/conformance/index/third",
+		"title":   "third",
+	}, true)
+
+	var titleBody struct {
+		Content []struct {
+			ContentID string  `json:"contentId"`
+			Title     *string `json:"title"`
+		} `json:"content"`
+	}
+	resp := getJSON(t, base+"/index/v0/content?creator="+url.QueryEscape(creator.did)+"&limit=1000", &titleBody)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("content title projection: status %d", resp.StatusCode)
+	}
+	foundPost := false
+	foundNonPost := false
+	for _, row := range titleBody.Content {
+		switch row.ContentID {
+		case post.contentID:
+			foundPost = true
+			if row.Title == nil || *row.Title != "conformance post" {
+				t.Fatalf("post title = %v, want conformance post", row.Title)
+			}
+		case nonPost.contentID:
+			foundNonPost = true
+			if row.Title != nil {
+				t.Fatalf("non-post title = %v, want nil", *row.Title)
+			}
+		}
+	}
+	if !foundPost || !foundNonPost {
+		t.Fatalf("title projection did not find expected rows: post=%v nonPost=%v", foundPost, foundNonPost)
+	}
+
+	type orderedContentPage struct {
+		Content []struct {
+			ContentID string `json:"contentId"`
+			GenesisAt string `json:"genesisAt"`
+		} `json:"content"`
+		Next *string `json:"next"`
+	}
+
+	// Scope by creator so the walk covers only this test's rows — the suite
+	// shares one relay and the unfiltered index grows with every test.
+	orderedBase := base + "/index/v0/content?order=genesisAt.desc&creator=" + url.QueryEscape(creator.did)
+
+	var allOrdered orderedContentPage
+	resp = getJSON(t, orderedBase+"&limit=1000", &allOrdered)
+	if resp.StatusCode != 200 {
+		t.Fatalf("ordered content all: status %d", resp.StatusCode)
+	}
+	expectedOrdered := make([]string, 0, len(allOrdered.Content))
+	for _, row := range allOrdered.Content {
+		expectedOrdered = append(expectedOrdered, row.ContentID)
+	}
+
+	orderedWalk := []string{}
+	after := ""
+	for pages := 0; ; pages++ {
+		if pages > 20 {
+			t.Fatal("ordered content cursor walk exceeded 20 pages")
+		}
+		u := orderedBase + "&limit=1"
+		if after != "" {
+			u += "&after=" + url.QueryEscape(after)
+		}
+		var page orderedContentPage
+		resp = getJSON(t, u, &page)
+		if resp.StatusCode != 200 {
+			t.Fatalf("ordered content page: status %d", resp.StatusCode)
+		}
+		if len(page.Content) > 1 {
+			t.Fatalf("ordered limit=1 returned %d rows", len(page.Content))
+		}
+		for _, row := range page.Content {
+			orderedWalk = append(orderedWalk, row.ContentID)
+		}
+		if page.Next == nil {
+			if len(page.Content) != 0 {
+				t.Fatalf("ordered final page had one row but next was null: %+v", page)
+			}
+			break
+		}
+		if len(page.Content) != 1 {
+			t.Fatalf("ordered page with next had %d rows: %+v", len(page.Content), page)
+		}
+		after = *page.Next
+	}
+	if len(orderedWalk) < 3 {
+		t.Fatalf("ordered cursor walk saw %d rows, want at least 3", len(orderedWalk))
+	}
+	if strings.Join(orderedWalk, "\n") != strings.Join(expectedOrdered, "\n") {
+		t.Fatalf("ordered cursor walk = %v, want %v", orderedWalk, expectedOrdered)
+	}
+
+	var errBody struct {
+		Error string `json:"error"`
+	}
+	resp = getJSON(t, base+"/index/v0/content?order=bogus", &errBody)
+	if resp.StatusCode != 400 {
+		t.Fatalf("bad order status = %d, want 400", resp.StatusCode)
+	}
+	resp = getJSON(t, base+"/index/v0/content?order=genesisAt.desc&after=not-a-cursor", &errBody)
+	if resp.StatusCode != 400 {
+		t.Fatalf("bad ordered cursor status = %d, want 400", resp.StatusCode)
+	}
+
+	creatorKid := creator.did + "#" + creator.auth.keyID
+	writeCred, err := dfos.CreateCredential(creator.did, delegate.did, creatorKid, "chain:"+post.contentID, "write", 5*time.Minute, creator.auth.priv)
+	if err != nil {
+		t.Fatalf("CreateCredential(write): %v", err)
+	}
+
+	updateDoc := map[string]any{"$schema": "https://schemas.dfos.com/post/v1", "title": "delegate update"}
+	updateCID, _, err := dfos.DocumentCID(updateDoc)
+	if err != nil {
+		t.Fatalf("DocumentCID(update): %v", err)
+	}
+	delegateKid := delegate.did + "#" + delegate.auth.keyID
+	updateToken, updateOpCID, err := dfos.SignContentUpdateWithOptions(
+		delegate.did, post.genCID, updateCID, delegateKid, delegate.auth.priv,
+		dfos.ContentUpdateOptions{Authorization: writeCred},
+	)
+	if err != nil {
+		t.Fatalf("SignContentUpdateWithOptions: %v", err)
+	}
+	res := postOperations(t, base, []string{updateToken})
+	if res.StatusCode != 200 {
+		t.Fatalf("submit delegated update: status %d body %s", res.StatusCode, readBody(t, res))
+	}
+	res.Body.Close()
+	updateBytes, _ := json.Marshal(updateDoc)
+	resp = putBlob(t, base, post.contentID, updateOpCID, authToken(t, base, delegate), updateBytes)
+	if resp.StatusCode != 200 {
+		t.Fatalf("upload delegate update blob: status %d body %s", resp.StatusCode, readBody(t, resp))
+	}
+	resp.Body.Close()
+
+	readCred := createPublicCredential(t, creator.did, creatorKid, "read", post.contentID, 5*time.Minute, creator.auth.priv)
+	res = postOperations(t, base, []string{readCred})
+	if res.StatusCode != 200 {
+		t.Fatalf("submit read credential: status %d body %s", res.StatusCode, readBody(t, res))
+	}
+	res.Body.Close()
+
+	var signerBody struct {
+		Content []struct {
+			ContentID  string  `json:"contentId"`
+			CreatorDID string  `json:"creatorDID"`
+			DocSchema  *string `json:"docSchema"`
+			PublicRead bool    `json:"publicRead"`
+		} `json:"content"`
+	}
+	resp = getJSON(t, base+"/index/v0/content?signer="+url.QueryEscape(delegate.did)+"&creator="+url.QueryEscape(creator.did)+"&docSchema="+url.QueryEscape("https://schemas.dfos.com/post/v1")+"&publicRead=true&limit=1000", &signerBody)
+	if resp.StatusCode != 200 {
+		t.Fatalf("signer content query: status %d", resp.StatusCode)
+	}
+	foundDelegate := false
+	for _, row := range signerBody.Content {
+		if row.ContentID == post.contentID {
+			foundDelegate = true
+		}
+		if row.CreatorDID != creator.did || row.DocSchema == nil || *row.DocSchema != "https://schemas.dfos.com/post/v1" || !row.PublicRead {
+			t.Fatalf("signer-composed row violates filters: %+v", row)
+		}
+	}
+	if !foundDelegate {
+		t.Fatalf("signer filter did not include delegated content %s", post.contentID)
+	}
+
+	var orderedCreator struct {
+		Content []struct {
+			ContentID  string `json:"contentId"`
+			CreatorDID string `json:"creatorDID"`
+		} `json:"content"`
+	}
+	resp = getJSON(t, base+"/index/v0/content?order=headAt.desc&creator="+url.QueryEscape(creator.did)+"&limit=1000", &orderedCreator)
+	if resp.StatusCode != 200 {
+		t.Fatalf("ordered creator query: status %d", resp.StatusCode)
+	}
+	gotCreatorOrder := []string{}
+	for _, row := range orderedCreator.Content {
+		if row.CreatorDID != creator.did {
+			t.Fatalf("ordered creator row has creatorDID %s, want %s: %+v", row.CreatorDID, creator.did, row)
+		}
+		gotCreatorOrder = append(gotCreatorOrder, row.ContentID)
+	}
+	wantCreatorOrder := []string{post.contentID, third.contentID, nonPost.contentID}
+	if strings.Join(gotCreatorOrder, "\n") != strings.Join(wantCreatorOrder, "\n") {
+		t.Fatalf("ordered creator content = %v, want %v", gotCreatorOrder, wantCreatorOrder)
+	}
+
+	var creatorSigner struct {
+		Content []struct {
+			ContentID string `json:"contentId"`
+		} `json:"content"`
+	}
+	resp = getJSON(t, base+"/index/v0/content?signer="+url.QueryEscape(creator.did)+"&limit=1000", &creatorSigner)
+	if resp.StatusCode != 200 {
+		t.Fatalf("creator signer query: status %d", resp.StatusCode)
+	}
+	foundCreator := false
+	for _, row := range creatorSigner.Content {
+		if row.ContentID == post.contentID {
+			foundCreator = true
+		}
+	}
+	if !foundCreator {
+		t.Fatalf("creator signer filter did not include genesis signer content %s", post.contentID)
+	}
+	resp = getJSON(t, base+"/index/v0/content?signer=not-a-did", &errBody)
+	if resp.StatusCode != 400 {
+		t.Fatalf("bad signer status = %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestIndexContentHappyPath(t *testing.T) {
 	base := relayURL(t)
 	requireIndexCapability(t, base)

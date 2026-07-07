@@ -10,10 +10,12 @@ import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-pro
 import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
+  IndexOrder,
   IndexContentRow,
   IndexCountersignatureRow,
   IndexCredentialRow,
   IndexIdentityRow,
+  IndexOrderedCursor,
 } from './index-routes';
 import { createKeyResolver } from './ingest';
 import type {
@@ -47,6 +49,35 @@ const pageRows = <T>(
   return gated.slice(0, limit);
 };
 
+const pageOrderedRows = <T>(
+  rows: T[],
+  keyOf: (row: T) => string,
+  timestampOf: (row: T) => string,
+  after: IndexOrderedCursor | undefined,
+  limit: number,
+): T[] => {
+  const sorted = [...rows].sort((a, b) => {
+    const ats = timestampOf(a);
+    const bts = timestampOf(b);
+    if (ats !== bts) return ats > bts ? -1 : 1;
+    return ascending(keyOf(a), keyOf(b));
+  });
+  const gated =
+    after === undefined
+      ? sorted
+      : sorted.filter((row) => {
+          const ts = timestampOf(row);
+          const key = keyOf(row);
+          return ts < after.timestamp || (ts === after.timestamp && key > after.key);
+        });
+  return gated.slice(0, limit);
+};
+
+const timestampOfOrder = (
+  order: IndexOrder,
+): ((row: { genesisAt: string; headAt: string }) => string) =>
+  order === 'genesisAt.desc' ? (row) => row.genesisAt : (row) => row.headAt;
+
 /** Serialize a BlobKey to a string for map indexing */
 const blobKeyString = (key: BlobKey): string => `${key.creatorDID}::${key.documentCID}`;
 
@@ -72,6 +103,8 @@ export class MemoryRelayStore implements RelayStore {
   private indexIdentityRows = new Map<string, IndexIdentityRow>();
   /** Content projection rows keyed by contentId. */
   private indexContentRows = new Map<string, IndexContentRow>();
+  /** Accepted content-operation signer sets keyed by contentId. */
+  private indexContentSigners = new Map<string, Set<string>>();
   /** Countersignature projection rows keyed by cid (carry witnessDID column). */
   private indexCountersignatureRows = new Map<
     string,
@@ -189,6 +222,8 @@ export class MemoryRelayStore implements RelayStore {
     hasPublicProfile?: boolean;
     nameContains?: string;
     after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexOrder;
     limit: number;
   }): Promise<IndexIdentityRow[]> {
     const rows = [...this.indexIdentityRows.values()].filter((row) => {
@@ -206,24 +241,42 @@ export class MemoryRelayStore implements RelayStore {
       }
       return true;
     });
+    if (q.order) {
+      return pageOrderedRows(rows, (row) => row.did, timestampOfOrder(q.order), q.orderedAfter, q.limit);
+    }
     return pageRows(rows, (row) => row.did, q.after, q.limit);
   }
 
   async queryIndexContent(q: {
     creator?: string;
+    signer?: string;
     docSchema?: string;
     documentCID?: string;
     publicRead?: boolean;
     after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexOrder;
     limit: number;
   }): Promise<IndexContentRow[]> {
     const rows = [...this.indexContentRows.values()].filter((row) => {
       if (q.creator !== undefined && row.creatorDID !== q.creator) return false;
+      if (q.signer !== undefined && !this.indexContentSigners.get(row.contentId)?.has(q.signer)) {
+        return false;
+      }
       if (q.docSchema !== undefined && row.docSchema !== q.docSchema) return false;
       if (q.documentCID !== undefined && row.currentDocumentCID !== q.documentCID) return false;
       if (q.publicRead !== undefined && row.publicRead !== q.publicRead) return false;
       return true;
     });
+    if (q.order) {
+      return pageOrderedRows(
+        rows,
+        (row) => row.contentId,
+        timestampOfOrder(q.order),
+        q.orderedAfter,
+        q.limit,
+      );
+    }
     return pageRows(rows, (row) => row.contentId, q.after, q.limit);
   }
 
@@ -281,6 +334,12 @@ export class MemoryRelayStore implements RelayStore {
 
   async putIndexContentRow(row: IndexContentRow): Promise<void> {
     this.indexContentRows.set(row.contentId, row);
+  }
+
+  async putIndexContentSigner(contentId: string, did: string): Promise<void> {
+    const signers = this.indexContentSigners.get(contentId) ?? new Set<string>();
+    signers.add(did);
+    this.indexContentSigners.set(contentId, signers);
   }
 
   async putIndexCountersignatureRow(

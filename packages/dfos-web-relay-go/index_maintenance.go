@@ -216,6 +216,11 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 	case "content-op":
 		if result.ChainID != "" {
 			dirty.contentIDs[result.ChainID] = struct{}{}
+			if _, payload, err := dfos.DecodeJWSUnsafe(jwsToken); err == nil && payload != nil {
+				if signerDID, ok := payload["did"].(string); ok && signerDID != "" {
+					_ = store.PutIndexContentSigner(result.ChainID, signerDID)
+				}
+			}
 		}
 	case "credential":
 		wildcard, contentIds := contentIdsFromCredential(jwsToken)
@@ -369,6 +374,19 @@ func rebuildIndexProjectionRows(store Store, rebuildable RebuildableIndexStore, 
 	for i, chain := range contents {
 		if err := store.PutIndexContentRow(contentIndexRow(chain, store)); err != nil {
 			return err
+		}
+		for _, token := range chain.Log {
+			_, payload, err := dfos.DecodeJWSUnsafe(token)
+			if err != nil || payload == nil {
+				continue
+			}
+			signerDID, _ := payload["did"].(string)
+			if signerDID == "" {
+				continue
+			}
+			if err := store.PutIndexContentSigner(chain.ContentID, signerDID); err != nil {
+				return err
+			}
 		}
 		if (i+1)%rebuildProgressEvery == 0 {
 			logger.Info("index projection: rebuilt content", "count", i+1, "total", len(contents))

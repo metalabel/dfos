@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS index_identity (
 );
 CREATE INDEX IF NOT EXISTS idx_index_identity_anchor ON index_identity(profile_anchor);
 CREATE INDEX IF NOT EXISTS idx_index_identity_public ON index_identity(has_public_profile, did);
+CREATE INDEX IF NOT EXISTS idx_index_identity_genesis ON index_identity(genesis_at, did);
+CREATE INDEX IF NOT EXISTS idx_index_identity_head ON index_identity(head_at, did);
 
 CREATE TABLE IF NOT EXISTS index_content (
 	content_id TEXT PRIMARY KEY,
@@ -132,11 +134,21 @@ CREATE TABLE IF NOT EXISTS index_content (
 	head_at TEXT NOT NULL,
 	current_document_cid TEXT,
 	public_read INTEGER NOT NULL,
-	doc_schema TEXT
+	doc_schema TEXT,
+	title TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_index_content_creator ON index_content(creator_did, content_id);
 CREATE INDEX IF NOT EXISTS idx_index_content_schema ON index_content(doc_schema, content_id);
 CREATE INDEX IF NOT EXISTS idx_index_content_doccid ON index_content(current_document_cid);
+CREATE INDEX IF NOT EXISTS idx_index_content_genesis ON index_content(genesis_at, content_id);
+CREATE INDEX IF NOT EXISTS idx_index_content_head ON index_content(head_at, content_id);
+
+CREATE TABLE IF NOT EXISTS content_signers (
+	content_id TEXT NOT NULL,
+	did TEXT NOT NULL,
+	PRIMARY KEY (content_id, did)
+);
+CREATE INDEX IF NOT EXISTS idx_content_signers_did ON content_signers(did, content_id);
 
 CREATE TABLE IF NOT EXISTS index_countersign (
 	cid TEXT PRIMARY KEY,
@@ -282,8 +294,42 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		readDB.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
+	if err := ensureColumn(writeDB, "index_content", "title", "TEXT"); err != nil {
+		writeDB.Close()
+		readDB.Close()
+		return nil, err
+	}
 
 	return &SQLiteStore{db: writeDB, readDB: readDB}, nil
+}
+
+func ensureColumn(db *sql.DB, table, column, columnType string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + columnType)
+	if err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
+	}
+	return nil
 }
 
 // Close closes the underlying database connection.
@@ -623,10 +669,10 @@ const indexIdentityCols = "did, head_cid, op_count, genesis_at, head_at, is_dele
 func scanIndexContentRow(sc scanner) (indexContentRow, error) {
 	var row indexContentRow
 	var isDeleted, publicRead int
-	var currentDocCID, docSchema sql.NullString
+	var currentDocCID, docSchema, title sql.NullString
 	if err := sc.Scan(
 		&row.ContentID, &row.GenesisCID, &row.HeadCID, &row.CreatorDID, &isDeleted,
-		&row.OpCount, &row.GenesisAt, &row.HeadAt, &currentDocCID, &publicRead, &docSchema,
+		&row.OpCount, &row.GenesisAt, &row.HeadAt, &currentDocCID, &publicRead, &docSchema, &title,
 	); err != nil {
 		return row, err
 	}
@@ -640,10 +686,14 @@ func scanIndexContentRow(sc scanner) (indexContentRow, error) {
 		v := docSchema.String
 		row.DocSchema = &v
 	}
+	if title.Valid {
+		v := title.String
+		row.Title = &v
+	}
 	return row, nil
 }
 
-const indexContentCols = "content_id, genesis_cid, head_cid, creator_did, is_deleted, op_count, genesis_at, head_at, current_document_cid, public_read, doc_schema"
+const indexContentCols = "content_id, genesis_cid, head_cid, creator_did, is_deleted, op_count, genesis_at, head_at, current_document_cid, public_read, doc_schema, title"
 
 func (s *SQLiteStore) PutIndexIdentityRow(row indexIdentityRow) error {
 	var anchor, docSchema, name any
@@ -673,10 +723,18 @@ func (s *SQLiteStore) PutIndexContentRow(row indexContentRow) error {
 	_, err := s.writerDB().Exec(
 		`INSERT OR REPLACE INTO index_content
 		 (content_id, genesis_cid, head_cid, creator_did, is_deleted, op_count,
-		  genesis_at, head_at, current_document_cid, public_read, doc_schema)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  genesis_at, head_at, current_document_cid, public_read, doc_schema, title)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		row.ContentID, row.GenesisCID, row.HeadCID, row.CreatorDID, boolToInt(row.IsDeleted), row.OpCount,
-		row.GenesisAt, row.HeadAt, nullStr(row.CurrentDocumentCID), boolToInt(row.PublicRead), nullStr(row.DocSchema),
+		row.GenesisAt, row.HeadAt, nullStr(row.CurrentDocumentCID), boolToInt(row.PublicRead), nullStr(row.DocSchema), nullStr(row.Title),
+	)
+	return err
+}
+
+func (s *SQLiteStore) PutIndexContentSigner(contentID string, did string) error {
+	_, err := s.writerDB().Exec(
+		"INSERT OR IGNORE INTO content_signers (content_id, did) VALUES (?, ?)",
+		contentID, did,
 	)
 	return err
 }
@@ -701,15 +759,29 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 		where = append(where, "profile_name IS NOT NULL AND instr(lower(profile_name), lower(?)) > 0")
 		args = append(args, q.NameContains)
 	}
-	if q.After != "" {
+	if q.Order == "" && q.After != "" {
 		where = append(where, "did > ?")
 		args = append(args, q.After)
+	}
+	if q.Order != "" && q.OrderedAfter != nil {
+		col := "head_at"
+		if q.Order == "genesisAt.desc" {
+			col = "genesis_at"
+		}
+		where = append(where, "("+col+" < ? OR ("+col+" = ? AND did > ?))")
+		args = append(args, q.OrderedAfter.Timestamp, q.OrderedAfter.Timestamp, q.OrderedAfter.Key)
 	}
 	query := "SELECT " + indexIdentityCols + " FROM index_identity"
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	query += " ORDER BY did LIMIT ?"
+	if q.Order == "genesisAt.desc" {
+		query += " ORDER BY genesis_at DESC, did ASC LIMIT ?"
+	} else if q.Order == "headAt.desc" {
+		query += " ORDER BY head_at DESC, did ASC LIMIT ?"
+	} else {
+		query += " ORDER BY did LIMIT ?"
+	}
 	args = append(args, q.Limit)
 
 	rows, err := s.readerDB().Query(query, args...)
@@ -735,6 +807,10 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		where = append(where, "creator_did = ?")
 		args = append(args, q.Creator)
 	}
+	if q.Signer != "" {
+		where = append(where, "EXISTS (SELECT 1 FROM content_signers WHERE content_signers.content_id = index_content.content_id AND content_signers.did = ?)")
+		args = append(args, q.Signer)
+	}
 	if q.DocSchema != nil {
 		where = append(where, "doc_schema = ?")
 		args = append(args, *q.DocSchema)
@@ -747,15 +823,29 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		where = append(where, "public_read = ?")
 		args = append(args, boolToInt(*q.PublicRead))
 	}
-	if q.After != "" {
+	if q.Order == "" && q.After != "" {
 		where = append(where, "content_id > ?")
 		args = append(args, q.After)
+	}
+	if q.Order != "" && q.OrderedAfter != nil {
+		col := "head_at"
+		if q.Order == "genesisAt.desc" {
+			col = "genesis_at"
+		}
+		where = append(where, "("+col+" < ? OR ("+col+" = ? AND content_id > ?))")
+		args = append(args, q.OrderedAfter.Timestamp, q.OrderedAfter.Timestamp, q.OrderedAfter.Key)
 	}
 	query := "SELECT " + indexContentCols + " FROM index_content"
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	query += " ORDER BY content_id LIMIT ?"
+	if q.Order == "genesisAt.desc" {
+		query += " ORDER BY genesis_at DESC, content_id ASC LIMIT ?"
+	} else if q.Order == "headAt.desc" {
+		query += " ORDER BY head_at DESC, content_id ASC LIMIT ?"
+	} else {
+		query += " ORDER BY content_id LIMIT ?"
+	}
 	args = append(args, q.Limit)
 
 	rows, err := s.readerDB().Query(query, args...)
@@ -920,7 +1010,7 @@ func (s *SQLiteStore) SetIndexProjectionVersion(v int) error {
 }
 
 func (s *SQLiteStore) ClearIndexProjection() error {
-	for _, table := range []string{"index_identity", "index_content", "index_countersign"} {
+	for _, table := range []string{"index_identity", "index_content", "content_signers", "index_countersign"} {
 		if _, err := s.writerDB().Exec("DELETE FROM " + table); err != nil {
 			return err
 		}

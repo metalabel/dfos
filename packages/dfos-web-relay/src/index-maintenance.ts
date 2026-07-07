@@ -178,7 +178,15 @@ export const collectIndexDirtyAfterOp = async (
         }
         break;
       case 'content-op':
-        if (result.chainId) dirty.contentIds.add(result.chainId);
+        if (result.chainId) {
+          dirty.contentIds.add(result.chainId);
+          const signerDID = (decodeJwsUnsafe(jwsToken)?.payload as Record<string, unknown>)?.[
+            'did'
+          ];
+          if (typeof signerDID === 'string') {
+            await store.putIndexContentSigner(result.chainId, signerDID);
+          }
+        }
         break;
       case 'credential': {
         const { wildcard, contentIds } = contentIdsFromCredential(jwsToken);

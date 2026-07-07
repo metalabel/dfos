@@ -334,6 +334,9 @@ type Store interface {
 	PutIndexIdentityRow(row indexIdentityRow) error
 	// PutIndexContentRow upserts a content projection row by contentId.
 	PutIndexContentRow(row indexContentRow) error
+	// PutIndexContentSigner adds one accepted content-operation signer to a
+	// chain's signer set. The set is branch-inclusive and includes genesis.
+	PutIndexContentSigner(contentID string, did string) error
 	// PutIndexCountersignatureRow upserts a countersignature projection row by
 	// cid. The WitnessDID column is stored (never echoed in the wire row) so
 	// witness-scoped queries stay O(page).
@@ -358,17 +361,22 @@ type IndexIdentityQuery struct {
 	HasPublicProfile *bool  // nil = no filter
 	NameContains     string // "" = no filter
 	After            string
+	OrderedAfter     *indexOrderedCursor
+	Order            string
 	Limit            int
 }
 
 // IndexContentQuery is the keyset-paged filter for content projection rows.
 type IndexContentQuery struct {
-	Creator     string  // "" = no filter
-	DocSchema   *string // nil = no filter
-	DocumentCID *string // nil = no filter
-	PublicRead  *bool   // nil = no filter
-	After       string
-	Limit       int
+	Creator      string  // "" = no filter
+	Signer       string  // "" = no filter
+	DocSchema    *string // nil = no filter
+	DocumentCID  *string // nil = no filter
+	PublicRead   *bool   // nil = no filter
+	After        string
+	OrderedAfter *indexOrderedCursor
+	Order        string
+	Limit        int
 }
 
 // IndexCountersignatureQuery is the keyset-paged filter for countersignature
