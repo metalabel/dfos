@@ -27,6 +27,7 @@ export {
   countersignatureIndexRow,
   type IndexContentRow,
   type IndexCountersignatureRow,
+  type IndexCredentialRow,
   type IndexIdentityRow,
   type IndexProfile,
 } from './index-routes';
