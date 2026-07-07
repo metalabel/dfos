@@ -186,6 +186,7 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
   const document = {
     $schema: 'https://schemas.dfos.com/post/v1',
     format: 'short-post',
+    publishedAt: '2026-03-07T00:02:00.000Z',
     title: 'Hello World',
     body: 'First post on the protocol.',
     credits: [{ did: identity2.did, label: 'author' }],
@@ -216,6 +217,7 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
   const document2 = {
     $schema: 'https://schemas.dfos.com/post/v1',
     format: 'short-post',
+    publishedAt: '2026-03-07T00:02:00.000Z',
     title: 'Hello World (edited)',
     body: 'Updated content.',
     credits: [{ did: identity2.did, label: 'author' }],
@@ -490,11 +492,11 @@ describe('protocol reference artifacts', () => {
     expectInSpec('content update CID', a.contentUpdateCID);
     expectInSpec('content id', a.contentId);
 
-    expect(a.documentCID).toBe('bafyreihq7b6wbpexepxnmm25rscds5punnw3kngdj3vm2h5wzuoiqlteri');
-    expect(a.documentCID2).toBe('bafyreiblhw7eeuebukut5p5xenkczuce6t7xu2r3uvzqc2vmk77sn4rmnu');
-    expect(a.contentCreateCID).toBe('bafyreifwemrntupov3wleuboze322bp3btpbfsd2ywjpfrdkudjwr4jqoe');
-    expect(a.contentUpdateCID).toBe('bafyreih4cy6x2nahxt7vt66ynrvx7ggnwz3flvzfylb3fud5espuvb74oa');
-    expect(a.contentId).toBe('943v8rzdr9fdr4z77tf8de8hn3afed4');
+    expect(a.documentCID).toBe('bafyreie6xfkrtwax2dq5gdw3rpsurz2glsduxycfhk7jjllewiwivkkafu');
+    expect(a.documentCID2).toBe('bafyreiaoinzo2ai4hx56b7244zahnfqmgurcd3rppqbawhv32xzlvct5m4');
+    expect(a.contentCreateCID).toBe('bafyreibs3vlvainfjfuet6x4uds3pivbmbohy7f64iegbuw3gpsuqtma6i');
+    expect(a.contentUpdateCID).toBe('bafyreied5cjgjjt2pdz52k6pgipcjg3i4xl7txbrbdedscejvqhtgltxdi');
+    expect(a.contentId).toBe('8n8fnzhrrefkrde6h72kfvff43r8c63');
 
     // --- cross-check the examples/ fixtures (a second golden source) ---
     // identity-genesis.json: chain[0] is the genesis JWS, expected pins DID/keys.

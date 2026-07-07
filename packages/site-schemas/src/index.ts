@@ -69,7 +69,7 @@ app.get('/llms.txt', (c) => {
       '',
       '## Schemas',
       '',
-      '- [post/v1](https://schemas.dfos.com/post/v1): Posts, comments, and replies',
+      '- [post/v1](https://schemas.dfos.com/post/v1): Short and long posts',
       '- [profile/v1](https://schemas.dfos.com/profile/v1): Identity profiles',
       '- [index/v1](https://schemas.dfos.com/index/v1): Index chains — LWW-Map curation over content refs',
       '',
@@ -131,7 +131,7 @@ small a { color: #666; }
 <h1>DFOS Content Schemas</h1>
 <p>JSON Schema definitions for <a href="https://protocol.dfos.com">DFOS protocol</a> content types.</p>
 <ul>
-<li><a href="/post/v1">post/v1</a> &mdash; posts, comments, and replies</li>
+<li><a href="/post/v1">post/v1</a> &mdash; short and long posts</li>
 <li><a href="/profile/v1">profile/v1</a> &mdash; identity profiles</li>
 <li><a href="/index/v1">index/v1</a> &mdash; index chains (LWW-Map curation)</li>
 </ul>

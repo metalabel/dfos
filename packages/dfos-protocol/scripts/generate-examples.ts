@@ -132,6 +132,7 @@ const main = async () => {
   const document1 = {
     $schema: 'https://schemas.dfos.com/post/v1',
     format: 'short-post',
+    publishedAt: '2026-03-07T00:02:00.000Z',
     title: 'Hello World',
     body: 'First post on the protocol.',
     credits: [{ did: identityRotated.did, label: 'author' }],
@@ -155,6 +156,7 @@ const main = async () => {
   const document2 = {
     $schema: 'https://schemas.dfos.com/post/v1',
     format: 'short-post',
+    publishedAt: '2026-03-07T00:02:00.000Z',
     title: 'Hello World (edited)',
     body: 'Updated content.',
     credits: [{ did: identityRotated.did, label: 'author' }],

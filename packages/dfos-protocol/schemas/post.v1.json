@@ -2,17 +2,28 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.dfos.com/post/v1",
   "title": "Post",
-  "description": "A post — the primary content type in DFOS. Covers short posts, long-form posts, comments, and replies via the format discriminator.",
+  "description": "A post \u2014 the primary content type in DFOS. Covers short posts and long-form posts via the format discriminator.",
   "type": "object",
-  "required": ["$schema", "format"],
+  "required": [
+    "$schema",
+    "format"
+  ],
   "properties": {
     "$schema": {
       "const": "https://schemas.dfos.com/post/v1"
     },
     "format": {
       "type": "string",
-      "enum": ["short-post", "long-post", "comment", "reply"],
-      "description": "Immutable content format — set at creation, never changes. Determines rendering and interaction semantics."
+      "enum": [
+        "short-post",
+        "long-post"
+      ],
+      "description": "Immutable content format \u2014 set at creation, never changes. Determines rendering and interaction semantics. Comments and replies are deliberately NOT post/v1 surface \u2014 threaded content arrives as its own schema (with signed target linkage), not as additional format values."
+    },
+    "publishedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Asserted original publication time of the content (ISO 8601). Distinct from the operation's createdAt, which records when the operation was signed: a chain anchored after the fact carries the original publication time here while its genesis operation truthfully records the later anchoring time. Assertion-tier like credits \u2014 the operation signer asserts it; the protocol verifies the signer, not the claim. Author-revisable: a later revision may change it (deliberate back-dating or correction) \u2014 the operation log preserves every previously committed value, so re-dating is always auditable."
     },
     "title": {
       "type": "string",
@@ -20,7 +31,7 @@
     },
     "body": {
       "type": "string",
-      "description": "Post body content. May embed attachment://<id> refs inline; each should have a corresponding attachments entry carrying the verifiable reference."
+      "description": "Post body content \u2014 markdown (CommonMark) text. May embed attachment://<id> refs inline; each should have a corresponding attachments entry carrying the verifiable reference."
     },
     "cover": {
       "$ref": "#/$defs/media",
@@ -28,47 +39,50 @@
     },
     "attachments": {
       "type": "array",
-      "items": { "$ref": "#/$defs/media" },
+      "items": {
+        "$ref": "#/$defs/media"
+      },
       "description": "Attached media objects."
-    },
-    "topics": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "Topic names this post belongs to. Stored as names for portability."
     },
     "credits": {
       "type": "array",
-      "items": { "$ref": "#/$defs/credit" },
-      "description": "Ordered authorship credits. Array order is display order; the first entry is the primary author. Omit entirely for unattributed content. Credits are the assertion tier of the authorship lattice — the operation signer asserts them; a credited DID may upgrade its credit to proof via a claim operation."
+      "items": {
+        "$ref": "#/$defs/credit"
+      },
+      "description": "Ordered authorship credits. Array order is display order; the first entry is the primary author. Omit entirely for unattributed content. Credits are the assertion tier of the authorship lattice \u2014 the operation signer asserts them; a credited DID may upgrade its credit to proof via a claim operation."
     }
   },
   "additionalProperties": false,
   "$defs": {
     "media": {
       "type": "object",
-      "required": ["uri"],
+      "required": [
+        "uri"
+      ],
       "properties": {
         "uri": {
           "type": "string",
           "format": "uri",
-          "description": "Canonical reference to the media — an attachment://<id> ref (opaque, host-scoped) or any other URI. Always present."
+          "description": "Canonical reference to the media \u2014 an attachment://<id> ref (opaque, host-scoped) or any other URI. Always present."
         },
         "cid": {
           "type": "string",
           "pattern": "^bafkrei[a-z2-7]{52}$",
-          "description": "Optional content commitment — CIDv1, raw codec (0x55), sha2-256, base32 lowercase, computed over the media bytes exactly as stored/served. May be absent when no cid has been computed for the media."
+          "description": "Optional content commitment \u2014 CIDv1, raw codec (0x55), sha2-256, base32 lowercase, computed over the media bytes exactly as stored/served. May be absent when no cid has been computed for the media."
         },
         "href": {
           "type": "string",
           "format": "uri",
-          "description": "Optional resolution hint — a plain URL where the bytes may currently be fetched. Implementation-dependent and non-normative; carries no integrity promise."
+          "description": "Optional resolution hint \u2014 a plain URL where the bytes may currently be fetched. Implementation-dependent and non-normative; carries no integrity promise."
         }
       },
       "additionalProperties": false
     },
     "credit": {
       "type": "object",
-      "required": ["did"],
+      "required": [
+        "did"
+      ],
       "properties": {
         "did": {
           "type": "string",
@@ -77,7 +91,7 @@
         },
         "label": {
           "type": "string",
-          "description": "Free-text role label — display vocabulary, not an enum (e.g. \"author\", \"editor\", \"photography\")."
+          "description": "Free-text role label \u2014 display vocabulary, not an enum (e.g. \"author\", \"editor\", \"photography\")."
         }
       },
       "additionalProperties": false

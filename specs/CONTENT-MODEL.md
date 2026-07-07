@@ -55,24 +55,28 @@ Schema files live in [`schemas/`](https://github.com/metalabel/dfos/tree/main/pa
 
 ### Post (`https://schemas.dfos.com/post/v1`)
 
-The primary content type. Covers short posts, long-form posts, comments, and replies via the `format` discriminator.
+The primary content type. Covers short posts and long-form posts via the `format` discriminator. Comments and replies are deliberately **not** `post/v1` surface: threaded content needs signed target linkage (see [Intra-Chain References](#intra-chain-references-targetoperationcid)) and arrives as its own schema rather than as additional `format` values.
 
-| Field         | Type     | Required | Description                                                                                                       |
-| ------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                                                              |
-| `format`      | enum     | yes      | `"short-post"`, `"long-post"`, `"comment"`, `"reply"` — fixed at chain genesis and not changed by later revisions |
-| `title`       | string   | no       | Post title (typically for long-post format)                                                                       |
-| `body`        | string   | no       | Post body content                                                                                                 |
-| `cover`       | media    | no       | Cover image as a [Media object](#media-object)                                                                    |
-| `attachments` | media[]  | no       | Attached media as [Media objects](#media-object)                                                                  |
-| `topics`      | string[] | no       | Topic names this post belongs to (stored as names for portability)                                                |
-| `credits`     | credit[] | no       | Ordered authorship credits — `{ did, label? }` entries; see below and [Authorship](#authorship)                   |
+| Field         | Type     | Required | Description                                                                                     |
+| ------------- | -------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `$schema`     | string   | yes      | `"https://schemas.dfos.com/post/v1"`                                                            |
+| `format`      | enum     | yes      | `"short-post"`, `"long-post"` — fixed at chain genesis and not changed by later revisions       |
+| `publishedAt` | string   | no       | Asserted original publication time (ISO 8601) — see **Two clocks** below                        |
+| `title`       | string   | no       | Post title (typically for long-post format)                                                     |
+| `body`        | string   | no       | Post body content — markdown (CommonMark) text                                                  |
+| `cover`       | media    | no       | Cover image as a [Media object](#media-object)                                                  |
+| `attachments` | media[]  | no       | Attached media as [Media objects](#media-object)                                                |
+| `credits`     | credit[] | no       | Ordered authorship credits — `{ did, label? }` entries; see below and [Authorship](#authorship) |
+
+**Two clocks.** A post document and its operations carry two distinct times, and conflating them corrupts both. The operation's `createdAt` records **when the operation was signed** — it is load-bearing protocol state (head selection orders by it) and always tells the truth about chain history. `publishedAt` records **when the content was originally published**, as asserted inside the signed document: a chain anchored long after the fact carries the original publication time here while its genesis operation truthfully records the later anchoring time. `publishedAt` is assertion-tier (like `credits` — the protocol verifies the signer, never the claim), and author-revisable: a later revision MAY change it — deliberate back-dating or correction is an ordinary content edit, and the operation log preserves every previously committed value, so re-dating is always auditable. Never backdate operation `createdAt` to encode publication time.
+
+**Why no `topics`.** Topic/category labels are deliberately absent from the document. They are mutable organizational taxonomy — renameable and re-assignable without any authorial act — and a signed, CID-committed document that embeds them turns every taxonomy rename into a corpus-wide revision wave. The document commits to what the author published; discovery-plane organization (topics, collections, routing) belongs to [index](#index-httpsschemasdfoscomindexv1) entries and host-side projections, which are mutable and cheap to rebuild.
 
 **Credits.** Each credit is `{ did, label? }`: `did` (REQUIRED) is the credited identity; `label` (OPTIONAL) is a free-text role — display vocabulary, not an enum (`"author"`, `"editor"`, `"photography"`, …), the same display-string register as the `label` in [index](#index-httpsschemasdfoscomindexv1) entry metadata. Array order is display order, and the **first entry is the primary author**. Omit `credits` entirely for unattributed content (system or imported posts). Credits are the **assertion tier** of the [authorship lattice](#authorship): the operation signer asserts them, and the protocol verifies the signer, never the credits. A credited DID can upgrade its credit from assertion to proof with a [claim operation](#authorship).
 
 **Body ↔ attachment binding.** A post body MAY embed `attachment://<id>` refs inline (for example, an image reference inside markdown). Each inline ref SHOULD have a corresponding entry in `attachments` whose `uri` is that same `attachment://<id>` ref — the Media object is where the integrity commitment (`cid`) for an inline ref lives. The body names media; `attachments` carries the verifiable reference.
 
-> **Pre-adoption amendment (2026-07).** This shape replaces an earlier draft of `post/v1` — a `createdByDID` string in place of `credits`, and a legacy `{ id, uri? }` media shape predating the [Media object](#media-object) — as a breaking amendment made **in place**, deliberately without minting `post/v2`, while zero `post/v1` documents existed on any chain. That breaking window is now closed: from here `post/v1` evolves only additively, and any further breaking change is a `post/v2`.
+> **Pre-adoption amendments (2026-07).** This shape is the product of two breaking amendments made **in place**, deliberately without minting `post/v2`, both inside the pre-adoption window. The first replaced an earlier draft — a `createdByDID` string in place of `credits`, and a legacy `{ id, uri? }` media shape predating the [Media object](#media-object) — while zero `post/v1` documents existed on any chain. The second (this revision) removed `topics`, narrowed `format` to the two post formats, and added `publishedAt`, while every existing `post/v1` document lived only on shadowed (never-served) chains that were wiped and re-anchored under the amended shape — equivalent, from any external observer's standpoint, to the documents never having existed. **The window closes for good when post chains are first publicly served**: from that point `post/v1` evolves only additively, and any further breaking change is a `post/v2`.
 
 ### Profile (`https://schemas.dfos.com/profile/v1`)
 
