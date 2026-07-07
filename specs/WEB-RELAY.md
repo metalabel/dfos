@@ -572,7 +572,7 @@ If more than one issuer has revoked the same credential CID (possible, since the
 
 ## Index (v0)
 
-A relay that verifies and folds chains already holds current-state projections — terminal states, standing public-read grants, per-chain logs. The **index** route family exposes read-only, cursor-paginated _queries_ over those projections: enumerate identities, filter content chains, reverse-look-up countersignatures by witness. It exists so a light client can browse and discover without replaying the global operation log — the same role the revocation status family plays for credential state, generalized.
+A relay that verifies and folds chains already holds current-state projections — terminal states, standing public-read grants, per-chain logs. The **index** route family exposes read-only, cursor-paginated _queries_ over those projections: enumerate identities, filter content chains, reverse-look-up countersignatures by witness, enumerate held public credentials. It exists so a light client can browse and discover without replaying the global operation log — the same role the revocation status family plays for credential state, generalized.
 
 The family lives at **`/index/v0/*`** on its own **`0.x` clock** — NOT part of the frozen `/proof/v1` proof plane, and (unlike `/revocations/v1`) not yet frozen itself. A relay advertises support via `capabilities.index` in the well-known; when unsupported (or when the flag is absent — relays predating this family), the routes return **501 Not Implemented**. Nothing about ingestion changes.
 
@@ -590,41 +590,49 @@ The index is bounded by one invariant:
 
 > **Every index field and filter MUST be computable from protocol-defined fields and verification outcomes alone. Document payloads are opaque**, except the [well-known projections](#well-known-projections) below.
 
+The invariant has a semantic reading that bounds the query vocabulary itself:
+
+> **The index knows who acted, when, and what things call themselves. Nothing else.**
+
+Every index field and filter is an instance of one of three axes — **actor** (creator, signer, witness, issuer), **clock** (`genesisAt` / `headAt`), or **name** (the [display-name registry](#well-known-projections)). A query that cannot be phrased under these axes is not an index feature: it is a client-composed filter over them, a client-side fold over verified bytes, or `/search` (deferred, on its own clock).
+
 Concretely, the index may serve:
 
-- **Structural facts** the relay already computes to verify: chain kind, genesis/head CIDs, op counts, creator DIDs, deletion state, countersign witnesses and targets, credential issuer/subject/scope, revocation status, standing public-read grants, identity service entries.
+- **Structural facts** the relay already computes to verify: chain kind, genesis/head CIDs, op counts, creator DIDs, operation signer sets, deletion state, countersign witnesses and targets, credential issuer/subject/scope, revocation status, standing public-read grants, identity service entries.
 - **Declared labels, matched as opaque strings**: an artifact or document `$schema`, a `ContentAnchor` `label`. The relay matches these byte-for-byte the way an HTTP server serves a `Content-Type` — it never interprets what they mean.
 
 What the index MUST NOT do: interpret document payloads, join across application semantics, rank, or reify application concepts. There is no "posts" endpoint and never will be — an application-level notion like _post_ is a **client-composed filter expression** over structural parts (`docSchema=… & publicRead=true & creator=…`), not an index concept. This keeps the relay's query vocabulary closed while the application vocabulary composed on top stays open.
 
 ### Well-Known Projections
 
-Exactly one exception to payload opacity exists, and it is enumerated here rather than left to implementations:
+The **display-name registry** is the sole exception to payload opacity, enumerated here rather than left to implementations. Its rule: **one display-name field per enumerated `$schema` — the index may know what a thing calls itself, never what it says.** A registry row names an exact `$schema`, the single payload field that schema uses as its display name, and the index surface where the projection appears. Nothing else is ever extracted — no descriptions, bodies, summaries, credits, or payload timestamps; what a document _says_ is client-fold or `/search` territory, never an index axis.
 
-| #   | Projection          | Definition                                                                                                                                                                                                                                                                                                                                                                                         |
-| --- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `profile/v1 → name` | For an identity whose terminal `services` contain a `ContentAnchor` whose `label`, lowercased, equals `"profile"` and whose `anchor` is a content-chain identifier: if the relay holds the bytes of that chain's current head document, and the decoded document declares `$schema: "https://schemas.dfos.com/profile/v1"`, and its `name` is a non-empty string — the index surfaces that `name`. |
+| #   | Projection          | Definition                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `profile/v1 → name` | For an identity whose terminal `services` contain a `ContentAnchor` whose `label`, lowercased, equals `"profile"` and whose `anchor` is a content-chain identifier: if the relay holds the bytes of that chain's current head document, and the decoded document declares `$schema: "https://schemas.dfos.com/profile/v1"`, and its `name` is a non-empty string — the index surfaces that `name` on the identity row's `profile` projection. |
+| 2   | `post/v1 → title`   | For a content chain whose current head document bytes the relay holds: if the decoded document declares `$schema: "https://schemas.dfos.com/post/v1"` and its `title` is a non-empty string — the index surfaces that `title` on the content row.                                                                                                                                                                                             |
 
-The projection carries structural **circuit breakers** — every escape hatch resolves to the honest unknown, never a guess:
+Every registry row carries the same structural **circuit breakers** — every escape hatch resolves to the honest unknown, never a guess:
 
 - A document under any `$schema` NOT in this table is never field-extracted, no matter how tempting its shape.
-- A listed schema whose document is malformed, whose extracted field is missing, empty, or not a string — `name: null`. No partial parses, no coercion.
-- Bytes the relay does not hold — `docSchema: null`, `name: null` (see coverage, below).
+- A listed schema whose document is malformed, whose extracted field is missing, empty, or not a string — the projected field is `null`. No partial parses, no coercion.
+- Bytes the relay does not hold — `docSchema: null` and the projected field `null` (see coverage, below).
 
-Extracted values are **attribution-tier claims**: the anchor is controller-signed (strong), but the name is whatever the document says. Clients verify by fetching the chain and re-hashing the served bytes to the committed `documentCID`. Additions to this table require an amendment to this spec — a relay MUST NOT ship extraction rules that are not listed here.
+Extracted values are **attribution-tier claims**: the value is whatever the signed head document says (row 1 is additionally reached through a controller-signed anchor). Clients verify by fetching the chain and re-hashing the served bytes to the committed `documentCID`. Additions to this table require an amendment to this spec — one display-name field per schema, and a relay MUST NOT ship extraction rules that are not listed here.
 
 ### Determinism and Coverage
 
-- **Deterministic enumeration.** Every index list is ordered lexicographically ascending by its cursor key (identity rows by `did`, content rows by `contentId`, countersign rows by countersignature `cid`). Two relays holding the same operations serve identical page ordering and identical structural fields — the same convergence property the proof plane guarantees for head state, extended to enumeration. Held-bytes-dependent fields (`docSchema`, projected values) additionally require the same held blobs to agree, per coverage below.
-- **Keyset pagination.** `after` is a **strictly-greater** cursor: a page returns the rows whose (post-filter) cursor key is lexicographically **greater than** `after`, ascending, capped at `limit`; `next` is the last returned row's key, or `null` when the page was not full (caught up). The cursor need not be a currently-present key — a value that falls between keys, or names a row that was mutated out of the active filter between pages, resumes at the next greater key rather than truncating to an empty page. This makes enumeration stable under concurrent row changes: keys are immutable natural identifiers, so a row's filtered membership or projected values may change between pages without dropping or duplicating other rows.
+- **Deterministic enumeration.** By default every index list is ordered lexicographically ascending by its cursor key (identity rows by `did`, content rows by `contentId`, countersign rows by countersignature `cid`); identity and content enumerations additionally accept a time ordering via `order=` (below). Two relays holding the same operations serve identical page ordering — in either mode — and identical structural fields — the same convergence property the proof plane guarantees for head state, extended to enumeration. Held-bytes-dependent fields (`docSchema`, projected values) additionally require the same held blobs to agree, per coverage below.
+- **Keyset pagination is the normative shared envelope.** Every index route paginates identically — `after` (keyset cursor), `limit` (default 100, max 1000), `next` (the resume cursor, or `null` when caught up) — over the route's enumeration order. New index routes inherit this envelope; none may invent another. In the default lexical mode `after` is a **strictly-greater** cursor: a page returns the rows whose (post-filter) cursor key is lexicographically **greater than** `after`, ascending, capped at `limit`; `next` is the last returned row's key, or `null` when the page was not full (caught up). The cursor need not be a currently-present key — a value that falls between keys, or names a row that was mutated out of the active filter between pages, resumes at the next greater key rather than truncating to an empty page. This makes enumeration stable under concurrent row changes: keys are immutable natural identifiers, so a row's filtered membership or projected values may change between pages without dropping or duplicating other rows.
+- **Time-ordered enumeration (`order=`).** `/identities` and `/content` accept `order=genesisAt.desc` (newest chains first) or `order=headAt.desc` (most recently active first). The sort key is the composite `(timestamp descending, cursor key ascending)` — the timestamps are the same author-claimed, head-selection-trusted `createdAt` values already surfaced as `genesisAt` / `headAt`, so ordered pages are exactly as deterministic and convergent across relays as the lexical default: an ordering of _claimed_ times, never receipt times, inheriting precisely the trust posture of the fields it sorts by. In ordered mode `after` and `next` are **opaque cursor tokens** — a client resumes by passing `next` back verbatim and MUST NOT parse or construct one; the token encoding is implementation-internal. All other envelope semantics are unchanged (strictly-greater resumption past the composite key, stability under concurrent row changes, `limit` bounds). Absent `order`, enumeration is the lexical default above — existing clients are untouched. Only the two enumerated values exist; an unrecognized value is a `400`.
 - **Coverage is bounded by held bytes.** `docSchema` and projected fields are computable only for chains whose current head document bytes the relay holds (uploaded, or pulled via [content following](#content-following)). A chain whose bytes are absent reports `docSchema: null` — honest unknown, not a claim of schemalessness. A `docSchema` filter therefore matches only chains with held, decodable head bytes; callers MUST treat the result as a lower bound.
 - **Timestamps are author-claimed.** `genesisAt` / `headAt` surface the `createdAt` fields signed inside the operations — the same values head selection uses — not relay receipt times.
 - **Maintenance.** The index is fully re-derivable from the operation log plus held blobs. Reference implementations maintain it incrementally at ingestion and expose a rebuild path for pre-existing corpora; either way the serving contract is identical.
 - **`publicRead` is a last-touch snapshot, and MAY lag time-based transitions.** A materialized `publicRead` reflects whether a standing public-read grant authorized anonymous read **at the moment the row was last recomputed** (its content's most recent op, or a rebuild). One input to that predicate — a grant credential's `exp` — is wall-clock-relative and crosses **without emitting any operation**, so incremental maintenance has no event to react to: a row can continue to advertise `publicRead: true` after the grant that made it public has expired, until the next op dirties that content or a rebuild reruns the projection. This is deliberately tolerated because the index is a discovery hint, never an authorization input (see [Hints, Not Authority](#hints-not-authority)) — the content plane re-derives `hasPublicStandingAuth` live on every read, where `exp` is always evaluated against the current clock. A relay MAY additionally re-sweep public rows near expiry to tighten the hint, but is not required to.
 
-### Identities (`GET /index/v0/identities?hasPublicProfile=&nameContains=&after={did}&limit=N`)
+### Identities (`GET /index/v0/identities?hasPublicProfile=&nameContains=&order=&after={did}&limit=N`)
 
-Enumerates identity chains, `did` ascending.
+Enumerates identity chains, `did` ascending by default; `order=genesisAt.desc` / `order=headAt.desc` select time-ordered enumeration (recently arrived / recently active) per [Determinism and Coverage](#determinism-and-coverage).
 
 ```json
 {
@@ -658,11 +666,11 @@ Enumerates identity chains, `did` ascending.
 | `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                            |
 | `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker                                                                                        |
 
-Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `nameContains` (optional case-insensitive substring filter over projected `profile.name`; non-authoritative/amber; applied before keyset pagination), `after` (a `did` keyset cursor — returns rows with `did` strictly greater), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
+Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `nameContains` (optional case-insensitive substring filter over projected `profile.name`; non-authoritative/amber; applied before keyset pagination), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `did` keyset cursor in the lexical default — returns rows with `did` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
 
-### Content Chains (`GET /index/v0/content?creator={did}&docSchema=&documentCID=&publicRead=&after={contentId}&limit=N`)
+### Content Chains (`GET /index/v0/content?creator={did}&signer={did}&docSchema=&documentCID=&publicRead=&order=&after={contentId}&limit=N`)
 
-Enumerates content chains, `contentId` ascending. All filters are ANDed exact matches.
+Enumerates content chains, `contentId` ascending by default; `order=genesisAt.desc` / `order=headAt.desc` select time-ordered enumeration per [Determinism and Coverage](#determinism-and-coverage). All filters are ANDed exact matches.
 
 ```json
 {
@@ -678,14 +686,19 @@ Enumerates content chains, `contentId` ascending. All filters are ANDed exact ma
       "headAt": "2026-04-02T00:00:00.000Z",
       "currentDocumentCID": "bafyrei…",
       "publicRead": true,
-      "docSchema": "https://schemas.dfos.com/profile/v1"
+      "docSchema": "https://schemas.dfos.com/profile/v1",
+      "title": null
     }
   ],
   "next": null
 }
 ```
 
-Parameters: `creator` (exact DID — the chain's genesis signer; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `documentCID` (exact match against the projected `currentDocumentCID` — the reverse lookup "who published this document"), `publicRead` (boolean), `after` (a `contentId` keyset cursor — returns rows with `contentId` strictly greater), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, composed client-side.
+`title` is the [display-name registry](#well-known-projections) projection for content rows (row 2, `post/v1 → title`): `null` for any chain whose held head document is not an enumerated schema, on any circuit breaker, or when bytes are not held — an honest unknown, never a guess.
+
+Parameters: `creator` (exact DID — the chain's genesis signer; `400` when malformed), `signer` (exact DID — keeps chains in which the DID signed at least one **accepted** operation, branch-inclusive: "has signed in this chain," not "signs the current head lineage"; operations on branches later deleted or abandoned still count — the log records that the signature happened; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `documentCID` (exact match against the projected `currentDocumentCID` — the reverse lookup "who published this document"), `publicRead` (boolean), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `contentId` keyset cursor in the lexical default — returns rows with `contentId` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, and its notion of _recent public posts_ is `order=headAt.desc&docSchema=<its post schema>&publicRead=true`, composed client-side.
+
+`signer` is an **actor-axis verification outcome**, deliberately raw: the creator matches their own chains (the creator signs genesis), and "contributed to but did not create" is client-composed as `signer=X` minus `creator=X`. It is proof-tier — the DID's key actually signed accepted operations, revealing nothing not already derivable from the public per-chain log — and it is never an authorship or credit claim: `credits` and similar payload fields are assertion-tier and are not index concepts.
 
 ### Countersignatures by Witness (`GET /index/v0/countersignatures?witness={did}&after={cid}&limit=N`)
 
@@ -735,7 +748,7 @@ This route is amber and relay-asserted: `resource=chain:Y` returns a superset of
 
 ### Deferred from v0
 
-- **`/search`** — fuzzy or tokenized name search. Search semantics (normalization, ranking) are deliberately kept off this clock; if they ship, they ship as their own explicitly-unstable family, never frozen into the index contract.
+- **`/search`** — fuzzy or tokenized name search. Search semantics (normalization, ranking) are deliberately kept off this clock; if they ship, they ship as their own explicitly-unstable family, never frozen into the index contract. `nameContains` (above) is the index's one search-flavored filter and its ceiling: it is a relocation candidate into `/search` when that family exists, and the index does not grow a second.
 - **Fork/tips visibility** — remains deferred at the proof-plane level (see [What's Deferred](#whats-deferred)).
 
 ---
