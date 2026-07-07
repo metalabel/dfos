@@ -9,11 +9,11 @@
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 import type {
-  IndexOrder,
   IndexContentRow,
   IndexCountersignatureRow,
   IndexCredentialRow,
   IndexIdentityRow,
+  IndexOrder,
   IndexOrderedCursor,
 } from './index-routes';
 

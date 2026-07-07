@@ -544,7 +544,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const next =
       rows.length === limit
         ? order
-          ? encodeIndexOrderedCursor(rows[rows.length - 1]![order === 'genesisAt.desc' ? 'genesisAt' : 'headAt'], rows[rows.length - 1]!.did)
+          ? encodeIndexOrderedCursor(
+              rows[rows.length - 1]![order === 'genesisAt.desc' ? 'genesisAt' : 'headAt'],
+              rows[rows.length - 1]!.did,
+            )
           : rows[rows.length - 1]!.did
         : null;
 
@@ -585,7 +588,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const next =
       rows.length === limit
         ? order
-          ? encodeIndexOrderedCursor(rows[rows.length - 1]![order === 'genesisAt.desc' ? 'genesisAt' : 'headAt'], rows[rows.length - 1]!.contentId)
+          ? encodeIndexOrderedCursor(
+              rows[rows.length - 1]![order === 'genesisAt.desc' ? 'genesisAt' : 'headAt'],
+              rows[rows.length - 1]!.contentId,
+            )
           : rows[rows.length - 1]!.contentId
         : null;
 

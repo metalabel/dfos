@@ -10,11 +10,11 @@ import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-pro
 import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
-  IndexOrder,
   IndexContentRow,
   IndexCountersignatureRow,
   IndexCredentialRow,
   IndexIdentityRow,
+  IndexOrder,
   IndexOrderedCursor,
 } from './index-routes';
 import { createKeyResolver } from './ingest';
@@ -242,7 +242,13 @@ export class MemoryRelayStore implements RelayStore {
       return true;
     });
     if (q.order) {
-      return pageOrderedRows(rows, (row) => row.did, timestampOfOrder(q.order), q.orderedAfter, q.limit);
+      return pageOrderedRows(
+        rows,
+        (row) => row.did,
+        timestampOfOrder(q.order),
+        q.orderedAfter,
+        q.limit,
+      );
     }
     return pageRows(rows, (row) => row.did, q.after, q.limit);
   }
