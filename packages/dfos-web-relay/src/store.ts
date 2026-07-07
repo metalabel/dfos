@@ -187,13 +187,24 @@ export class MemoryRelayStore implements RelayStore {
 
   async queryIndexIdentities(q: {
     hasPublicProfile?: boolean;
+    nameContains?: string;
     after?: string;
     limit: number;
   }): Promise<IndexIdentityRow[]> {
     const rows = [...this.indexIdentityRows.values()].filter((row) => {
-      if (q.hasPublicProfile === undefined) return true;
-      const isPublic = row.profile !== null && row.profile.publicRead;
-      return isPublic === q.hasPublicProfile;
+      if (q.hasPublicProfile !== undefined) {
+        const isPublic = row.profile !== null && row.profile.publicRead;
+        if (isPublic !== q.hasPublicProfile) return false;
+      }
+      if (q.nameContains) {
+        if (
+          row.profile?.name == null ||
+          !row.profile.name.toLowerCase().includes(q.nameContains.toLowerCase())
+        ) {
+          return false;
+        }
+      }
+      return true;
     });
     return pageRows(rows, (row) => row.did, q.after, q.limit);
   }

@@ -622,7 +622,7 @@ Extracted values are **attribution-tier claims**: the anchor is controller-signe
 - **Maintenance.** The index is fully re-derivable from the operation log plus held blobs. Reference implementations maintain it incrementally at ingestion and expose a rebuild path for pre-existing corpora; either way the serving contract is identical.
 - **`publicRead` is a last-touch snapshot, and MAY lag time-based transitions.** A materialized `publicRead` reflects whether a standing public-read grant authorized anonymous read **at the moment the row was last recomputed** (its content's most recent op, or a rebuild). One input to that predicate — a grant credential's `exp` — is wall-clock-relative and crosses **without emitting any operation**, so incremental maintenance has no event to react to: a row can continue to advertise `publicRead: true` after the grant that made it public has expired, until the next op dirties that content or a rebuild reruns the projection. This is deliberately tolerated because the index is a discovery hint, never an authorization input (see [Hints, Not Authority](#hints-not-authority)) — the content plane re-derives `hasPublicStandingAuth` live on every read, where `exp` is always evaluated against the current clock. A relay MAY additionally re-sweep public rows near expiry to tighten the hint, but is not required to.
 
-### Identities (`GET /index/v0/identities?hasPublicProfile=&after={did}&limit=N`)
+### Identities (`GET /index/v0/identities?hasPublicProfile=&nameContains=&after={did}&limit=N`)
 
 Enumerates identity chains, `did` ascending.
 
@@ -658,7 +658,7 @@ Enumerates identity chains, `did` ascending.
 | `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                            |
 | `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker                                                                                        |
 
-Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `after` (a `did` keyset cursor — returns rows with `did` strictly greater), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
+Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `nameContains` (optional case-insensitive substring filter over projected `profile.name`; non-authoritative/amber; applied before keyset pagination), `after` (a `did` keyset cursor — returns rows with `did` strictly greater), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
 
 ### Content Chains (`GET /index/v0/content?creator={did}&docSchema=&documentCID=&publicRead=&after={contentId}&limit=N`)
 

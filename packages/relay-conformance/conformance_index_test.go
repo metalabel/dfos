@@ -702,6 +702,75 @@ func TestIndexIdentitiesHasPublicProfileFilter(t *testing.T) {
 	_ = body.Next
 }
 
+func TestIndexIdentitiesNameContainsFilter(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+
+	var body struct {
+		Identities []struct {
+			DID     string `json:"did"`
+			Profile *struct {
+				Anchor     string  `json:"anchor"`
+				PublicRead bool    `json:"publicRead"`
+				DocSchema  *string `json:"docSchema"`
+				Name       *string `json:"name"`
+			} `json:"profile"`
+		} `json:"identities"`
+		Next *string `json:"next"`
+	}
+	resp := getJSON(t, base+"/index/v0/identities?limit=1000", &body)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("identity unfiltered index: status %d", resp.StatusCode)
+	}
+
+	sourceDID := ""
+	needle := "zzq-no-such-name-marker"
+	for _, row := range body.Identities {
+		if row.Profile != nil && row.Profile.Name != nil && len(*row.Profile.Name) >= 3 {
+			name := *row.Profile.Name
+			start := (len(name) - 3) / 2
+			needle = strings.ToUpper(name[start : start+3])
+			sourceDID = row.DID
+			break
+		}
+	}
+	if sourceDID == "" {
+		t.Logf("no named identity available for positive nameContains check")
+	}
+
+	var filtered struct {
+		Identities []struct {
+			DID     string `json:"did"`
+			Profile *struct {
+				Anchor     string  `json:"anchor"`
+				PublicRead bool    `json:"publicRead"`
+				DocSchema  *string `json:"docSchema"`
+				Name       *string `json:"name"`
+			} `json:"profile"`
+		} `json:"identities"`
+		Next *string `json:"next"`
+	}
+	resp = getJSON(t, base+"/index/v0/identities?nameContains="+url.QueryEscape(needle)+"&limit=1000", &filtered)
+	if resp.StatusCode != 200 {
+		t.Fatalf("identity nameContains filter: status %d", resp.StatusCode)
+	}
+
+	foundSource := sourceDID == ""
+	for _, row := range filtered.Identities {
+		if row.DID == sourceDID {
+			foundSource = true
+		}
+		if row.Profile == nil || row.Profile.Name == nil || !strings.Contains(strings.ToLower(*row.Profile.Name), strings.ToLower(needle)) {
+			t.Fatalf("nameContains=%q row has profile %+v for DID %s", needle, row.Profile, row.DID)
+		}
+	}
+	if !foundSource {
+		t.Fatalf("nameContains=%q did not include source DID %s", needle, sourceDID)
+	}
+	_ = filtered.Next
+}
+
 func TestIndexIdentitiesKeysetPagination(t *testing.T) {
 	base := relayURL(t)
 	requireIndexCapability(t, base)

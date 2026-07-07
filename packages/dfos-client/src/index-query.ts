@@ -83,7 +83,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
   const relaysFor = (o?: CallOptions): string[] => normalizeRelays(o?.relays ?? relays);
 
   const indexIdentities = (
-    params?: { hasPublicProfile?: boolean; after?: string; limit?: number },
+    params?: { hasPublicProfile?: boolean; nameContains?: string; after?: string; limit?: number },
     options?: CallOptions,
   ): Promise<IndexIdentitiesPage> =>
     fetchIndexPage(
@@ -92,6 +92,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
       (base) => {
         const url = new URL(`${INDEX_BASE_PATH}/identities`, base);
         setParam(url, 'hasPublicProfile', params?.hasPublicProfile);
+        setParam(url, 'nameContains', params?.nameContains);
         setParam(url, 'after', params?.after);
         setParam(url, 'limit', params?.limit);
         return url;

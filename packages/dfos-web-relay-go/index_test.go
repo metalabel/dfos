@@ -902,3 +902,62 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 		t.Fatal("author identity row missing after rebuild")
 	}
 }
+
+// TestSQLiteQueryIndexIdentitiesNameContains locks the `nameContains` substring
+// filter directly at the SQLite store layer — the bespoke
+// `instr(lower(profile_name), lower(?)) > 0` clause. The shared conformance corpus
+// holds no named profiles, so it can only exercise the invariant (no non-matching
+// row leaks), never a positive match; this proves a match, exclusion of a
+// non-match, case-insensitivity, and null-profile exclusion against real SQLite.
+func TestSQLiteQueryIndexIdentitiesNameContains(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "namecontains.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	put := func(did, name string) {
+		t.Helper()
+		var profile *indexProfile
+		if name != "" {
+			n := name
+			profile = &indexProfile{Anchor: "anchor-" + did, Name: &n}
+		}
+		if err := store.PutIndexIdentityRow(indexIdentityRow{DID: did, HeadCID: "head-" + did, Profile: profile}); err != nil {
+			t.Fatalf("PutIndexIdentityRow(%s): %v", did, err)
+		}
+	}
+	put("did:dfos:aaa", "Asha")  // contains "sh"
+	put("did:dfos:bbb", "Boris") // contains "or"
+	put("did:dfos:ccc", "")      // no profile — must never match
+
+	query := func(needle string) []string {
+		t.Helper()
+		rows, err := store.QueryIndexIdentities(IndexIdentityQuery{NameContains: needle, Limit: 100})
+		if err != nil {
+			t.Fatalf("QueryIndexIdentities(%q): %v", needle, err)
+		}
+		dids := make([]string, len(rows))
+		for i, row := range rows {
+			dids[i] = row.DID
+		}
+		return dids
+	}
+
+	// positive substring match (stored "Asha" vs lowercase query "sh")
+	if got := query("sh"); len(got) != 1 || got[0] != "did:dfos:aaa" {
+		t.Fatalf("nameContains=sh → %v, want [did:dfos:aaa]", got)
+	}
+	// case-insensitive: an uppercase query still matches the lowercase-folded name
+	if got := query("SH"); len(got) != 1 || got[0] != "did:dfos:aaa" {
+		t.Fatalf("nameContains=SH → %v, want [did:dfos:aaa]", got)
+	}
+	// a different substring selects the other row (not always-first, not the null one)
+	if got := query("or"); len(got) != 1 || got[0] != "did:dfos:bbb" {
+		t.Fatalf("nameContains=or → %v, want [did:dfos:bbb]", got)
+	}
+	// no match → empty; the null-profile row is never a false positive
+	if got := query("zzq-no-such"); len(got) != 0 {
+		t.Fatalf("nameContains=zzq-no-such → %v, want []", got)
+	}
+}

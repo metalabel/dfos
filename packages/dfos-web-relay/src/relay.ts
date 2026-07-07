@@ -521,10 +521,12 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
 
     const hasPublicProfile = parseBooleanQuery(c.req.query('hasPublicProfile'));
+    const nameContains = c.req.query('nameContains');
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = await store.queryIndexIdentities({
       ...(hasPublicProfile !== undefined ? { hasPublicProfile } : {}),
+      ...(nameContains ? { nameContains } : {}),
       ...(after ? { after } : {}),
       limit,
     });
