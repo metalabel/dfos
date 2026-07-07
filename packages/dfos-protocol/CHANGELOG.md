@@ -11,9 +11,78 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
-Pre-adoption amendments to frozen-but-unserved surfaces. These are deliberate
-in-place breaks before external adoption, so the freeze protects adopters rather
-than preserving shadow-chain drafts.
+## [0.21.0] — 2026-07-07
+
+The second (and last planned) pre-adoption amendment to `post/v1`, plus
+identity-index ergonomics. The `post/v1` breaking window closes for good when
+post chains are first publicly served.
+
+### Added
+
+- **`?nameContains=` substring filter on the identity index** —
+  `/index/v0/identities` gains case-insensitive substring matching on the
+  indexed profile name (TS + Go). (#187)
+
+### Changed
+
+- **`post/v1` second pre-adoption amendment** — amended in place before public
+  serving: `topics` is removed (mutable taxonomy doesn't belong in immutable
+  documents), `format` is narrowed to `short-post` / `long-post` (comments and
+  replies will be their own schema with target linkage), `body` is declared
+  CommonMark markdown, and optional `publishedAt` records the author-asserted
+  publication time separately from operation `createdAt` — author-revisable, so
+  deliberate back-dating is an ordinary audited amend. (#188)
+
+### Fixed
+
+- **`IndexCredentialRow` re-exported from the `dfos-web-relay` package
+  root.** (#186)
+
+## [0.20.0] — 2026-07-06
+
+The first `post/v1` pre-adoption amendment, plus public-credential discovery
+on the index namespace.
+
+### Added
+
+- **`/index/v0/credentials`** — public-credential discovery by issuer and
+  resource, including `chain:*` union semantics (TS + Go, conformance-locked
+  3-way). (#184)
+- **`documentCID` exact-match filter on `/index/v0/content`.** (#182)
+
+### Changed
+
+- **`post/v1` pre-adoption amendment** — amended in place while zero `post/v1`
+  documents existed on any chain. `createdByDID` is replaced by ordered
+  `credits: [{did, label?}]` (first entry = primary author), `cover` and
+  `attachments` now use the standard Media object `{ uri, cid?, href? }`, and the
+  legacy `{ id, uri? }` post-media shape is removed. `CONTENT-MODEL.md` now
+  documents the Authorship lattice (assertion -> claim-operation proof ->
+  sovereign). (#183)
+
+## [0.19.0] — 2026-07-05
+
+### Added
+
+- **Materialized O(page) `/index/v0` projection** — the reference relay (TS +
+  Go) serves index queries from an incrementally-maintained projection instead
+  of scanning the op log per request. (#175)
+
+## [0.18.0] — 2026-07-05
+
+### Added
+
+- **`/index/v0` — non-authoritative query namespace** — spec plus reference
+  implementation of the relay-asserted discovery routes (identities, content,
+  operations); everything served is re-verifiable against the proof plane.
+  (#172, #173)
+
+## [0.17.0] — 2026-07-04
+
+The last pre-adoption breaking amendment to the reference relay wire — a
+single, deliberate break that froze the non-proof surfaces before external
+adoption, so the freeze protects adopters. (#165, docs sync #166, conformance
+guardrails #167)
 
 ### Added
 
@@ -22,17 +91,6 @@ than preserving shadow-chain drafts.
 
 ### Changed
 
-- **`post/v1` second pre-adoption amendment** — amended in place before public
-  serving: `topics` is removed, `format` is narrowed to `short-post` /
-  `long-post`, and optional `publishedAt` records asserted original publication
-  time separately from operation `createdAt`.
-- **`post/v1` pre-adoption amendment** — amended in place while zero `post/v1`
-  documents existed on any chain. `createdByDID` is replaced by ordered
-  `credits: [{did, label?}]` (first entry = primary author), `cover` and
-  `attachments` now use the standard Media object `{ uri, cid?, href? }`, and the
-  legacy `{ id, uri? }` post-media shape is removed. `CONTENT-MODEL.md` now
-  documents the Authorship lattice (assertion -> claim-operation proof ->
-  sovereign).
 - **`/revocations/v1` frozen at v1** — the revocation status family is promoted
   to a frozen v1 contract, and its issuer feed is now bounded with a
   `limit` + `after` + `next` cursor ordered by revocation `createdAt`
