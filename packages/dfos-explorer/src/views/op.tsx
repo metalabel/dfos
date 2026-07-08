@@ -25,9 +25,11 @@ import { decodeDFOSCredentialUnsafe } from '@metalabel/dfos-protocol/credentials
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks, type CheckState } from '../components/checks';
+import { JsonView } from '../components/json-view';
 import { OpTimeline, OpType } from '../components/timeline';
 import {
   ContentLink,
+  CredLink,
   DidLink,
   KidLink,
   OpLink,
@@ -38,8 +40,9 @@ import {
   TruncId,
 } from '../components/ui';
 import { getClient } from '../lib/client';
+import { summarizeAuthorization } from '../lib/credentials';
 import { getDb } from '../lib/db-instance';
-import { didOfKid, short } from '../lib/format';
+import { didOfKid, fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { KIND_OF_TYP, PAYLOAD_NOTES } from '../lib/op-annotations';
 import { toOpRows, type OpRow } from '../lib/op-rows';
@@ -468,10 +471,10 @@ export const Op = (props: { cid: string }) => {
             ))}
           </div>
           <details style={{ marginTop: 8 }}>
-            <summary>raw json</summary>
-            <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', fontSize: 11 }}>
-              {JSON.stringify(payload, null, 2).slice(0, 3000)}
-            </pre>
+            <summary>payload json</summary>
+            <div style={{ marginTop: 6 }}>
+              <JsonView value={payload} />
+            </div>
           </details>
         </Panel>
       ) : null}
@@ -708,6 +711,7 @@ const PayloadRow = (props: { k: string; value: unknown; kind: string }) => {
     )
       return <TruncId value={value} />;
     if (k === 'documentCID' && value === null) return <span class="muted">null (cleared)</span>;
+    if (k === 'authorization' && typeof value === 'string') return <AuthorizationRow token={value} />;
     if ((k === 'authKeys' || k === 'assertKeys' || k === 'controllerKeys') && Array.isArray(value))
       return <>{value.length} key(s)</>;
     if (k === 'services' && Array.isArray(value))
@@ -728,4 +732,64 @@ const PayloadRow = (props: { k: string; value: unknown; kind: string }) => {
       </div>
     </>
   );
+};
+
+/*
+  AUTHORIZATION — the embedded delegated-authority credential
+
+  A non-creator's update/delete op carries a `authorization` DFOS credential
+  proving the signer was delegated write authority rooted at the chain creator.
+  Rather than dump the raw JWS, decode it (unsafe — display only) into a compact
+  summary and link to the credential page, which folds the real proof (signature,
+  delegation root, temporal window). The CID is re-derived from the payload bytes
+  the same way credential.tsx does, so the link addresses the credential by its
+  own content hash — not a relay-supplied header value.
+*/
+const AuthorizationRow = (props: { token: string }) => {
+  const summary = summarizeAuthorization(props.token);
+  const [cid, setCid] = useState('');
+  useEffect(() => {
+    if (!summary) return;
+    let dead = false;
+    const decoded = decodeDFOSCredentialUnsafe(props.token);
+    if (!decoded) return;
+    void dagCborCanonicalEncode(decoded.payload).then((e) => {
+      if (!dead) setCid(e.cid.toString());
+    });
+    return () => {
+      dead = true;
+    };
+  }, [props.token, summary]);
+
+  if (!summary) {
+    // not a well-formed credential — show the raw token, truncated + copyable,
+    // rather than pretend to summarize something we couldn't decode.
+    return <TruncId value={props.token} head={40} tail={8} />;
+  }
+  return (
+    <div class="authz">
+      <span class="lbl">issuer</span> <DidLink did={summary.iss} />{' '}
+      <span class="lbl">audience</span>{' '}
+      {summary.aud === '*' ? <span class="k-role">public · anyone</span> : <DidLink did={summary.aud} />}
+      <div style={{ marginTop: 2 }}>
+        {summary.att.map((a, i) => (
+          <span key={i} class="k-role">
+            {a.action} · <AuthResource resource={a.resource} />
+          </span>
+        ))}
+      </div>
+      <div class="lbl" style={{ marginTop: 2 }}>
+        valid {fmtUnixDate(summary.iat)} → {fmtUnixDate(summary.exp)} ·{' '}
+        {cid ? <CredLink cid={cid} /> : 'deriving credential id…'}
+      </div>
+    </div>
+  );
+};
+
+/** A credential attenuation resource, linkified when it names a content chain. */
+const AuthResource = (props: { resource: string }) => {
+  const r = props.resource;
+  if (r === 'chain:*') return <span class="muted">chain:*</span>;
+  if (r.startsWith('chain:')) return <ContentLink id={r.slice('chain:'.length)} />;
+  return <span class="muted">{r}</span>;
 };

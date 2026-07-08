@@ -20,6 +20,8 @@ export const PAYLOAD_NOTES: Record<string, string> = {
   targetCID: 'the operation this statement witnesses',
   relation: 'open-namespace tag naming the witness relation',
   credentialCID: 'the credential this revocation permanently invalidates',
+  authorization:
+    "a non-creator signer's delegated-write credential — its chain must root at the content creator",
 };
 
 /** Operation kinds by JWS envelope typ. */
