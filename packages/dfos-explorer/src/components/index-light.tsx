@@ -57,8 +57,10 @@ export const useVerifyOnVisible = <T extends HTMLElement>(
 export const IndexLightNote = () => (
   <div class="ck-note" style={{ marginBottom: 8 }}>
     Live rows from the relay’s <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — each is an{' '}
-    <b>attributed</b> hint, promoted to <b>verified</b> as it scrolls into view and your tab folds
-    its chain. Completeness is never proven; a <b>deep sync</b> folds the whole log for the audit
+    <b>attributed</b> hint. As a row scrolls into view your tab folds its chain and the badge greens
+    on its <b>structural facts</b> (signatures, op count, deletion) — but a projected{' '}
+    <span class="attr">name/title</span> stays a relay-asserted projection until its own bytes are
+    re-verified. Completeness is never proven; a <b>deep sync</b> folds the whole log for the audit
     stance (it alone catches omission).
   </div>
 );

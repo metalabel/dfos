@@ -165,7 +165,7 @@ const IndexIdentityRowView = (props: { row: IndexIdentityRow }) => {
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>
       <td>
-        {name ? <b>{name}</b> : <span class="muted">— no public profile</span>}{' '}
+        {name ? <span class="attr">{name}</span> : <span class="muted">— no public profile</span>}{' '}
         <VerifyBadge kind="identity" chainId={row.did} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
@@ -248,7 +248,7 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        {row.title ? <b>{row.title}</b> : <span class="muted">—</span>}{' '}
+        {row.title ? <span class="attr">{row.title}</span> : <span class="muted">—</span>}{' '}
         <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>

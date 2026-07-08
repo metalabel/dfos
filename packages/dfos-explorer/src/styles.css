@@ -715,6 +715,16 @@ tr:hover td {
   content: none;
 }
 
+/* a projected name/title (index display-name registry) is a relay-asserted
+   attribution — never the plain-bold ink that reads as verified. Amber, so it
+   sits in the attribution tier permanently: the adjacent VerifyBadge greens on
+   the structural chain-fold (signatures, ops, deletion), but the projected
+   string stays amber until its own bytes are re-hashed to the committed CID. */
+.attr {
+  color: var(--warn);
+  font-weight: 600;
+}
+
 /* ---------------------------------------------------------------- bars + filters */
 
 .bar {
