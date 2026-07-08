@@ -36,12 +36,13 @@ import {
   Term,
   TruncId,
 } from '../components/ui';
+import { contributedFromSignerPage } from '../lib/actor-ledger';
 import { getClient } from '../lib/client';
 import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtAge, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { indexCredSource, useIndexCapable } from '../lib/index-light';
+import { indexCredSource, indexListState, useIndexCapable } from '../lib/index-light';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
@@ -83,6 +84,15 @@ export const Identity = (props: { did: string }) => {
   // prescribes). Both are index-only reverse lookups, so they key on [did, indexed].
   const [created, setCreated] = useState<IndexContentRow[] | null>(null);
   const [contributed, setContributed] = useState<IndexContentRow[] | null>(null);
+  // per-lane error flags: an index-only reverse lookup that REJECTED (relay
+  // unreachable / route declined) must render as an honest error, never a
+  // confirmed-empty — absence is not proof of absence (the index can lie by
+  // omission). `contributedTruncated` keys the "first 200" note off the RAW
+  // signer page length, before the creator-subtraction shrinks the array.
+  const [createdErr, setCreatedErr] = useState(false);
+  const [contributedErr, setContributedErr] = useState(false);
+  const [contributedTruncated, setContributedTruncated] = useState(false);
+  const [witnessedErr, setWitnessedErr] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -157,6 +167,7 @@ export const Identity = (props: { did: string }) => {
   useEffect(() => {
     let dead = false;
     setWitnessed(null);
+    setWitnessedErr(false);
     if (indexed !== true) return;
     void getClient()
       .indexCountersignatures(props.did, { limit: 200 })
@@ -164,7 +175,11 @@ export const Identity = (props: { did: string }) => {
         if (!dead) setWitnessed(p.countersignatures);
       })
       .catch(() => {
-        if (!dead) setWitnessed([]);
+        // rejected — an error, NOT a confirmed "witnessed nothing"
+        if (!dead) {
+          setWitnessedErr(true);
+          setWitnessed([]);
+        }
       });
     return () => {
       dead = true;
@@ -179,6 +194,9 @@ export const Identity = (props: { did: string }) => {
     let dead = false;
     setCreated(null);
     setContributed(null);
+    setCreatedErr(false);
+    setContributedErr(false);
+    setContributedTruncated(false);
     if (indexed !== true) return;
     const client = getClient();
     void client
@@ -187,15 +205,26 @@ export const Identity = (props: { did: string }) => {
         if (!dead) setCreated(p.content);
       })
       .catch(() => {
-        if (!dead) setCreated([]);
+        // rejected (unreachable / declined) — an error, NOT a confirmed-empty
+        if (!dead) {
+          setCreatedErr(true);
+          setCreated([]);
+        }
       });
     void client
       .indexContent({ signer: props.did, limit: 200 })
       .then((p) => {
-        if (!dead) setContributed(p.content.filter((r) => r.creatorDID !== props.did));
+        if (dead) return;
+        // subtract the DID's own creations; truncation keys off the RAW page
+        const page = contributedFromSignerPage(p.content, props.did, 200);
+        setContributedTruncated(page.truncated);
+        setContributed(page.rows);
       })
       .catch(() => {
-        if (!dead) setContributed([]);
+        if (!dead) {
+          setContributedErr(true);
+          setContributed([]);
+        }
       });
     return () => {
       dead = true;
@@ -358,8 +387,12 @@ export const Identity = (props: { did: string }) => {
       <ActorLedger
         indexed={indexed}
         created={created}
+        createdErr={createdErr}
         contributed={contributed}
+        contributedErr={contributedErr}
+        contributedTruncated={contributedTruncated}
         witnessed={witnessed}
+        witnessedErr={witnessedErr}
         credSource={credSource}
         credFromRelayIndex={credFromRelayIndex}
         revoked={revoked}
@@ -432,7 +465,7 @@ const LedgerContentRow = (props: { row: IndexContentRow }) => {
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        {row.title ? <b>{row.title}</b> : <span class="muted">—</span>}{' '}
+        {row.title ? <span class="attr">{row.title}</span> : <span class="muted">—</span>}{' '}
         <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
@@ -450,16 +483,23 @@ const LedgerContentRow = (props: { row: IndexContentRow }) => {
 };
 
 /** A content-chain ledger table (Created / Contributed tabs) over relay-index
- *  rows, with an honest, omission-aware empty state. */
+ *  rows. Distinguishes a REJECTED lookup (honest "couldn't reach") from a genuine
+ *  200-with-zero-rows (the confirmed-empty `empty` copy) — a rejection labelled
+ *  empty would violate the omission-can-lie posture. `truncated` keys the
+ *  first-200 note off the raw page (the Contributed array is post-subtraction). */
 const LedgerContentTable = (props: {
   rows: IndexContentRow[] | null;
   indexed: boolean | null;
+  error: boolean;
+  truncated: boolean;
   empty: string;
 }) => {
   if (props.indexed === null) return <span class="muted">checking relay capabilities…</span>;
   if (props.indexed !== true) return <span class="muted">requires an index-capable relay.</span>;
-  if (props.rows === null) return <span class="muted">reading relay index…</span>;
-  if (props.rows.length === 0) return <span class="muted">{props.empty}</span>;
+  const state = indexListState(props.rows === null, props.error, props.rows?.length ?? 0);
+  if (state === 'loading') return <span class="muted">reading relay index…</span>;
+  if (state === 'error') return <span class="muted">couldn’t reach the relay index.</span>;
+  if (state === 'empty') return <span class="muted">{props.empty}</span>;
   return (
     <>
       <table>
@@ -472,14 +512,14 @@ const LedgerContentTable = (props: {
           </tr>
         </thead>
         <tbody>
-          {props.rows.map((row) => (
+          {props.rows!.map((row) => (
             <LedgerContentRow key={row.contentId} row={row} />
           ))}
         </tbody>
       </table>
       <div class="ck-note" style={{ marginTop: 8 }}>
         relay-asserted index hints — open a chain to fold its proof.
-        {props.rows.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}
+        {props.truncated ? ' showing the first 200 the relay index surfaces.' : ''}
       </div>
     </>
   );
@@ -488,27 +528,34 @@ const LedgerContentTable = (props: {
 const ActorLedger = (props: {
   indexed: boolean | null;
   created: IndexContentRow[] | null;
+  createdErr: boolean;
   contributed: IndexContentRow[] | null;
+  contributedErr: boolean;
+  contributedTruncated: boolean;
   witnessed: IndexCountersignatureRow[] | null;
+  witnessedErr: boolean;
   credSource: { cid: string; jwsToken: string }[] | null;
   credFromRelayIndex: boolean;
   revoked: Map<string, string>;
 }) => {
   const [tab, setTab] = useState<LedgerTab>('created');
-  const cnt = (rows: unknown[] | null): string => (rows ? ` ${rows.length}` : '');
+  // suppress the count while loading (rows null) OR errored (rows []) so a tab
+  // never reads "contributed 0" over an unreachable relay — a false-empty too.
+  const cnt = (rows: unknown[] | null, err = false): string =>
+    err || !rows ? '' : ` ${rows.length}`;
   const rightLabel =
     tab === 'issued' && !props.credFromRelayIndex ? 'from local index' : 'relay index · attributed';
   return (
     <Panel title="actor ledger" right={<span class="lbl">{rightLabel}</span>}>
       <div class="filters" style={{ marginBottom: 10 }}>
         <button class={tab === 'created' ? 'on' : ''} onClick={() => setTab('created')}>
-          created{cnt(props.created)}
+          created{cnt(props.created, props.createdErr)}
         </button>
         <button class={tab === 'contributed' ? 'on' : ''} onClick={() => setTab('contributed')}>
-          contributed{cnt(props.contributed)}
+          contributed{cnt(props.contributed, props.contributedErr)}
         </button>
         <button class={tab === 'witnessed' ? 'on' : ''} onClick={() => setTab('witnessed')}>
-          witnessed{cnt(props.witnessed)}
+          witnessed{cnt(props.witnessed, props.witnessedErr)}
         </button>
         <button class={tab === 'issued' ? 'on' : ''} onClick={() => setTab('issued')}>
           issued{cnt(props.credSource)}
@@ -519,16 +566,24 @@ const ActorLedger = (props: {
         <LedgerContentTable
           rows={props.created}
           indexed={props.indexed}
+          error={props.createdErr}
+          truncated={(props.created?.length ?? 0) === 200}
           empty="no content chains this identity created that the relay index holds."
         />
       ) : tab === 'contributed' ? (
         <LedgerContentTable
           rows={props.contributed}
           indexed={props.indexed}
+          error={props.contributedErr}
+          truncated={props.contributedTruncated}
           empty="no chains this identity signed but did not create that the relay index holds."
         />
       ) : tab === 'witnessed' ? (
-        <WitnessedTable indexed={props.indexed} witnessed={props.witnessed} />
+        <WitnessedTable
+          indexed={props.indexed}
+          witnessed={props.witnessed}
+          error={props.witnessedErr}
+        />
       ) : (
         <IssuedTable
           credSource={props.credSource}
@@ -545,11 +600,14 @@ const ActorLedger = (props: {
 const WitnessedTable = (props: {
   indexed: boolean | null;
   witnessed: IndexCountersignatureRow[] | null;
+  error: boolean;
 }) => {
   if (props.indexed === null) return <span class="muted">checking relay capabilities…</span>;
   if (props.indexed !== true) return <span class="muted">requires an index-capable relay.</span>;
-  if (props.witnessed === null) return <span class="muted">reading relay index…</span>;
-  if (props.witnessed.length === 0)
+  const state = indexListState(props.witnessed === null, props.error, props.witnessed?.length ?? 0);
+  if (state === 'loading') return <span class="muted">reading relay index…</span>;
+  if (state === 'error') return <span class="muted">couldn’t reach the relay index.</span>;
+  if (state === 'empty')
     return (
       <span class="muted">this identity has witnessed no operations the relay index surfaces.</span>
     );
@@ -564,7 +622,7 @@ const WitnessedTable = (props: {
           </tr>
         </thead>
         <tbody>
-          {props.witnessed.map((r) => (
+          {props.witnessed!.map((r) => (
             <tr key={r.cid}>
               <td>
                 {r.relation ? (
@@ -585,7 +643,7 @@ const WitnessedTable = (props: {
       </table>
       <div class="ck-note" style={{ marginTop: 8 }}>
         relay-asserted index hints — open a witnessed op to fold its countersignature proof.
-        {props.witnessed.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}
+        {props.witnessed!.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}
       </div>
     </>
   );
