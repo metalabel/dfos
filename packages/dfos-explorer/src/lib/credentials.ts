@@ -15,7 +15,8 @@
 */
 
 import type { IndexCredentialRow } from '@metalabel/dfos-client';
-import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { decodeDFOSCredentialUnsafe } from '@metalabel/dfos-protocol/credentials';
+import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { ExplorerOp } from './db';
 
 export interface GrantSummary {
@@ -66,6 +67,49 @@ export const grantsForChain = (ops: ExplorerOp[], contentId: string): GrantSumma
     });
   }
   return [...byCid.values()].sort((a, b) => Number(b.isPublic) - Number(a.isPublic));
+};
+
+/** A compact, decode-only view of an op payload's embedded `authorization`
+ *  credential — the DFOS credential a NON-creator signer carries to prove
+ *  delegated write/delete authority (PROTOCOL.md). Unverified (the credential
+ *  page folds the real proof); this is just the readable summary the op view
+ *  shows in place of an unbounded raw-JWS dump. */
+export interface AuthorizationSummary {
+  iss: string;
+  aud: string;
+  att: { resource: string; action: string }[];
+  iat: number;
+  exp: number;
+}
+
+/** Decode an embedded `authorization` JWS into its summary, or null when it is
+ *  not a well-formed DFOS credential. Pure — no network, no verification. */
+export const summarizeAuthorization = (token: string): AuthorizationSummary | null => {
+  const decoded = decodeDFOSCredentialUnsafe(token);
+  if (!decoded) return null;
+  const p = decoded.payload;
+  return {
+    iss: p.iss,
+    aud: p.aud,
+    att: p.att.map((a) => ({ resource: a.resource, action: a.action })),
+    iat: p.iat,
+    exp: p.exp,
+  };
+};
+
+/** Re-derive a credential's CID from its own payload bytes (dag-cbor → CID), the
+ *  same self-addressing credential.tsx uses so the op view can link to the
+ *  credential page by its content hash — not a relay-supplied header value.
+ *  Returns null when the token can't be decoded or encoded (the caller renders a
+ *  visible failure rather than sticking on "deriving…"). */
+export const deriveCredentialCid = async (token: string): Promise<string | null> => {
+  const decoded = decodeDFOSCredentialUnsafe(token);
+  if (!decoded) return null;
+  try {
+    return (await dagCborCanonicalEncode(decoded.payload)).cid.toString();
+  } catch {
+    return null;
+  }
 };
 
 /**

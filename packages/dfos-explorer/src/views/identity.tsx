@@ -20,7 +20,7 @@ import { classifyAnchor } from '@metalabel/dfos-protocol/chain';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks, type CheckState } from '../components/checks';
-import { useVerifyOnVisible, VerifyBadge } from '../components/index-light';
+import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { ProfileCard } from '../components/profile';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
@@ -40,6 +40,7 @@ import { contributedFromSignerPage } from '../lib/actor-ledger';
 import { getClient } from '../lib/client';
 import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
+import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { fmtAge, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
@@ -211,8 +212,12 @@ export const Identity = (props: { did: string }) => {
     setContributedTruncated(false);
     if (indexed !== true) return;
     const client = getClient();
+    // order= combines with creator=/signer= on an iteration-2 relay (the store
+    // filters, then orders) — so newest-first, but ONLY where honoured; a
+    // pre-iteration-2 relay would 400 on order=, so gate it on iter2.
+    const newest = iter2 === true ? ({ order: 'genesisAt.desc' } as const) : {};
     void client
-      .indexContent({ creator: props.did, limit: 200 })
+      .indexContent({ creator: props.did, limit: 200, ...newest })
       .then((p) => {
         if (!dead) setCreated(p.content);
       })
@@ -230,7 +235,8 @@ export const Identity = (props: { did: string }) => {
       };
     }
     void client
-      .indexContent({ signer: props.did, limit: 200 })
+      // this branch runs only when iter2 === true (guarded above), so order= is safe
+      .indexContent({ signer: props.did, limit: 200, order: 'genesisAt.desc' })
       .then((p) => {
         if (dead) return;
         // subtract the DID's own creations; truncation keys off the RAW page
@@ -481,11 +487,20 @@ const LedgerContentRow = (props: { row: IndexContentRow }) => {
   const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
   const rec = useVerifyStatus('content', row.contentId);
   const opCount = rec.facts?.opCount ?? row.opCount;
+  const doc = useDocSnippet(
+    row.contentId,
+    rec.status !== 'attributed' && !row.title && !!row.docSchema && row.publicRead,
+  );
+  const label = deriveDocLabel({
+    title: row.title,
+    docSchema: row.docSchema,
+    contentId: row.contentId,
+    doc,
+  });
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        {row.title ? <span class="attr">{row.title}</span> : <span class="muted">—</span>}{' '}
-        <VerifyBadge kind="content" chainId={row.contentId} />
+        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
       <td>

@@ -86,6 +86,12 @@ export interface ChainRollup {
   publicRead?: boolean;
   /** content rollup: headCid at resolve time — re-resolve only when the head drifts. */
   resolvedHead?: string;
+  /** content rollup: a post/v1 document's `title`, projected so the LOCAL browse
+   *  shows the same label the relay index projects (parity with the live path). */
+  title?: string;
+  /** content rollup: a plain-text body/description excerpt for an UNTITLED public
+   *  document, so the local label can show a snippet instead of a bare id. */
+  snippet?: string;
   /**
    * identity rollup: name from a profile/v1 doc ATTRIBUTED to this DID via the
    * cheap creator-heuristic (profile content chain genesis-op signer → DID).
@@ -223,7 +229,10 @@ export interface ExplorerDb {
 // wipes+rebuilds (see onupgradeneeded) — a re-sync repopulates rollups cleanly.
 // bumped 4→5: added the `verify` store — durable viewport-fold verdicts so a
 // reload shows already-verified rows green without re-folding (see verify-queue).
-const DB_VERSION = 5;
+// bumped 5→6: content rollups gained projected `title`/`snippet` (post/v1 label
+// parity with the relay index). The local index is a disposable cache, so the
+// upgrade wipes+rebuilds and a re-sync repopulates the new projection fields.
+const DB_VERSION = 6;
 
 // scan ceiling for filtered index-cursor queries — keeps worst case bounded.
 // When a query stops here before the cursor is exhausted, it reports

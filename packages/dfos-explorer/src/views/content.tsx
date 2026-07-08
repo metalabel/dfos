@@ -15,6 +15,7 @@ import { dagCborCanonicalEncode } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
 import { IndexPanel } from '../components/index-view';
+import { JsonView } from '../components/json-view';
 import { MediaPanel } from '../components/media';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
@@ -147,12 +148,10 @@ export const Content = (props: { id: string }) => {
           blob,
           derivedCid: encoded.cid.toString(),
           parsed,
-          pretty: JSON.stringify(parsed, null, 2).slice(0, 4000),
         });
       } catch {
         const printable = /^[\x09\x0a\x0d\x20-\x7e]*$/.test(text);
-        if (!dead)
-          setDoc(printable ? { blob, pretty: text.slice(0, 4000) } : { blob, binary: true });
+        if (!dead) setDoc(printable ? { blob, pretty: text } : { blob, binary: true });
       }
     })();
 
@@ -549,7 +548,11 @@ const DocPanel = (props: {
               (comparison against the relay-asserted committed CID until the chain fold lands)
             </div>
           ) : null}
-          {doc.pretty ? (
+          {doc.parsed !== undefined ? (
+            <div style={{ marginTop: 8 }}>
+              <JsonView value={doc.parsed} />
+            </div>
+          ) : doc.pretty ? (
             <pre style={{ whiteSpace: 'pre-wrap', margin: '8px 0 0', fontSize: 11 }}>
               {doc.pretty}
             </pre>

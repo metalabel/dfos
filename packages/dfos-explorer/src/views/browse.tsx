@@ -24,10 +24,16 @@
 import type { IndexContentRow, IndexIdentityRow, IndexOrder } from '@metalabel/dfos-client';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
-import { IndexLightNote, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
+import {
+  DocName,
+  IndexLightNote,
+  useVerifyOnVisible,
+  VerifyBadge,
+} from '../components/index-light';
 import { Badge, DidLink, Panel, Pill, Term } from '../components/ui';
 import type { ChainRollup, DocumentsBrowse, ExplorerOp, IdentitiesBrowse } from '../lib/db';
 import { getDb } from '../lib/db-instance';
+import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { fmtAge, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
@@ -246,11 +252,23 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
   const rec = useVerifyStatus('content', row.contentId);
   const opCount = rec.facts?.opCount ?? row.opCount;
   const gated = !(row.docSchema && row.publicRead);
+  // an untitled but typed/public row: fetch its bytes lazily for a snippet, but
+  // only once it's on-screen (the verify enqueue that visibility triggers flips
+  // status off 'attributed') — no snippet fetch for rows the eye never reaches.
+  const doc = useDocSnippet(
+    row.contentId,
+    rec.status !== 'attributed' && !row.title && !!row.docSchema && row.publicRead,
+  );
+  const label = deriveDocLabel({
+    title: row.title,
+    docSchema: row.docSchema,
+    contentId: row.contentId,
+    doc,
+  });
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        {row.title ? <span class="attr">{row.title}</span> : <span class="muted">—</span>}{' '}
-        <VerifyBadge kind="content" chainId={row.contentId} />
+        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
       <td>
@@ -470,11 +488,12 @@ export const BrowseDocuments = () => {
   const ordered = iter2 === true;
   const [includeGated, setIncludeGated] = useState(false);
   const [schema, setSchema] = useState<string | null>(null);
-  // enumeration order for the index path: null = the relay's lexical default
-  // (contentId ascending — the pre-order behavior), or a recency ordering the
-  // relay serves via `order=`. Picking post/v1 + "recently active" composes the
-  // application-level "recent public posts" feed entirely client-side.
-  const [order, setOrder] = useState<IndexOrder | null>(null);
+  // enumeration order for the index path: newest (genesisAt.desc) is the default
+  // — a browse-by-recency feed is what a reader wants, not the relay's lexical
+  // contentId order (which is meaningless to a human). "recently active"
+  // (headAt.desc) is the other offered ordering; the lexical default is no longer
+  // surfaced. Only sent to a relay that honours `order=` (iteration-2, gated below).
+  const [order, setOrder] = useState<IndexOrder>('genesisAt.desc');
   // never send `order=` to a relay that ignores it (would mislabel lexical rows
   // as recency-ordered); the toggle is hidden there, but guard the query too.
   const effectiveOrder = ordered ? order : null;
@@ -586,9 +605,6 @@ export const BrowseDocuments = () => {
           <span class="lbl" style={{ marginRight: 2 }}>
             order
           </span>
-          <button class={order === null ? 'on' : ''} onClick={() => setOrder(null)}>
-            lexical
-          </button>
           <button
             class={order === 'genesisAt.desc' ? 'on' : ''}
             onClick={() => setOrder('genesisAt.desc')}
@@ -666,20 +682,27 @@ export const BrowseDocuments = () => {
             </thead>
             <tbody>
               {result?.rows.map((row) => {
-                const title = result.names[row.chainId];
                 const gated = !(row.docSchema && row.publicRead);
+                // local projections carry the same material the relay index does:
+                // a post/v1 title/snippet on the rollup, a profile name via names-join.
+                const label = deriveDocLabel({
+                  title: row.title ?? result.names[row.chainId],
+                  snippet: row.snippet,
+                  docSchema: row.docSchema,
+                  contentId: row.chainId,
+                });
                 return (
                   <tr
                     key={row.chainId}
                     onClick={() => (location.hash = `#/content/${row.chainId}`)}
                   >
                     <td>
-                      {title ? (
-                        <>
-                          <b>{title}</b> <Badge state="warn">attributed</Badge>
-                        </>
-                      ) : (
+                      {label.kind === 'id' ? (
                         <span class="muted">—</span>
+                      ) : (
+                        <>
+                          <DocName label={label} /> <Badge state="warn">attributed</Badge>
+                        </>
                       )}
                     </td>
                     <td>

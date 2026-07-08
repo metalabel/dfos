@@ -1283,3 +1283,134 @@ button.primary:hover {
 .related-empty {
   color: var(--dim);
 }
+
+/* ------------------------------------------------------------------ json view
+
+   A hand-rolled JSON tree (components/json-view.tsx): a collapsible,
+   syntax-coloured render where multi-line strings become real newline blocks
+   and did/cid strings linkify — the antidote to an escaped-`\n` <pre> dump. */
+
+.jsonview {
+  font-size: 11px;
+}
+
+.jv-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.jv-bar button {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.jv-bar button.on {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
+.jv-tree {
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  padding: 6px 8px;
+  overflow-x: auto;
+}
+
+.jv-row {
+  line-height: 1.55;
+  white-space: nowrap;
+}
+
+.jv-toggle {
+  cursor: pointer;
+}
+
+.jv-toggle:hover {
+  background: var(--panel-hd);
+}
+
+.jv-caret {
+  color: var(--dim);
+  margin-right: 3px;
+}
+
+.jv-key {
+  color: var(--link);
+}
+
+.jv-str {
+  color: var(--ok);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.jv-num {
+  color: var(--cred);
+}
+
+.jv-bool,
+.jv-null {
+  color: var(--warn);
+}
+
+.jv-punct,
+.jv-collapsed {
+  color: var(--dim);
+}
+
+/* the "+N more entries" reveal row — the entry-count cap's expander */
+.jv-more {
+  white-space: normal;
+}
+
+.jv-more-btn {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.jv-more-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
+/* a multi-line string, rendered with its real newlines (not `\n`) as an indented
+   block — the reason this component exists. */
+.jv-multiline {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 2px 0 2px 18px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--line);
+  color: var(--ok);
+}
+
+.jv-raw {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line2);
+  background: var(--bg);
+  max-height: 480px;
+  overflow: auto;
+}
+
+/* the embedded `authorization` credential summary in a decoded op payload row */
+.authz {
+  border-left: 2px solid var(--cred);
+  padding-left: 8px;
+}

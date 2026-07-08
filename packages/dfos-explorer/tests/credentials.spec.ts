@@ -1,6 +1,11 @@
 import type { IndexCredentialRow } from '@metalabel/dfos-client';
 import { describe, expect, it } from 'vitest';
-import { grantsForChain, grantsFromIndex } from '../src/lib/credentials';
+import {
+  deriveCredentialCid,
+  grantsForChain,
+  grantsFromIndex,
+  summarizeAuthorization,
+} from '../src/lib/credentials';
 import type { ExplorerOp } from '../src/lib/db';
 
 const b64url = (v: unknown): string => Buffer.from(JSON.stringify(v)).toString('base64url');
@@ -112,5 +117,63 @@ describe('grantsFromIndex', () => {
     expect(
       grantsFromIndex([idxRow('c1', [{ resource: 'chain:other', action: 'read' }])], CHAIN),
     ).toEqual([]);
+  });
+});
+
+const authToken = (payload: Record<string, unknown>): string =>
+  `${b64url({ typ: 'did:dfos:credential' })}.${b64url(payload)}.sig`;
+
+describe('summarizeAuthorization', () => {
+  it('decodes a well-formed embedded credential into a compact summary', () => {
+    const token = authToken({
+      version: 1,
+      type: 'DFOSCredential',
+      iss: 'did:dfos:creator',
+      aud: 'did:dfos:delegate',
+      att: [{ resource: `chain:${CHAIN}`, action: 'write' }],
+      prf: [],
+      iat: 1_700_000_000,
+      exp: 1_800_000_000,
+    });
+    expect(summarizeAuthorization(token)).toEqual({
+      iss: 'did:dfos:creator',
+      aud: 'did:dfos:delegate',
+      att: [{ resource: `chain:${CHAIN}`, action: 'write' }],
+      iat: 1_700_000_000,
+      exp: 1_800_000_000,
+    });
+  });
+
+  it('returns null for a token that is not a valid DFOS credential', () => {
+    // missing required att / iss — fails the payload schema
+    expect(summarizeAuthorization(authToken({ version: 1, type: 'DFOSCredential' }))).toBeNull();
+    expect(summarizeAuthorization('not-a-jws')).toBeNull();
+  });
+});
+
+describe('deriveCredentialCid', () => {
+  const valid = authToken({
+    version: 1,
+    type: 'DFOSCredential',
+    iss: 'did:dfos:creator',
+    aud: '*',
+    att: [{ resource: `chain:${CHAIN}`, action: 'read' }],
+    prf: [],
+    iat: 1_700_000_000,
+    exp: 1_800_000_000,
+  });
+
+  it('re-derives a CID from a well-formed credential payload', async () => {
+    const cid = await deriveCredentialCid(valid);
+    expect(cid).toMatch(/^baf[a-z2-7]+$/); // a dag-cbor CIDv1
+  });
+
+  it('is deterministic — same payload, same CID', async () => {
+    expect(await deriveCredentialCid(valid)).toBe(await deriveCredentialCid(valid));
+  });
+
+  it('returns null when the token cannot be decoded (drives the visible error)', async () => {
+    expect(await deriveCredentialCid('not-a-jws')).toBeNull();
+    expect(await deriveCredentialCid(authToken({ version: 1, type: 'DFOSCredential' }))).toBeNull();
   });
 });

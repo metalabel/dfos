@@ -83,7 +83,20 @@ interface OneResult {
   /** set only when the resolved public doc is a profile/v1 (→ write attribution). */
   profileName?: string;
   avatarRef?: string;
+  /** post/v1 title projected onto the content rollup (label parity w/ the relay index). */
+  title?: string;
+  /** plain-text body/description excerpt for an untitled public doc — the local snippet. */
+  snippet?: string;
 }
+
+/** Collapse whitespace and cap length — a plain-text strip (no markdown render)
+ *  matching doc-label's snippet, bounded generously so the display truncation
+ *  (shorter) always has material to work with. */
+const textSnippet = (value: unknown, max = 160): string => {
+  if (typeof value !== 'string') return '';
+  const flat = value.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? flat.slice(0, max) : flat;
+};
 
 /** decoded op payload paired with its row — decode each JWS once per chain. */
 interface DecodedOp {
@@ -176,6 +189,16 @@ const resolveOne = async (
       out.profileName = name;
       const avatarRef = parseMediaObject(parsed.avatar)?.uri;
       if (avatarRef) out.avatarRef = avatarRef;
+    }
+  } else {
+    // post/v1 (and any other titled/bodied doc): project a title, or an untitled
+    // snippet, so LOCAL browse renders the same label the relay index projects.
+    // (profile names ride the identity attribution above, surfaced via names-join.)
+    const title = typeof rec['title'] === 'string' ? rec['title'].trim() : '';
+    if (title) out.title = title;
+    else {
+      const snip = textSnippet(rec['body']);
+      if (snip) out.snippet = snip;
     }
   }
   return out;
@@ -297,6 +320,10 @@ export const resolvePublicProjections = async (
         };
         if (b.result.docSchema) m.docSchema = b.result.docSchema;
         else delete m.docSchema;
+        if (b.result.title) m.title = b.result.title;
+        else delete m.title;
+        if (b.result.snippet) m.snippet = b.result.snippet;
+        else delete m.snippet;
         merged.push(m);
       });
       await db.putBatch([], merged);
