@@ -32,6 +32,13 @@ export const fmtUnixDate = (unix: number): string => {
 export const fmtCount = (n: number): string =>
   n >= 10000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
+/** Short, human label for a doc/artifact $schema URL (…/profile/v1 → profile/v1). */
+export const schemaLabel = (schema: string | null | undefined): string => {
+  if (!schema) return 'untyped';
+  const m = /schemas\.dfos\.com\/(.+)$/.exec(schema);
+  return m?.[1] ?? schema;
+};
+
 /** ISO timestamp → coarse age like "3y" / "2mo" / "5d" / "4h" / "just now". */
 export const fmtAge = (iso: string | null | undefined): string => {
   if (!iso) return '';

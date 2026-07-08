@@ -25,7 +25,7 @@
 
 */
 
-import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
+import type { IndexContentRow, IndexIdentityRow, IndexOrder } from '@metalabel/dfos-client';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { getClient } from './client';
 
@@ -204,36 +204,62 @@ const useIndexPager = <T>(
   return { rows, loading, hasMore, loadMore, error, retry };
 };
 
-/** Page the identity index (optionally public-profile-only) with load-more. */
+/** Options common to the index list hooks — a server-side `nameContains` substring
+ *  (identities only) and a time `order`. Both bump the pager's resetKey, so changing
+ *  either re-pages from the relay and the loaded rows always reflect the live query. */
+export interface IndexListOpts {
+  nameContains?: string;
+  order?: IndexOrder;
+}
+
+/** Page the identity index (optionally public-profile-only) with load-more. A
+ *  `nameContains` substring is applied SERVER-SIDE (the relay filters over the
+ *  projected profile name before paginating — amber/non-authoritative), and an
+ *  `order` selects recently-arrived / recently-active enumeration. Both re-page
+ *  from the relay when changed. */
 export const useIndexIdentities = (
   enabled: boolean,
   publicOnly: boolean,
+  opts?: IndexListOpts,
 ): IndexLoad<IndexIdentityRow> =>
-  useIndexPager(enabled, `identities:${publicOnly}`, (after) =>
-    getClient()
-      .indexIdentities({
-        ...(publicOnly ? { hasPublicProfile: true } : {}),
-        ...(after ? { after } : {}),
-        limit: PAGE,
-      })
-      .then((p) => ({ items: p.identities, next: p.next })),
+  useIndexPager(
+    enabled,
+    `identities:${publicOnly}:${opts?.nameContains ?? ''}:${opts?.order ?? ''}`,
+    (after) =>
+      getClient()
+        .indexIdentities({
+          ...(publicOnly ? { hasPublicProfile: true } : {}),
+          ...(opts?.nameContains ? { nameContains: opts.nameContains } : {}),
+          ...(opts?.order ? { order: opts.order } : {}),
+          ...(after ? { after } : {}),
+          limit: PAGE,
+        })
+        .then((p) => ({ items: p.identities, next: p.next })),
   );
 
 /** Page the content index (optionally public-read-only), optionally narrowed to a
- *  single `$schema` server-side. Changing `docSchema` re-pages from the relay (it
- *  bumps the resetKey), so the facet always reflects the live filtered corpus. */
+ *  single `$schema` and/or a `creator` / `signer` DID server-side, in the lexical
+ *  default or a time `order`. Every filter bumps the resetKey, so changing one
+ *  re-pages from the relay and the loaded rows always reflect the live query. In
+ *  ordered mode the relay's `next` is an opaque token, passed back verbatim. */
 export const useIndexContent = (
   enabled: boolean,
   publicOnly: boolean,
-  docSchema?: string,
+  opts?: { docSchema?: string; creator?: string; signer?: string; order?: IndexOrder },
 ): IndexLoad<IndexContentRow> =>
-  useIndexPager(enabled, `content:${publicOnly}:${docSchema ?? ''}`, (after) =>
-    getClient()
-      .indexContent({
-        ...(publicOnly ? { publicRead: true } : {}),
-        ...(docSchema ? { docSchema } : {}),
-        ...(after ? { after } : {}),
-        limit: PAGE,
-      })
-      .then((p) => ({ items: p.content, next: p.next })),
+  useIndexPager(
+    enabled,
+    `content:${publicOnly}:${opts?.docSchema ?? ''}:${opts?.creator ?? ''}:${opts?.signer ?? ''}:${opts?.order ?? ''}`,
+    (after) =>
+      getClient()
+        .indexContent({
+          ...(publicOnly ? { publicRead: true } : {}),
+          ...(opts?.docSchema ? { docSchema: opts.docSchema } : {}),
+          ...(opts?.creator ? { creator: opts.creator } : {}),
+          ...(opts?.signer ? { signer: opts.signer } : {}),
+          ...(opts?.order ? { order: opts.order } : {}),
+          ...(after ? { after } : {}),
+          limit: PAGE,
+        })
+        .then((p) => ({ items: p.content, next: p.next })),
   );
