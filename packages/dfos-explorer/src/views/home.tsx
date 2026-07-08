@@ -683,7 +683,11 @@ export const Home = (props: { onSample: (q: string) => void }) => {
   useEffect(() => {
     let dead = false;
     void (async () => {
-      const db = await getDb();
+      // a local-index open failure (e.g. another tab blocking an upgrade) leaves
+      // obs null — the panels already render their empty state (0 chains, no
+      // spinner), so home degrades honestly instead of an unhandled rejection.
+      const db = await getDb().catch(() => null);
+      if (dead || !db) return;
       const [counts, oldestOpAt, docs, recentRes, idRes, storageBytes] = await Promise.all([
         db.counts(),
         db.oldestOpAt(),

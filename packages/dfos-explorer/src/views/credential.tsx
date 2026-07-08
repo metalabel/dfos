@@ -66,8 +66,11 @@ export const Credential = (props: { cid: string }) => {
     const client = getClient();
 
     void (async () => {
-      const db = await getDb();
-      const local = await db.getOp(props.cid);
+      // local index first, relay fallback — a local-index open failure (another
+      // tab blocking an upgrade) degrades to a relay-only lookup, never a hang.
+      const local = await getDb()
+        .then((db) => db.getOp(props.cid))
+        .catch(() => undefined);
       let token = local?.jwsToken ?? null;
       if (!token) token = (await fetchOpRaw(props.cid, relays))?.jwsToken ?? null;
       if (dead) return;

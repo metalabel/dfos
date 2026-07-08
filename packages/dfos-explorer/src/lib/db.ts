@@ -234,6 +234,15 @@ export interface ExplorerDb {
 // upgrade wipes+rebuilds and a re-sync repopulates the new projection fields.
 const DB_VERSION = 6;
 
+// openExplorerDb guards so the open ALWAYS settles (see the open Promise). A
+// version bump can't upgrade while another same-origin tab still holds an
+// older-version connection: indexedDB.open fires `blocked` and never settles
+// on its own. BLOCKED_GRACE_MS is how long we wait after `blocked` for that tab
+// to close before rejecting; OPEN_TIMEOUT_MS is an overall safety net so getDb()
+// can never hang for the tab's lifetime for ANY reason.
+const BLOCKED_GRACE_MS = 3_000;
+const OPEN_TIMEOUT_MS = 15_000;
+
 // scan ceiling for filtered index-cursor queries — keeps worst case bounded.
 // When a query stops here before the cursor is exhausted, it reports
 // `truncated: true` rather than silently dropping the tail of the corpus.
@@ -270,12 +279,58 @@ export const estimateStorageBytes = async (): Promise<number | null> => {
 export const openExplorerDb = async (
   name = 'dfos-explorer',
   factory?: IDBFactory,
+  // Called when THIS connection closes to yield to another tab's version upgrade
+  // (onversionchange). The caller memoizing this handle uses it to drop the dead
+  // connection so a later open reopens rather than handing out a connection whose
+  // every transaction throws InvalidStateError.
+  onClosed?: () => void,
 ): Promise<ExplorerDb> => {
   const idb = factory ?? globalThis.indexedDB;
   if (!idb) throw new Error('openExplorerDb requires an IndexedDB environment');
 
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
     const open = idb.open(name, DB_VERSION);
+
+    // The open MUST always settle. `blocked` (another tab holding an older
+    // version across a version bump) and any other stall would otherwise leave
+    // this Promise — and every getDb() awaiter — pending for the tab's lifetime.
+    // A `settled` latch + two timers guarantee exactly one resolve/reject and
+    // clear the timers on the way out so nothing fires late.
+    let settled = false;
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let safetyTimer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (graceTimer !== undefined) clearTimeout(graceTimer);
+      if (safetyTimer !== undefined) clearTimeout(safetyTimer);
+      fn();
+    };
+
+    safetyTimer = setTimeout(
+      () => settle(() => reject(new Error('local index open timed out'))),
+      OPEN_TIMEOUT_MS,
+    );
+
+    open.onblocked = () => {
+      // another same-origin tab still holds an older-version connection. Give it
+      // a short grace to yield (its onversionchange closes it, or the user closes
+      // the tab) — a success/error within the grace cancels this via settle. If
+      // the grace elapses we reject loudly so callers degrade to a network fold
+      // instead of spinning forever on a hung open.
+      if (graceTimer !== undefined) return;
+      graceTimer = setTimeout(
+        () =>
+          settle(() =>
+            reject(
+              new Error(
+                'another tab is blocking a local index upgrade — close other DFOS tabs and reload',
+              ),
+            ),
+          ),
+        BLOCKED_GRACE_MS,
+      );
+    };
     open.onupgradeneeded = (event) => {
       const d = open.result;
       // schema changed since the spike (cursor shape, seq semantics) — the
@@ -304,8 +359,28 @@ export const openExplorerDb = async (
       d.createObjectStore('sync', { keyPath: 'relay' });
       d.createObjectStore('verify', { keyPath: 'key' });
     };
-    open.onsuccess = () => resolve(open.result);
-    open.onerror = () => reject(open.error ?? new Error('indexeddb open failed'));
+    open.onsuccess = () => {
+      const d = open.result;
+      // a late success — the grace/safety timeout already rejected this open —
+      // must NOT leak an open connection. Close it and bail (resolve is a no-op
+      // post-settle, but the handle would otherwise stay open for the tab's life).
+      if (settled) {
+        d.close();
+        return;
+      }
+      // yield to a FUTURE version bump from another tab so THIS connection is
+      // never the one that blocks it. We can't retrofit already-open older tabs
+      // (that's what bit this bump), but from here forward the newest tab always
+      // steps aside — the recurrence guard for the next DB_VERSION change. Closing
+      // invalidates the shared handle, so signal onClosed too (the memoizer drops
+      // it → the next open reopens instead of using a dead connection).
+      d.onversionchange = () => {
+        d.close();
+        onClosed?.();
+      };
+      settle(() => resolve(d));
+    };
+    open.onerror = () => settle(() => reject(open.error ?? new Error('indexeddb open failed')));
   });
 
   const putBatch = async (ops: ExplorerOp[], rollups: ChainRollup[]): Promise<void> => {

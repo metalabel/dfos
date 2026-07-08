@@ -56,7 +56,11 @@ export const LocalIndex = () => {
   useEffect(() => subscribeSettings(() => setAutoMin(getAutoSyncMinutes())), []);
 
   const refresh = async (): Promise<void> => {
-    const db = await getDb();
+    // a local-index open failure (another tab blocking an upgrade) leaves the
+    // counts at their zero floor rather than throwing an unhandled rejection —
+    // the panel reads "0 chains", an honest empty state, not a stuck spinner.
+    const db = await getDb().catch(() => null);
+    if (!db) return;
     setCounts(await db.counts());
     setStorageBytes(await estimateStorageBytes());
   };
@@ -87,7 +91,8 @@ export const LocalIndex = () => {
   };
 
   const doWipe = async (): Promise<void> => {
-    const db = await getDb();
+    const db = await getDb().catch(() => null);
+    if (!db) return;
     await db.wipe();
     setWiped('wiped');
     markDbChanged();
