@@ -489,7 +489,7 @@ const LedgerContentRow = (props: { row: IndexContentRow }) => {
   const opCount = rec.facts?.opCount ?? row.opCount;
   const doc = useDocSnippet(
     row.contentId,
-    rec.status !== 'attributed' && !row.title && !!row.docSchema,
+    rec.status !== 'attributed' && !row.title && !!row.docSchema && row.publicRead,
   );
   const label = deriveDocLabel({
     title: row.title,

@@ -296,7 +296,7 @@ const RecentContentRow = (props: { row: IndexContentRow }) => {
   const rec = useVerifyStatus('content', row.contentId);
   const doc = useDocSnippet(
     row.contentId,
-    rec.status !== 'attributed' && !row.title && !!row.docSchema,
+    rec.status !== 'attributed' && !row.title && !!row.docSchema && row.publicRead,
   );
   const label = deriveDocLabel({
     title: row.title,

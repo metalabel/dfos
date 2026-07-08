@@ -252,7 +252,7 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
   // status off 'attributed') — no snippet fetch for rows the eye never reaches.
   const doc = useDocSnippet(
     row.contentId,
-    rec.status !== 'attributed' && !row.title && !!row.docSchema,
+    rec.status !== 'attributed' && !row.title && !!row.docSchema && row.publicRead,
   );
   const label = deriveDocLabel({
     title: row.title,
