@@ -202,9 +202,11 @@ export const CredStatus = (props: { revokedByOp?: string | undefined }) =>
  */
 export const TruncId = (props: { value: string; head?: number; tail?: number }) => {
   const [copied, setCopied] = useState(false);
+  // `copyable` renders a hover copy glyph so a bare identifier reads as clickable;
+  // `copied` suppresses that glyph while the "copied ✓" confirmation shows.
   return (
     <span
-      class="cid"
+      class={copied ? 'cid copyable copied' : 'cid copyable'}
       title={`${props.value} — click to copy`}
       onClick={() => {
         copyToClipboard(props.value);

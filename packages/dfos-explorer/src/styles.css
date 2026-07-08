@@ -695,6 +695,26 @@ tr:hover td {
   color: var(--ink);
 }
 
+/* copy affordance — a bare identifier (TruncId/Copyable) is click-to-copy; a
+   faint glyph surfaces on hover so the affordance is discoverable, and is
+   suppressed while the "copied ✓" confirmation shows. */
+.copyable::after {
+  content: '⧉';
+  margin-left: 4px;
+  font-size: 0.85em;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.copyable:hover::after,
+.copyable:focus::after {
+  opacity: 0.5;
+}
+
+.copyable.copied::after {
+  content: none;
+}
+
 /* ---------------------------------------------------------------- bars + filters */
 
 .bar {
