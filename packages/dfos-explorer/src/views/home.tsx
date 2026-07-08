@@ -28,6 +28,7 @@ import {
   useIndexCapable,
   useIndexContent,
   useIndexIdentities,
+  useIndexIter2,
   type IndexLoad,
 } from '../lib/index-light';
 import { fetchRelayHint, type RelayHint } from '../lib/relay-hint';
@@ -631,13 +632,25 @@ export const Home = (props: { onSample: (q: string) => void }) => {
   const [obs, setObs] = useState<Observatory | null>(null);
   const [hint, setHint] = useState<RelayHint>({});
   const indexed = useIndexCapable();
+  // the recency panels (recent activity, recently arrived, derived active) are
+  // ENTIRELY about `order=` — meaningless on a relay that ignores it (it would
+  // serve LEXICAL rows under a recency label). Gate them on iteration-2 support:
+  // `orderedIndexed` is true only when the relay is index-capable AND honours
+  // order, null while either is still resolving (hold, don't flash), else false —
+  // and false routes each panel to its existing LOCAL-fallback rendering.
+  const iter2 = useIndexIter2();
+  const orderedIndexed: boolean | null =
+    indexed === null || iter2 === null ? null : indexed && iter2;
   // recent public documents by head time (recency) — feeds the recent-activity
   // panel AND the derived recently-active identities; recently-arrived identities
-  // by genesis time. Both index-only; local paths fall back to the synced corpus.
-  const recentContent = useIndexContent(indexed === true, true, { order: 'headAt.desc' });
+  // by genesis time. Both index-only AND order-only; local paths fall back to the
+  // synced corpus (which IS genuinely recency-ordered, by last local op).
+  const recentContent = useIndexContent(orderedIndexed === true, true, { order: 'headAt.desc' });
   // recently-arrived is a plain identity enumeration — NOT public-profile-only;
   // name-less arrivals still render (truncated DID), the honest "newest arrivals".
-  const arrivedIds = useIndexIdentities(indexed === true, false, { order: 'genesisAt.desc' });
+  const arrivedIds = useIndexIdentities(orderedIndexed === true, false, {
+    order: 'genesisAt.desc',
+  });
 
   useEffect(() => {
     let dead = false;
@@ -695,9 +708,13 @@ export const Home = (props: { onSample: (q: string) => void }) => {
       </div>
 
       <NetworkPanel obs={obs} hint={hint} />
-      <RecentPanel obs={obs} indexed={indexed} content={recentContent} />
-      <ArrivedIdentitiesPanel obs={obs} indexed={indexed} ids={arrivedIds} />
-      <ActiveIdentitiesPanel indexed={indexed} content={recentContent} arrived={arrivedIds.rows} />
+      <RecentPanel obs={obs} indexed={orderedIndexed} content={recentContent} />
+      <ArrivedIdentitiesPanel obs={obs} indexed={orderedIndexed} ids={arrivedIds} />
+      <ActiveIdentitiesPanel
+        indexed={orderedIndexed}
+        content={recentContent}
+        arrived={arrivedIds.rows}
+      />
       <SyncInstrument obs={obs} />
 
       <Panel title="what this is">
