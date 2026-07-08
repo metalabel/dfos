@@ -416,6 +416,9 @@ const ArrivedIdentitiesPanel = (props: {
   indexed: boolean | null;
   ids: IndexLoad<IndexIdentityRow>;
 }) => {
+  // hook stays above the indexed branch — `indexed` resolves null→true/false
+  // after mount, and a conditional hook would change the hook order mid-life
+  const sync = useSyncState();
   if (props.indexed === true) {
     const rows = props.ids.rows.slice(0, ARRIVED_N);
     const state = indexListState(props.ids.loading, props.ids.error, rows.length);
@@ -450,7 +453,6 @@ const ArrivedIdentitiesPanel = (props: {
   }
 
   // local fallback: the synced identity strip (attributed chips), as before.
-  const sync = useSyncState();
   const busy = sync.phase === 'resolving' || sync.phase === 'syncing';
   const ids = props.obs?.identities ?? [];
   const populated = (props.obs?.counts.chains ?? 0) > 0;
