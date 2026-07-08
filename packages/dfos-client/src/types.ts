@@ -194,6 +194,15 @@ export interface IndexCapabilities {
 }
 
 /**
+ * Time-ordered enumeration selector for the `/identities` and `/content` index
+ * routes: newest chains first (`genesisAt.desc`) or most recently active first
+ * (`headAt.desc`). Absent this param the route enumerates in its lexical default.
+ * In ordered mode `after`/`next` are OPAQUE cursor tokens — pass `next` back
+ * verbatim, never parse or construct one.
+ */
+export type IndexOrder = 'genesisAt.desc' | 'headAt.desc';
+
+/**
  * The `profile/v1 → name` well-known projection on an identity row. ATTRIBUTION
  * TIER by construction: the `anchor` is controller-signed (strong), but `name`
  * is whatever the anchored document says — verify by fetching + re-hashing the
@@ -237,6 +246,7 @@ export interface IndexContentRow {
   currentDocumentCID: string | null;
   publicRead: boolean;
   docSchema: string | null;
+  title: string | null;
 }
 
 /** A page of the content index. `next` is a `contentId` cursor (null on the last page). */
@@ -337,15 +347,23 @@ export interface Client {
    */
   capabilities(options?: CallOptions): Promise<IndexCapabilities>;
   indexIdentities(
-    params?: { hasPublicProfile?: boolean; nameContains?: string; after?: string; limit?: number },
+    params?: {
+      hasPublicProfile?: boolean;
+      nameContains?: string;
+      order?: IndexOrder;
+      after?: string;
+      limit?: number;
+    },
     options?: CallOptions,
   ): Promise<IndexIdentitiesPage>;
   indexContent(
     params?: {
       creator?: string;
+      signer?: string;
       docSchema?: string;
       documentCID?: string;
       publicRead?: boolean;
+      order?: IndexOrder;
       after?: string;
       limit?: number;
     },
