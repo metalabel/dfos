@@ -14,7 +14,7 @@
 
 */
 
-import type { IndexIdentityRow } from '@metalabel/dfos-client';
+import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
 import { useEffect, useState } from 'preact/hooks';
 import { useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { Panel, Term } from '../components/ui';
@@ -23,7 +23,13 @@ import { estimateStorageBytes, OP_KINDS } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtAge, fmtBytes, fmtCount, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { indexListState, useIndexCapable, useIndexIdentities } from '../lib/index-light';
+import {
+  indexListState,
+  useIndexCapable,
+  useIndexContent,
+  useIndexIdentities,
+  type IndexLoad,
+} from '../lib/index-light';
 import { fetchRelayHint, type RelayHint } from '../lib/relay-hint';
 import { startSync, stopSync, useSyncState } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
@@ -268,36 +274,35 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
 };
 
 // -----------------------------------------------------------------------------
-// RECENT ACTIVITY / INDEX HEAD
-//   local (non-indexed) path: latest chains by last op — genuinely recency-ordered.
-//   index-capable path: the HEAD of the relay index — the /index/v0 identities
-//   endpoint pages by DID ascending (lexicographic), NOT recency, so this panel
-//   is titled "head of relay index", never "recent", and each row verifies live.
+// RECENT ACTIVITY — public content chains by most-recent head time
+//   index-capable path: content `order=headAt.desc` — genuinely recency-ordered
+//   (the relay serves the sort), each row an attributed hint that greens as it
+//   scrolls into view and its chain folds. This is the network's pulse AND the
+//   recent-public-documents feed: the title projection surfaces on each row.
+//   local (non-indexed) path: latest local chains by last op, as before.
 // -----------------------------------------------------------------------------
 
-// how many head-of-index rows home shows and verifies live
-const HEAD_N = 100;
+// how many recent rows home shows and verifies live
+const RECENT_N = 60;
 
-/** One head-of-index identity row on home: attributed name + a live verify badge
- *  that flips to verified as the row enters view and its chain folds in the tab.
- *  opCount reconciles to the fold (the fold wins over the relay hint). */
-const IndexHeadRow = (props: { row: IndexIdentityRow }) => {
+/** One recent-content row: the projected title (attributed) + when, with a live
+ *  verify badge that flips to verified as the row enters view and its chain folds
+ *  in the tab. opCount/deletion reconcile to the fold (the fold wins). */
+const RecentContentRow = (props: { row: IndexContentRow }) => {
   const { row } = props;
-  const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did, row.opCount);
-  const rec = useVerifyStatus('identity', row.did);
-  const name = row.profile?.name ?? '';
-  const opCount = rec.facts?.opCount ?? row.opCount;
+  const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
+  const rec = useVerifyStatus('content', row.contentId);
   return (
-    <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>
+    <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        <span class="kind identity-op">identity</span>
+        <span class="kind content-op">content</span>
       </td>
       <td>
-        {name ? <b>{name}</b> : short(row.did, 14, 5)}{' '}
-        <VerifyBadge kind="identity" chainId={row.did} />
+        {row.title ? <b>{row.title}</b> : short(row.contentId, 14, 5)}{' '}
+        <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
-      <td class="n">{fmtCount(opCount)} ops</td>
+      <td class="n">{fmtAge(row.headAt)}</td>
     </tr>
   );
 };
@@ -305,30 +310,30 @@ const IndexHeadRow = (props: { row: IndexIdentityRow }) => {
 const RecentPanel = (props: {
   obs: Observatory | null;
   indexed: boolean | null;
-  indexRows: IndexIdentityRow[];
-  indexLoading: boolean;
-  indexError: boolean;
+  content: IndexLoad<IndexContentRow>;
 }) => {
-  // index-capable → show the HEAD of the live relay index (DID-ordered, NOT
-  // recency), every row verifying in real time (attributed → verified) right on
-  // the landing page. Otherwise fall back to the local recent-activity view.
+  // index-capable → the live recent-public-documents feed, content ordered by
+  // author-claimed head time (recency), every row verifying in real time. Where
+  // no relay advertises the index, fall back to the local recent-activity view.
   if (props.indexed === true) {
-    const head = props.indexRows.slice(0, HEAD_N);
-    const state = indexListState(props.indexLoading, props.indexError, head.length);
+    const rows = props.content.rows.slice(0, RECENT_N);
+    const state = indexListState(props.content.loading, props.content.error, rows.length);
     return (
       <Panel
-        title="identities · head of relay index"
+        title="recent activity"
         accent="warn"
         right={
-          <span class="lbl">head {fmtCount(head.length)} · from relay index · verifying live</span>
+          <span class="lbl">
+            public documents · newest active · from relay index · verifying live
+          </span>
         }
       >
         {state === 'rows' ? (
           <div class="index-rows">
             <table>
               <tbody>
-                {head.map((row) => (
-                  <IndexHeadRow key={row.did} row={row} />
+                {rows.map((row) => (
+                  <RecentContentRow key={row.contentId} row={row} />
                 ))}
               </tbody>
             </table>
@@ -336,9 +341,9 @@ const RecentPanel = (props: {
         ) : state === 'error' ? (
           <span class="muted">couldn’t reach the relay index.</span>
         ) : state === 'loading' ? (
-          <span class="muted">loading the head of the relay index…</span>
+          <span class="muted">loading recent public documents…</span>
         ) : (
-          <span class="muted">no public identities in the relay index</span>
+          <span class="muted">no public documents in the relay index</span>
         )}
       </Panel>
     );
@@ -377,53 +382,91 @@ const RecentPanel = (props: {
 };
 
 // -----------------------------------------------------------------------------
-// PUBLIC IDENTITIES — attributed profile chips
+// RECENTLY ARRIVED IDENTITIES — identities `order=genesisAt.desc`, the newest
+// chains first (the relay serves the sort). Each row an attributed name that
+// greens as its chain folds. Local fallback: the synced identity strip.
 // -----------------------------------------------------------------------------
 
-const IdentitiesPanel = (props: {
+const ARRIVED_N = 60;
+
+/** One recently-arrived identity row: attributed name + when it arrived
+ *  (genesisAt), with a live verify badge that greens as its chain folds. */
+const ArrivedIdentityRow = (props: { row: IndexIdentityRow }) => {
+  const { row } = props;
+  const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did, row.opCount);
+  const rec = useVerifyStatus('identity', row.did);
+  const name = row.profile?.name ?? '';
+  return (
+    <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>
+      <td>
+        <span class="kind identity-op">identity</span>
+      </td>
+      <td>
+        {name ? <b>{name}</b> : short(row.did, 14, 5)}{' '}
+        <VerifyBadge kind="identity" chainId={row.did} />
+        {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
+      </td>
+      <td class="n">{fmtAge(row.genesisAt)}</td>
+    </tr>
+  );
+};
+
+const ArrivedIdentitiesPanel = (props: {
   obs: Observatory | null;
   indexed: boolean | null;
-  indexRows: IndexIdentityRow[];
-  indexLoading: boolean;
-  indexError: boolean;
+  ids: IndexLoad<IndexIdentityRow>;
 }) => {
+  if (props.indexed === true) {
+    const rows = props.ids.rows.slice(0, ARRIVED_N);
+    const state = indexListState(props.ids.loading, props.ids.error, rows.length);
+    return (
+      <Panel
+        title="recently arrived identities"
+        accent="warn"
+        right={<span class="lbl">newest first · from relay index · verifying live</span>}
+      >
+        {state === 'rows' ? (
+          <div class="index-rows">
+            <table>
+              <tbody>
+                {rows.map((row) => (
+                  <ArrivedIdentityRow key={row.did} row={row} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : state === 'error' ? (
+          <span class="muted">couldn’t reach the relay index.</span>
+        ) : state === 'loading' ? (
+          <span class="muted">loading recently-arrived identities…</span>
+        ) : (
+          <span class="muted">no public identities in the relay index</span>
+        )}
+        <div class="lbl" style={{ marginTop: 9 }}>
+          <a href="#/identities">browse all identities →</a>
+        </div>
+      </Panel>
+    );
+  }
+
+  // local fallback: the synced identity strip (attributed chips), as before.
   const sync = useSyncState();
   const busy = sync.phase === 'resolving' || sync.phase === 'syncing';
-  const localIds = props.obs?.identities ?? [];
+  const ids = props.obs?.identities ?? [];
   const populated = (props.obs?.counts.chains ?? 0) > 0;
-  // index-capable relay → surface attributed identities straight from the live
-  // relay index (a hint, framed as such), so home is alive before/without any
-  // sync. Where no relay advertises the index, fall back to the local synced set.
-  const indexed = props.indexed === true;
-  const indexIds = props.indexRows
-    .filter((r) => typeof r.profile?.name === 'string' && r.profile.name.length > 0)
-    .slice(0, 12)
-    .map((r) => ({ chainId: r.did, name: r.profile?.name ?? '' }));
-  const ids = indexed ? indexIds : localIds;
-  // distinguish index error / still-loading / settled-empty so an unreachable or
-  // loading index never shows a false "nobody is public"
-  const idxState = indexListState(props.indexLoading, props.indexError, indexIds.length);
   return (
     <Panel
       title="public identities"
       accent={ids.length > 0 ? 'warn' : undefined}
-      right={<span class="lbl">attributed · from {indexed ? 'relay index' : 'local index'}</span>}
+      right={<span class="lbl">attributed · from local index</span>}
     >
       {ids.length === 0 ? (
         <span class="muted">
-          {/* only claim "none" once resolution has settled — while Phase 2 runs
-              an empty strip means "not resolved yet", not "nobody is public" */}
-          {indexed
-            ? idxState === 'error'
-              ? 'couldn’t reach the relay index.'
-              : idxState === 'loading'
-                ? 'loading identities from the relay index…'
-                : 'no public identities in the relay index'
-            : !populated
-              ? 'sync the log to surface identities'
-              : busy
-                ? 'resolving projections…'
-                : 'no attributed public profiles yet'}
+          {!populated
+            ? 'sync the log to surface identities'
+            : busy
+              ? 'resolving projections…'
+              : 'no attributed public profiles yet'}
         </span>
       ) : (
         <>
@@ -439,6 +482,66 @@ const IdentitiesPanel = (props: {
             <a href="#/identities">browse all identities →</a>
           </div>
         </>
+      )}
+    </Panel>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// RECENTLY ACTIVE IDENTITIES — DERIVED, not curated: the distinct creator DIDs
+// of the recent-content feed, in first-seen (most-recent-activity) order. No
+// random sampling — who actually moved the chain most recently. Names come from
+// the recently-arrived identity rows when known, else the DID stands in.
+// Index-only (it derives from the index content feed); silent otherwise.
+// -----------------------------------------------------------------------------
+
+const ACTIVE_N = 12;
+
+const ActiveIdentitiesPanel = (props: {
+  indexed: boolean | null;
+  content: IndexLoad<IndexContentRow>;
+  arrived: IndexIdentityRow[];
+}) => {
+  if (props.indexed !== true) return null;
+  // did → attributed name, from whatever recently-arrived rows we've loaded
+  const nameByDid = new Map<string, string>();
+  for (const r of props.arrived) {
+    const n = r.profile?.name;
+    if (typeof n === 'string' && n.length > 0) nameByDid.set(r.did, n);
+  }
+  // distinct creators in recent-activity order (first appearance wins)
+  const seen = new Set<string>();
+  const actors: { did: string; name: string }[] = [];
+  for (const row of props.content.rows) {
+    if (seen.has(row.creatorDID)) continue;
+    seen.add(row.creatorDID);
+    actors.push({ did: row.creatorDID, name: nameByDid.get(row.creatorDID) ?? '' });
+    if (actors.length >= ACTIVE_N) break;
+  }
+  const state = indexListState(props.content.loading, props.content.error, actors.length);
+  return (
+    <Panel
+      title="recently active identities"
+      accent={actors.length > 0 ? 'warn' : undefined}
+      right={<span class="lbl">derived from recent activity · attributed</span>}
+    >
+      {state === 'rows' ? (
+        <div class="idstrip">
+          {actors.map((a) => (
+            <a key={a.did} class="idchip" href={`#/did/${a.did}`} title={a.name || a.did}>
+              <span class="av">
+                {(a.name || a.did.replace('did:dfos:', '') || '·').slice(0, 1).toUpperCase()}
+              </span>
+              <span class="nm">{a.name || short(a.did, 12, 4)}</span>
+            </a>
+          ))}
+        </div>
+      ) : state === 'error' ? (
+        <span class="muted">couldn’t reach the relay index.</span>
+      ) : state === 'loading' ? (
+        <span class="muted">deriving active identities from recent activity…</span>
+      ) : (
+        <span class="muted">no recent public activity to derive from</span>
       )}
     </Panel>
   );
@@ -521,9 +624,12 @@ export const Home = (props: { onSample: (q: string) => void }) => {
   const sync = useSyncState();
   const [obs, setObs] = useState<Observatory | null>(null);
   const [hint, setHint] = useState<RelayHint>({});
-  // one live index-identities fetch, shared by the head panel and the id strip
   const indexed = useIndexCapable();
-  const idIndex = useIndexIdentities(indexed === true, true);
+  // recent public documents by head time (recency) — feeds the recent-activity
+  // panel AND the derived recently-active identities; recently-arrived identities
+  // by genesis time. Both index-only; local paths fall back to the synced corpus.
+  const recentContent = useIndexContent(indexed === true, true, { order: 'headAt.desc' });
+  const arrivedIds = useIndexIdentities(indexed === true, true, { order: 'genesisAt.desc' });
 
   useEffect(() => {
     let dead = false;
@@ -581,20 +687,9 @@ export const Home = (props: { onSample: (q: string) => void }) => {
       </div>
 
       <NetworkPanel obs={obs} hint={hint} />
-      <RecentPanel
-        obs={obs}
-        indexed={indexed}
-        indexRows={idIndex.rows}
-        indexLoading={idIndex.loading}
-        indexError={idIndex.error}
-      />
-      <IdentitiesPanel
-        obs={obs}
-        indexed={indexed}
-        indexRows={idIndex.rows}
-        indexLoading={idIndex.loading}
-        indexError={idIndex.error}
-      />
+      <RecentPanel obs={obs} indexed={indexed} content={recentContent} />
+      <ArrivedIdentitiesPanel obs={obs} indexed={indexed} ids={arrivedIds} />
+      <ActiveIdentitiesPanel indexed={indexed} content={recentContent} arrived={arrivedIds.rows} />
       <SyncInstrument obs={obs} />
 
       <Panel title="what this is">
