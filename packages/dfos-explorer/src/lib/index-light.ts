@@ -77,7 +77,12 @@ export const useIndexCapable = (): boolean | null => {
 // -----------------------------------------------------------------------------
 
 const PROBE_ORDER = '__dfos_iter2_probe__';
-const PROBE_TIMEOUT_MS = 8000;
+// Must EXCEED the dfos-client per-request timeout (10s default): the probe may
+// never mark a relay indeterminate that the query failover would still wait
+// for, or the gate and the queries can disagree on which relay answers — and a
+// slow pre-iteration-2 first relay would serve ordered/signer requests the
+// probe cleared against a faster later relay.
+const PROBE_TIMEOUT_MS = 12_000;
 
 /** Interpret one relay's probe response STATUS: 400 → it validates `order=` (an
  *  iteration-2 relay), 2xx → it ignores the param (pre-iteration-2), anything
