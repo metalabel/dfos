@@ -21,14 +21,14 @@
 
 */
 
-import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
+import type { IndexContentRow, IndexIdentityRow, IndexOrder } from '@metalabel/dfos-client';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { IndexLightNote, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
-import { Badge, Panel, Pill, Term } from '../components/ui';
+import { Badge, DidLink, Panel, Pill, Term } from '../components/ui';
 import type { ChainRollup, DocumentsBrowse, ExplorerOp, IdentitiesBrowse } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { fmtCount, short } from '../lib/format';
+import { fmtAge, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
   indexBrowseMode,
@@ -42,17 +42,21 @@ import { useVerifyStatus } from '../lib/verify-queue';
 
 const BROWSE_LIMIT = 300;
 
+/** Debounce a rapidly-changing value (e.g. a search box) so it only settles after
+ *  `ms` of quiet — used to fold keystrokes into one server-side index query. */
+const useDebounced = <T,>(value: T, ms: number): T => {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return settled;
+};
+
 // stable references so useAvailable's effect runs once, not every render
 const ID_KEYS = ['identity', 'identity-op'];
 const DOC_KEYS = ['content', 'content-op'];
 const ART_KEYS = ['artifact'];
-
-/** Short, human label for a doc/artifact $schema URL (…/profile/v1 → profile/v1). */
-const schemaLabel = (schema: string | undefined): string => {
-  if (!schema) return 'untyped';
-  const m = /schemas\.dfos\.com\/(.+)$/.exec(schema);
-  return m?.[1] ?? schema;
-};
 
 /**
  * Relay-advertised count for a browse kind (max across relays), or undefined when
@@ -179,23 +183,23 @@ const IndexIdentitiesLight = (props: {
   query: string;
 }) => {
   const { rows, loading } = props;
-  const needle = props.query.trim().toLowerCase();
-  const filtered = needle
-    ? rows.filter((r) => (r.profile?.name ?? '').toLowerCase().includes(needle))
-    : rows;
-  // render ALL loaded (filtered) index rows — load-more appends past any fixed
-  // cap, and PAGE + user-driven load-more already bound growth (FIX: a slice here
-  // would hide everything load-more pulled)
-  const shown = filtered;
+  const needle = props.query.trim();
+  // rows are ALREADY filtered SERVER-SIDE (the relay's `nameContains` runs before
+  // pagination) — render them straight, no client-side needle pass. Load-more
+  // appends the next page of matches; PAGE + user-driven load-more bound growth.
   return (
     <>
       <IndexLightNote />
       {loading && rows.length === 0 ? (
-        <span class="muted">loading identities from the relay index…</span>
-      ) : shown.length === 0 ? (
         <span class="muted">
           {needle
-            ? `no loaded identities match “${props.query}”.`
+            ? `searching the relay index for “${needle}”…`
+            : 'loading identities from the relay index…'}
+        </span>
+      ) : rows.length === 0 ? (
+        <span class="muted">
+          {needle
+            ? `no public identities in the relay index match “${needle}”.`
             : 'the relay index returned no public identities.'}
         </span>
       ) : (
@@ -208,7 +212,7 @@ const IndexIdentitiesLight = (props: {
             </tr>
           </thead>
           <tbody>
-            {shown.map((row) => (
+            {rows.map((row) => (
               <IndexIdentityRowView key={row.did} row={row} />
             ))}
           </tbody>
@@ -216,8 +220,9 @@ const IndexIdentitiesLight = (props: {
       )}
       {needle ? (
         <div class="ck-note" style={{ marginTop: 8 }}>
-          searching {fmtCount(rows.length)} loaded index rows — the relay has no name search; load
-          more (or deep-sync the full log) to search a wider set.
+          <b>{fmtCount(rows.length)}</b> match(es) — a relay-asserted case-insensitive substring
+          over projected profile names (<b>amber</b>, verified as each row folds). Completeness is
+          never proven; a deep-sync of the full log audits for names the relay withheld.
         </div>
       ) : null}
       <LoadMore
@@ -230,7 +235,10 @@ const IndexIdentitiesLight = (props: {
   );
 };
 
-/** One content index row: type ($schema, held-bytes only) + a live verify badge. */
+/** One content index row: the projected title (attributed) + type ($schema,
+ *  held-bytes only) + creator + when, with a live verify badge. The title, like an
+ *  identity's name, is a relay projection over held head bytes — shown amber; the
+ *  badge greens as the tab folds the chain (which re-checks its structural facts). */
 const IndexContentRowView = (props: { row: IndexContentRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
@@ -240,7 +248,8 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        <span class="muted">—</span> <VerifyBadge kind="content" chainId={row.contentId} />
+        {row.title ? <b>{row.title}</b> : <span class="muted">—</span>}{' '}
+        <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
       <td>
@@ -251,6 +260,10 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
         )}
         {gated ? <span class="err"> gated</span> : null}
       </td>
+      <td onClick={(e) => e.stopPropagation()}>
+        <DidLink did={row.creatorDID} />
+      </td>
+      <td class="n">{fmtAge(row.headAt)}</td>
       <td class="cid">{short(row.contentId, 16, 6)}</td>
       <td class="n">{opCount}</td>
     </tr>
@@ -279,6 +292,8 @@ const IndexDocumentsLight = (props: {
             <tr>
               <th>name / title</th>
               <th>type</th>
+              <th>creator</th>
+              <th>updated</th>
               <th>content chain</th>
               <th>ops</th>
             </tr>
@@ -311,7 +326,11 @@ export const BrowseIdentities = () => {
   const [includeGated, setIncludeGated] = useState(false);
   const [result, setResult] = useState<IdentitiesBrowse | null>(null);
   const available = useAvailable(ID_KEYS);
-  const index = useIndexIdentities(indexed === true, true);
+  // debounce the search box into the relay's server-side `nameContains` filter so
+  // a keystroke doesn't re-page the index on every character; the relay filters
+  // over the projected profile name (amber) before paginating.
+  const nameContains = useDebounced(query.trim(), 250);
+  const index = useIndexIdentities(indexed === true, true, { nameContains });
 
   useEffect(() => {
     let dead = false;
@@ -348,7 +367,7 @@ export const BrowseIdentities = () => {
             Identities with a publicly-readable profile, straight off the relay's{' '}
             <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — every row is an{' '}
             <b>attributed</b> relay hint, promoted to <b>verified</b> as your tab folds its chain.
-            Search filters the loaded rows only.
+            Search runs server-side over projected names (a relay-asserted substring, amber).
           </>
         ) : (
           <>
@@ -446,9 +465,17 @@ export const BrowseDocuments = () => {
   const indexed = useIndexCapable();
   const [includeGated, setIncludeGated] = useState(false);
   const [schema, setSchema] = useState<string | null>(null);
+  // enumeration order for the index path: null = the relay's lexical default
+  // (contentId ascending — the pre-order behavior), or a recency ordering the
+  // relay serves via `order=`. Picking post/v1 + "recently active" composes the
+  // application-level "recent public posts" feed entirely client-side.
+  const [order, setOrder] = useState<IndexOrder | null>(null);
   const [result, setResult] = useState<DocumentsBrowse | null>(null);
   const available = useAvailable(DOC_KEYS);
-  const index = useIndexContent(indexed === true, true, schema ?? undefined);
+  const index = useIndexContent(indexed === true, true, {
+    ...(schema ? { docSchema: schema } : {}),
+    ...(order ? { order } : {}),
+  });
 
   // monotonic set of $schemas seen across loaded rows — so the facet bar stays
   // stable even after a filter narrows the live rows down to one schema
@@ -538,6 +565,39 @@ export const BrowseDocuments = () => {
           <button class={includeGated ? 'on' : ''} onClick={() => setIncludeGated((v) => !v)}>
             {includeGated ? 'hide' : 'show'} {fmtCount(result.gatedCount)} gated / private
           </button>
+        </div>
+      ) : null}
+
+      {/* enumeration order — the relay serves lexical (contentId) by default, or a
+          recency ordering via `order=`. "recently active" (headAt.desc) over the
+          post/v1 facet is the client-composed "recent public posts" feed. */}
+      {mode === 'index' ? (
+        <div class="filters" style={{ marginBottom: 8 }}>
+          <span class="lbl" style={{ marginRight: 2 }}>
+            order
+          </span>
+          <button class={order === null ? 'on' : ''} onClick={() => setOrder(null)}>
+            lexical
+          </button>
+          <button
+            class={order === 'genesisAt.desc' ? 'on' : ''}
+            onClick={() => setOrder('genesisAt.desc')}
+          >
+            newest
+          </button>
+          <button
+            class={order === 'headAt.desc' ? 'on' : ''}
+            onClick={() => setOrder('headAt.desc')}
+          >
+            recently active
+          </button>
+        </div>
+      ) : null}
+      {mode === 'index' && order === 'headAt.desc' ? (
+        <div class="ck-note" style={{ marginBottom: 8 }}>
+          <code>headAt.desc</code> sorts by author-claimed head time — a recency feed. It is
+          eventually-fresh: a chain updated mid-scroll moves to the top of a fresher enumeration, so
+          refresh from the top; completeness stays the job of the lexical order or a deep-sync.
         </div>
       ) : null}
 
