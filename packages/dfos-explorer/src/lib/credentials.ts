@@ -16,7 +16,7 @@
 
 import type { IndexCredentialRow } from '@metalabel/dfos-client';
 import { decodeDFOSCredentialUnsafe } from '@metalabel/dfos-protocol/credentials';
-import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { ExplorerOp } from './db';
 
 export interface GrantSummary {
@@ -95,6 +95,21 @@ export const summarizeAuthorization = (token: string): AuthorizationSummary | nu
     iat: p.iat,
     exp: p.exp,
   };
+};
+
+/** Re-derive a credential's CID from its own payload bytes (dag-cbor → CID), the
+ *  same self-addressing credential.tsx uses so the op view can link to the
+ *  credential page by its content hash — not a relay-supplied header value.
+ *  Returns null when the token can't be decoded or encoded (the caller renders a
+ *  visible failure rather than sticking on "deriving…"). */
+export const deriveCredentialCid = async (token: string): Promise<string | null> => {
+  const decoded = decodeDFOSCredentialUnsafe(token);
+  if (!decoded) return null;
+  try {
+    return (await dagCborCanonicalEncode(decoded.payload)).cid.toString();
+  } catch {
+    return null;
+  }
 };
 
 /**

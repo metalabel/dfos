@@ -27,6 +27,23 @@ const CID_RE = /^[a-z2-7]{46,}$/i;
 const AUTO_OPEN_DEPTH = 2;
 const INDENT_PX = 14;
 
+/** Max entries a single object/array node paints at once. content.tsx feeds
+ *  this UNTRUSTED relay document bytes up to 16MB (MAX_BODY_BYTES in relay-raw),
+ *  so a hostile flat array of millions of elements would otherwise create
+ *  millions of DOM nodes synchronously and lock the tab. Past the cap a row
+ *  reveals the next batch on demand; the raw-json toggle is the uncapped escape
+ *  hatch (a single <pre> text node — no per-element DOM to explode). */
+export const ENTRY_CAP = 100;
+
+/** Split a node's entries into the visible slice + the hidden remainder count. */
+export const capEntries = <T,>(
+  entries: T[],
+  shown: number,
+): { visible: T[]; hidden: number } => {
+  const visible = entries.slice(0, shown);
+  return { visible, hidden: entries.length - visible.length };
+};
+
 const Scalar = (props: { value: string | number | boolean | null }) => {
   const v = props.value;
   if (v === null) return <span class="jv-null">null</span>;
@@ -43,6 +60,7 @@ const Node = (props: { name?: string | undefined; value: unknown; depth: number 
   const { value, depth } = props;
   const container = typeof value === 'object' && value !== null;
   const [open, setOpen] = useState(depth < AUTO_OPEN_DEPTH);
+  const [shown, setShown] = useState(ENTRY_CAP);
   const pad = { paddingLeft: depth * INDENT_PX };
   const key = props.name !== undefined ? <span class="jv-key">{props.name}: </span> : null;
 
@@ -60,7 +78,9 @@ const Node = (props: { name?: string | undefined; value: unknown; depth: number 
     ? (value as unknown[]).map((v, i) => [String(i), v])
     : Object.entries(value as Record<string, unknown>);
   const [openBr, closeBr] = arr ? ['[', ']'] : ['{', '}'];
-  const count = `${entries.length} ${arr ? (entries.length === 1 ? 'item' : 'items') : entries.length === 1 ? 'key' : 'keys'}`;
+  const unit = (n: number): string => (arr ? (n === 1 ? 'item' : 'items') : n === 1 ? 'key' : 'keys');
+  const count = `${entries.length} ${unit(entries.length)}`;
+  const { visible, hidden } = capEntries(entries, shown);
 
   return (
     <div class="jv-node">
@@ -77,9 +97,16 @@ const Node = (props: { name?: string | undefined; value: unknown; depth: number 
       </div>
       {open ? (
         <>
-          {entries.map(([k, v]) => (
+          {visible.map(([k, v]) => (
             <Node key={k} name={arr ? undefined : k} value={v} depth={depth + 1} />
           ))}
+          {hidden > 0 ? (
+            <div class="jv-row jv-more" style={{ paddingLeft: (depth + 1) * INDENT_PX }}>
+              <button class="jv-more-btn" onClick={() => setShown((s) => s + ENTRY_CAP)}>
+                +{hidden} more {unit(hidden)} — reveal, or use raw json
+              </button>
+            </div>
+          ) : null}
           <div class="jv-row jv-punct" style={pad}>
             {closeBr}
           </div>

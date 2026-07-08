@@ -23,7 +23,7 @@ import {
 } from '@metalabel/dfos-protocol/chain';
 import { decodeDFOSCredentialUnsafe } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import { Check, Checks, type CheckState } from '../components/checks';
 import { JsonView } from '../components/json-view';
 import { OpTimeline, OpType } from '../components/timeline';
@@ -40,7 +40,7 @@ import {
   TruncId,
 } from '../components/ui';
 import { getClient } from '../lib/client';
-import { summarizeAuthorization } from '../lib/credentials';
+import { deriveCredentialCid, summarizeAuthorization } from '../lib/credentials';
 import { getDb } from '../lib/db-instance';
 import { didOfKid, fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
@@ -746,20 +746,23 @@ const PayloadRow = (props: { k: string; value: unknown; kind: string }) => {
   own content hash — not a relay-supplied header value.
 */
 const AuthorizationRow = (props: { token: string }) => {
-  const summary = summarizeAuthorization(props.token);
-  const [cid, setCid] = useState('');
+  // memoized so the decode isn't redone (and the CID effect doesn't refire) on
+  // every unrelated Op-page re-render — the effect depends on props.token alone.
+  const summary = useMemo(() => summarizeAuthorization(props.token), [props.token]);
+  // undefined = deriving · null = derivation failed (fail visibly) · string = cid
+  const [cid, setCid] = useState<string | null | undefined>(undefined);
   useEffect(() => {
-    if (!summary) return;
     let dead = false;
-    const decoded = decodeDFOSCredentialUnsafe(props.token);
-    if (!decoded) return;
-    void dagCborCanonicalEncode(decoded.payload).then((e) => {
-      if (!dead) setCid(e.cid.toString());
+    setCid(undefined);
+    // deriveCredentialCid swallows decode/encode failure into null, so this never
+    // rejects unhandled — a failure shows an error, not a stuck "deriving…".
+    void deriveCredentialCid(props.token).then((c) => {
+      if (!dead) setCid(c);
     });
     return () => {
       dead = true;
     };
-  }, [props.token, summary]);
+  }, [props.token]);
 
   if (!summary) {
     // not a well-formed credential — show the raw token, truncated + copyable,
@@ -780,7 +783,13 @@ const AuthorizationRow = (props: { token: string }) => {
       </div>
       <div class="lbl" style={{ marginTop: 2 }}>
         valid {fmtUnixDate(summary.iat)} → {fmtUnixDate(summary.exp)} ·{' '}
-        {cid ? <CredLink cid={cid} /> : 'deriving credential id…'}
+        {cid === undefined ? (
+          'deriving credential id…'
+        ) : cid === null ? (
+          <span class="err">credential id unavailable</span>
+        ) : (
+          <CredLink cid={cid} />
+        )}
       </div>
     </div>
   );

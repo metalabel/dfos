@@ -1365,6 +1365,27 @@ button.primary:hover {
   color: var(--dim);
 }
 
+/* the "+N more entries" reveal row — the entry-count cap's expander */
+.jv-more {
+  white-space: normal;
+}
+
+.jv-more-btn {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.jv-more-btn:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+
 /* a multi-line string, rendered with its real newlines (not `\n`) as an indented
    block — the reason this component exists. */
 .jv-multiline {
