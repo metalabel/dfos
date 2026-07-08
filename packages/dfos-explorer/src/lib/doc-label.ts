@@ -50,14 +50,6 @@ export const snippet = (text: string, max = SNIPPET_MAX): string => {
   return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
 };
 
-/** Short `$schema` badge text (…/post/v1 → post/v1); '' when there's no schema. */
-export const schemaBadge = (schema: string | null | undefined): string => {
-  if (!schema) return '';
-  const m = /schemas\.dfos\.com\/(.+)$/.exec(schema);
-  if (m?.[1]) return m[1];
-  return short(schema, 16, 4);
-};
-
 /** Derive a label from a projected title/snippet (local index) and/or lazily
  *  resolved document bytes (relay index). Pure — the fetch lives in the hook. */
 export const deriveDocLabel = (input: {
@@ -120,7 +112,10 @@ const resolveOne = async (id: string): Promise<void> => {
   try {
     const blob = await fetchBlobRaw(id, getRelays());
     if (!blob.bytes) {
-      cache.set(id, null);
+      // status 0 = no relay answered (transient/unreachable) — do NOT negative-
+      // cache, so a later mount retries. A real HTTP verdict (401/403 gated, 404
+      // absent) is durable — cache null so a known-empty chain isn't refetched.
+      if (blob.status !== 0) cache.set(id, null);
       return;
     }
     const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: false }).decode(blob.bytes));

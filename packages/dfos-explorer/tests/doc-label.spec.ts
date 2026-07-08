@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveDocLabel, schemaBadge, snippet, SNIPPET_MAX } from '../src/lib/doc-label';
+import { deriveDocLabel, snippet, SNIPPET_MAX } from '../src/lib/doc-label';
 
 const POST = 'https://schemas.dfos.com/post/v1';
 const PROFILE = 'https://schemas.dfos.com/profile/v1';
@@ -19,20 +19,6 @@ describe('snippet', () => {
 
   it('leaves a short string untouched', () => {
     expect(snippet('hello')).toBe('hello');
-  });
-});
-
-describe('schemaBadge', () => {
-  it('shortens a dfos schema URL to its path tail', () => {
-    expect(schemaBadge(POST)).toBe('post/v1');
-    expect(schemaBadge(PROFILE)).toBe('profile/v1');
-  });
-
-  it('is empty for a missing schema and truncates a long unrecognized one', () => {
-    expect(schemaBadge(null)).toBe('');
-    expect(schemaBadge(undefined)).toBe('');
-    expect(schemaBadge('short:schema')).toBe('short:schema');
-    expect(schemaBadge(`urn:${'x'.repeat(40)}`)).toContain('…');
   });
 });
 
