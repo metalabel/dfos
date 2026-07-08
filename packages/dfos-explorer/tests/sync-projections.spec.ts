@@ -6,6 +6,7 @@ import type { BlobResult } from '../src/lib/relay-raw';
 import { resolvePublicProjections } from '../src/lib/sync-projections';
 
 const PROFILE_SCHEMA = 'https://schemas.dfos.com/profile/v1';
+const POST_SCHEMA = 'https://schemas.dfos.com/post/v1';
 
 const b64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
 const mkJws = (header: Record<string, unknown>, payload: Record<string, unknown>): string =>
@@ -513,5 +514,34 @@ describe('resolvePublicProjections', () => {
     expect(fetched).toBe(false); // revoked in the log — nothing to ask a relay
     expect((await db.getChain('c-revoked-grant'))?.publicRead).toBe(false);
     expect((await db.getChain('did:dfos:creator'))?.name).toBeUndefined(); // stale attribution cleared
+  });
+
+  it('projects a post/v1 title onto the content rollup', async () => {
+    const db = await freshDb();
+    const doc = { $schema: POST_SCHEMA, format: 'long-post', title: 'A Long Read', body: 'x' };
+    const { op, rollup } = await publicChain('c-post-titled', 'did:dfos:a#k', doc);
+    await db.putBatch([op, grantOp('c-post-titled')], [rollup]);
+
+    await resolvePublicProjections({ db, relays: ['r'], fetchBlob: async () => served(bytesOf(doc)) });
+    const content = await db.getChain('c-post-titled');
+    expect(content?.title).toBe('A Long Read');
+    expect(content?.snippet).toBeUndefined(); // title present → no snippet
+  });
+
+  it('projects a body snippet for an untitled post/v1', async () => {
+    const db = await freshDb();
+    const doc = {
+      $schema: POST_SCHEMA,
+      format: 'short-post',
+      body: 'So today I did a whole bunch of things\nworth writing down',
+    };
+    const { op, rollup } = await publicChain('c-post-untitled', 'did:dfos:a#k', doc);
+    await db.putBatch([op, grantOp('c-post-untitled')], [rollup]);
+
+    await resolvePublicProjections({ db, relays: ['r'], fetchBlob: async () => served(bytesOf(doc)) });
+    const content = await db.getChain('c-post-untitled');
+    expect(content?.title).toBeUndefined();
+    // whitespace/newlines collapsed to single spaces (plain-text strip)
+    expect(content?.snippet).toBe('So today I did a whole bunch of things worth writing down');
   });
 });

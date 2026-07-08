@@ -10,6 +10,7 @@
 */
 
 import { useEffect, useRef } from 'preact/hooks';
+import type { DocLabel } from '../lib/doc-label';
 import { GLOSSARY } from '../lib/glossary';
 import { enqueueVerify, useVerifyStatus, type VerifyKind } from '../lib/verify-queue';
 import { Badge, Term } from './ui';
@@ -64,6 +65,17 @@ export const IndexLightNote = () => (
     stance (it alone catches omission).
   </div>
 );
+
+/** A content chain's standardized display name — the shared render of a
+ *  {@link DocLabel} (see lib/doc-label.ts). A title/name reads plain amber
+ *  (attributed, like a projected name); a body/description snippet is quoted;
+ *  an unresolvable row falls back to the short contentId. Used identically on
+ *  home recent-activity, the document browser, and the identity actor-ledger. */
+export const DocName = (props: { label: DocLabel }) => {
+  const { label } = props;
+  if (label.kind === 'id') return <span class="cid">{label.text}</span>;
+  return <span class="attr">{label.quoted ? `“${label.text}”` : label.text}</span>;
+};
 
 /** The one badge vocabulary for an index-light row's verification tier. */
 export const VerifyBadge = (props: { kind: VerifyKind; chainId: string }) => {

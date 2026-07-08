@@ -16,12 +16,13 @@
 
 import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
 import { useEffect, useState } from 'preact/hooks';
-import { useVerifyOnVisible, VerifyBadge } from '../components/index-light';
+import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { Panel, Term } from '../components/ui';
 import type { ChainRollup, OpKind } from '../lib/db';
 import { estimateStorageBytes, OP_KINDS } from '../lib/db';
+import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { getDb } from '../lib/db-instance';
-import { fmtAge, fmtBytes, fmtCount, short } from '../lib/format';
+import { fmtAge, fmtBytes, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
   indexListState,
@@ -293,17 +294,24 @@ const RecentContentRow = (props: { row: IndexContentRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
   const rec = useVerifyStatus('content', row.contentId);
+  const doc = useDocSnippet(
+    row.contentId,
+    rec.status !== 'attributed' && !row.title && !!row.docSchema,
+  );
+  const label = deriveDocLabel({
+    title: row.title,
+    docSchema: row.docSchema,
+    contentId: row.contentId,
+    doc,
+  });
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
         <span class="kind content-op">content</span>
       </td>
       <td>
-        {row.title ? (
-          <span class="attr">{row.title}</span>
-        ) : (
-          <span class="cid">{short(row.contentId, 14, 5)}</span>
-        )}{' '}
+        <DocName label={label} />{' '}
+        {row.docSchema ? <span class="k-role">{schemaLabel(row.docSchema)}</span> : null}{' '}
         <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
@@ -373,7 +381,27 @@ const RecentPanel = (props: {
                   <td>
                     <span class={`kind ${row.kind}`}>{row.kind.replace('-op', '')}</span>
                   </td>
-                  <td>{row.name ? <b>{row.name}</b> : short(row.chainId, 14, 5)}</td>
+                  <td>
+                    {row.kind === 'content-op' ? (
+                      <>
+                        <DocName
+                          label={deriveDocLabel({
+                            title: row.title,
+                            snippet: row.snippet,
+                            docSchema: row.docSchema,
+                            contentId: row.chainId,
+                          })}
+                        />{' '}
+                        {row.docSchema ? (
+                          <span class="k-role">{schemaLabel(row.docSchema)}</span>
+                        ) : null}
+                      </>
+                    ) : row.name ? (
+                      <b>{row.name}</b>
+                    ) : (
+                      <span class="cid">{short(row.chainId, 14, 5)}</span>
+                    )}
+                  </td>
                   <td class="n">{fmtCount(row.opCount)} ops</td>
                   <td class="n">{fmtAge(row.lastCreatedAt)}</td>
                 </tr>
