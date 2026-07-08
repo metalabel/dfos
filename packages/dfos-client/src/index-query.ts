@@ -25,6 +25,7 @@ import type {
   IndexCountersignaturesPage,
   IndexCredentialsPage,
   IndexIdentitiesPage,
+  IndexOrder,
 } from './types';
 
 // Mirrors the relay package's INDEX_BASE_PATH (packages/dfos-web-relay). Kept as
@@ -83,7 +84,13 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
   const relaysFor = (o?: CallOptions): string[] => normalizeRelays(o?.relays ?? relays);
 
   const indexIdentities = (
-    params?: { hasPublicProfile?: boolean; nameContains?: string; after?: string; limit?: number },
+    params?: {
+      hasPublicProfile?: boolean;
+      nameContains?: string;
+      order?: IndexOrder;
+      after?: string;
+      limit?: number;
+    },
     options?: CallOptions,
   ): Promise<IndexIdentitiesPage> =>
     fetchIndexPage(
@@ -93,6 +100,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
         const url = new URL(`${INDEX_BASE_PATH}/identities`, base);
         setParam(url, 'hasPublicProfile', params?.hasPublicProfile);
         setParam(url, 'nameContains', params?.nameContains);
+        setParam(url, 'order', params?.order);
         setParam(url, 'after', params?.after);
         setParam(url, 'limit', params?.limit);
         return url;
@@ -103,9 +111,11 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
   const indexContent = (
     params?: {
       creator?: string;
+      signer?: string;
       docSchema?: string;
       documentCID?: string;
       publicRead?: boolean;
+      order?: IndexOrder;
       after?: string;
       limit?: number;
     },
@@ -117,9 +127,11 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
       (base) => {
         const url = new URL(`${INDEX_BASE_PATH}/content`, base);
         setParam(url, 'creator', params?.creator);
+        setParam(url, 'signer', params?.signer);
         setParam(url, 'docSchema', params?.docSchema);
         setParam(url, 'documentCID', params?.documentCID);
         setParam(url, 'publicRead', params?.publicRead);
+        setParam(url, 'order', params?.order);
         setParam(url, 'after', params?.after);
         setParam(url, 'limit', params?.limit);
         return url;

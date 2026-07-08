@@ -10,6 +10,7 @@
 */
 
 import type {
+  IndexContentRow,
   IndexCountersignatureRow,
   IndexCredentialRow,
   Resolved,
@@ -19,6 +20,7 @@ import { classifyAnchor } from '@metalabel/dfos-protocol/chain';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks, type CheckState } from '../components/checks';
+import { useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { ProfileCard } from '../components/profile';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
@@ -34,12 +36,13 @@ import {
   Term,
   TruncId,
 } from '../components/ui';
+import { contributedFromSignerPage } from '../lib/actor-ledger';
 import { getClient } from '../lib/client';
 import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { short } from '../lib/format';
+import { fmtAge, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { indexCredSource, useIndexCapable } from '../lib/index-light';
+import { indexCredSource, indexListState, useIndexCapable } from '../lib/index-light';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
@@ -47,6 +50,7 @@ import { fetchBlobRaw, fetchClaim, type ClaimResult } from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
 import { revokedByCredential } from '../lib/revocations';
 import { jitIndexChain } from '../lib/sync-store';
+import { useVerifyStatus } from '../lib/verify-queue';
 import { NotFound } from './not-found';
 
 interface IdentityClaimState {
@@ -75,6 +79,20 @@ export const Identity = (props: { did: string }) => {
   // operations this identity has WITNESSED — a relay-index reverse lookup by
   // witness DID (attributed hint; open a target op to fold the real proof)
   const [witnessed, setWitnessed] = useState<IndexCountersignatureRow[] | null>(null);
+  // content chains this identity CREATED (creator=did) and CONTRIBUTED to
+  // (signer=did minus the rows it created — the client-side subtraction the spec
+  // prescribes). Both are index-only reverse lookups, so they key on [did, indexed].
+  const [created, setCreated] = useState<IndexContentRow[] | null>(null);
+  const [contributed, setContributed] = useState<IndexContentRow[] | null>(null);
+  // per-lane error flags: an index-only reverse lookup that REJECTED (relay
+  // unreachable / route declined) must render as an honest error, never a
+  // confirmed-empty — absence is not proof of absence (the index can lie by
+  // omission). `contributedTruncated` keys the "first 200" note off the RAW
+  // signer page length, before the creator-subtraction shrinks the array.
+  const [createdErr, setCreatedErr] = useState(false);
+  const [contributedErr, setContributedErr] = useState(false);
+  const [contributedTruncated, setContributedTruncated] = useState(false);
+  const [witnessedErr, setWitnessedErr] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -149,6 +167,7 @@ export const Identity = (props: { did: string }) => {
   useEffect(() => {
     let dead = false;
     setWitnessed(null);
+    setWitnessedErr(false);
     if (indexed !== true) return;
     void getClient()
       .indexCountersignatures(props.did, { limit: 200 })
@@ -156,7 +175,56 @@ export const Identity = (props: { did: string }) => {
         if (!dead) setWitnessed(p.countersignatures);
       })
       .catch(() => {
-        if (!dead) setWitnessed([]);
+        // rejected — an error, NOT a confirmed "witnessed nothing"
+        if (!dead) {
+          setWitnessedErr(true);
+          setWitnessed([]);
+        }
+      });
+    return () => {
+      dead = true;
+    };
+  }, [props.did, indexed]);
+
+  // separate index lane: content chains CREATED and CONTRIBUTED TO by this DID.
+  // Created is `creator=did`; contributed is `signer=did` (branch-inclusive "has
+  // signed in this chain") minus the rows this DID created — the spec's client-side
+  // subtraction for "contributed to but did not create." Index-only, keyed [did, indexed].
+  useEffect(() => {
+    let dead = false;
+    setCreated(null);
+    setContributed(null);
+    setCreatedErr(false);
+    setContributedErr(false);
+    setContributedTruncated(false);
+    if (indexed !== true) return;
+    const client = getClient();
+    void client
+      .indexContent({ creator: props.did, limit: 200 })
+      .then((p) => {
+        if (!dead) setCreated(p.content);
+      })
+      .catch(() => {
+        // rejected (unreachable / declined) — an error, NOT a confirmed-empty
+        if (!dead) {
+          setCreatedErr(true);
+          setCreated([]);
+        }
+      });
+    void client
+      .indexContent({ signer: props.did, limit: 200 })
+      .then((p) => {
+        if (dead) return;
+        // subtract the DID's own creations; truncation keys off the RAW page
+        const page = contributedFromSignerPage(p.content, props.did, 200);
+        setContributedTruncated(page.truncated);
+        setContributed(page.rows);
+      })
+      .catch(() => {
+        if (!dead) {
+          setContributedErr(true);
+          setContributed([]);
+        }
       });
     return () => {
       dead = true;
@@ -316,126 +384,19 @@ export const Identity = (props: { did: string }) => {
       <KeysPanel state={state} verified={stateVerified} />
       <ServicesPanel services={services} />
 
-      <Panel
-        title="credentials issued"
-        right={
-          <span class="lbl">
-            {credFromRelayIndex ? 'relay index · attributed' : 'from local index'}
-          </span>
-        }
-      >
-        {credSource === null ? (
-          <span class="muted">
-            {credFromRelayIndex ? 'reading relay index…' : 'reading local index…'}
-          </span>
-        ) : credSource.length === 0 ? (
-          <span class="muted">
-            {credFromRelayIndex
-              ? 'this identity has issued no credentials the relay index surfaces.'
-              : 'none in local index — sync the full log to populate.'}
-          </span>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>credential</th>
-                <th>status</th>
-                <th>audience</th>
-                <th>grants</th>
-              </tr>
-            </thead>
-            <tbody>
-              {credSource.map((op) => {
-                const decoded = decodeJwsUnsafe(op.jwsToken);
-                const aud =
-                  typeof decoded?.payload['aud'] === 'string' ? decoded.payload['aud'] : '?';
-                const att = Array.isArray(decoded?.payload['att'])
-                  ? (decoded.payload['att'] as { resource?: string; action?: string }[])
-                  : [];
-                const first = att[0];
-                return (
-                  <tr key={op.cid}>
-                    <td>
-                      <CredLink cid={op.cid} />
-                    </td>
-                    <td>
-                      <CredStatus revokedByOp={revoked.get(op.cid)} />
-                    </td>
-                    <td>
-                      {aud === '*' ? (
-                        <span class="k-role">public · anyone</span>
-                      ) : (
-                        <DidLink did={aud} />
-                      )}
-                    </td>
-                    <td class="muted">
-                      {first ? `${first.action ?? ''} ${first.resource ?? ''}` : ''}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-        {credFromRelayIndex && credSource !== null && credSource.length > 0 && (
-          <div class="ck-note" style={{ marginTop: 8 }}>
-            relay-asserted index hints — open a credential to fold its signature and authority.
-            {credSource.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}
-          </div>
-        )}
-      </Panel>
-
-      <Panel
-        title="countersignatures witnessed"
-        right={<span class="lbl">relay index · attributed</span>}
-      >
-        {indexed === null ? (
-          <span class="muted">checking relay capabilities…</span>
-        ) : indexed !== true ? (
-          <span class="muted">requires an index-capable relay.</span>
-        ) : witnessed === null ? (
-          <span class="muted">reading relay index…</span>
-        ) : witnessed.length === 0 ? (
-          <span class="muted">
-            this identity has witnessed no operations the relay index surfaces.
-          </span>
-        ) : (
-          <>
-            <table>
-              <thead>
-                <tr>
-                  <th>relation</th>
-                  <th>witnessed op</th>
-                  <th>countersignature</th>
-                </tr>
-              </thead>
-              <tbody>
-                {witnessed.map((r) => (
-                  <tr key={r.cid}>
-                    <td>
-                      {r.relation ? (
-                        <span class="k-role">{r.relation}</span>
-                      ) : (
-                        <span class="muted">—</span>
-                      )}
-                    </td>
-                    <td>
-                      <OpLink cid={r.targetCID} />
-                    </td>
-                    <td class="cid">
-                      <OpLink cid={r.cid} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div class="ck-note" style={{ marginTop: 8 }}>
-              relay-asserted index hints — open a witnessed op to fold its countersignature proof.
-              {witnessed.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}
-            </div>
-          </>
-        )}
-      </Panel>
+      <ActorLedger
+        indexed={indexed}
+        created={created}
+        createdErr={createdErr}
+        contributed={contributed}
+        contributedErr={contributedErr}
+        contributedTruncated={contributedTruncated}
+        witnessed={witnessed}
+        witnessedErr={witnessedErr}
+        credSource={credSource}
+        credFromRelayIndex={credFromRelayIndex}
+        revoked={revoked}
+      />
 
       <Panel title="operation history">
         {rows.length === 0 ? (
@@ -477,6 +438,288 @@ export const Identity = (props: { did: string }) => {
           },
         ]}
       />
+    </>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// ACTOR LEDGER — the four ways this DID appears in the chain, as relay-index
+// reverse lookups over the actor axis: what it Created (creator=), Contributed
+// to (signer= minus created — the spec's client-side subtraction), Witnessed
+// (countersignatures?witness=), and Issued (credentials?issuer=). Every row is
+// attributed: content rows green as the tab folds their chain, credentials and
+// countersignatures fold on open. Empty states are omission-aware — "none the
+// relay holds," never "none exist" (the index can lie by omission).
+// -----------------------------------------------------------------------------
+
+type LedgerTab = 'created' | 'contributed' | 'witnessed' | 'issued';
+
+/** One content row in the actor ledger (Created / Contributed): the projected
+ *  title (attributed) + type + when, with a live verify badge that greens as the
+ *  tab folds the chain — the same amber→verified posture as the browse rows. */
+const LedgerContentRow = (props: { row: IndexContentRow }) => {
+  const { row } = props;
+  const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
+  const rec = useVerifyStatus('content', row.contentId);
+  const opCount = rec.facts?.opCount ?? row.opCount;
+  return (
+    <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
+      <td>
+        {row.title ? <span class="attr">{row.title}</span> : <span class="muted">—</span>}{' '}
+        <VerifyBadge kind="content" chainId={row.contentId} />
+        {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
+      </td>
+      <td>
+        {row.docSchema ? (
+          <span class="k-role">{schemaLabel(row.docSchema)}</span>
+        ) : (
+          <span class="muted">untyped</span>
+        )}
+      </td>
+      <td class="n">{fmtAge(row.headAt)}</td>
+      <td class="n">{opCount}</td>
+    </tr>
+  );
+};
+
+/** A content-chain ledger table (Created / Contributed tabs) over relay-index
+ *  rows. Distinguishes a REJECTED lookup (honest "couldn't reach") from a genuine
+ *  200-with-zero-rows (the confirmed-empty `empty` copy) — a rejection labelled
+ *  empty would violate the omission-can-lie posture. `truncated` keys the
+ *  first-200 note off the raw page (the Contributed array is post-subtraction). */
+const LedgerContentTable = (props: {
+  rows: IndexContentRow[] | null;
+  indexed: boolean | null;
+  error: boolean;
+  truncated: boolean;
+  empty: string;
+}) => {
+  if (props.indexed === null) return <span class="muted">checking relay capabilities…</span>;
+  if (props.indexed !== true) return <span class="muted">requires an index-capable relay.</span>;
+  const state = indexListState(props.rows === null, props.error, props.rows?.length ?? 0);
+  if (state === 'loading') return <span class="muted">reading relay index…</span>;
+  if (state === 'error') return <span class="muted">couldn’t reach the relay index.</span>;
+  if (state === 'empty') return <span class="muted">{props.empty}</span>;
+  return (
+    <>
+      <table>
+        <thead>
+          <tr>
+            <th>name / title</th>
+            <th>type</th>
+            <th>updated</th>
+            <th>ops</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.rows!.map((row) => (
+            <LedgerContentRow key={row.contentId} row={row} />
+          ))}
+        </tbody>
+      </table>
+      <div class="ck-note" style={{ marginTop: 8 }}>
+        relay-asserted index hints — open a chain to fold its proof.
+        {props.truncated ? ' showing the first 200 the relay index surfaces.' : ''}
+      </div>
+    </>
+  );
+};
+
+const ActorLedger = (props: {
+  indexed: boolean | null;
+  created: IndexContentRow[] | null;
+  createdErr: boolean;
+  contributed: IndexContentRow[] | null;
+  contributedErr: boolean;
+  contributedTruncated: boolean;
+  witnessed: IndexCountersignatureRow[] | null;
+  witnessedErr: boolean;
+  credSource: { cid: string; jwsToken: string }[] | null;
+  credFromRelayIndex: boolean;
+  revoked: Map<string, string>;
+}) => {
+  const [tab, setTab] = useState<LedgerTab>('created');
+  // suppress the count while loading (rows null) OR errored (rows []) so a tab
+  // never reads "contributed 0" over an unreachable relay — a false-empty too.
+  const cnt = (rows: unknown[] | null, err = false): string =>
+    err || !rows ? '' : ` ${rows.length}`;
+  const rightLabel =
+    tab === 'issued' && !props.credFromRelayIndex ? 'from local index' : 'relay index · attributed';
+  return (
+    <Panel title="actor ledger" right={<span class="lbl">{rightLabel}</span>}>
+      <div class="filters" style={{ marginBottom: 10 }}>
+        <button class={tab === 'created' ? 'on' : ''} onClick={() => setTab('created')}>
+          created{cnt(props.created, props.createdErr)}
+        </button>
+        <button class={tab === 'contributed' ? 'on' : ''} onClick={() => setTab('contributed')}>
+          contributed{cnt(props.contributed, props.contributedErr)}
+        </button>
+        <button class={tab === 'witnessed' ? 'on' : ''} onClick={() => setTab('witnessed')}>
+          witnessed{cnt(props.witnessed, props.witnessedErr)}
+        </button>
+        <button class={tab === 'issued' ? 'on' : ''} onClick={() => setTab('issued')}>
+          issued{cnt(props.credSource)}
+        </button>
+      </div>
+
+      {tab === 'created' ? (
+        <LedgerContentTable
+          rows={props.created}
+          indexed={props.indexed}
+          error={props.createdErr}
+          truncated={(props.created?.length ?? 0) === 200}
+          empty="no content chains this identity created that the relay index holds."
+        />
+      ) : tab === 'contributed' ? (
+        <LedgerContentTable
+          rows={props.contributed}
+          indexed={props.indexed}
+          error={props.contributedErr}
+          truncated={props.contributedTruncated}
+          empty="no chains this identity signed but did not create that the relay index holds."
+        />
+      ) : tab === 'witnessed' ? (
+        <WitnessedTable
+          indexed={props.indexed}
+          witnessed={props.witnessed}
+          error={props.witnessedErr}
+        />
+      ) : (
+        <IssuedTable
+          credSource={props.credSource}
+          credFromRelayIndex={props.credFromRelayIndex}
+          revoked={props.revoked}
+        />
+      )}
+    </Panel>
+  );
+};
+
+/** Witnessed tab — countersignatures this DID signed, a relay-index reverse
+ *  lookup by witness. Each carries the full JWS; open the target op to fold it. */
+const WitnessedTable = (props: {
+  indexed: boolean | null;
+  witnessed: IndexCountersignatureRow[] | null;
+  error: boolean;
+}) => {
+  if (props.indexed === null) return <span class="muted">checking relay capabilities…</span>;
+  if (props.indexed !== true) return <span class="muted">requires an index-capable relay.</span>;
+  const state = indexListState(props.witnessed === null, props.error, props.witnessed?.length ?? 0);
+  if (state === 'loading') return <span class="muted">reading relay index…</span>;
+  if (state === 'error') return <span class="muted">couldn’t reach the relay index.</span>;
+  if (state === 'empty')
+    return (
+      <span class="muted">this identity has witnessed no operations the relay index surfaces.</span>
+    );
+  return (
+    <>
+      <table>
+        <thead>
+          <tr>
+            <th>relation</th>
+            <th>witnessed op</th>
+            <th>countersignature</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.witnessed!.map((r) => (
+            <tr key={r.cid}>
+              <td>
+                {r.relation ? (
+                  <span class="k-role">{r.relation}</span>
+                ) : (
+                  <span class="muted">—</span>
+                )}
+              </td>
+              <td>
+                <OpLink cid={r.targetCID} />
+              </td>
+              <td class="cid">
+                <OpLink cid={r.cid} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div class="ck-note" style={{ marginTop: 8 }}>
+        relay-asserted index hints — open a witnessed op to fold its countersignature proof.
+        {props.witnessed!.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}
+      </div>
+    </>
+  );
+};
+
+/** Issued tab — credentials issued by this DID. The live relay index when the
+ *  relay is index-capable AND the credentials route answered, else the local
+ *  synced scan; both expose {cid, jwsToken} so the row renders identically. */
+const IssuedTable = (props: {
+  credSource: { cid: string; jwsToken: string }[] | null;
+  credFromRelayIndex: boolean;
+  revoked: Map<string, string>;
+}) => {
+  const { credSource, credFromRelayIndex } = props;
+  if (credSource === null)
+    return (
+      <span class="muted">
+        {credFromRelayIndex ? 'reading relay index…' : 'reading local index…'}
+      </span>
+    );
+  if (credSource.length === 0)
+    return (
+      <span class="muted">
+        {credFromRelayIndex
+          ? 'this identity has issued no credentials the relay index surfaces.'
+          : 'none in local index — sync the full log to populate.'}
+      </span>
+    );
+  return (
+    <>
+      <table>
+        <thead>
+          <tr>
+            <th>credential</th>
+            <th>status</th>
+            <th>audience</th>
+            <th>grants</th>
+          </tr>
+        </thead>
+        <tbody>
+          {credSource.map((op) => {
+            const decoded = decodeJwsUnsafe(op.jwsToken);
+            const aud = typeof decoded?.payload['aud'] === 'string' ? decoded.payload['aud'] : '?';
+            const att = Array.isArray(decoded?.payload['att'])
+              ? (decoded.payload['att'] as { resource?: string; action?: string }[])
+              : [];
+            const first = att[0];
+            return (
+              <tr key={op.cid}>
+                <td>
+                  <CredLink cid={op.cid} />
+                </td>
+                <td>
+                  <CredStatus revokedByOp={props.revoked.get(op.cid)} />
+                </td>
+                <td>
+                  {aud === '*' ? (
+                    <span class="k-role">public · anyone</span>
+                  ) : (
+                    <DidLink did={aud} />
+                  )}
+                </td>
+                <td class="muted">
+                  {first ? `${first.action ?? ''} ${first.resource ?? ''}` : ''}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {credFromRelayIndex && credSource.length > 0 && (
+        <div class="ck-note" style={{ marginTop: 8 }}>
+          relay-asserted index hints — open a credential to fold its signature and authority.
+          {credSource.length === 200 ? ' showing the first 200 the relay index surfaces.' : ''}
+        </div>
+      )}
     </>
   );
 };
