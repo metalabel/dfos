@@ -522,7 +522,11 @@ describe('resolvePublicProjections', () => {
     const { op, rollup } = await publicChain('c-post-titled', 'did:dfos:a#k', doc);
     await db.putBatch([op, grantOp('c-post-titled')], [rollup]);
 
-    await resolvePublicProjections({ db, relays: ['r'], fetchBlob: async () => served(bytesOf(doc)) });
+    await resolvePublicProjections({
+      db,
+      relays: ['r'],
+      fetchBlob: async () => served(bytesOf(doc)),
+    });
     const content = await db.getChain('c-post-titled');
     expect(content?.title).toBe('A Long Read');
     expect(content?.snippet).toBeUndefined(); // title present → no snippet
@@ -538,7 +542,11 @@ describe('resolvePublicProjections', () => {
     const { op, rollup } = await publicChain('c-post-untitled', 'did:dfos:a#k', doc);
     await db.putBatch([op, grantOp('c-post-untitled')], [rollup]);
 
-    await resolvePublicProjections({ db, relays: ['r'], fetchBlob: async () => served(bytesOf(doc)) });
+    await resolvePublicProjections({
+      db,
+      relays: ['r'],
+      fetchBlob: async () => served(bytesOf(doc)),
+    });
     const content = await db.getChain('c-post-untitled');
     expect(content?.title).toBeUndefined();
     // whitespace/newlines collapsed to single spaces (plain-text strip)

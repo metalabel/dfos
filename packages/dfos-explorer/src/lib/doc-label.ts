@@ -118,7 +118,9 @@ const resolveOne = async (id: string): Promise<void> => {
       if (blob.status !== 0) cache.set(id, null);
       return;
     }
-    const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: false }).decode(blob.bytes));
+    const parsed: unknown = JSON.parse(
+      new TextDecoder('utf-8', { fatal: false }).decode(blob.bytes),
+    );
     cache.set(
       id,
       typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
@@ -155,10 +157,7 @@ const enqueueSnippet = (id: string): void => {
  * flag derived from the row's verify status, which flips the moment the row
  * scrolls into view). Returns the parsed doc, or null until/unless it resolves.
  */
-export const useDocSnippet = (
-  contentId: string,
-  need: boolean,
-): Record<string, unknown> | null => {
+export const useDocSnippet = (contentId: string, need: boolean): Record<string, unknown> | null => {
   const [doc, setDoc] = useState<Record<string, unknown> | null>(
     () => cache.get(contentId) ?? null,
   );

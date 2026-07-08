@@ -36,10 +36,7 @@ const INDENT_PX = 14;
 export const ENTRY_CAP = 100;
 
 /** Split a node's entries into the visible slice + the hidden remainder count. */
-export const capEntries = <T,>(
-  entries: T[],
-  shown: number,
-): { visible: T[]; hidden: number } => {
+export const capEntries = <T,>(entries: T[], shown: number): { visible: T[]; hidden: number } => {
   const visible = entries.slice(0, shown);
   return { visible, hidden: entries.length - visible.length };
 };
@@ -78,7 +75,8 @@ const Node = (props: { name?: string | undefined; value: unknown; depth: number 
     ? (value as unknown[]).map((v, i) => [String(i), v])
     : Object.entries(value as Record<string, unknown>);
   const [openBr, closeBr] = arr ? ['[', ']'] : ['{', '}'];
-  const unit = (n: number): string => (arr ? (n === 1 ? 'item' : 'items') : n === 1 ? 'key' : 'keys');
+  const unit = (n: number): string =>
+    arr ? (n === 1 ? 'item' : 'items') : n === 1 ? 'key' : 'keys';
   const count = `${entries.length} ${unit(entries.length)}`;
   const { visible, hidden } = capEntries(entries, shown);
 

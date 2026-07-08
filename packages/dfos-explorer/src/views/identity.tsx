@@ -39,8 +39,8 @@ import {
 import { contributedFromSignerPage } from '../lib/actor-ledger';
 import { getClient } from '../lib/client';
 import type { ExplorerOp } from '../lib/db';
-import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { getDb } from '../lib/db-instance';
+import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { fmtAge, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
@@ -500,8 +500,7 @@ const LedgerContentRow = (props: { row: IndexContentRow }) => {
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        <DocName label={label} />{' '}
-        <VerifyBadge kind="content" chainId={row.contentId} />
+        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
       <td>

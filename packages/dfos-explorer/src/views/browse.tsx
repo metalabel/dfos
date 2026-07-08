@@ -24,11 +24,16 @@
 import type { IndexContentRow, IndexIdentityRow, IndexOrder } from '@metalabel/dfos-client';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
-import { DocName, IndexLightNote, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
+import {
+  DocName,
+  IndexLightNote,
+  useVerifyOnVisible,
+  VerifyBadge,
+} from '../components/index-light';
 import { Badge, DidLink, Panel, Pill, Term } from '../components/ui';
 import type { ChainRollup, DocumentsBrowse, ExplorerOp, IdentitiesBrowse } from '../lib/db';
-import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { getDb } from '../lib/db-instance';
+import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { fmtAge, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
@@ -263,8 +268,7 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        <DocName label={label} />{' '}
-        <VerifyBadge kind="content" chainId={row.contentId} />
+        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
       <td>

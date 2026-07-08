@@ -20,8 +20,8 @@ import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-li
 import { Panel, Term } from '../components/ui';
 import type { ChainRollup, OpKind } from '../lib/db';
 import { estimateStorageBytes, OP_KINDS } from '../lib/db';
-import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { getDb } from '../lib/db-instance';
+import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { fmtAge, fmtBytes, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {

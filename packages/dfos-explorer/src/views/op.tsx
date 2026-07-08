@@ -711,7 +711,8 @@ const PayloadRow = (props: { k: string; value: unknown; kind: string }) => {
     )
       return <TruncId value={value} />;
     if (k === 'documentCID' && value === null) return <span class="muted">null (cleared)</span>;
-    if (k === 'authorization' && typeof value === 'string') return <AuthorizationRow token={value} />;
+    if (k === 'authorization' && typeof value === 'string')
+      return <AuthorizationRow token={value} />;
     if ((k === 'authKeys' || k === 'assertKeys' || k === 'controllerKeys') && Array.isArray(value))
       return <>{value.length} key(s)</>;
     if (k === 'services' && Array.isArray(value))
@@ -773,7 +774,11 @@ const AuthorizationRow = (props: { token: string }) => {
     <div class="authz">
       <span class="lbl">issuer</span> <DidLink did={summary.iss} />{' '}
       <span class="lbl">audience</span>{' '}
-      {summary.aud === '*' ? <span class="k-role">public · anyone</span> : <DidLink did={summary.aud} />}
+      {summary.aud === '*' ? (
+        <span class="k-role">public · anyone</span>
+      ) : (
+        <DidLink did={summary.aud} />
+      )}
       <div style={{ marginTop: 2 }}>
         {summary.att.map((a, i) => (
           <span key={i} class="k-role">

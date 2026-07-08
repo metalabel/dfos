@@ -59,7 +59,11 @@ describe('deriveDocLabel', () => {
 
   it('reads a profile/v1 name, else a quoted description', () => {
     expect(
-      deriveDocLabel({ docSchema: PROFILE, contentId: CID, doc: { $schema: PROFILE, name: 'Alice' } }),
+      deriveDocLabel({
+        docSchema: PROFILE,
+        contentId: CID,
+        doc: { $schema: PROFILE, name: 'Alice' },
+      }),
     ).toEqual({ text: 'Alice', quoted: false, kind: 'title' });
     expect(
       deriveDocLabel({

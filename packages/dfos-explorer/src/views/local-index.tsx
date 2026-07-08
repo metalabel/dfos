@@ -21,7 +21,13 @@ import {
   setAutoSyncMinutes,
   subscribeSettings,
 } from '../lib/settings';
-import { markDbChanged, nextAutoSyncAt, startSync, stopSync, useSyncState } from '../lib/sync-store';
+import {
+  markDbChanged,
+  nextAutoSyncAt,
+  startSync,
+  stopSync,
+  useSyncState,
+} from '../lib/sync-store';
 
 /** "next auto-sync" hint from a due ms-epoch: "~4m", "soon", "now". */
 const autoSyncHint = (dueAt: number): string => {
