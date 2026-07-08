@@ -42,7 +42,12 @@ import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
 import { fmtAge, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { indexCredSource, indexListState, useIndexCapable } from '../lib/index-light';
+import {
+  indexCredSource,
+  indexListState,
+  useIndexCapable,
+  useIndexIter2,
+} from '../lib/index-light';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
@@ -63,6 +68,10 @@ interface IdentityClaimState {
 
 export const Identity = (props: { did: string }) => {
   const indexed = useIndexCapable();
+  // does the serving relay honour `signer=`? (ships with `order=`, one probe).
+  // Contributed is the ONLY actor-ledger lane on the signer axis; Created
+  // (creator=), Witnessed (witness=), Issued (issuer=) predate iteration 2.
+  const iter2 = useIndexIter2();
   const [claim, setClaim] = useState<ClaimResult | null>(null);
   const [verified, setVerified] = useState<Resolved<VerifiedIdentity> | null>(null);
   const [rows, setRows] = useState<OpRow[]>([]);
@@ -187,9 +196,12 @@ export const Identity = (props: { did: string }) => {
   }, [props.did, indexed]);
 
   // separate index lane: content chains CREATED and CONTRIBUTED TO by this DID.
-  // Created is `creator=did`; contributed is `signer=did` (branch-inclusive "has
-  // signed in this chain") minus the rows this DID created — the spec's client-side
-  // subtraction for "contributed to but did not create." Index-only, keyed [did, indexed].
+  // Created is `creator=did` (predates iteration 2 — always fetched). Contributed
+  // is `signer=did` (branch-inclusive "has signed in this chain") minus the rows
+  // this DID created — the spec's client-side subtraction — and `signer=` exists
+  // ONLY on an iteration-2 relay: an older relay IGNORES it and returns an
+  // unfiltered page, so on `iter2 !== true` we do NOT fetch it (the tab renders an
+  // honest note instead). Keyed [did, indexed, iter2].
   useEffect(() => {
     let dead = false;
     setCreated(null);
@@ -211,6 +223,12 @@ export const Identity = (props: { did: string }) => {
           setCreated([]);
         }
       });
+    if (iter2 !== true) {
+      // no signer support — leave `contributed` null; the tab shows the note.
+      return () => {
+        dead = true;
+      };
+    }
     void client
       .indexContent({ signer: props.did, limit: 200 })
       .then((p) => {
@@ -229,7 +247,7 @@ export const Identity = (props: { did: string }) => {
     return () => {
       dead = true;
     };
-  }, [props.did, indexed]);
+  }, [props.did, indexed, iter2]);
 
   // separate index lane: credentials ISSUED by this DID (iss === did) — a relay
   // reverse lookup that exists only on an index-capable relay, so it keys on
@@ -386,6 +404,7 @@ export const Identity = (props: { did: string }) => {
 
       <ActorLedger
         indexed={indexed}
+        iter2={iter2}
         created={created}
         createdErr={createdErr}
         contributed={contributed}
@@ -527,6 +546,7 @@ const LedgerContentTable = (props: {
 
 const ActorLedger = (props: {
   indexed: boolean | null;
+  iter2: boolean | null;
   created: IndexContentRow[] | null;
   createdErr: boolean;
   contributed: IndexContentRow[] | null;
@@ -571,13 +591,32 @@ const ActorLedger = (props: {
           empty="no content chains this identity created that the relay index holds."
         />
       ) : tab === 'contributed' ? (
-        <LedgerContentTable
-          rows={props.contributed}
-          indexed={props.indexed}
-          error={props.contributedErr}
-          truncated={props.contributedTruncated}
-          empty="no chains this identity signed but did not create that the relay index holds."
-        />
+        props.indexed !== true ? (
+          <LedgerContentTable
+            rows={props.contributed}
+            indexed={props.indexed}
+            error={props.contributedErr}
+            truncated={props.contributedTruncated}
+            empty="no chains this identity signed but did not create that the relay index holds."
+          />
+        ) : props.iter2 === null ? (
+          <span class="muted">checking relay capabilities…</span>
+        ) : props.iter2 === false ? (
+          // signer= is IGNORED by a pre-iteration-2 relay, returning an unfiltered
+          // page — never render that fabrication. Keep the tab, tell the truth.
+          <span class="muted">
+            this relay doesn’t serve signer lookups yet — “contributed to but did not create” needs
+            an iteration-2 index. (Created, witnessed, and issued below don’t.)
+          </span>
+        ) : (
+          <LedgerContentTable
+            rows={props.contributed}
+            indexed={props.indexed}
+            error={props.contributedErr}
+            truncated={props.contributedTruncated}
+            empty="no chains this identity signed but did not create that the relay index holds."
+          />
+        )
       ) : tab === 'witnessed' ? (
         <WitnessedTable
           indexed={props.indexed}

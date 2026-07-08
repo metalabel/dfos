@@ -35,6 +35,7 @@ import {
   useIndexCapable,
   useIndexContent,
   useIndexIdentities,
+  useIndexIter2,
 } from '../lib/index-light';
 import { fetchRelayHint } from '../lib/relay-hint';
 import { startProjections, startSync, stopSync, useSyncState } from '../lib/sync-store';
@@ -463,6 +464,10 @@ export const BrowseIdentities = () => {
 export const BrowseDocuments = () => {
   const sync = useSyncState();
   const indexed = useIndexCapable();
+  // does the serving relay honour `order=`? An older relay IGNORES it and returns
+  // LEXICAL rows — so we hide the recency options and never send `order=` there.
+  const iter2 = useIndexIter2();
+  const ordered = iter2 === true;
   const [includeGated, setIncludeGated] = useState(false);
   const [schema, setSchema] = useState<string | null>(null);
   // enumeration order for the index path: null = the relay's lexical default
@@ -470,11 +475,14 @@ export const BrowseDocuments = () => {
   // relay serves via `order=`. Picking post/v1 + "recently active" composes the
   // application-level "recent public posts" feed entirely client-side.
   const [order, setOrder] = useState<IndexOrder | null>(null);
+  // never send `order=` to a relay that ignores it (would mislabel lexical rows
+  // as recency-ordered); the toggle is hidden there, but guard the query too.
+  const effectiveOrder = ordered ? order : null;
   const [result, setResult] = useState<DocumentsBrowse | null>(null);
   const available = useAvailable(DOC_KEYS);
   const index = useIndexContent(indexed === true, true, {
     ...(schema ? { docSchema: schema } : {}),
-    ...(order ? { order } : {}),
+    ...(effectiveOrder ? { order: effectiveOrder } : {}),
   });
 
   // monotonic set of $schemas seen across loaded rows — so the facet bar stays
@@ -570,8 +578,10 @@ export const BrowseDocuments = () => {
 
       {/* enumeration order — the relay serves lexical (contentId) by default, or a
           recency ordering via `order=`. "recently active" (headAt.desc) over the
-          post/v1 facet is the client-composed "recent public posts" feed. */}
-      {mode === 'index' ? (
+          post/v1 facet is the client-composed "recent public posts" feed. Hidden
+          entirely on a relay that doesn't honour `order=` (pre-iteration-2 UX):
+          offering recency there would just relabel lexical rows. */}
+      {mode === 'index' && ordered ? (
         <div class="filters" style={{ marginBottom: 8 }}>
           <span class="lbl" style={{ marginRight: 2 }}>
             order
@@ -593,7 +603,7 @@ export const BrowseDocuments = () => {
           </button>
         </div>
       ) : null}
-      {mode === 'index' && order === 'headAt.desc' ? (
+      {mode === 'index' && ordered && order === 'headAt.desc' ? (
         <div class="ck-note" style={{ marginBottom: 8 }}>
           <code>headAt.desc</code> sorts by author-claimed head time — a recency feed. It is
           eventually-fresh: a chain updated mid-scroll moves to the top of a fresher enumeration, so

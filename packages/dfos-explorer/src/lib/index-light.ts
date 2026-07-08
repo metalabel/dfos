@@ -28,6 +28,7 @@
 import type { IndexContentRow, IndexIdentityRow, IndexOrder } from '@metalabel/dfos-client';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { getClient } from './client';
+import { getRelays } from './relays';
 
 /** Per-page size for the index loaders — one page is the initial browse, and
  *  "load more" pulls the next page on demand (no silent whole-corpus cap). */
@@ -57,6 +58,104 @@ export const useIndexCapable = (): boolean | null => {
     };
   }, []);
   return capable;
+};
+
+// -----------------------------------------------------------------------------
+// ITERATION-2 FEATURE DETECTION — does the SERVING relay honour the index
+// `order=` param (and therefore also `signer=`, shipped in the same release)?
+//
+// A relay predating index iteration 2 silently IGNORES both: it returns LEXICAL
+// rows under a recency label ("newest active"/"newest first") and an UNFILTERED
+// content page under "contributed" (signer= ignored → every chain, minus the
+// client-side creator-subtraction = fabricated "contributions"). Both are lies
+// the explorer must not present. The spec REQUIRES a 400 for an unknown `order=`
+// value, so ONE probe cleanly separates an iteration-2 relay (400) from an older
+// one that ignores the param (200) — feature detection, never a version sniff.
+//
+// Gate ONLY the ordered/signer surfaces on this. `nameContains`, `creator`,
+// `witness`, and `issuer` predate iteration 2 and MUST NOT be gated.
+// -----------------------------------------------------------------------------
+
+const PROBE_ORDER = '__dfos_iter2_probe__';
+// Must EXCEED the dfos-client per-request timeout (10s default): the probe may
+// never mark a relay indeterminate that the query failover would still wait
+// for, or the gate and the queries can disagree on which relay answers — and a
+// slow pre-iteration-2 first relay would serve ordered/signer requests the
+// probe cleared against a faster later relay.
+const PROBE_TIMEOUT_MS = 12_000;
+
+/** Interpret one relay's probe response STATUS: 400 → it validates `order=` (an
+ *  iteration-2 relay), 2xx → it ignores the param (pre-iteration-2), anything
+ *  else (501 no index / 5xx / unreachable = 0) → indeterminate, defer to the next
+ *  relay. Pure, unit-tested. */
+export const iter2FromProbeStatus = (status: number): boolean | null =>
+  status === 400 ? true : status >= 200 && status < 300 ? false : null;
+
+/** Decide iteration-2 support from the ordered per-relay probe statuses: the
+ *  first DEFINITIVE relay wins (mirrors query failover, which serves from the
+ *  first reachable index relay); all-indeterminate → unsupported. The default is
+ *  deliberately the SAFE one — degrade rather than risk presenting fabricated
+ *  ordered/signer rows. Pure, unit-tested. */
+export const decideIter2 = (statuses: number[]): boolean => {
+  for (const status of statuses) {
+    const verdict = iter2FromProbeStatus(status);
+    if (verdict !== null) return verdict;
+  }
+  return false;
+};
+
+/** One relay's probe status — the `order=` value is deliberately invalid, so an
+ *  iteration-2 relay answers 400 and an older one 200. Network/abort → 0. */
+const probeRelayStatus = async (base: string): Promise<number> => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const url = new URL(`/index/v0/identities?order=${PROBE_ORDER}&limit=1`, base);
+    return (await fetch(url.toString(), { signal: ctrl.signal })).status;
+  } catch {
+    return 0; // unreachable / aborted — indeterminate
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+// probe once per relay set, shared across every mount for the session (a relay
+// switch re-navigates, and the set key changes anyway, so this never goes stale)
+const iter2Cache = new Map<string, Promise<boolean>>();
+
+const probeIter2Support = (relays: string[]): Promise<boolean> => {
+  const key = relays.join('|');
+  let cached = iter2Cache.get(key);
+  if (!cached) {
+    cached = Promise.all(relays.map(probeRelayStatus)).then(decideIter2);
+    iter2Cache.set(key, cached);
+  }
+  return cached;
+};
+
+/**
+ * Whether the serving relay supports index iteration 2 (`order=` + `signer=`).
+ * `null` while the probe is in flight — callers hold the DEGRADED (pre-iteration-2)
+ * view until it settles, so an older relay never flashes ordered/signer rows the
+ * gate would then have to retract — then a stable boolean. Same module-cached,
+ * once-per-session idiom as {@link useIndexCapable}.
+ */
+export const useIndexIter2 = (): boolean | null => {
+  const [supported, setSupported] = useState<boolean | null>(null);
+  useEffect(() => {
+    let dead = false;
+    void probeIter2Support(getRelays())
+      .then((v) => {
+        if (!dead) setSupported(v);
+      })
+      .catch(() => {
+        if (!dead) setSupported(false);
+      });
+    return () => {
+      dead = true;
+    };
+  }, []);
+  return supported;
 };
 
 export interface IndexLoad<T> {

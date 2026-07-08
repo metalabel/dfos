@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { indexBrowseMode, indexCredSource, indexListState } from '../src/lib/index-light';
+import {
+  decideIter2,
+  indexBrowseMode,
+  indexCredSource,
+  indexListState,
+  iter2FromProbeStatus,
+} from '../src/lib/index-light';
 
 describe('indexBrowseMode — enumeration source decision', () => {
   it('index-capable + no error → the live relay index (incl. a genuinely-empty index)', () => {
@@ -37,6 +43,43 @@ describe('indexListState — list render state (rows > error > loading > empty)'
 
   it('settled + empty → empty', () => {
     expect(indexListState(false, false, 0)).toBe('empty');
+  });
+});
+
+describe('iter2FromProbeStatus — one relay’s order-probe verdict', () => {
+  it('400 (unknown order rejected) → validates order → iteration-2', () => {
+    expect(iter2FromProbeStatus(400)).toBe(true);
+  });
+
+  it('2xx (order silently ignored) → pre-iteration-2', () => {
+    expect(iter2FromProbeStatus(200)).toBe(false);
+    expect(iter2FromProbeStatus(204)).toBe(false);
+  });
+
+  it('501/5xx/unreachable(0) → indeterminate (defer to the next relay)', () => {
+    expect(iter2FromProbeStatus(501)).toBeNull();
+    expect(iter2FromProbeStatus(500)).toBeNull();
+    expect(iter2FromProbeStatus(404)).toBeNull();
+    expect(iter2FromProbeStatus(0)).toBeNull();
+  });
+});
+
+describe('decideIter2 — support across the ordered relay set', () => {
+  it('a single 400 relay → supported; a single 200 relay → unsupported', () => {
+    expect(decideIter2([400])).toBe(true);
+    expect(decideIter2([200])).toBe(false);
+  });
+
+  it('the first DEFINITIVE relay wins (mirrors query failover order)', () => {
+    // indeterminate relays are skipped until one answers definitively
+    expect(decideIter2([501, 0, 400])).toBe(true);
+    // a reachable pre-iter2 relay ahead of an iter2 one → unsupported (it serves)
+    expect(decideIter2([200, 400])).toBe(false);
+  });
+
+  it('all-indeterminate (or empty) → unsupported — the SAFE default', () => {
+    expect(decideIter2([501, 0, 500])).toBe(false);
+    expect(decideIter2([])).toBe(false);
   });
 });
 
