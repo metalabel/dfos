@@ -2,67 +2,26 @@
 
   LOCAL INDEX — the side panel
 
-  Sync the full operation log from every configured relay into IndexedDB, then
-  browse the derived chain rollups offline. The counts and rows here are
-  relay-asserted routing metadata; verification happens on the detail pages.
+  Sync the full operation log from every configured relay into IndexedDB, so the
+  detail pages can fold chains offline. This panel is the sync INSTRUMENT — its
+  controls, progress, and footprint. Browsing the synced corpus lives on the
+  dedicated index pages (documents / identities), not here.
 
 */
 
-import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Panel } from '../components/ui';
-import type { ChainRollup, ExplorerOp, OpKind } from '../lib/db';
+import type { OpKind } from '../lib/db';
 import { estimateStorageBytes } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { fmtBytes, fmtCount, short } from '../lib/format';
+import { fmtBytes, fmtCount } from '../lib/format';
 import {
   AUTO_SYNC_OPTIONS,
   getAutoSyncMinutes,
   setAutoSyncMinutes,
   subscribeSettings,
 } from '../lib/settings';
-import {
-  markDbChanged,
-  nextAutoSyncAt,
-  startSync,
-  stopSync,
-  useSyncState,
-} from '../lib/sync-store';
-
-type Filter = 'all' | 'identity-op' | 'content-op' | 'credential';
-type Sort = 'recent' | 'ops';
-
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: 'all', label: 'all' },
-  { key: 'identity-op', label: 'identity' },
-  { key: 'content-op', label: 'content' },
-  { key: 'credential', label: 'credential' },
-];
-
-const SORTS: { key: Sort; label: string }[] = [
-  { key: 'recent', label: 'recent' },
-  { key: 'ops', label: 'most ops' },
-];
-
-// The sidebar is a bounded ACTIVITY panel, not the whole corpus — rendering all
-// ~20k rollups as DOM rows was a real perf bug (pages measured in thousands of
-// px). Cap what we paint and route "browse all" into the dedicated index pages.
-const SIDEBAR_LIMIT = 50;
-
-/** The dedicated index page + total for a filter, for the "browse all N →" link. */
-const browseAllTarget = (
-  filter: Filter,
-  counts: { chains: number; byKind: Partial<Record<OpKind, number>> },
-): { href: string; total: number } | null => {
-  switch (filter) {
-    case 'identity-op':
-      return { href: '#/identities', total: counts.byKind['identity-op'] ?? 0 };
-    case 'content-op':
-      return { href: '#/documents', total: counts.byKind['content-op'] ?? 0 };
-    default:
-      return null; // 'all' and 'credential' have no single dedicated index page
-  }
-};
+import { markDbChanged, nextAutoSyncAt, startSync, stopSync, useSyncState } from '../lib/sync-store';
 
 /** "next auto-sync" hint from a due ms-epoch: "~4m", "soon", "now". */
 const autoSyncHint = (dueAt: number): string => {
@@ -73,33 +32,12 @@ const autoSyncHint = (dueAt: number): string => {
   return `~${Math.round(secs / 60)}m`;
 };
 
-const routeForChain = (row: ChainRollup): string => {
-  switch (row.kind) {
-    case 'content-op':
-      return `#/content/${row.chainId}`;
-    case 'identity-op':
-    case 'credential': // credential ops chain under their issuer DID
-      return `#/did/${row.chainId}`;
-    case 'countersign': // chainId is the target op CID
-      return `#/op/${row.chainId}`;
-    default:
-      return `#/op/${row.headCid}`;
-  }
-};
-
 export const LocalIndex = () => {
   const [counts, setCounts] = useState<{
     ops: number;
     chains: number;
     byKind: Partial<Record<OpKind, number>>;
   }>({ ops: 0, chains: 0, byKind: {} });
-  const [rows, setRows] = useState<ChainRollup[]>([]);
-  // credentials chain under their issuer DID (colliding with the identity
-  // chain), so they don't surface as their own rollup — list them from the ops
-  // store instead when the credential filter is active
-  const [credRows, setCredRows] = useState<ExplorerOp[]>([]);
-  const [filter, setFilter] = useState<Filter>('all');
-  const [sort, setSort] = useState<Sort>('recent');
   const [storageBytes, setStorageBytes] = useState<number | null>(null);
   const sync = useSyncState();
   const syncing = sync.phase === 'syncing';
@@ -114,27 +52,10 @@ export const LocalIndex = () => {
   const refresh = async (): Promise<void> => {
     const db = await getDb();
     setCounts(await db.counts());
-    if (filter === 'credential') {
-      setCredRows(await db.opsOfKind('credential', SIDEBAR_LIMIT));
-      setRows([]);
-    } else {
-      const res = await db.chainsQuery({
-        sort,
-        kind: filter === 'all' ? undefined : filter,
-        limit: SIDEBAR_LIMIT,
-      });
-      setRows(res.rows);
-      setCredRows([]);
-    }
     setStorageBytes(await estimateStorageBytes());
   };
 
-  useEffect(() => {
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, sort]);
-
-  // live-refresh the rows as the global sync makes progress (throttled), and a
+  // live-refresh the counts as the global sync makes progress (throttled), and a
   // final refresh whenever a run settles
   useEffect(() => {
     if (busy) {
@@ -168,7 +89,6 @@ export const LocalIndex = () => {
   };
 
   const status = wiped || sync.status;
-  const browseAll = filter === 'credential' ? null : browseAllTarget(filter, counts);
 
   const summary = useMemo(() => {
     const k = counts.byKind;
@@ -219,65 +139,6 @@ export const LocalIndex = () => {
       {autoMin > 0 && !syncing ? (
         <div class="lbl autosync-next">next auto-sync {autoSyncHint(nextAutoSyncAt())}</div>
       ) : null}
-      <div class="filters" style={{ marginBottom: 4 }}>
-        {FILTERS.map((f) => (
-          <button key={f.key} class={filter === f.key ? 'on' : ''} onClick={() => setFilter(f.key)}>
-            {f.label}
-          </button>
-        ))}
-      </div>
-      <div class="filters" style={{ marginBottom: 8 }}>
-        {SORTS.map((s) => (
-          <button key={s.key} class={sort === s.key ? 'on' : ''} onClick={() => setSort(s.key)}>
-            {s.label}
-          </button>
-        ))}
-      </div>
-      <div class="index-rows">
-        {filter === 'credential' ? (
-          credRows.length === 0 ? (
-            <span class="muted">{counts.byKind['credential'] ? '…' : 'no grants — hit sync'}</span>
-          ) : (
-            <table>
-              <tbody>
-                {credRows.map((op) => {
-                  const aud = decodeJwsUnsafe(op.jwsToken)?.payload['aud'];
-                  return (
-                    <tr key={op.cid} onClick={() => (location.hash = `#/cred/${op.cid}`)}>
-                      <td>
-                        <span class="kind credential">grant</span>
-                      </td>
-                      <td>{short(op.cid, 13, 5)}</td>
-                      <td class="n">{aud === '*' ? 'public' : aud ? 'scoped' : ''}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )
-        ) : rows.length === 0 ? (
-          <span class="muted">{counts.chains ? 'no chains of this kind' : 'idle'}</span>
-        ) : (
-          <table>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.chainId} onClick={() => (location.hash = routeForChain(row))}>
-                  <td>
-                    <span class={`kind ${row.kind}`}>{row.kind.replace('-op', '')}</span>
-                  </td>
-                  <td>{row.name ? <b>{row.name}</b> : short(row.chainId, 13, 5)}</td>
-                  <td class="n">{fmtCount(row.opCount)} ops</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {browseAll && browseAll.total > rows.length ? (
-          <div class="lbl" style={{ marginTop: 6 }}>
-            <a href={browseAll.href}>browse all {fmtCount(browseAll.total)} →</a>
-          </div>
-        ) : null}
-      </div>
     </Panel>
   );
 };
