@@ -298,7 +298,11 @@ const RecentContentRow = (props: { row: IndexContentRow }) => {
         <span class="kind content-op">content</span>
       </td>
       <td>
-        {row.title ? <b>{row.title}</b> : short(row.contentId, 14, 5)}{' '}
+        {row.title ? (
+          <span class="attr">{row.title}</span>
+        ) : (
+          <span class="cid">{short(row.contentId, 14, 5)}</span>
+        )}{' '}
         <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
@@ -402,7 +406,7 @@ const ArrivedIdentityRow = (props: { row: IndexIdentityRow }) => {
         <span class="kind identity-op">identity</span>
       </td>
       <td>
-        {name ? <b>{name}</b> : short(row.did, 14, 5)}{' '}
+        {name ? <span class="attr">{name}</span> : <span class="cid">{short(row.did, 14, 5)}</span>}{' '}
         <VerifyBadge kind="identity" chainId={row.did} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
@@ -443,7 +447,7 @@ const ArrivedIdentitiesPanel = (props: {
         ) : state === 'loading' ? (
           <span class="muted">loading recently-arrived identities…</span>
         ) : (
-          <span class="muted">no public identities in the relay index</span>
+          <span class="muted">no identities in the relay index</span>
         )}
         <div class="lbl" style={{ marginTop: 9 }}>
           <a href="#/identities">browse all identities →</a>
@@ -631,7 +635,9 @@ export const Home = (props: { onSample: (q: string) => void }) => {
   // panel AND the derived recently-active identities; recently-arrived identities
   // by genesis time. Both index-only; local paths fall back to the synced corpus.
   const recentContent = useIndexContent(indexed === true, true, { order: 'headAt.desc' });
-  const arrivedIds = useIndexIdentities(indexed === true, true, { order: 'genesisAt.desc' });
+  // recently-arrived is a plain identity enumeration — NOT public-profile-only;
+  // name-less arrivals still render (truncated DID), the honest "newest arrivals".
+  const arrivedIds = useIndexIdentities(indexed === true, false, { order: 'genesisAt.desc' });
 
   useEffect(() => {
     let dead = false;
