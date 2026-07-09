@@ -357,6 +357,11 @@ export const BrowseIdentities = () => {
       .then((db) => db.browseIdentities({ query, includeGated, limit: BROWSE_LIMIT }))
       .then((r) => {
         if (!dead) setResult(r);
+      })
+      // a local-index open failure (another tab blocking an upgrade) clears to
+      // the empty state — SyncPrompt, not a stuck spinner — rather than throwing.
+      .catch(() => {
+        if (!dead) setResult(null);
       });
     return () => {
       dead = true;
@@ -521,6 +526,10 @@ export const BrowseDocuments = () => {
       .then((db) => db.browseDocuments({ includeGated, limit: BROWSE_LIMIT }))
       .then((r) => {
         if (!dead) setResult(r);
+      })
+      // local-index open failure → empty state (SyncPrompt), never a hung spinner.
+      .catch(() => {
+        if (!dead) setResult(null);
       });
     return () => {
       dead = true;
@@ -779,6 +788,10 @@ export const BrowseArtifacts = () => {
         if (dead) return;
         setRows(r);
         setTotal(counts.byKind['artifact'] ?? 0);
+      })
+      // local-index open failure → empty state (SyncPrompt), never a hung spinner.
+      .catch(() => {
+        if (!dead) setRows(null);
       });
     return () => {
       dead = true;

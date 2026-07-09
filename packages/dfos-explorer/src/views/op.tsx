@@ -134,9 +134,12 @@ export const Op = (props: { cid: string }) => {
     const client = getClient();
 
     void (async () => {
-      // find the JWS: local index first, relay fallback
-      const db = await getDb();
-      const local = await db.getOp(props.cid);
+      // find the JWS: local index first, relay fallback. A local-index open
+      // failure (another tab blocking an upgrade) degrades to a relay-only
+      // lookup rather than a hung "decoding…" pill.
+      const local = await getDb()
+        .then((db) => db.getOp(props.cid))
+        .catch(() => undefined);
       let jwsToken = local?.jwsToken;
       let source: OpState['source'] = local ? 'local' : 'missing';
       if (!jwsToken) {
