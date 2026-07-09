@@ -35,6 +35,8 @@ import {
   INDEX_BASE_PATH,
   parseBooleanQuery,
   parseIndexOrder,
+  redactNonPublicContentRow,
+  redactNonPublicIdentityRow,
 } from './index-routes';
 import { ingestOperations } from './ingest';
 import {
@@ -534,13 +536,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
     if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
-    const rows = await store.queryIndexIdentities({
-      ...(hasPublicProfile !== undefined ? { hasPublicProfile } : {}),
-      ...(nameContains ? { nameContains } : {}),
-      ...(order ? { order } : {}),
-      ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
-      limit,
-    });
+    const rows = (
+      await store.queryIndexIdentities({
+        ...(hasPublicProfile !== undefined ? { hasPublicProfile } : {}),
+        ...(nameContains ? { nameContains } : {}),
+        ...(order ? { order } : {}),
+        ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
+        limit,
+      })
+    ).map(redactNonPublicIdentityRow);
     const next =
       rows.length === limit
         ? order
@@ -575,16 +579,18 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
     if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
-    const rows = await store.queryIndexContent({
-      ...(creator ? { creator } : {}),
-      ...(signer ? { signer } : {}),
-      ...(docSchema !== undefined ? { docSchema } : {}),
-      ...(documentCID !== undefined ? { documentCID } : {}),
-      ...(publicRead !== undefined ? { publicRead } : {}),
-      ...(order ? { order } : {}),
-      ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
-      limit,
-    });
+    const rows = (
+      await store.queryIndexContent({
+        ...(creator ? { creator } : {}),
+        ...(signer ? { signer } : {}),
+        ...(docSchema !== undefined ? { docSchema } : {}),
+        ...(documentCID !== undefined ? { documentCID } : {}),
+        ...(publicRead !== undefined ? { publicRead } : {}),
+        ...(order ? { order } : {}),
+        ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
+        limit,
+      })
+    ).map(redactNonPublicContentRow);
     const next =
       rows.length === limit
         ? order

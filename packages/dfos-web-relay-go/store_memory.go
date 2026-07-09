@@ -272,7 +272,9 @@ func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 			}
 		}
 		if q.NameContains != "" {
-			if row.Profile == nil || row.Profile.Name == nil || !strings.Contains(strings.ToLower(*row.Profile.Name), strings.ToLower(q.NameContains)) {
+			// Match only rows whose name is servable (public) — closes the oracle on
+			// any non-public name a pre-gate builder may have persisted.
+			if row.Profile == nil || !row.Profile.PublicRead || row.Profile.Name == nil || !strings.Contains(strings.ToLower(*row.Profile.Name), strings.ToLower(q.NameContains)) {
 				continue
 			}
 		}

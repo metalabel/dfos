@@ -481,6 +481,9 @@ describe('index v0', () => {
       winningContent.operationCID,
       winningContent.document,
     );
+    // name projects only for a publicly-readable profile; grant so this case
+    // isolates the anchor-tiebreak breaker, not the publicRead gate
+    await addPublicReadGrant(winner, winningContent.contentId);
     await updateServices(winner, [
       { id: 'z-profile', type: 'ContentAnchor', label: 'profile', anchor: losingContent.contentId },
       {
@@ -500,6 +503,9 @@ describe('index v0', () => {
     for (const [i, identity] of nameBreakers.entries()) {
       const content = await createContent(identity, breakerDocs[i]!);
       await uploadBlob(identity, content.contentId, content.operationCID, content.document);
+      // name projects only for a publicly-readable profile; grant so these cases
+      // isolate the doc-level name breakers, not the publicRead gate
+      await addPublicReadGrant(identity, content.contentId);
       await updateServices(identity, [
         { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: content.contentId },
       ]);
@@ -597,6 +603,11 @@ describe('index v0', () => {
     const empty = await createContent(creator, { $schema: POST_SCHEMA, title: '' });
     const nonString = await createContent(creator, { $schema: POST_SCHEMA, title: 123 });
     const late = await createContent(creator, { $schema: POST_SCHEMA, title: 'late' });
+    // title projects only for a publicly-readable chain; grant so these cases
+    // isolate the doc-level title breakers, not the publicRead gate
+    for (const content of [post, nonRegistry, missing, empty, nonString, late]) {
+      await addPublicReadGrant(creator, content.contentId);
+    }
     for (const content of [nonRegistry, missing, empty, nonString]) {
       await uploadBlob(creator, content.contentId, content.operationCID, content.document);
     }
@@ -1151,5 +1162,103 @@ describe('index v0', () => {
     expect(afterSecond.countersignatures).toHaveLength(1);
     expect(afterSecond.countersignatures[0].cid).toBe(acceptedCid);
     expect(afterSecond.countersignatures[0].relation).toBe('endorses');
+  });
+
+  // ---------------------------------------------------------------------------
+  // confidentiality: extracted display-name fields are public-only
+  // ---------------------------------------------------------------------------
+
+  it('withholds a non-public profile name at rest, on the wire, and from nameContains', async () => {
+    const subject = await createIdentity();
+    const profileDoc = { $schema: PROFILE_SCHEMA, name: 'hidden' };
+    const profileContent = await createContent(subject, profileDoc);
+    await uploadBlob(subject, profileContent.contentId, profileContent.operationCID, profileDoc);
+    await updateServices(subject, [
+      { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: profileContent.contentId },
+    ]);
+
+    // non-public: the stored row carries no name (write gate), the served row is
+    // likewise gated, and nameContains cannot confirm the hidden name
+    const stored = (await store.queryIndexIdentities({ limit: 1000 })).find(
+      (row) => row.did === subject.did,
+    );
+    expect(stored?.profile).toMatchObject({ publicRead: false, name: null });
+    const served = await identityRow(subject.did);
+    expect(served.profile).toMatchObject({ publicRead: false, name: null });
+    expect(
+      (await json(await req('/index/v0/identities?nameContains=hidden'))).identities.map(
+        (row: { did: string }) => row.did,
+      ),
+    ).not.toContain(subject.did);
+
+    // grant public read → the same name projects everywhere
+    await addPublicReadGrant(subject, profileContent.contentId);
+    expect((await identityRow(subject.did)).profile).toMatchObject({
+      publicRead: true,
+      name: 'hidden',
+    });
+    expect(
+      (await json(await req('/index/v0/identities?nameContains=hidden'))).identities.map(
+        (row: { did: string }) => row.did,
+      ),
+    ).toContain(subject.did);
+  });
+
+  it('withholds a non-public content title until public read is granted', async () => {
+    const creator = await createIdentity();
+    const doc = { $schema: POST_SCHEMA, title: 'secret' };
+    const post = await createContent(creator, doc);
+    await uploadBlob(creator, post.contentId, post.operationCID, doc);
+
+    const stored = (await store.queryIndexContent({ limit: 1000 })).find(
+      (row) => row.contentId === post.contentId,
+    );
+    expect(stored).toMatchObject({ publicRead: false, title: null });
+    expect(await contentRow(post.contentId)).toMatchObject({ publicRead: false, title: null });
+
+    await addPublicReadGrant(creator, post.contentId);
+    expect(await contentRow(post.contentId)).toMatchObject({ publicRead: true, title: 'secret' });
+  });
+
+  it('redacts a stale non-public row at serve time and keeps it out of nameContains', async () => {
+    // A row a pre-gate builder might have persisted: non-public but carrying an
+    // extracted name/title. Serve-time redaction must null both, and nameContains
+    // must not confirm the stale name — the current builder never writes this.
+    await store.putIndexIdentityRow({
+      did: 'did:dfos:stale-identity',
+      headCID: 'h',
+      opCount: 1,
+      genesisAt: '2999-01-01T00:00:00.000Z',
+      headAt: '2999-01-01T00:00:00.000Z',
+      isDeleted: false,
+      profile: {
+        anchor: 'stale-anchor',
+        publicRead: false,
+        docSchema: PROFILE_SCHEMA,
+        name: 'stale',
+      },
+    });
+    await store.putIndexContentRow({
+      contentId: 'stale-content',
+      genesisCID: 'g',
+      headCID: 'h',
+      creatorDID: relayDID,
+      isDeleted: false,
+      opCount: 1,
+      genesisAt: '2999-01-01T00:00:00.000Z',
+      headAt: '2999-01-01T00:00:00.000Z',
+      currentDocumentCID: null,
+      publicRead: false,
+      docSchema: POST_SCHEMA,
+      title: 'stale-title',
+    });
+
+    expect((await identityRow('did:dfos:stale-identity')).profile.name).toBeNull();
+    expect((await contentRow('stale-content')).title).toBeNull();
+    expect(
+      (await json(await req('/index/v0/identities?nameContains=stale'))).identities.map(
+        (row: { did: string }) => row.did,
+      ),
+    ).not.toContain('did:dfos:stale-identity');
   });
 });

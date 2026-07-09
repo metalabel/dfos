@@ -128,8 +128,16 @@ export const contentIndexRow = async (
   store: RelayStore,
 ): Promise<IndexContentRow> => {
   const { doc, docSchema } = await headDocumentProjection(chain, store);
+  // Confidentiality is enforced at the application layer by whoever serves: a
+  // non-public document MUST NOT project its extracted display-name field onto
+  // the anonymous index surface. Compute publicRead first and gate title on it.
+  const publicRead = await hasPublicStandingAuth(chain.contentId, 'read', store);
   const title =
-    docSchema === POST_SCHEMA && doc && typeof doc['title'] === 'string' && doc['title'].length > 0
+    publicRead &&
+    docSchema === POST_SCHEMA &&
+    doc &&
+    typeof doc['title'] === 'string' &&
+    doc['title'].length > 0
       ? doc['title']
       : null;
   return {
@@ -142,11 +150,29 @@ export const contentIndexRow = async (
     genesisAt: createdAtOf(chain.log[0]),
     headAt: chain.lastCreatedAt,
     currentDocumentCID: chain.state.currentDocumentCID,
-    publicRead: await hasPublicStandingAuth(chain.contentId, 'read', store),
+    publicRead,
     docSchema,
     title,
   };
 };
+
+/**
+ * Strip the extracted display-name field from a non-public identity row before
+ * serialization — defense in depth against a row persisted by a pre-gate builder
+ * (the current builder already withholds it). Returns a fresh row/profile so it
+ * never mutates a shared in-memory projection row.
+ */
+export const redactNonPublicIdentityRow = (row: IndexIdentityRow): IndexIdentityRow =>
+  row.profile && !row.profile.publicRead && row.profile.name !== null
+    ? { ...row, profile: { ...row.profile, name: null } }
+    : row;
+
+/**
+ * Strip the extracted title from a non-public content row before serialization —
+ * the content-side twin of the identity redaction.
+ */
+export const redactNonPublicContentRow = (row: IndexContentRow): IndexContentRow =>
+  !row.publicRead && row.title !== null ? { ...row, title: null } : row;
 
 export const countersignatureIndexRow = (
   row: StoredCountersignature,
@@ -181,14 +207,22 @@ const profileProjection = async (
   const { doc, docSchema } = content
     ? await headDocumentProjection(content, store)
     : { doc: null, docSchema: null };
+  // Confidentiality is enforced at the application layer by whoever serves: a
+  // non-public profile document MUST NOT project its extracted name onto the
+  // anonymous index surface. Compute publicRead first and gate name on it.
+  const publicRead = await hasPublicStandingAuth(anchor, 'read', store);
   const name =
-    docSchema === PROFILE_SCHEMA && doc && typeof doc['name'] === 'string' && doc['name'].length > 0
+    publicRead &&
+    docSchema === PROFILE_SCHEMA &&
+    doc &&
+    typeof doc['name'] === 'string' &&
+    doc['name'].length > 0
       ? doc['name']
       : null;
 
   return {
     anchor,
-    publicRead: await hasPublicStandingAuth(anchor, 'read', store),
+    publicRead,
     docSchema,
     name,
   };

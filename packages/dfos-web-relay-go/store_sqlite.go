@@ -756,7 +756,11 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 		args = append(args, boolToInt(*q.HasPublicProfile))
 	}
 	if q.NameContains != "" {
-		where = append(where, "profile_name IS NOT NULL AND instr(lower(profile_name), lower(?)) > 0")
+		// Match only rows whose name is servable (public). The gated builder stores a
+		// null name for non-public rows, but requiring has_public_profile also closes
+		// the oracle on any row a pre-gate builder persisted: a non-public name can
+		// never be confirmed by row-presence.
+		where = append(where, "has_public_profile = 1 AND profile_name IS NOT NULL AND instr(lower(profile_name), lower(?)) > 0")
 		args = append(args, q.NameContains)
 	}
 	if q.Order == "" && q.After != "" {

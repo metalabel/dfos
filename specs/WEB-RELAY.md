@@ -617,6 +617,7 @@ Every registry row carries the same structural **circuit breakers** — every es
 - A document under any `$schema` NOT in this table is never field-extracted, no matter how tempting its shape.
 - A listed schema whose document is malformed, whose extracted field is missing, empty, or not a string — the projected field is `null`. No partial parses, no coercion.
 - Bytes the relay does not hold — `docSchema: null` and the projected field `null` (see coverage, below).
+- **A chain that is not publicly readable** — the projected `publicRead` is `false` — never surfaces its extracted display-name field: the projected value is `null`. Confidentiality of the underlying documents is enforced at the application layer by whoever serves them (see [PROTOCOL.md](https://protocol.dfos.com/spec)); the index MUST NOT project a non-public document's extracted fields onto its anonymous surface. Only the extracted display-name value is withheld — the structural `anchor` / `publicRead` / `docSchema` fields (a declared label matched as an opaque string, never document content) still project.
 
 Extracted values are **attribution-tier claims**: the value is whatever the signed head document says (row 1 is additionally reached through a controller-signed anchor). Clients verify by fetching the chain and re-hashing the served bytes to the committed `documentCID`. Additions to this table require an amendment to this spec — one display-name field per schema, and a relay MUST NOT ship extraction rules that are not listed here.
 
@@ -656,15 +657,15 @@ Enumerates identity chains, `did` ascending by default; `order=genesisAt.desc` /
 }
 ```
 
-| Field                  | Type           | Description                                                                                                                                              |
-| ---------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `opCount`              | number         | Operations stored for this chain, branch-inclusive (log length, not head-branch length)                                                                  |
-| `genesisAt` / `headAt` | string         | Author-claimed `createdAt` of the genesis and current head operations                                                                                    |
-| `profile`              | object \| null | The [well-known projection](#well-known-projections), or `null` when the identity declares no profile-labeled content-chain anchor                       |
-| `profile.anchor`       | string         | The anchored contentId — the client's verification pointer                                                                                               |
-| `profile.publicRead`   | boolean        | Whether a standing public-read grant currently authorizes anonymous read of the anchored chain, per this relay's fold — a hint, never an access decision |
-| `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                            |
-| `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker                                                                                        |
+| Field                  | Type           | Description                                                                                                                                                       |
+| ---------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opCount`              | number         | Operations stored for this chain, branch-inclusive (log length, not head-branch length)                                                                           |
+| `genesisAt` / `headAt` | string         | Author-claimed `createdAt` of the genesis and current head operations                                                                                             |
+| `profile`              | object \| null | The [well-known projection](#well-known-projections), or `null` when the identity declares no profile-labeled content-chain anchor                                |
+| `profile.anchor`       | string         | The anchored contentId — the client's verification pointer                                                                                                        |
+| `profile.publicRead`   | boolean        | Whether a standing public-read grant currently authorizes anonymous read of the anchored chain, per this relay's fold — a hint, never an access decision          |
+| `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                                     |
+| `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker — including when `profile.publicRead` is `false` (a non-public profile never projects its name) |
 
 Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `nameContains` (optional case-insensitive substring filter over projected `profile.name`; non-authoritative/amber; applied before keyset pagination), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `did` keyset cursor in the lexical default — returns rows with `did` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
 
@@ -694,7 +695,7 @@ Enumerates content chains, `contentId` ascending by default; `order=genesisAt.de
 }
 ```
 
-`title` is the [display-name registry](#well-known-projections) projection for content rows (row 2, `post/v1 → title`): `null` for any chain whose held head document is not an enumerated schema, on any circuit breaker, or when bytes are not held — an honest unknown, never a guess.
+`title` is the [display-name registry](#well-known-projections) projection for content rows (row 2, `post/v1 → title`): `null` for any chain whose held head document is not an enumerated schema, on any circuit breaker (including a non-public chain — `publicRead: false` — whose title is never projected), or when bytes are not held — an honest unknown, never a guess.
 
 Parameters: `creator` (exact DID — the chain's genesis signer; `400` when malformed), `signer` (exact DID — keeps chains in which the DID signed at least one **accepted** operation, branch-inclusive: "has signed in this chain," not "signs the current head lineage"; operations on branches later deleted or abandoned still count — the log records that the signature happened; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `documentCID` (exact match against the projected `currentDocumentCID` — the reverse lookup "who published this document"), `publicRead` (boolean), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `contentId` keyset cursor in the lexical default — returns rows with `contentId` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, and its notion of _recent public posts_ is `order=headAt.desc&docSchema=<its post schema>&publicRead=true`, composed client-side.
 
