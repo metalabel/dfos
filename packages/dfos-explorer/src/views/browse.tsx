@@ -262,7 +262,9 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
     rec.status !== 'attributed' && !row.title && !!row.docSchema && row.publicRead,
   );
   const label = deriveDocLabel({
-    title: row.title,
+    // Honest degradation: only a relay-marked-public title is safe to render. An
+    // unupgraded relay may still send a non-public title; never surface it.
+    title: row.publicRead ? row.title : null,
     docSchema: row.docSchema,
     contentId: row.contentId,
     doc,

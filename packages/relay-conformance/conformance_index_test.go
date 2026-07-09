@@ -1000,13 +1000,17 @@ func TestIndexOrderTitleAndSignerIteration2(t *testing.T) {
 		"title":   "third",
 	}, true)
 
-	// title projects only for a publicly-readable chain — grant before asserting it
-	postKid := creator.did + "#" + creator.auth.keyID
-	grantRes := postOperations(t, base, []string{createPublicCredential(t, creator.did, postKid, "read", post.contentID, 5*time.Minute, creator.auth.priv)})
-	if grantRes.StatusCode != 200 {
-		t.Fatalf("submit public read credential: status %d body %s", grantRes.StatusCode, readBody(t, grantRes))
+	// title projects only for a publicly-readable chain — grant post (whose title is
+	// asserted) and nonPost (so its nil title isolates the non-registry-schema
+	// breaker, not the publicRead gate)
+	grantKid := creator.did + "#" + creator.auth.keyID
+	for _, cid := range []string{post.contentID, nonPost.contentID} {
+		grantRes := postOperations(t, base, []string{createPublicCredential(t, creator.did, grantKid, "read", cid, 5*time.Minute, creator.auth.priv)})
+		if grantRes.StatusCode != 200 {
+			t.Fatalf("submit public read credential: status %d body %s", grantRes.StatusCode, readBody(t, grantRes))
+		}
+		grantRes.Body.Close()
 	}
-	grantRes.Body.Close()
 
 	var titleBody struct {
 		Content []struct {

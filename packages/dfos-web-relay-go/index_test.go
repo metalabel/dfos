@@ -444,6 +444,9 @@ func TestIndexProfileProjectionCircuitBreakers(t *testing.T) {
 	}
 	for i, id := range nameBreakers {
 		content := createIndexedContent(t, r, store, id, breakerDocs[i], true)
+		// name projects only for a publicly-readable profile; grant so these cases
+		// isolate the doc-level name breakers, not the publicRead gate
+		addPublicRead(t, r, id, content.contentID)
 		updateIdentityServices(t, r, id, []dfos.ServiceEntry{
 			{"id": "profile", "type": "ContentAnchor", "label": "profile", "anchor": content.contentID},
 		})

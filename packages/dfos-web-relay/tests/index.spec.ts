@@ -503,6 +503,9 @@ describe('index v0', () => {
     for (const [i, identity] of nameBreakers.entries()) {
       const content = await createContent(identity, breakerDocs[i]!);
       await uploadBlob(identity, content.contentId, content.operationCID, content.document);
+      // name projects only for a publicly-readable profile; grant so these cases
+      // isolate the doc-level name breakers, not the publicRead gate
+      await addPublicReadGrant(identity, content.contentId);
       await updateServices(identity, [
         { id: 'profile', type: 'ContentAnchor', label: 'profile', anchor: content.contentId },
       ]);
