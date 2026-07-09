@@ -657,15 +657,15 @@ Enumerates identity chains, `did` ascending by default; `order=genesisAt.desc` /
 }
 ```
 
-| Field                  | Type           | Description                                                                                                                                              |
-| ---------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `opCount`              | number         | Operations stored for this chain, branch-inclusive (log length, not head-branch length)                                                                  |
-| `genesisAt` / `headAt` | string         | Author-claimed `createdAt` of the genesis and current head operations                                                                                    |
-| `profile`              | object \| null | The [well-known projection](#well-known-projections), or `null` when the identity declares no profile-labeled content-chain anchor                       |
-| `profile.anchor`       | string         | The anchored contentId — the client's verification pointer                                                                                               |
-| `profile.publicRead`   | boolean        | Whether a standing public-read grant currently authorizes anonymous read of the anchored chain, per this relay's fold — a hint, never an access decision |
-| `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                            |
-| `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker — including when `profile.publicRead` is `false` (a non-public profile never projects its name)          |
+| Field                  | Type           | Description                                                                                                                                                       |
+| ---------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opCount`              | number         | Operations stored for this chain, branch-inclusive (log length, not head-branch length)                                                                           |
+| `genesisAt` / `headAt` | string         | Author-claimed `createdAt` of the genesis and current head operations                                                                                             |
+| `profile`              | object \| null | The [well-known projection](#well-known-projections), or `null` when the identity declares no profile-labeled content-chain anchor                                |
+| `profile.anchor`       | string         | The anchored contentId — the client's verification pointer                                                                                                        |
+| `profile.publicRead`   | boolean        | Whether a standing public-read grant currently authorizes anonymous read of the anchored chain, per this relay's fold — a hint, never an access decision          |
+| `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                                     |
+| `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker — including when `profile.publicRead` is `false` (a non-public profile never projects its name) |
 
 Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `nameContains` (optional case-insensitive substring filter over projected `profile.name`; non-authoritative/amber; applied before keyset pagination), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `did` keyset cursor in the lexical default — returns rows with `did` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
 
