@@ -167,7 +167,9 @@ const IndexIdentityRowView = (props: { row: IndexIdentityRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did, row.opCount);
   const rec = useVerifyStatus('identity', row.did);
-  const name = row.profile?.name ?? '';
+  // Honest degradation: only surface a projected name the relay marks public. An
+  // unupgraded relay may still send a non-public name; never render it.
+  const name = row.profile?.publicRead ? (row.profile.name ?? '') : '';
   const opCount = rec.facts?.opCount ?? row.opCount;
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>

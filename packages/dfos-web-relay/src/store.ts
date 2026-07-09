@@ -232,8 +232,11 @@ export class MemoryRelayStore implements RelayStore {
         if (isPublic !== q.hasPublicProfile) return false;
       }
       if (q.nameContains) {
+        // Match only rows whose name is servable (public) — closes the oracle on
+        // any non-public name a pre-gate builder may have persisted.
         if (
-          row.profile?.name == null ||
+          !row.profile?.publicRead ||
+          row.profile.name == null ||
           !row.profile.name.toLowerCase().includes(q.nameContains.toLowerCase())
         ) {
           return false;

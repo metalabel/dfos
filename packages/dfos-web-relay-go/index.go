@@ -22,7 +22,12 @@ const (
 	// relay rebuilds all projection rows from the authoritative chain/countersign
 	// tables before serving. Bump this whenever the projection row shape or a
 	// row-value computation changes.
-	IndexProjectionVersion = 2
+	//
+	// v3: gate the extracted display-name fields (profile name, content title) on
+	// the row's publicRead — a non-public document never projects its extracted
+	// field onto the anonymous index surface — so upgraded relays rebuild any rows
+	// a pre-gate builder persisted with a non-public name/title.
+	IndexProjectionVersion = 3
 )
 
 var (
@@ -137,6 +142,9 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 	if storeErr(w, err) {
 		return
 	}
+	for i := range rows {
+		rows[i] = redactNonPublicIdentityRow(rows[i])
+	}
 	writeJSON(w, 200, indexIdentityPage{Identities: rows, Next: nextIndexCursor(len(rows), limit, order, func() (string, string) {
 		row := rows[len(rows)-1]
 		if order == "genesisAt.desc" {
@@ -201,6 +209,9 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 	})
 	if storeErr(w, err) {
 		return
+	}
+	for i := range rows {
+		rows[i] = redactNonPublicContentRow(rows[i])
 	}
 	writeJSON(w, 200, indexContentPage{Content: rows, Next: nextIndexCursor(len(rows), limit, order, func() (string, string) {
 		row := rows[len(rows)-1]
@@ -309,8 +320,12 @@ func identityIndexRow(chain StoredIdentityChain, store Store) indexIdentityRow {
 
 func contentIndexRow(chain StoredContentChain, store Store) indexContentRow {
 	doc, docSchema := headDocumentProjection(chain, store)
+	// Confidentiality is enforced at the application layer by whoever serves: a
+	// non-public document MUST NOT project its extracted display-name field onto
+	// the anonymous index surface. Compute publicRead first and gate title on it.
+	publicRead := hasPublicStandingAuth(chain.ContentID, "read", store)
 	var title *string
-	if docSchema != nil && *docSchema == postSchema && doc != nil {
+	if publicRead && docSchema != nil && *docSchema == postSchema && doc != nil {
 		if value, ok := doc["title"].(string); ok && value != "" {
 			title = &value
 		}
@@ -325,10 +340,32 @@ func contentIndexRow(chain StoredContentChain, store Store) indexContentRow {
 		GenesisAt:          createdAtOf(chain.Log),
 		HeadAt:             chain.LastCreatedAt,
 		CurrentDocumentCID: chain.State.CurrentDocumentCID,
-		PublicRead:         hasPublicStandingAuth(chain.ContentID, "read", store),
+		PublicRead:         publicRead,
 		DocSchema:          docSchema,
 		Title:              title,
 	}
+}
+
+// redactNonPublicIdentityRow strips the extracted display-name field from a
+// non-public identity row before serialization — defense in depth against a row
+// persisted by a pre-gate builder (the current builder already withholds it).
+// Clones the profile so it never mutates a shared in-memory projection row.
+func redactNonPublicIdentityRow(row indexIdentityRow) indexIdentityRow {
+	if row.Profile != nil && !row.Profile.PublicRead && row.Profile.Name != nil {
+		clone := *row.Profile
+		clone.Name = nil
+		row.Profile = &clone
+	}
+	return row
+}
+
+// redactNonPublicContentRow strips the extracted title from a non-public content
+// row before serialization — the content-side twin of the identity redaction.
+func redactNonPublicContentRow(row indexContentRow) indexContentRow {
+	if !row.PublicRead {
+		row.Title = nil
+	}
+	return row
 }
 
 // countersignatureIndexRow projects a stored countersignature to its wire row.
@@ -376,15 +413,19 @@ func profileProjection(chain StoredIdentityChain, store Store) *indexProfile {
 		doc, docSchema = headDocumentProjection(*content, store)
 	}
 
+	// Confidentiality is enforced at the application layer by whoever serves: a
+	// non-public profile document MUST NOT project its extracted name onto the
+	// anonymous index surface. Compute publicRead first and gate name on it.
+	publicRead := hasPublicStandingAuth(anchor, "read", store)
 	var name *string
-	if docSchema != nil && *docSchema == profileSchema && doc != nil {
+	if publicRead && docSchema != nil && *docSchema == profileSchema && doc != nil {
 		if value, ok := doc["name"].(string); ok && value != "" {
 			name = &value
 		}
 	}
 	return &indexProfile{
 		Anchor:     anchor,
-		PublicRead: hasPublicStandingAuth(anchor, "read", store),
+		PublicRead: publicRead,
 		DocSchema:  docSchema,
 		Name:       name,
 	}

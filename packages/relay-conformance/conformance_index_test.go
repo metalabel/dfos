@@ -1000,6 +1000,14 @@ func TestIndexOrderTitleAndSignerIteration2(t *testing.T) {
 		"title":   "third",
 	}, true)
 
+	// title projects only for a publicly-readable chain — grant before asserting it
+	postKid := creator.did + "#" + creator.auth.keyID
+	grantRes := postOperations(t, base, []string{createPublicCredential(t, creator.did, postKid, "read", post.contentID, 5*time.Minute, creator.auth.priv)})
+	if grantRes.StatusCode != 200 {
+		t.Fatalf("submit public read credential: status %d body %s", grantRes.StatusCode, readBody(t, grantRes))
+	}
+	grantRes.Body.Close()
+
 	var titleBody struct {
 		Content []struct {
 			ContentID string  `json:"contentId"`
@@ -1308,4 +1316,90 @@ func TestIndexCountersignaturesByWitnessHappyPath(t *testing.T) {
 		t.Fatalf("witness index did not include countersignature %s", csCID)
 	}
 	_ = body.Next
+}
+
+// indexProfileProbe is the subset of an identity row's profile projection the
+// confidentiality-gate conformance check inspects.
+type indexProfileProbe struct {
+	anchor     string
+	publicRead bool
+	name       *string
+}
+
+// fetchIndexProfile returns the profile projection the relay serves for did, or
+// fails when the identity (or its profile) is absent from the index.
+func fetchIndexProfile(t *testing.T, base, did string) indexProfileProbe {
+	t.Helper()
+	var body struct {
+		Identities []struct {
+			DID     string `json:"did"`
+			Profile *struct {
+				Anchor     string  `json:"anchor"`
+				PublicRead bool    `json:"publicRead"`
+				Name       *string `json:"name"`
+			} `json:"profile"`
+		} `json:"identities"`
+	}
+	resp := getJSON(t, base+"/index/v0/identities?limit=1000", &body)
+	skipIndex501(t, resp.StatusCode)
+	if resp.StatusCode != 200 {
+		t.Fatalf("identity index: status %d", resp.StatusCode)
+	}
+	for _, row := range body.Identities {
+		if row.DID == did {
+			if row.Profile == nil {
+				t.Fatalf("identity %s has no profile projection", did)
+			}
+			return indexProfileProbe{row.Profile.Anchor, row.Profile.PublicRead, row.Profile.Name}
+		}
+	}
+	t.Fatalf("identity %s absent from index", did)
+	return indexProfileProbe{}
+}
+
+// A non-public profile MUST NOT project its extracted name onto the anonymous
+// index surface — confidentiality is enforced at the application layer by
+// whoever serves. Granting standing public read reveals the same name.
+func TestIndexProfileNameGatedOnPublicRead(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+
+	subject := createIdentity(t, base)
+	const profileName = "conformance-gate-name"
+	profile := createContentWithDocument(t, base, subject, map[string]any{
+		"$schema": "https://schemas.dfos.com/profile/v1",
+		"name":    profileName,
+	}, true)
+	updateServices(t, base, &subject, []dfos.ServiceEntry{
+		anchorSvc("profile", "profile", profile.contentID),
+	})
+
+	// non-public: the profile projects its anchor but never its name
+	before := fetchIndexProfile(t, base, subject.did)
+	if before.anchor != profile.contentID {
+		t.Fatalf("profile anchor = %q, want %q", before.anchor, profile.contentID)
+	}
+	if before.publicRead {
+		t.Fatalf("non-public profile reported publicRead true")
+	}
+	if before.name != nil {
+		t.Fatalf("non-public profile leaked name %q", *before.name)
+	}
+
+	// grant standing public read → the same name now projects
+	kid := subject.did + "#" + subject.auth.keyID
+	credToken := createPublicCredential(t, subject.did, kid, "read", profile.contentID, 5*time.Minute, subject.auth.priv)
+	res := postOperations(t, base, []string{credToken})
+	if res.StatusCode != 200 {
+		t.Fatalf("submit public credential: status %d, body: %s", res.StatusCode, readBody(t, res))
+	}
+	res.Body.Close()
+
+	after := fetchIndexProfile(t, base, subject.did)
+	if !after.publicRead {
+		t.Fatalf("public profile reported publicRead false")
+	}
+	if after.name == nil || *after.name != profileName {
+		t.Fatalf("public profile name = %v, want %q", after.name, profileName)
+	}
 }

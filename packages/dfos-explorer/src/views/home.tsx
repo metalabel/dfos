@@ -428,7 +428,9 @@ const ArrivedIdentityRow = (props: { row: IndexIdentityRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did, row.opCount);
   const rec = useVerifyStatus('identity', row.did);
-  const name = row.profile?.name ?? '';
+  // Honest degradation: only surface a projected name the relay marks public. An
+  // unupgraded relay may still send a non-public name; never render it.
+  const name = row.profile?.publicRead ? (row.profile.name ?? '') : '';
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>
       <td>
@@ -541,7 +543,8 @@ const ActiveIdentitiesPanel = (props: {
   // did → attributed name, from whatever recently-arrived rows we've loaded
   const nameByDid = new Map<string, string>();
   for (const r of props.arrived) {
-    const n = r.profile?.name;
+    // Honest degradation: only a relay-marked-public name is safe to attribute.
+    const n = r.profile?.publicRead ? r.profile.name : null;
     if (typeof n === 'string' && n.length > 0) nameByDid.set(r.did, n);
   }
   // distinct creators in recent-activity order (first appearance wins)

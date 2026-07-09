@@ -428,6 +428,9 @@ func TestIndexProfileProjectionCircuitBreakers(t *testing.T) {
 	winner := ingestIdentity(t, r)
 	losingContent := createIndexedContent(t, r, store, winner, map[string]any{"$schema": testProfileSchema, "name": "loser"}, true)
 	winningContent := createIndexedContent(t, r, store, winner, map[string]any{"$schema": testProfileSchema, "name": "winner"}, true)
+	// name projects only for a publicly-readable profile; grant so this case
+	// isolates the anchor-tiebreak breaker, not the publicRead gate
+	addPublicRead(t, r, winner, winningContent.contentID)
 	updateIdentityServices(t, r, winner, []dfos.ServiceEntry{
 		{"id": "z-profile", "type": "ContentAnchor", "label": "profile", "anchor": losingContent.contentID},
 		{"id": "a-profile", "type": "ContentAnchor", "label": "PROFILE", "anchor": winningContent.contentID},
@@ -541,6 +544,11 @@ func TestIndexContentTitleProjectionCircuitBreakersAndLateBlob(t *testing.T) {
 	empty := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": ""}, false)
 	nonString := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": 123}, false)
 	late := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": "late"}, false)
+	// title projects only for a publicly-readable chain; grant so these cases
+	// isolate the doc-level title breakers, not the publicRead gate
+	for _, c := range []testContent{post, nonRegistry, missing, empty, nonString, late} {
+		addPublicRead(t, r, creator, c.contentID)
+	}
 	for _, c := range []testContent{post, nonRegistry, missing, empty, nonString} {
 		uploadBlobViaRoute(t, r, creator, c)
 	}
@@ -1139,6 +1147,7 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 	witness := ingestIdentity(t, r)
 	content := createIndexedContent(t, r, NewMemoryStore(), author, map[string]any{"$schema": testPostSchema, "title": "seed"}, false)
 	uploadBlobViaRoute(t, r, author, content)
+	addPublicRead(t, r, author, content.contentID) // title projects only when public
 	witnessKid := witness.did + "#" + witness.auth.keyID
 	cs, csCID, err := dfos.SignCountersign(witness.did, content.operationCID, witnessKid, witness.auth.priv)
 	if err != nil {
@@ -1215,20 +1224,23 @@ func TestSQLiteQueryIndexIdentitiesNameContains(t *testing.T) {
 	}
 	defer store.Close()
 
-	put := func(did, name string) {
+	put := func(did, name string, publicRead bool) {
 		t.Helper()
 		var profile *indexProfile
 		if name != "" {
 			n := name
-			profile = &indexProfile{Anchor: "anchor-" + did, Name: &n}
+			profile = &indexProfile{Anchor: "anchor-" + did, PublicRead: publicRead, Name: &n}
 		}
 		if err := store.PutIndexIdentityRow(indexIdentityRow{DID: did, HeadCID: "head-" + did, Profile: profile}); err != nil {
 			t.Fatalf("PutIndexIdentityRow(%s): %v", did, err)
 		}
 	}
-	put("did:dfos:aaa", "Asha")  // contains "sh"
-	put("did:dfos:bbb", "Boris") // contains "or"
-	put("did:dfos:ccc", "")      // no profile — must never match
+	put("did:dfos:aaa", "Asha", true)  // public, contains "sh"
+	put("did:dfos:bbb", "Boris", true) // public, contains "or"
+	put("did:dfos:ccc", "", true)      // no profile — must never match
+	// A non-public row carrying a name (as a pre-gate builder might persist) shares
+	// the "sh" substring but MUST stay closed to the nameContains oracle.
+	put("did:dfos:ddd", "Ashanti", false)
 
 	query := func(needle string) []string {
 		t.Helper()
@@ -1243,7 +1255,8 @@ func TestSQLiteQueryIndexIdentitiesNameContains(t *testing.T) {
 		return dids
 	}
 
-	// positive substring match (stored "Asha" vs lowercase query "sh")
+	// positive substring match (stored "Asha" vs lowercase query "sh"); the
+	// non-public "Ashanti" row also contains "sh" but stays excluded (oracle closed)
 	if got := query("sh"); len(got) != 1 || got[0] != "did:dfos:aaa" {
 		t.Fatalf("nameContains=sh → %v, want [did:dfos:aaa]", got)
 	}
@@ -1258,5 +1271,126 @@ func TestSQLiteQueryIndexIdentitiesNameContains(t *testing.T) {
 	// no match → empty; the null-profile row is never a false positive
 	if got := query("zzq-no-such"); len(got) != 0 {
 		t.Fatalf("nameContains=zzq-no-such → %v, want []", got)
+	}
+}
+
+// A non-public profile whose anchored doc is held and well-formed must NOT
+// project its name onto the anonymous index surface — at rest (stored row),
+// on the wire (served row), or via the nameContains oracle. Granting public
+// read flips the same name into view.
+func TestIndexProfileNameGatedOnPublicRead(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	subject := ingestIdentity(t, r)
+	profile := createIndexedContent(t, r, store, subject, map[string]any{"$schema": testProfileSchema, "name": "hidden"}, true)
+	updateIdentityServices(t, r, subject, []dfos.ServiceEntry{
+		{"id": "profile", "type": "ContentAnchor", "label": "profile", "anchor": profile.contentID},
+	})
+
+	// non-public: stored row carries no name (write gate)
+	stored, err := store.QueryIndexIdentities(IndexIdentityQuery{Limit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range stored {
+		if row.DID == subject.did {
+			if row.Profile == nil || row.Profile.PublicRead || row.Profile.Name != nil {
+				t.Fatalf("stored non-public profile leaked name: %+v", row.Profile)
+			}
+		}
+	}
+	served := indexIdentityRowByDID(t, handler, subject.did)["profile"].(map[string]any)
+	if served["publicRead"] != false || served["name"] != nil {
+		t.Fatalf("served non-public profile = %v, want publicRead false + name nil", served)
+	}
+	_, byName, _ := getIndexJSONBody(t, handler, "/index/v0/identities?nameContains=hidden")
+	for _, d := range identityDIDs(byName) {
+		if d == subject.did {
+			t.Fatalf("nameContains confirmed a non-public name")
+		}
+	}
+
+	// grant public read → the same name now projects everywhere
+	addPublicRead(t, r, subject, profile.contentID)
+	served = indexIdentityRowByDID(t, handler, subject.did)["profile"].(map[string]any)
+	if served["publicRead"] != true || served["name"] != "hidden" {
+		t.Fatalf("served public profile = %v, want publicRead true + name hidden", served)
+	}
+	foundPublic := false
+	_, byNamePublic, _ := getIndexJSONBody(t, handler, "/index/v0/identities?nameContains=hidden")
+	for _, d := range identityDIDs(byNamePublic) {
+		if d == subject.did {
+			foundPublic = true
+		}
+	}
+	if !foundPublic {
+		t.Fatalf("nameContains did not match the now-public name")
+	}
+}
+
+// The content-title twin of the profile-name gate: a non-public post's title is
+// withheld at rest and on the wire until public read is granted.
+func TestIndexContentTitleGatedOnPublicRead(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	post := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": "secret"}, true)
+
+	stored, err := store.QueryIndexContent(IndexContentQuery{Limit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range stored {
+		if row.ContentID == post.contentID && (row.PublicRead || row.Title != nil) {
+			t.Fatalf("stored non-public content leaked title: %+v", row)
+		}
+	}
+	served := indexContentRowByID(t, handler, post.contentID)
+	if served["publicRead"] != false || served["title"] != nil {
+		t.Fatalf("served non-public content = %v, want publicRead false + title nil", served)
+	}
+
+	addPublicRead(t, r, creator, post.contentID)
+	served = indexContentRowByID(t, handler, post.contentID)
+	if served["publicRead"] != true || served["title"] != "secret" {
+		t.Fatalf("served public content = %v, want publicRead true + title secret", served)
+	}
+}
+
+// Defense in depth: a row a pre-gate builder persisted with a non-public
+// name/title is redacted at serve time and stays closed to the nameContains
+// oracle — even though the current builder would never write such a row.
+func TestIndexServeTimeRedactsStaleNonPublicRow(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+
+	name := "stale"
+	did := "did:dfos:" + strings.Repeat("2", 31)
+	if err := store.PutIndexIdentityRow(indexIdentityRow{
+		DID: did, HeadCID: "h",
+		Profile: &indexProfile{Anchor: strings.Repeat("3", 31), PublicRead: false, Name: &name},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	title := "stale-title"
+	cid := "2346789acdefhknrtvz2346789acdef"
+	if err := store.PutIndexContentRow(indexContentRow{
+		ContentID: cid, GenesisCID: "g", HeadCID: "h", CreatorDID: r.DID(),
+		PublicRead: false, Title: &title,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if served := indexIdentityRowByDID(t, handler, did)["profile"].(map[string]any); served["name"] != nil {
+		t.Fatalf("stale non-public name served: %v", served)
+	}
+	if indexContentRowByID(t, handler, cid)["title"] != nil {
+		t.Fatalf("stale non-public title served")
+	}
+	_, byName, _ := getIndexJSONBody(t, handler, "/index/v0/identities?nameContains=stale")
+	for _, d := range identityDIDs(byName) {
+		if d == did {
+			t.Fatalf("nameContains confirmed a stale non-public name")
+		}
 	}
 }
