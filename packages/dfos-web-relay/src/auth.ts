@@ -162,8 +162,17 @@ export const verifyContentAccess = async (options: {
   creatorDID: string;
   /** From auth token — the DID making the request */
   requesterDID?: string;
+  /**
+   * Whether public (aud '*') grants count for this request. A standing public
+   * grant asserts the publicness of a chain's CURRENT head only, so a request
+   * for a non-head document sets this false: access then requires the creator
+   * or a credential scoped to the requester's audience — never a public grant
+   * (stored or presented). Defaults true (head reads and every other caller).
+   */
+  allowPublicGrant?: boolean;
 }): Promise<AccessVerification> => {
   const { credentialJWS, requestedResource, action, store, creatorDID, requesterDID } = options;
+  const allowPublicGrant = options.allowPublicGrant ?? true;
 
   // 1. creator always has access
   if (requesterDID && requesterDID === creatorDID) {
@@ -176,26 +185,30 @@ export const verifyContentAccess = async (options: {
   const isRevoked = async (issuerDID: string, credentialCID: string) =>
     store.isCredentialRevoked(issuerDID, credentialCID);
 
-  // 2. check stored public credentials
-  const publicCreds = await store.getPublicCredentials(requestedResource);
-  for (const credJws of publicCreds) {
-    try {
-      const cred = await verifyDFOSCredential(credJws, { resolveIdentity });
+  // 2. check stored public credentials — these are standing public (aud '*')
+  // grants, which convey head-only publicness, so they are skipped for a
+  // non-head request (allowPublicGrant === false).
+  if (allowPublicGrant) {
+    const publicCreds = await store.getPublicCredentials(requestedResource);
+    for (const credJws of publicCreds) {
+      try {
+        const cred = await verifyDFOSCredential(credJws, { resolveIdentity });
 
-      // check revocation (scoped to credential issuer)
-      const leafRevoked = await isRevoked(cred.iss, cred.credentialCID);
-      if (leafRevoked) continue;
+        // check revocation (scoped to credential issuer)
+        const leafRevoked = await isRevoked(cred.iss, cred.credentialCID);
+        if (leafRevoked) continue;
 
-      // check resource + action match
-      const covers = await matchesResource(cred.att, requestedResource, action);
-      if (!covers) continue;
+        // check resource + action match
+        const covers = await matchesResource(cred.att, requestedResource, action);
+        if (!covers) continue;
 
-      // verify delegation chain roots at creator (with revocation at every level)
-      await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID, isRevoked });
+        // verify delegation chain roots at creator (with revocation at every level)
+        await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID, isRevoked });
 
-      return { granted: true, source: 'public-credential' as const, credential: cred };
-    } catch {
-      continue; // invalid credential, skip
+        return { granted: true, source: 'public-credential' as const, credential: cred };
+      } catch {
+        continue; // invalid credential, skip
+      }
     }
   }
 
@@ -213,8 +226,16 @@ export const verifyContentAccess = async (options: {
       // verify delegation chain roots at creator (with revocation at every level)
       await verifyDelegationChain(cred, { resolveIdentity, rootDID: creatorDID, isRevoked });
 
-      // audience verification for non-public credentials
-      if (cred.aud !== '*') {
+      // audience verification. A public (aud '*') credential presented per
+      // request acts as a bearer capability — accepted only where public grants
+      // count (head reads); for a non-head request it conveys nothing, exactly
+      // as the stored standing grant above. A scoped credential must name the
+      // requester as its audience.
+      if (cred.aud === '*') {
+        if (!allowPublicGrant) {
+          return { granted: false, source: 'none' };
+        }
+      } else {
         if (!requesterDID || cred.aud !== requesterDID) {
           return { granted: false, source: 'none' };
         }

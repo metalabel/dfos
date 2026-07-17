@@ -411,6 +411,127 @@ func TestStandingAuthorizationViaPublicCredential(t *testing.T) {
 	}
 }
 
+func TestStandingAuthorizationServesOnlyCurrentHead(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	cc := createContent(t, base, id)
+	tok := authToken(t, base, id)
+
+	// upload the genesis blob
+	genesisBlob, _ := json.Marshal(cc.document)
+	genesisUpload := putBlob(t, base, cc.contentID, cc.genCID, tok, genesisBlob)
+	if genesisUpload.StatusCode != 200 {
+		body := readBody(t, genesisUpload)
+		t.Fatalf("upload genesis blob: status %d, body: %s", genesisUpload.StatusCode, body)
+	}
+	genesisUpload.Body.Close()
+
+	// update the chain and upload the new head blob
+	headDocument := map[string]any{"type": "post", "title": "current head", "body": "updated content"}
+	headDocumentCID, _, err := dfos.DocumentCID(headDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kid := id.did + "#" + id.auth.keyID
+	updateToken, headOperationCID, err := dfos.SignContentUpdate(
+		id.did, cc.genCID, headDocumentCID, kid, id.auth.priv,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateRes := postOperations(t, base, []string{updateToken})
+	updateBody := readBody(t, updateRes)
+	if updateRes.StatusCode != 200 {
+		t.Fatalf("submit content update: status %d, body: %s", updateRes.StatusCode, updateBody)
+	}
+
+	headBlob, _ := json.Marshal(headDocument)
+	headUpload := putBlob(t, base, cc.contentID, headOperationCID, tok, headBlob)
+	if headUpload.StatusCode != 200 {
+		body := readBody(t, headUpload)
+		t.Fatalf("upload head blob: status %d, body: %s", headUpload.StatusCode, body)
+	}
+	headUpload.Body.Close()
+
+	// mint a standing public read grant
+	credToken := createPublicCredential(t, id.did, kid, "read", cc.contentID, 5*time.Minute, id.auth.priv)
+	credRes := postOperations(t, base, []string{credToken})
+	credBody := readBody(t, credRes)
+	if credRes.StatusCode != 200 {
+		t.Fatalf("submit public credential: status %d, body: %s", credRes.StatusCode, credBody)
+	}
+
+	getAnonymous := func(ref string) *http.Response {
+		url := fmt.Sprintf("%s/content/%s/blob", base, cc.contentID)
+		if ref != "" {
+			url += "/" + ref
+		}
+		res, err := http.Get(url)
+		if err != nil {
+			t.Fatalf("anonymous GET blob: %v", err)
+		}
+		return res
+	}
+
+	anonymousHead := getAnonymous("")
+	anonymousHeadBody := readBody(t, anonymousHead)
+	if anonymousHead.StatusCode != 200 {
+		t.Fatalf("anonymous head read: status %d, body: %s", anonymousHead.StatusCode, anonymousHeadBody)
+	}
+	if string(anonymousHeadBody) != string(headBlob) {
+		t.Fatal("anonymous head blob does not match uploaded data")
+	}
+
+	anonymousGenesis := getAnonymous(cc.genCID)
+	anonymousGenesisBody := readBody(t, anonymousGenesis)
+	if anonymousGenesis.StatusCode != 401 {
+		t.Fatalf("anonymous genesis-ref read: expected 401, got %d, body: %s", anonymousGenesis.StatusCode, anonymousGenesisBody)
+	}
+
+	anonymousHeadRef := getAnonymous(headOperationCID)
+	anonymousHeadRefBody := readBody(t, anonymousHeadRef)
+	if anonymousHeadRef.StatusCode != 200 {
+		t.Fatalf("anonymous head-ref read: status %d, body: %s", anonymousHeadRef.StatusCode, anonymousHeadRefBody)
+	}
+	if string(anonymousHeadRefBody) != string(headBlob) {
+		t.Fatal("anonymous head-ref blob does not match uploaded data")
+	}
+
+	creatorGenesis := getBlob(t, base, cc.contentID, tok, cc.genCID)
+	creatorGenesisBody := readBody(t, creatorGenesis)
+	if creatorGenesis.StatusCode != 200 {
+		t.Fatalf("creator genesis-ref read: status %d, body: %s", creatorGenesis.StatusCode, creatorGenesisBody)
+	}
+	if string(creatorGenesisBody) != string(genesisBlob) {
+		t.Fatal("creator genesis-ref blob does not match uploaded data")
+	}
+
+	// A stranger holding only their own auth token must NOT reach the non-head
+	// revision: the standing public grant conveys head-only publicness, so the
+	// authenticated path denies the genesis ref.
+	stranger := createIdentity(t, base)
+	strangerTok := authToken(t, base, stranger)
+	strangerGenesis := getBlob(t, base, cc.contentID, strangerTok, cc.genCID)
+	strangerGenesisBody := readBody(t, strangerGenesis)
+	if strangerGenesis.StatusCode != 403 {
+		t.Fatalf("stranger genesis-ref read: expected 403, got %d, body: %s", strangerGenesis.StatusCode, strangerGenesisBody)
+	}
+
+	// nor by replaying the public credential JWS as a per-request bearer.
+	replayURL := fmt.Sprintf("%s/content/%s/blob/%s", base, cc.contentID, cc.genCID)
+	replayReq, _ := http.NewRequest("GET", replayURL, nil)
+	replayReq.Header.Set("authorization", "Bearer "+strangerTok)
+	replayReq.Header.Set("x-credential", credToken)
+	replayRes, err := http.DefaultClient.Do(replayReq)
+	if err != nil {
+		t.Fatalf("stranger genesis-ref replay read: %v", err)
+	}
+	replayBody := readBody(t, replayRes)
+	if replayRes.StatusCode != 403 {
+		t.Fatalf("stranger genesis-ref credential replay: expected 403, got %d, body: %s", replayRes.StatusCode, replayBody)
+	}
+}
+
 // ===================================================================
 // credential helpers for delegation chain tests
 // ===================================================================

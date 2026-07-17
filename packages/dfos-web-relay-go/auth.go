@@ -88,7 +88,7 @@ func hasPublicStandingAuth(contentID string, action string, store Store) bool {
 	}
 
 	for _, credJws := range publicCreds {
-		if err := verifyCredentialForAccess(credJws, resolveKey, resource, action, chain.State.CreatorDID, "", store); err == nil {
+		if err := verifyCredentialForAccess(credJws, resolveKey, resource, action, chain.State.CreatorDID, "", store, true); err == nil {
 			return true
 		}
 	}
@@ -106,7 +106,13 @@ func hasPublicStandingAuth(contentID string, action string, store Store) bool {
 // 1. Creator always has access
 // 2. Stored public credentials (standing authorization)
 // 3. Per-request credential (X-Credential header)
-func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requestedResource string, action string, credentialJWS string) string {
+//
+// allowPublicGrant governs whether public (aud "*") grants count. A standing
+// public grant asserts the publicness of a chain's CURRENT head only, so a
+// request for a non-head document passes false: access then requires the creator
+// or a credential scoped to the requester's audience — never a public grant,
+// whether stored (step 2) or presented (step 3).
+func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requestedResource string, action string, credentialJWS string, allowPublicGrant bool) string {
 	// 1. creator always has access
 	if requesterDID != "" && requesterDID == creatorDID {
 		return ""
@@ -116,17 +122,20 @@ func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requ
 	store := r.readStore
 	resolveKey := CreateKeyResolver(store)
 
-	// 2. check stored public credentials
-	publicCreds, _ := store.GetPublicCredentials(requestedResource)
-	for _, credJws := range publicCreds {
-		if err := verifyCredentialForAccess(credJws, resolveKey, requestedResource, action, creatorDID, "", store); err == nil {
-			return ""
+	// 2. check stored public credentials — standing public (aud "*") grants,
+	// skipped for a non-head request.
+	if allowPublicGrant {
+		publicCreds, _ := store.GetPublicCredentials(requestedResource)
+		for _, credJws := range publicCreds {
+			if err := verifyCredentialForAccess(credJws, resolveKey, requestedResource, action, creatorDID, "", store, true); err == nil {
+				return ""
+			}
 		}
 	}
 
 	// 3. check per-request credential
 	if credentialJWS != "" {
-		if err := verifyCredentialForAccess(credentialJWS, resolveKey, requestedResource, action, creatorDID, requesterDID, store); err != nil {
+		if err := verifyCredentialForAccess(credentialJWS, resolveKey, requestedResource, action, creatorDID, requesterDID, store, allowPublicGrant); err != nil {
 			return err.Error()
 		}
 		return ""
@@ -141,7 +150,9 @@ func (r *Relay) verifyContentAccess(requesterDID string, creatorDID string, requ
 //
 // For public credentials (aud="*"), requesterDID can be empty.
 // For per-request credentials, requesterDID is checked against aud.
-func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requestedResource string, action string, creatorDID string, requesterDID string, store Store) error {
+// allowPublicGrant=false rejects public (aud="*") credentials outright — a
+// non-head read may not be granted by a public grant presented as a bearer.
+func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requestedResource string, action string, creatorDID string, requesterDID string, store Store, allowPublicGrant bool) error {
 	// decode to get kid and raw payload
 	header, payload, err := dfos.DecodeJWSUnsafe(credJws)
 	if err != nil || header == nil {
@@ -189,12 +200,16 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 		return fmt.Errorf("credential does not cover requested resource")
 	}
 
-	// for per-request credentials, check audience
-	if requesterDID != "" {
-		aud, _ := payload["aud"].(string)
-		if aud != "*" && aud != requesterDID {
-			return fmt.Errorf("credential audience does not match requester")
+	// audience check. A public (aud "*") credential is a bearer capability —
+	// rejected outright when public grants are disallowed (non-head reads). A
+	// scoped credential must name the requester as its audience.
+	aud, _ := payload["aud"].(string)
+	if aud == "*" {
+		if !allowPublicGrant {
+			return fmt.Errorf("public credential does not grant access to this resource")
 		}
+	} else if requesterDID != "" && aud != requesterDID {
+		return fmt.Errorf("credential audience does not match requester")
 	}
 
 	// verify delegation chain — shared with the write path via the protocol
