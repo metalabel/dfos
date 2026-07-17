@@ -679,9 +679,9 @@ export const Home = (props: { onSample: (q: string) => void }) => {
   // by genesis time. Both index-only AND order-only; local paths fall back to the
   // synced corpus (which IS genuinely recency-ordered, by last local op).
   const recentContent = useIndexContent(orderedIndexed === true, true, { order: 'headAt.desc' });
-  // recently-arrived is a plain identity enumeration — NOT public-profile-only;
-  // name-less arrivals still render (truncated DID), the honest "newest arrivals".
-  const arrivedIds = useIndexIdentities(orderedIndexed === true, false, {
+  // recently-arrived identities are public-profile-only by design, so the panel
+  // enumerates identities that have affirmatively published a profile.
+  const arrivedIds = useIndexIdentities(orderedIndexed === true, true, {
     order: 'genesisAt.desc',
   });
 

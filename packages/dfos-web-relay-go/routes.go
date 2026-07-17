@@ -732,9 +732,8 @@ func (r *Relay) handleGetBlob(w http.ResponseWriter, req *http.Request) {
 
 // authorizeRead checks if the request is authorized to read the given content.
 // Returns true if authorized. Writes 401/403 error response and returns false if not.
-// Allows unauthenticated access when a valid public standing credential exists.
-func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentID string, creatorDID string) bool {
-	if hasPublicStandingAuth(contentID, "read", r.readStore) {
+func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentID string, creatorDID string, publicAccess bool, isHeadRef bool) bool {
+	if publicAccess {
 		return true
 	}
 	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore, r.maxAuthTokenTTL)
@@ -743,7 +742,9 @@ func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentI
 		return false
 	}
 	credHeader := req.Header.Get("X-Credential")
-	if errMsg := r.verifyContentAccess(auth.Iss, creatorDID, "chain:"+contentID, "read", credHeader); errMsg != "" {
+	// public grants convey head-only publicness; a non-head read needs the
+	// creator or an audience-scoped credential.
+	if errMsg := r.verifyContentAccess(auth.Iss, creatorDID, "chain:"+contentID, "read", credHeader, isHeadRef); errMsg != "" {
 		writeError(w, 403, errMsg)
 		return false
 	}
@@ -757,10 +758,6 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 	}
 	if chain == nil {
 		writeError(w, 404, "content chain not found")
-		return
-	}
-
-	if !r.authorizeRead(w, req, contentID, chain.State.CreatorDID) {
 		return
 	}
 
@@ -792,6 +789,15 @@ func (r *Relay) readBlob(w http.ResponseWriter, req *http.Request, contentID, re
 	}
 	if documentCID == "" {
 		writeError(w, 404, "no document at this ref")
+		return
+	}
+
+	// A standing public grant asserts the publicness of the chain's current head
+	// only; a request for any other revision requires authenticated or credentialed
+	// access, and even then a public grant does not count (see authorizeRead).
+	isHeadRef := chain.State.CurrentDocumentCID != nil && documentCID == *chain.State.CurrentDocumentCID
+	publicAccess := isHeadRef && hasPublicStandingAuth(contentID, "read", r.readStore)
+	if !r.authorizeRead(w, req, contentID, chain.State.CreatorDID, publicAccess, isHeadRef) {
 		return
 	}
 

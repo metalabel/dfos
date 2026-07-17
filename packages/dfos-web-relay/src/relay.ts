@@ -911,18 +911,6 @@ const readBlob = async (params: {
   const chain = await store.getContentChain(contentId);
   if (!chain) return jsonResponse({ error: 'content chain not found' }, 404);
 
-  // check for public standing authorization (no auth needed)
-  const publicAccess = await hasPublicStandingAuth(contentId, 'read', store);
-  if (!publicAccess) {
-    // require auth token
-    const auth = await authenticateRequest(authHeader, relayDID, store, maxAuthTokenTTLSeconds);
-    if (!auth) return jsonResponse({ error: 'authentication required' }, 401);
-
-    // verify read credential — unless the caller is the chain creator
-    const credError = await verifyReadAccess(auth, chain, contentId, credHeader, store);
-    if (credError) return credError;
-  }
-
   // resolve documentCID for the requested ref
   let documentCID: string | null = null;
   let operationFound = ref === 'head';
@@ -945,6 +933,21 @@ const readBlob = async (params: {
   if (!operationFound) return jsonResponse({ error: 'operation not found in chain' }, 404);
   if (!documentCID) return jsonResponse({ error: 'no document at this ref' }, 404);
 
+  // A standing public grant asserts the publicness of the chain's current head
+  // only; a request for any other revision requires authenticated or credentialed
+  // access, and even then a public grant does not count (see verifyReadAccess).
+  const isHeadRef = documentCID === chain.state.currentDocumentCID;
+  const publicAccess = isHeadRef && (await hasPublicStandingAuth(contentId, 'read', store));
+  if (!publicAccess) {
+    // require auth token
+    const auth = await authenticateRequest(authHeader, relayDID, store, maxAuthTokenTTLSeconds);
+    if (!auth) return jsonResponse({ error: 'authentication required' }, 401);
+
+    // verify read credential — unless the caller is the chain creator
+    const credError = await verifyReadAccess(auth, chain, contentId, credHeader, store, isHeadRef);
+    if (credError) return credError;
+  }
+
   const blob = await store.getBlob({ creatorDID: chain.state.creatorDID, documentCID });
   if (!blob) return jsonResponse({ error: 'blob not found' }, 404);
 
@@ -963,6 +966,7 @@ const verifyReadAccess = async (
   contentId: string,
   credHeader: string | undefined,
   store: RelayStore,
+  isHeadRef: boolean,
 ): Promise<Response | null> => {
   const result = await verifyContentAccess({
     ...(credHeader ? { credentialJWS: credHeader } : {}),
@@ -971,6 +975,9 @@ const verifyReadAccess = async (
     store,
     creatorDID: chain.state.creatorDID,
     requesterDID: auth.iss,
+    // public grants convey head-only publicness; a non-head read needs the
+    // creator or an audience-scoped credential.
+    allowPublicGrant: isHeadRef,
   });
 
   if (result.granted) return null;

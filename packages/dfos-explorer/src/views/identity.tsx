@@ -196,13 +196,13 @@ export const Identity = (props: { did: string }) => {
     };
   }, [props.did, indexed]);
 
-  // separate index lane: content chains CREATED and CONTRIBUTED TO by this DID.
-  // Created is `creator=did` (predates iteration 2 — always fetched). Contributed
-  // is `signer=did` (branch-inclusive "has signed in this chain") minus the rows
-  // this DID created — the spec's client-side subtraction — and `signer=` exists
-  // ONLY on an iteration-2 relay: an older relay IGNORES it and returns an
-  // unfiltered page, so on `iter2 !== true` we do NOT fetch it (the tab renders an
-  // honest note instead). Keyed [did, indexed, iter2].
+  // separate index lane: public-read content chains CREATED and CONTRIBUTED TO
+  // by this DID. Created is `creator=did` (predates iteration 2 — always fetched).
+  // Contributed is `signer=did` (branch-inclusive "has signed in this chain")
+  // minus the rows this DID created — the spec's client-side subtraction — and
+  // `signer=` exists ONLY on an iteration-2 relay: an older relay IGNORES it and
+  // returns an unfiltered page, so on `iter2 !== true` we do NOT fetch it (the tab
+  // renders an honest note instead). Keyed [did, indexed, iter2].
   useEffect(() => {
     let dead = false;
     setCreated(null);
@@ -217,7 +217,7 @@ export const Identity = (props: { did: string }) => {
     // pre-iteration-2 relay would 400 on order=, so gate it on iter2.
     const newest = iter2 === true ? ({ order: 'genesisAt.desc' } as const) : {};
     void client
-      .indexContent({ creator: props.did, limit: 200, ...newest })
+      .indexContent({ creator: props.did, publicRead: true, limit: 200, ...newest })
       .then((p) => {
         if (!dead) setCreated(p.content);
       })
@@ -236,7 +236,12 @@ export const Identity = (props: { did: string }) => {
     }
     void client
       // this branch runs only when iter2 === true (guarded above), so order= is safe
-      .indexContent({ signer: props.did, limit: 200, order: 'genesisAt.desc' })
+      .indexContent({
+        signer: props.did,
+        publicRead: true,
+        limit: 200,
+        order: 'genesisAt.desc',
+      })
       .then((p) => {
         if (dead) return;
         // subtract the DID's own creations; truncation keys off the RAW page

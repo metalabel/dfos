@@ -46,7 +46,7 @@ func TestReadPathRejectsMultiParentCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deny := r.verifyContentAccess(delegate.did, creator.did, resource, "read", rootCred); deny != "" {
+	if deny := r.verifyContentAccess(delegate.did, creator.did, resource, "read", rootCred, true); deny != "" {
 		t.Fatalf("control: valid single-parent read credential denied: %q", deny)
 	}
 
@@ -56,7 +56,7 @@ func TestReadPathRejectsMultiParentCredential(t *testing.T) {
 	// through; it must now be DENIED.
 	multiParent, _ := mintDelegatedCredential(t, delegate.did, delegateKid, delegate.auth.priv,
 		delegate.did, resource, "read", []string{"parentA", "parentB"}, time.Hour)
-	deny := r.verifyContentAccess(delegate.did, creator.did, resource, "read", multiParent)
+	deny := r.verifyContentAccess(delegate.did, creator.did, resource, "read", multiParent, true)
 	if deny == "" {
 		t.Fatal("SECURITY: multi-parent X-Credential was GRANTED on the read path (R1 regression)")
 	}

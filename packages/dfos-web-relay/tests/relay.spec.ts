@@ -3752,6 +3752,100 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('standing authorization', () => {
+    it('should serve only the current head to standing-auth readers', async () => {
+      const creator = await createIdentity();
+      const content = await createContentOp(creator);
+      await postOps([creator.jwsToken]);
+
+      const ingestRes = await postOps([content.jwsToken]);
+      const contentId = (await json(ingestRes)).results[0].chainId;
+      const creatorToken = await createTestAuthToken(creator);
+
+      // upload the genesis blob
+      const genesisBytes = new TextEncoder().encode(JSON.stringify(content.document));
+      const genesisUpload = await putBlob(
+        contentId,
+        content.operationCID,
+        creatorToken,
+        genesisBytes,
+      );
+      expect(genesisUpload.status).toBe(200);
+
+      // update the chain and upload the new head blob
+      const headDocument = { type: 'post', title: 'current head', body: 'updated content' };
+      const headEncoded = await dagCborCanonicalEncode(
+        headDocument as unknown as Record<string, unknown>,
+      );
+      const updateOp: ContentOperation = {
+        version: 1,
+        type: 'update',
+        did: creator.did,
+        previousOperationCID: content.operationCID,
+        documentCID: headEncoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(2),
+        note: null,
+      };
+      const { jwsToken: updateToken, operationCID: headOperationCID } = await signContentOperation({
+        operation: updateOp,
+        signer: creator.authKey.signer,
+        kid: `${creator.did}#${creator.authKey.keyId}`,
+      });
+      await postOps([updateToken]);
+
+      const headBytes = new TextEncoder().encode(JSON.stringify(headDocument));
+      const headUpload = await putBlob(contentId, headOperationCID, creatorToken, headBytes);
+      expect(headUpload.status).toBe(200);
+
+      // mint a standing public read grant
+      const now = Math.floor(Date.now() / 1000);
+      const publicCred = await createDFOSCredential({
+        issuerDID: creator.did,
+        audienceDID: '*',
+        att: [{ resource: `chain:${contentId}`, action: 'read' }],
+        exp: now + 3600,
+        signer: creator.authKey.signer,
+        keyId: creator.authKey.keyId,
+        iat: now,
+      });
+      await postOps([publicCred]);
+
+      const anonymousHead = await req(`/content/${contentId}/blob`);
+      expect(anonymousHead.status).toBe(200);
+      expect(new Uint8Array(await anonymousHead.arrayBuffer())).toEqual(headBytes);
+
+      const anonymousGenesis = await req(`/content/${contentId}/blob/${content.operationCID}`);
+      expect(anonymousGenesis.status).toBe(401);
+
+      const anonymousHeadRef = await req(`/content/${contentId}/blob/${headOperationCID}`);
+      expect(anonymousHeadRef.status).toBe(200);
+      expect(new Uint8Array(await anonymousHeadRef.arrayBuffer())).toEqual(headBytes);
+
+      const creatorGenesis = await req(`/content/${contentId}/blob/${content.operationCID}`, {
+        headers: { authorization: `Bearer ${creatorToken}` },
+      });
+      expect(creatorGenesis.status).toBe(200);
+      expect(new Uint8Array(await creatorGenesis.arrayBuffer())).toEqual(genesisBytes);
+
+      // a stranger holding only their own auth token must NOT reach the non-head
+      // revision: the standing public grant conveys head-only publicness, so the
+      // authenticated path denies the genesis ref (403).
+      const stranger = await createIdentity();
+      await postOps([stranger.jwsToken]);
+      const strangerToken = await createTestAuthToken(stranger);
+      const strangerGenesis = await req(`/content/${contentId}/blob/${content.operationCID}`, {
+        headers: { authorization: `Bearer ${strangerToken}` },
+      });
+      expect(strangerGenesis.status).toBe(403);
+
+      // nor by replaying the public credential JWS as a per-request bearer.
+      const strangerGenesisWithCred = await req(
+        `/content/${contentId}/blob/${content.operationCID}`,
+        { headers: { authorization: `Bearer ${strangerToken}`, 'x-credential': publicCred } },
+      );
+      expect(strangerGenesisWithCred.status).toBe(403);
+    });
+
     it('should grant read access via stored public credential', async () => {
       const creator = await createIdentity();
       const reader = await createIdentity();
