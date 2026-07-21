@@ -15,13 +15,13 @@
 
   Why batch-coalesce rather than recompute per op: two triggers fan out over a
   bounded-but-large superset — a `chain:*` grant touches every content row, and
-  a revocation (or an identity deletion, which removes a credential issuer /
-  delegation hop) touches every currently-public-read content row. Running that
-  per op means a sync batch delivering N such ops does N back-to-back full
-  sweeps. Collecting dirtiness across the batch and flushing once collapses that
-  to a single sweep, while the post-batch store state the flush reads is the same
-  final state each per-op recompute would have converged to — so the projection
-  is byte-identical, just computed once.
+  a wildcard / unresolvable revocation (or an identity deletion, which removes
+  a credential issuer / delegation hop) touches every currently-public-read
+  content row. Running that per op means a sync batch delivering N such ops does
+  N back-to-back full sweeps. Collecting dirtiness across the batch and flushing
+  once collapses that to a single sweep, while the post-batch store state the
+  flush reads is the same final state each per-op recompute would have converged
+  to — so the projection is byte-identical, just computed once.
 
   The projection is a NON-AUTHORITATIVE hint plane. Maintenance therefore never
   fails an authoritative write: every entry point swallows its own errors so a
@@ -39,24 +39,25 @@
 
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { contentIndexRow, identityIndexRow, type IndexCountersignatureRow } from './index-routes';
-import type { IngestionResult, RelayStore } from './types';
+import type { IngestionResult, RelayStore, StoredPublicCredential } from './types';
 
 /**
  * Upper bound for the maintenance-time enumerate-all fallback used by the two
- * fan-out triggers (a `chain:*` grant, and any revocation). Both can flip
- * publicRead across many rows without naming a single content, so we recompute
- * the bounded affected superset. Kept well above any realistic in-memory
- * corpus; the SQL twins do the equivalent as an indexed `WHERE public_read`
- * (revocation) or a full projection scan (`chain:*`).
+ * fan-out triggers (a `chain:*` grant, and a wildcard / unresolvable
+ * revocation). Both can flip publicRead across many rows without naming a
+ * single content, so we recompute the bounded affected superset. Kept well
+ * above any realistic in-memory corpus; the SQL twins do the equivalent as an
+ * indexed `WHERE public_read` (revocation) or a full projection scan
+ * (`chain:*`).
  */
 const ENUMERATE_ALL_LIMIT = Number.MAX_SAFE_INTEGER;
 
 /**
  * The rows one batch of accepted ops dirtied, collected across the batch and
  * flushed once. `allContent`/`allPublicContent` are the two fan-out supersets
- * (a `chain:*` grant → all content; a revocation or identity deletion → all
- * currently-public-read content); when set they subsume the per-id sets, so a
- * batch of N such ops flushes a single sweep instead of N.
+ * (a `chain:*` grant → all content; a wildcard / unresolvable revocation or
+ * identity deletion → all currently-public-read content); when set they subsume
+ * the per-id sets, so a batch of N such ops flushes a single sweep instead of N.
  */
 export interface IndexDirtySet {
   identityDIDs: Set<string>;
@@ -113,23 +114,34 @@ const recomputePublicReadContentRows = async (store: RelayStore): Promise<void> 
  * resources). Returns { wildcard: true } when it grants `chain:*`, which covers
  * every chain and therefore fans out to all content rows.
  */
-const contentIdsFromCredential = (
+export const contentIdsFromCredential = (
+  credential: Pick<StoredPublicCredential, 'att'>,
+): { wildcard: boolean; contentIds: string[] } => {
+  const contentIds: string[] = [];
+  let wildcard = false;
+  for (const entry of credential.att) {
+    if (entry.resource === 'chain:*') wildcard = true;
+    else if (entry.resource.startsWith('chain:')) {
+      contentIds.push(entry.resource.slice('chain:'.length));
+    }
+  }
+  return { wildcard, contentIds };
+};
+
+const contentIdsFromCredentialToken = (
   jwsToken: string,
 ): { wildcard: boolean; contentIds: string[] } => {
   const decoded = decodeJwsUnsafe(jwsToken);
   const att = (decoded?.payload as Record<string, unknown> | undefined)?.['att'];
-  const contentIds: string[] = [];
-  let wildcard = false;
-  if (Array.isArray(att)) {
-    for (const entry of att) {
-      const resource = (entry as Record<string, unknown> | null)?.['resource'];
-      if (resource === 'chain:*') wildcard = true;
-      else if (typeof resource === 'string' && resource.startsWith('chain:')) {
-        contentIds.push(resource.slice('chain:'.length));
-      }
-    }
-  }
-  return { wildcard, contentIds };
+  const credential = {
+    att: Array.isArray(att)
+      ? att.filter(
+          (entry): entry is StoredPublicCredential['att'][number] =>
+            typeof (entry as Record<string, unknown> | null)?.['resource'] === 'string',
+        )
+      : [],
+  };
+  return contentIdsFromCredential(credential);
 };
 
 /**
@@ -152,9 +164,9 @@ const contentIdsFromCredential = (
  *  - content-op for chain C            → dirty content row C (+ anchored identities)
  *  - credential grant                  → dirty the att-named content rows, or all
  *                                        content rows on a `chain:*` grant
- *  - revocation                        → dirty all currently-public-read content
- *                                        rows (a revocation only ever turns
- *                                        publicRead true→false)
+ *  - revocation                        → dirty the revoked held grant's att-named
+ *                                        content rows, or all currently-public-read
+ *                                        rows when wildcard / unresolvable
  *  - countersign                       → queue the accepted countersign row upsert
  *                                        (dedup returns 'duplicate', so a
  *                                        status:'new' countersign IS the accepted
@@ -189,13 +201,17 @@ export const collectIndexDirtyAfterOp = async (
         }
         break;
       case 'credential': {
-        const { wildcard, contentIds } = contentIdsFromCredential(jwsToken);
+        const { wildcard, contentIds } = contentIdsFromCredentialToken(jwsToken);
         if (wildcard) dirty.allContent = true;
         else for (const contentId of contentIds) dirty.contentIds.add(contentId);
         break;
       }
       case 'revocation':
-        dirty.allPublicContent = true;
+        if (result.revokedGrant && !result.revokedGrant.wildcard) {
+          for (const contentId of result.revokedGrant.contentIds) dirty.contentIds.add(contentId);
+        } else {
+          dirty.allPublicContent = true;
+        }
         break;
       case 'countersign': {
         if (!result.chainId) break;

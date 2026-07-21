@@ -17,13 +17,13 @@ package relay
 
   Why batch-coalesce rather than recompute per op: two triggers fan out over a
   bounded-but-large superset — a chain:* grant touches every content row, and a
-  revocation (or an identity deletion, which removes a credential issuer /
-  delegation hop) touches every currently-public-read content row. Running that
-  per op means a sync batch delivering N such ops does N back-to-back full
-  sweeps. Collecting dirtiness across the batch and flushing once collapses that
-  to a single sweep, while the post-batch store state the flush reads is the same
-  final state each per-op recompute would have converged to — so the projection
-  is byte-identical, just computed once.
+  wildcard / unresolvable revocation (or an identity deletion, which removes a
+  credential issuer / delegation hop) touches every currently-public-read
+  content row. Running that per op means a sync batch delivering N such ops does
+  N back-to-back full sweeps. Collecting dirtiness across the batch and flushing
+  once collapses that to a single sweep, while the post-batch store state the
+  flush reads is the same final state each per-op recompute would have converged
+  to — so the projection is byte-identical, just computed once.
 
   The projection is a NON-AUTHORITATIVE hint plane. Maintenance therefore never
   fails an authoritative write: every entry point swallows its own errors (and
@@ -44,23 +44,26 @@ package relay
 
 import (
 	"log/slog"
+	"strings"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
 // enumerateAllLimit is the upper bound for the maintenance-time enumerate-all
-// fallback used by the two fan-out triggers (a chain:* grant, and any
-// revocation). Both can flip publicRead across many rows without naming a single
-// content, so we recompute the bounded affected superset. Kept well above any
-// realistic corpus; the SQL store does the equivalent as an indexed
-// WHERE public_read = 1 (revocation) or a full projection scan (chain:*).
+// fallback used by the two fan-out triggers (a chain:* grant, and a wildcard /
+// unresolvable revocation). Both can flip publicRead across many rows without
+// naming a single content, so we recompute the bounded affected superset. Kept
+// well above any realistic corpus; the SQL store does the equivalent as an
+// indexed WHERE public_read = 1 (revocation) or a full projection scan
+// (chain:*).
 const enumerateAllLimit = 1<<31 - 1
 
 // indexDirtySet is the rows one batch of accepted ops dirtied, collected across
 // the batch and flushed once. allContent/allPublicContent are the two fan-out
-// supersets (a chain:* grant → all content; a revocation or identity deletion →
-// all currently-public-read content); when set they subsume the per-id sets, so
-// a batch of N such ops flushes a single sweep instead of N.
+// supersets (a chain:* grant → all content; a wildcard / unresolvable revocation
+// or identity deletion → all currently-public-read content); when set they
+// subsume the per-id sets, so a batch of N such ops flushes a single sweep
+// instead of N.
 type indexDirtySet struct {
 	identityDIDs     map[string]struct{}
 	contentIDs       map[string]struct{}
@@ -147,7 +150,19 @@ func recomputePublicReadContentRows(store Store) error {
 // credential's attenuations (chain:<contentId> resources). wildcard is true when
 // it grants chain:*, which covers every chain and therefore fans out to all
 // content rows.
-func contentIdsFromCredential(jwsToken string) (wildcard bool, contentIds []string) {
+func contentIdsFromCredential(credential StoredPublicCredential) (wildcard bool, contentIds []string) {
+	contentIds = []string{}
+	for _, entry := range credential.Att {
+		if entry.Resource == "chain:*" {
+			wildcard = true
+		} else if strings.HasPrefix(entry.Resource, "chain:") {
+			contentIds = append(contentIds, entry.Resource[len("chain:"):])
+		}
+	}
+	return wildcard, contentIds
+}
+
+func contentIdsFromCredentialToken(jwsToken string) (wildcard bool, contentIds []string) {
 	_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || payload == nil {
 		return false, nil
@@ -156,6 +171,7 @@ func contentIdsFromCredential(jwsToken string) (wildcard bool, contentIds []stri
 	if !ok {
 		return false, nil
 	}
+	credential := StoredPublicCredential{}
 	for _, entry := range att {
 		m, ok := entry.(map[string]any)
 		if !ok {
@@ -165,13 +181,9 @@ func contentIdsFromCredential(jwsToken string) (wildcard bool, contentIds []stri
 		if !ok {
 			continue
 		}
-		if resource == "chain:*" {
-			wildcard = true
-		} else if len(resource) > len("chain:") && resource[:len("chain:")] == "chain:" {
-			contentIds = append(contentIds, resource[len("chain:"):])
-		}
+		credential.Att = append(credential.Att, AttenuationPair{Resource: resource})
 	}
-	return wildcard, contentIds
+	return contentIdsFromCredential(credential)
 }
 
 // collectIndexDirtyAfterOp collects the rows ONE accepted operation dirties into
@@ -191,8 +203,8 @@ func contentIdsFromCredential(jwsToken string) (wildcard bool, contentIds []stri
 //   - content-op for chain C             → dirty content row C (+ anchored identities)
 //   - credential grant                   → dirty the att-named content rows, or
 //     all content rows on a chain:* grant
-//   - revocation                         → dirty all currently-public-read content
-//     rows (a revocation only ever turns publicRead true→false)
+//   - revocation                         → dirty the revoked held grant's att-named
+//     content rows, or all currently-public-read rows when wildcard / unresolvable
 //   - countersign                        → queue the accepted countersign row
 //     upsert (dedup returns status "duplicate", so a status:"new" countersign IS
 //     the accepted one — never a shadowed raw op)
@@ -223,7 +235,7 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 			}
 		}
 	case "credential":
-		wildcard, contentIds := contentIdsFromCredential(jwsToken)
+		wildcard, contentIds := contentIdsFromCredentialToken(jwsToken)
 		if wildcard {
 			dirty.allContent = true
 		} else {
@@ -232,7 +244,13 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 			}
 		}
 	case "revocation":
-		dirty.allPublicContent = true
+		if result.RevokedGrant != nil && !result.RevokedGrant.Wildcard {
+			for _, contentID := range result.RevokedGrant.ContentIDs {
+				dirty.contentIDs[contentID] = struct{}{}
+			}
+		} else {
+			dirty.allPublicContent = true
+		}
 	case "countersign":
 		if result.ChainID == "" {
 			return

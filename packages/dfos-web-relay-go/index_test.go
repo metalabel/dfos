@@ -38,6 +38,26 @@ func indexRelay(t *testing.T) (*Relay, *MemoryStore) {
 	return r, store
 }
 
+type indexCountingStore struct {
+	*MemoryStore
+	contentRowPuts []string
+}
+
+func (s *indexCountingStore) PutIndexContentRow(row indexContentRow) error {
+	s.contentRowPuts = append(s.contentRowPuts, row.ContentID)
+	return s.MemoryStore.PutIndexContentRow(row)
+}
+
+func countingIndexRelay(t *testing.T) (*Relay, *indexCountingStore) {
+	t.Helper()
+	store := &indexCountingStore{MemoryStore: NewMemoryStore()}
+	r, err := NewRelay(RelayOptions{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, store
+}
+
 func getIndexJSONBody(t *testing.T, handler http.Handler, path string) (int, map[string]any, string) {
 	t.Helper()
 	req := httptest.NewRequest("GET", "http://localhost"+path, nil)
@@ -124,23 +144,34 @@ func createIndexedContent(t *testing.T, r *Relay, store *MemoryStore, id testIde
 	return testContent{contentID: contentID, operationCID: opCID, documentCID: documentCID, document: document}
 }
 
-// addPublicRead grants public read and returns the credential CID (so the grant
-// can later be revoked to exercise the publicRead true→false cascade).
-func addPublicRead(t *testing.T, r *Relay, id testIdentity, contentID string) string {
+func mintPublicReadGrant(t *testing.T, id testIdentity, resource string) (string, string) {
 	t.Helper()
 	kid := id.did + "#" + id.auth.keyID
-	credential, err := dfos.CreateCredential(id.did, "*", kid, "chain:"+contentID, "read", time.Hour, id.auth.priv)
+	credential, err := dfos.CreateCredential(id.did, "*", kid, resource, "read", time.Hour, id.auth.priv)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if res := r.Ingest([]string{credential}); res[0].Status != "new" {
-		t.Fatalf("ingest public read credential: %+v", res[0])
 	}
 	header, _, err := dfos.DecodeJWSUnsafe(credential)
 	if err != nil || header == nil {
 		t.Fatalf("decode credential CID: %v", err)
 	}
-	return header.CID
+	return credential, header.CID
+}
+
+func addPublicReadResource(t *testing.T, r *Relay, id testIdentity, resource string) string {
+	t.Helper()
+	credential, credentialCID := mintPublicReadGrant(t, id, resource)
+	if res := r.Ingest([]string{credential}); res[0].Status != "new" {
+		t.Fatalf("ingest public read credential: %+v", res[0])
+	}
+	return credentialCID
+}
+
+// addPublicRead grants public read and returns the credential CID (so the grant
+// can later be revoked to exercise the publicRead true→false cascade).
+func addPublicRead(t *testing.T, r *Relay, id testIdentity, contentID string) string {
+	t.Helper()
+	return addPublicReadResource(t, r, id, "chain:"+contentID)
 }
 
 func revokeGrant(t *testing.T, r *Relay, id testIdentity, credentialCID string) {
@@ -1029,6 +1060,78 @@ func TestIndexPublicReadFlipCascade(t *testing.T) {
 	}
 	if hasInPublicFilter() {
 		t.Fatalf("post-revoke subject leaked into hasPublicProfile=true")
+	}
+}
+
+func contentRowPutsEqual(got []string, want ...string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	return reflect.DeepEqual(got, want)
+}
+
+func TestIndexNamedGrantRevocationNarrowsMaintenance(t *testing.T) {
+	r, store := countingIndexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	contentA := createIndexedContent(t, r, store.MemoryStore, creator, map[string]any{"$schema": testPostSchema, "title": "a"}, false)
+	contentB := createIndexedContent(t, r, store.MemoryStore, creator, map[string]any{"$schema": testPostSchema, "title": "b"}, false)
+	credentialA := addPublicRead(t, r, creator, contentA.contentID)
+	addPublicRead(t, r, creator, contentB.contentID)
+	store.contentRowPuts = nil
+
+	revokeGrant(t, r, creator, credentialA)
+
+	if indexContentRowByID(t, handler, contentA.contentID)["publicRead"] != false {
+		t.Fatalf("revoked content A publicRead != false")
+	}
+	if indexContentRowByID(t, handler, contentB.contentID)["publicRead"] != true {
+		t.Fatalf("unrevoked content B publicRead != true")
+	}
+	if !contentRowPutsEqual(store.contentRowPuts, contentA.contentID) {
+		t.Fatalf("content row recomputes = %v, want only %s", store.contentRowPuts, contentA.contentID)
+	}
+}
+
+func TestIndexWildcardGrantRevocationFallsBackToPublicSweep(t *testing.T) {
+	r, store := countingIndexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	contentA := createIndexedContent(t, r, store.MemoryStore, creator, map[string]any{"$schema": testPostSchema, "title": "a"}, false)
+	contentB := createIndexedContent(t, r, store.MemoryStore, creator, map[string]any{"$schema": testPostSchema, "title": "b"}, false)
+	credentialCID := addPublicReadResource(t, r, creator, "chain:*")
+	store.contentRowPuts = nil
+
+	revokeGrant(t, r, creator, credentialCID)
+
+	if indexContentRowByID(t, handler, contentA.contentID)["publicRead"] != false || indexContentRowByID(t, handler, contentB.contentID)["publicRead"] != false {
+		t.Fatalf("wildcard-revoked content rows did not converge to private")
+	}
+	if !contentRowPutsEqual(store.contentRowPuts, contentA.contentID, contentB.contentID) {
+		t.Fatalf("content row recomputes = %v, want both content rows", store.contentRowPuts)
+	}
+}
+
+func TestIndexUnresolvableRevocationFallsBackToPublicSweep(t *testing.T) {
+	r, store := countingIndexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	contentA := createIndexedContent(t, r, store.MemoryStore, creator, map[string]any{"$schema": testPostSchema, "title": "a"}, false)
+	contentB := createIndexedContent(t, r, store.MemoryStore, creator, map[string]any{"$schema": testPostSchema, "title": "b"}, false)
+	addPublicRead(t, r, creator, contentA.contentID)
+	addPublicRead(t, r, creator, contentB.contentID)
+	_, unheldCredentialCID := mintPublicReadGrant(t, creator, "chain:unheld")
+	store.contentRowPuts = nil
+
+	revokeGrant(t, r, creator, unheldCredentialCID)
+
+	if indexContentRowByID(t, handler, contentA.contentID)["publicRead"] != true || indexContentRowByID(t, handler, contentB.contentID)["publicRead"] != true {
+		t.Fatalf("unresolvable revocation changed public-read values")
+	}
+	if !contentRowPutsEqual(store.contentRowPuts, contentA.contentID, contentB.contentID) {
+		t.Fatalf("content row recomputes = %v, want both content rows", store.contentRowPuts)
 	}
 }
 

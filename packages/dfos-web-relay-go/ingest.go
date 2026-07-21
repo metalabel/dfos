@@ -746,6 +746,16 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
 	}
 
+	revokedCredential, err := store.GetPublicCredentialByCID(result.CredentialCID)
+	if perr := persistError(cid, err); perr != nil {
+		return *perr
+	}
+	var revokedGrant *RevokedGrant
+	if revokedCredential != nil {
+		wildcard, contentIDs := contentIdsFromCredential(*revokedCredential)
+		revokedGrant = &RevokedGrant{Wildcard: wildcard, ContentIDs: contentIDs}
+	}
+
 	// store revocation
 	if perr := persistError(cid, store.AddRevocation(StoredRevocation{
 		CID:           cid,
@@ -769,7 +779,7 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 			return *perr
 		}
 	}
-	return IngestionResult{CID: cid, Status: "new", Kind: "revocation", ChainID: did}
+	return IngestionResult{CID: cid, Status: "new", Kind: "revocation", ChainID: did, RevokedGrant: revokedGrant}
 }
 
 func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) IngestionResult {
