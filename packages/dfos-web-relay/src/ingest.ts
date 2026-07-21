@@ -37,6 +37,7 @@ import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protoco
 import { compareHeadPreference } from '@metalabel/dfos-protocol/fold';
 import {
   collectIndexDirtyAfterOp,
+  contentIdsFromCredential,
   createIndexDirtySet,
   flushIndexMaintenance,
 } from './index-maintenance';
@@ -983,6 +984,9 @@ const ingestRevocation = async (
     return { cid, status: 'rejected', error: 'identity is deleted' };
   }
 
+  const revokedCredential = await store.getPublicCredentialByCID(verified.credentialCID);
+  const revokedGrant = revokedCredential ? contentIdsFromCredential(revokedCredential) : undefined;
+
   // add to revocation set
   await store.addRevocation({
     cid,
@@ -998,7 +1002,13 @@ const ingestRevocation = async (
   if (logEnabled) {
     await store.appendToLog({ cid, jwsToken, kind: 'revocation', chainId: did });
   }
-  return { cid, status: 'new', kind: 'revocation', chainId: did };
+  return {
+    cid,
+    status: 'new',
+    kind: 'revocation',
+    chainId: did,
+    ...(revokedGrant ? { revokedGrant } : {}),
+  };
 };
 
 const ingestPublicCredential = async (

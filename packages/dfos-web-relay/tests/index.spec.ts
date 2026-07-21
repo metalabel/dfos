@@ -22,7 +22,7 @@ import {
   generateId,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { bootstrapRelayIdentity, createRelay, MemoryRelayStore } from '../src';
 import type { RelayIdentity } from '../src';
 
@@ -252,21 +252,35 @@ describe('index v0', () => {
   };
 
   /** Grant public read and return the credential CID (so the grant can be revoked). */
-  const grantPublicRead = async (identity: TestIdentity, contentId: string): Promise<string> => {
+  const mintPublicReadGrant = async (identity: TestIdentity, resource: string) => {
     const now = Math.floor(Date.now() / 1000);
     const credential = await createDFOSCredential({
       issuerDID: identity.did,
       audienceDID: '*',
-      att: [{ resource: `chain:${contentId}`, action: 'read' }],
+      att: [{ resource, action: 'read' }],
       exp: now + 3600,
       signer: identity.authKey.signer,
       keyId: identity.authKey.keyId,
       iat: now,
     });
+    return {
+      credential,
+      credentialCID: decodeDFOSCredentialUnsafe(credential)!.header.cid as string,
+    };
+  };
+
+  const grantPublicReadResource = async (
+    identity: TestIdentity,
+    resource: string,
+  ): Promise<string> => {
+    const { credential, credentialCID } = await mintPublicReadGrant(identity, resource);
     const res = await postOps([credential]);
     expect(res.status).toBe(200);
-    return decodeDFOSCredentialUnsafe(credential)!.header.cid as string;
+    return credentialCID;
   };
+
+  const grantPublicRead = (identity: TestIdentity, contentId: string): Promise<string> =>
+    grantPublicReadResource(identity, `chain:${contentId}`);
 
   const revokeGrant = async (identity: TestIdentity, credentialCID: string) => {
     const { jwsToken } = await signRevocation({
@@ -1068,6 +1082,62 @@ describe('index v0', () => {
         (row: { did: string }) => row.did,
       ),
     ).not.toContain(subject.did);
+  });
+
+  it('narrows named grant revocation maintenance to its att-named chain', async () => {
+    const creator = await createIdentity();
+    const contentA = await createContent(creator, { $schema: POST_SCHEMA, title: 'a' }, 1);
+    const contentB = await createContent(creator, { $schema: POST_SCHEMA, title: 'b' }, 2);
+    const credentialA = await grantPublicRead(creator, contentA.contentId);
+    await grantPublicRead(creator, contentB.contentId);
+    expect((await contentRow(contentA.contentId)).publicRead).toBe(true);
+    expect((await contentRow(contentB.contentId)).publicRead).toBe(true);
+
+    const putContentRow = vi.spyOn(store, 'putIndexContentRow');
+    await revokeGrant(creator, credentialA);
+
+    expect((await contentRow(contentA.contentId)).publicRead).toBe(false);
+    expect((await contentRow(contentB.contentId)).publicRead).toBe(true);
+    expect(putContentRow.mock.calls.map(([row]) => row.contentId)).toEqual([contentA.contentId]);
+  });
+
+  it('falls back to the public sweep for wildcard grant revocation', async () => {
+    const creator = await createIdentity();
+    const contentA = await createContent(creator, { $schema: POST_SCHEMA, title: 'a' }, 1);
+    const contentB = await createContent(creator, { $schema: POST_SCHEMA, title: 'b' }, 2);
+    const credentialCID = await grantPublicReadResource(creator, 'chain:*');
+    expect((await contentRow(contentA.contentId)).publicRead).toBe(true);
+    expect((await contentRow(contentB.contentId)).publicRead).toBe(true);
+
+    const putContentRow = vi.spyOn(store, 'putIndexContentRow');
+    await revokeGrant(creator, credentialCID);
+
+    expect((await contentRow(contentA.contentId)).publicRead).toBe(false);
+    expect((await contentRow(contentB.contentId)).publicRead).toBe(false);
+    const recomputed = putContentRow.mock.calls.map(([row]) => row.contentId);
+    expect(recomputed).toHaveLength(2);
+    expect(new Set(recomputed)).toEqual(new Set([contentA.contentId, contentB.contentId]));
+  });
+
+  it('falls back to the public sweep for an unresolvable revoked credential', async () => {
+    const creator = await createIdentity();
+    const contentA = await createContent(creator, { $schema: POST_SCHEMA, title: 'a' }, 1);
+    const contentB = await createContent(creator, { $schema: POST_SCHEMA, title: 'b' }, 2);
+    await grantPublicRead(creator, contentA.contentId);
+    await grantPublicRead(creator, contentB.contentId);
+    const { credentialCID: unheldCredentialCID } = await mintPublicReadGrant(
+      creator,
+      'chain:unheld',
+    );
+
+    const putContentRow = vi.spyOn(store, 'putIndexContentRow');
+    await revokeGrant(creator, unheldCredentialCID);
+
+    expect((await contentRow(contentA.contentId)).publicRead).toBe(true);
+    expect((await contentRow(contentB.contentId)).publicRead).toBe(true);
+    const recomputed = putContentRow.mock.calls.map(([row]) => row.contentId);
+    expect(recomputed).toHaveLength(2);
+    expect(new Set(recomputed)).toEqual(new Set([contentA.contentId, contentB.contentId]));
   });
 
   it('flips publicRead false when the identity that granted it is deleted (issuer no longer a valid credential hop)', async () => {

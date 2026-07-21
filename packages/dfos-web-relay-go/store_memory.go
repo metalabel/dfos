@@ -809,6 +809,16 @@ func (s *MemoryStore) GetPublicCredentials(resource string) ([]string, error) {
 	return tokens, nil
 }
 
+func (s *MemoryStore) GetPublicCredentialByCID(cid string) (*StoredPublicCredential, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	credential, ok := s.publicCredentials[cid]
+	if !ok {
+		return nil, nil
+	}
+	return &credential, nil
+}
+
 func (s *MemoryStore) AddPublicCredential(credential StoredPublicCredential) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

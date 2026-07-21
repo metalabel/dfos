@@ -211,13 +211,21 @@ func kindBucket(kind string) string {
 	}
 }
 
+// RevokedGrant is the revoked public grant scope. A nil result field means the
+// credential was not held.
+type RevokedGrant struct {
+	Wildcard   bool     `json:"wildcard"`
+	ContentIDs []string `json:"contentIds"`
+}
+
 // IngestionResult reports the outcome of ingesting a single operation.
 type IngestionResult struct {
-	CID     string `json:"cid"`
-	Status  string `json:"status"`
-	Error   string `json:"error,omitempty"`
-	Kind    string `json:"kind,omitempty"`
-	ChainID string `json:"chainId,omitempty"`
+	CID          string        `json:"cid"`
+	Status       string        `json:"status"`
+	Error        string        `json:"error,omitempty"`
+	Kind         string        `json:"kind,omitempty"`
+	ChainID      string        `json:"chainId,omitempty"`
+	RevokedGrant *RevokedGrant `json:"revokedGrant,omitempty"`
 
 	// DependencyMissing is the structured dependency-failure signal. When true,
 	// the rejection is due to a missing dependency that may arrive later via
@@ -294,6 +302,7 @@ type Store interface {
 
 	// public credentials (standing authorization)
 	GetPublicCredentials(resource string) ([]string, error) // returns JWS tokens
+	GetPublicCredentialByCID(cid string) (*StoredPublicCredential, error)
 	AddPublicCredential(credential StoredPublicCredential) error
 	RemovePublicCredential(credentialCID string) error
 

@@ -1510,6 +1510,25 @@ func (s *SQLiteStore) GetPublicCredentials(resource string) ([]string, error) {
 	return tokens, rows.Err()
 }
 
+func (s *SQLiteStore) GetPublicCredentialByCID(cid string) (*StoredPublicCredential, error) {
+	var credential StoredPublicCredential
+	var attJSON string
+	err := s.readerDB().QueryRow(
+		"SELECT cid, issuer_did, att, exp, jws_token FROM public_credentials WHERE cid = ?",
+		cid,
+	).Scan(&credential.CID, &credential.IssuerDID, &attJSON, &credential.Exp, &credential.JWSToken)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(attJSON), &credential.Att); err != nil {
+		return nil, err
+	}
+	return &credential, nil
+}
+
 func (s *SQLiteStore) AddPublicCredential(credential StoredPublicCredential) error {
 	attJSON, err := json.Marshal(credential.Att)
 	if err != nil {

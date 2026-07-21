@@ -394,6 +394,10 @@ export class MemoryRelayStore implements RelayStore {
     return tokens;
   }
 
+  async getPublicCredentialByCID(cid: string): Promise<StoredPublicCredential | undefined> {
+    return this.publicCredentials.get(cid);
+  }
+
   async addPublicCredential(credential: StoredPublicCredential): Promise<void> {
     this.publicCredentials.set(credential.cid, credential);
   }

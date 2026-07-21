@@ -440,6 +440,8 @@ export interface RelayStore {
 
   /** Get public credentials covering a specific resource */
   getPublicCredentials(resource: string): Promise<string[]>;
+  /** Get a stored public credential by CID */
+  getPublicCredentialByCID(cid: string): Promise<StoredPublicCredential | undefined>;
   /** Add a public credential as standing authorization */
   addPublicCredential(credential: StoredPublicCredential): Promise<void>;
   /** Remove a public credential (e.g., after revocation) */
@@ -487,6 +489,8 @@ export interface IngestionResult {
   kind?: OperationKind;
   /** Chain identifier if applicable */
   chainId?: string;
+  /** Revoked public grant scope; undefined when the credential was not held */
+  revokedGrant?: { wildcard: boolean; contentIds: string[] };
   /**
    * Structured dependency-failure signal. When true, the rejection is due to a
    * missing dependency that may arrive later via sync or gossip, so the
