@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dfos.com/credit-claim/v1",
+  "title": "Credit Claim",
+  "description": "The payload of a did:dfos:credit-claim JWS — a claimant's own signed assertion that it holds a named role on a content chain. Unlike post/v1, profile/v1, and index/v1, this is NOT a document committed to a chain by CID: it is an envelope payload carried inside document bytes, in the claim field of a credits entry (see $defs/creditEntry). Attribution, not authorization — a credit claim grants nothing. Unknown top-level fields are deliberately NOT rejected here (no additionalProperties: false, unlike the document schemas): this is a wire payload under the protocol's MUST-ignore-unknown rule, and the CID commits to the exact bytes, so a verifier that stripped unknown keys would fail its own CID check. Full semantics, the two-way bind, and the four verification states: https://protocol.dfos.com/credits",
+  "type": "object",
+  "required": ["version", "type", "contentId", "did", "role", "createdAt"],
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Schema version."
+    },
+    "type": {
+      "const": "credit-claim",
+      "description": "Literal discriminator."
+    },
+    "contentId": {
+      "type": "string",
+      "pattern": "^[2346789acdefhknrtvz]{31}$",
+      "description": "The content chain this claim binds to — the binder. A 31-char content chain id, never a documentCID and never a chain head CID: binding the chain is what lets a claim survive edits verbatim and avoids circularity with the document that embeds it. Naming the chain in the signed bytes is also what makes a claim anti-replay — it cannot be lifted into another chain's document."
+    },
+    "did": {
+      "type": "string",
+      "pattern": "^did:",
+      "description": "The claimant DID. MUST equal the DID portion of the JWS header's kid — only the claimant can claim its own credit."
+    },
+    "role": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The claimed role — open vocabulary, compared by exact, case-sensitive byte equality with no normalization of any kind (not case folding, not Unicode normalization, not whitespace trimming). One component of the bind, so any normalization would let implementations disagree about whether an entry is claimed."
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the claimant signed (ISO 8601, millisecond precision, UTC). Provenance metadata only — unlike an operation's createdAt it orders nothing and gates nothing, and a claim has no expiry."
+    },
+    "asOfDocumentCID": {
+      "type": "string",
+      "description": "Optional content-strength flavor — the document state the claimant pins its credit to. NOT part of the bind; consumers that ignore it are conformant. Omission is the default and is CID-neutral."
+    }
+  },
+  "$defs": {
+    "creditEntry": {
+      "title": "Credit Entry",
+      "description": "The canonical credits[] entry shape — the document-plane site that hosts a credit claim. Schemas carrying credits inline this shape (post/v1 does). Array order is display order; the first entry is the primary author.",
+      "type": "object",
+      "required": ["did"],
+      "dependentRequired": {
+        "claim": ["role"]
+      },
+      "properties": {
+        "did": {
+          "type": "string",
+          "pattern": "^did:",
+          "description": "DID of the credited identity."
+        },
+        "role": {
+          "type": "string",
+          "description": "Free-text role — open vocabulary, not an enum (e.g. \"author\", \"editor\", \"photography\"). Compared byte-exact against the claim payload's role, so it is REQUIRED whenever claim is present: an entry with a claim but no role has nothing to bind to and is invalid, not unclaimed."
+        },
+        "name": {
+          "type": "string",
+          "description": "Credited party's display name at time of publication — a rendering convenience so a document reads without resolving every credited DID. Never authoritative (the credited DID's profile is) and never compared during verification."
+        },
+        "claim": {
+          "type": "string",
+          "description": "A did:dfos:credit-claim JWS asserting this same credit, bound to the entry by exact match of (contentId, did, role). Absent is the ordinary \"unclaimed\" state, not a defect — the credited party may hold no keys. A claim present but failing verification or the bind is \"invalid\" and MUST NOT be rendered as unclaimed."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

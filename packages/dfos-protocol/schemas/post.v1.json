@@ -43,7 +43,7 @@
       "items": {
         "$ref": "#/$defs/credit"
       },
-      "description": "Ordered authorship credits. Array order is display order; the first entry is the primary author. Omit entirely for unattributed content. Credits are the assertion tier of the authorship lattice \u2014 the operation signer asserts them; a credited DID may upgrade its credit to proof via a claim operation."
+      "description": "Ordered authorship credits. Array order is display order; the first entry is the primary author. Omit entirely for unattributed content. A bare entry is the assertion tier of the authorship lattice \u2014 the operation signer asserts it; a credited DID upgrades its credit to proof by adding a credit claim in the entry's claim field (see https://protocol.dfos.com/credits)."
     }
   },
   "additionalProperties": false,
@@ -73,15 +73,26 @@
     "credit": {
       "type": "object",
       "required": ["did"],
+      "dependentRequired": {
+        "claim": ["role"]
+      },
       "properties": {
         "did": {
           "type": "string",
           "pattern": "^did:",
           "description": "DID of the credited identity."
         },
-        "label": {
+        "role": {
           "type": "string",
-          "description": "Free-text role label \u2014 display vocabulary, not an enum (e.g. \"author\", \"editor\", \"photography\")."
+          "description": "Free-text role \u2014 open vocabulary, not an enum (e.g. \"author\", \"editor\", \"photography\"). Compared by exact, case-sensitive byte equality as one component of a credit claim's bind, so it is REQUIRED whenever claim is present."
+        },
+        "name": {
+          "type": "string",
+          "description": "Credited party's display name at time of publication \u2014 a rendering convenience so a document reads without resolving every credited DID. Never authoritative (the credited DID's profile is) and never compared during verification."
+        },
+        "claim": {
+          "type": "string",
+          "description": "A did:dfos:credit-claim JWS in which the credited DID asserts this same credit itself, bound to this entry by exact match of (contentId, did, role). Absent is the ordinary case (\"unclaimed\"), not a defect. See https://protocol.dfos.com/credits"
         }
       },
       "additionalProperties": false

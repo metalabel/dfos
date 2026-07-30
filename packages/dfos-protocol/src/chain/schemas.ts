@@ -303,3 +303,52 @@ export const RevocationPayload = z.looseObject({
   createdAt: Iso8601,
 });
 export type RevocationPayload = z.infer<typeof RevocationPayload>;
+
+// ---
+
+/**
+ * Max byte length of a credit-claim JWS token — the claim's aggregate size bound,
+ * the same register as MAX_CREDENTIAL_SIZE (measured over the serialized token,
+ * checked before any decode as a DoS guard). Claims are small by construction:
+ * two identifiers, a role string, and a timestamp. Deliberately tight because
+ * claims travel INSIDE document bytes — a document embedding many credits carries
+ * one token per claimed entry, so a generous per-claim cap would multiply into the
+ * document blob. `role` therefore carries no separate length cap; this aggregate
+ * is the single byte arbiter. VALIDITY-determining: MUST match the Go reference
+ * (maxCreditClaimSize in credit_claim.go).
+ */
+export const MAX_CREDIT_CLAIM_SIZE = 4096;
+
+/**
+ * Credit claim: a claimant's signed assertion that it holds a named role on a
+ * content chain. A document-plane artifact — it is NOT gossiped and relays are not
+ * credit-claim aware; a claim travels inside the document bytes that embed it (see
+ * `specs/CREDITS.md`).
+ *
+ * `contentId` is the binder — the STABLE 31-char content chain id, never a
+ * documentCID or a chain head CID. Binding to the chain (not a document) is what
+ * makes a claim survive edits verbatim and avoids the circularity of a claim
+ * embedded in the very document it would otherwise commit to. It is shape-validated
+ * against the same 31-char contentId form used for anchor dispatch, so an artifact
+ * CID (immutable, chainless, and therefore unable to host a credits slot) is
+ * rejected uniformly across implementations.
+ *
+ * `role` is an OPEN-namespace tag compared by exact, case-sensitive byte equality —
+ * it is the third component of the entry↔claim bind, so no normalization of any kind
+ * is applied to it.
+ *
+ * `asOfDocumentCID` is an OPTIONAL content-strength flavor: the claimant pins the
+ * document state it is crediting itself on. Omitted by default, and omission is
+ * CID-neutral (undefined strips under canonical CBOR). Consumers that ignore it are
+ * conformant — the bind never depends on it.
+ */
+export const CreditClaimPayload = z.looseObject({
+  version: z.literal(1),
+  type: z.literal('credit-claim'),
+  contentId: z.string().regex(CONTENT_ID_ANCHOR_RE, 'contentId must be a 31-char content chain id'),
+  did: z.string(),
+  role: z.string().min(1),
+  createdAt: Iso8601,
+  asOfDocumentCID: CIDString.optional(),
+});
+export type CreditClaimPayload = z.infer<typeof CreditClaimPayload>;

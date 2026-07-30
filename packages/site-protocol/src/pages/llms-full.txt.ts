@@ -13,6 +13,7 @@ export const GET: APIRoute = () => {
   const webRelay = fs.readFileSync('../../specs/WEB-RELAY.md', 'utf-8');
   const documentGateway = fs.readFileSync('../../specs/DOCUMENT-GATEWAY.md', 'utf-8');
   const credentials = fs.readFileSync('../../specs/CREDENTIALS.md', 'utf-8');
+  const credits = fs.readFileSync('../../specs/CREDITS.md', 'utf-8');
   const siwd = fs.readFileSync('../../specs/SIWD.md', 'utf-8');
   const threatModel = fs.readFileSync('../../specs/THREAT-MODEL.md', 'utf-8');
   const conformance = fs.readFileSync('../../specs/CONFORMANCE.md', 'utf-8');
@@ -55,6 +56,10 @@ export const GET: APIRoute = () => {
     '---',
     '',
     credentials,
+    '',
+    '---',
+    '',
+    credits,
     '',
     '---',
     '',

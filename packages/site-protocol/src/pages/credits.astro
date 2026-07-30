@@ -1,0 +1,13 @@
+---
+import fs from 'node:fs';
+import SpecPage from '../layouts/SpecPage.astro';
+
+const source = fs.readFileSync('../../specs/CREDITS.md', 'utf-8');
+---
+
+<SpecPage
+  title="Credits"
+  description="DFOS Credits — verifiable attribution via credit claims: the signed envelope, the two-way bind, and the four verification states."
+  path="/credits"
+  source={source}
+/>
