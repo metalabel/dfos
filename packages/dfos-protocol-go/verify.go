@@ -68,10 +68,14 @@ type KeyResolver func(kid string) (ed25519.PublicKey, error)
 // decisions: acceptance is a freshness decision; verification of committed
 // history is a validity decision.
 //
-//   - asOfUnix == 0 (timeless) — "is this credential revoked as far as you know
+//   - asOfUnix <= 0 (timeless) — "is this credential revoked as far as you know
 //     right now?". The freshness question, used by acceptance gates: relay
 //     ingest (do not admit a NEW operation authorized by a credential we
-//     already know to be revoked) and live read-path authorization.
+//     already know to be revoked) and live read-path authorization. 0 is the
+//     in-band sentinel, so "as of epoch 0" is not expressible; the whole
+//     non-positive range is timeless in the TS twin too, which keeps the two
+//     from answering that degenerate input oppositely (an operation dated at or
+//     before 1970 gets the stricter answer in both).
 //   - asOfUnix > 0 (as-of) — "was this credential already revoked at asOfUnix?".
 //     The validity question. Report true only if a revocation exists AND its
 //     signed createdAt is <= asOfUnix. Used when verifying operations already

@@ -91,6 +91,55 @@ func (c asOfChain) revoke(t *testing.T) {
 	}
 }
 
+// signRevocationAt signs a revocation of the seeded credential with a
+// caller-chosen createdAt. dfos.SignRevocation stamps time.Now(), which cannot
+// express the two-revocations-at-different-instants case the min-boundary rule
+// exists for.
+func (c asOfChain) signRevocationAt(t *testing.T, createdAt time.Time) (token, cid string) {
+	t.Helper()
+	payload := map[string]any{
+		"version":       int64(1),
+		"type":          "revocation",
+		"did":           c.creator.did,
+		"credentialCID": c.credentialCID,
+		"createdAt":     createdAt.UTC().Format(expBasisTimeFormat),
+	}
+	_, _, cidStr, err := dfos.DagCborCID(payload)
+	if err != nil {
+		t.Fatalf("DagCborCID(revocation): %v", err)
+	}
+	header := dfos.JWSHeader{
+		Alg: "EdDSA", Typ: "did:dfos:revocation",
+		Kid: c.creator.did + "#" + c.creator.auth.keyID, CID: cidStr,
+	}
+	token, err = dfos.CreateJWS(header, payload, c.creator.auth.priv)
+	if err != nil {
+		t.Fatalf("CreateJWS(revocation): %v", err)
+	}
+	return token, cidStr
+}
+
+// storedRevocation builds a record for direct AddRevocation contract tests.
+func (c asOfChain) storedRevocation(cid, createdAt string) StoredRevocation {
+	return StoredRevocation{
+		CID: cid, IssuerDID: c.creator.did, CredentialCID: c.credentialCID, CreatedAt: createdAt,
+	}
+}
+
+// boundaryOf reports the createdAt of the revocation the store currently holds for
+// the seeded credential — i.e. the as-of boundary in force.
+func (c asOfChain) boundaryOf(t *testing.T) string {
+	t.Helper()
+	stored, err := c.store.GetRevocationForCredential(c.credentialCID)
+	if err != nil {
+		t.Fatalf("GetRevocationForCredential: %v", err)
+	}
+	if stored == nil {
+		return ""
+	}
+	return stored.CreatedAt
+}
+
 // signBackdatedUpdate hand-builds a NON-delegated (creator-signed) update op with a
 // caller-chosen createdAt. The delegated twin is signBackdatedDelegatedUpdate
 // (ingest_exp_basis_test.go); this one carries no authorization, so it isolates the
@@ -474,5 +523,333 @@ func TestLiteNodeStillServesBlobDownload(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode == 501 {
 		t.Fatal("write:false must not 501 a blob READ — reads are unaffected")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// the min-boundary rule: two revocations for one credential
+// ---------------------------------------------------------------------------
+
+// TestEarliestRevocationBoundaryWins — nothing stops an issuer signing a second
+// revocation for the same credential (different artifact, so ingest idempotence
+// admits it). If the store took the last write, the validity boundary would slide
+// forward and RE-VALIDATE operations the first revocation had already invalidated.
+func TestEarliestRevocationBoundaryWins(t *testing.T) {
+	now := time.Now()
+
+	t.Run("re-revoking later does not move the boundary", func(t *testing.T) {
+		c := seedAsOfChain(t, -60*time.Minute)
+		early := c.storedRevocation("bafyearly", now.Add(-30*time.Minute).UTC().Format(expBasisTimeFormat))
+		late := c.storedRevocation("bafylate", now.Add(-5*time.Minute).UTC().Format(expBasisTimeFormat))
+
+		if err := c.store.AddRevocation(early); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.store.AddRevocation(late); err != nil {
+			t.Fatal(err)
+		}
+		if got := c.boundaryOf(t); got != early.CreatedAt {
+			t.Fatalf("boundary moved later: got %q, want %q", got, early.CreatedAt)
+		}
+	})
+
+	t.Run("an earlier revocation arriving second moves the boundary earlier", func(t *testing.T) {
+		c := seedAsOfChain(t, -60*time.Minute)
+		late := c.storedRevocation("bafylate", now.Add(-5*time.Minute).UTC().Format(expBasisTimeFormat))
+		early := c.storedRevocation("bafyearly", now.Add(-30*time.Minute).UTC().Format(expBasisTimeFormat))
+
+		if err := c.store.AddRevocation(late); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.store.AddRevocation(early); err != nil {
+			t.Fatal(err)
+		}
+		if got := c.boundaryOf(t); got != early.CreatedAt {
+			t.Fatalf("boundary did not move earlier: got %q, want %q", got, early.CreatedAt)
+		}
+	})
+
+	t.Run("an unparseable boundary wins over a dated one", func(t *testing.T) {
+		c := seedAsOfChain(t, -60*time.Minute)
+		dated := c.storedRevocation("bafydated", now.Add(-30*time.Minute).UTC().Format(expBasisTimeFormat))
+		broken := c.storedRevocation("bafybroken", "not-a-timestamp")
+
+		if err := c.store.AddRevocation(dated); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.store.AddRevocation(broken); err != nil {
+			t.Fatal(err)
+		}
+		if got := c.boundaryOf(t); got != broken.CreatedAt {
+			t.Fatalf("timeless boundary lost: got %q, want %q", got, broken.CreatedAt)
+		}
+		// and it bites at every instant — the fail-closed direction
+		if revoked, _ := c.store.IsCredentialRevoked(c.creator.did, c.credentialCID, now.Add(-24*time.Hour).Unix()); !revoked {
+			t.Fatal("an unparseable boundary must fail CLOSED (revoked at every instant)")
+		}
+	})
+}
+
+// TestRevocationBoundaryIsArrivalOrderIndependent ingests two genuine, verifiable
+// revocations of the same credential in OPPOSITE orders on two stores; both must
+// converge on the same (earlier) boundary. Byte twin of the TS relay test.
+func TestRevocationBoundaryIsArrivalOrderIndependent(t *testing.T) {
+	now := time.Now()
+
+	boundary := func(order string) string {
+		c := seedAsOfChain(t, -60*time.Minute)
+		early, _ := c.signRevocationAt(t, now.Add(-30*time.Minute))
+		late, _ := c.signRevocationAt(t, now.Add(-5*time.Minute))
+		seq := []string{early, late}
+		if order == "late-first" {
+			seq = []string{late, early}
+		}
+		for _, token := range seq {
+			if res := IngestOperations([]string{token}, c.store); res[0].Status != "new" {
+				t.Fatalf("[%s] ingest revocation: %s (%s)", order, res[0].Status, res[0].Error)
+			}
+		}
+		return c.boundaryOf(t)
+	}
+
+	forwards := boundary("early-first")
+	backwards := boundary("late-first")
+	if forwards != backwards {
+		t.Fatalf("boundary depends on arrival order: early-first=%q late-first=%q", forwards, backwards)
+	}
+}
+
+// TestSQLiteEarliestRevocationBoundaryWins covers the durable store's own
+// read-compare-update path, which is a different implementation from the memory
+// store's map swap.
+func TestSQLiteEarliestRevocationBoundaryWins(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "boundary.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Now()
+	issuerDID := "did:dfos:" + strings.Repeat("a", 31)
+	credentialCID := "bafyrei" + strings.Repeat("c", 52)
+	rev := func(cid, createdAt string) StoredRevocation {
+		return StoredRevocation{CID: cid, IssuerDID: issuerDID, CredentialCID: credentialCID, CreatedAt: createdAt}
+	}
+	early := rev("bafyearly", now.Add(-30*time.Minute).UTC().Format(expBasisTimeFormat))
+	late := rev("bafylate", now.Add(-5*time.Minute).UTC().Format(expBasisTimeFormat))
+
+	if err := store.AddRevocation(late); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddRevocation(early); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetRevocationForCredential(credentialCID)
+	if err != nil || stored == nil {
+		t.Fatalf("GetRevocationForCredential: %v (nil=%v)", err, stored == nil)
+	}
+	if stored.CreatedAt != early.CreatedAt {
+		t.Fatalf("boundary: got %q, want the earlier %q", stored.CreatedAt, early.CreatedAt)
+	}
+	// the surviving row is the winning revocation IN FULL, so the status route
+	// serves the artifact that actually sets the boundary
+	if stored.CID != early.CID {
+		t.Fatalf("surviving artifact: got %q, want %q", stored.CID, early.CID)
+	}
+	// re-adding the later one must not move it back
+	if err := store.AddRevocation(late); err != nil {
+		t.Fatal(err)
+	}
+	if got := c0BoundaryOf(t, store, credentialCID); got != early.CreatedAt {
+		t.Fatalf("boundary moved later on re-add: got %q, want %q", got, early.CreatedAt)
+	}
+}
+
+// c0BoundaryOf is the store-agnostic boundary read used by the SQLite test.
+func c0BoundaryOf(t *testing.T, store Store, credentialCID string) string {
+	t.Helper()
+	stored, err := store.GetRevocationForCredential(credentialCID)
+	if err != nil {
+		t.Fatalf("GetRevocationForCredential: %v", err)
+	}
+	if stored == nil {
+		return ""
+	}
+	return stored.CreatedAt
+}
+
+// ---------------------------------------------------------------------------
+// as-of sentinel + boundary parsing
+// ---------------------------------------------------------------------------
+
+// TestNonPositiveAsOfIsTimeless — 0 is the in-band sentinel and "as of epoch 0" is
+// not expressible, so the whole non-positive range is timeless. The TS twin pins
+// the same contract, which is what keeps the two from answering it oppositely.
+func TestNonPositiveAsOfIsTimeless(t *testing.T) {
+	c := seedAsOfChain(t, -30*time.Minute)
+	c.revoke(t)
+
+	for _, asOf := range []int64{0, -1} {
+		revoked, err := c.store.IsCredentialRevoked(c.creator.did, c.credentialCID, asOf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !revoked {
+			t.Fatalf("asOf %d must be timeless (revoked)", asOf)
+		}
+	}
+}
+
+// TestAsOfBoundaryParsingIsCanonicalGrammarOnly — the boundary is read through the
+// protocol's canonical grammar, not RFC3339. An off-grammar timestamp must fail
+// CLOSED (revoked at every instant) rather than yield a boundary the signer could
+// never have produced. Same vector set as the TS twin.
+func TestAsOfBoundaryParsingIsCanonicalGrammarOnly(t *testing.T) {
+	cases := []struct {
+		label     string
+		createdAt string
+		usable    bool
+	}{
+		{"canonical .000Z", "2026-03-07T00:00:00.000Z", true},
+		{"numeric offset", "2026-03-07T00:00:00.000+05:00", false},
+		{"missing Z", "2026-03-07T00:00:00.000", false},
+		{"no fraction", "2026-03-07T00:00:00Z", false},
+		{"garbage", "not-a-timestamp", false},
+		{"empty", "", false},
+	}
+	wellBefore, err := dfos.ParseProtocolTimestamp("2020-01-01T00:00:00.000Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			c := seedAsOfChain(t, -60*time.Minute)
+			// JWSToken empty so the legacy decode fallback cannot rescue the value —
+			// this isolates the parse.
+			if err := c.store.AddRevocation(c.storedRevocation("bafyparse", tc.createdAt)); err != nil {
+				t.Fatal(err)
+			}
+			revoked, err := c.store.IsCredentialRevoked(c.creator.did, c.credentialCID, wellBefore.Unix())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if revoked != !tc.usable {
+				t.Fatalf("createdAt %q: revoked-as-of-2020 = %v, want %v (usable=%v)", tc.createdAt, revoked, !tc.usable, tc.usable)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// fork-path classification + retroactive deletion
+// ---------------------------------------------------------------------------
+
+// TestForkPointReplayFailureIsDependencyMissing pins the classification the TS twin
+// converged onto: a fork whose fork-point replay FAILS is retryable (the raw op is
+// retained), never a permanent rejection — because the same failure covers a
+// transient gap (a dependency not yet ingested) and permanent deletion is the
+// unsafe direction.
+//
+// B moves the head past A so the fork op takes the FORK branch (which replays from
+// the fork point) instead of the linear fast path (which never replays).
+func TestForkPointReplayFailureIsDependencyMissing(t *testing.T) {
+	c := seedAsOfChain(t, -30*time.Minute)
+	now := time.Now()
+
+	a, aCID := signBackdatedDelegatedUpdate(t, c.delegate, c.genesisOpCID, newDocCID(t, "A"), c.credential, now.Add(5*time.Minute))
+	if res := IngestOperations([]string{a}, c.store); res[0].Status != "new" {
+		t.Fatalf("op A: %s (%s)", res[0].Status, res[0].Error)
+	}
+	b, _ := signBackdatedUpdate(t, c.creator, aCID, newDocCID(t, "B"), now.Add(6*time.Minute))
+	if res := IngestOperations([]string{b}, c.store); res[0].Status != "new" {
+		t.Fatalf("op B: %s (%s)", res[0].Status, res[0].Error)
+	}
+
+	// revoked NOW — before A's own (future-dated) createdAt, so replaying A fails
+	c.revoke(t)
+
+	fork, _ := signBackdatedUpdate(t, c.creator, aCID, newDocCID(t, "fork"), now.Add(7*time.Minute))
+	res := IngestOperations([]string{fork}, c.store)
+	if res[0].Status != "rejected" {
+		t.Fatalf("expected the fork to be rejected once its fork point stopped verifying, got %s", res[0].Status)
+	}
+	if !res[0].DependencyMissing {
+		t.Fatal("a failed fork-point replay MUST be DependencyMissing — otherwise the sequencer permanently DELETES the raw op")
+	}
+	if res[0].CID == "" {
+		t.Fatal("expected the rejection to carry a CID")
+	}
+	if !strings.Contains(res[0].Error, ForkPointStateErrorPrefix) {
+		t.Fatalf("expected the fork-point state error prefix, got: %s", res[0].Error)
+	}
+}
+
+// TestReplayEnforcesRetroactiveIdentityDeletion — identity deletion has NO as-of
+// basis (CREDENTIALS.md "Identity Deletion Is Absolute"), so a deleted issuer's
+// credentials stop authorizing committed history immediately. Go takes the
+// deleted-issuer gate as an explicit option (TS gets it via resolveIdentity), so
+// without it threaded into the replay this passes on TS and fails only here.
+func TestReplayEnforcesRetroactiveIdentityDeletion(t *testing.T) {
+	c := seedAsOfChain(t, -30*time.Minute)
+	now := time.Now()
+
+	a, aCID := signBackdatedDelegatedUpdate(t, c.delegate, c.genesisOpCID, newDocCID(t, "A"), c.credential, now.Add(-25*time.Minute))
+	if res := IngestOperations([]string{a}, c.store); res[0].Status != "new" {
+		t.Fatalf("op A: %s (%s)", res[0].Status, res[0].Error)
+	}
+
+	// mark the credential issuer's identity deleted in stored state
+	chain, err := c.store.GetIdentityChain(c.creator.did)
+	if err != nil || chain == nil {
+		t.Fatalf("GetIdentityChain: %v (nil=%v)", err, chain == nil)
+	}
+	chain.State.IsDeleted = true
+	if err := c.store.PutIdentityChain(*chain); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := c.store.GetContentStateAtCID(c.contentID, aCID); err == nil {
+		t.Fatal("expected replay to REJECT history authorized by a DELETED issuer's credential")
+	}
+}
+
+// TestSequencerRejectionLogsCidAndReason covers the sequencer.go call site;
+// TestRejectedOpLogsCidAndReason covers relay.go's. Both emit the same structured
+// event as the TS twin.
+func TestSequencerRejectionLogsCidAndReason(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	store := NewMemoryStore()
+	r, err := NewRelay(RelayOptions{Store: store, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed the raw store directly so the op is drained by the SEQUENCER loop rather
+	// than by the immediate-ingest path relay.go handles.
+	id := createTestIdentity(t)
+	corrupt := corruptSignature(id.token)
+	rawCID := computeOpCID(corrupt)
+	if rawCID == "" {
+		t.Fatal("expected the corrupt op to carry a storage CID")
+	}
+	if err := store.PutRawOp(rawCID, corrupt); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, result := r.RunSequencer(); result.Rejected != 1 {
+		t.Fatalf("expected 1 rejection through the sequencer, got %d", result.Rejected)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "relay.op.rejected") {
+		t.Fatalf("sequencer rejection log is missing the shared event string: %s", out)
+	}
+	if !strings.Contains(out, rawCID) {
+		t.Fatalf("sequencer rejection log is missing the cid %s: %s", rawCID, out)
+	}
+	if !strings.Contains(out, "reason=") {
+		t.Fatalf("sequencer rejection log is missing the reason: %s", out)
 	}
 }

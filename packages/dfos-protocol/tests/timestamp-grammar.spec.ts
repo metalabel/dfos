@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { parseProtocolTimestampUnix } from '../src/chain';
 
 /*
 
@@ -43,5 +44,26 @@ const vectors: { input: string; valid: boolean }[] = [
 describe('strict createdAt grammar (Go twin parity)', () => {
   it.each(vectors)('$input → valid=$valid', ({ input, valid }) => {
     expect(Iso8601Strict.safeParse(input).success).toBe(valid);
+  });
+});
+
+describe('parseProtocolTimestampUnix', () => {
+  it('accepts exactly the grammar above and rejects the rest', () => {
+    // The exported parse and the schema gate MUST agree — anything the schema
+    // rejects has no comparable instant, so consumers get null rather than a number
+    // derived from an input a signer could never have produced.
+    for (const { input, valid } of vectors) {
+      expect(parseProtocolTimestampUnix(input) !== null).toBe(valid);
+    }
+  });
+
+  it('converts to integer unix SECONDS, flooring the millisecond remainder', () => {
+    // Floor, never round: the credential temporal basis is integer seconds
+    // (CREDENTIALS.md "Time Basis Conversion and Boundaries").
+    expect(parseProtocolTimestampUnix('1970-01-01T00:00:00.000Z')).toBe(0);
+    expect(parseProtocolTimestampUnix('1970-01-01T00:00:00.999Z')).toBe(0);
+    const whole = Math.floor(Date.parse('2026-03-07T00:00:00.000Z') / 1000);
+    expect(parseProtocolTimestampUnix('2026-03-07T00:00:00.000Z')).toBe(whole);
+    expect(parseProtocolTimestampUnix('2026-03-07T00:00:00.999Z')).toBe(whole);
   });
 });

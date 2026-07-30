@@ -84,8 +84,19 @@ const timelessChecker = (revoked: Map<string, number>): RevocationChecker => {
  * Build a two-op chain: a creator's genesis plus a delegated update signed by a
  * delegate under an inline write credential. `depth: 2` inserts an intermediate
  * delegate so the PARENT hop of the delegation walk is exercised too.
+ *
+ * `genesisOffset` / `opOffset` (minutes from now) place the chain in time. Dating
+ * the operation in the PAST is what makes a wall-clock substitution detectable: a
+ * revocation timestamped between the op and now is invisible to the correct as-of
+ * basis but bites under `now`.
  */
-const buildDelegatedChain = async (opts?: { depth?: 1 | 2 }) => {
+const buildDelegatedChain = async (opts?: {
+  depth?: 1 | 2;
+  genesisOffset?: number;
+  opOffset?: number;
+}) => {
+  const genesisOffset = opts?.genesisOffset ?? 0;
+  const opOffset = opts?.opOffset ?? 1;
   const creator = makeIdentity();
   const delegate = makeIdentity();
   const middle = makeIdentity();
@@ -110,7 +121,7 @@ const buildDelegatedChain = async (opts?: { depth?: 1 | 2 }) => {
     did: creator.did,
     documentCID: await makeDocCID({ type: 'post', title: 'genesis' }),
     baseDocumentCID: null,
-    createdAt: ts(0),
+    createdAt: ts(genesisOffset),
   };
   const { jwsToken: createJws, operationCID: createCID } = await signContentOperation({
     operation: createOp,
@@ -119,7 +130,10 @@ const buildDelegatedChain = async (opts?: { depth?: 1 | 2 }) => {
   });
   const genesis = await verifyContentChain({ log: [createJws], resolveKey });
 
-  // credential(s): creator → [middle →] delegate
+  // Credential(s): creator → [middle →] delegate. The [iat, exp) window spans
+  // hours, not minutes, so it comfortably contains every op placement the fixtures
+  // use — a window that merely touched the op's createdAt would flake on a
+  // one-second clock tick between the two calls.
   const att = [{ resource: `chain:${genesis.contentId}`, action: 'write' }];
   let leaf: string;
   let parent: string | undefined;
@@ -128,35 +142,35 @@ const buildDelegatedChain = async (opts?: { depth?: 1 | 2 }) => {
       issuerDID: creator.did,
       audienceDID: middle.did,
       att,
-      exp: unix(60),
+      exp: unix(240),
       signer: creator.signer,
       keyId: creator.keyId,
-      iat: unix(-10),
+      iat: unix(-240),
     });
     leaf = await createDFOSCredential({
       issuerDID: middle.did,
       audienceDID: delegate.did,
       att,
       prf: [parent],
-      exp: unix(60),
+      exp: unix(240),
       signer: middle.signer,
       keyId: middle.keyId,
-      iat: unix(-10),
+      iat: unix(-240),
     });
   } else {
     leaf = await createDFOSCredential({
       issuerDID: creator.did,
       audienceDID: delegate.did,
       att,
-      exp: unix(60),
+      exp: unix(240),
       signer: creator.signer,
       keyId: creator.keyId,
-      iat: unix(-10),
+      iat: unix(-240),
     });
   }
 
-  // delegated update, timestamped +1 minute from now
-  const opCreatedAt = ts(1);
+  // delegated update
+  const opCreatedAt = ts(opOffset);
   const updateOp: ContentOperation = {
     version: 1,
     type: 'update',
@@ -315,6 +329,61 @@ describe('as-of revocation — delegation parents', () => {
         isRevoked: asOfChecker(revoked),
       }),
     ).rejects.toThrow(/revoked/);
+  });
+
+  it('uses the op createdAt (not wall-clock now) as the PARENT hop basis', async () => {
+    // The discriminating fixture: the op is dated in the PAST and the parent's
+    // revocation lands BETWEEN the op and now. Correct as-of → the parent was live
+    // when the op was signed → VERIFIES. Substitute wall-clock `now` for the basis
+    // and the same revocation bites → REJECTS. Without this shape, a parent-hop
+    // test passes either way and pins nothing.
+    const c = await buildDelegatedChain({ depth: 2, genesisOffset: -20, opOffset: -10 });
+    const revoked = new Map([[c.parentKey!, unix(-5)]]);
+
+    const result = await verifyContentChain({
+      log: c.log,
+      resolveKey: c.resolveKey,
+      enforceAuthorization: true,
+      resolveIdentity: c.resolveIdentity,
+      isRevoked: asOfChecker(revoked),
+    });
+    expect(result.length).toBe(2);
+
+    // same fixture, same revocation, wall-clock basis → the verdict flips
+    const wallClockChecker: RevocationChecker = async (issuerDID, credentialCID) =>
+      asOfChecker(revoked)(issuerDID, credentialCID, Math.floor(Date.now() / 1000));
+    await expect(
+      verifyContentChain({
+        log: c.log,
+        resolveKey: c.resolveKey,
+        enforceAuthorization: true,
+        resolveIdentity: c.resolveIdentity,
+        isRevoked: wallClockChecker,
+      }),
+    ).rejects.toThrow(/revoked/);
+  });
+
+  it('passes the op createdAt to EVERY hop, leaf and parent alike', async () => {
+    // The depth-1 spy above only observes the leaf call (a prf:[] credential
+    // terminates the walk before any parent check). Depth 2 observes both.
+    const c = await buildDelegatedChain({ depth: 2, genesisOffset: -20, opOffset: -10 });
+    const seen: (number | undefined)[] = [];
+    const spy: RevocationChecker = async (_issuer, _cid, asOfUnix) => {
+      seen.push(asOfUnix);
+      return false;
+    };
+
+    await verifyContentChain({
+      log: c.log,
+      resolveKey: c.resolveKey,
+      enforceAuthorization: true,
+      resolveIdentity: c.resolveIdentity,
+      isRevoked: spy,
+    });
+
+    // leaf + one parent hop
+    expect(seen.length).toBe(2);
+    for (const asOf of seen) expect(asOf).toBe(c.opCreatedAtUnix);
   });
 });
 

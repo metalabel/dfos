@@ -620,11 +620,24 @@ func (s *MemoryStore) GetContentStateAtCID(contentID, cid string) (*ContentState
 	// moment any credential in the chain's history was revoked, which would make a
 	// legitimate fork extension unverifiable. Mirrors the TS twin (store.ts
 	// getContentStateAtCID).
+	// Identity deletion, unlike revocation, IS retroactive and has no as-of basis
+	// (CREDENTIALS.md "Identity Deletion Is Absolute"), so the deleted-issuer gate
+	// is threaded unconditionally. The TS twin gets this for free — its
+	// verifyDFOSCredential rejects a deleted issuer via resolveIdentity — while Go
+	// takes it as an explicit option, so omitting it here would let a deleted
+	// issuer's credentials keep authorizing committed history on Go only.
 	resolveKey := CreateKeyResolver(s)
 	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, asOfUnix int64) (bool, error) {
 		return s.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
 	})
-	result, err := dfos.VerifyContentChain(path, resolveKey, true, isRevoked)
+	isDeleted := dfos.WithIdentityDeletedChecker(func(did string) (bool, error) {
+		identity, err := s.GetIdentityChain(did)
+		if err != nil {
+			return false, err
+		}
+		return identity != nil && identity.State.IsDeleted, nil
+	})
+	result, err := dfos.VerifyContentChain(path, resolveKey, true, isRevoked, isDeleted)
 	if err != nil {
 		return nil, err
 	}
@@ -729,6 +742,12 @@ func (s *MemoryStore) AddRevocation(revocation StoredRevocation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := revocation.IssuerDID + "::" + revocation.CredentialCID
+	// earliest boundary wins — see revocationSupersedes. The survivor is kept
+	// WHOLE (artifact + boundary together), so the revocation this store serves
+	// from /revocations/v1 is always the one that actually sets the boundary.
+	if existing, ok := s.revocations[key]; ok && !revocationSupersedes(revocation, existing) {
+		return nil
+	}
 	s.revocations[key] = revocation
 	return nil
 }
@@ -741,10 +760,11 @@ func (s *MemoryStore) IsCredentialRevoked(issuerDID string, credentialCID string
 	if !ok {
 		return false, nil
 	}
-	if asOfUnix == 0 {
+	// asOfUnix <= 0 is the timeless (freshness) question — see the Store contract.
+	if asOfUnix <= 0 {
 		return true, nil
 	}
-	revokedAt, ok := revocationCreatedAtUnix(rev.CreatedAt)
+	revokedAt, ok := revocationCreatedAtUnix(storedRevocationCreatedAt(rev.CreatedAt, rev.JWSToken))
 	return !ok || revokedAt <= asOfUnix, nil
 }
 

@@ -144,7 +144,35 @@ export type ServicesArray = z.infer<typeof ServicesArray>;
 
 // ---
 
-const Iso8601 = z.iso.datetime({ offset: false, precision: 3 });
+/**
+ * The canonical DFOS operation timestamp grammar: fixed 3-digit fraction, literal
+ * `Z`, full calendar validation. Deliberately stricter than RFC 3339 (no numeric
+ * offsets, no variable fraction) so two implementations cannot disagree about
+ * whether a signed timestamp is well-formed. The Go twin is
+ * `time.Parse(protocolTimeFormat, …)`; the 22-case vector set asserting they agree
+ * verdict-for-verdict lives in tests/timestamp-grammar.spec.ts and
+ * dfos-protocol-go/timestamp_grammar_test.go.
+ */
+export const Iso8601 = z.iso.datetime({ offset: false, precision: 3 });
+
+/**
+ * Parse a canonical DFOS timestamp to integer unix **seconds**, or null when it
+ * does not match the grammar above.
+ *
+ * This is the ONE parse every consumer of a signed timestamp should use when it
+ * needs a comparable instant. A lenient `new Date(value)` accepts inputs the
+ * protocol rejects (numeric offsets, missing `Z` — which some runtimes then read
+ * as LOCAL time), so two verifiers in different timezones could order the same two
+ * signed timestamps differently. Truncates (floors) the millisecond remainder to
+ * match the credential temporal basis — see CREDENTIALS.md "Time Basis Conversion
+ * and Boundaries". Go twin: `ParseProtocolTimestamp`.
+ */
+export const parseProtocolTimestampUnix = (value: string): number | null => {
+  if (!Iso8601.safeParse(value).success) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+};
+
 const CIDString = z.string();
 
 /** Identity chain: create — genesis operation, starts the chain */

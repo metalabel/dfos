@@ -30,8 +30,15 @@ export const isDependencyFailure = (res: Pick<IngestionResult, 'dependencyMissin
  * the `reason` was previously passed only to be discarded — so a relay dropping
  * every op it was handed left nothing behind to explain why. This log line is
  * that explanation. Observability only: the deletion semantics are unchanged, and
- * nothing is added to the store. Mirrors the Go twin's slog call
- * (sequencer.go / relay.go).
+ * nothing is added to the store. The event string and both field names match the
+ * Go twin's slog call (sequencer.go / relay.go) so one query shape works across
+ * implementations.
+ *
+ * One line per rejected op on an unauthenticated ingest endpoint is a considered
+ * tradeoff: a flood of junk ops does amplify into logs, but each such op already
+ * cost signature verification and store reads, so the marginal write is small next
+ * to the work it reports — and a silent drop is the failure mode that actually goes
+ * undiagnosed.
  */
 export const logOpRejected = (cid: string, reason: string): void => {
   console.warn(JSON.stringify({ event: 'relay.op.rejected', cid, reason }));

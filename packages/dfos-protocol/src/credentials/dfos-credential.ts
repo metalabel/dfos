@@ -61,11 +61,14 @@ export interface VerifiedDelegationChain {
  * decisions: **acceptance is a freshness decision; verification of committed
  * history is a validity decision.**
  *
- * - **Omitted (timeless)** — "is this credential revoked as far as you know
- *   right now?". The freshness question. Used by acceptance gates: relay ingest
- *   (do not admit a NEW operation authorized by a credential we already know to
- *   be revoked) and live read-path authorization.
- * - **Provided (as-of)** — "was this credential already revoked at `asOfUnix`?".
+ * - **Omitted, or `<= 0` (timeless)** — "is this credential revoked as far as you
+ *   know right now?". The freshness question. Used by acceptance gates: relay
+ *   ingest (do not admit a NEW operation authorized by a credential we already
+ *   know to be revoked) and live read-path authorization. Non-positive instants
+ *   are timeless because the Go twin uses `0` as its in-band sentinel and cannot
+ *   express "as of epoch 0"; the degenerate case (an operation dated at or before
+ *   1970) therefore gets the stricter answer in both languages.
+ * - **Positive (as-of)** — "was this credential already revoked at `asOfUnix`?".
  *   The validity question. Return true only if a revocation exists AND its
  *   signed `createdAt` is ≤ `asOfUnix`. Used when verifying operations already
  *   committed to a chain, where `asOfUnix` is the operation's own `createdAt`.

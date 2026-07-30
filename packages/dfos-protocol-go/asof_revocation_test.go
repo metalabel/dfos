@@ -60,15 +60,25 @@ type asOfFixture struct {
 	parentKey string
 }
 
-// buildAsOfFixture assembles the fixture. With depth 2 it inserts an
-// intermediate delegate so the PARENT hop of the delegation walk is exercised.
+// buildAsOfFixture assembles the fixture with the default placement: genesis now,
+// the delegated op at +1 minute — so a revocation at now+10min is strictly after
+// the op and one at now-10min strictly before it.
 func buildAsOfFixture(t *testing.T, depth int) asOfFixture {
 	t.Helper()
+	return buildAsOfFixtureAt(t, depth, 0, 1*time.Minute)
+}
+
+// buildAsOfFixtureAt places the chain in time. Dating the operation in the PAST is
+// what makes a wall-clock substitution detectable: a revocation timestamped between
+// the op and now is invisible to the correct as-of basis but bites under now.
+//
+// With depth 2 an intermediate delegate is inserted so the PARENT hop of the
+// delegation walk is exercised.
+func buildAsOfFixtureAt(t *testing.T, depth int, genesisOffset, opOffset time.Duration) asOfFixture {
+	t.Helper()
 	now := time.Now().UTC()
-	genesisTime := now.Format(protocolTimeFormat)
-	// the delegated op is timestamped +1 minute, so a revocation at now+10min is
-	// strictly after it and a revocation at now-10min strictly before it
-	updateTime := now.Add(1 * time.Minute).Format(protocolTimeFormat)
+	genesisTime := now.Add(genesisOffset).Format(protocolTimeFormat)
+	updateTime := now.Add(opOffset).Format(protocolTimeFormat)
 
 	creatorPriv, creatorPub, _, creatorKeyID := testKeys(t)
 	_, creatorDID, _ := testSignIdentityGenesis(t,
@@ -137,8 +147,10 @@ func buildAsOfFixture(t *testing.T, depth int) asOfFixture {
 	}
 }
 
-// mintAsOfCredential mints a credential with an optional prf parent, backdating
-// iat so it is valid relative to the delegated op's createdAt.
+// mintAsOfCredential mints a credential with an optional prf parent. iat/exp are
+// backdated/extended by hours, not minutes, so the [iat, exp) window comfortably
+// contains every op placement the fixtures use — a window that merely touches the
+// op's createdAt would flake on a one-second clock tick between the two calls.
 func mintAsOfCredential(t *testing.T, issuerDID, issuerKid string, issuerPriv ed25519.PrivateKey, aud, resource, action string, prf []string) (token, cid string) {
 	t.Helper()
 	now := time.Now().Unix()
@@ -153,8 +165,8 @@ func mintAsOfCredential(t *testing.T, issuerDID, issuerKid string, issuerPriv ed
 		"aud":     aud,
 		"att":     []any{map[string]any{"resource": resource, "action": action}},
 		"prf":     prfAny,
-		"exp":     now + int64(time.Hour.Seconds()),
-		"iat":     now - 600,
+		"exp":     now + int64(4*time.Hour.Seconds()),
+		"iat":     now - int64(4*time.Hour.Seconds()),
 	}
 	_, _, cidStr, err := DagCborCID(payload)
 	if err != nil {
@@ -338,5 +350,55 @@ func TestAsOfExtensionRejectsEarlierRevocation(t *testing.T) {
 	if _, err := VerifyContentExtension(f.genesisState, f.genesisLastAt, f.updateJWS, f.resolver, true,
 		WithRevocationChecker(asOfRevocationChecker(revoked))); err == nil {
 		t.Fatal("expected extension to REJECT an op authorized by an already-revoked credential")
+	}
+}
+
+// TestAsOfParentBasisIsOpCreatedAtNotWallClock is the discriminating parent-hop
+// fixture: the op is dated in the PAST and the parent's revocation lands BETWEEN
+// the op and now. Correct as-of → the parent was live when the op was signed →
+// VERIFIES. Substitute wall-clock now for the basis and the same revocation bites →
+// REJECTS. Without this shape a parent-hop test passes either way and pins nothing.
+func TestAsOfParentBasisIsOpCreatedAtNotWallClock(t *testing.T) {
+	f := buildAsOfFixtureAt(t, 2, -20*time.Minute, -10*time.Minute)
+	revoked := map[string]int64{f.parentKey: time.Now().Add(-5 * time.Minute).Unix()}
+
+	result, err := VerifyContentChain(f.log, f.resolver, true, WithRevocationChecker(asOfRevocationChecker(revoked)))
+	if err != nil {
+		t.Fatalf("expected fold to VERIFY (parent revoked AFTER the op, before now): %v", err)
+	}
+	if result.State.Length != 2 {
+		t.Fatalf("Length: got %d, want 2", result.State.Length)
+	}
+
+	// same fixture, same revocation, wall-clock basis → the verdict flips
+	wallClock := func(issuerDID, credentialCID string, _ int64) (bool, error) {
+		return asOfRevocationChecker(revoked)(issuerDID, credentialCID, time.Now().Unix())
+	}
+	if _, err := VerifyContentChain(f.log, f.resolver, true, WithRevocationChecker(wallClock)); err == nil {
+		t.Fatal("wall-clock basis must reject this fixture — otherwise the test pins nothing")
+	}
+}
+
+// TestAsOfBasisReachesEveryHop — the depth-1 spy only observes the leaf call (a
+// prf:[] credential terminates the walk before any parent check). Depth 2 observes
+// both, so this pins that the SAME instant is handed to every hop.
+func TestAsOfBasisReachesEveryHop(t *testing.T) {
+	f := buildAsOfFixtureAt(t, 2, -20*time.Minute, -10*time.Minute)
+	var seen []int64
+	spy := func(_, _ string, asOfUnix int64) (bool, error) {
+		seen = append(seen, asOfUnix)
+		return false, nil
+	}
+
+	if _, err := VerifyContentChain(f.log, f.resolver, true, WithRevocationChecker(spy)); err != nil {
+		t.Fatalf("VerifyContentChain: %v", err)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected 2 revocation checks (leaf + one parent hop), got %d", len(seen))
+	}
+	for i, asOf := range seen {
+		if asOf != f.opCreatedAtUnix {
+			t.Fatalf("hop %d: as-of basis %d, want the op createdAt %d", i, asOf, f.opCreatedAtUnix)
+		}
 	}
 }

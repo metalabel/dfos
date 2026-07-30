@@ -116,7 +116,9 @@ export type Resolution =
  * `asOfUnix` is the protocol's revocation as-of basis (see the protocol's
  * `RevocationChecker`): supplied when folding committed history, so a credential
  * revoked AFTER an operation was signed does not invalidate it; omitted for live
- * "is it revoked right now" checks.
+ * "is it revoked right now" checks. Omitted **or `<= 0`** means timeless — `0` is
+ * the Go twin's in-band sentinel, so "as of epoch 0" is not expressible there and
+ * must not be expressible here either.
  */
 export type RevChecker = (
   issuerDID: string,

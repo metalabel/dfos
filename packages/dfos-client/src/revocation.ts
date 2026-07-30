@@ -20,7 +20,7 @@
 
 */
 
-import { verifyRevocation } from '@metalabel/dfos-protocol/chain';
+import { parseProtocolTimestampUnix, verifyRevocation } from '@metalabel/dfos-protocol/chain';
 import { REVOCATIONS_BASE_PATH } from '@metalabel/dfos-web-relay/peer-client';
 import { normalizeRelays } from './transport';
 import type { RevChecker } from './types';
@@ -74,14 +74,14 @@ export const createRevocationChecker = (
         if (verified.did === issuerDID && verified.credentialCID === credentialCID) {
           // as-of gate: a revocation signed AFTER the instant being asked about
           // does not reach back to it. The boundary comes from the VERIFIED
-          // payload, so a relay cannot move it by lying. An unparseable timestamp
-          // on an otherwise-valid revocation falls back to the timeless answer —
-          // the stricter direction, never a silent un-revoke.
-          if (asOfUnix === undefined) return true;
-          const revokedAtMs = new Date(verified.createdAt).getTime();
-          if (!Number.isFinite(revokedAtMs) || Math.floor(revokedAtMs / 1000) <= asOfUnix) {
-            return true;
-          }
+          // payload, so a relay cannot move it by lying, and it is read through the
+          // protocol's canonical grammar rather than a lenient `new Date()` — an
+          // off-grammar timestamp on an otherwise-valid revocation falls back to
+          // the timeless answer, the stricter direction, never a silent un-revoke.
+          // `asOfUnix <= 0` is timeless per the RevChecker contract.
+          if (asOfUnix === undefined || asOfUnix <= 0) return true;
+          const revokedAtUnix = parseProtocolTimestampUnix(verified.createdAt);
+          if (revokedAtUnix === null || revokedAtUnix <= asOfUnix) return true;
           // Revoked strictly AFTER asOfUnix — not revoked as of the queried
           // instant. Keep consulting the remaining relays rather than answering
           // false here: a store keeps one revocation per (issuer, credentialCID),

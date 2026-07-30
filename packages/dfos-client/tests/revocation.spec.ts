@@ -12,7 +12,13 @@
 
 */
 
-import { decodeMultikey, signRevocation } from '@metalabel/dfos-protocol/chain';
+import {
+  decodeMultikey,
+  signContentOperation,
+  signRevocation,
+  verifyContentChain,
+  type ContentOperation,
+} from '@metalabel/dfos-protocol/chain';
 import { createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
 import {
   createJws,
@@ -22,7 +28,8 @@ import {
 import { describe, expect, it } from 'vitest';
 import { createClient } from '../src/client';
 import { createRevocationChecker } from '../src/revocation';
-import { buildIdentity, fakePeerClient, type BuiltIdentity } from './fixtures';
+import type { RevChecker } from '../src/types';
+import { buildIdentity, fakePeerClient, ts, type BuiltIdentity } from './fixtures';
 
 const A = 'https://a.test';
 const B = 'https://b.test';
@@ -281,5 +288,144 @@ describe('createRevocationChecker', () => {
     const res = await client.credential(credential);
     expect(res.value.revoked).toBe(true);
     expect(res.trust.ok).toBe(false);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// the as-of basis must survive the client's late-bind wrapper
+// -----------------------------------------------------------------------------
+
+describe('client cold fold — asOfUnix forwarding', () => {
+  /**
+   * A two-op content chain whose second op is DELEGATED (carries an inline
+   * authorization), so folding it makes the protocol ask `isRevoked` with the op's
+   * own createdAt. `buildContent` only produces creator-signed ops, which never
+   * reach the revocation check at all.
+   */
+  const buildDelegatedContent = async () => {
+    const creator = await buildIdentity();
+    const delegate = await buildIdentity();
+
+    const genesis: ContentOperation = {
+      version: 1,
+      type: 'create',
+      did: creator.did,
+      documentCID: 'bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenera6h5y',
+      baseDocumentCID: null,
+      createdAt: ts(-8),
+    };
+    const g = await signContentOperation({
+      operation: genesis,
+      signer: creator.k.signer,
+      kid: creator.kid,
+    });
+    const resolveKey = async (kid: string): Promise<Uint8Array> => {
+      for (const id of [creator, delegate]) {
+        if (kid === id.kid) return decodeMultikey(id.k.key.publicKeyMultibase).keyBytes;
+      }
+      throw new Error(`unexpected kid ${kid}`);
+    };
+    const { contentId } = await verifyContentChain({ log: [g.jwsToken], resolveKey });
+
+    const credential = await createDFOSCredential({
+      issuerDID: creator.did,
+      audienceDID: delegate.did,
+      att: [{ resource: `chain:${contentId}`, action: 'write' }],
+      exp: Math.floor(Date.now() / 1000) + 4 * 3600,
+      iat: Math.floor(Date.now() / 1000) - 4 * 3600,
+      signer: creator.k.signer,
+      keyId: creator.k.keyId,
+    });
+    const credentialCID = credCid(credential);
+
+    // the delegated op is dated 4 minutes ago, so a revocation stamped NOW lands
+    // strictly AFTER it
+    const update = {
+      version: 1 as const,
+      type: 'update' as const,
+      did: delegate.did,
+      previousOperationCID: g.operationCID,
+      documentCID: 'bafkreiupdatedocument000000000000000000000000000000000000000',
+      baseDocumentCID: null,
+      createdAt: ts(-4),
+      authorization: credential,
+    };
+    const u = await signContentOperation({
+      operation: update as unknown as ContentOperation,
+      signer: delegate.k.signer,
+      kid: delegate.kid,
+    });
+
+    return {
+      creator,
+      delegate,
+      contentId,
+      credentialCID,
+      log: [g.jwsToken, u.jwsToken],
+      opCreatedAtUnix: Math.floor(new Date(ts(-4)).getTime() / 1000),
+    };
+  };
+
+  const clientFor = async (
+    c: Awaited<ReturnType<typeof buildDelegatedContent>>,
+    isRevoked: RevChecker,
+  ) =>
+    createClient({
+      relays: [A],
+      peerClient: fakePeerClient({
+        [A]: {
+          identities: { [c.creator.did]: c.creator.log, [c.delegate.did]: c.delegate.log },
+          contents: { [c.contentId]: c.log },
+        },
+      }),
+      isRevoked,
+    });
+
+  it('folds a chain whose delegated credential was revoked AFTER the op', async () => {
+    // THE REGRESSION GUARD for client.ts's late-bind wrapper. The wrapper exists to
+    // break a construction cycle, and it forwards (issuerDID, credentialCID,
+    // asOfUnix) to the real checker. Drop that third argument and every cold fold
+    // silently reverts to timeless revocation — this fold would then FAIL, because
+    // the revocation below is dated after the op it is being asked about.
+    const c = await buildDelegatedContent();
+    const revokedAtUnix = Math.floor(Date.now() / 1000);
+
+    const asOfAware: RevChecker = async (_issuerDID, credentialCID, asOfUnix) => {
+      if (credentialCID !== c.credentialCID) return false;
+      if (asOfUnix === undefined || asOfUnix <= 0) return true; // timeless
+      return revokedAtUnix <= asOfUnix;
+    };
+
+    const res = await (await clientFor(c, asOfAware)).content(c.contentId);
+    expect(res.value.chain.contentId).toBe(c.contentId);
+    expect(res.value.chain.length).toBe(2);
+  });
+
+  it('still rejects when the revocation PREDATES the op', async () => {
+    // The negative control: forwarding asOfUnix must not turn the check off.
+    const c = await buildDelegatedContent();
+    const revokedAtUnix = Math.floor(Date.now() / 1000) - 8 * 60;
+
+    const asOfAware: RevChecker = async (_issuerDID, credentialCID, asOfUnix) => {
+      if (credentialCID !== c.credentialCID) return false;
+      if (asOfUnix === undefined || asOfUnix <= 0) return true;
+      return revokedAtUnix <= asOfUnix;
+    };
+
+    await expect((await clientFor(c, asOfAware)).content(c.contentId)).rejects.toThrow(/revoked/);
+  });
+
+  it('hands the delegated op createdAt to the checker, not wall-clock now', async () => {
+    const c = await buildDelegatedContent();
+    const seen: (number | undefined)[] = [];
+    const spy: RevChecker = async (_issuerDID, _credentialCID, asOfUnix) => {
+      seen.push(asOfUnix);
+      return false;
+    };
+
+    await (await clientFor(c, spy)).content(c.contentId);
+
+    expect(seen.length).toBeGreaterThan(0);
+    for (const asOf of seen) expect(asOf).toBe(c.opCreatedAtUnix);
   });
 });

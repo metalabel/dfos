@@ -29,7 +29,6 @@ package relay
 import (
 	"net/http"
 	"regexp"
-	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -39,21 +38,57 @@ import (
 // -----------------------------------------------------------------------------
 
 // revocationCreatedAtUnix converts a revocation's signed createdAt to integer
-// unix seconds — the as-of boundary. The bool is false when the timestamp is
-// missing or unparseable, which callers MUST read as "no usable boundary" and
-// answer timelessly (i.e. revoked). Failing open there would let a malformed row
-// silently un-revoke history. Floors to seconds to match the credential temporal
-// basis (CREDENTIALS.md "Time Basis Conversion"). MUST match the TS twin
-// (store.ts revocationCreatedAtUnix).
+// unix seconds — the as-of boundary.
+//
+// Parsed through the protocol's canonical grammar (dfos.ParseProtocolTimestamp),
+// NOT RFC3339: RFC3339 accepts numeric offsets and variable fractions that the
+// protocol rejects, so using it here would let the boundary be derived from an
+// input the signer could never have produced. The bool is false when the
+// timestamp is missing or off-grammar, which callers MUST read as "no usable
+// boundary" and answer timelessly (i.e. revoked) — failing open there would let a
+// malformed row silently un-revoke history. MUST match the TS twin (store.ts
+// revocationCreatedAtUnix).
 func revocationCreatedAtUnix(createdAt string) (int64, bool) {
 	if createdAt == "" {
 		return 0, false
 	}
-	parsed, err := time.Parse(time.RFC3339, createdAt)
+	parsed, err := dfos.ParseProtocolTimestamp(createdAt)
 	if err != nil {
 		return 0, false
 	}
 	return parsed.Unix(), true
+}
+
+// revocationSupersedes reports whether candidate should replace incumbent as the
+// stored revocation for a (issuerDID, credentialCID) pair.
+//
+// THE EARLIEST BOUNDARY WINS. Nothing stops an issuer from signing two distinct
+// revocations for the same credential — they have different artifact CIDs, so
+// ingest idempotence (keyed on the artifact) admits both. Under as-of semantics
+// the stored one sets the validity boundary for all of history, so
+// last-write-wins would make that boundary depend on gossip arrival order, and a
+// later re-revocation could retroactively RE-VALIDATE operations an earlier
+// revocation had already invalidated. Keeping the minimum is monotonic: a
+// revocation's reach can only ever grow.
+//
+// An unparseable/absent boundary is the STRONGEST — it means "timeless", so it
+// sorts before every real instant. Ties break on the artifact CID so the survivor
+// is a pure function of the set rather than of arrival order (the same
+// determinism rule GetRevocationForCredential uses for multi-issuer collisions).
+// MUST match the TS twin (store.ts revocationSupersedes).
+func revocationSupersedes(candidate, incumbent StoredRevocation) bool {
+	candidateAt, candidateOK := revocationCreatedAtUnix(storedRevocationCreatedAt(candidate.CreatedAt, candidate.JWSToken))
+	incumbentAt, incumbentOK := revocationCreatedAtUnix(storedRevocationCreatedAt(incumbent.CreatedAt, incumbent.JWSToken))
+	if !candidateOK {
+		return incumbentOK || candidate.CID < incumbent.CID
+	}
+	if !incumbentOK {
+		return false
+	}
+	if candidateAt != incumbentAt {
+		return candidateAt < incumbentAt
+	}
+	return candidate.CID < incumbent.CID
 }
 
 // storedRevocationCreatedAt resolves the createdAt of a stored revocation,

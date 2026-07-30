@@ -1243,12 +1243,20 @@ func (s *SQLiteStore) GetContentStateAtCID(contentID, cid string) (*ContentState
 	}
 
 	// Historical replay is a VALIDITY decision — authorization enforced, revocation
-	// evaluated AS OF each op's own createdAt. See the MemoryStore twin.
+	// evaluated AS OF each op's own createdAt, identity deletion retroactive and
+	// therefore unconditional. See the MemoryStore twin.
 	resolveKey := CreateKeyResolver(s)
 	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, asOfUnix int64) (bool, error) {
 		return s.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
 	})
-	result, err := dfos.VerifyContentChain(path, resolveKey, true, isRevoked)
+	isDeleted := dfos.WithIdentityDeletedChecker(func(did string) (bool, error) {
+		identity, err := s.GetIdentityChain(did)
+		if err != nil {
+			return false, err
+		}
+		return identity != nil && identity.State.IsDeleted, nil
+	})
+	result, err := dfos.VerifyContentChain(path, resolveKey, true, isRevoked, isDeleted)
 	if err != nil {
 		return nil, err
 	}
@@ -1398,9 +1406,51 @@ func (s *SQLiteStore) GetRevocations(issuerDID string) ([]string, error) {
 	return cids, rows.Err()
 }
 
+// AddRevocation stores a revocation, keeping the one with the EARLIEST as-of
+// boundary when the (issuer_did, credential_cid) pair already has one — see
+// revocationSupersedes. `INSERT OR IGNORE` alone would make the boundary depend on
+// which of two distinct revocations for the same credential arrived first.
+//
+// The comparison happens in Go (not as an ON CONFLICT expression) so both stores
+// share one implementation of the rule, including the legacy-NULL-column fallback
+// and the CID tiebreak. Writes here are serialized through the single writer
+// connection, so the read-compare-write is not racing another writer.
 func (s *SQLiteStore) AddRevocation(revocation StoredRevocation) error {
-	_, err := s.writerDB().Exec(
-		"INSERT OR IGNORE INTO revocations (cid, issuer_did, credential_cid, jws_token, created_at) VALUES (?, ?, ?, ?, ?)",
+	w := s.writerDB()
+
+	var existing StoredRevocation
+	var existingCreatedAt sql.NullString
+	err := s.readerDB().QueryRow(
+		"SELECT cid, jws_token, created_at FROM revocations WHERE issuer_did = ? AND credential_cid = ? LIMIT 1",
+		revocation.IssuerDID, revocation.CredentialCID,
+	).Scan(&existing.CID, &existing.JWSToken, &existingCreatedAt)
+	switch {
+	case err == sql.ErrNoRows:
+		_, err = w.Exec(
+			"INSERT OR IGNORE INTO revocations (cid, issuer_did, credential_cid, jws_token, created_at) VALUES (?, ?, ?, ?, ?)",
+			revocation.CID, revocation.IssuerDID, revocation.CredentialCID, revocation.JWSToken, revocation.CreatedAt,
+		)
+		return err
+	case err != nil:
+		return err
+	}
+
+	existing.CreatedAt = existingCreatedAt.String
+	if !revocationSupersedes(revocation, existing) {
+		return nil
+	}
+
+	// Replace the row wholesale rather than UPDATE-ing cid in place: cid is the
+	// PRIMARY KEY, and delete-then-insert keeps the artifact, its boundary, and the
+	// key consistent in one step.
+	if _, err := w.Exec(
+		"DELETE FROM revocations WHERE issuer_did = ? AND credential_cid = ?",
+		revocation.IssuerDID, revocation.CredentialCID,
+	); err != nil {
+		return err
+	}
+	_, err = w.Exec(
+		"INSERT INTO revocations (cid, issuer_did, credential_cid, jws_token, created_at) VALUES (?, ?, ?, ?, ?)",
 		revocation.CID, revocation.IssuerDID, revocation.CredentialCID, revocation.JWSToken, revocation.CreatedAt,
 	)
 	return err
@@ -1422,7 +1472,8 @@ func (s *SQLiteStore) IsCredentialRevoked(issuerDID string, credentialCID string
 	if err != nil {
 		return false, err
 	}
-	if asOfUnix == 0 {
+	// asOfUnix <= 0 is the timeless (freshness) question — see the Store contract.
+	if asOfUnix <= 0 {
 		return true, nil
 	}
 	revokedAt, ok := revocationCreatedAtUnix(storedRevocationCreatedAt(createdAt.String, jwsToken))

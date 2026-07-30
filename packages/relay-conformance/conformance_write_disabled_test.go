@@ -243,14 +243,33 @@ func TestWriteDisabledBlobPutRejected(t *testing.T) {
 }
 
 // TestWriteDisabledBlobGetNot501 is the content-plane negative control: write:false
-// gates content-plane WRITES only. A blob READ must still reach the route.
+// gates content-plane WRITES only, so a blob READ must still reach the route.
+//
+// This assertion is only meaningful when the content plane EXISTS. `write: false`
+// plus `content: false` is a spec-blessed deployment (a proof-plane-only read-only
+// node), and there a blob GET legitimately 501s on the content gate — so the test
+// additionally requires capabilities.content == true rather than asserting against
+// every write-disabled relay.
 func TestWriteDisabledBlobGetNot501(t *testing.T) {
 	base := writeDisabledBase(t)
+
+	var meta struct {
+		Capabilities struct {
+			Content bool `json:"content"`
+		} `json:"capabilities"`
+	}
+	wk := getJSON(t, base+"/.well-known/dfos-relay", &meta)
+	if wk.StatusCode != 200 {
+		t.Fatalf("GET /.well-known/dfos-relay: status %d", wk.StatusCode)
+	}
+	if !meta.Capabilities.Content {
+		t.Skip("relay advertises capabilities.content: false — blob reads 501 on the content gate, which is correct")
+	}
 
 	resp := getJSON(t, base+"/content/someid/blob", nil)
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusNotImplemented {
-		t.Fatal("GET /content/someid/blob: returned 501 — write:false must not disable content-plane READS")
+		t.Fatal("GET /content/someid/blob: returned 501 on a content-enabled relay — write:false must not disable content-plane READS")
 	}
 }
 

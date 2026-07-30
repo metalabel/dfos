@@ -757,8 +757,29 @@ const ingestContentOp = async (
     };
   }
 
-  // load state at fork point and verify extension against it
-  const forkState = await store.getContentStateAtCID(chain.contentId, previousCID);
+  // Load state at fork point and verify extension against it.
+  //
+  // The replay can THROW, not just return null: it re-verifies the historical
+  // operations, so a dependency the relay has not ingested yet (an identity chain
+  // whose keys the fork point's signer needs) surfaces as an exception. Left
+  // unhandled it escapes to the batch-level catch in ingestOperations, which
+  // produces a rejection WITHOUT `dependencyMissing` — and the sequencer treats
+  // that as permanent and DELETES the raw op, so an op that would have verified
+  // once its dependency arrived is lost for good. Classify it the same way the
+  // null case is classified (and the same way the Go twin classifies it):
+  // retryable, keep the raw op.
+  let forkState: Awaited<ReturnType<typeof store.getContentStateAtCID>>;
+  try {
+    forkState = await store.getContentStateAtCID(chain.contentId, previousCID);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown error';
+    return {
+      cid,
+      status: 'rejected',
+      error: `${FORK_POINT_STATE_ERROR_PREFIX}${previousCID}: ${message}`,
+      dependencyMissing: true,
+    };
+  }
   if (!forkState) {
     return {
       cid,

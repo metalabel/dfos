@@ -12,14 +12,16 @@ import {
   decodeDFOSCredentialUnsafe,
 } from '@metalabel/dfos-protocol/credentials';
 import {
+  createJws,
   createNewEd25519Keypair,
   dagCborCanonicalEncode,
   generateId,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
-import { ingestOperations } from '../src/ingest';
+import { FORK_POINT_STATE_ERROR_PREFIX, ingestOperations } from '../src/ingest';
 import { MemoryRelayStore } from '../src/store';
+import type { StoredRevocation } from '../src/types';
 
 /*
 
@@ -165,8 +167,63 @@ const seedChain = async (genesisOffset: number) => {
     expect(res!.status).toBe('new');
   };
 
-  return { store, creator, delegate, genesis, contentId, credential, credentialCID, revoke };
+  /**
+   * Sign a revocation of the seeded credential with a caller-chosen `createdAt`.
+   * `signRevocation` stamps Date.now(), which cannot express the two-revocations-
+   * at-different-instants case the min-boundary rule exists for.
+   */
+  const signRevocationAt = async (createdAt: string): Promise<{ jws: string; cid: string }> => {
+    const payload = {
+      version: 1 as const,
+      type: 'revocation' as const,
+      did: creator.did,
+      credentialCID,
+      createdAt,
+    };
+    const encoded = await dagCborCanonicalEncode(payload);
+    const jws = await createJws({
+      header: {
+        alg: 'EdDSA',
+        typ: 'did:dfos:revocation',
+        kid: `${creator.did}#${creator.authKey.keyId}`,
+        cid: encoded.cid.toString(),
+      },
+      payload: payload as unknown as Record<string, unknown>,
+      sign: creator.authKey.signer,
+    });
+    return { jws, cid: encoded.cid.toString() };
+  };
+
+  /** A StoredRevocation record for direct addRevocation contract tests. */
+  const storedRevocation = (cid: string, createdAt: string): StoredRevocation => ({
+    cid,
+    issuerDID: creator.did,
+    credentialCID,
+    jwsToken: '',
+    createdAt,
+  });
+
+  const boundaryOf = async (): Promise<string | undefined> =>
+    (await store.getRevocationForCredential(credentialCID))?.createdAt;
+
+  return {
+    store,
+    creator,
+    delegate,
+    genesis,
+    contentId,
+    credential,
+    credentialCID,
+    revoke,
+    signRevocationAt,
+    storedRevocation,
+    boundaryOf,
+  };
 };
+
+/** ISO timestamp in the canonical protocol grammar, `offset` minutes from now. */
+const iso = (offsetMinutes: number) =>
+  new Date(Date.now() + offsetMinutes * 60_000).toISOString().replace(/\d{3}Z$/, '000Z');
 
 // -----------------------------------------------------------------------------
 // store: the as-of compare
@@ -198,6 +255,17 @@ describe('relay store — as-of revocation', () => {
     expect(
       await c.store.isCredentialRevoked(c.creator.did, c.credentialCID, revokedAtUnix + 60),
     ).toBe(true);
+  });
+
+  it('treats a non-positive as-of instant as timeless', async () => {
+    // Go uses 0 as its in-band sentinel and cannot express "as of epoch 0", so TS
+    // must not either — otherwise the twins answer this input oppositely. The
+    // degenerate case (an op dated at or before 1970) gets the stricter answer.
+    const c = await seedChain(-30);
+    await c.revoke();
+    for (const asOf of [0, -1]) {
+      expect(await c.store.isCredentialRevoked(c.creator.did, c.credentialCID, asOf)).toBe(true);
+    }
   });
 
   it('reports an unknown credential as not revoked on both bases', async () => {
@@ -301,4 +369,156 @@ describe('getContentStateAtCID — historical replay', () => {
       /revoked/,
     );
   });
+
+  it('classifies a failed fork-point replay as a MISSING DEPENDENCY, not a permanent rejection', async () => {
+    // The replay re-verifies historical ops, so it can THROW — and a rejection
+    // without `dependencyMissing` is treated as permanent by the sequencer, which
+    // DELETES the raw op. An op that would verify once its dependency arrived would
+    // then be lost for good, so the throw must classify as retryable (matching the
+    // Go twin, which already did).
+    // Reached through the real path: op A is future-dated past a revocation, so
+    // replaying it throws (see the test above). A creator-signed fork off A then
+    // hits that throw inside ingest's fork branch — no stubbing needed.
+    //
+    // B is required: it moves the head past A, so the fork op takes the FORK branch
+    // (which replays from the fork point) instead of the linear fast path (which
+    // extends trusted head state and never replays).
+    const c = await seedChain(-30);
+    const a = await updateOp(c.delegate, c.genesis.operationCID, 'A', 5, c.credential);
+    expect((await ingestOperations([a.jwsToken], c.store))[0]!.status).toBe('new');
+    const b = await updateOp(c.creator, a.operationCID, 'B', 6);
+    expect((await ingestOperations([b.jwsToken], c.store))[0]!.status).toBe('new');
+
+    await c.revoke();
+
+    const fork = await updateOp(c.creator, a.operationCID, 'fork', 7);
+    const [res] = await ingestOperations([fork.jwsToken], c.store);
+
+    expect(res!.status).toBe('rejected');
+    expect(res!.dependencyMissing).toBe(true);
+    expect(res!.cid).not.toBe('');
+    expect(res!.error).toContain(FORK_POINT_STATE_ERROR_PREFIX);
+  });
+
+  it('enforces retroactive identity deletion during replay', async () => {
+    // Identity deletion has NO as-of basis (CREDENTIALS.md "Identity Deletion Is
+    // Absolute"), so a deleted issuer's credentials stop authorizing committed
+    // history immediately. Twin of the Go test — neither language pinned this.
+    const c = await seedChain(-30);
+    const a = await updateOp(c.delegate, c.genesis.operationCID, 'A', -25, c.credential);
+    expect((await ingestOperations([a.jwsToken], c.store))[0]!.status).toBe('new');
+
+    // mark the credential's issuer deleted in the store's identity state
+    const issuerChain = await c.store.getIdentityChain(c.creator.did);
+    await c.store.putIdentityChain({
+      ...issuerChain!,
+      state: { ...issuerChain!.state, isDeleted: true },
+    });
+
+    await expect(c.store.getContentStateAtCID(c.contentId, a.operationCID)).rejects.toThrow(
+      /deleted/,
+    );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// the min-boundary rule: two revocations for one credential
+// -----------------------------------------------------------------------------
+
+describe('relay store — earliest revocation boundary wins', () => {
+  it('does NOT move the boundary later when the credential is re-revoked', async () => {
+    // Nothing stops an issuer signing a second revocation for the same credential:
+    // different artifact, so ingest idempotence admits it. If the store took the
+    // last write, the validity boundary would slide forward and RE-VALIDATE
+    // operations the first revocation had already invalidated.
+    const c = await seedChain(-60);
+    const early = c.storedRevocation('bafyearly', iso(-30));
+    const late = c.storedRevocation('bafylate', iso(-5));
+
+    await c.store.addRevocation(early);
+    await c.store.addRevocation(late);
+
+    expect(await c.boundaryOf()).toBe(early.createdAt);
+  });
+
+  it('moves the boundary earlier when an earlier revocation arrives second', async () => {
+    // The reach of a revocation may only ever GROW, so a later-arriving earlier
+    // revocation does replace the incumbent.
+    const c = await seedChain(-60);
+    const late = c.storedRevocation('bafylate', iso(-5));
+    const early = c.storedRevocation('bafyearly', iso(-30));
+
+    await c.store.addRevocation(late);
+    await c.store.addRevocation(early);
+
+    expect(await c.boundaryOf()).toBe(early.createdAt);
+  });
+
+  it('lets an unparseable boundary win over a dated one (timeless is strongest)', async () => {
+    const c = await seedChain(-60);
+    const dated = c.storedRevocation('bafydated', iso(-30));
+    const broken = c.storedRevocation('bafybroken', 'not-a-timestamp');
+
+    await c.store.addRevocation(dated);
+    await c.store.addRevocation(broken);
+
+    expect(await c.boundaryOf()).toBe(broken.createdAt);
+    // and it bites at every instant — the fail-closed direction
+    expect(
+      await c.store.isCredentialRevoked(c.creator.did, c.credentialCID, nowUnix() - 86_400),
+    ).toBe(true);
+  });
+
+  it('is arrival-order independent end to end through ingest', async () => {
+    // Two genuine, verifiable revocations of the same credential, ingested in
+    // opposite orders on two relays: both MUST converge on the earlier boundary.
+    const forwards = await seedChain(-60);
+    const backwards = await seedChain(-60);
+    const boundary = async (c: typeof forwards, order: 'early-first' | 'late-first') => {
+      const early = await c.signRevocationAt(iso(-30));
+      const late = await c.signRevocationAt(iso(-5));
+      const seq = order === 'early-first' ? [early, late] : [late, early];
+      for (const rev of seq) {
+        const [res] = await ingestOperations([rev.jws], c.store);
+        expect(res!.status).toBe('new');
+      }
+      return c.boundaryOf();
+    };
+
+    const a = await boundary(forwards, 'early-first');
+    const b = await boundary(backwards, 'late-first');
+    expect(a).toBe(b);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// boundary parsing: canonical grammar only
+// -----------------------------------------------------------------------------
+
+describe('relay store — as-of boundary parsing', () => {
+  const cases: { label: string; createdAt: string; usable: boolean }[] = [
+    { label: 'canonical .000Z', createdAt: '2026-03-07T00:00:00.000Z', usable: true },
+    { label: 'numeric offset', createdAt: '2026-03-07T00:00:00.000+05:00', usable: false },
+    { label: 'missing Z', createdAt: '2026-03-07T00:00:00.000', usable: false },
+    { label: 'no fraction', createdAt: '2026-03-07T00:00:00Z', usable: false },
+    { label: 'garbage', createdAt: 'not-a-timestamp', usable: false },
+    { label: 'empty', createdAt: '', usable: false },
+  ];
+
+  it.each(cases)(
+    '$label → usable=$usable (off-grammar fails CLOSED to revoked)',
+    async ({ createdAt, usable }) => {
+      // An off-grammar boundary must never silently un-revoke history: the store
+      // answers revoked at EVERY instant instead of computing a bogus comparison.
+      // A lenient `new Date()` would accept the offset and missing-Z forms and
+      // derive a timezone-dependent boundary from them.
+      const c = await seedChain(-60);
+      await c.store.addRevocation(c.storedRevocation('bafyparse', createdAt));
+
+      const wellBefore = Math.floor(new Date('2020-01-01T00:00:00.000Z').getTime() / 1000);
+      expect(await c.store.isCredentialRevoked(c.creator.did, c.credentialCID, wellBefore)).toBe(
+        !usable,
+      );
+    },
+  );
 });

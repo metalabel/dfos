@@ -412,7 +412,7 @@ A verifier that cannot ask the as-of question (no revocation source, or a source
 
 **Backdating is bounded.** `op.createdAt` is signer-asserted, so a delegate whose credential is about to be revoked will try to date operations before the revocation. Three independent bounds make that a non-lever:
 
-1. **Chain monotonicity.** Each operation's `createdAt` MUST be strictly after the previous operation's, so a backdated operation cannot precede the chain's existing head — the usable window is bounded below by history the chain already committed.
+1. **Chain monotonicity.** Each operation's `createdAt` MUST be strictly after that of the operation it **extends**. Note this binds against the predecessor, **not** the chain head: an operation forking from an earlier point is bounded only by that fork point, so it may legitimately carry a `createdAt` earlier than the current head. The floor is therefore the fork point being extended, not the chain's latest operation.
 2. **The credential's own window.** An operation dated outside `[iat, exp)` fails the temporal check regardless of revocation.
 3. **Ingest-time freshness.** An honest relay that already holds the revocation refuses the operation however it is dated, so a backdated operation must find a relay that has not yet heard about the revocation.
 

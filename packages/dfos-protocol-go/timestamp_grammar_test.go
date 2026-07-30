@@ -51,3 +51,39 @@ func TestTimestampGrammarParity(t *testing.T) {
 		}
 	}
 }
+
+// TestParseProtocolTimestampMatchesGrammar asserts the exported parse accepts
+// exactly the canonical grammar — anything it rejects has no comparable instant, so
+// consumers must not derive a boundary from it.
+func TestParseProtocolTimestampMatchesGrammar(t *testing.T) {
+	for _, v := range timestampGrammarVectors {
+		_, err := ParseProtocolTimestamp(v.input)
+		if (err == nil) != v.valid {
+			t.Errorf("ParseProtocolTimestamp(%q): valid=%v, want %v", v.input, err == nil, v.valid)
+		}
+	}
+}
+
+// TestParseProtocolTimestampUnixSeconds pins the seconds conversion (floor, never
+// round) that the credential temporal basis depends on.
+func TestParseProtocolTimestampUnixSeconds(t *testing.T) {
+	epoch, err := ParseProtocolTimestamp("1970-01-01T00:00:00.000Z")
+	if err != nil || epoch.Unix() != 0 {
+		t.Fatalf("epoch: %v (unix %d)", err, epoch.Unix())
+	}
+	sub, err := ParseProtocolTimestamp("1970-01-01T00:00:00.999Z")
+	if err != nil || sub.Unix() != 0 {
+		t.Fatalf("sub-second must floor to 0: %v (unix %d)", err, sub.Unix())
+	}
+	whole, err := ParseProtocolTimestamp("2026-03-07T00:00:00.000Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frac, err := ParseProtocolTimestamp("2026-03-07T00:00:00.999Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if whole.Unix() != frac.Unix() {
+		t.Fatalf("millisecond remainder must floor away: %d vs %d", whole.Unix(), frac.Unix())
+	}
+}

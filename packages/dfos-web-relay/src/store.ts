@@ -7,7 +7,11 @@
 */
 
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
-import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protocol/chain';
+import {
+  parseProtocolTimestampUnix,
+  verifyContentChain,
+  verifyIdentityChain,
+} from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
   IndexContentRow,
@@ -83,15 +87,47 @@ const blobKeyString = (key: BlobKey): string => `${key.creatorDID}::${key.docume
 
 /**
  * A revocation's signed `createdAt` as integer unix seconds — the as-of boundary.
- * Returns null when the stored timestamp is missing or unparseable, which callers
- * MUST read as "no usable boundary" and answer timelessly (i.e. revoked). Failing
- * open here would let a malformed row silently un-revoke history. Floors to
- * seconds to match the credential temporal basis (CREDENTIALS.md "Time Basis
- * Conversion"). MUST match the Go twin (`revocationCreatedAtUnix`).
+ *
+ * Parsed through the protocol's canonical grammar, NOT a lenient `new Date()`: a
+ * lenient parse accepts inputs the protocol rejects (numeric offsets, a missing
+ * `Z` that some runtimes then read as LOCAL time), which would make the boundary
+ * timezone-dependent. Returns null when the stored timestamp is missing or
+ * off-grammar, which callers MUST read as "no usable boundary" and answer
+ * timelessly (i.e. revoked) — failing open would let a malformed row silently
+ * un-revoke history. MUST match the Go twin (`revocationCreatedAtUnix`).
  */
-const revocationCreatedAtUnix = (revocation: StoredRevocation): number | null => {
-  const ms = new Date(revocation.createdAt).getTime();
-  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+const revocationCreatedAtUnix = (revocation: StoredRevocation): number | null =>
+  parseProtocolTimestampUnix(revocation.createdAt);
+
+/**
+ * Should `candidate` replace `incumbent` as the stored revocation for a
+ * (issuerDID, credentialCID) pair?
+ *
+ * **The earliest boundary wins.** Nothing stops an issuer from signing two
+ * distinct revocations for the same credential — they have different artifact
+ * CIDs, so ingest idempotence (keyed on the artifact) admits both. Under as-of
+ * semantics the stored one sets the validity boundary for all of history, so
+ * last-write-wins would make that boundary depend on gossip arrival order, and a
+ * later re-revocation could retroactively RE-VALIDATE operations an earlier
+ * revocation had already invalidated. Keeping the minimum is monotonic: a
+ * revocation's reach can only ever grow.
+ *
+ * A null (off-grammar) boundary is the STRONGEST — it means "timeless", so it
+ * sorts before every real instant. Ties break on the artifact CID so the survivor
+ * is a pure function of the set rather than of arrival order (the same
+ * determinism rule `getRevocationForCredential` uses for multi-issuer
+ * collisions). MUST match the Go twin (`revocationSupersedes`).
+ */
+const revocationSupersedes = (
+  candidate: StoredRevocation,
+  incumbent: StoredRevocation,
+): boolean => {
+  const candidateAt = revocationCreatedAtUnix(candidate);
+  const incumbentAt = revocationCreatedAtUnix(incumbent);
+  if (candidateAt === null) return incumbentAt !== null || candidate.cid < incumbent.cid;
+  if (incumbentAt === null) return false;
+  if (candidateAt !== incumbentAt) return candidateAt < incumbentAt;
+  return candidate.cid < incumbent.cid;
 };
 
 /**
@@ -193,6 +229,11 @@ export class MemoryRelayStore implements RelayStore {
 
   async addRevocation(revocation: StoredRevocation): Promise<void> {
     const key = `${revocation.issuerDID}::${revocation.credentialCID}`;
+    // earliest boundary wins — see revocationSupersedes. The survivor is kept
+    // WHOLE (artifact + boundary together), so the revocation this store serves
+    // from /revocations/v1 is always the one that actually sets the boundary.
+    const existing = this.revocations.get(key);
+    if (existing && !revocationSupersedes(revocation, existing)) return;
     this.revocations.set(key, revocation);
   }
 
@@ -203,7 +244,10 @@ export class MemoryRelayStore implements RelayStore {
   ): Promise<boolean> {
     const rev = this.revocations.get(`${issuerDID}::${credentialCID}`);
     if (!rev) return false;
-    if (asOfUnix === undefined) return true;
+    // asOf omitted OR <= 0 is the timeless (freshness) question — see the
+    // RelayStore contract. Go cannot express "as of epoch 0" (0 is its sentinel),
+    // so TS must not either, or the twins would answer that input oppositely.
+    if (asOfUnix === undefined || asOfUnix <= 0) return true;
     const revokedAt = revocationCreatedAtUnix(rev);
     return revokedAt === null || revokedAt <= asOfUnix;
   }
