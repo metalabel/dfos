@@ -36,7 +36,8 @@
     },
     "asOfDocumentCID": {
       "type": "string",
-      "description": "Optional content-strength flavor — the document state the claimant pins its credit to. NOT part of the bind; consumers that ignore it are conformant. Omission is the default and is CID-neutral."
+      "description": "Optional content-strength flavor — the document state the claimant pins its credit to. When the key IS present it MUST be a non-empty string: an empty string is a distinct, CID-changing encoding from an absent field, so accepting it would mean two claim CIDs for the same statement. NOT part of the bind; consumers that ignore it are conformant. Omission is the default and is CID-neutral.",
+      "minLength": 1
     }
   },
   "$defs": {
@@ -56,7 +57,8 @@
         },
         "role": {
           "type": "string",
-          "description": "Free-text role — open vocabulary, not an enum (e.g. \"author\", \"editor\", \"photography\"). Compared byte-exact against the claim payload's role, so it is REQUIRED whenever claim is present: an entry with a claim but no role has nothing to bind to and is invalid, not unclaimed."
+          "description": "Free-text role — open vocabulary, not an enum (e.g. \"author\", \"editor\", \"photography\"). Compared byte-exact against the claim payload's role, so it is REQUIRED whenever claim is present: an entry with a claim but no role — or an empty role, which can never equal the payload's non-empty one — has nothing to bind to and is invalid, not unclaimed.",
+          "minLength": 1
         },
         "name": {
           "type": "string",

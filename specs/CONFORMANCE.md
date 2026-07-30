@@ -5,6 +5,7 @@ against the existing proving corpora. This document defines no new protocol rule
 points at the normative MUST sets already specified in
 [PROTOCOL.md](https://protocol.dfos.com/spec),
 [CREDENTIALS.md](https://protocol.dfos.com/credentials),
+[CREDITS.md](https://protocol.dfos.com/credits),
 [WEB-RELAY.md](https://protocol.dfos.com/web-relay), and
 [DID-METHOD.md](https://protocol.dfos.com/did-method), and binds each tier to the tests
 that exercise it.
@@ -52,6 +53,15 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   basis, depth limit, revocation at every level (CREDENTIALS.md "Verification Walk" /
   "Attenuation Rules" / "Revocation", `specs/CREDENTIALS.md`, `specs/CREDENTIALS.md`,
   `specs/CREDENTIALS.md`).
+- **Credit-claim verification** (if it renders attribution) — the 4096-byte aggregate token
+  cap checked before any decode, `typ` equal to `did:dfos:credit-claim`, the `cid` header
+  present and re-derived, `kid`-DID equal to payload `did`, and the **full three-component
+  bind** on `(contentId, did, role)` compared byte-exact against the hosting entry. Two
+  rules are easy to get backwards and are normative: verification MUST NOT consult the
+  claimant's `isDeleted` state (a tombstoned claimant's credit still verifies — attribution
+  is history, authorization is standing), and the **`invalid` vs `unverifiable`** verdicts
+  MUST stay distinct, with neither rendered as `unclaimed` (CREDITS.md "Verification
+  Algorithm" / "Verification States" / "Two-Way Binding", `specs/CREDITS.md`).
 
 ### Tier 2 — Signer
 
@@ -63,8 +73,13 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
 - **`kid` rules** — bare key ID for identity genesis, DID URL otherwise; content ops always
   DID URL (PROTOCOL.md "kid Rules", `specs/PROTOCOL.md`).
 - **`cid` header** — present on every operation JWS, artifacts, countersignatures,
-  credentials, revocations; absent on auth-token JWTs (PROTOCOL.md "`cid` Header",
-  `specs/PROTOCOL.md`).
+  credentials, revocations, credit claims; absent on auth-token JWTs (PROTOCOL.md
+  "`cid` Header", `specs/PROTOCOL.md`).
+- **Credit-claim emission** (if it signs attribution) — derive `kid` from the claimant DID
+  so a `kid`↔`did` mismatch is unrepresentable, bind to the chain's 31-char `contentId`
+  (never a `documentCID` or head CID), omit `asOfDocumentCID` rather than emitting it empty,
+  and refuse to emit a token over the 4096-byte cap. A signer MUST NOT mint a claim its own
+  verifier would reject (CREDITS.md "The Credit Claim Envelope", `specs/CREDITS.md`).
 - **Canonicalization discipline** — integer number bounds, no Unicode normalization, no
   duplicate keys (PROTOCOL.md "Number Encoding" / "String Encoding" / "JSON Payload
   Canonicalization", `specs/PROTOCOL.md`, `specs/PROTOCOL.md`, `specs/PROTOCOL.md`).

@@ -44,6 +44,8 @@
   Cache-Control: public, max-age=0, must-revalidate
 /credentials/
   Cache-Control: public, max-age=0, must-revalidate
+/credits/
+  Cache-Control: public, max-age=0, must-revalidate
 /deploy/
   Cache-Control: public, max-age=0, must-revalidate
 /siwd/

@@ -52,6 +52,8 @@ A credit claim is a JWS in the same envelope family as [credentials](https://pro
 
 **Key resolution** follows the credential rule: **historical** resolution, any key role. Every key that has ever appeared in the claimant's identity chain is an acceptable signing key, so a claim survives key rotation. This is the right default for a permanent historical attribution — a credit signed in 2026 should not evaporate because the claimant rotated keys in 2028.
 
+Historical resolution is a **requirement on the resolver a verifier is given**, not something the verifier can supply for itself. A verified identity's `authKeys`/`assertKeys`/`controllerKeys` are a projection of the chain's CURRENT head — an `update` operation replaces each role array wholesale — so a resolver built from head state alone has already discarded the rotated-out key a two-year-old claim was signed with. An implementation MUST resolve claimant keys from chain history (merging every key the chain has ever carried, exactly as credential verification already requires) before handing the identity to a claim verifier. A verifier fed current-state-only keys reports **invalid** for every claim predating the claimant's most recent rotation — silently un-crediting real work, and reporting a positive failure where the honest answer was "this key rotated."
+
 ### Payload
 
 ```json
@@ -185,6 +187,10 @@ Every `credits[]` entry resolves to exactly one of four states. A consumer SHOUL
 
 **unverifiable is honest ignorance.** The claimant's DID may live on a relay this consumer cannot reach, or the identity may simply not be resolvable here. The claim may be perfectly valid. Consumers SHOULD distinguish "I checked and it failed" from "I could not check," and SHOULD NOT cache an unverifiable verdict as invalid.
 
+**The two failure verdicts MUST be machine-distinguishable.** A verifier that signals every failure as one undifferentiated error forces consumers to string-match its prose to tell "checked and failed" from "could not check" — and prose gets reworded, so those consumers break silently and land on the wrong verdict. Implementations MUST expose the verdict structurally: the reference implementations carry it as a field on a typed error (TypeScript: `CreditClaimVerifyError.reason`) and as `errors.Is`-able sentinels (Go: `ErrCreditClaimInvalid` / `ErrCreditClaimUnverifiable`). A failure whose cause cannot be attributed — an unexpected fault inside the verifier itself — MUST resolve to **unverifiable**, never **invalid**: absent evidence against the claim, the honest verdict is that it was not checked.
+
+A **transport failure is unverifiable, not invalid.** If identity resolution fails because a relay is unreachable, times out, or errors, the correct verdict is unverifiable — an outage is not evidence about a signature. A verifier that reports a network error as invalid tells its users the credit was checked and found bad, which is false, and which the spec's own "checked and failed" language would then license a consumer to display as a warning about the claimant.
+
 ---
 
 ## Verification Algorithm
@@ -195,7 +201,7 @@ To verify one `credits[]` entry, given the entry, the `contentId` of the chain w
 2. **Size.** If the `claim` token exceeds **4096 bytes**, the entry is **invalid**. Check this before any decode.
 3. **Decode** the JWS. Failure to decode → **invalid**.
 4. **`typ`.** MUST be `did:dfos:credit-claim`. Anything else → **invalid**. (In particular, another envelope type from this family — a credential, a revocation, a countersign — is not a credit claim, no matter how well it verifies.)
-5. **Payload schema.** `version` MUST be `1`, `type` MUST be `credit-claim`, `contentId` MUST be a 31-char content chain id, `did` and `role` MUST be non-empty, `createdAt` MUST parse as ISO 8601 millisecond-precision UTC. Otherwise → **invalid**.
+5. **Payload schema.** `version` MUST be `1`, `type` MUST be `credit-claim`, `contentId` MUST be a 31-char content chain id, `did` MUST be non-empty and carry the `did:` prefix, `role` MUST be non-empty, `createdAt` MUST parse as ISO 8601 millisecond-precision UTC, and `asOfDocumentCID` — if the key is PRESENT — MUST be a non-empty string. Otherwise → **invalid**. (The `did:` check is a prefix check, not full `did:dfos` validation: a claimant is not required to be a `did:dfos` identifier.)
 6. **`kid` ↔ `did`.** The `kid`'s DID portion MUST equal `payload.did`. Otherwise → **invalid**.
 7. **Resolve the claimant identity** named by `payload.did` and find the key named by the `kid` fragment. Unresolvable identity → **unverifiable**. Resolvable identity with no such key → **invalid**.
 8. **Signature.** Verify the JWS under that key. Failure → **invalid**.
@@ -233,6 +239,10 @@ The claim binds to the chain's stable 31-char `contentId`. The two alternatives 
 **And `contentId` is what makes the claim anti-replay.** Without a chain component in the signed payload, a claim would be a free-floating "Alice is a photographer" token — valid anywhere, liftable from one document and pasted into any other. Anyone who could read one of Alice's claims could credit her, verifiably, on content she never touched. Naming the chain in the signed bytes is what confines a claim to the one chain it was made about.
 
 This is why step 10 of the algorithm is not optional and why implementations SHOULD always pass the expected `contentId` to their verifier: a consumer reading a credits entry **always** knows which chain the document came from, so there is never a legitimate reason to skip the check. The reference implementations expose the unbound form (TS: omitting `expectedContentId`; Go: `VerifyCreditClaim` rather than `VerifyCreditClaimBound`) only for tooling that inspects a claim in isolation.
+
+**An empty expected `contentId` MUST be an error, never a skip.** A verifier that treats the empty string as "no binder wanted" hands unbound semantics to a caller who asked for bound ones — and the empty string is exactly what an unhydrated database column, a zero-valued struct field, or a failed parse produces. The skip must be requested by a distinct, deliberate act (omitting an optional argument, or calling a differently-named function), so that an accidental empty value fails loudly instead of quietly reopening the cross-chain replay this section exists to close.
+
+**Ship the entry-level check, not just the claim-level one.** Because the bind has three components and a claim verifier can only enforce one of them, an implementation whose only public entry point is "verify this claim token" has made the unsafe call the easy one, and step 10 the caller's homework. Implementations SHOULD expose a single call that takes the whole `credits[]` entry plus the hosting `contentId` and returns one of the four states, performing the full comparison internally — the reference implementations do (`verifyCreditEntry` / `VerifyCreditEntry`), and it is the call consumers should reach for.
 
 ### Claim stability
 

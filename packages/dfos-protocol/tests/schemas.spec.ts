@@ -698,3 +698,27 @@ describe('credit entry shape', () => {
     expect(validate({ did: 'did:dfos:abc123', label: 'author' })).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Published-artifact drift guards
+// ---------------------------------------------------------------------------
+
+describe('credit entry shape is published once, copied verbatim', () => {
+  // The credits-entry shape is published in TWO normative artifacts:
+  // credit-claim/v1#/$defs/creditEntry (the declared-canonical definition) and
+  // post/v1#/$defs/credit (the inline copy the post schema actually validates
+  // against). They are copied rather than $ref'd on purpose — a cross-document
+  // $ref would make offline validation of post/v1 require fetching a second
+  // schema. The cost of copying is drift, so it is pinned here: the two MUST be
+  // deep-equal, and a change to one is a change to both.
+  it('post/v1 $defs.credit deep-equals credit-claim/v1 $defs.creditEntry', () => {
+    expect(postSchema.$defs.credit).toEqual(creditClaimSchema.$defs.creditEntry);
+  });
+
+  it('neither copy uses a remote $ref', () => {
+    // a $ref to another hosted schema would make post/v1 validation require a
+    // network fetch; the copies exist precisely to avoid that
+    const serialized = JSON.stringify(postSchema.$defs.credit);
+    expect(serialized).not.toContain('https://schemas.dfos.com/credit-claim');
+  });
+});

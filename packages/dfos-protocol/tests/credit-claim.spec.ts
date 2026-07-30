@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   CreditClaimPayload,
+  CreditClaimVerifyError,
   encodeEd25519Multikey,
   MAX_CREDIT_CLAIM_SIZE,
   signCreditClaim,
   verifyCreditClaim,
+  verifyCreditEntry,
 } from '../src/chain';
-import type { VerifiedIdentity } from '../src/chain';
+import type { MultikeyPublicKey, VerifiedIdentity } from '../src/chain';
 import {
   createJws,
   createNewEd25519Keypair,
@@ -19,6 +21,12 @@ import {
 // helpers
 // =============================================================================
 
+const multikey = (keyId: string, publicKey: Uint8Array): MultikeyPublicKey => ({
+  id: keyId,
+  type: 'Multikey',
+  publicKeyMultibase: encodeEd25519Multikey(publicKey),
+});
+
 const makeIdentity = () => {
   const keypair = createNewEd25519Keypair();
   const keyId = generateId('key');
@@ -28,9 +36,7 @@ const makeIdentity = () => {
   const identity: VerifiedIdentity = {
     did,
     isDeleted: false,
-    assertKeys: [
-      { id: keyId, type: 'Multikey', publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey) },
-    ],
+    assertKeys: [multikey(keyId, keypair.publicKey)],
     authKeys: [],
     controllerKeys: [],
     services: [],
@@ -44,6 +50,57 @@ const makeContentId = () => generateId('test').substring(5);
 const resolverFor = (...identities: VerifiedIdentity[]) => {
   const map = new Map(identities.map((i) => [i.did, i]));
   return async (did: string) => map.get(did);
+};
+
+/** Stands in for an unreachable relay — a resolver that throws, not returns */
+const throwingResolver = async (): Promise<VerifiedIdentity | undefined> => {
+  throw new Error('relay unreachable');
+};
+
+type Claimant = ReturnType<typeof makeIdentity>;
+
+/**
+ * Sign a claim JWS from an arbitrary payload, bypassing the signer's validation.
+ * Used to probe what the VERIFIER accepts for payloads a conforming signer would
+ * never mint.
+ */
+const signRaw = async (
+  claimant: Claimant,
+  payload: Record<string, unknown>,
+  overrides: { typ?: string; cid?: string; kid?: string } = {},
+) => {
+  const encoded = await dagCborCanonicalEncode(payload);
+  return createJws({
+    header: {
+      alg: 'EdDSA',
+      typ: overrides.typ ?? 'did:dfos:credit-claim',
+      kid: overrides.kid ?? claimant.kid,
+      cid: overrides.cid ?? encoded.cid.toString(),
+    },
+    payload,
+    sign: claimant.signer,
+  });
+};
+
+const basePayload = (claimant: Claimant, contentId: string) => ({
+  version: 1 as const,
+  type: 'credit-claim' as const,
+  contentId,
+  did: claimant.did,
+  role: 'author',
+  createdAt: '2026-03-07T00:00:00.000Z',
+});
+
+/** Assert a rejection is a typed verify error carrying the expected verdict */
+const expectVerdict = async (promise: Promise<unknown>, reason: 'invalid' | 'unverifiable') => {
+  const error = await promise.then(
+    () => {
+      throw new Error('expected the verification to reject');
+    },
+    (thrown: unknown) => thrown,
+  );
+  expect(error).toBeInstanceOf(CreditClaimVerifyError);
+  expect((error as CreditClaimVerifyError).reason).toBe(reason);
 };
 
 // =============================================================================
@@ -79,6 +136,50 @@ describe('credit claim', () => {
     expect(verified.asOfDocumentCID).toBeUndefined();
   });
 
+  it('should derive the kid from did + keyId', async () => {
+    // a kid↔did mismatch is unrepresentable at sign time
+    const claimant = makeIdentity();
+
+    const { jwsToken } = await signCreditClaim({
+      contentId: makeContentId(),
+      did: claimant.did,
+      role: 'author',
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+
+    const header = JSON.parse(
+      Buffer.from(jwsToken.split('.')[0]!, 'base64url').toString('utf-8'),
+    ) as { kid: string };
+    expect(header.kid).toBe(`${claimant.did}#${claimant.keyId}`);
+  });
+
+  it('should re-derive identical bytes from a createdAt override', async () => {
+    const claimant = makeIdentity();
+    const contentId = makeContentId();
+    const createdAt = '2026-03-07T00:00:00.000Z';
+
+    const first = await signCreditClaim({
+      contentId,
+      did: claimant.did,
+      role: 'author',
+      createdAt,
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+    const second = await signCreditClaim({
+      contentId,
+      did: claimant.did,
+      role: 'author',
+      createdAt,
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+
+    expect(first.jwsToken).toBe(second.jwsToken);
+    expect(first.claimCID).toBe(second.claimCID);
+  });
+
   it('should round-trip the optional asOfDocumentCID flavor', async () => {
     const claimant = makeIdentity();
     const asOfDocumentCID = 'bafyrei' + 'a'.repeat(52);
@@ -97,6 +198,62 @@ describe('credit claim', () => {
     });
 
     expect(verified.asOfDocumentCID).toBe(asOfDocumentCID);
+  });
+
+  it('should refuse to sign an empty asOfDocumentCID', async () => {
+    // the empty-string shape is a DIFFERENT signed encoding from an absent field,
+    // so minting it would produce a claim both verifiers reject
+    const claimant = makeIdentity();
+
+    await expect(
+      signCreditClaim({
+        contentId: makeContentId(),
+        did: claimant.did,
+        role: 'author',
+        asOfDocumentCID: '',
+        signer: claimant.signer,
+        keyId: claimant.keyId,
+      }),
+    ).rejects.toThrow('asOfDocumentCID must be non-empty when present');
+  });
+
+  it('should reject a present-but-non-string asOfDocumentCID', async () => {
+    // exactly what a nullable-optional producer emits (`?? null`, a nil *string,
+    // Python None) — the Go twin must reject these identically
+    const claimant = makeIdentity();
+
+    for (const bad of [null, 42, '', true]) {
+      const payload = { ...basePayload(claimant, makeContentId()), asOfDocumentCID: bad };
+      const jwsToken = await signRaw(claimant, payload);
+
+      await expectVerdict(
+        verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor(claimant.identity) }),
+        'invalid',
+      );
+    }
+  });
+
+  it('should reject a claimant that is not a DID', async () => {
+    const claimant = makeIdentity();
+    const payload = { ...basePayload(claimant, makeContentId()), did: 'not-a-did' };
+    // kid must agree with the payload did, or the kid check fires first
+    const jwsToken = await signRaw(claimant, payload, { kid: `not-a-did#${claimant.keyId}` });
+
+    await expectVerdict(
+      verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor(claimant.identity) }),
+      'invalid',
+    );
+
+    // and the signer refuses it too
+    await expect(
+      signCreditClaim({
+        contentId: makeContentId(),
+        did: 'not-a-did',
+        role: 'author',
+        signer: claimant.signer,
+        keyId: claimant.keyId,
+      }),
+    ).rejects.toThrow('did must be a DID');
   });
 
   // ---------------------------------------------------------------------------
@@ -133,35 +290,18 @@ describe('credit claim', () => {
   it('should reject a claim whose kid DID does not match the payload did', async () => {
     const claimant = makeIdentity();
     const other = makeIdentity();
-    const contentId = makeContentId();
 
-    // hand-build a claim signed under `other`'s kid while naming `claimant` in
-    // the payload — the "someone else claims your credit for you" shape
-    const payload = {
-      version: 1 as const,
-      type: 'credit-claim' as const,
-      contentId,
-      did: claimant.did,
-      role: 'author',
-      createdAt: new Date().toISOString().replace(/\d{3}Z$/, '000Z'),
-    };
-    const encoded = await dagCborCanonicalEncode(payload);
-    const jwsToken = await createJws({
-      header: {
-        alg: 'EdDSA',
-        typ: 'did:dfos:credit-claim',
-        kid: other.kid,
-        cid: encoded.cid.toString(),
-      },
-      payload: payload as unknown as Record<string, unknown>,
-      sign: other.signer,
-    });
+    // signed under `other`'s kid while naming `claimant` in the payload — the
+    // "someone else claims your credit for you" shape. The signer can no longer
+    // produce this, so it must be forged directly.
+    const jwsToken = await signRaw(other, basePayload(claimant, makeContentId()));
 
-    await expect(
+    await expectVerdict(
       verifyCreditClaim(jwsToken, {
         resolveIdentity: resolverFor(claimant.identity, other.identity),
       }),
-    ).rejects.toThrow('credit claim kid DID does not match payload did');
+      'invalid',
+    );
   });
 
   it('should reject a claim whose signature does not match the resolved key', async () => {
@@ -180,118 +320,77 @@ describe('credit claim', () => {
     // from key lookup
     const swapped: VerifiedIdentity = {
       ...claimant.identity,
-      assertKeys: [
-        {
-          id: claimant.keyId,
-          type: 'Multikey',
-          publicKeyMultibase: encodeEd25519Multikey(impostor.keypair.publicKey),
-        },
-      ],
+      assertKeys: [multikey(claimant.keyId, impostor.keypair.publicKey)],
     };
 
-    await expect(
+    await expectVerdict(
       verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor(swapped) }),
-    ).rejects.toThrow('invalid credit claim signature');
+      'invalid',
+    );
   });
 
   it('should reject a claim with the wrong typ', async () => {
     const claimant = makeIdentity();
-
-    const payload = {
-      version: 1 as const,
-      type: 'credit-claim' as const,
-      contentId: makeContentId(),
-      did: claimant.did,
-      role: 'author',
-      createdAt: new Date().toISOString().replace(/\d{3}Z$/, '000Z'),
-    };
-    const encoded = await dagCborCanonicalEncode(payload);
-    const jwsToken = await createJws({
-      header: {
-        alg: 'EdDSA',
-        typ: 'did:dfos:revocation',
-        kid: claimant.kid,
-        cid: encoded.cid.toString(),
-      },
-      payload: payload as unknown as Record<string, unknown>,
-      sign: claimant.signer,
+    const jwsToken = await signRaw(claimant, basePayload(claimant, makeContentId()), {
+      typ: 'did:dfos:revocation',
     });
 
-    await expect(
+    await expectVerdict(
       verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor(claimant.identity) }),
-    ).rejects.toThrow('invalid credit claim typ');
+      'invalid',
+    );
   });
 
   it('should reject a claim whose header cid does not commit to the payload', async () => {
     const claimant = makeIdentity();
-
-    const payload = {
-      version: 1 as const,
-      type: 'credit-claim' as const,
-      contentId: makeContentId(),
-      did: claimant.did,
-      role: 'author',
-      createdAt: new Date().toISOString().replace(/\d{3}Z$/, '000Z'),
-    };
-    // sign a header carrying a CID for a DIFFERENT payload — the signature is
-    // valid over these exact bytes, so only CID re-derivation catches it
+    const payload = basePayload(claimant, makeContentId());
+    // a CID for a DIFFERENT payload — the signature is valid over these exact
+    // bytes, so only CID re-derivation catches it
     const decoy = await dagCborCanonicalEncode({ ...payload, role: 'editor' });
-    const jwsToken = await createJws({
-      header: {
-        alg: 'EdDSA',
-        typ: 'did:dfos:credit-claim',
-        kid: claimant.kid,
-        cid: decoy.cid.toString(),
-      },
-      payload: payload as unknown as Record<string, unknown>,
-      sign: claimant.signer,
-    });
+    const jwsToken = await signRaw(claimant, payload, { cid: decoy.cid.toString() });
 
-    await expect(
+    await expectVerdict(
       verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor(claimant.identity) }),
-    ).rejects.toThrow('credit claim cid mismatch');
+      'invalid',
+    );
   });
 
-  it('should reject a claim exceeding the size cap', async () => {
+  it('should refuse to sign a claim over the size cap', async () => {
+    // a signer must not mint a token every verifier — including its own — rejects
     const claimant = makeIdentity();
 
-    // `role` carries no separate length cap — the aggregate token cap is the
-    // single byte arbiter, so an oversized role is what trips it
-    const { jwsToken } = await signCreditClaim({
-      contentId: makeContentId(),
-      did: claimant.did,
+    await expect(
+      signCreditClaim({
+        contentId: makeContentId(),
+        did: claimant.did,
+        role: 'x'.repeat(MAX_CREDIT_CLAIM_SIZE + 1),
+        signer: claimant.signer,
+        keyId: claimant.keyId,
+      }),
+    ).rejects.toThrow('credit claim exceeds max size');
+  });
+
+  it('should reject a claim exceeding the size cap on verify', async () => {
+    const claimant = makeIdentity();
+    const payload = {
+      ...basePayload(claimant, makeContentId()),
       role: 'x'.repeat(MAX_CREDIT_CLAIM_SIZE + 1),
-      signer: claimant.signer,
-      keyId: claimant.keyId,
-    });
+    };
+    const jwsToken = await signRaw(claimant, payload);
 
     expect(jwsToken.length).toBeGreaterThan(MAX_CREDIT_CLAIM_SIZE);
-    await expect(
+    await expectVerdict(
       verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor(claimant.identity) }),
-    ).rejects.toThrow('credit claim exceeds max size');
+      'invalid',
+    );
   });
 
   it('should reject malformed JWS', async () => {
     const claimant = makeIdentity();
 
-    await expect(
+    await expectVerdict(
       verifyCreditClaim('not-a-jws', { resolveIdentity: resolverFor(claimant.identity) }),
-    ).rejects.toThrow('failed to decode credit claim JWS');
-  });
-
-  it('should reject a claim naming an unresolvable claimant', async () => {
-    const claimant = makeIdentity();
-
-    const { jwsToken } = await signCreditClaim({
-      contentId: makeContentId(),
-      did: claimant.did,
-      role: 'author',
-      signer: claimant.signer,
-      keyId: claimant.keyId,
-    });
-
-    await expect(verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor() })).rejects.toThrow(
-      'claimant identity not found',
+      'invalid',
     );
   });
 
@@ -309,6 +408,64 @@ describe('credit claim', () => {
         keyId: claimant.keyId,
       }),
     ).rejects.toThrow('contentId must be a 31-char content chain id');
+  });
+
+  // ---------------------------------------------------------------------------
+  // the invalid / unverifiable split
+  // ---------------------------------------------------------------------------
+
+  it('should report an unresolvable claimant as unverifiable, not invalid', async () => {
+    const claimant = makeIdentity();
+
+    const { jwsToken } = await signCreditClaim({
+      contentId: makeContentId(),
+      did: claimant.did,
+      role: 'author',
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+
+    await expectVerdict(
+      verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor() }),
+      'unverifiable',
+    );
+  });
+
+  it('should report a THROWING resolver as unverifiable, not invalid', async () => {
+    // a relay outage is "could not check", never "checked and failed" — the
+    // distinction the spec says a consumer MUST keep
+    const claimant = makeIdentity();
+
+    const { jwsToken } = await signCreditClaim({
+      contentId: makeContentId(),
+      did: claimant.did,
+      role: 'author',
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+
+    await expectVerdict(
+      verifyCreditClaim(jwsToken, { resolveIdentity: throwingResolver }),
+      'unverifiable',
+    );
+  });
+
+  it('should report a resolved identity missing the signing key as invalid', async () => {
+    const claimant = makeIdentity();
+
+    const { jwsToken } = await signCreditClaim({
+      contentId: makeContentId(),
+      did: claimant.did,
+      role: 'author',
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+
+    const keyless: VerifiedIdentity = { ...claimant.identity, assertKeys: [] };
+    await expectVerdict(
+      verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor(keyless) }),
+      'invalid',
+    );
   });
 
   // ---------------------------------------------------------------------------
@@ -347,12 +504,34 @@ describe('credit claim', () => {
       keyId: claimant.keyId,
     });
 
-    await expect(
+    await expectVerdict(
       verifyCreditClaim(jwsToken, {
         resolveIdentity: resolverFor(claimant.identity),
         expectedContentId: otherChain,
       }),
-    ).rejects.toThrow('does not match expected');
+      'invalid',
+    );
+  });
+
+  it('should reject an EMPTY expectedContentId rather than skipping the binder', async () => {
+    // the empty string is a zero value (unhydrated field, failed parse), never a
+    // request for unbound semantics — the Go twin errors on the same input
+    const claimant = makeIdentity();
+
+    const { jwsToken } = await signCreditClaim({
+      contentId: makeContentId(),
+      did: claimant.did,
+      role: 'author',
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+
+    await expect(
+      verifyCreditClaim(jwsToken, {
+        resolveIdentity: resolverFor(claimant.identity),
+        expectedContentId: '',
+      }),
+    ).rejects.toThrow('expectedContentId must be a non-empty contentId');
   });
 
   // ---------------------------------------------------------------------------
@@ -383,5 +562,182 @@ describe('credit claim', () => {
 
     expect(verified.did).toBe(claimant.did);
     expect(verified.role).toBe('author');
+  });
+
+  it('should verify a claim signed before a key rotation, given a historical resolver', async () => {
+    // Key history is the RESOLVER's contract. A resolver that merges every key the
+    // identity chain has ever held — as dfos-client's does, so credential validity
+    // persists across rotations — keeps old credits verifying. A current-state-only
+    // resolver reports `invalid` for this exact claim and silently un-credits real
+    // work, which is why the contract is documented on the verifier.
+    const claimant = makeIdentity();
+
+    const { jwsToken } = await signCreditClaim({
+      contentId: makeContentId(),
+      did: claimant.did,
+      role: 'photography',
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+
+    // the claimant rotates: a new key replaces the old one in CURRENT state
+    const rotated = createNewEd25519Keypair();
+    const rotatedKeyId = generateId('key');
+    const currentStateOnly: VerifiedIdentity = {
+      ...claimant.identity,
+      assertKeys: [multikey(rotatedKeyId, rotated.publicKey)],
+    };
+    const historical: VerifiedIdentity = {
+      ...claimant.identity,
+      assertKeys: [
+        multikey(rotatedKeyId, rotated.publicKey),
+        multikey(claimant.keyId, claimant.keypair.publicKey),
+      ],
+    };
+
+    // current-state-only: the signing key is gone, so the claim reads as invalid
+    await expectVerdict(
+      verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor(currentStateOnly) }),
+      'invalid',
+    );
+
+    // historical (the required contract): the claim still verifies
+    const verified = await verifyCreditClaim(jwsToken, {
+      resolveIdentity: resolverFor(historical),
+    });
+    expect(verified.role).toBe('photography');
+  });
+});
+
+// =============================================================================
+// credit entry — the full three-component bind
+// =============================================================================
+
+describe('credit entry', () => {
+  const claimedEntry = async () => {
+    const claimant = makeIdentity();
+    const contentId = makeContentId();
+    const { jwsToken } = await signCreditClaim({
+      contentId,
+      did: claimant.did,
+      role: 'photography',
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+    return { claimant, contentId, jwsToken };
+  };
+
+  it('should resolve a bound entry as claimed', async () => {
+    const { claimant, contentId, jwsToken } = await claimedEntry();
+
+    const result = await verifyCreditEntry(
+      { did: claimant.did, role: 'photography', name: 'Alice', claim: jwsToken },
+      { resolveIdentity: resolverFor(claimant.identity), contentId },
+    );
+
+    expect(result.state).toBe('claimed');
+    expect(result.claim?.role).toBe('photography');
+  });
+
+  it('should resolve an entry with no claim as unclaimed', async () => {
+    const claimant = makeIdentity();
+
+    const result = await verifyCreditEntry(
+      { did: claimant.did, role: 'author' },
+      { resolveIdentity: resolverFor(claimant.identity), contentId: makeContentId() },
+    );
+
+    expect(result.state).toBe('unclaimed');
+    expect(result.claim).toBeUndefined();
+  });
+
+  it('should resolve a role mismatch as invalid', async () => {
+    const { claimant, contentId, jwsToken } = await claimedEntry();
+
+    const result = await verifyCreditEntry(
+      { did: claimant.did, role: 'editor', claim: jwsToken },
+      { resolveIdentity: resolverFor(claimant.identity), contentId },
+    );
+
+    expect(result.state).toBe('invalid');
+    expect(result.claim).toBeUndefined();
+  });
+
+  it('should resolve a claim-bearing entry with no role as invalid', async () => {
+    // an absent entry role is a BIND MISMATCH, not a wildcard, and never unclaimed
+    const { claimant, contentId, jwsToken } = await claimedEntry();
+
+    const result = await verifyCreditEntry(
+      { did: claimant.did, claim: jwsToken },
+      { resolveIdentity: resolverFor(claimant.identity), contentId },
+    );
+
+    expect(result.state).toBe('invalid');
+  });
+
+  it('should resolve a did mismatch as invalid', async () => {
+    const { claimant, contentId, jwsToken } = await claimedEntry();
+
+    const result = await verifyCreditEntry(
+      { did: 'did:dfos:someone-else', role: 'photography', claim: jwsToken },
+      { resolveIdentity: resolverFor(claimant.identity), contentId },
+    );
+
+    expect(result.state).toBe('invalid');
+  });
+
+  it('should resolve a claim replayed from another chain as invalid', async () => {
+    const { claimant, jwsToken } = await claimedEntry();
+
+    const result = await verifyCreditEntry(
+      { did: claimant.did, role: 'photography', claim: jwsToken },
+      { resolveIdentity: resolverFor(claimant.identity), contentId: makeContentId() },
+    );
+
+    expect(result.state).toBe('invalid');
+  });
+
+  it('should resolve a non-string claim as invalid', async () => {
+    const claimant = makeIdentity();
+
+    const result = await verifyCreditEntry(
+      { did: claimant.did, role: 'photography', claim: 42 },
+      { resolveIdentity: resolverFor(claimant.identity), contentId: makeContentId() },
+    );
+
+    expect(result.state).toBe('invalid');
+  });
+
+  it('should resolve an unresolvable claimant as unverifiable', async () => {
+    const { claimant, contentId, jwsToken } = await claimedEntry();
+
+    const result = await verifyCreditEntry(
+      { did: claimant.did, role: 'photography', claim: jwsToken },
+      { resolveIdentity: resolverFor(), contentId },
+    );
+
+    expect(result.state).toBe('unverifiable');
+  });
+
+  it('should resolve a relay outage as unverifiable', async () => {
+    const { claimant, contentId, jwsToken } = await claimedEntry();
+
+    const result = await verifyCreditEntry(
+      { did: claimant.did, role: 'photography', claim: jwsToken },
+      { resolveIdentity: throwingResolver, contentId },
+    );
+
+    expect(result.state).toBe('unverifiable');
+  });
+
+  it('should require the hosting contentId', async () => {
+    const claimant = makeIdentity();
+
+    await expect(
+      verifyCreditEntry(
+        { did: claimant.did, role: 'author' },
+        { resolveIdentity: resolverFor(claimant.identity), contentId: '' },
+      ),
+    ).rejects.toThrow('requires the hosting chain contentId');
   });
 });

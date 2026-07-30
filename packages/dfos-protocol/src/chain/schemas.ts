@@ -340,15 +340,26 @@ export const MAX_CREDIT_CLAIM_SIZE = 4096;
  * `asOfDocumentCID` is an OPTIONAL content-strength flavor: the claimant pins the
  * document state it is crediting itself on. Omitted by default, and omission is
  * CID-neutral (undefined strips under canonical CBOR). Consumers that ignore it are
- * conformant — the bind never depends on it.
+ * conformant — the bind never depends on it. When the key IS present it MUST be a
+ * non-empty string: an empty string is a distinct, CID-changing encoding from an
+ * absent field, so accepting it would mean two different claim CIDs for the same
+ * (absent-flavor) statement.
+ *
+ * `did` is constrained to the `did:` prefix and non-empty, which is STRICTER than
+ * the sibling wire payloads above (`RevocationPayload.did`, `ContentOperation.did`
+ * are bare strings). That is deliberate, not drift: the published
+ * `credit-claim/v1` JSON Schema already mandates `^did:`, so leaving the zod schema
+ * permissive forked validity between the schema, this verifier, and the Go twin.
+ * The check is a PREFIX check, not full did:dfos validation — a claimant DID is not
+ * required to be a did:dfos identifier.
  */
 export const CreditClaimPayload = z.looseObject({
   version: z.literal(1),
   type: z.literal('credit-claim'),
   contentId: z.string().regex(CONTENT_ID_ANCHOR_RE, 'contentId must be a 31-char content chain id'),
-  did: z.string(),
+  did: z.string().regex(/^did:/, 'did must be a DID (did: prefix)'),
   role: z.string().min(1),
   createdAt: Iso8601,
-  asOfDocumentCID: CIDString.optional(),
+  asOfDocumentCID: CIDString.min(1, 'asOfDocumentCID must be non-empty when present').optional(),
 });
 export type CreditClaimPayload = z.infer<typeof CreditClaimPayload>;

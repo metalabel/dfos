@@ -28,6 +28,7 @@ This repository contains the protocol specification, reference implementations i
 - [Protocol specification](https://protocol.dfos.com/spec) — core protocol with worked examples and test vectors
 - [DID Method](https://protocol.dfos.com/did-method) — W3C DID method specification for `did:dfos`
 - [Credentials](https://protocol.dfos.com/credentials) — UCAN-style authorization, linear delegation, revocation
+- [Credits](https://protocol.dfos.com/credits) — verifiable attribution: signed credit claims bound to the content they credit
 - [Web Relay](https://protocol.dfos.com/web-relay) — HTTP relay for ingestion, chain state, and the content plane
 - [Content Model](https://protocol.dfos.com/content-model) — standard JSON Schema content types
 - [Threat Model](https://protocol.dfos.com/threat-model) — adversary classes and the trustless-proof / honest-host split

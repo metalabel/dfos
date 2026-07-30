@@ -215,7 +215,13 @@ export const Content = (props: { id: string }) => {
       : headMatch
         ? { state: 'ok' as const, text: 'verified locally' }
         : { state: 'warn' as const, text: 'verified · tip drift' };
-  const credits = documentCredits(doc?.parsed);
+  // Credits read THIS doc's bytes, so surface them only once the served bytes have
+  // been re-hashed to the committed document CID AND the chain verified — the same
+  // gate the avatar path uses (see SchemaPanels). Otherwise a relay could dress up
+  // arbitrary bytes as attribution, and a claimed badge on bytes that were never
+  // committed is worse than showing no credits at all.
+  const docBytesTrusted = !!chain && !!doc?.derivedCid && doc.derivedCid === docCid;
+  const credits = docBytesTrusted ? documentCredits(doc?.parsed) : null;
 
   return (
     <>

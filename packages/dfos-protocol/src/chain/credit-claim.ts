@@ -27,6 +27,12 @@
   historical attribution survives a claimant tombstone. This is the opposite of
   the credential rule, and it is intentional: see verifyCreditClaim below.
 
+  ENTRY POINTS. `verifyCreditEntry` is the one most callers want: it resolves a
+  whole `credits[]` entry to one of the four spec states and performs the FULL
+  three-component bind. `verifyCreditClaim` verifies a claim token in isolation
+  and checks only the `contentId` component — reach for it only when there is no
+  entry to bind against.
+
 */
 
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
@@ -55,6 +61,56 @@ export interface VerifiedCreditClaim {
   claimCID: string;
 }
 
+/**
+ * The four states a `credits[]` entry resolves to (see `specs/CREDITS.md`).
+ *
+ * `invalid` and `unverifiable` are deliberately distinct and MUST NOT be
+ * collapsed: `invalid` means "checked and failed" (a positive signal that
+ * something is wrong), `unverifiable` means "could not check" (the claim may be
+ * perfectly valid). Rendering `invalid` as `unclaimed` launders a failure into
+ * the ordinary case.
+ */
+export type CreditEntryState = 'claimed' | 'unclaimed' | 'invalid' | 'unverifiable';
+
+/** Why a credit-claim verification failed — the consumer-visible verdict split */
+export type CreditClaimFailureReason = 'invalid' | 'unverifiable';
+
+/**
+ * Thrown by `verifyCreditClaim`, carrying the spec's verdict as a FIELD.
+ *
+ * Consumers MUST branch on `reason`, never on the message text. The message is
+ * diagnostic prose and may be reworded at any time; `reason` is the contract.
+ */
+export class CreditClaimVerifyError extends Error {
+  readonly reason: CreditClaimFailureReason;
+
+  constructor(reason: CreditClaimFailureReason, message: string) {
+    super(message);
+    this.name = 'CreditClaimVerifyError';
+    this.reason = reason;
+  }
+}
+
+const invalid = (message: string) => new CreditClaimVerifyError('invalid', message);
+const unverifiable = (message: string) => new CreditClaimVerifyError('unverifiable', message);
+
+/** A `credits[]` entry as it appears in document bytes — every field untrusted */
+export interface CreditEntry {
+  did?: unknown;
+  role?: unknown;
+  name?: unknown;
+  claim?: unknown;
+}
+
+export interface VerifiedCreditEntry {
+  /** The resolved state of this entry */
+  state: CreditEntryState;
+  /** Human-readable diagnosis — display prose, never a branch target */
+  note: string;
+  /** The verified claim, present only when `state` is 'claimed' */
+  claim?: VerifiedCreditClaim;
+}
+
 // -----------------------------------------------------------------------------
 // key resolution helper
 // -----------------------------------------------------------------------------
@@ -63,20 +119,28 @@ export interface VerifiedCreditClaim {
  * Resolve a public key from a VerifiedIdentity by kid (DID URL)
  *
  * Searches across all key roles (auth, assert, controller) — the protocol does
- * not restrict which role may sign a claim, matching the credential rule. Key
- * HISTORY is the resolver's business: a caller that supplies every key the
- * identity chain has ever held lets claims survive key rotation, which is the
- * right default for a permanent historical attribution.
+ * not restrict which role may sign a claim, matching the credential rule.
+ *
+ * KEY HISTORY IS THE RESOLVER'S CONTRACT, not this function's. A claim is a
+ * permanent historical attribution, so a `resolveIdentity` passed to
+ * `verifyCreditClaim` MUST supply every key the claimant's identity chain has
+ * ever held, not only its current head state — exactly as the credential path
+ * already requires (see `createIdentityResolver` in `@metalabel/dfos-client`,
+ * which merges historical keys so credential validity persists across
+ * rotations). A resolver that returns only current-state keys reports `invalid`
+ * for every claim signed before the claimant's most recent rotation, silently
+ * un-crediting real work. `verifyIdentityChain`'s `VerifiedIdentity` is a
+ * CURRENT-state projection — do not hand it to this verifier unmerged.
  */
 const resolveKeyFromIdentity = (identity: VerifiedIdentity, kid: string): Uint8Array => {
   const hashIdx = kid.indexOf('#');
-  if (hashIdx < 0) throw new Error('credit claim kid must be a DID URL');
+  if (hashIdx < 0) throw invalid('credit claim kid must be a DID URL');
   const keyId = kid.substring(hashIdx + 1);
 
   const allKeys = [...identity.authKeys, ...identity.assertKeys, ...identity.controllerKeys];
   const key = allKeys.find((k) => k.id === keyId);
   if (!key) {
-    throw new Error(`key ${keyId} not found on identity ${identity.did}`);
+    throw invalid(`key ${keyId} not found on identity ${identity.did}`);
   }
 
   const { keyBytes } = decodeMultikey(key.publicKeyMultibase);
@@ -94,7 +158,13 @@ const resolveKeyFromIdentity = (identity: VerifiedIdentity, kid: string): Uint8A
  * so a signed claim stays valid verbatim across every subsequent edit of the
  * chain. Callers SHOULD sign a given (contentId, did, role) triple exactly once
  * and reuse the token: re-signing mints a fresh `createdAt`, which changes the
- * claim bytes, which changes the embedding document's CID.
+ * claim bytes, which changes the embedding document's CID. Pass `createdAt` to
+ * re-derive a previously issued claim's exact bytes (the same override register
+ * as `createDFOSCredential`'s `iat`).
+ *
+ * The `kid` is derived from `did` + `keyId` here rather than accepted from the
+ * caller, so a claim whose kid DID disagrees with its payload DID — the shape
+ * every verifier MUST reject — is unrepresentable at sign time.
  */
 export const signCreditClaim = async (input: {
   contentId: string;
@@ -102,11 +172,22 @@ export const signCreditClaim = async (input: {
   role: string;
   /** Optional document state the claimant pins its credit to */
   asOfDocumentCID?: string;
+  /** ISO 8601 override; defaults to now with the millisecond component zeroed */
+  createdAt?: string;
   signer: Signer;
   keyId: string;
 }): Promise<{ jwsToken: string; claimCID: string }> => {
   const kid = `${input.did}#${input.keyId}`;
-  const now = new Date().toISOString().replace(/\d{3}Z$/, '000Z');
+  const now = input.createdAt ?? new Date().toISOString().replace(/\d{3}Z$/, '000Z');
+
+  // An empty-string flavor is a DIFFERENT signed encoding from an absent one (the
+  // key is present, so the CID differs). Refuse it rather than minting a claim the
+  // verifiers reject — callers meaning "no flavor" omit the field.
+  if (input.asOfDocumentCID === '') {
+    throw new Error(
+      'invalid credit claim payload: asOfDocumentCID must be non-empty when present (omit the field instead)',
+    );
+  }
 
   const payload = {
     version: 1 as const,
@@ -136,6 +217,13 @@ export const signCreditClaim = async (input: {
     sign: input.signer,
   });
 
+  // enforce the aggregate cap on the SIGN path too. A signer that mints a token
+  // over the cap has produced a claim every verifier — including this one — MUST
+  // reject, so failing here beats embedding dead bytes in a document.
+  if (jwsToken.length > MAX_CREDIT_CLAIM_SIZE) {
+    throw new Error(`credit claim exceeds max size: ${jwsToken.length} > ${MAX_CREDIT_CLAIM_SIZE}`);
+  }
+
   return { jwsToken, claimCID };
 };
 
@@ -146,12 +234,22 @@ export const signCreditClaim = async (input: {
 /**
  * Verify a credit claim JWS — size, signature, CID, payload schema, signer match
  *
+ * Prefer `verifyCreditEntry` when you have a `credits[]` entry: this function
+ * checks only the `contentId` component of the three-component bind, leaving
+ * `did` and `role` to the caller.
+ *
  * Pass `expectedContentId` to enforce the anti-replay half of the bind: without
  * it, a valid claim lifted from one chain's document verifies when replayed in
  * another chain's document. A consumer verifying a credits entry ALWAYS knows
- * which chain it is reading, so it should always pass it. The remaining two
- * components of the bind — `did` and `role` — are compared by the caller against
- * the entry plaintext (exact byte equality, no normalization).
+ * which chain it is reading, so it should always pass it. Omit the option
+ * entirely to skip the check; passing an EMPTY STRING is an error, never a skip
+ * (a zero-valued content id is a bug, not a request for unbound semantics).
+ *
+ * `resolveIdentity` MUST supply the claimant's historical keys — see
+ * `resolveKeyFromIdentity` above for why, and what breaks if it does not.
+ *
+ * Failures throw `CreditClaimVerifyError` carrying `reason: 'invalid' |
+ * 'unverifiable'`. Branch on that field, never on the message.
  *
  * **A deleted claimant still verifies.** This function does not consult
  * `identity.isDeleted`, and that omission is the doctrine, not an oversight: a
@@ -169,43 +267,63 @@ export const verifyCreditClaim = async (
     expectedContentId?: string;
   },
 ): Promise<VerifiedCreditClaim> => {
+  // An empty string is a zero value, not the unset sentinel. Treating it as "skip
+  // the binder" is how a consumer reading the hosting chain id from an unhydrated
+  // field silently gets unbound semantics from a call that promised binding.
+  if (options.expectedContentId === '') {
+    throw invalid(
+      'expectedContentId must be a non-empty contentId — omit the option for the unbound form',
+    );
+  }
+
   // bound claim size before any decode — a DoS guard, and the single byte
   // arbiter for the payload's open-namespace `role`. (JWS tokens are base64url +
   // dots = ASCII, so string length equals byte length.)
   if (jwsToken.length > MAX_CREDIT_CLAIM_SIZE) {
-    throw new Error(`credit claim exceeds max size: ${jwsToken.length} > ${MAX_CREDIT_CLAIM_SIZE}`);
+    throw invalid(`credit claim exceeds max size: ${jwsToken.length} > ${MAX_CREDIT_CLAIM_SIZE}`);
   }
 
   const decoded = decodeJwsUnsafe(jwsToken);
-  if (!decoded) throw new Error('failed to decode credit claim JWS');
+  if (!decoded) throw invalid('failed to decode credit claim JWS');
 
   // verify typ
   if (decoded.header.typ !== 'did:dfos:credit-claim') {
-    throw new Error(`invalid credit claim typ: ${decoded.header.typ}`);
+    throw invalid(`invalid credit claim typ: ${decoded.header.typ}`);
   }
 
   // parse payload
   const result = CreditClaimPayload.safeParse(decoded.payload);
   if (!result.success) {
     const messages = result.error.issues.map((e) => e.message).join(', ');
-    throw new Error(`invalid credit claim payload: ${messages}`);
+    throw invalid(`invalid credit claim payload: ${messages}`);
   }
   const payload = result.data;
 
   // verify kid DID matches payload did (only the claimant can claim its credit)
   const kid = decoded.header.kid;
   const hashIdx = kid.indexOf('#');
-  if (hashIdx < 0) throw new Error('credit claim kid must be a DID URL');
+  if (hashIdx < 0) throw invalid('credit claim kid must be a DID URL');
   const kidDid = kid.substring(0, hashIdx);
   if (kidDid !== payload.did) {
-    throw new Error('credit claim kid DID does not match payload did');
+    throw invalid('credit claim kid DID does not match payload did');
   }
 
   // resolve the claimant identity and find the signing key. NOTE the absence of
   // an isDeleted gate here — see the doctrine paragraph above.
-  const identity = await options.resolveIdentity(payload.did);
+  //
+  // A resolver that THROWS (relay unreachable, transport failure) is in the same
+  // epistemic position as one returning undefined: we could not check. Both are
+  // 'unverifiable', never 'invalid' — a network failure must never be presented
+  // as a failed signature.
+  let identity: VerifiedIdentity | undefined;
+  try {
+    identity = await options.resolveIdentity(payload.did);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw unverifiable(`could not resolve claimant identity ${payload.did}: ${detail}`);
+  }
   if (!identity) {
-    throw new Error(`claimant identity not found: ${payload.did}`);
+    throw unverifiable(`claimant identity not found: ${payload.did}`);
   }
   const publicKey = resolveKeyFromIdentity(identity, kid);
 
@@ -213,18 +331,18 @@ export const verifyCreditClaim = async (
   try {
     verifyJws({ token: jwsToken, publicKey });
   } catch {
-    throw new Error('invalid credit claim signature');
+    throw invalid('invalid credit claim signature');
   }
 
   // verify CID
   const encoded = await dagCborCanonicalEncode(payload);
   const claimCID = encoded.cid.toString();
-  if (!decoded.header.cid) throw new Error('missing cid in credit claim header');
-  if (decoded.header.cid !== claimCID) throw new Error('credit claim cid mismatch');
+  if (!decoded.header.cid) throw invalid('missing cid in credit claim header');
+  if (decoded.header.cid !== claimCID) throw invalid('credit claim cid mismatch');
 
   // enforce the binder — a claim is only about the chain it names
   if (options.expectedContentId !== undefined && payload.contentId !== options.expectedContentId) {
-    throw new Error(
+    throw invalid(
       `credit claim contentId ${payload.contentId} does not match expected ${options.expectedContentId}`,
     );
   }
@@ -237,5 +355,89 @@ export const verifyCreditClaim = async (
     ...(payload.asOfDocumentCID !== undefined ? { asOfDocumentCID: payload.asOfDocumentCID } : {}),
     signerKeyId: kid,
     claimCID,
+  };
+};
+
+// -----------------------------------------------------------------------------
+// entry verification (the full bind)
+// -----------------------------------------------------------------------------
+
+/**
+ * Resolve one `credits[]` entry to its spec state, performing the FULL bind
+ *
+ * This is the call most consumers want. `verifyCreditClaim` alone checks only
+ * the `contentId` component; the `did` and `role` comparisons are what make a
+ * claim an assertion about THIS entry, and skipping them verifies the wrong
+ * proposition — that some valid claim exists, not that it is about this credit.
+ * Shipping the whole comparison here is deliberate: the safe call should be the
+ * easy one.
+ *
+ * `contentId` is the chain whose document contains the entry. It is REQUIRED,
+ * because a consumer reading an entry always knows it, and without it the claim
+ * is replayable across chains.
+ *
+ * Never throws for claim-level problems — every outcome is one of the four
+ * states. It throws only when `contentId` is missing, which is a caller bug
+ * rather than a verdict about the entry.
+ */
+export const verifyCreditEntry = async (
+  entry: CreditEntry,
+  options: {
+    resolveIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
+    contentId: string;
+  },
+): Promise<VerifiedCreditEntry> => {
+  if (!options.contentId) {
+    throw new Error('verifyCreditEntry requires the hosting chain contentId');
+  }
+
+  // `claim` absent entirely — the ordinary case, and not a defect
+  if (entry.claim === undefined) {
+    return {
+      state: 'unclaimed',
+      note: 'the document signer asserts this credit; the claimant has not signed it',
+    };
+  }
+
+  if (typeof entry.claim !== 'string' || entry.claim === '') {
+    return { state: 'invalid', note: 'claim is present but is not a JWS string' };
+  }
+  if (typeof entry.did !== 'string' || entry.did === '') {
+    return { state: 'invalid', note: 'claim-bearing entry has no credited DID to bind to' };
+  }
+  // The claim-requires-role rule. An absent entry role is a BIND MISMATCH, not a
+  // wildcard: payload.role is always present and non-empty, so there is nothing
+  // for it to equal. Never 'unclaimed' — a claim is present and failing.
+  if (typeof entry.role !== 'string' || entry.role === '') {
+    return { state: 'invalid', note: 'claim-bearing entry has no role to bind to' };
+  }
+
+  let verified: VerifiedCreditClaim;
+  try {
+    verified = await verifyCreditClaim(entry.claim, {
+      resolveIdentity: options.resolveIdentity,
+      expectedContentId: options.contentId,
+    });
+  } catch (error) {
+    if (error instanceof CreditClaimVerifyError) {
+      return { state: error.reason, note: error.message };
+    }
+    // an unexpected throw is not evidence the claim itself is bad
+    const detail = error instanceof Error ? error.message : String(error);
+    return { state: 'unverifiable', note: `verification could not complete: ${detail}` };
+  }
+
+  // the remaining two components of the bind, byte-exact, no normalization
+  if (verified.did !== entry.did) {
+    return { state: 'invalid', note: 'signed claimant DID does not match the credited DID' };
+  }
+  if (verified.role !== entry.role) {
+    return { state: 'invalid', note: 'signed role does not match the credited role' };
+  }
+
+  return {
+    state: 'claimed',
+    note: 'signature and the exact (contentId, did, role) bind verified',
+    claim: verified,
   };
 };
