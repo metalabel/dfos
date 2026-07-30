@@ -136,7 +136,7 @@ A claim is not published on its own. It rides in the `claim` field of a `credits
 
 - Array **order is display order**, and the **first entry is the primary author**. Both are unchanged from the credits shape they extend.
 - **`name` is a cached display string, not a source of truth.** The claimant's [profile](https://protocol.dfos.com/content-model) is authoritative for its current name; `name` records what the document said when it was signed, so a document renders sensibly without resolving every credited DID. A consumer that resolves profiles SHOULD prefer the profile name. `name` is never compared during verification.
-- **`role` is required when `claim` is present**, because `role` is a component of the bind. An entry with a `claim` but no `role` has nothing to bind to and is **invalid** (see below), not unclaimed.
+- **`role` is REQUIRED whenever `claim` is present**, because `role` is a component of the bind. An entry carrying a `claim` with no `role` has nothing for the claim's (always-present) `role` to match, so it is a bind mismatch and resolves **invalid** — never unclaimed, and never a wildcard match. See [Two-Way Binding](#two-way-binding). Publishers get this checked for free: the published schema encodes it as `dependentRequired: { claim: ["role"] }`.
 - Omit `credits` entirely for unattributed content. An empty entry list and an absent list mean the same thing.
 
 Both the claim payload and this entry shape are published as [`credit-claim/v1`](https://schemas.dfos.com/credit-claim/v1).
@@ -161,6 +161,8 @@ Attribution has two sides, and DFOS keeps both. They are separate assertions by 
 | `role`      | `entry.role`                   | `payload.role`      | exact, case-sensitive byte equality |
 
 All three MUST match. Nothing is normalized, folded, or coerced on either side. A claim that verifies cryptographically but names a different role than the entry it sits in is **not** a weaker claim about that entry — it is a failed bind, and the entry is invalid.
+
+**A claim-bearing entry MUST carry a `role`.** `role` is OPTIONAL on the entry in general — an unroled credit is a perfectly ordinary credit — but the payload's `role` is REQUIRED and non-empty, so an entry that carries a `claim` and omits `role` can never satisfy the third row of the table above. Verifiers MUST treat that as an ordinary **bind mismatch** and resolve the entry **invalid**. There is no lenient reading in which a missing entry role is a wildcard that matches whatever the claim asserts: that reading would let a claim signed for one role bind to an entry displayed under any other, which is precisely the agreement the bind exists to establish. Nor is it **unclaimed** — a `claim` is present, so the entry is making a verifiable assertion and failing it.
 
 What the bind establishes, when it holds, is narrow and worth stating exactly: **the document's signer and the claimant independently assert the same credit.** It does not establish that the credit is true. Two parties can agree and both be wrong, or collude. What it rules out is the interesting adversarial case — a signer attributing work to someone who never agreed to be attributed, and a claimant attaching itself to work no one credited it for. Neither party can produce a claimed entry alone.
 
@@ -198,7 +200,7 @@ To verify one `credits[]` entry, given the entry, the `contentId` of the chain w
 7. **Resolve the claimant identity** named by `payload.did` and find the key named by the `kid` fragment. Unresolvable identity → **unverifiable**. Resolvable identity with no such key → **invalid**.
 8. **Signature.** Verify the JWS under that key. Failure → **invalid**.
 9. **CID integrity.** Re-derive the payload CID and compare against the header `cid`. A missing or mismatched `cid` → **invalid**.
-10. **The bind.** `payload.contentId` MUST equal the hosting chain's `contentId`; `payload.did` MUST equal `entry.did`; `payload.role` MUST equal `entry.role` byte-for-byte. Any mismatch → **invalid**.
+10. **The bind.** `payload.contentId` MUST equal the hosting chain's `contentId`; `payload.did` MUST equal `entry.did`; `payload.role` MUST equal `entry.role` byte-for-byte. Any mismatch → **invalid**. An **absent** `entry.role` is a mismatch, not a wildcard: `payload.role` is always present and non-empty, so a claim-bearing entry without a `role` fails here → **invalid**.
 11. Otherwise the entry is **claimed**.
 
 Step 10 is the step implementations skip. A claim that passes steps 1–9 is a valid signed statement **by** someone **about** something — verifying it without binding it to the entry that hosts it verifies the wrong proposition.
