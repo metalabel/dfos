@@ -82,6 +82,19 @@ const timestampOfOrder = (
 const blobKeyString = (key: BlobKey): string => `${key.creatorDID}::${key.documentCID}`;
 
 /**
+ * A revocation's signed `createdAt` as integer unix seconds — the as-of boundary.
+ * Returns null when the stored timestamp is missing or unparseable, which callers
+ * MUST read as "no usable boundary" and answer timelessly (i.e. revoked). Failing
+ * open here would let a malformed row silently un-revoke history. Floors to
+ * seconds to match the credential temporal basis (CREDENTIALS.md "Time Basis
+ * Conversion"). MUST match the Go twin (`revocationCreatedAtUnix`).
+ */
+const revocationCreatedAtUnix = (revocation: StoredRevocation): number | null => {
+  const ms = new Date(revocation.createdAt).getTime();
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+};
+
+/**
  * In-memory relay store — all data lives in Maps, lost on restart
  *
  * Suitable for development, testing, and short-lived relay instances.
@@ -183,8 +196,16 @@ export class MemoryRelayStore implements RelayStore {
     this.revocations.set(key, revocation);
   }
 
-  async isCredentialRevoked(issuerDID: string, credentialCID: string): Promise<boolean> {
-    return this.revocations.has(`${issuerDID}::${credentialCID}`);
+  async isCredentialRevoked(
+    issuerDID: string,
+    credentialCID: string,
+    asOfUnix?: number,
+  ): Promise<boolean> {
+    const rev = this.revocations.get(`${issuerDID}::${credentialCID}`);
+    if (!rev) return false;
+    if (asOfUnix === undefined) return true;
+    const revokedAt = revocationCreatedAtUnix(rev);
+    return revokedAt === null || revokedAt <= asOfUnix;
   }
 
   async getRevocationForCredential(credentialCID: string): Promise<StoredRevocation | undefined> {
@@ -199,21 +220,15 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]> {
-    const revs: { revocation: StoredRevocation; createdAt: string }[] = [];
-    for (const rev of this.revocations.values()) {
-      if (rev.issuerDID !== issuerDID) continue;
-      const createdAt = decodeJwsUnsafe(rev.jwsToken)?.payload?.createdAt;
-      revs.push({
-        revocation: rev,
-        createdAt: typeof createdAt === 'string' ? createdAt : '',
-      });
-    }
+    // Sorts on the PERSISTED createdAt (verified at ingest) rather than
+    // re-decoding each jwsToken unverified — same frozen v1 feed order, one less
+    // place that parses a token it did not check.
+    const revs = [...this.revocations.values()].filter((rev) => rev.issuerDID === issuerDID);
     revs.sort((a, b) => {
       if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
-      if (a.revocation.credentialCID === b.revocation.credentialCID) return 0;
-      return a.revocation.credentialCID < b.revocation.credentialCID ? -1 : 1;
+      return ascending(a.credentialCID, b.credentialCID);
     });
-    return revs.map((entry) => entry.revocation);
+    return revs;
   }
 
   // --- index (v0) materialized projection ---
@@ -555,11 +570,20 @@ export class MemoryRelayStore implements RelayStore {
       const chain2 = await this.getIdentityChain(did);
       return chain2?.state;
     };
+    // Historical replay is a VALIDITY decision, so authorization is enforced and
+    // revocation is evaluated AS OF each op's own createdAt: a credential revoked
+    // after an op was signed leaves that op — and therefore the fork state
+    // derived from it — valid. Without the as-of basis this replay would start
+    // failing the moment any credential in the chain's history was revoked, which
+    // would make a legitimate fork extension unverifiable. Mirrors the Go twins
+    // (store_memory.go / store_sqlite.go GetContentStateAtCID).
     const content = await verifyContentChain({
       log: path,
       resolveKey,
       enforceAuthorization: true,
       resolveIdentity,
+      isRevoked: (issuerDID, credentialCID, asOfUnix) =>
+        this.isCredentialRevoked(issuerDID, credentialCID, asOfUnix),
     });
 
     const targetDecoded = decodeJwsUnsafe(opsByCID.get(cid)!.jws);

@@ -110,8 +110,19 @@ export type Resolution =
 // protocol-lib callbacks — the product
 // -----------------------------------------------------------------------------
 
-/** Check whether a credential has been revoked. Default: `() => false` (honest). */
-export type RevChecker = (issuerDID: string, credentialCID: string) => Promise<boolean>;
+/**
+ * Check whether a credential has been revoked. Default: `() => false` (honest).
+ *
+ * `asOfUnix` is the protocol's revocation as-of basis (see the protocol's
+ * `RevocationChecker`): supplied when folding committed history, so a credential
+ * revoked AFTER an operation was signed does not invalidate it; omitted for live
+ * "is it revoked right now" checks.
+ */
+export type RevChecker = (
+  issuerDID: string,
+  credentialCID: string,
+  asOfUnix?: number,
+) => Promise<boolean>;
 
 /**
  * The bound protocol-lib callbacks — spread straight into `verifyContentChain`,

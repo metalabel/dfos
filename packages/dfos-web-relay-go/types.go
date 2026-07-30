@@ -125,11 +125,17 @@ type StoredOperation struct {
 }
 
 // StoredRevocation represents a revocation in the store.
+//
+// CreatedAt is the revocation's own signed createdAt (ISO 8601), taken from the
+// VERIFIED payload at ingest — never re-decoded unverified. Persisting it is what
+// makes as-of revocation answerable: it is the boundary that separates operations
+// a revocation reaches (signed before it) from operations it does not.
 type StoredRevocation struct {
 	CID           string `json:"cid"`
 	IssuerDID     string `json:"issuerDID"`
 	CredentialCID string `json:"credentialCID"`
 	JWSToken      string `json:"jwsToken"`
+	CreatedAt     string `json:"createdAt"`
 }
 
 // StoredCountersignature represents a countersignature indexed by target and witness.
@@ -288,7 +294,16 @@ type Store interface {
 	// revocations
 	GetRevocations(issuerDID string) ([]string, error)
 	AddRevocation(revocation StoredRevocation) error
-	IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error)
+	// IsCredentialRevoked reports whether a credential CID has been revoked by a
+	// specific issuer.
+	//
+	// asOfUnix == 0 is the FRESHNESS answer — "revoked as far as this relay knows
+	// right now" — which is what acceptance gates (ingest, live read-path
+	// authorization) ask. asOfUnix > 0 is the VALIDITY answer: true only if the
+	// revocation's own signed createdAt is at or before asOfUnix, which is what
+	// verifying already-committed history asks. See CREDENTIALS.md "Revocation
+	// Scope".
+	IsCredentialRevoked(issuerDID string, credentialCID string, asOfUnix int64) (bool, error)
 	// GetRevocationForCredential returns the stored revocation for a credential
 	// CID, any issuer (nil when unknown). Serves the revocation-status route. If
 	// more than one issuer has revoked the same CID, implementations MUST return

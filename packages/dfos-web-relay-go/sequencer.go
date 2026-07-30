@@ -75,6 +75,11 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 				sequencedCIDs = append(sequencedCIDs, rawCID)
 				progress = true
 			case res.Status == "rejected" && isPermanentRejection(res):
+				// The one durable trace of the drop: MarkOpRejected DELETES the row,
+				// and the reason was previously passed only to be discarded. Log
+				// before the delete so a relay refusing everything it is handed can
+				// be diagnosed. Observability only — deletion semantics unchanged.
+				r.logger.Warn("sequencer: dropping permanently rejected op", "cid", rawCID, "reason", res.Error)
 				r.store.MarkOpRejected(rawCID, res.Error)
 				result.Rejected++
 				progress = true

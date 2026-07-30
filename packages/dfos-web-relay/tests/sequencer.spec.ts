@@ -12,7 +12,7 @@ import {
   generateId,
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FORK_POINT_STATE_ERROR_PREFIX, ingestOperations } from '../src/ingest';
 import { isDependencyFailure, sequenceOps } from '../src/sequencer';
 import { MemoryRelayStore } from '../src/store';
@@ -168,6 +168,40 @@ describe('CID-less durability', () => {
     const { result: second } = await sequenceOps(store);
     expect(second.rejected).toBe(0);
     expect(second.pending).toBe(0);
+  });
+
+  it('logs {cid, reason} before dropping the row', async () => {
+    // markOpRejected DELETES the raw op and the reason was previously discarded,
+    // so this line is the only durable trace of why a relay refused an op.
+    const store = new MemoryRelayStore();
+    const identity = await createIdentity();
+    const corrupt = corruptSignature(identity.jwsToken);
+
+    const decoded = (await import('@metalabel/dfos-protocol/crypto')).decodeJwsUnsafe(corrupt);
+    const cid = (await dagCborCanonicalEncode(decoded!.payload)).cid.toString();
+    await store.putRawOp(cid, corrupt);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { result } = await sequenceOps(store);
+      expect(result.rejected).toBe(1);
+
+      const rejection = warn.mock.calls
+        .map(([first]) => {
+          try {
+            return JSON.parse(String(first)) as { event?: string; cid?: string; reason?: string };
+          } catch {
+            return null;
+          }
+        })
+        .find((entry) => entry?.event === 'relay.op.rejected');
+
+      expect(rejection).toBeDefined();
+      expect(rejection!.cid).toBe(cid);
+      expect(rejection!.reason).toBeTruthy();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

@@ -38,6 +38,12 @@ interface CredentialStatusBody {
  * payload binds exactly the queried (issuerDID, credentialCID). Anything less —
  * unreachable relay, negative answer, forged or mismatched proof — moves on to
  * the next relay; false only after the full set has been consulted.
+ *
+ * When the caller supplies `asOfUnix` (the protocol does, on every cold fold, with
+ * each operation's own `createdAt`), a verified revocation only counts if its own
+ * signed `createdAt` is at or before that instant. This is what heals cold
+ * verification of history: without it, revoking a credential today would make
+ * every already-committed operation it ever authorized fail to verify tomorrow.
  */
 export const createRevocationChecker = (
   relays: string[],
@@ -45,7 +51,7 @@ export const createRevocationChecker = (
   resolveKey: (kid: string) => Promise<Uint8Array>,
 ): RevChecker => {
   const relaySet = normalizeRelays(relays);
-  return async (issuerDID: string, credentialCID: string): Promise<boolean> => {
+  return async (issuerDID: string, credentialCID: string, asOfUnix?: number): Promise<boolean> => {
     for (const url of relaySet) {
       let body: CredentialStatusBody | null = null;
       try {
@@ -66,7 +72,22 @@ export const createRevocationChecker = (
       try {
         const verified = await verifyRevocation({ jwsToken: body.revocation, resolveKey });
         if (verified.did === issuerDID && verified.credentialCID === credentialCID) {
-          return true;
+          // as-of gate: a revocation signed AFTER the instant being asked about
+          // does not reach back to it. The boundary comes from the VERIFIED
+          // payload, so a relay cannot move it by lying. An unparseable timestamp
+          // on an otherwise-valid revocation falls back to the timeless answer —
+          // the stricter direction, never a silent un-revoke.
+          if (asOfUnix === undefined) return true;
+          const revokedAtMs = new Date(verified.createdAt).getTime();
+          if (!Number.isFinite(revokedAtMs) || Math.floor(revokedAtMs / 1000) <= asOfUnix) {
+            return true;
+          }
+          // Revoked strictly AFTER asOfUnix — not revoked as of the queried
+          // instant. Keep consulting the remaining relays rather than answering
+          // false here: a store keeps one revocation per (issuer, credentialCID),
+          // so a relay that ingested a DIFFERENT (earlier) revocation for the same
+          // credential would answer with an earlier boundary that does bite.
+          continue;
         }
         // verified JWS but for a different (issuer, credential) — a replay;
         // keep consulting the remaining relays

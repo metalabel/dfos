@@ -621,6 +621,15 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 		writeError(w, 501, "content plane not available")
 		return
 	}
+	// Blob upload is a WRITE. A node advertising write:false must present no write
+	// surface at all — otherwise the one route that accepts a 16MB body is still
+	// open on the node whose whole point is a minimal attack surface, and the
+	// well-known's capability advertisement lies about it. Both gates apply:
+	// content:false disables the plane, write:false disables writing to it.
+	if !r.writeEnabled {
+		writeError(w, 501, "this relay is pull-only; writes are disabled")
+		return
+	}
 
 	contentID := req.PathValue("contentId")
 	operationCID := req.PathValue("operationCID")

@@ -622,7 +622,18 @@ const ingestContentOp = async (
   // Thread revocation onto the WRITE path so revoked credentials (leaf AND
   // parents) no longer authorize writes. The read path already does this
   // (auth.ts); this closes the write-path gap.
-  const isRevoked = (issuerDID: string, credentialCID: string) =>
+  //
+  // ACCEPTANCE IS A FRESHNESS DECISION. The protocol verifier offers an as-of
+  // basis (the op's own createdAt) because verifying committed history is a
+  // validity decision — but admitting a NEW operation is not that question. This
+  // closure therefore DELIBERATELY IGNORES `asOfUnix` and answers from the
+  // relay's current knowledge: a relay must never accept a new op authorized by a
+  // credential it already knows to be revoked, no matter how the op is dated.
+  // (Answering "revoked as of now" instead would be subtly weaker — it would
+  // admit an op under a revocation whose own createdAt is in the future. Current
+  // knowledge is strictly stronger and byte-identical to the pre-as-of behavior,
+  // so ingest verdicts do not change.) Mirrors the Go twin (ingest.go).
+  const isRevoked = (issuerDID: string, credentialCID: string, _asOfUnix?: number) =>
     store.isCredentialRevoked(issuerDID, credentialCID);
   const opType = (payload as Record<string, unknown>)['type'];
   const isGenesis = opType === 'create';
@@ -987,12 +998,14 @@ const ingestRevocation = async (
   const revokedCredential = await store.getPublicCredentialByCID(verified.credentialCID);
   const revokedGrant = revokedCredential ? contentIdsFromCredential(revokedCredential) : undefined;
 
-  // add to revocation set
+  // add to revocation set — carrying the VERIFIED createdAt, which is the as-of
+  // boundary every later validity check compares against
   await store.addRevocation({
     cid,
     issuerDID: did,
     credentialCID: verified.credentialCID,
     jwsToken,
+    createdAt: verified.createdAt,
   });
 
   // if the revoked credential was a stored public credential, remove it

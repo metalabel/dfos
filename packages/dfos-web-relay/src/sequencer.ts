@@ -24,6 +24,20 @@ export const isDependencyFailure = (res: Pick<IngestionResult, 'dependencyMissin
   res.dependencyMissing === true;
 
 /**
+ * Emit the one durable trace of a permanent rejection.
+ *
+ * `markOpRejected` DELETES the raw op (see MemoryRelayStore.markOpRejected), and
+ * the `reason` was previously passed only to be discarded — so a relay dropping
+ * every op it was handed left nothing behind to explain why. This log line is
+ * that explanation. Observability only: the deletion semantics are unchanged, and
+ * nothing is added to the store. Mirrors the Go twin's slog call
+ * (sequencer.go / relay.go).
+ */
+export const logOpRejected = (cid: string, reason: string): void => {
+  console.warn(JSON.stringify({ event: 'relay.op.rejected', cid, reason }));
+};
+
+/**
  * Process unsequenced raw ops in a fixed-point loop until no more progress
  * is made. Returns the JWS tokens of newly sequenced ops and aggregate stats.
  */
@@ -55,7 +69,9 @@ export const sequenceOps = async (
         sequencedCIDs.push(res.cid);
         progress = true;
       } else if (res.status === 'rejected' && !isDependencyFailure(res)) {
-        await store.markOpRejected(res.cid, res.error ?? 'unknown');
+        const reason = res.error ?? 'unknown';
+        logOpRejected(res.cid, reason);
+        await store.markOpRejected(res.cid, reason);
         result.rejected++;
         progress = true;
       } else {

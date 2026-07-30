@@ -29,7 +29,54 @@ package relay
 import (
 	"net/http"
 	"regexp"
+	"time"
+
+	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
+
+// -----------------------------------------------------------------------------
+// as-of boundary helpers (shared by both stores)
+// -----------------------------------------------------------------------------
+
+// revocationCreatedAtUnix converts a revocation's signed createdAt to integer
+// unix seconds — the as-of boundary. The bool is false when the timestamp is
+// missing or unparseable, which callers MUST read as "no usable boundary" and
+// answer timelessly (i.e. revoked). Failing open there would let a malformed row
+// silently un-revoke history. Floors to seconds to match the credential temporal
+// basis (CREDENTIALS.md "Time Basis Conversion"). MUST match the TS twin
+// (store.ts revocationCreatedAtUnix).
+func revocationCreatedAtUnix(createdAt string) (int64, bool) {
+	if createdAt == "" {
+		return 0, false
+	}
+	parsed, err := time.Parse(time.RFC3339, createdAt)
+	if err != nil {
+		return 0, false
+	}
+	return parsed.Unix(), true
+}
+
+// storedRevocationCreatedAt resolves the createdAt of a stored revocation,
+// decoding it from the token when the column is empty.
+//
+// The empty case is exactly one thing: a row written by a relay build that
+// predates the created_at column (added via ensureColumn, so existing rows come
+// back NULL). Rather than run a backfill pass, those rows resolve lazily here and
+// converge as they are read. Every row written by a current build carries the
+// verified value, so this fallback is legacy-only — and it is an UNVERIFIED decode
+// of a token whose signature was checked at ingest, used only to recover a
+// timestamp that is already committed in the store.
+func storedRevocationCreatedAt(createdAt, jwsToken string) string {
+	if createdAt != "" {
+		return createdAt
+	}
+	_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+	if err != nil {
+		return ""
+	}
+	value, _ := payload["createdAt"].(string)
+	return value
+}
 
 // revocationsBasePath namespaces the revocation-status routes on their own
 // frozen v1 clock (NOT the /proof/v1 proof plane). Root-mounted v1 contract;

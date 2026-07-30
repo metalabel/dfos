@@ -130,8 +130,10 @@ export const createClient = (config: ClientConfig): Client => {
   // resolvers provide — and the resolvers need isRevoked. Late-bind through a
   // stable wrapper to break the construction cycle.
   let isRevokedImpl: RevChecker = async () => false;
-  const isRevoked: RevChecker = (issuerDID, credentialCID) =>
-    isRevokedImpl(issuerDID, credentialCID);
+  // Forward asOfUnix — dropping it here would silently downgrade every cold fold
+  // back to timeless revocation.
+  const isRevoked: RevChecker = (issuerDID, credentialCID, asOfUnix) =>
+    isRevokedImpl(issuerDID, credentialCID, asOfUnix);
 
   const resolvers: Resolvers = createResolvers({ relays, quorum, store, peerClient, isRevoked });
   isRevokedImpl =

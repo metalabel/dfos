@@ -22,6 +22,7 @@ import {
   matchesResource,
   verifyDelegationChain,
   verifyDFOSCredential,
+  type RevocationChecker,
 } from '../credentials';
 import { MAX_CREDENTIAL_SIZE } from '../credentials/schemas';
 import { createJws, dagCborCanonicalEncode, decodeJwsUnsafe, verifyJws } from '../crypto';
@@ -123,8 +124,14 @@ const verifyOperationAuthorization = async (input: {
    * so a revoked LEAF credential no longer authorizes writes (verifyDelegationChain
    * only checks PARENTS). When omitted, revocation is not enforced (protocol-layer
    * callers without a revocation store).
+   *
+   * Called with `asOfUnix = the operation's own createdAt`: verifying an
+   * operation that is already part of a chain is a VALIDITY decision, and a
+   * revocation signed after the operation does not reach back to invalidate it.
+   * A caller that instead wants a freshness gate (relay ingest) supplies a
+   * checker that ignores the as-of basis and answers from current knowledge.
    */
-  isRevoked?: (issuerDID: string, credentialCID: string) => Promise<boolean>;
+  isRevoked?: RevocationChecker;
 }): Promise<void> => {
   // decode to check typ before full verification
   const decoded = decodeDFOSCredentialUnsafe(input.authorization);
@@ -145,18 +152,27 @@ const verifyOperationAuthorization = async (input: {
   // explicit LEAF-revocation check on the write path. verifyDelegationChain
   // (below) only checks PARENTS — without this, a revoked leaf credential would
   // still authorize writes, so "revocation is the timely lever" would be false
-  // for the leaf case. Mirrors the read-path pattern (relay auth.ts:104).
-  if (input.isRevoked && (await input.isRevoked(credential.iss, credential.credentialCID))) {
+  // for the leaf case. Mirrors the read-path pattern (relay auth.ts).
+  //
+  // asOf = the operation's own createdAt — the SAME deterministic basis already
+  // used for expiry above. A revocation signed after this operation leaves it
+  // valid on every future verification of the chain; only a revocation that
+  // predates it invalidates it. MUST stay in sync with the Go twin (verify.go
+  // verifyContentAuthorization).
+  if (
+    input.isRevoked &&
+    (await input.isRevoked(credential.iss, credential.credentialCID, opCreatedAtUnix))
+  ) {
     throw new Error('credential is revoked');
   }
 
   // verify the delegation chain roots at the creator DID (parents covered by
-  // the same isRevoked callback)
+  // the same isRevoked callback, on the same as-of basis)
   await verifyDelegationChain(credential, {
     resolveIdentity: input.resolveIdentity,
     rootDID: input.creatorDID,
     now: opCreatedAtUnix,
-    ...(input.isRevoked ? { isRevoked: input.isRevoked } : {}),
+    ...(input.isRevoked ? { isRevoked: input.isRevoked, asOfUnix: opCreatedAtUnix } : {}),
   });
 
   // verify the credential's audience matches the operation signer
@@ -206,10 +222,11 @@ export const verifyContentChain = async (input: {
    */
   resolveIdentity?: (did: string) => Promise<VerifiedIdentity | undefined>;
   /**
-   * Check whether a credential (leaf or parent) has been revoked. Threaded onto
-   * the WRITE path so revoked credentials no longer authorize writes.
+   * Check whether a credential (leaf or parent) has been revoked. Called with
+   * `asOfUnix` = each operation's own `createdAt`, so a fold of committed
+   * history is stable under later revocations. See `RevocationChecker`.
    */
-  isRevoked?: (issuerDID: string, credentialCID: string) => Promise<boolean>;
+  isRevoked?: RevocationChecker;
 }): Promise<VerifiedContentChain> => {
   if (input.log.length === 0) throw new Error('log must have at least one operation');
 
@@ -389,8 +406,11 @@ export const verifyContentExtensionFromTrustedState = async (input: {
   enforceAuthorization?: boolean;
   /** Resolve a DID to a VerifiedIdentity. Required when enforceAuthorization is true. */
   resolveIdentity?: (did: string) => Promise<VerifiedIdentity | undefined>;
-  /** Check whether a credential (leaf or parent) has been revoked. */
-  isRevoked?: (issuerDID: string, credentialCID: string) => Promise<boolean>;
+  /**
+   * Check whether a credential (leaf or parent) has been revoked. Called with
+   * `asOfUnix` = the new operation's own `createdAt`. See `RevocationChecker`.
+   */
+  isRevoked?: RevocationChecker;
 }): Promise<{
   state: VerifiedContentChain;
   operationCID: string;

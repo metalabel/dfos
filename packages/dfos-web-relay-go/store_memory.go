@@ -613,8 +613,18 @@ func (s *MemoryStore) GetContentStateAtCID(contentID, cid string) (*ContentState
 		currentCID = op.previousCID
 	}
 
+	// Historical replay is a VALIDITY decision, so authorization is enforced and
+	// revocation is evaluated AS OF each op's own createdAt: a credential revoked
+	// after an op was signed leaves that op — and therefore the fork state derived
+	// from it — valid. Without the as-of basis this replay would start failing the
+	// moment any credential in the chain's history was revoked, which would make a
+	// legitimate fork extension unverifiable. Mirrors the TS twin (store.ts
+	// getContentStateAtCID).
 	resolveKey := CreateKeyResolver(s)
-	result, err := dfos.VerifyContentChain(path, resolveKey, true)
+	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, asOfUnix int64) (bool, error) {
+		return s.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
+	})
+	result, err := dfos.VerifyContentChain(path, resolveKey, true, isRevoked)
 	if err != nil {
 		return nil, err
 	}
@@ -723,12 +733,19 @@ func (s *MemoryStore) AddRevocation(revocation StoredRevocation) error {
 	return nil
 }
 
-func (s *MemoryStore) IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error) {
+func (s *MemoryStore) IsCredentialRevoked(issuerDID string, credentialCID string, asOfUnix int64) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := issuerDID + "::" + credentialCID
-	_, ok := s.revocations[key]
-	return ok, nil
+	rev, ok := s.revocations[key]
+	if !ok {
+		return false, nil
+	}
+	if asOfUnix == 0 {
+		return true, nil
+	}
+	revokedAt, ok := revocationCreatedAtUnix(rev.CreatedAt)
+	return !ok || revokedAt <= asOfUnix, nil
 }
 
 func (s *MemoryStore) GetRevocationForCredential(credentialCID string) (*StoredRevocation, error) {
@@ -752,34 +769,23 @@ func (s *MemoryStore) GetRevocationForCredential(credentialCID string) (*StoredR
 func (s *MemoryStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	type revocationWithCreatedAt struct {
-		revocation StoredRevocation
-		createdAt  string
-	}
-	revs := []revocationWithCreatedAt{}
+	// Sorts on the PERSISTED CreatedAt (verified at ingest) rather than re-decoding
+	// each token unverified — same frozen v1 feed order, one less place that parses
+	// a token it did not check.
+	revs := []StoredRevocation{}
 	for _, rev := range s.revocations {
 		if rev.IssuerDID != issuerDID {
 			continue
 		}
-		createdAt := ""
-		if _, payload, err := dfos.DecodeJWSUnsafe(rev.JWSToken); err == nil {
-			if value, ok := payload["createdAt"].(string); ok {
-				createdAt = value
-			}
-		}
-		revs = append(revs, revocationWithCreatedAt{revocation: rev, createdAt: createdAt})
+		revs = append(revs, rev)
 	}
 	sort.Slice(revs, func(i, j int) bool {
-		if revs[i].createdAt != revs[j].createdAt {
-			return revs[i].createdAt < revs[j].createdAt
+		if revs[i].CreatedAt != revs[j].CreatedAt {
+			return revs[i].CreatedAt < revs[j].CreatedAt
 		}
-		return revs[i].revocation.CredentialCID < revs[j].revocation.CredentialCID
+		return revs[i].CredentialCID < revs[j].CredentialCID
 	})
-	result := make([]StoredRevocation, 0, len(revs))
-	for _, rev := range revs {
-		result = append(result, rev.revocation)
-	}
-	return result, nil
+	return revs, nil
 }
 
 // ---------------------------------------------------------------------------

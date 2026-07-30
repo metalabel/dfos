@@ -755,6 +755,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   /** Upload a blob for a content chain, keyed by operation CID */
   app.put('/content/:contentId/blob/:operationCID', async (c) => {
     if (!contentEnabled) return c.json({ error: 'content plane not available' }, 501);
+    // Blob upload is a WRITE. A node advertising write:false must present no
+    // write surface at all — otherwise the one route that accepts a 16MB body is
+    // still open on the node whose whole point is a minimal attack surface, and
+    // the well-known's capability advertisement lies about it. Both gates apply:
+    // content:false disables the plane, write:false disables writing to it.
+    if (!writeEnabled) {
+      return c.json({ error: 'this relay is pull-only; writes are disabled' }, 501);
+    }
     const contentId = c.req.param('contentId');
     const operationCID = c.req.param('operationCID');
 

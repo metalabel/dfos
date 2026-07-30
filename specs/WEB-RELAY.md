@@ -338,7 +338,17 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 
 A relay MAY run as a **lite pull-only proof node**: it verifies, stores, and serves the proof plane, but accepts **no writes**. When `capabilities.write: false`, `POST /proof/v1/operations` returns **501 Not Implemented**. Because that endpoint is _both_ the client-write and the peer-gossip-ingest path (a gossiping peer POSTs operations here, and nothing in the request distinguishes a first-party submission from a peer push), refusing it disables **gossip-in along with client writes**. Such a node stays current by **pulling**: `syncFromPeers` polls its peers' `/proof/v1/log` and ingests verified operations locally. This is the smallest, safest mesh citizen — a tiny attack surface (no untrusted write endpoint) that still contributes verification and availability. All read routes behave normally. `dfos serve --no-write` runs this mode.
 
-`capabilities.write` governs the **proof-plane** write endpoint (`POST /proof/v1/operations`) only. Content-plane writes (blob upload, `PUT /content/:contentId/blob/:operationCID`) are governed independently by `capabilities.content`, which enables or disables the content plane as a whole. A node that should accept no writes of any kind runs with both `write: false` and `content: false`.
+**`capabilities.write: false` means the node accepts no writes of any kind.** It gates **every** write route, on both planes: `POST /proof/v1/operations` (proof plane) and `PUT /content/:contentId/blob/:operationCID` (content-plane blob upload) both return **501 Not Implemented**. Blob upload is the one route that accepts a multi-megabyte body, so leaving it open on a node whose whole point is a minimal attack surface would contradict the advertised capability.
+
+The two flags gate different things and compose:
+
+| Flags                          | Result                                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| `write: false`                 | No writes on either plane. Content-plane **reads** (blob download) still serve normally |
+| `content: false`               | The content plane is absent entirely — all content routes 501, reads included           |
+| `write: false, content: false` | A proof-plane-only, read-only node                                                      |
+
+`capabilities.content` still governs the content plane **as a whole** (its reads included); `capabilities.write` governs only the act of writing.
 
 ---
 
@@ -505,12 +515,14 @@ These are evaluated live per request, so the effect is immediate; no cache inval
 
 Revocation artifacts (`typ: did:dfos:revocation`) are ingested via `POST /proof/v1/operations` alongside other proof plane operations. When a revocation is accepted:
 
-1. The revoked credential's CID is recorded against its issuer
+1. The revoked credential's CID is recorded against its issuer, **together with the revocation's own signed `createdAt`** — the boundary the as-of rule compares against (see below)
 2. Standing authorization backed by that credential stops granting — the live per-request revocation check denies it on the next read (a relay that keeps a candidate index MAY also evict the entry eagerly, but the live check is what guarantees immediacy)
 3. Future content chain operations embedding the revoked credential as `authorization` are rejected
 4. Future content plane requests presenting the revoked credential are rejected
 
 Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the revocation payload format. A relay MAY additionally expose a read over the revocation index it keeps for this enforcement — see [Revocation Status](#revocation-status-v1).
+
+**Ingest asks freshness; re-verification asks validity.** Points 2–4 are all **acceptance** decisions, answered from what the relay currently knows: a relay MUST refuse a new operation authorized by a credential it already holds a revocation for, **whatever that operation's `createdAt` claims** — otherwise backdating would buy a revoked delegate an indefinite write window. Re-verifying operations the relay has **already committed** is the other question, and it is answered **as of each operation's own `createdAt`** per CREDENTIALS.md ["Acceptance vs Validity"](https://protocol.dfos.com/credentials#acceptance-vs-validity-normative). Concretely, a relay replaying a chain's history (for example to compute the state at a fork point) MUST NOT reject an operation because a credential in its history was revoked **later** — that operation was authorized when it was signed, and rejecting it would make a legitimate fork unextendable. The two rules coexist without tension: acceptance is local and timely, and the ingest verdict never enters the replicated log; historical validity is deterministic and therefore identical on every relay, forever.
 
 ### Content Following
 

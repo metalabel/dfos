@@ -186,8 +186,9 @@ func TestTwoRelayRevocationAfterRotationConvergesUnderHistorical(t *testing.T) {
 func assertRevokedAndSubtreeDenied(t *testing.T, label string, r *Relay, store *MemoryStore, creator, delegate, subDelegate testIdentity, rootCred, childCred, rootCredCID, w1CID string) {
 	t.Helper()
 
-	// 1. the revocation converged into the store's revocation set
-	revoked, _ := store.IsCredentialRevoked(creator.did, rootCredCID)
+	// 1. the revocation converged into the store's revocation set (asOf 0 = "is it
+	// revoked as far as this relay knows", the convergence question here)
+	revoked, _ := store.IsCredentialRevoked(creator.did, rootCredCID, 0)
 	if !revoked {
 		t.Fatalf("[%s] expected root credential to be in the revocation set (convergence FAILED — current-state regression?)", label)
 	}

@@ -124,7 +124,9 @@ func verifyChain(t *testing.T, childToken string, resolve KeyResolver, rootDID s
 	if err != nil {
 		return err
 	}
-	return verifyDelegationChain(childToken, vc, childAtt, childPrf, resolve, rootDID, nil, nil, 0)
+	// asOfUnix 0, depth 0 — no revocation checker is wired here, so the as-of basis
+	// is immaterial to what these positive cases assert
+	return verifyDelegationChain(childToken, vc, childAtt, childPrf, resolve, rootDID, nil, nil, 0, 0)
 }
 
 func att(resource, action string) []map[string]string {
