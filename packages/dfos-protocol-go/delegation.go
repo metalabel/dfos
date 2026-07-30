@@ -151,8 +151,13 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 // authority-escalation slipped past one surface but not the other).
 //
 // Pass nil for isRevoked or isDeleted to skip that store-backed check.
-func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker) error {
-	return verifyDelegationChain(childToken, childVC, childAtt, childPrf, resolveKey, rootDID, isRevoked, isDeleted, 0)
+//
+// asOfUnix is the revocation as-of basis handed to isRevoked at every hop: pass
+// the operation's own createdAt when verifying committed history (a validity
+// decision), or 0 for the timeless "revoked as far as we know right now" answer
+// the live read path wants (a freshness decision). See RevocationChecker.
+func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, asOfUnix int64) error {
+	return verifyDelegationChain(childToken, childVC, childAtt, childPrf, resolveKey, rootDID, isRevoked, isDeleted, asOfUnix, 0)
 }
 
 // verifyDelegationChain verifies a DFOS credential's delegation chain.
@@ -160,11 +165,12 @@ func VerifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 // signature, audience linkage, expiry bounds, and monotonic attenuation.
 // The chain must root at rootDID.
 //
-// The optional isRevoked callback checks revocation at each parent level, and
-// the optional isDeleted callback gates each parent's issuer identity. Pass nil
-// for either to skip that check (the protocol layer is store-agnostic; the
-// relay supplies these closures at the call boundary).
-func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, depth int) error {
+// The optional isRevoked callback checks revocation at each parent level (on the
+// asOfUnix basis, see RevocationChecker), and the optional isDeleted callback
+// gates each parent's issuer identity. Pass nil for either to skip that check
+// (the protocol layer is store-agnostic; the relay supplies these closures at the
+// call boundary).
+func verifyDelegationChain(childToken string, childVC *VerifiedCredential, childAtt []AttEntry, childPrf []string, resolveKey KeyResolver, rootDID string, isRevoked RevocationChecker, isDeleted IdentityDeletedChecker, asOfUnix int64, depth int) error {
 	// A delegation chain MUST contain at most 16 credentials (leaf through root
 	// inclusive). The leaf is verified at depth 0 and each parent walk increments
 	// depth, so the root of an N-credential chain is reached at depth N-1; the
@@ -226,9 +232,12 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 		return fmt.Errorf("parent credential verification failed: %v", err)
 	}
 
-	// check revocation at every level
+	// check revocation at every level, on the SAME as-of basis as the leaf (a
+	// parent revoked after the operation was signed must not retroactively
+	// invalidate it either — the whole chain is evaluated at one point in time).
+	// MUST stay in sync with the TS twin (dfos-credential.ts).
 	if isRevoked != nil {
-		revoked, err := isRevoked(pVerified.Iss, pVerified.CID)
+		revoked, err := isRevoked(pVerified.Iss, pVerified.CID, asOfUnix)
 		if err != nil {
 			return fmt.Errorf("revocation check failed: %v", err)
 		}
@@ -260,5 +269,5 @@ func verifyDelegationChain(childToken string, childVC *VerifiedCredential, child
 	}
 
 	// continue walking through the parent
-	return verifyDelegationChain(parentJws, pVerified, parentAtt, parentPrf, resolveKey, rootDID, isRevoked, isDeleted, depth+1)
+	return verifyDelegationChain(parentJws, pVerified, parentAtt, parentPrf, resolveKey, rootDID, isRevoked, isDeleted, asOfUnix, depth+1)
 }

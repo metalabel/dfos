@@ -391,6 +391,39 @@ Revocation is **forward-looking**: it prevents future use of a credential but do
 
 This is consistent with the content chain's append-only semantics: operations are immutable once committed. Revocation controls future access (standing authorization checks, per-request credential verification) but not the historical record.
 
+#### Acceptance vs Validity (Normative)
+
+Honoring that promise requires separating two questions asked of the same revocation set. **Acceptance is a freshness decision; verification of committed history is a validity decision.** Conflating them is exactly what makes revocation _feel_ retroactive: a verifier that asks the timeless question ("is this credential revoked?") while folding a chain will reject operations that were unimpeachable when they were signed.
+
+- **Acceptance** — "should I admit this NEW operation?" A relay answers from what it **currently** knows: if it holds a revocation for the authorizing credential, it refuses the operation regardless of the operation's `createdAt`. This is a local, timely gate. It is deliberately **not** convergent — two relays ingesting the same operation on either side of a revocation's arrival legitimately reach different verdicts — and that is harmless, because nothing in the replicated log depends on _when_ a relay chose to admit an operation.
+- **Validity** — "is this operation, already in the log, authorized?" Every verifier must reach the same answer forever, so the question is asked **as of the operation's own `createdAt`** — the same deterministic basis expiry uses (see [Expiry Basis](#expiry-basis-normative)), never the verifier's wall clock.
+
+**The as-of rule.** A revocation `R` invalidates an operation `O` **if and only if**:
+
+```
+R.createdAt <= O.createdAt
+```
+
+The boundary is **inclusive**: a revocation signed at the same second as the operation invalidates it. `R.createdAt` comes from the revocation's own signed payload, so no relay can move the boundary by misreporting it — a caller that re-verifies the revocation JWS (as it must; see [Revocation Status](https://protocol.dfos.com/web-relay#revocation-status-v1)) reads the boundary out of the verified bytes.
+
+The rule applies at **every level** of the presented credential — leaf and each parent in the delegation chain — all evaluated at that one instant, so a parent revoked after the operation no longer invalidates it either.
+
+A verifier that cannot ask the as-of question (no revocation source, or a source that answers only timelessly) MUST fall back to the timeless answer. That is the strictly stricter direction: it can only reject history the as-of rule would accept, never admit an operation the as-of rule would reject.
+
+**Backdating is bounded.** `op.createdAt` is signer-asserted, so a delegate whose credential is about to be revoked will try to date operations before the revocation. Three independent bounds make that a non-lever:
+
+1. **Chain monotonicity.** Each operation's `createdAt` MUST be strictly after that of the operation it **extends**. Note this binds against the predecessor, **not** the chain head: an operation forking from an earlier point is bounded only by that fork point, so it may legitimately carry a `createdAt` earlier than the current head. The floor is therefore the fork point being extended, not the chain's latest operation.
+2. **The credential's own window.** An operation dated outside `[iat, exp)` fails the temporal check regardless of revocation.
+3. **Ingest-time freshness.** An honest relay that already holds the revocation refuses the operation however it is dated, so a backdated operation must find a relay that has not yet heard about the revocation.
+
+Net effect: a revoked delegate can at most mint operations dated inside the window in which it was **already legitimately authorized**, and only at relays that have not yet received the revocation. It gains no authority it did not already have, and no window it was not already inside.
+
+#### Identity Deletion Is Absolute
+
+Identity deletion is the deliberate exception. Deleting an identity invalidates the credentials it issued **retroactively**: a credential from a deleted issuer authorizes nothing, on any surface, at any point in history, and verification of committed history rejects operations that relied on it. There is no as-of basis for deletion and none is intended.
+
+The asymmetry is deliberate. Revocation withdraws **one grant** and leaves the record that grant authorized standing — which is what makes it a routine, low-stakes operation an issuer can perform freely. Deletion withdraws **the authority itself**, the strongest statement an identity can make about its own history; a deleted identity whose credentials still authorized reachable operations would make deletion cosmetic.
+
 ---
 
 ## Relationship to Auth Tokens

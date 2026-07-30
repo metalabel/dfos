@@ -108,8 +108,10 @@ the [document gateway](https://protocol.dfos.com/document-gateway), an optional 
 its own `0.x` clock — outside the v1 conformance tiers.
 
 **Writes are OPTIONAL too.** A lite (pull-only) proof node MAY advertise
-`capabilities.write: false`, in which case `POST /proof/v1/operations` returns **501 Not
-Implemented** while all proof-plane read routes remain conformant; the node stays current
+`capabilities.write: false`, in which case every write route returns **501 Not
+Implemented** — `POST /proof/v1/operations` and the content-plane blob upload
+`PUT /content/{contentId}/blob/{operationCID}` — while read routes on both planes remain
+conformant; the node stays current
 by pulling peers' logs (WEB-RELAY.md "Lite (pull-only) node"). So a conformant proof node
 need not accept writes — only serve and verify them. A read-only node cannot be seeded by
 the suite (its POSTs 501), so the write-disabled variant verifies it by **recomputing from

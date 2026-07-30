@@ -465,8 +465,20 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 	resolveKey := CreateKeyResolver(store)
 	// WRITE-path hardening callbacks (mirror the relay READ path / the TS twin):
 	// revoked credentials and deleted issuers/parents no longer authorize writes.
-	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string) (bool, error) {
-		return store.IsCredentialRevoked(issuerDID, credentialCID)
+	//
+	// ACCEPTANCE IS A FRESHNESS DECISION. The protocol verifier offers an as-of
+	// basis (the op's own createdAt) because verifying committed history is a
+	// validity decision — but admitting a NEW operation is not that question. This
+	// closure therefore DELIBERATELY IGNORES asOfUnix (passing 0 = timeless) and
+	// answers from the relay's current knowledge: a relay must never accept a new
+	// op authorized by a credential it already knows to be revoked, no matter how
+	// the op is dated. (Answering "revoked as of now" instead would be subtly
+	// weaker — it would admit an op under a revocation whose own createdAt is in
+	// the future. Current knowledge is strictly stronger and byte-identical to the
+	// pre-as-of behavior, so ingest verdicts do not change.) Mirrors the TS twin
+	// (ingest.ts).
+	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, _ int64) (bool, error) {
+		return store.IsCredentialRevoked(issuerDID, credentialCID, 0)
 	})
 	isDeleted := dfos.WithIdentityDeletedChecker(func(did string) (bool, error) {
 		identity, err := store.GetIdentityChain(did)
@@ -756,12 +768,14 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 		revokedGrant = &RevokedGrant{Wildcard: wildcard, ContentIDs: contentIDs}
 	}
 
-	// store revocation
+	// store revocation — carrying the VERIFIED createdAt, which is the as-of
+	// boundary every later validity check compares against
 	if perr := persistError(cid, store.AddRevocation(StoredRevocation{
 		CID:           cid,
 		IssuerDID:     did,
 		CredentialCID: result.CredentialCID,
 		JWSToken:      jwsToken,
+		CreatedAt:     result.CreatedAt,
 	})); perr != nil {
 		return *perr
 	}
@@ -846,8 +860,9 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 		return IngestionResult{CID: cid, Status: "rejected", Error: "issuer identity is deleted"}
 	}
 
-	// check if already revoked
-	revoked, _ := store.IsCredentialRevoked(kidDID, cid)
+	// check if already revoked — timeless (asOf 0): admitting a standing credential
+	// is an acceptance decision, so it asks what the relay knows right now
+	revoked, _ := store.IsCredentialRevoked(kidDID, cid, 0)
 	if revoked {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "credential has been revoked"}
 	}

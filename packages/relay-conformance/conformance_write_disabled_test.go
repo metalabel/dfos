@@ -3,6 +3,7 @@ package conformance
 import (
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
@@ -211,6 +212,65 @@ func TestWriteDisabledSeededIdentity(t *testing.T) {
 		t.Skip("WRITE_DISABLED_SEED_DID not set — skipping out-of-band-seeded chain recompute")
 	}
 	verifyServedIdentity(t, base, did)
+}
+
+// TestWriteDisabledBlobPutRejected asserts a write-disabled relay also 501s the
+// content-plane WRITE, `PUT /content/{contentId}/blob/{operationCID}`.
+//
+// `capabilities.write: false` means the node accepts no writes of ANY kind: blob
+// upload is the one route that accepts a 16MB body, so leaving it open would
+// contradict the advertised capability and defeat the point of the role (a minimal
+// attack surface). The gate fires before authentication and before the chain
+// lookup, so an arbitrary contentId/operationCID and body suffice — a 404 here
+// would mean the relay reached the chain lookup and never applied the write gate.
+func TestWriteDisabledBlobPutRejected(t *testing.T) {
+	base := writeDisabledBase(t)
+
+	req, err := http.NewRequest("PUT", base+"/content/someid/blob/somecid", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("build PUT blob request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT blob: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("PUT /content/someid/blob/somecid: expected 501 Not Implemented on a write-disabled relay, got %d", resp.StatusCode)
+	}
+}
+
+// TestWriteDisabledBlobGetNot501 is the content-plane negative control: write:false
+// gates content-plane WRITES only, so a blob READ must still reach the route.
+//
+// This assertion is only meaningful when the content plane EXISTS. `write: false`
+// plus `content: false` is a spec-blessed deployment (a proof-plane-only read-only
+// node), and there a blob GET legitimately 501s on the content gate — so the test
+// additionally requires capabilities.content == true rather than asserting against
+// every write-disabled relay.
+func TestWriteDisabledBlobGetNot501(t *testing.T) {
+	base := writeDisabledBase(t)
+
+	var meta struct {
+		Capabilities struct {
+			Content bool `json:"content"`
+		} `json:"capabilities"`
+	}
+	wk := getJSON(t, base+"/.well-known/dfos-relay", &meta)
+	if wk.StatusCode != 200 {
+		t.Fatalf("GET /.well-known/dfos-relay: status %d", wk.StatusCode)
+	}
+	if !meta.Capabilities.Content {
+		t.Skip("relay advertises capabilities.content: false — blob reads 501 on the content gate, which is correct")
+	}
+
+	resp := getJSON(t, base+"/content/someid/blob", nil)
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusNotImplemented {
+		t.Fatal("GET /content/someid/blob: returned 501 on a content-enabled relay — write:false must not disable content-plane READS")
+	}
 }
 
 // TestWriteDisabledReadRoutesNot501 is the negative control: write:false gates

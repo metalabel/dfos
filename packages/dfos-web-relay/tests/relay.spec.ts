@@ -327,6 +327,27 @@ describe('web relay', () => {
       // reaches body/ingest handling — 400 (bad op), never 501
       expect(res.status).not.toBe(501);
     });
+
+    it('rejects PUT blob with 501 — write:false means no write surface at all', async () => {
+      // Blob upload is the one route that accepts a 16MB body. Leaving it open on
+      // a node advertising write:false would contradict the capability and defeat
+      // the point of the role (a minimal attack surface).
+      const liteRelay = await createRelay({ store, identity: RELAY_IDENTITY, write: false });
+      const res = await liteRelay.app.request('http://localhost/content/someid/blob/somecid', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream', authorization: 'Bearer fake' },
+        body: new Uint8Array([1, 2, 3]),
+      });
+      expect(res.status).toBe(501);
+    });
+
+    it('still serves blob DOWNLOAD on a write:false node (reads are unaffected)', async () => {
+      // Negative control: write:false gates writes only. A blob read must reach the
+      // route (404 for an unknown chain), never 501.
+      const liteRelay = await createRelay({ store, identity: RELAY_IDENTITY, write: false });
+      const res = await liteRelay.app.request('http://localhost/content/someid/blob');
+      expect(res.status).not.toBe(501);
+    });
   });
 
   // ---------------------------------------------------------------------------

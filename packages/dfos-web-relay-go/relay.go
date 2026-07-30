@@ -216,6 +216,10 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 			}
 			dupCount++
 		case res.Status == "rejected" && isPermanentRejection(res):
+			// see the sequencer twin: log before the row is dropped, since
+			// MarkOpRejected deletes it and the reason is otherwise discarded.
+			// Same event string and fields as the TS twin and the sequencer site.
+			r.logger.Warn("relay.op.rejected", "cid", rawCID, "reason", res.Error)
 			r.store.MarkOpRejected(rawCID, res.Error)
 			rejCount++
 		}

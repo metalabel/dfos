@@ -86,7 +86,8 @@ CREATE TABLE IF NOT EXISTS revocations (
 	cid TEXT PRIMARY KEY,
 	issuer_did TEXT NOT NULL,
 	credential_cid TEXT NOT NULL,
-	jws_token TEXT NOT NULL
+	jws_token TEXT NOT NULL,
+	created_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_revocations_issuer ON revocations(issuer_did);
@@ -295,6 +296,15 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	if err := ensureColumn(writeDB, "index_content", "title", "TEXT"); err != nil {
+		writeDB.Close()
+		readDB.Close()
+		return nil, err
+	}
+	// The CREATE TABLE above is a no-op on an existing database, so a relay
+	// upgrading in place needs the column added. Pre-existing rows come back NULL
+	// and resolve lazily from their stored token on read (see
+	// storedRevocationCreatedAt) — no backfill pass.
+	if err := ensureColumn(writeDB, "revocations", "created_at", "TEXT"); err != nil {
 		writeDB.Close()
 		readDB.Close()
 		return nil, err
@@ -1232,8 +1242,21 @@ func (s *SQLiteStore) GetContentStateAtCID(contentID, cid string) (*ContentState
 		currentCID = op.previousCID
 	}
 
+	// Historical replay is a VALIDITY decision — authorization enforced, revocation
+	// evaluated AS OF each op's own createdAt, identity deletion retroactive and
+	// therefore unconditional. See the MemoryStore twin.
 	resolveKey := CreateKeyResolver(s)
-	result, err := dfos.VerifyContentChain(path, resolveKey, true)
+	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, asOfUnix int64) (bool, error) {
+		return s.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
+	})
+	isDeleted := dfos.WithIdentityDeletedChecker(func(did string) (bool, error) {
+		identity, err := s.GetIdentityChain(did)
+		if err != nil {
+			return false, err
+		}
+		return identity != nil && identity.State.IsDeleted, nil
+	})
+	result, err := dfos.VerifyContentChain(path, resolveKey, true, isRevoked, isDeleted)
 	if err != nil {
 		return nil, err
 	}
@@ -1383,49 +1406,102 @@ func (s *SQLiteStore) GetRevocations(issuerDID string) ([]string, error) {
 	return cids, rows.Err()
 }
 
+// AddRevocation stores a revocation, keeping the one with the EARLIEST as-of
+// boundary when the (issuer_did, credential_cid) pair already has one — see
+// revocationSupersedes. `INSERT OR IGNORE` alone would make the boundary depend on
+// which of two distinct revocations for the same credential arrived first.
+//
+// The comparison happens in Go (not as an ON CONFLICT expression) so both stores
+// share one implementation of the rule, including the legacy-NULL-column fallback
+// and the CID tiebreak. Writes here are serialized through the single writer
+// connection, so the read-compare-write is not racing another writer.
 func (s *SQLiteStore) AddRevocation(revocation StoredRevocation) error {
-	_, err := s.writerDB().Exec(
-		"INSERT OR IGNORE INTO revocations (cid, issuer_did, credential_cid, jws_token) VALUES (?, ?, ?, ?)",
-		revocation.CID, revocation.IssuerDID, revocation.CredentialCID, revocation.JWSToken,
+	w := s.writerDB()
+
+	var existing StoredRevocation
+	var existingCreatedAt sql.NullString
+	err := s.readerDB().QueryRow(
+		"SELECT cid, jws_token, created_at FROM revocations WHERE issuer_did = ? AND credential_cid = ? LIMIT 1",
+		revocation.IssuerDID, revocation.CredentialCID,
+	).Scan(&existing.CID, &existing.JWSToken, &existingCreatedAt)
+	switch {
+	case err == sql.ErrNoRows:
+		_, err = w.Exec(
+			"INSERT OR IGNORE INTO revocations (cid, issuer_did, credential_cid, jws_token, created_at) VALUES (?, ?, ?, ?, ?)",
+			revocation.CID, revocation.IssuerDID, revocation.CredentialCID, revocation.JWSToken, revocation.CreatedAt,
+		)
+		return err
+	case err != nil:
+		return err
+	}
+
+	existing.CreatedAt = existingCreatedAt.String
+	if !revocationSupersedes(revocation, existing) {
+		return nil
+	}
+
+	// Replace the row wholesale rather than UPDATE-ing cid in place: cid is the
+	// PRIMARY KEY, and delete-then-insert keeps the artifact, its boundary, and the
+	// key consistent in one step.
+	if _, err := w.Exec(
+		"DELETE FROM revocations WHERE issuer_did = ? AND credential_cid = ?",
+		revocation.IssuerDID, revocation.CredentialCID,
+	); err != nil {
+		return err
+	}
+	_, err = w.Exec(
+		"INSERT INTO revocations (cid, issuer_did, credential_cid, jws_token, created_at) VALUES (?, ?, ?, ?, ?)",
+		revocation.CID, revocation.IssuerDID, revocation.CredentialCID, revocation.JWSToken, revocation.CreatedAt,
 	)
 	return err
 }
 
-func (s *SQLiteStore) IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error) {
-	var exists int
+func (s *SQLiteStore) IsCredentialRevoked(issuerDID string, credentialCID string, asOfUnix int64) (bool, error) {
+	// The (issuer_did, credential_cid) unique index makes this at most one row, so
+	// selecting the boundary columns and comparing in Go is as cheap as the old
+	// SELECT 1 and keeps the as-of rule in one place across both stores.
+	var createdAt sql.NullString
+	var jwsToken string
 	err := s.readerDB().QueryRow(
-		"SELECT 1 FROM revocations WHERE issuer_did = ? AND credential_cid = ? LIMIT 1",
+		"SELECT created_at, jws_token FROM revocations WHERE issuer_did = ? AND credential_cid = ? LIMIT 1",
 		issuerDID, credentialCID,
-	).Scan(&exists)
+	).Scan(&createdAt, &jwsToken)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return true, nil
+	// asOfUnix <= 0 is the timeless (freshness) question — see the Store contract.
+	if asOfUnix <= 0 {
+		return true, nil
+	}
+	revokedAt, ok := revocationCreatedAtUnix(storedRevocationCreatedAt(createdAt.String, jwsToken))
+	return !ok || revokedAt <= asOfUnix, nil
 }
 
 func (s *SQLiteStore) GetRevocationForCredential(credentialCID string) (*StoredRevocation, error) {
 	// deterministic across stores/twins: smallest issuerDID wins on a
 	// (theoretical) multi-issuer collision
 	var rev StoredRevocation
+	var createdAt sql.NullString
 	err := s.readerDB().QueryRow(
-		"SELECT cid, issuer_did, credential_cid, jws_token FROM revocations WHERE credential_cid = ? ORDER BY issuer_did ASC LIMIT 1",
+		"SELECT cid, issuer_did, credential_cid, jws_token, created_at FROM revocations WHERE credential_cid = ? ORDER BY issuer_did ASC LIMIT 1",
 		credentialCID,
-	).Scan(&rev.CID, &rev.IssuerDID, &rev.CredentialCID, &rev.JWSToken)
+	).Scan(&rev.CID, &rev.IssuerDID, &rev.CredentialCID, &rev.JWSToken, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	rev.CreatedAt = storedRevocationCreatedAt(createdAt.String, rev.JWSToken)
 	return &rev, nil
 }
 
 func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
 	rows, err := s.readerDB().Query(
-		"SELECT cid, issuer_did, credential_cid, jws_token FROM revocations WHERE issuer_did = ?",
+		"SELECT cid, issuer_did, credential_cid, jws_token, created_at FROM revocations WHERE issuer_did = ?",
 		issuerDID,
 	)
 	if err != nil {
@@ -1435,40 +1511,26 @@ func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocati
 	revs := []StoredRevocation{}
 	for rows.Next() {
 		var rev StoredRevocation
-		if err := rows.Scan(&rev.CID, &rev.IssuerDID, &rev.CredentialCID, &rev.JWSToken); err != nil {
+		var createdAt sql.NullString
+		if err := rows.Scan(&rev.CID, &rev.IssuerDID, &rev.CredentialCID, &rev.JWSToken, &createdAt); err != nil {
 			return nil, err
 		}
+		rev.CreatedAt = storedRevocationCreatedAt(createdAt.String, rev.JWSToken)
 		revs = append(revs, rev)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	type revocationWithCreatedAt struct {
-		revocation StoredRevocation
-		createdAt  string
-	}
-	decorated := make([]revocationWithCreatedAt, 0, len(revs))
-	for _, rev := range revs {
-		createdAt := ""
-		if _, payload, err := dfos.DecodeJWSUnsafe(rev.JWSToken); err == nil {
-			if value, ok := payload["createdAt"].(string); ok {
-				createdAt = value
-			}
+	// Sorts on the persisted CreatedAt (resolved above) — same frozen v1 feed
+	// order as before, without a second unverified decode per row.
+	sort.Slice(revs, func(i, j int) bool {
+		if revs[i].CreatedAt != revs[j].CreatedAt {
+			return revs[i].CreatedAt < revs[j].CreatedAt
 		}
-		decorated = append(decorated, revocationWithCreatedAt{revocation: rev, createdAt: createdAt})
-	}
-	sort.Slice(decorated, func(i, j int) bool {
-		if decorated[i].createdAt != decorated[j].createdAt {
-			return decorated[i].createdAt < decorated[j].createdAt
-		}
-		return decorated[i].revocation.CredentialCID < decorated[j].revocation.CredentialCID
+		return revs[i].CredentialCID < revs[j].CredentialCID
 	})
-	result := make([]StoredRevocation, 0, len(decorated))
-	for _, rev := range decorated {
-		result = append(result, rev.revocation)
-	}
-	return result, nil
+	return revs, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,11 @@
 */
 
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
-import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protocol/chain';
+import {
+  parseProtocolTimestampUnix,
+  verifyContentChain,
+  verifyIdentityChain,
+} from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
   IndexContentRow,
@@ -80,6 +84,51 @@ const timestampOfOrder = (
 
 /** Serialize a BlobKey to a string for map indexing */
 const blobKeyString = (key: BlobKey): string => `${key.creatorDID}::${key.documentCID}`;
+
+/**
+ * A revocation's signed `createdAt` as integer unix seconds — the as-of boundary.
+ *
+ * Parsed through the protocol's canonical grammar, NOT a lenient `new Date()`: a
+ * lenient parse accepts inputs the protocol rejects (numeric offsets, a missing
+ * `Z` that some runtimes then read as LOCAL time), which would make the boundary
+ * timezone-dependent. Returns null when the stored timestamp is missing or
+ * off-grammar, which callers MUST read as "no usable boundary" and answer
+ * timelessly (i.e. revoked) — failing open would let a malformed row silently
+ * un-revoke history. MUST match the Go twin (`revocationCreatedAtUnix`).
+ */
+const revocationCreatedAtUnix = (revocation: StoredRevocation): number | null =>
+  parseProtocolTimestampUnix(revocation.createdAt);
+
+/**
+ * Should `candidate` replace `incumbent` as the stored revocation for a
+ * (issuerDID, credentialCID) pair?
+ *
+ * **The earliest boundary wins.** Nothing stops an issuer from signing two
+ * distinct revocations for the same credential — they have different artifact
+ * CIDs, so ingest idempotence (keyed on the artifact) admits both. Under as-of
+ * semantics the stored one sets the validity boundary for all of history, so
+ * last-write-wins would make that boundary depend on gossip arrival order, and a
+ * later re-revocation could retroactively RE-VALIDATE operations an earlier
+ * revocation had already invalidated. Keeping the minimum is monotonic: a
+ * revocation's reach can only ever grow.
+ *
+ * A null (off-grammar) boundary is the STRONGEST — it means "timeless", so it
+ * sorts before every real instant. Ties break on the artifact CID so the survivor
+ * is a pure function of the set rather than of arrival order (the same
+ * determinism rule `getRevocationForCredential` uses for multi-issuer
+ * collisions). MUST match the Go twin (`revocationSupersedes`).
+ */
+const revocationSupersedes = (
+  candidate: StoredRevocation,
+  incumbent: StoredRevocation,
+): boolean => {
+  const candidateAt = revocationCreatedAtUnix(candidate);
+  const incumbentAt = revocationCreatedAtUnix(incumbent);
+  if (candidateAt === null) return incumbentAt !== null || candidate.cid < incumbent.cid;
+  if (incumbentAt === null) return false;
+  if (candidateAt !== incumbentAt) return candidateAt < incumbentAt;
+  return candidate.cid < incumbent.cid;
+};
 
 /**
  * In-memory relay store — all data lives in Maps, lost on restart
@@ -180,11 +229,27 @@ export class MemoryRelayStore implements RelayStore {
 
   async addRevocation(revocation: StoredRevocation): Promise<void> {
     const key = `${revocation.issuerDID}::${revocation.credentialCID}`;
+    // earliest boundary wins — see revocationSupersedes. The survivor is kept
+    // WHOLE (artifact + boundary together), so the revocation this store serves
+    // from /revocations/v1 is always the one that actually sets the boundary.
+    const existing = this.revocations.get(key);
+    if (existing && !revocationSupersedes(revocation, existing)) return;
     this.revocations.set(key, revocation);
   }
 
-  async isCredentialRevoked(issuerDID: string, credentialCID: string): Promise<boolean> {
-    return this.revocations.has(`${issuerDID}::${credentialCID}`);
+  async isCredentialRevoked(
+    issuerDID: string,
+    credentialCID: string,
+    asOfUnix?: number,
+  ): Promise<boolean> {
+    const rev = this.revocations.get(`${issuerDID}::${credentialCID}`);
+    if (!rev) return false;
+    // asOf omitted OR <= 0 is the timeless (freshness) question — see the
+    // RelayStore contract. Go cannot express "as of epoch 0" (0 is its sentinel),
+    // so TS must not either, or the twins would answer that input oppositely.
+    if (asOfUnix === undefined || asOfUnix <= 0) return true;
+    const revokedAt = revocationCreatedAtUnix(rev);
+    return revokedAt === null || revokedAt <= asOfUnix;
   }
 
   async getRevocationForCredential(credentialCID: string): Promise<StoredRevocation | undefined> {
@@ -199,21 +264,15 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]> {
-    const revs: { revocation: StoredRevocation; createdAt: string }[] = [];
-    for (const rev of this.revocations.values()) {
-      if (rev.issuerDID !== issuerDID) continue;
-      const createdAt = decodeJwsUnsafe(rev.jwsToken)?.payload?.createdAt;
-      revs.push({
-        revocation: rev,
-        createdAt: typeof createdAt === 'string' ? createdAt : '',
-      });
-    }
+    // Sorts on the PERSISTED createdAt (verified at ingest) rather than
+    // re-decoding each jwsToken unverified — same frozen v1 feed order, one less
+    // place that parses a token it did not check.
+    const revs = [...this.revocations.values()].filter((rev) => rev.issuerDID === issuerDID);
     revs.sort((a, b) => {
       if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
-      if (a.revocation.credentialCID === b.revocation.credentialCID) return 0;
-      return a.revocation.credentialCID < b.revocation.credentialCID ? -1 : 1;
+      return ascending(a.credentialCID, b.credentialCID);
     });
-    return revs.map((entry) => entry.revocation);
+    return revs;
   }
 
   // --- index (v0) materialized projection ---
@@ -555,11 +614,20 @@ export class MemoryRelayStore implements RelayStore {
       const chain2 = await this.getIdentityChain(did);
       return chain2?.state;
     };
+    // Historical replay is a VALIDITY decision, so authorization is enforced and
+    // revocation is evaluated AS OF each op's own createdAt: a credential revoked
+    // after an op was signed leaves that op — and therefore the fork state
+    // derived from it — valid. Without the as-of basis this replay would start
+    // failing the moment any credential in the chain's history was revoked, which
+    // would make a legitimate fork extension unverifiable. Mirrors the Go twins
+    // (store_memory.go / store_sqlite.go GetContentStateAtCID).
     const content = await verifyContentChain({
       log: path,
       resolveKey,
       enforceAuthorization: true,
       resolveIdentity,
+      isRevoked: (issuerDID, credentialCID, asOfUnix) =>
+        this.isCredentialRevoked(issuerDID, credentialCID, asOfUnix),
     });
 
     const targetDecoded = decodeJwsUnsafe(opsByCID.get(cid)!.jws);

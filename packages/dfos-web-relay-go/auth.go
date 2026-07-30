@@ -186,8 +186,8 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 		return err
 	}
 
-	// check leaf revocation
-	revoked, _ := store.IsCredentialRevoked(verified.Iss, verified.CID)
+	// check leaf revocation — timeless (asOf 0), the live read-path question
+	revoked, _ := store.IsCredentialRevoked(verified.Iss, verified.CID, 0)
 	if revoked {
 		return fmt.Errorf("credential is revoked")
 	}
@@ -224,15 +224,20 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 	if err != nil {
 		return fmt.Errorf("credential prf invalid: %v", err)
 	}
-	isRevoked := func(issuerDID, credentialCID string) (bool, error) {
-		revoked, _ := store.IsCredentialRevoked(issuerDID, credentialCID)
+	// asOf = 0 (timeless) at every hop: a read is a live, ephemeral decision that
+	// never enters the replicated log, so it asks the FRESHNESS question — "is this
+	// credential revoked as far as we know right now?" — exactly as before. The
+	// as-of basis belongs to verification of committed history, not to read-path
+	// authorization.
+	isRevoked := func(issuerDID, credentialCID string, _ int64) (bool, error) {
+		revoked, _ := store.IsCredentialRevoked(issuerDID, credentialCID, 0)
 		return revoked, nil
 	}
 	isDeleted := func(did string) (bool, error) {
 		idc, _ := store.GetIdentityChain(did)
 		return idc != nil && idc.State.IsDeleted, nil
 	}
-	if err := dfos.VerifyDelegationChain(credJws, verified, att, prf, resolveKey, creatorDID, isRevoked, isDeleted); err != nil {
+	if err := dfos.VerifyDelegationChain(credJws, verified, att, prf, resolveKey, creatorDID, isRevoked, isDeleted, 0); err != nil {
 		return err
 	}
 

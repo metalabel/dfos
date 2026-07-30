@@ -622,7 +622,18 @@ const ingestContentOp = async (
   // Thread revocation onto the WRITE path so revoked credentials (leaf AND
   // parents) no longer authorize writes. The read path already does this
   // (auth.ts); this closes the write-path gap.
-  const isRevoked = (issuerDID: string, credentialCID: string) =>
+  //
+  // ACCEPTANCE IS A FRESHNESS DECISION. The protocol verifier offers an as-of
+  // basis (the op's own createdAt) because verifying committed history is a
+  // validity decision — but admitting a NEW operation is not that question. This
+  // closure therefore DELIBERATELY IGNORES `asOfUnix` and answers from the
+  // relay's current knowledge: a relay must never accept a new op authorized by a
+  // credential it already knows to be revoked, no matter how the op is dated.
+  // (Answering "revoked as of now" instead would be subtly weaker — it would
+  // admit an op under a revocation whose own createdAt is in the future. Current
+  // knowledge is strictly stronger and byte-identical to the pre-as-of behavior,
+  // so ingest verdicts do not change.) Mirrors the Go twin (ingest.go).
+  const isRevoked = (issuerDID: string, credentialCID: string, _asOfUnix?: number) =>
     store.isCredentialRevoked(issuerDID, credentialCID);
   const opType = (payload as Record<string, unknown>)['type'];
   const isGenesis = opType === 'create';
@@ -746,8 +757,29 @@ const ingestContentOp = async (
     };
   }
 
-  // load state at fork point and verify extension against it
-  const forkState = await store.getContentStateAtCID(chain.contentId, previousCID);
+  // Load state at fork point and verify extension against it.
+  //
+  // The replay can THROW, not just return null: it re-verifies the historical
+  // operations, so a dependency the relay has not ingested yet (an identity chain
+  // whose keys the fork point's signer needs) surfaces as an exception. Left
+  // unhandled it escapes to the batch-level catch in ingestOperations, which
+  // produces a rejection WITHOUT `dependencyMissing` — and the sequencer treats
+  // that as permanent and DELETES the raw op, so an op that would have verified
+  // once its dependency arrived is lost for good. Classify it the same way the
+  // null case is classified (and the same way the Go twin classifies it):
+  // retryable, keep the raw op.
+  let forkState: Awaited<ReturnType<typeof store.getContentStateAtCID>>;
+  try {
+    forkState = await store.getContentStateAtCID(chain.contentId, previousCID);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown error';
+    return {
+      cid,
+      status: 'rejected',
+      error: `${FORK_POINT_STATE_ERROR_PREFIX}${previousCID}: ${message}`,
+      dependencyMissing: true,
+    };
+  }
   if (!forkState) {
     return {
       cid,
@@ -987,12 +1019,14 @@ const ingestRevocation = async (
   const revokedCredential = await store.getPublicCredentialByCID(verified.credentialCID);
   const revokedGrant = revokedCredential ? contentIdsFromCredential(revokedCredential) : undefined;
 
-  // add to revocation set
+  // add to revocation set — carrying the VERIFIED createdAt, which is the as-of
+  // boundary every later validity check compares against
   await store.addRevocation({
     cid,
     issuerDID: did,
     credentialCID: verified.credentialCID,
     jwsToken,
+    createdAt: verified.createdAt,
   });
 
   // if the revoked credential was a stored public credential, remove it

@@ -220,6 +220,13 @@ export interface StoredRevocation {
   issuerDID: string;
   credentialCID: string;
   jwsToken: string;
+  /**
+   * The revocation's own signed `createdAt` (ISO 8601), taken from the VERIFIED
+   * payload at ingest — never re-decoded unverified. Persisting it is what makes
+   * as-of revocation answerable: it is the boundary that separates operations a
+   * revocation reaches (signed before it) from operations it does not.
+   */
+  createdAt: string;
 }
 
 export interface StoredPublicCredential {
@@ -326,8 +333,36 @@ export interface RelayStore {
   getRevocations(issuerDID: string): Promise<string[]>;
   /** Add a revocation to the revocation set */
   addRevocation(revocation: StoredRevocation): Promise<void>;
-  /** Check if a specific credential CID has been revoked by a specific issuer */
-  isCredentialRevoked(issuerDID: string, credentialCID: string): Promise<boolean>;
+  /**
+   * Check if a specific credential CID has been revoked by a specific issuer.
+   *
+   * With `asOfUnix` omitted **or `<= 0`** this is the FRESHNESS answer — "revoked
+   * as far as this relay knows right now" — which is what acceptance gates
+   * (ingest, live read-path authorization) ask. With a positive `asOfUnix` it is
+   * the VALIDITY answer: true only if the revocation's own signed `createdAt` is at
+   * or before `asOfUnix`, which is what verifying already-committed history asks.
+   * See CREDENTIALS.md "Revocation Scope".
+   *
+   * `<= 0` is timeless because the Go twin uses `0` as its in-band sentinel and
+   * cannot express "as of epoch 0"; treating a non-positive instant as timeless in
+   * both keeps the twins from answering that degenerate input oppositely. The
+   * practical effect is that an operation dated at or before 1970 gets the
+   * stricter (timeless) answer everywhere.
+   *
+   * **Implementors: accept and honor the third parameter.** JS/TS arity is
+   * permissive, so a two-parameter implementation still satisfies this type — and
+   * silently degrades every as-of query to the timeless answer. That direction is
+   * safe (it over-rejects rather than over-admits) but it reintroduces exactly the
+   * retroactive-invalidation behavior the parameter exists to fix: history that was
+   * valid when it was signed starts failing verification as soon as any credential
+   * in it is revoked. A store that genuinely cannot answer the as-of question
+   * should document that rather than quietly ignore the argument.
+   */
+  isCredentialRevoked(
+    issuerDID: string,
+    credentialCID: string,
+    asOfUnix?: number,
+  ): Promise<boolean>;
   /**
    * Get the stored revocation for a credential CID, any issuer. Serves the
    * `/revocations/v1/credential/:credentialCID` status route. If more than one

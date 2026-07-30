@@ -54,6 +54,37 @@ export interface VerifiedDelegationChain {
   rootDID: string;
 }
 
+/**
+ * Check whether a credential (leaf or any parent) has been revoked.
+ *
+ * `asOfUnix` selects WHICH question is being asked, and the two are different
+ * decisions: **acceptance is a freshness decision; verification of committed
+ * history is a validity decision.**
+ *
+ * - **Omitted, or `<= 0` (timeless)** — "is this credential revoked as far as you
+ *   know right now?". The freshness question. Used by acceptance gates: relay
+ *   ingest (do not admit a NEW operation authorized by a credential we already
+ *   know to be revoked) and live read-path authorization. Non-positive instants
+ *   are timeless because the Go twin uses `0` as its in-band sentinel and cannot
+ *   express "as of epoch 0"; the degenerate case (an operation dated at or before
+ *   1970) therefore gets the stricter answer in both languages.
+ * - **Positive (as-of)** — "was this credential already revoked at `asOfUnix`?".
+ *   The validity question. Return true only if a revocation exists AND its
+ *   signed `createdAt` is ≤ `asOfUnix`. Used when verifying operations already
+ *   committed to a chain, where `asOfUnix` is the operation's own `createdAt`.
+ *   A revocation signed AFTER an operation does not invalidate it — see
+ *   CREDENTIALS.md "Revocation Scope".
+ *
+ * An implementation that ignores `asOfUnix` degrades to the timeless answer,
+ * which is always the stricter (safe) direction — it can only reject history
+ * that as-of semantics would accept.
+ */
+export type RevocationChecker = (
+  issuerDID: string,
+  credentialCID: string,
+  asOfUnix?: number,
+) => Promise<boolean>;
+
 // -----------------------------------------------------------------------------
 // key resolution helper
 // -----------------------------------------------------------------------------
@@ -268,7 +299,15 @@ export const verifyDelegationChain = async (
     /** Current time in seconds (defaults to Date.now() / 1000) */
     now?: number;
     /** Check if a credential has been revoked (checked at every level of the chain) */
-    isRevoked?: (issuerDID: string, credentialCID: string) => Promise<boolean>;
+    isRevoked?: RevocationChecker;
+    /**
+     * As-of basis for the revocation check, unix seconds. Kept SEPARATE from
+     * `now` (the expiry basis) on purpose: expiry and revocation are two
+     * different decisions, and a caller evaluating expiry against a deterministic
+     * basis does not automatically want history-relative revocation. Omitted =
+     * timeless revocation (current knowledge). See `RevocationChecker`.
+     */
+    asOfUnix?: number;
   },
 ): Promise<VerifiedDelegationChain> => {
   const chain: VerifiedDFOSCredential[] = [credential];
@@ -305,9 +344,12 @@ export const verifyDelegationChain = async (
       ...(options.now !== undefined ? { now: options.now } : {}),
     });
 
-    // check revocation at every level of the chain
+    // check revocation at every level of the chain, on the SAME as-of basis as
+    // the leaf (a parent revoked after the operation was signed must not
+    // retroactively invalidate it either — the whole chain is evaluated at one
+    // point in time). MUST stay in sync with the Go twin (delegation.go).
     if (options.isRevoked) {
-      const revoked = await options.isRevoked(parent.iss, parent.credentialCID);
+      const revoked = await options.isRevoked(parent.iss, parent.credentialCID, options.asOfUnix);
       if (revoked) {
         throw new CredentialVerificationError('parent credential in delegation chain is revoked');
       }

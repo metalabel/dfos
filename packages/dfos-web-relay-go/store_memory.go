@@ -613,8 +613,31 @@ func (s *MemoryStore) GetContentStateAtCID(contentID, cid string) (*ContentState
 		currentCID = op.previousCID
 	}
 
+	// Historical replay is a VALIDITY decision, so authorization is enforced and
+	// revocation is evaluated AS OF each op's own createdAt: a credential revoked
+	// after an op was signed leaves that op — and therefore the fork state derived
+	// from it — valid. Without the as-of basis this replay would start failing the
+	// moment any credential in the chain's history was revoked, which would make a
+	// legitimate fork extension unverifiable. Mirrors the TS twin (store.ts
+	// getContentStateAtCID).
+	// Identity deletion, unlike revocation, IS retroactive and has no as-of basis
+	// (CREDENTIALS.md "Identity Deletion Is Absolute"), so the deleted-issuer gate
+	// is threaded unconditionally. The TS twin gets this for free — its
+	// verifyDFOSCredential rejects a deleted issuer via resolveIdentity — while Go
+	// takes it as an explicit option, so omitting it here would let a deleted
+	// issuer's credentials keep authorizing committed history on Go only.
 	resolveKey := CreateKeyResolver(s)
-	result, err := dfos.VerifyContentChain(path, resolveKey, true)
+	isRevoked := dfos.WithRevocationChecker(func(issuerDID, credentialCID string, asOfUnix int64) (bool, error) {
+		return s.IsCredentialRevoked(issuerDID, credentialCID, asOfUnix)
+	})
+	isDeleted := dfos.WithIdentityDeletedChecker(func(did string) (bool, error) {
+		identity, err := s.GetIdentityChain(did)
+		if err != nil {
+			return false, err
+		}
+		return identity != nil && identity.State.IsDeleted, nil
+	})
+	result, err := dfos.VerifyContentChain(path, resolveKey, true, isRevoked, isDeleted)
 	if err != nil {
 		return nil, err
 	}
@@ -719,16 +742,30 @@ func (s *MemoryStore) AddRevocation(revocation StoredRevocation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := revocation.IssuerDID + "::" + revocation.CredentialCID
+	// earliest boundary wins — see revocationSupersedes. The survivor is kept
+	// WHOLE (artifact + boundary together), so the revocation this store serves
+	// from /revocations/v1 is always the one that actually sets the boundary.
+	if existing, ok := s.revocations[key]; ok && !revocationSupersedes(revocation, existing) {
+		return nil
+	}
 	s.revocations[key] = revocation
 	return nil
 }
 
-func (s *MemoryStore) IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error) {
+func (s *MemoryStore) IsCredentialRevoked(issuerDID string, credentialCID string, asOfUnix int64) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key := issuerDID + "::" + credentialCID
-	_, ok := s.revocations[key]
-	return ok, nil
+	rev, ok := s.revocations[key]
+	if !ok {
+		return false, nil
+	}
+	// asOfUnix <= 0 is the timeless (freshness) question — see the Store contract.
+	if asOfUnix <= 0 {
+		return true, nil
+	}
+	revokedAt, ok := revocationCreatedAtUnix(storedRevocationCreatedAt(rev.CreatedAt, rev.JWSToken))
+	return !ok || revokedAt <= asOfUnix, nil
 }
 
 func (s *MemoryStore) GetRevocationForCredential(credentialCID string) (*StoredRevocation, error) {
@@ -752,34 +789,23 @@ func (s *MemoryStore) GetRevocationForCredential(credentialCID string) (*StoredR
 func (s *MemoryStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	type revocationWithCreatedAt struct {
-		revocation StoredRevocation
-		createdAt  string
-	}
-	revs := []revocationWithCreatedAt{}
+	// Sorts on the PERSISTED CreatedAt (verified at ingest) rather than re-decoding
+	// each token unverified — same frozen v1 feed order, one less place that parses
+	// a token it did not check.
+	revs := []StoredRevocation{}
 	for _, rev := range s.revocations {
 		if rev.IssuerDID != issuerDID {
 			continue
 		}
-		createdAt := ""
-		if _, payload, err := dfos.DecodeJWSUnsafe(rev.JWSToken); err == nil {
-			if value, ok := payload["createdAt"].(string); ok {
-				createdAt = value
-			}
-		}
-		revs = append(revs, revocationWithCreatedAt{revocation: rev, createdAt: createdAt})
+		revs = append(revs, rev)
 	}
 	sort.Slice(revs, func(i, j int) bool {
-		if revs[i].createdAt != revs[j].createdAt {
-			return revs[i].createdAt < revs[j].createdAt
+		if revs[i].CreatedAt != revs[j].CreatedAt {
+			return revs[i].CreatedAt < revs[j].CreatedAt
 		}
-		return revs[i].revocation.CredentialCID < revs[j].revocation.CredentialCID
+		return revs[i].CredentialCID < revs[j].CredentialCID
 	})
-	result := make([]StoredRevocation, 0, len(revs))
-	for _, rev := range revs {
-		result = append(result, rev.revocation)
-	}
-	return result, nil
+	return revs, nil
 }
 
 // ---------------------------------------------------------------------------

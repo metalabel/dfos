@@ -63,7 +63,30 @@ type KeyResolver func(kid string) (ed25519.PublicKey, error)
 // RevocationChecker reports whether a credential (by issuer DID + credential
 // CID) has been revoked. Threaded onto the content WRITE path so revoked
 // credentials — leaf AND parents — no longer authorize writes.
-type RevocationChecker func(issuerDID, credentialCID string) (bool, error)
+//
+// asOfUnix selects WHICH question is being asked, and the two are different
+// decisions: acceptance is a freshness decision; verification of committed
+// history is a validity decision.
+//
+//   - asOfUnix <= 0 (timeless) — "is this credential revoked as far as you know
+//     right now?". The freshness question, used by acceptance gates: relay
+//     ingest (do not admit a NEW operation authorized by a credential we
+//     already know to be revoked) and live read-path authorization. 0 is the
+//     in-band sentinel, so "as of epoch 0" is not expressible; the whole
+//     non-positive range is timeless in the TS twin too, which keeps the two
+//     from answering that degenerate input oppositely (an operation dated at or
+//     before 1970 gets the stricter answer in both).
+//   - asOfUnix > 0 (as-of) — "was this credential already revoked at asOfUnix?".
+//     The validity question. Report true only if a revocation exists AND its
+//     signed createdAt is <= asOfUnix. Used when verifying operations already
+//     committed to a chain, where asOfUnix is the operation's own createdAt. A
+//     revocation signed AFTER an operation does not invalidate it — see
+//     CREDENTIALS.md "Revocation Scope".
+//
+// An implementation that ignores asOfUnix degrades to the timeless answer, which
+// is always the stricter (safe) direction. MUST stay in sync with the TS twin
+// (dfos-credential.ts RevocationChecker).
+type RevocationChecker func(issuerDID, credentialCID string, asOfUnix int64) (bool, error)
 
 // IdentityDeletedChecker reports whether an identity (by DID) has been deleted.
 // Threaded onto the content WRITE path so credentials issued by a deleted
@@ -652,8 +675,14 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 
 	// explicit LEAF-revocation check on the write path. verifyDelegationChain
 	// covers PARENTS only — without this a revoked leaf still authorizes writes.
+	//
+	// asOf = opTimeUnix, the operation's own createdAt and the SAME deterministic
+	// basis already used for expiry above. A revocation signed after this
+	// operation leaves it valid on every future verification of the chain; only a
+	// revocation that predates it invalidates it. MUST stay in sync with the TS
+	// twin (content-chain.ts verifyOperationAuthorization).
 	if opts.isRevoked != nil {
-		revoked, err := opts.isRevoked(vc.Iss, vc.CID)
+		revoked, err := opts.isRevoked(vc.Iss, vc.CID, opTimeUnix)
 		if err != nil {
 			return fmt.Errorf("revocation check failed: %w", err)
 		}
@@ -675,7 +704,7 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	if err != nil {
 		return fmt.Errorf("credential prf invalid: %v", err)
 	}
-	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, opts.isRevoked, opts.isDeleted, 0); err != nil {
+	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, opts.isRevoked, opts.isDeleted, opTimeUnix, 0); err != nil {
 		return err
 	}
 

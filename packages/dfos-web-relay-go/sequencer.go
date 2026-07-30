@@ -75,6 +75,21 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 				sequencedCIDs = append(sequencedCIDs, rawCID)
 				progress = true
 			case res.Status == "rejected" && isPermanentRejection(res):
+				// The one durable trace of the drop: MarkOpRejected DELETES the row,
+				// and the reason was previously passed only to be discarded. Log
+				// before the delete so a relay refusing everything it is handed can
+				// be diagnosed. Observability only — deletion semantics unchanged.
+				//
+				// The event string and both field names match the TS twin's structured
+				// line (sequencer.ts logOpRejected) so one query shape works across
+				// implementations.
+				//
+				// One line per rejected op on an unauthenticated ingest endpoint is a
+				// considered tradeoff: a flood of junk ops does amplify into logs, but
+				// each such op already cost signature verification and store reads, so
+				// the marginal write is small next to the work it reports — and a
+				// silent drop is the failure mode that actually goes undiagnosed.
+				r.logger.Warn("relay.op.rejected", "cid", rawCID, "reason", res.Error)
 				r.store.MarkOpRejected(rawCID, res.Error)
 				result.Rejected++
 				progress = true

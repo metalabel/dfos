@@ -125,11 +125,17 @@ type StoredOperation struct {
 }
 
 // StoredRevocation represents a revocation in the store.
+//
+// CreatedAt is the revocation's own signed createdAt (ISO 8601), taken from the
+// VERIFIED payload at ingest — never re-decoded unverified. Persisting it is what
+// makes as-of revocation answerable: it is the boundary that separates operations
+// a revocation reaches (signed before it) from operations it does not.
 type StoredRevocation struct {
 	CID           string `json:"cid"`
 	IssuerDID     string `json:"issuerDID"`
 	CredentialCID string `json:"credentialCID"`
 	JWSToken      string `json:"jwsToken"`
+	CreatedAt     string `json:"createdAt"`
 }
 
 // StoredCountersignature represents a countersignature indexed by target and witness.
@@ -286,9 +292,31 @@ type Store interface {
 	CountUnsequenced() (int, error)
 
 	// revocations
+
 	GetRevocations(issuerDID string) ([]string, error)
+	// AddRevocation stores a revocation for a (issuerDID, credentialCID) pair.
+	// When the pair already has one, implementations MUST keep whichever has the
+	// EARLIEST as-of boundary — an absent/unparseable boundary being the earliest
+	// of all — with the artifact CID as tiebreak. Otherwise the validity boundary
+	// for all of history would depend on gossip arrival order, and a later
+	// re-revocation of the same credential could retroactively RE-VALIDATE
+	// operations an earlier revocation had already invalidated. See
+	// revocationSupersedes.
 	AddRevocation(revocation StoredRevocation) error
-	IsCredentialRevoked(issuerDID string, credentialCID string) (bool, error)
+	// IsCredentialRevoked reports whether a credential CID has been revoked by a
+	// specific issuer.
+	//
+	// asOfUnix <= 0 is the FRESHNESS answer — "revoked as far as this relay knows
+	// right now" — which is what acceptance gates (ingest, live read-path
+	// authorization) ask. asOfUnix > 0 is the VALIDITY answer: true only if the
+	// revocation's own signed createdAt is at or before asOfUnix, which is what
+	// verifying already-committed history asks. See CREDENTIALS.md "Revocation
+	// Scope".
+	//
+	// 0 is the in-band timeless sentinel, so "as of epoch 0" is not expressible;
+	// the whole non-positive range is timeless in the TS twin too, so an operation
+	// dated at or before 1970 gets the stricter answer in both languages.
+	IsCredentialRevoked(issuerDID string, credentialCID string, asOfUnix int64) (bool, error)
 	// GetRevocationForCredential returns the stored revocation for a credential
 	// CID, any issuer (nil when unknown). Serves the revocation-status route. If
 	// more than one issuer has revoked the same CID, implementations MUST return

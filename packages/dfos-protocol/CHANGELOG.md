@@ -11,7 +11,42 @@ describes the protocol-package surface of that release.
 
 ## [Unreleased]
 
+### Changed
+
+- **As-of revocation — committed history stays valid.** `isRevoked` was a timeless
+  boolean threaded through chain verification, so revoking a credential
+  retroactively invalidated every operation it had ever authorized —
+  contradicting CREDENTIALS.md's own frozen "Revocation Scope" promise. The
+  callback now takes an as-of basis (TS `asOfUnix?: number`, Go
+  `asOfUnix int64`), and chain verification threads each operation's own
+  `createdAt` — the same deterministic clock already used for expiry — at the
+  leaf and at every delegation parent, in both the full fold and the
+  extension-from-trusted-state path. Omitted (or non-positive) keeps the timeless
+  answer, so acceptance gates are unchanged: relay ingest still refuses a new
+  operation authorized by a credential it currently knows to be revoked, however
+  that operation is dated. CREDENTIALS.md gains a normative "Acceptance vs
+  Validity" section (the as-of rule, its inclusive boundary, the backdating
+  bound, and why identity deletion stays absolute).
+
+  **`RevocationChecker` implementors must accept and honor the third argument.**
+  JS/TS arity is permissive, so a two-parameter checker still satisfies the type
+  and silently degrades every as-of query to the timeless answer. That direction
+  is safe (it over-rejects, never over-admits) but it reintroduces exactly the
+  retroactive invalidation this change fixes. The same applies to
+  `RelayStore.isCredentialRevoked`.
+
+  Relay stores additionally persist each revocation's signed `createdAt` (the
+  as-of boundary) and, when a credential has more than one revocation, keep the
+  one with the **earliest** boundary — otherwise the validity boundary would
+  depend on gossip arrival order.
+
 ### Added
+
+- **`parseProtocolTimestampUnix` (TS) / `ParseProtocolTimestamp` (Go)** — the
+  canonical operation-timestamp parse, exported so consumers of a signed
+  timestamp stop reaching for a lenient `new Date()` / `time.RFC3339` (both
+  accept inputs the protocol rejects, including forms some runtimes read as
+  local time).
 
 - **Index v0 iteration 2 — "actor, clock, name"** (#190, spec; implementation
   in TS + Go + conformance). The `/index/v0` contract gains its fence — _the
