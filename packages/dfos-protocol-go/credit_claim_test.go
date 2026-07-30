@@ -184,6 +184,34 @@ func TestCreditClaimCreatedAtOverrideIsDeterministic(t *testing.T) {
 	}
 }
 
+// createdAt is inside the signed payload, so it is part of the claim CID. An
+// override carrying real milliseconds through on one implementation but not the
+// other would fork claim identity, so BOTH signers truncate to whole seconds. The
+// assertion anchors on the cross-language parity CID: signing the parity payload's
+// fields with a .777 override MUST land on the same claim CID as the .000Z vector,
+// which is what "the override is normalized" means. The TS twin asserts the same
+// literal from the same override ("should normalize a createdAt override to whole
+// seconds").
+func TestCreditClaimCreatedAtOverrideIsNormalized(t *testing.T) {
+	claimant := makeClaimant("credit-claim-normalize")
+	at := time.Date(2026, 3, 7, 0, 0, 0, 777_000_000, time.UTC)
+
+	_, claimCID, err := SignCreditClaimWithOptions(
+		"did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+		"cv7n8vkvr64cctf3294h9k4eanhff8z",
+		"photography",
+		claimant.keyID,
+		claimant.priv,
+		CreditClaimOptions{CreatedAt: at},
+	)
+	if err != nil {
+		t.Fatalf("SignCreditClaimWithOptions: %v", err)
+	}
+	if claimCID != creditClaimParityCID {
+		t.Errorf("claim CID: got %q want %q — a createdAt override must be truncated to whole seconds", claimCID, creditClaimParityCID)
+	}
+}
+
 func TestCreditClaimAsOfDocumentCID(t *testing.T) {
 	claimant := makeClaimant("credit-claim-asof")
 	asOf := "bafyrei" + strings.Repeat("a", 52)

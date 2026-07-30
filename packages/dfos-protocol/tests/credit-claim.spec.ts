@@ -180,6 +180,44 @@ describe('credit claim', () => {
     expect(first.claimCID).toBe(second.claimCID);
   });
 
+  it('should normalize a createdAt override to whole seconds', async () => {
+    // `createdAt` is inside the signed payload, so it is part of the claim CID. An
+    // override carrying real milliseconds through on one implementation but not the
+    // other would fork claim identity, so BOTH signers truncate. The assertion
+    // anchors on the existing cross-language parity CID: signing the parity
+    // payload's fields with a `.777Z` override MUST land on the same claim CID as
+    // the `.000Z` vector, which is what "the override is normalized" means. The Go
+    // twin asserts the same literal from the same override
+    // (TestCreditClaimCreatedAtOverrideIsNormalized).
+    const claimant = makeIdentity();
+
+    const { claimCID } = await signCreditClaim({
+      contentId: 'cv7n8vkvr64cctf3294h9k4eanhff8z',
+      did: 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr',
+      role: 'photography',
+      createdAt: '2026-03-07T00:00:00.777Z',
+      signer: claimant.signer,
+      keyId: claimant.keyId,
+    });
+
+    expect(claimCID).toBe('bafyreih4ge62ips6u6ek3y6sg2a6xlwuciz5njqftcxfoytfius4lekohq');
+  });
+
+  it('should reject an unparseable createdAt override', async () => {
+    const claimant = makeIdentity();
+
+    await expect(
+      signCreditClaim({
+        contentId: makeContentId(),
+        did: claimant.did,
+        role: 'author',
+        createdAt: 'last thursday',
+        signer: claimant.signer,
+        keyId: claimant.keyId,
+      }),
+    ).rejects.toThrow('unparseable createdAt');
+  });
+
   it('should round-trip the optional asOfDocumentCID flavor', async () => {
     const claimant = makeIdentity();
     const asOfDocumentCID = 'bafyrei' + 'a'.repeat(52);
@@ -392,6 +430,43 @@ describe('credit claim', () => {
       verifyCreditClaim('not-a-jws', { resolveIdentity: resolverFor(claimant.identity) }),
       'invalid',
     );
+  });
+
+  it('should reject a decodable JWS with a malformed header as invalid', async () => {
+    // The protected header is JSON.parsed and CAST, so `kid` can be absent or a
+    // non-string on a token that decodes perfectly well. Reading it unguarded threw
+    // a raw TypeError, which the entry classifier then reported as `unverifiable` —
+    // "could not check" for a claim we did check and found malformed.
+    const claimant = makeIdentity();
+    const payload = basePayload(claimant, makeContentId());
+    const cid = (await dagCborCanonicalEncode(payload)).cid.toString();
+
+    const headers: Record<string, unknown>[] = [
+      { alg: 'EdDSA', typ: 'did:dfos:credit-claim', cid }, // kid absent
+      { alg: 'EdDSA', typ: 'did:dfos:credit-claim', kid: 42, cid },
+      { alg: 'EdDSA', typ: 'did:dfos:credit-claim', kid: null, cid },
+      { alg: 'EdDSA', kid: claimant.kid, cid }, // typ absent
+      { alg: 'EdDSA', typ: 7, kid: claimant.kid, cid },
+    ];
+
+    const b64 = (value: unknown) =>
+      Buffer.from(JSON.stringify(value), 'utf-8').toString('base64url');
+
+    for (const header of headers) {
+      const signingInput = `${b64(header)}.${b64(payload)}`;
+      const signature = Buffer.from(
+        await claimant.signer(new TextEncoder().encode(signingInput)),
+      ).toString('base64url');
+      const jwsToken = `${signingInput}.${signature}`;
+
+      // three parts and valid base64url — the failure is the header SHAPE, not the
+      // encoding, so this is not the malformed-JWS path above
+      expect(jwsToken.split('.')).toHaveLength(3);
+      await expectVerdict(
+        verifyCreditClaim(jwsToken, { resolveIdentity: resolverFor(claimant.identity) }),
+        'invalid',
+      );
+    }
   });
 
   it('should refuse to sign a claim bound to a non-contentId', async () => {

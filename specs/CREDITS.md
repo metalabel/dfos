@@ -83,6 +83,8 @@ Unknown top-level fields are preserved-and-ignored, per the protocol's MUST-igno
 
 **`createdAt` is not load-bearing.** Unlike an operation's `createdAt` (which orders chain history), a claim's timestamp orders nothing and gates nothing. It is provenance metadata — when the claimant signed. Verification never compares it against a clock, and a claim has **no expiry**.
 
+**Signers MUST normalize `createdAt` to whole seconds** — the millisecond component of a signed claim is always `000`, the canonical form this envelope family uses. This binds signers, not verifiers: a verifier accepts any conforming millisecond-precision timestamp (the grammar is what is normative), but a signer that emitted real milliseconds would produce different claim bytes, and therefore a different claim CID, for a statement another implementation encodes as `.000Z`. The rule applies to a caller-supplied timestamp exactly as it does to "now": an override is normalized, not passed through, so re-deriving a claim from the same inputs lands on the same CID on every implementation.
+
 ### CID Derivation
 
 Identical to every other protocol object:

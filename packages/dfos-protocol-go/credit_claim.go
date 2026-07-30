@@ -80,8 +80,14 @@ type CreditClaimOptions struct {
 	// accepting it would mint two claim CIDs for the same statement.
 	AsOfDocumentCID *string
 	// CreatedAt overrides the signing timestamp so a previously issued claim's
-	// exact bytes can be re-derived. The zero value means "now". Truncated to
-	// whole seconds either way, matching the TS twin.
+	// exact bytes can be re-derived. The zero value means "now".
+	//
+	// TRUNCATED to whole seconds either way — a sub-second component passed here is
+	// DISCARDED, not signed. createdAt lives inside the signed payload and is
+	// therefore part of the claim's CID, so an override whose milliseconds survived
+	// on one implementation but not the other would fork claim identity over a field
+	// nothing reads for ordering. The TS twin normalizes overrides identically
+	// (normalizeClaimCreatedAt); a shared parity vector pins the two together.
 	CreatedAt time.Time
 }
 
@@ -231,6 +237,13 @@ func verifyCreditClaimCore(jwsToken string, resolveKey KeyResolver, expectedCont
 		return nil, fmt.Errorf("%w: credit claim exceeds max size: %d > %d", ErrCreditClaimInvalid, len(jwsToken), maxCreditClaimSize)
 	}
 
+	// DecodeJWSUnsafe unmarshals the protected header into a typed struct, so a
+	// non-string typ/kid fails HERE (invalid) and a missing kid arrives as "" and is
+	// caught by the DID-URL check below (also invalid). Keep it that way: decoding
+	// the header into a map[string]any instead would let a malformed header reach
+	// the field reads and surface as an untyped fault, which the entry-level
+	// classifier would then report as unverifiable rather than invalid. The TS twin
+	// has to validate the header shape explicitly for exactly this reason.
 	header, payload, err := DecodeJWSUnsafe(jwsToken)
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to decode credit claim JWS", ErrCreditClaimInvalid)

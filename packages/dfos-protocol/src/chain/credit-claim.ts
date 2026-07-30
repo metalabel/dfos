@@ -152,6 +152,34 @@ const resolveKeyFromIdentity = (identity: VerifiedIdentity, kid: string): Uint8A
 // -----------------------------------------------------------------------------
 
 /**
+ * Normalize a claim `createdAt` to the canonical `.000Z` form
+ *
+ * A signed claim's `createdAt` is ALWAYS whole seconds with a zeroed millisecond
+ * component — the `signRevocation` convention this envelope family follows. The
+ * normalization applies to a caller-supplied override too, not just to `now`:
+ * `createdAt` is inside the signed payload, so it is part of the claim's bytes and
+ * therefore of its CID. Letting an override carry real milliseconds through would
+ * mean the same logical override produced different claim CIDs on this
+ * implementation and the Go twin (whose signer truncates), which is a
+ * cross-implementation identity fork over a field nothing reads for ordering.
+ *
+ * MUST match the Go reference (`SignCreditClaimWithOptions`, which truncates
+ * `CreatedAt` to whole seconds).
+ */
+const normalizeClaimCreatedAt = (createdAt?: string): string => {
+  if (createdAt === undefined) {
+    return new Date().toISOString().replace(/\d{3}Z$/, '000Z');
+  }
+  const ms = Date.parse(createdAt);
+  if (Number.isNaN(ms)) {
+    throw new Error(`invalid credit claim payload: unparseable createdAt: ${createdAt}`);
+  }
+  // floor, never round — a sub-second component is discarded, matching Go's
+  // Truncate(time.Second) for every timestamp this protocol carries
+  return new Date(Math.floor(ms / 1000) * 1000).toISOString();
+};
+
+/**
  * Sign a credit claim as a JWS
  *
  * The claim binds to the content chain's stable `contentId`, not to a document —
@@ -172,13 +200,17 @@ export const signCreditClaim = async (input: {
   role: string;
   /** Optional document state the claimant pins its credit to */
   asOfDocumentCID?: string;
-  /** ISO 8601 override; defaults to now with the millisecond component zeroed */
+  /**
+   * ISO 8601 override; defaults to now. NORMALIZED to whole seconds either way —
+   * a sub-second component you pass is discarded, not signed. See
+   * `normalizeClaimCreatedAt`.
+   */
   createdAt?: string;
   signer: Signer;
   keyId: string;
 }): Promise<{ jwsToken: string; claimCID: string }> => {
   const kid = `${input.did}#${input.keyId}`;
-  const now = input.createdAt ?? new Date().toISOString().replace(/\d{3}Z$/, '000Z');
+  const now = normalizeClaimCreatedAt(input.createdAt);
 
   // An empty-string flavor is a DIFFERENT signed encoding from an absent one (the
   // key is present, so the CID differs). Refuse it rather than minting a claim the
@@ -285,6 +317,19 @@ export const verifyCreditClaim = async (
 
   const decoded = decodeJwsUnsafe(jwsToken);
   if (!decoded) throw invalid('failed to decode credit claim JWS');
+
+  // Validate the header SHAPE before touching any field. decodeJwsUnsafe
+  // JSON.parses the protected header and CASTS it to JwsHeader — a compile-time
+  // assertion, not a runtime guarantee — so on a decodable-but-malformed token
+  // `kid` may be absent, null, or a number. Reading it unguarded raises a raw
+  // TypeError out of `kid.indexOf('#')`, which is not a CreditClaimVerifyError and
+  // so lands in verifyCreditEntry's catch-all as **unverifiable** — reporting a
+  // malformed claim as "could not check" when we did check and it is malformed.
+  // A bad header is invalid.
+  const rawHeader = decoded.header as unknown as Record<string, unknown>;
+  if (typeof rawHeader['typ'] !== 'string' || typeof rawHeader['kid'] !== 'string') {
+    throw invalid('credit claim header must carry a string typ and kid');
+  }
 
   // verify typ
   if (decoded.header.typ !== 'did:dfos:credit-claim') {
