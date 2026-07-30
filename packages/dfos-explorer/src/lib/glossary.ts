@@ -62,6 +62,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'A UCAN-style JWS capability (typ: did:dfos:credential): the issuer grants an audience a set of attenuations (resource + action), optionally rooted through a single parent in prf.',
   },
   {
+    key: 'creditClaim',
+    term: 'credit claim',
+    def: 'A claimant-signed document-plane JWS (typ: did:dfos:credit-claim) that binds its DID and byte-exact role to a content chain — independently agreeing with the document signer’s credit; attribution, not authorization.',
+  },
+  {
     key: 'attenuation',
     term: 'attenuation',
     def: 'One resource+action grant (e.g. chain:<id> / read); a delegated child’s attenuations must be a subset of its parent’s — scope only narrows down a delegation, never widens.',

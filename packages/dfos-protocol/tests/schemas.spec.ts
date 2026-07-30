@@ -16,6 +16,7 @@ const loadSchema = (name: string) => JSON.parse(readFileSync(resolve(schemasDir,
 const postSchema = loadSchema('post.v1.json');
 const profileSchema = loadSchema('profile.v1.json');
 const indexSchema = loadSchema('index.v1.json');
+const creditClaimSchema = loadSchema('credit-claim.v1.json');
 const ajv = new Ajv({ strict: true, allErrors: true });
 addFormats(ajv);
 
@@ -34,6 +35,10 @@ describe('schema compilation', () => {
 
   it('index.v1.json compiles', () => {
     expect(() => ajv.compile(indexSchema)).not.toThrow();
+  });
+
+  it('credit-claim.v1.json compiles', () => {
+    expect(() => ajv.compile(creditClaimSchema)).not.toThrow();
   });
 });
 
@@ -107,17 +112,56 @@ describe('post schema validation', () => {
     ).toBe(true);
   });
 
-  it('accepts ordered labeled credits', () => {
+  it('accepts ordered roled credits', () => {
     expect(
       validate({
         $schema: 'https://schemas.dfos.com/post/v1',
         format: 'short-post',
         credits: [
-          { did: 'did:dfos:abc123', label: 'author' },
-          { did: 'did:dfos:def456', label: 'editor' },
+          { did: 'did:dfos:abc123', role: 'author' },
+          { did: 'did:dfos:def456', role: 'editor' },
         ],
       }),
     ).toBe(true);
+  });
+
+  it('accepts a claimed credit', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        credits: [
+          {
+            did: 'did:dfos:abc123',
+            role: 'photography',
+            name: 'Alice',
+            claim: 'header.payload.signature',
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a claim without a role to bind to', () => {
+    // role is a component of the credit claim's bind — a claim with no role in
+    // the entry has nothing to bind to, so it is invalid rather than unclaimed
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        credits: [{ did: 'did:dfos:abc123', claim: 'header.payload.signature' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects the pre-amendment label field', () => {
+    expect(
+      validate({
+        $schema: 'https://schemas.dfos.com/post/v1',
+        format: 'short-post',
+        credits: [{ did: 'did:dfos:abc123', label: 'author' }],
+      }),
+    ).toBe(false);
   });
 
   it('accepts empty credits', () => {
@@ -188,7 +232,7 @@ describe('post schema validation', () => {
       validate({
         $schema: 'https://schemas.dfos.com/post/v1',
         format: 'short-post',
-        credits: [{ label: 'author' }],
+        credits: [{ role: 'author' }],
       }),
     ).toBe(false);
   });
@@ -552,5 +596,129 @@ describe('index schema validation', () => {
 
   it('rejects missing $schema', () => {
     expect(validate({ deltas: [] })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Credit claim schema
+// ---------------------------------------------------------------------------
+
+describe('credit claim schema validation', () => {
+  const validate = ajv.compile(creditClaimSchema);
+  const contentId = 'cv7n8vkvr64cctf3294h9k4eanhff8z';
+  const did = 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr';
+
+  const claim = (overrides: Record<string, unknown> = {}) => ({
+    version: 1,
+    type: 'credit-claim',
+    contentId,
+    did,
+    role: 'photography',
+    createdAt: '2026-03-07T00:00:00.000Z',
+    ...overrides,
+  });
+
+  it('accepts a minimal claim payload', () => {
+    expect(validate(claim())).toBe(true);
+  });
+
+  it('accepts the optional asOfDocumentCID flavor', () => {
+    expect(
+      validate(
+        claim({ asOfDocumentCID: 'bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne' }),
+      ),
+    ).toBe(true);
+  });
+
+  it('preserves unknown top-level fields (MUST-ignore-unknown wire payload)', () => {
+    // NOT additionalProperties:false — the CID commits to the exact bytes, so a
+    // verifier that stripped unknown keys would fail its own CID check
+    expect(validate(claim({ futureField: 'whatever' }))).toBe(true);
+  });
+
+  it('rejects a documentCID in place of the contentId binder', () => {
+    expect(
+      validate({
+        ...claim(),
+        contentId: 'bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne',
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects an empty role', () => {
+    expect(validate(claim({ role: '' }))).toBe(false);
+  });
+
+  it('rejects a did without the did: prefix', () => {
+    expect(validate(claim({ did: 'cnnnft9f8a2rn938d6nkz38r847v2kr' }))).toBe(false);
+  });
+
+  it('rejects the wrong type discriminator', () => {
+    expect(validate(claim({ type: 'revocation' }))).toBe(false);
+  });
+
+  it('rejects a missing createdAt', () => {
+    const { createdAt: _omit, ...withoutCreatedAt } = claim();
+    expect(validate(withoutCreatedAt)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Credit entry shape (the credits[] embedding, published in credit-claim/v1)
+// ---------------------------------------------------------------------------
+
+describe('credit entry shape', () => {
+  // the entry shape is published as a $def of credit-claim/v1, so validate it
+  // through a ref into the registered schema rather than a doctored copy
+  const validate = ajv.compile({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    $ref: 'https://schemas.dfos.com/credit-claim/v1#/$defs/creditEntry',
+  });
+
+  it('accepts a bare (unclaimed) entry', () => {
+    expect(validate({ did: 'did:dfos:abc123' })).toBe(true);
+  });
+
+  it('accepts a fully claimed entry', () => {
+    expect(
+      validate({
+        did: 'did:dfos:abc123',
+        role: 'photography',
+        name: 'Alice',
+        claim: 'header.payload.signature',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a claim with no role to bind to', () => {
+    expect(validate({ did: 'did:dfos:abc123', claim: 'header.payload.signature' })).toBe(false);
+  });
+
+  it('rejects the pre-amendment label field', () => {
+    expect(validate({ did: 'did:dfos:abc123', label: 'author' })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Published-artifact drift guards
+// ---------------------------------------------------------------------------
+
+describe('credit entry shape is published once, copied verbatim', () => {
+  // The credits-entry shape is published in TWO normative artifacts:
+  // credit-claim/v1#/$defs/creditEntry (the declared-canonical definition) and
+  // post/v1#/$defs/credit (the inline copy the post schema actually validates
+  // against). They are copied rather than $ref'd on purpose — a cross-document
+  // $ref would make offline validation of post/v1 require fetching a second
+  // schema. The cost of copying is drift, so it is pinned here: the two MUST be
+  // deep-equal, and a change to one is a change to both.
+  it('post/v1 $defs.credit deep-equals credit-claim/v1 $defs.creditEntry', () => {
+    expect(postSchema.$defs.credit).toEqual(creditClaimSchema.$defs.creditEntry);
+  });
+
+  it('neither copy uses a remote $ref', () => {
+    // a $ref to another hosted schema would make post/v1 validation require a
+    // network fetch; the copies exist precisely to avoid that
+    const serialized = JSON.stringify(postSchema.$defs.credit);
+    expect(serialized).not.toContain('https://schemas.dfos.com/credit-claim');
   });
 });

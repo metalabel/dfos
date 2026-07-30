@@ -7,3 +7,4 @@ export * from './content-chain';
 export * from './countersign';
 export * from './artifact';
 export * from './revocation';
+export * from './credit-claim';

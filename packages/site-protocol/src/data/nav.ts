@@ -29,6 +29,7 @@ export const navLinks: NavLink[] = [
   { href: '/did-method', label: 'DID Method', tier: 'secondary' },
   { href: '/content-model', label: 'Content Model', tier: 'secondary' },
   { href: '/credentials', label: 'Credentials', tier: 'secondary' },
+  { href: '/credits', label: 'Credits', tier: 'secondary' },
   { href: '/siwd', label: 'Sign In With DFOS', tier: 'secondary' },
   { href: '/web-relay', label: 'Web Relay', shortLabel: 'Relay', tier: 'primary' },
   { href: '/document-gateway', label: 'Document Gateway', tier: 'secondary' },

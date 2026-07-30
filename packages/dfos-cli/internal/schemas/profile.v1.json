@@ -17,6 +17,10 @@
       "type": "string",
       "description": "Short bio or description."
     },
+    "avatar": {
+      "$ref": "#/$defs/media",
+      "description": "Optional avatar image as a Media object."
+    },
     "links": {
       "type": "array",
       "maxItems": 20,
@@ -43,5 +47,29 @@
       }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "media": {
+      "type": "object",
+      "required": ["uri"],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "format": "uri",
+          "description": "Canonical reference to the media — an attachment://<id> ref (opaque, host-scoped) or any other URI. Always present."
+        },
+        "cid": {
+          "type": "string",
+          "pattern": "^bafkrei[a-z2-7]{52}$",
+          "description": "Optional content commitment — CIDv1, raw codec (0x55), sha2-256, base32 lowercase, computed over the media bytes exactly as stored/served. May be absent when no cid has been computed for the media."
+        },
+        "href": {
+          "type": "string",
+          "format": "uri",
+          "description": "Optional resolution hint — a plain URL where the bytes may currently be fetched. Implementation-dependent and non-normative; carries no integrity promise."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
 }

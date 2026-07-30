@@ -139,17 +139,18 @@ Content chain verification requires a **valid EdDSA signature** and delegates ke
 
 The JWS `typ` header uses protocol-specific values (not IANA media types):
 
-| `typ` value            | Usage                                         |
-| ---------------------- | --------------------------------------------- |
-| `did:dfos:identity-op` | Identity chain operations                     |
-| `did:dfos:content-op`  | Content chain operations                      |
-| `did:dfos:artifact`    | Standalone signed inline documents            |
-| `did:dfos:countersign` | Standalone witness attestations               |
-| `did:dfos:revocation`  | Credential revocation artifacts               |
-| `did:dfos:credential`  | DFOS authorization credentials                |
-| `JWT`                  | Auth tokens (DID-signed relay authentication) |
+| `typ` value             | Usage                                         |
+| ----------------------- | --------------------------------------------- |
+| `did:dfos:identity-op`  | Identity chain operations                     |
+| `did:dfos:content-op`   | Content chain operations                      |
+| `did:dfos:artifact`     | Standalone signed inline documents            |
+| `did:dfos:countersign`  | Standalone witness attestations               |
+| `did:dfos:revocation`   | Credential revocation artifacts               |
+| `did:dfos:credential`   | DFOS authorization credentials                |
+| `did:dfos:credit-claim` | Document-plane credit claims (attribution)    |
+| `JWT`                   | Auth tokens (DID-signed relay authentication) |
 
-Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for credential `typ` values and format.
+Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for credential `typ` values and format, and [CREDITS.md](https://protocol.dfos.com/credits) for the credit-claim envelope — a document-plane artifact that relays never see as a claim, so it appears in this registry but in no relay ingestion path.
 
 ### Operation Versioning
 

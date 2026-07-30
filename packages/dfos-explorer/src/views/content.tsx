@@ -14,6 +14,7 @@ import type { Resolved, ResolvedContent } from '@metalabel/dfos-client';
 import { dagCborCanonicalEncode } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
+import { Credits } from '../components/credits';
 import { IndexPanel } from '../components/index-view';
 import { JsonView } from '../components/json-view';
 import { MediaPanel } from '../components/media';
@@ -214,6 +215,13 @@ export const Content = (props: { id: string }) => {
       : headMatch
         ? { state: 'ok' as const, text: 'verified locally' }
         : { state: 'warn' as const, text: 'verified · tip drift' };
+  // Credits read THIS doc's bytes, so surface them only once the served bytes have
+  // been re-hashed to the committed document CID AND the chain verified — the same
+  // gate the avatar path uses (see SchemaPanels). Otherwise a relay could dress up
+  // arbitrary bytes as attribution, and a claimed badge on bytes that were never
+  // committed is worse than showing no credits at all.
+  const docBytesTrusted = !!chain && !!doc?.derivedCid && doc.derivedCid === docCid;
+  const credits = docBytesTrusted ? documentCredits(doc?.parsed) : null;
 
   return (
     <>
@@ -327,6 +335,8 @@ export const Content = (props: { id: string }) => {
 
       <DocPanel doc={doc} committedCid={docCid} verified={!!chain} />
 
+      {credits ? <Credits contentId={props.id} entries={credits} /> : null}
+
       <GrantsPanel
         grants={grantsFromRelayIndex ? grantsIndex : grants}
         revoked={revoked}
@@ -365,6 +375,12 @@ export const Content = (props: { id: string }) => {
       />
     </>
   );
+};
+
+const documentCredits = (parsed: unknown): readonly unknown[] | null => {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const credits = (parsed as Record<string, unknown>)['credits'];
+  return Array.isArray(credits) && credits.length > 0 ? credits : null;
 };
 
 /** Schema-aware extras: index chains get the fold, profile avatars get media. */

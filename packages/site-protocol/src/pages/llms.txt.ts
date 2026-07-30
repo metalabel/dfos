@@ -18,6 +18,7 @@ export const GET: APIRoute = () => {
     '- [DID Method](https://protocol.dfos.com/did-method): W3C DID method specification for did:dfos',
     '- [Content Model](https://protocol.dfos.com/content-model): Standard JSON Schema content types (post, profile)',
     '- [Credentials](https://protocol.dfos.com/credentials): Authorization credentials, delegation chains, and revocation',
+    '- [Credits](https://protocol.dfos.com/credits): Verifiable attribution — the credit-claim envelope, the two-way bind between a credits entry and a claimant signature, and the four verification states',
     '- [Sign-In With DID](https://protocol.dfos.com/siwd): SIWD authentication flow for did:dfos',
     '- [Threat Model](https://protocol.dfos.com/threat-model): Adversary model, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol defends against',
     '- [Conformance](https://protocol.dfos.com/conformance): Conformance tiers (signer, verifier, relay), the normative MUST sets per tier, and the deterministic test vectors that prove them',
