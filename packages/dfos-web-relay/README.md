@@ -7,8 +7,14 @@ See [WEB-RELAY.md](../../specs/WEB-RELAY.md) for the full relay specification.
 ## Install
 
 ```bash
-npm install @metalabel/dfos-web-relay @metalabel/dfos-protocol
+npm install @metalabel/dfos-web-relay @metalabel/dfos-protocol hono
 ```
+
+`@metalabel/dfos-protocol` and `hono` are peer dependencies. Hono is peered
+rather than bundled because the relay's public API is Hono-typed — `createRelay`
+returns `{ app: Hono }` and `serve(app)` takes one — so the relay and your app
+must resolve to the _same_ Hono install. A private copy yields two structurally
+incompatible `Hono` types and the handoff fails to compile.
 
 ## Usage
 
