@@ -74,7 +74,9 @@
     "@ipld/dag-cbor": "^10.0.1",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
-    "multiformats": "^14.0.0",
+    "multiformats": "^14.0.0"
+  },
+  "peerDependencies": {
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -83,6 +85,7 @@
     "ajv-formats": "^3.0.1",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "zod": "^4.4.3"
   }
 }

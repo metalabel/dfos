@@ -59,15 +59,16 @@
     "prepublishOnly": "pnpm build"
   },
   "dependencies": {
-    "hono": "^4.12.23",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@metalabel/dfos-protocol": "^0.25.0"
+    "@metalabel/dfos-protocol": "^0.25.0",
+    "hono": "^4.12.23"
   },
   "devDependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
     "@types/node": "^24.10.4",
+    "hono": "^4.12.23",
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
     "vitest": "^4.1.8",

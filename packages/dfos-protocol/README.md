@@ -5,8 +5,13 @@ Ed25519 signed chain primitives for cryptographic identity and verifiable conten
 ## Install
 
 ```bash
-npm install @metalabel/dfos-protocol
+npm install @metalabel/dfos-protocol zod
 ```
+
+`zod` is a peer dependency. The package exports Zod schema objects directly
+(`IdentityOperation`, `ContentOperation`, `MultikeyPublicKey`, …) so you can
+compose them into your own schemas — which only works if your app and this
+package share one Zod install.
 
 ## Usage
 
