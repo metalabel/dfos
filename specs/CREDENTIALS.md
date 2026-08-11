@@ -259,7 +259,7 @@ Revocation — not expiry — is the **timely lever** for invalidating a credent
 
 ## Resource Types
 
-Two resource forms are defined. Both use the `chain:` prefix.
+The frozen v1 surface defines two resource forms, both under the `chain:` prefix. New capabilities register additional forms **additively** as they land — the resource grammar (`type:id`) is open by construction, and an unrecognized resource type simply never matches a request. One additive form is registered so far: [`mailbox:<id>`](#mailboxid----signing-mailbox-deposit-additive-signing-0x), below.
 
 ### `chain:<contentId>` -- Exact Match
 
@@ -293,6 +293,20 @@ This is the broadest resource scope. Common use case: granting a collaborator ac
 | `chain:X` | `chain:*` | No     | Widening from specific to wildcard        |
 
 The resource hierarchy from broadest to narrowest is: `chain:*` > `chain:X`. Each delegation hop can only move down this hierarchy, never up.
+
+### `mailbox:<id>` -- Signing Mailbox Deposit (additive, SIGNING 0.x)
+
+> **Status.** This form is **not** part of the frozen v1 credential surface. It lands additively with the [signing mailbox](https://protocol.dfos.com/signing) capability and rides that spec's `0.x` clock; the credential envelope, delegation, attenuation, and revocation machinery it uses are the frozen machinery above, unchanged.
+
+Grants the audience the right to **deposit** sign requests into the subject's relay mailbox. `<id>` is the subject DID's 31-character identifier (the `did:dfos:` prefix stripped, exactly as `chain:<contentId>` does not repeat its scheme).
+
+```json
+{ "resource": "mailbox:cnnnft9f8a2rn938d6nkz38r847v2kr", "action": "deposit" }
+```
+
+- **`deposit` is the only action.** There is deliberately no `collect`: reading one's own mailbox is proven by key possession, not delegated by credential — credentials delegate authority to _others_, and being yourself is not a delegation. See [SIGNING.md](https://protocol.dfos.com/signing) for the reasoning; a credential attenuated to any other action on a `mailbox:` resource grants nothing.
+- **Exact match only.** No wildcard form is defined for `mailbox`, and a relay MUST NOT honor `mailbox:*` (or any non-exact form) as covering a deposit.
+- **The consuming rule lives in SIGNING.md**, including the one that gives the form its teeth: a deposit credential's delegation chain MUST **root at the subject DID** — only the subject is original authority over its own mailbox.
 
 ---
 

@@ -166,9 +166,12 @@ core is unambiguous across languages.
   fork acceptance, head convergence, capability flags, 501 semantics, deletion semantics)
   against the running service rather than the library. Capability-gated variants self-skip
   unless the relay advertises the matching flag: the content-disabled suite (501 on every
-  content route when `capabilities.content: false`) and the write-disabled suite
+  content route when `capabilities.content: false`), the write-disabled suite
   (`scripts/run-write-disabled.sh` — recompute-from-log read-only conformance when
-  `capabilities.write: false`).
+  `capabilities.write: false`), and the signing pair — enabled-behavior tests that run
+  only when `capabilities.signing: true` (`scripts/run-signing.sh`), and a disabled suite
+  asserting 501 on every `/signing/v1/*` route when the flag is `false` or absent
+  (SIGNING.md).
 - **Content following** is inherently a **two-relay** behavior (a follower materializing an
   origin's bytes), so it is exercised in the Go relay library's race-tested in-package suite
   rather than the single-endpoint conformance corpus. An origin and an eager follower are
