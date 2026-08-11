@@ -328,6 +328,24 @@ func TestSignRequestCanonicalPayloadPositiveControls(t *testing.T) {
 	if err := AssertCanonicalSignRequestPayload("did:dfos:credit-claim", []byte(special), "did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae"); err != nil {
 		t.Errorf("canonical non-ASCII/HTML payload rejected: %v", err)
 	}
+	// A role legitimately carrying the six literal chars ` ` canonicalizes to
+	// `\\u2028` (escaped backslash) and must round-trip — the case a blind
+	// post-substitution corrupts. In this raw Go string literal `\\u2028` is the
+	// JSON two-char escape for one backslash followed by u2028.
+	literalEscape := strings.Replace(bare, "photography", `a\\u2028b`, 1)
+	if err := AssertCanonicalSignRequestPayload("did:dfos:credit-claim", []byte(literalEscape), "did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae"); err != nil {
+		t.Errorf("canonical literal-escape payload rejected: %v", err)
+	}
+}
+
+func TestSignRequestCanonicalPayloadLoneSurrogateRefused(t *testing.T) {
+	const subject = "did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae"
+	// role "\ud800" is a lone surrogate; Go substitutes U+FFFD on decode so the
+	// re-serialization cannot byte-match the input, and the payload is refused —
+	// converging with the TS twin's explicit well-formedness rejection.
+	loneSurrogate := strings.Replace(signRequestParityClaim, "photography", `\ud800`, 1)
+	err := AssertCanonicalSignRequestPayload("did:dfos:credit-claim", []byte(loneSurrogate), subject)
+	requireSignRequestVerdict(t, err, ErrSignRequestInvalid)
 }
 
 func TestSignRequestCanonicalPayloadAdversarialVectors(t *testing.T) {

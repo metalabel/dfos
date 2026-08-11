@@ -361,6 +361,17 @@ describe('sign request canonical payload check', () => {
 
     const special = bare.replace('photography', '<photography>&é\u2028');
     expect(() => check(special)).not.toThrow();
+
+    // A role legitimately containing the six literal chars ` ` canonicalizes
+    // to `\\u2028` (escaped backslash) and must round-trip — exactly the value a
+    // blind post-substitution on the Go side would corrupt.
+    const literalEscape = bare.replace('photography', 'a\\\\u2028b');
+    expect(() => check(literalEscape)).not.toThrow();
+  });
+
+  it('refuses a lone surrogate in role (no convergent canonical form)', () => {
+    const loneSurrogate = bare.replace('photography', '\\ud800');
+    expect(() => check(loneSurrogate)).toThrow(SignRequestVerifyError);
   });
 
   it('refuses the shared adversarial canonicalization vectors', () => {

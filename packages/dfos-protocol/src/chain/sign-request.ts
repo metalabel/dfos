@@ -388,6 +388,17 @@ export const assertCanonicalSignRequestPayload = (
   if (payload.did !== context.subject) {
     throw invalid('credit-claim payload did does not match sign request subject');
   }
+  // `role` is the one free-form UTF-8 field. A lone surrogate has no convergent
+  // canonical form across implementations — `JSON.stringify` round-trips it to a
+  // `\uXXXX` escape here, but the Go twin cannot hold it (its UTF-8 string would
+  // already carry U+FFFD) and refuses the byte-compare. Refuse it on this side
+  // too so the WYSIWYS verdict is identical on both, rather than signable in TS
+  // and rejected in Go. (Matches a high surrogate not followed by a low one, or a
+  // low surrogate not preceded by a high one — the `String.isWellFormed` test
+  // without the ES2024 lib.)
+  if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(payload.role)) {
+    throw invalid('credit-claim role is not well-formed unicode (lone surrogate)');
+  }
 
   const canonical = JSON.stringify({
     version: payload.version,

@@ -339,37 +339,81 @@ func AssertCanonicalSignRequestPayload(payloadTyp string, payload []byte,
 		asOf = &s
 	}
 
-	canonical := struct {
-		Version         int     `json:"version"`
-		Type            string  `json:"type"`
-		ContentID       string  `json:"contentId"`
-		DID             string  `json:"did"`
-		Role            string  `json:"role"`
-		CreatedAt       string  `json:"createdAt"`
-		AsOfDocumentCID *string `json:"asOfDocumentCID,omitempty"`
-	}{1, claimType, contentID, did, role, createdAt, asOf}
-	canonicalBytes, err := marshalSignRequestCanonicalJSON(canonical)
-	if err != nil {
-		return fmt.Errorf("%w: canonical credit-claim serialization failed: %s", ErrSignRequestUnverifiable, err)
-	}
-	if !bytes.Equal(canonicalBytes, payload) {
+	// A JSON string value carrying a lone surrogate has no convergent
+	// serialization: TS `JSON.stringify` round-trips it to a `\uXXXX` escape,
+	// while Go's UTF-8 strings cannot hold it \u2014 json.Unmarshal already replaced
+	// it with U+FFFD, so the re-serialization below can never byte-match a
+	// `\ud800`-style input and the payload is refused here. The TS twin refuses
+	// the same input via an explicit well-formedness check, so the WYSIWYS
+	// verdict is identical across the boundary rather than signable on one side
+	// and refused on the other.
+	canonical := stringifyCreditClaimCanonical(claimType, contentID, did, role, createdAt, asOf)
+	if !bytes.Equal([]byte(canonical), payload) {
 		return fmt.Errorf("%w: credit-claim payload bytes are not canonical", ErrSignRequestInvalid)
 	}
 	return nil
 }
 
-// marshalSignRequestCanonicalJSON matches JSON.stringify byte-for-byte. Go's
-// encoder needs HTML escaping disabled and otherwise-unconditional U+2028/U+2029
-// escapes restored to their UTF-8 bytes. Encoder.Encode appends one newline.
-func marshalSignRequestCanonicalJSON(value any) ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
+// stringifyCreditClaimCanonical serializes the credit-claim payload to the exact
+// bytes `JSON.stringify` emits for the same object with keys in this order \u2014
+// integer `version` bare, every string field escaped by jsonStringifyString,
+// `asOfDocumentCID` present only when non-nil. This is a hand-rolled twin of
+// JSON.stringify rather than encoding/json, because Go's encoder escapes
+// U+2028/U+2029 (and, with SetEscapeHTML, </>/&) that JSON.stringify emits raw \u2014
+// and no blind post-substitution can undo that without also corrupting a value
+// that legitimately contains the six literal characters `\u2028`.
+func stringifyCreditClaimCanonical(claimType, contentID, did, role, createdAt string, asOf *string) string {
+	var b strings.Builder
+	b.WriteString(`{"version":1,"type":`)
+	b.WriteString(jsonStringifyString(claimType))
+	b.WriteString(`,"contentId":`)
+	b.WriteString(jsonStringifyString(contentID))
+	b.WriteString(`,"did":`)
+	b.WriteString(jsonStringifyString(did))
+	b.WriteString(`,"role":`)
+	b.WriteString(jsonStringifyString(role))
+	b.WriteString(`,"createdAt":`)
+	b.WriteString(jsonStringifyString(createdAt))
+	if asOf != nil {
+		b.WriteString(`,"asOfDocumentCID":`)
+		b.WriteString(jsonStringifyString(*asOf))
 	}
-	encoded := bytes.TrimSuffix(buf.Bytes(), []byte{'\n'})
-	encoded = bytes.ReplaceAll(encoded, []byte(`\u2028`), []byte("\u2028"))
-	encoded = bytes.ReplaceAll(encoded, []byte(`\u2029`), []byte("\u2029"))
-	return encoded, nil
+	b.WriteByte('}')
+	return b.String()
+}
+
+// jsonStringifyString escapes a Go string exactly as ECMAScript `JSON.stringify`
+// escapes a string value: the two mandatory escapes (`"` and `\`), the five
+// short control escapes, `\u00XX` (lowercase) for the remaining C0 controls, and
+// every other rune \u2014 including U+2028/U+2029 and all non-ASCII \u2014 emitted RAW as
+// UTF-8. MUST stay byte-identical to the TS reference's serialization.
+func jsonStringifyString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
