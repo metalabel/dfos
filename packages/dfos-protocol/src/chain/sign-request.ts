@@ -407,9 +407,7 @@ export const assertCanonicalSignRequestPayload = (
     did: payload.did,
     role: payload.role,
     createdAt: payload.createdAt,
-    ...(payload.asOfDocumentCID !== undefined
-      ? { asOfDocumentCID: payload.asOfDocumentCID }
-      : {}),
+    ...(payload.asOfDocumentCID !== undefined ? { asOfDocumentCID: payload.asOfDocumentCID } : {}),
   });
   const canonicalBytes = new TextEncoder().encode(canonical);
   if (

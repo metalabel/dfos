@@ -6,8 +6,8 @@ import {
   encodeEd25519Multikey,
   MAX_SIGN_REQUEST_PAYLOAD_SIZE,
   MAX_SIGN_REQUEST_SIZE,
-  SignRequestVerifyError,
   signCreditClaim,
+  SignRequestVerifyError,
   verifyCreditClaim,
   verifySignRequest,
 } from '../src/chain';
@@ -295,7 +295,10 @@ describe('sign request envelope', () => {
       baseEnvelope(requester, { expiresAt: '2026-08-17T00:00:01.000Z' }),
     ];
     for (const payload of cases) {
-      await expectVerdict(verifyAt(await signRaw(requester, payload), [requester.identity]), 'invalid');
+      await expectVerdict(
+        verifyAt(await signRaw(requester, payload), [requester.identity]),
+        'invalid',
+      );
     }
 
     const expiresAt = '2026-08-11T00:00:00.000Z';
@@ -388,10 +391,7 @@ describe('sign request canonical payload check', () => {
       bare.replace('}', ',"note":"hi"}'),
       bare.replace('.000Z', '.123Z'),
       bare.replace(subject, 'did:dfos:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
-      withAsOf.replace(
-        'bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne',
-        '',
-      ),
+      withAsOf.replace('bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne', ''),
       `${bare}\n`,
       `\uFEFF${bare}`,
       '[]',
@@ -407,11 +407,9 @@ describe('sign request canonical payload check', () => {
   it('admits bytes the credit-claim artifact family verifies end to end', async () => {
     const claimant = makeParty();
     const canonical = bare.replaceAll(subject, claimant.did);
-    assertCanonicalSignRequestPayload(
-      'did:dfos:credit-claim',
-      encoder.encode(canonical),
-      { subject: claimant.did },
-    );
+    assertCanonicalSignRequestPayload('did:dfos:credit-claim', encoder.encode(canonical), {
+      subject: claimant.did,
+    });
 
     const { jwsToken } = await signCreditClaim({
       contentId: 'cv7n8vkvr64cctf3294h9k4eanhff8z',

@@ -552,18 +552,30 @@ describe('dfos credential', () => {
     // coverage passes, and action narrowing still applies on the matched entry.
     const mailbox = 'mailbox:nzkf838efr424433rn2rzkdv8h7t9ae';
     expect(
-      isAttenuated([{ resource: mailbox, action: 'deposit' }], [{ resource: mailbox, action: 'deposit' }]),
+      isAttenuated(
+        [{ resource: mailbox, action: 'deposit' }],
+        [{ resource: mailbox, action: 'deposit' }],
+      ),
     ).toBe(true);
     expect(
-      isAttenuated([{ resource: mailbox, action: 'deposit,read' }], [{ resource: mailbox, action: 'deposit' }]),
+      isAttenuated(
+        [{ resource: mailbox, action: 'deposit,read' }],
+        [{ resource: mailbox, action: 'deposit' }],
+      ),
     ).toBe(true);
     // widening the action set on the same mailbox is refused
     expect(
-      isAttenuated([{ resource: mailbox, action: 'deposit' }], [{ resource: mailbox, action: 'deposit,read' }]),
+      isAttenuated(
+        [{ resource: mailbox, action: 'deposit' }],
+        [{ resource: mailbox, action: 'deposit,read' }],
+      ),
     ).toBe(false);
     // a different mailbox id is not covered
     expect(
-      isAttenuated([{ resource: mailbox, action: 'deposit' }], [{ resource: 'mailbox:cnnnft9f8a2rn938d6nkz38r847v2kr', action: 'deposit' }]),
+      isAttenuated(
+        [{ resource: mailbox, action: 'deposit' }],
+        [{ resource: 'mailbox:cnnnft9f8a2rn938d6nkz38r847v2kr', action: 'deposit' }],
+      ),
     ).toBe(false);
   });
 
@@ -571,17 +583,29 @@ describe('dfos credential', () => {
     const mailbox = 'mailbox:nzkf838efr424433rn2rzkdv8h7t9ae';
     // mailbox:* does NOT cover a concrete mailbox — a literal '*' id covers only itself
     expect(
-      isAttenuated([{ resource: 'mailbox:*', action: 'deposit' }], [{ resource: mailbox, action: 'deposit' }]),
+      isAttenuated(
+        [{ resource: 'mailbox:*', action: 'deposit' }],
+        [{ resource: mailbox, action: 'deposit' }],
+      ),
     ).toBe(false);
     expect(
-      isAttenuated([{ resource: 'mailbox:*', action: 'deposit' }], [{ resource: 'mailbox:*', action: 'deposit' }]),
+      isAttenuated(
+        [{ resource: 'mailbox:*', action: 'deposit' }],
+        [{ resource: 'mailbox:*', action: 'deposit' }],
+      ),
     ).toBe(true);
     // coverage never crosses resource types, wildcard or not
     expect(
-      isAttenuated([{ resource: 'chain:*', action: 'deposit' }], [{ resource: mailbox, action: 'deposit' }]),
+      isAttenuated(
+        [{ resource: 'chain:*', action: 'deposit' }],
+        [{ resource: mailbox, action: 'deposit' }],
+      ),
     ).toBe(false);
     expect(
-      isAttenuated([{ resource: mailbox, action: 'write' }], [{ resource: 'chain:content1', action: 'write' }]),
+      isAttenuated(
+        [{ resource: mailbox, action: 'write' }],
+        [{ resource: 'chain:content1', action: 'write' }],
+      ),
     ).toBe(false);
   });
 
