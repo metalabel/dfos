@@ -42,6 +42,10 @@ describes the protocol-package surface of that release.
 
 ### Added
 
+- **SIGNING 0.1 sign-request envelope (TS + Go)** — build and current-state
+  verification for `did:dfos:sign-request`, plus the strict byte-canonical
+  WYSIWYS check for requested `did:dfos:credit-claim` payloads.
+
 - **`parseProtocolTimestampUnix` (TS) / `ParseProtocolTimestamp` (Go)** — the
   canonical operation-timestamp parse, exported so consumers of a signed
   timestamp stop reaching for a lenient `new Date()` / `time.RFC3339` (both

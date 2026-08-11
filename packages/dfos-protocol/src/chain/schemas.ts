@@ -391,3 +391,39 @@ export const CreditClaimPayload = z.looseObject({
   asOfDocumentCID: CIDString.min(1, 'asOfDocumentCID must be non-empty when present').optional(),
 });
 export type CreditClaimPayload = z.infer<typeof CreditClaimPayload>;
+
+// ---
+
+/**
+ * Max byte length of a sign-request JWS token. Checked before any decode on the
+ * verify path and after construction on the build path. VALIDITY-determining:
+ * MUST match maxSignRequestSize in the Go reference.
+ */
+export const MAX_SIGN_REQUEST_SIZE = 8192;
+
+/**
+ * Max decoded byte length of the exact target payload carried by a sign request.
+ * This is the single aggregate cap on target bytes; there are no per-field caps.
+ * VALIDITY-determining: MUST match maxSignRequestPayloadSize in Go.
+ */
+export const MAX_SIGN_REQUEST_PAYLOAD_SIZE = 4096;
+
+/**
+ * Sign request: a requester's signed ask that one subject sign exact target bytes
+ * as one named artifact type before a bounded deadline.
+ *
+ * Unknown envelope fields are preserved-and-ignored, matching every other wire
+ * payload in this file. The signer-side target-payload check is deliberately
+ * strict instead: a signer refuses fields it cannot render (see SIGNING.md).
+ */
+export const SignRequestPayload = z.looseObject({
+  version: z.literal(1),
+  type: z.literal('sign-request'),
+  did: z.string().regex(/^did:/, 'did must be a DID (did: prefix)'),
+  subject: z.string().regex(/^did:/, 'subject must be a DID (did: prefix)'),
+  payloadTyp: z.string().min(1),
+  payload: z.string().min(1),
+  createdAt: Iso8601,
+  expiresAt: Iso8601,
+});
+export type SignRequestPayload = z.infer<typeof SignRequestPayload>;
