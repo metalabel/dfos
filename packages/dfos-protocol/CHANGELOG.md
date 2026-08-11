@@ -13,6 +13,19 @@ describes the protocol-package surface of that release.
 
 ### Changed
 
+- **Credential attenuation now covers non-`chain:` resource forms (TS + Go).**
+  `isAttenuated` / `IsAttenuated` previously understood only `chain:<id>` and
+  `chain:*`; every other resource type fell through to `false`, so a credential
+  delegating any non-chain resource was rejected outright. Non-`chain:` forms
+  (starting with `mailbox:<id>` from [SIGNING 0.1](https://protocol.dfos.com/signing),
+  and any type a future capability registers) now narrow by **exact byte
+  equality of the full resource string**: the `chain:*` wildcard stays a
+  chain-only concept, a literal `*` id in any other type covers only itself, and
+  coverage never crosses resource types. This is a **widening of accepted
+  delegations** — credentials that were universally rejected before may now
+  verify — with no change to any `chain:` verdict. CREDENTIALS.md "Resource
+  Types" pins the rule normatively; both implementations agree verdict-for-verdict.
+
 - **As-of revocation — committed history stays valid.** `isRevoked` was a timeless
   boolean threaded through chain verification, so revoking a credential
   retroactively invalidated every operation it had ever authorized —
@@ -44,7 +57,13 @@ describes the protocol-package surface of that release.
 
 - **SIGNING 0.1 sign-request envelope (TS + Go)** — build and current-state
   verification for `did:dfos:sign-request`, plus the strict byte-canonical
-  WYSIWYS check for requested `did:dfos:credit-claim` payloads.
+  WYSIWYS check for requested `did:dfos:credit-claim` payloads. The matching
+  relay-side `signing` mailbox courier capability (opt-in, `capabilities.signing`,
+  default off; `/signing/v1/*` routes) ships in `@metalabel/dfos-web-relay` and
+  the Go relay in the same release — deposit is credential-gated and rooted at
+  the subject, poll is DID-auth-token gated, respond/decline are unauthenticated
+  (a valid response is self-authenticating). See
+  [SIGNING.md](https://protocol.dfos.com/signing).
 
 - **`parseProtocolTimestampUnix` (TS) / `ParseProtocolTimestamp` (Go)** — the
   canonical operation-timestamp parse, exported so consumers of a signed
