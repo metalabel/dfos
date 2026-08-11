@@ -55,6 +55,8 @@ export interface RelayOptions {
    * PULLING from peers (syncFromPeers polls their /log).
    */
   write?: boolean;
+  /** Whether the ephemeral signing mailbox is enabled (default: false) */
+  signing?: boolean;
   /** Peer relay configurations */
   peers?: PeerConfig[];
   /** Injected peer client — if omitted, a default HTTP implementation is used */
@@ -245,6 +247,23 @@ export interface StoredCountersignature {
   jwsToken: string;
 }
 
+/** Ephemeral courier state for one sign request. */
+export interface StoredSignRequest {
+  cid: string;
+  request: string;
+  requesterDID: string;
+  subjectDID: string;
+  payloadTyp: string;
+  payloadBytes: Uint8Array;
+  expiresAt: string;
+  depositedAt: string;
+  declined: boolean;
+  response?: string;
+}
+
+export type SigningPutResult = 'created' | 'identical' | 'conflict' | 'not-found';
+export type SigningDeclineResult = 'declined' | 'responded' | 'not-found';
+
 // -----------------------------------------------------------------------------
 // relay store interface
 // -----------------------------------------------------------------------------
@@ -261,6 +280,19 @@ export interface StoredCountersignature {
  * from silently overwriting each other.
  */
 export interface RelayStore {
+  // --- signing mailbox (ephemeral courier state) ---
+
+  getSignRequest(cid: string, now: number): Promise<StoredSignRequest | undefined>;
+  putSignRequest(request: StoredSignRequest, now: number): Promise<SigningPutResult>;
+  listPendingSignRequests(params: {
+    subjectDID: string;
+    after?: string;
+    limit: number;
+    now: number;
+  }): Promise<{ requests: StoredSignRequest[]; cursor: string | null }>;
+  putSignResponse(cid: string, response: string, now: number): Promise<SigningPutResult>;
+  declineSignRequest(cid: string, now: number): Promise<SigningDeclineResult>;
+
   // --- operations ---
 
   getOperation(cid: string): Promise<StoredOperation | undefined>;

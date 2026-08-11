@@ -25,7 +25,8 @@ type Relay struct {
 	contentEnabled     bool
 	logEnabled         bool
 	indexEnabled       bool
-	writeEnabled       bool   // false = LITE pull-only node (POST /operations rejected)
+	writeEnabled       bool // false = LITE pull-only node (POST /operations rejected)
+	signingEnabled     bool
 	contentFollow      string // "eager" = materialize granted public content blobs; else off
 	logger             *slog.Logger
 	peers              []PeerConfig
@@ -78,6 +79,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	logEnabled := opts.Log == nil || *opts.Log
 	indexEnabled := opts.Index == nil || *opts.Index
 	writeEnabled := opts.Write == nil || *opts.Write
+	signingEnabled := opts.Signing != nil && *opts.Signing
 
 	identity := opts.Identity
 	if identity == nil {
@@ -125,6 +127,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		logEnabled:         logEnabled,
 		indexEnabled:       indexEnabled,
 		writeEnabled:       writeEnabled,
+		signingEnabled:     signingEnabled,
 		contentFollow:      opts.ContentFollow,
 		logger:             logger,
 		peers:              opts.Peers,

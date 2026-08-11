@@ -44,7 +44,7 @@ paths:
                     example: '0.16.0'
                   capabilities:
                     type: object
-                    required: [proof, write, content, log, revocations, index]
+                    required: [proof, write, content, log, revocations, index, signing]
                     properties:
                       proof:
                         type: boolean
@@ -64,6 +64,9 @@ paths:
                       index:
                         type: boolean
                         description: Whether the index query family is served (GET /index/v0/*)
+                      signing:
+                        type: boolean
+                        description: Whether the optional SIGNING 0.1 mailbox courier is enabled
                   profile:
                     type: string
                     description: The relay's profile artifact as a compact JWS token
@@ -116,6 +119,180 @@ paths:
                         type: string
                         nullable: true
                         description: CID of the newest operation in the log (the tip), or null when empty
+
+  /signing/v1/requests:
+    post:
+      operationId: depositSignRequest
+      summary: Deposit a credential-authorized sign request
+      description: Verifies the request envelope and a deposit credential rooted at the mailbox subject, then stores ephemeral courier state by request CID.
+      tags: [Signing Mailbox]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request, credential]
+              properties:
+                request: { type: string }
+                credential: { type: string }
+                chain:
+                  type: array
+                  items: { type: string }
+      responses:
+        '201':
+          description: Request deposited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningDepositResponse' }
+        '200':
+          description: Identical request already deposited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningDepositResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: CID already holds a different request token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413':
+          description: Deposit body exceeds 512 KiB
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '501':
+          description: Signing mailbox disabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    get:
+      operationId: pollSigningMailbox
+      summary: Poll the authenticated subject's pending sign requests
+      description: Returns only the authenticated subject's unexpired, unanswered requests in oldest-first order.
+      tags: [Signing Mailbox]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Pending requests, oldest first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningMailboxResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '501':
+          description: Signing mailbox disabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /signing/v1/requests/{cid}/response:
+    post:
+      operationId: submitSignResponse
+      summary: Submit the subject-signed response artifact
+      description: Verifies a canonical compact JWS over the request's exact target bytes and stores it first-write-wins.
+      tags: [Signing Mailbox]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [response]
+              properties:
+                response: { type: string }
+      responses:
+        '201':
+          description: Response stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningStoredResponse' }
+        '200':
+          description: Identical response already stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningStoredResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: A different response already won the slot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413':
+          description: Response body exceeds the aggregate route limit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '501':
+          description: Signing mailbox disabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    get:
+      operationId: getSignResponse
+      summary: Fetch request status or the response artifact
+      description: Returns the unexpired request's pending, declined, or responded state without authentication.
+      tags: [Signing Mailbox]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Pending, declined, or responded status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningResponseStatus' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '501':
+          description: Signing mailbox disabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /signing/v1/requests/{cid}/decline:
+    post:
+      operationId: declineSignRequest
+      summary: Set the advisory decline flag
+      description: Idempotently marks an unexpired unanswered request declined; the request may still be answered later.
+      tags: [Signing Mailbox]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Declined (idempotent) }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: A response already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413':
+          description: Decline body exceeds the aggregate route limit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '501':
+          description: Signing mailbox disabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /proof/v1/operations:
     post:
@@ -1247,6 +1424,60 @@ components:
       description: DID-signed auth token JWT
 
   schemas:
+    SigningDepositResponse:
+      type: object
+      required: [cid, expiresAt]
+      properties:
+        cid: { type: string }
+        expiresAt:
+          type: string
+          format: date-time
+
+    SigningMailboxResponse:
+      type: object
+      required: [requests, cursor]
+      properties:
+        requests:
+          type: array
+          items:
+            type: object
+            required: [cid, request, depositedAt, declined]
+            properties:
+              cid: { type: string }
+              request: { type: string }
+              depositedAt:
+                type: string
+                format: date-time
+              declined: { type: boolean }
+        cursor:
+          type: string
+          nullable: true
+          description: Opaque cursor for the next page, or null on the last page
+
+    SigningStoredResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [stored]
+
+    SigningResponseStatus:
+      oneOf:
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [pending] }
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [declined] }
+        - type: object
+          required: [status, response]
+          properties:
+            status: { type: string, enum: [responded] }
+            response: { type: string }
+
     IngestionResult:
       type: object
       required: [cid, status]
@@ -1414,3 +1645,5 @@ tags:
     description: DIF Universal Resolver binding — resolve a did:dfos to a W3C DID Document
   - name: Index
     description: Non-authoritative query surface over the relay's current-state projections — discovery hints, verified by the client against the proof plane
+  - name: Signing Mailbox
+    description: Optional ephemeral SIGNING 0.1 request/response courier

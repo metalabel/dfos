@@ -1,12 +1,38 @@
 package relay
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
+
+type signingCursor struct {
+	SubjectDID  string `json:"subjectDID"`
+	DepositedAt string `json:"depositedAt"`
+	CID         string `json:"cid"`
+}
+
+func encodeSigningCursor(cursor signingCursor) string {
+	encoded, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(encoded)
+}
+
+func decodeSigningCursor(encoded string) (signingCursor, bool) {
+	bytes, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || base64.RawURLEncoding.EncodeToString(bytes) != encoded {
+		return signingCursor{}, false
+	}
+	var cursor signingCursor
+	if err := json.Unmarshal(bytes, &cursor); err != nil || cursor.SubjectDID == "" || cursor.DepositedAt == "" || cursor.CID == "" {
+		return signingCursor{}, false
+	}
+	return cursor, true
+}
 
 // MemoryStore is an in-memory Store implementation for development and testing.
 type MemoryStore struct {
@@ -21,6 +47,7 @@ type MemoryStore struct {
 	rawOps            map[string]rawOpEntry             // cid → entry
 	revocations       map[string]StoredRevocation       // key: "issuerDID::credentialCID"
 	publicCredentials map[string]StoredPublicCredential // key: credential CID
+	signRequests      map[string]StoredSignRequest      // key: request CID
 	// --- index (v0) materialized projection rows ---
 	indexIdentityRows    map[string]indexIdentityRow            // keyed by DID
 	indexContentRows     map[string]indexContentRow             // keyed by contentId
@@ -45,12 +72,132 @@ func NewMemoryStore() *MemoryStore {
 		rawOps:            make(map[string]rawOpEntry),
 		revocations:       make(map[string]StoredRevocation),
 		publicCredentials: make(map[string]StoredPublicCredential),
+		signRequests:      make(map[string]StoredSignRequest),
 
 		indexIdentityRows:    make(map[string]indexIdentityRow),
 		indexContentRows:     make(map[string]indexContentRow),
 		indexContentSigners:  make(map[string]map[string]struct{}),
 		indexCountersignRows: make(map[string]storedIndexCountersignature),
 	}
+}
+
+func (s *MemoryStore) GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredSignRequestsLocked(now)
+	request, ok := s.signRequests[cid]
+	if !ok {
+		return nil, nil
+	}
+	request.PayloadBytes = append([]byte(nil), request.PayloadBytes...)
+	return &request, nil
+}
+
+func (s *MemoryStore) pruneExpiredSignRequestsLocked(now time.Time) {
+	for cid, request := range s.signRequests {
+		expires, err := time.Parse(time.RFC3339Nano, request.ExpiresAt)
+		if err != nil || !now.Before(expires) {
+			delete(s.signRequests, cid)
+		}
+	}
+}
+
+func (s *MemoryStore) PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredSignRequestsLocked(now)
+	if existing, ok := s.signRequests[request.CID]; ok {
+		if existing.Request == request.Request {
+			return SigningIdentical, nil
+		}
+		return SigningConflict, nil
+	}
+	request.PayloadBytes = append([]byte(nil), request.PayloadBytes...)
+	s.signRequests[request.CID] = request
+	return SigningCreated, nil
+}
+
+func (s *MemoryStore) ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredSignRequestsLocked(now)
+	rows := make([]StoredSignRequest, 0)
+	for _, request := range s.signRequests {
+		if request.SubjectDID != subjectDID || request.Response != "" {
+			continue
+		}
+		request.PayloadBytes = append([]byte(nil), request.PayloadBytes...)
+		rows = append(rows, request)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].DepositedAt != rows[j].DepositedAt {
+			return rows[i].DepositedAt < rows[j].DepositedAt
+		}
+		return rows[i].CID < rows[j].CID
+	})
+	start := 0
+	if after != "" {
+		cursor, ok := decodeSigningCursor(after)
+		if !ok {
+			if legacy, exists := s.signRequests[after]; exists {
+				cursor = signingCursor{SubjectDID: legacy.SubjectDID, DepositedAt: legacy.DepositedAt, CID: legacy.CID}
+				ok = true
+			}
+		}
+		if !ok || cursor.SubjectDID != subjectDID {
+			return []StoredSignRequest{}, "", nil
+		}
+		for start < len(rows) && (rows[start].DepositedAt < cursor.DepositedAt ||
+			(rows[start].DepositedAt == cursor.DepositedAt && rows[start].CID <= cursor.CID)) {
+			start++
+		}
+	}
+	end := start + limit
+	if end > len(rows) {
+		end = len(rows)
+	}
+	page := rows[start:end]
+	cursor := ""
+	if len(page) == limit && len(page) > 0 {
+		last := page[len(page)-1]
+		cursor = encodeSigningCursor(signingCursor{SubjectDID: subjectDID, DepositedAt: last.DepositedAt, CID: last.CID})
+	}
+	return page, cursor, nil
+}
+
+func (s *MemoryStore) PutSignResponse(cid, response string, now time.Time) (SigningPutResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredSignRequestsLocked(now)
+	request, ok := s.signRequests[cid]
+	if !ok {
+		return SigningNotFound, nil
+	}
+	if request.Response != "" {
+		if request.Response == response {
+			return SigningIdentical, nil
+		}
+		return SigningConflict, nil
+	}
+	request.Response = response
+	s.signRequests[cid] = request
+	return SigningCreated, nil
+}
+
+func (s *MemoryStore) DeclineSignRequest(cid string, now time.Time) (SigningPutResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredSignRequestsLocked(now)
+	request, ok := s.signRequests[cid]
+	if !ok {
+		return SigningNotFound, nil
+	}
+	if request.Response != "" {
+		return SigningConflict, nil
+	}
+	request.Declined = true
+	s.signRequests[cid] = request
+	return SigningCreated, nil
 }
 
 func blobKeyStr(key BlobKey) string {

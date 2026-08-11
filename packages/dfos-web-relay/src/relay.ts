@@ -46,6 +46,7 @@ import {
   REVOCATIONS_BASE_PATH,
 } from './revocations';
 import { computeOpCID, sequenceOps } from './sequencer';
+import { registerSigningRoutes } from './signing';
 import { PROOF_BASE_PATH } from './types';
 import type {
   PeerClient,
@@ -55,6 +56,9 @@ import type {
   RelayStore,
   StoredContentChain,
 } from './types';
+
+/** Optional SIGNING 0.1 courier clock; byte twin of signingBasePath in routes.go. */
+export const SIGNING_BASE_PATH = '/signing/v1';
 
 // -----------------------------------------------------------------------------
 // relay result type
@@ -165,6 +169,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const logEnabled = options.log !== false;
   const indexEnabled = options.index !== false;
   const writeEnabled = options.write !== false;
+  const signingEnabled = options.signing === true;
   const maxAuthTokenTTLSeconds =
     options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS;
 
@@ -290,6 +295,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         // 501 those routes, mirroring the content/log capability semantics.
         revocations: true,
         index: indexEnabled,
+        signing: signingEnabled,
       },
       profile: profileArtifactJws,
       peers: peerInfos,
@@ -298,6 +304,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         ...(stats ?? {}),
       },
     });
+  });
+
+  registerSigningRoutes({
+    app,
+    store,
+    relayDID,
+    basePath: SIGNING_BASE_PATH,
+    enabled: signingEnabled,
+    maxAuthTokenTTLSeconds,
   });
 
   // -------------------------------------------------------------------------

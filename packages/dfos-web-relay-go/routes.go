@@ -23,6 +23,10 @@ const maxRequestBodyBytes = 16 << 20 // 16 MB
 // with the TS relay (PROOF_BASE_PATH in relay.ts) and the clients.
 const proofBasePath = "/proof/v1"
 
+// signingBasePath is the optional SIGNING 0.1 courier clock. Byte twin of
+// SIGNING_BASE_PATH in the TypeScript relay.
+const signingBasePath = "/signing/v1"
+
 func newRouter(r *Relay) http.Handler {
 	mux := http.NewServeMux()
 
@@ -38,6 +42,14 @@ func newRouter(r *Relay) http.Handler {
 	mux.HandleFunc("GET "+proofBasePath+"/content/{contentId}", r.handleGetContent)
 	mux.HandleFunc("GET "+proofBasePath+"/countersignatures/{cid}", r.handleGetCountersignatures)
 	mux.HandleFunc("GET "+proofBasePath+"/log", r.handleGetLog)
+
+	// signing mailbox — routes always exist; each handler gates signingEnabled
+	// before authentication, body parsing, or store access.
+	mux.HandleFunc("POST "+signingBasePath+"/requests", r.handleSigningDeposit)
+	mux.HandleFunc("GET "+signingBasePath+"/requests", r.handleSigningPoll)
+	mux.HandleFunc("POST "+signingBasePath+"/requests/{cid}/response", r.handleSigningRespond)
+	mux.HandleFunc("GET "+signingBasePath+"/requests/{cid}/response", r.handleSigningGetResponse)
+	mux.HandleFunc("POST "+signingBasePath+"/requests/{cid}/decline", r.handleSigningDecline)
 
 	// universal DID resolver (DIF-compat, additive, own version clock) — mounts at
 	// ROOT (not under proofBasePath), riding the frozen v1 surface without touching
@@ -158,6 +170,7 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 			// 501 those routes, mirroring the content/log capability semantics.
 			"revocations": true,
 			"index":       r.indexEnabled,
+			"signing":     r.signingEnabled,
 		},
 		"profile": r.profileArtifactJWS,
 		"peers":   peers,

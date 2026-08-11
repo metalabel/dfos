@@ -30,7 +30,9 @@ type RelayOptions struct {
 	// /proof/v1/operations is rejected (501), so neither client writes nor peer
 	// gossip-in are accepted. The node still ingests by PULLING from peers
 	// (SyncFromPeers polls their /log). nil or true = accept writes (default).
-	Write        *bool
+	Write *bool
+	// Signing enables the optional SIGNING 0.1 mailbox. nil = disabled.
+	Signing      *bool
 	Logger       *slog.Logger // nil = slog.Default()
 	Peers        []PeerConfig
 	PeerClient   PeerClient // injected peer transport (nil = no peering)
@@ -156,6 +158,31 @@ type StoredPublicCredential struct {
 	JWSToken  string            `json:"jwsToken"`
 }
 
+// StoredSignRequest is ephemeral signing-mailbox courier state.
+type StoredSignRequest struct {
+	CID          string `json:"cid"`
+	Request      string `json:"request"`
+	RequesterDID string `json:"requesterDID"`
+	SubjectDID   string `json:"subjectDID"`
+	PayloadTyp   string `json:"payloadTyp"`
+	PayloadBytes []byte `json:"-"`
+	ExpiresAt    string `json:"expiresAt"`
+	DepositedAt  string `json:"depositedAt"`
+	Declined     bool   `json:"declined"`
+	Response     string `json:"response,omitempty"`
+}
+
+const signingTimeFormat = "2006-01-02T15:04:05.000Z"
+
+type SigningPutResult string
+
+const (
+	SigningCreated   SigningPutResult = "created"
+	SigningIdentical SigningPutResult = "identical"
+	SigningConflict  SigningPutResult = "conflict"
+	SigningNotFound  SigningPutResult = "not-found"
+)
+
 // AttenuationPair is a resource + action pair.
 type AttenuationPair struct {
 	Resource string `json:"resource"`
@@ -244,6 +271,13 @@ type IngestionResult struct {
 
 // Store is the storage backend for a DFOS web relay.
 type Store interface {
+	// signing mailbox (ephemeral courier state)
+	GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error)
+	PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error)
+	ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error)
+	PutSignResponse(cid, response string, now time.Time) (SigningPutResult, error)
+	DeclineSignRequest(cid string, now time.Time) (SigningPutResult, error)
+
 	// operations
 	GetOperation(cid string) (*StoredOperation, error)
 	PutOperation(op StoredOperation) error

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	_ "modernc.org/sqlite"
@@ -103,6 +104,22 @@ CREATE TABLE IF NOT EXISTS public_credentials (
 );
 
 CREATE INDEX IF NOT EXISTS idx_public_credentials_exp ON public_credentials(exp);
+
+CREATE TABLE IF NOT EXISTS signing_requests (
+	cid TEXT PRIMARY KEY,
+	request_token TEXT NOT NULL,
+	requester_did TEXT NOT NULL,
+	subject_did TEXT NOT NULL,
+	payload_typ TEXT NOT NULL,
+	payload_bytes BLOB NOT NULL,
+	expires_at TEXT NOT NULL,
+	deposited_at TEXT NOT NULL,
+	declined INTEGER NOT NULL DEFAULT 0,
+	response_token TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_signing_requests_subject_pending
+	ON signing_requests(subject_did, deposited_at, cid);
+CREATE INDEX IF NOT EXISTS idx_signing_requests_expiry ON signing_requests(expires_at);
 
 -- index (v0) materialized projection: flat-column rows the ingestion pipeline
 -- maintains incrementally so a /index/v0 page costs O(page), not O(corpus).
@@ -346,6 +363,177 @@ func ensureColumn(db *sql.DB, table, column, columnType string) error {
 func (s *SQLiteStore) Close() error {
 	s.readDB.Close()
 	return s.db.Close()
+}
+
+// ---------------------------------------------------------------------------
+// signing mailbox
+// ---------------------------------------------------------------------------
+
+func scanSignRequest(row interface{ Scan(...any) error }) (*StoredSignRequest, error) {
+	var request StoredSignRequest
+	var declined int
+	var response sql.NullString
+	err := row.Scan(
+		&request.CID, &request.Request, &request.RequesterDID, &request.SubjectDID,
+		&request.PayloadTyp, &request.PayloadBytes, &request.ExpiresAt,
+		&request.DepositedAt, &declined, &response,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	request.Declined = declined != 0
+	if response.Valid {
+		request.Response = response.String
+	}
+	return &request, nil
+}
+
+const selectSignRequest = `SELECT cid, request_token, requester_did, subject_did,
+	payload_typ, payload_bytes, expires_at, deposited_at, declined, response_token
+	FROM signing_requests`
+
+func (s *SQLiteStore) GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error) {
+	if err := s.pruneExpiredSignRequests(now); err != nil {
+		return nil, err
+	}
+	return scanSignRequest(s.readerDB().QueryRow(
+		selectSignRequest+" WHERE cid = ? AND expires_at > ?", cid, now.UTC().Format(signingTimeFormat),
+	))
+}
+
+func (s *SQLiteStore) pruneExpiredSignRequests(now time.Time) error {
+	_, err := s.writerDB().Exec("DELETE FROM signing_requests WHERE expires_at <= ?", now.UTC().Format(signingTimeFormat))
+	return err
+}
+
+func (s *SQLiteStore) PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error) {
+	if err := s.pruneExpiredSignRequests(now); err != nil {
+		return SigningConflict, err
+	}
+	result, err := s.writerDB().Exec(`INSERT OR IGNORE INTO signing_requests
+		(cid, request_token, requester_did, subject_did, payload_typ, payload_bytes, expires_at, deposited_at, declined)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		request.CID, request.Request, request.RequesterDID, request.SubjectDID, request.PayloadTyp,
+		request.PayloadBytes, request.ExpiresAt, request.DepositedAt, boolToInt(request.Declined),
+	)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if affected, _ := result.RowsAffected(); affected == 1 {
+		return SigningCreated, nil
+	}
+	existing, err := s.GetSignRequest(request.CID, now)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if existing != nil && existing.Request == request.Request {
+		return SigningIdentical, nil
+	}
+	return SigningConflict, nil
+}
+
+func (s *SQLiteStore) ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error) {
+	if err := s.pruneExpiredSignRequests(now); err != nil {
+		return nil, "", err
+	}
+	query := selectSignRequest + ` WHERE subject_did = ? AND expires_at > ? AND response_token IS NULL`
+	args := []any{subjectDID, now.UTC().Format(signingTimeFormat)}
+	if after != "" {
+		cursor, ok := decodeSigningCursor(after)
+		if !ok {
+			err := s.readerDB().QueryRow(
+				"SELECT deposited_at FROM signing_requests WHERE cid = ? AND subject_did = ? AND expires_at > ?",
+				after, subjectDID, now.UTC().Format(signingTimeFormat),
+			).Scan(&cursor.DepositedAt)
+			if err == nil {
+				cursor = signingCursor{SubjectDID: subjectDID, DepositedAt: cursor.DepositedAt, CID: after}
+				ok = true
+			} else if err != sql.ErrNoRows {
+				return nil, "", err
+			}
+		}
+		if !ok || cursor.SubjectDID != subjectDID {
+			return []StoredSignRequest{}, "", nil
+		}
+		query += " AND (deposited_at > ? OR (deposited_at = ? AND cid > ?))"
+		args = append(args, cursor.DepositedAt, cursor.DepositedAt, cursor.CID)
+	}
+	query += " ORDER BY deposited_at ASC, cid ASC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	requests := make([]StoredSignRequest, 0)
+	for rows.Next() {
+		request, err := scanSignRequest(rows)
+		if err != nil {
+			return nil, "", err
+		}
+		requests = append(requests, *request)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	cursor := ""
+	if len(requests) == limit && len(requests) > 0 {
+		last := requests[len(requests)-1]
+		cursor = encodeSigningCursor(signingCursor{SubjectDID: subjectDID, DepositedAt: last.DepositedAt, CID: last.CID})
+	}
+	return requests, cursor, nil
+}
+
+func (s *SQLiteStore) PutSignResponse(cid, response string, now time.Time) (SigningPutResult, error) {
+	if err := s.pruneExpiredSignRequests(now); err != nil {
+		return SigningConflict, err
+	}
+	result, err := s.writerDB().Exec(`UPDATE signing_requests SET response_token = ?
+		WHERE cid = ? AND expires_at > ? AND response_token IS NULL`,
+		response, cid, now.UTC().Format(signingTimeFormat))
+	if err != nil {
+		return SigningConflict, err
+	}
+	if affected, _ := result.RowsAffected(); affected == 1 {
+		return SigningCreated, nil
+	}
+	existing, err := s.GetSignRequest(cid, now)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if existing == nil {
+		return SigningNotFound, nil
+	}
+	if existing.Response == response {
+		return SigningIdentical, nil
+	}
+	return SigningConflict, nil
+}
+
+func (s *SQLiteStore) DeclineSignRequest(cid string, now time.Time) (SigningPutResult, error) {
+	if err := s.pruneExpiredSignRequests(now); err != nil {
+		return SigningConflict, err
+	}
+	result, err := s.writerDB().Exec(`UPDATE signing_requests SET declined = 1
+		WHERE cid = ? AND expires_at > ? AND response_token IS NULL`,
+		cid, now.UTC().Format(signingTimeFormat))
+	if err != nil {
+		return SigningConflict, err
+	}
+	if affected, _ := result.RowsAffected(); affected == 1 {
+		return SigningCreated, nil
+	}
+	existing, err := s.GetSignRequest(cid, now)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if existing == nil {
+		return SigningNotFound, nil
+	}
+	return SigningConflict, nil
 }
 
 // ---------------------------------------------------------------------------

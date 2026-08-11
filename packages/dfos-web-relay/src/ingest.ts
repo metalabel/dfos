@@ -27,6 +27,7 @@ import {
   verifyIdentityExtensionFromTrustedState,
   verifyRevocation,
   type VerifiedCountersignature,
+  type VerifiedIdentity,
   type VerifiedRevocation,
 } from '@metalabel/dfos-protocol/chain';
 import {
@@ -313,11 +314,10 @@ export const createKeyResolver =
  *
  * Used for credential verification at both ingestion and access-check time.
  */
-export const createHistoricalIdentityResolver = (store: RelayStore) => async (did: string) => {
-  const chain = await store.getIdentityChain(did);
-  if (!chain) return undefined;
-
-  const { state, log } = chain;
+export const mergeHistoricalIdentity = (
+  state: VerifiedIdentity,
+  log: string[],
+): VerifiedIdentity => {
   const keyMaps = {
     authKeys: new Map(state.authKeys.map((k) => [k.id, k])),
     assertKeys: new Map(state.assertKeys.map((k) => [k.id, k])),
@@ -358,6 +358,12 @@ export const createHistoricalIdentityResolver = (store: RelayStore) => async (di
     assertKeys: [...keyMaps.assertKeys.values()],
     controllerKeys: [...keyMaps.controllerKeys.values()],
   };
+};
+
+export const createHistoricalIdentityResolver = (store: RelayStore) => async (did: string) => {
+  const chain = await store.getIdentityChain(did);
+  if (!chain) return undefined;
+  return mergeHistoricalIdentity(chain.state, chain.log);
 };
 
 /**

@@ -12,7 +12,7 @@ import {
   verifyContentChain,
   verifyIdentityChain,
 } from '@metalabel/dfos-protocol/chain';
-import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { base64urlDecode, base64urlEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
   IndexContentRow,
   IndexCountersignatureRow,
@@ -32,10 +32,41 @@ import type {
   StoredOperation,
   StoredPublicCredential,
   StoredRevocation,
+  StoredSignRequest,
 } from './types';
 
 /** Ascending bytewise comparator — JS UTF-16 order over ASCII DIDs/CIDs. */
 const ascending = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+interface SigningCursor {
+  subjectDID: string;
+  depositedAt: string;
+  cid: string;
+}
+
+const signingCursorEncoder = new TextEncoder();
+const signingCursorDecoder = new TextDecoder('utf-8', { fatal: true });
+
+const encodeSigningCursor = (cursor: SigningCursor): string =>
+  base64urlEncode(signingCursorEncoder.encode(JSON.stringify(cursor)));
+
+const decodeSigningCursor = (cursor: string): SigningCursor | undefined => {
+  try {
+    const value = JSON.parse(
+      signingCursorDecoder.decode(base64urlDecode(cursor)),
+    ) as Partial<SigningCursor>;
+    if (
+      typeof value.subjectDID !== 'string' ||
+      typeof value.depositedAt !== 'string' ||
+      typeof value.cid !== 'string'
+    ) {
+      return undefined;
+    }
+    return { subjectDID: value.subjectDID, depositedAt: value.depositedAt, cid: value.cid };
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Page a projection: rows ascending by `keyOf`, strictly greater than `after`
@@ -136,6 +167,7 @@ const revocationSupersedes = (
  * Suitable for development, testing, and short-lived relay instances.
  */
 export class MemoryRelayStore implements RelayStore {
+  private signRequests = new Map<string, StoredSignRequest>();
   private operations = new Map<string, StoredOperation>();
   private identityChains = new Map<string, StoredIdentityChain>();
   private contentChains = new Map<string, StoredContentChain>();
@@ -159,6 +191,108 @@ export class MemoryRelayStore implements RelayStore {
     string,
     IndexCountersignatureRow & { witnessDID: string }
   >();
+
+  private pruneExpiredSignRequests(now: number): void {
+    for (const [cid, request] of this.signRequests) {
+      if (now >= Date.parse(request.expiresAt)) this.signRequests.delete(cid);
+    }
+  }
+
+  async getSignRequest(cid: string, now: number): Promise<StoredSignRequest | undefined> {
+    this.pruneExpiredSignRequests(now);
+    return this.signRequests.get(cid);
+  }
+
+  async putSignRequest(
+    request: StoredSignRequest,
+    now: number,
+  ): Promise<'created' | 'identical' | 'conflict'> {
+    this.pruneExpiredSignRequests(now);
+    const existing = this.signRequests.get(request.cid);
+    if (existing) return existing.request === request.request ? 'identical' : 'conflict';
+    this.signRequests.set(request.cid, request);
+    return 'created';
+  }
+
+  async listPendingSignRequests(params: {
+    subjectDID: string;
+    after?: string;
+    limit: number;
+    now: number;
+  }): Promise<{ requests: StoredSignRequest[]; cursor: string | null }> {
+    this.pruneExpiredSignRequests(params.now);
+    const rows = [...this.signRequests.values()]
+      .filter(
+        (request) =>
+          request.subjectDID === params.subjectDID &&
+          params.now < Date.parse(request.expiresAt) &&
+          request.response === undefined,
+      )
+      .sort((a, b) =>
+        a.depositedAt === b.depositedAt
+          ? ascending(a.cid, b.cid)
+          : ascending(a.depositedAt, b.depositedAt),
+      );
+    let after = params.after ? decodeSigningCursor(params.after) : undefined;
+    if (params.after && !after) {
+      const legacy = this.signRequests.get(params.after);
+      if (legacy) {
+        after = {
+          subjectDID: legacy.subjectDID,
+          depositedAt: legacy.depositedAt,
+          cid: legacy.cid,
+        };
+      }
+    }
+    if (params.after && (!after || after.subjectDID !== params.subjectDID)) {
+      return { requests: [], cursor: null };
+    }
+    const gated = after
+      ? rows.filter(
+          (request) =>
+            request.depositedAt > after.depositedAt ||
+            (request.depositedAt === after.depositedAt && request.cid > after.cid),
+        )
+      : rows;
+    const requests = gated.slice(0, params.limit);
+    const last = requests.at(-1);
+    const cursor =
+      requests.length === params.limit && last
+        ? encodeSigningCursor({
+            subjectDID: params.subjectDID,
+            depositedAt: last.depositedAt,
+            cid: last.cid,
+          })
+        : null;
+    return { requests, cursor };
+  }
+
+  async putSignResponse(
+    cid: string,
+    response: string,
+    now: number,
+  ): Promise<'created' | 'identical' | 'conflict' | 'not-found'> {
+    this.pruneExpiredSignRequests(now);
+    const request = this.signRequests.get(cid);
+    if (!request) return 'not-found';
+    if (request.response !== undefined) {
+      return request.response === response ? 'identical' : 'conflict';
+    }
+    request.response = response;
+    return 'created';
+  }
+
+  async declineSignRequest(
+    cid: string,
+    now: number,
+  ): Promise<'declined' | 'responded' | 'not-found'> {
+    this.pruneExpiredSignRequests(now);
+    const request = this.signRequests.get(cid);
+    if (!request) return 'not-found';
+    if (request.response !== undefined) return 'responded';
+    request.declined = true;
+    return 'declined';
+  }
 
   async getOperation(cid: string): Promise<StoredOperation | undefined> {
     return this.operations.get(cid);
