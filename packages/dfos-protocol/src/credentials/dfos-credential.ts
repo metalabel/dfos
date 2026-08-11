@@ -421,6 +421,11 @@ const parseActions = (action: string): Set<string> =>
  * - `chain:X` covered by `chain:*` (narrowing from wildcard — valid)
  * - `chain:*` covered by `chain:*` (exact match)
  * - `chain:*` NOT covered by `chain:X` (widening — invalid)
+ * - Non-`chain` types (`mailbox:<id>`, and any form a future capability
+ *   registers): exact byte equality of the full resource string, nothing else.
+ *   The wildcard is a `chain:`-only concept — a literal `*` id in any other
+ *   type is an ordinary id covering only itself — and coverage never crosses
+ *   resource types. See CREDENTIALS.md "Resource Types".
  * - Actions: child action set must be a subset of parent action set
  */
 export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]): boolean => {
@@ -452,6 +457,11 @@ export const isAttenuated = (parentAtt: Attenuation[], childAtt: Attenuation[]):
         // chain:X covered by chain:X (exact match)
         return childRes.id === parentRes.id;
       }
+      if (childRes.type !== 'chain' && parentRes.type !== 'chain') {
+        // non-chain forms narrow by exact byte equality only — no wildcard
+        return childEntry.resource === parentEntry.resource;
+      }
+      // coverage never crosses resource types
       return false;
     });
   });

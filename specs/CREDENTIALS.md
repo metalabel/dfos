@@ -305,7 +305,7 @@ Grants the audience the right to **deposit** sign requests into the subject's re
 ```
 
 - **`deposit` is the only action.** There is deliberately no `collect`: reading one's own mailbox is proven by key possession, not delegated by credential — credentials delegate authority to _others_, and being yourself is not a delegation. See [SIGNING.md](https://protocol.dfos.com/signing) for the reasoning; a credential attenuated to any other action on a `mailbox:` resource grants nothing.
-- **Exact match only.** No wildcard form is defined for `mailbox`, and a relay MUST NOT honor `mailbox:*` (or any non-exact form) as covering a deposit.
+- **Exact match only — in the deposit gate AND the attenuation walk.** No wildcard form is defined for `mailbox`, and a relay MUST NOT honor `mailbox:*` (or any non-exact form) as covering a deposit. The same rule governs delegation: attenuation coverage for a `mailbox:` entry (and any non-`chain:` form a future capability registers) is **exact byte equality of the full resource string** — the `chain:*` wildcard is a `chain:`-only concept, a literal `*` id in any other type is an ordinary id covering only itself, and coverage never crosses resource types. Verifiers MUST agree on this exactly: an implementation that generalized the wildcard to other types would widen every future resource form's delegation semantics unilaterally.
 - **The consuming rule lives in SIGNING.md**, including the one that gives the form its teeth: a deposit credential's delegation chain MUST **root at the subject DID** — only the subject is original authority over its own mailbox.
 
 ---

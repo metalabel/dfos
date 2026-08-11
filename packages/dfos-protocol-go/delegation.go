@@ -91,6 +91,14 @@ func ParseActions(action string) map[string]bool {
 
 // IsAttenuated checks if childAtt is a valid attenuation of parentAtt.
 // Every entry in childAtt must be covered by at least one entry in parentAtt.
+//
+// Coverage for chain resources honors the chain:* wildcard; every other
+// resource type (mailbox:<id>, and any form a future capability registers)
+// narrows by exact byte equality of the full resource string ONLY — the
+// wildcard is a chain:-only concept, a literal '*' id elsewhere is an ordinary
+// id covering only itself, and coverage never crosses resource types. MUST
+// match the TS twin (isAttenuated in dfos-credential.ts) verdict-for-verdict;
+// see CREDENTIALS.md "Resource Types".
 func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 	for _, child := range childAtt {
 		childType, childID, ok := ParseResource(child.Resource)
@@ -132,8 +140,15 @@ func IsAttenuated(parentAtt []AttEntry, childAtt []AttEntry) bool {
 					covered = true
 					break
 				}
+			} else if childType != "chain" && parentType != "chain" {
+				// non-chain forms narrow by exact byte equality only — no wildcard
+				if child.Resource == parent.Resource {
+					covered = true
+					break
+				}
 			}
-			// chain:* NOT covered by chain:X (widening — invalid)
+			// chain:* NOT covered by chain:X (widening — invalid);
+			// coverage never crosses resource types
 		}
 
 		if !covered {
