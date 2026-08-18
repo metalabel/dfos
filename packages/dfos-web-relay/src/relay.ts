@@ -175,6 +175,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     signingEnabled &&
     [
       store.getSignRequest,
+      store.pruneExpiredSignRequests,
       store.putSignRequest,
       store.listPendingSignRequests,
       store.putSignResponse,
@@ -182,6 +183,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     ].some((member) => typeof member !== 'function')
   ) {
     throw new Error('signing capability requires a store implementing the signing members');
+  }
+  if (typeof store.pruneExpiredSignRequests === 'function') {
+    await store.pruneExpiredSignRequests(Date.now());
   }
   const maxAuthTokenTTLSeconds =
     options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS;
@@ -243,6 +247,31 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     gossip(seqNewOps);
 
     return results;
+  };
+
+  const ingestPeerLogWithOneRestart = async (
+    getPage: (
+      after: string | undefined,
+    ) => Promise<
+      { entries: { jwsToken: string }[]; next: string | null } | 'invalid-cursor' | null
+    >,
+  ): Promise<boolean> => {
+    let after: string | undefined;
+    let restarted = false;
+    while (true) {
+      const page = await getPage(after);
+      if (page === 'invalid-cursor') {
+        if (restarted) return false;
+        restarted = true;
+        after = undefined;
+        continue;
+      }
+      if (!page) return false;
+      if (page.entries.length === 0) return true;
+      await ingestWithGossip(page.entries.map((entry) => entry.jwsToken));
+      if (!page.next) return true;
+      after = page.next;
+    }
   };
 
   const app = new Hono();
@@ -414,19 +443,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // read-through: try peers on local miss (paginate through full log)
     if (!chain && readThroughPeers.length > 0 && peerClient) {
       for (const peer of readThroughPeers) {
-        let after: string | undefined;
-        while (true) {
-          const logPage = await peerClient.getIdentityLog(peer.url, did, {
+        const completed = await ingestPeerLogWithOneRestart((after) =>
+          peerClient.getIdentityLog(peer.url, did, {
             ...(after ? { after } : {}),
             limit: 1000,
-          });
-          if (!logPage || logPage.entries.length === 0) break;
-          await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
-          if (!logPage.next) break;
-          after = logPage.next;
-        }
+          }),
+        );
         chain = await store.getIdentityChain(did);
-        if (chain) break;
+        if (completed && chain) break;
       }
     }
 
@@ -469,19 +493,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // read-through: try peers on local miss (paginate through full log)
     if (!chain && readThroughPeers.length > 0 && peerClient) {
       for (const peer of readThroughPeers) {
-        let after: string | undefined;
-        while (true) {
-          const logPage = await peerClient.getIdentityLog(peer.url, did, {
+        const completed = await ingestPeerLogWithOneRestart((after) =>
+          peerClient.getIdentityLog(peer.url, did, {
             ...(after ? { after } : {}),
             limit: 1000,
-          });
-          if (!logPage || logPage.entries.length === 0) break;
-          await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
-          if (!logPage.next) break;
-          after = logPage.next;
-        }
+          }),
+        );
         chain = await store.getIdentityChain(did);
-        if (chain) break;
+        if (completed && chain) break;
       }
     }
 
@@ -545,16 +564,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
 
-    let startIdx = 0;
-    if (after) {
-      const idx = revocations.findIndex((rev) => rev.credentialCID === after);
-      // The sort key is createdAt while the cursor is a credentialCID, so
-      // resumption is positional and cursors are relay-local: unknown → 400.
-      if (idx < 0) return c.json({ error: 'invalid cursor' }, 400);
-      startIdx = idx + 1;
-    }
-
-    const page = revocations.slice(startIdx, startIdx + limit);
+    const eligible = after
+      ? revocations.filter((revocation) => revocation.credentialCID > after)
+      : revocations;
+    const page = eligible.slice(0, limit);
     const next = page.length === limit ? page[page.length - 1]!.credentialCID : null;
 
     return c.json(issuerRevocationList(did, page, next));
@@ -722,19 +735,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // read-through: try peers on local miss (paginate through full log)
     if (!chain && readThroughPeers.length > 0 && peerClient) {
       for (const peer of readThroughPeers) {
-        let after: string | undefined;
-        while (true) {
-          const logPage = await peerClient.getContentLog(peer.url, contentId, {
+        const completed = await ingestPeerLogWithOneRestart((after) =>
+          peerClient.getContentLog(peer.url, contentId, {
             ...(after ? { after } : {}),
             limit: 1000,
-          });
-          if (!logPage || logPage.entries.length === 0) break;
-          await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
-          if (!logPage.next) break;
-          after = logPage.next;
-        }
+          }),
+        );
         chain = await store.getContentChain(contentId);
-        if (chain) break;
+        if (completed && chain) break;
       }
     }
 
@@ -924,21 +932,37 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     for (const peer of syncPeers) {
       let cursor = await store.getPeerCursor(peer.url);
       let fetched = 0;
+      let resetAttempted = false;
+      let resetPending = false;
       while (fetched < maxOpsPerSyncCycle) {
         const page = await peerClient.getOperationLog(peer.url, {
           ...(cursor ? { after: cursor } : {}),
           limit: 1000,
         });
         if (page === 'invalid-cursor') {
-          // The peer no longer recognizes our persisted cursor (wiped/rebuilt
-          // log). Reset and re-sync from the start next cycle — idempotent.
+          if (resetAttempted) {
+            console.warn(`peer ${peer.url} rejected its cursor twice; abandoning sync cycle`);
+            break;
+          }
+          resetAttempted = true;
+          resetPending = true;
           cursor = undefined;
-          await store.setPeerCursor(peer.url, '');
           continue;
         }
-        if (!page || page.entries.length === 0) break;
+        if (!page) break;
+        if (page.entries.length === 0) {
+          if (resetPending) await store.setPeerCursor(peer.url, page.next ?? '');
+          break;
+        }
         await ingestWithGossip(page.entries.map((e) => e.jwsToken));
         fetched += page.entries.length;
+        if (resetPending) {
+          // Only a successful from-scratch page proves that the old cursor was
+          // genuinely invalid. Until then, preserve the persisted high-water
+          // mark against transient edge-generated 400s.
+          if (!page.next) await store.setPeerCursor(peer.url, '');
+          resetPending = false;
+        }
         // Persist ONLY peer-supplied cursors — never fabricate one from the last
         // entry's CID. A peer whose cursor format is not a bare CID (production
         // pages a timestamp|cid token) would 400 a fabricated cursor and force a

@@ -111,14 +111,14 @@ export interface PeerClient {
     peerUrl: string,
     did: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
   /** Fetch content chain log from a peer */
   getContentLog(
     peerUrl: string,
     contentId: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
   /**
    * Fetch global operation log from a peer. Returns the page, `null` on any
@@ -270,10 +270,11 @@ export interface StoredSignRequest {
   response?: string;
 }
 
-export type SigningPutResult = 'created' | 'identical' | 'conflict' | 'not-found';
+export type SigningPutResult = 'created' | 'identical' | 'conflict' | 'not-found' | 'capacity';
 export type SigningDeclineResult = 'declined' | 'responded' | 'not-found';
 
 export interface SigningCursor {
+  subjectDID: string;
   depositedAt: string;
   cid: string;
 }
@@ -281,27 +282,32 @@ export interface SigningCursor {
 const signingCursorEncoder = new TextEncoder();
 const signingCursorDecoder = new TextDecoder('utf-8', { fatal: true });
 
-/** Unpadded base64url of `<depositedAt-ISO-millis>|<cid>`. */
+/** Unpadded base64url of `<subjectDID>|<depositedAt-ISO-millis>|<cid>`. */
 export const encodeSigningCursor = (cursor: SigningCursor): string =>
-  base64urlEncode(signingCursorEncoder.encode(`${cursor.depositedAt}|${cursor.cid}`));
+  base64urlEncode(
+    signingCursorEncoder.encode(`${cursor.subjectDID}|${cursor.depositedAt}|${cursor.cid}`),
+  );
 
 export const decodeSigningCursor = (raw: string): SigningCursor | undefined => {
   try {
     const bytes = base64urlDecode(raw);
     if (base64urlEncode(bytes) !== raw) return undefined;
     const decoded = signingCursorDecoder.decode(bytes);
-    const separator = decoded.indexOf('|');
+    const firstSeparator = decoded.indexOf('|');
+    const secondSeparator = decoded.indexOf('|', firstSeparator + 1);
     if (
-      separator <= 0 ||
-      separator !== decoded.lastIndexOf('|') ||
-      separator === decoded.length - 1
+      firstSeparator <= 0 ||
+      secondSeparator <= firstSeparator + 1 ||
+      secondSeparator !== decoded.lastIndexOf('|') ||
+      secondSeparator === decoded.length - 1
     ) {
       return undefined;
     }
-    const depositedAt = decoded.slice(0, separator);
-    const cid = decoded.slice(separator + 1);
+    const subjectDID = decoded.slice(0, firstSeparator);
+    const depositedAt = decoded.slice(firstSeparator + 1, secondSeparator);
+    const cid = decoded.slice(secondSeparator + 1);
     if (new Date(depositedAt).toISOString() !== depositedAt) return undefined;
-    return { depositedAt, cid };
+    return { subjectDID, depositedAt, cid };
   } catch {
     return undefined;
   }
@@ -326,13 +332,14 @@ export interface RelayStore {
   // --- signing mailbox (ephemeral courier state) ---
 
   getSignRequest?(cid: string, now: number): Promise<StoredSignRequest | undefined>;
+  pruneExpiredSignRequests?(now: number): Promise<void>;
   putSignRequest?(request: StoredSignRequest, now: number): Promise<SigningPutResult>;
   listPendingSignRequests?(params: {
     subjectDID: string;
     after?: string;
     limit: number;
     now: number;
-  }): Promise<{ requests: StoredSignRequest[]; next: string | null }>;
+  }): Promise<{ requests: StoredSignRequest[]; next: string | null } | null>;
   putSignResponse?(cid: string, response: string, now: number): Promise<SigningPutResult>;
   declineSignRequest?(cid: string, now: number): Promise<SigningDeclineResult>;
 
@@ -588,6 +595,7 @@ export type SigningStore = RelayStore &
     Pick<
       RelayStore,
       | 'getSignRequest'
+      | 'pruneExpiredSignRequests'
       | 'putSignRequest'
       | 'listPendingSignRequests'
       | 'putSignResponse'

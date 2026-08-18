@@ -21,7 +21,6 @@ import {
 import { Hono, type Context } from 'hono';
 import { authenticateRequest, DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS } from './auth';
 import { createHistoricalIdentityResolver, mergeHistoricalIdentity } from './ingest';
-import { decodeSigningCursor } from './types';
 import type { RelayStore, SigningStore, StoredSignRequest } from './types';
 
 const MAX_DEPOSIT_BODY_BYTES = 524_288;
@@ -261,6 +260,7 @@ export const registerSigningRoutes = (options: {
       now,
     );
     if (result === 'conflict') return c.json({ error: 'request CID conflict' }, 409);
+    if (result === 'capacity') return c.json({ error: 'mailbox pending request cap reached' }, 429);
     return c.json(
       { cid: verifiedRequest.requestCID, expiresAt: verifiedRequest.expiresAt },
       result === 'created' ? 201 : 200,
@@ -277,7 +277,6 @@ export const registerSigningRoutes = (options: {
     );
     if (!auth) return c.json({ error: 'authentication required' }, 401);
     const after = c.req.query('after');
-    if (after && !decodeSigningCursor(after)) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseSigningLimit(c.req.query('limit'));
     const result = await signingStore.listPendingSignRequests({
       subjectDID: auth.iss,
@@ -285,6 +284,7 @@ export const registerSigningRoutes = (options: {
       limit,
       now: Date.now(),
     });
+    if (!result) return c.json({ error: 'invalid cursor' }, 400);
     return c.json({
       requests: result.requests.map((request) => ({
         cid: request.cid,

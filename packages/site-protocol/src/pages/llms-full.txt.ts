@@ -15,6 +15,7 @@ export const GET: APIRoute = () => {
   const credentials = fs.readFileSync('../../specs/CREDENTIALS.md', 'utf-8');
   const credits = fs.readFileSync('../../specs/CREDITS.md', 'utf-8');
   const siwd = fs.readFileSync('../../specs/SIWD.md', 'utf-8');
+  const signing = fs.readFileSync('../../specs/SIGNING.md', 'utf-8');
   const threatModel = fs.readFileSync('../../specs/THREAT-MODEL.md', 'utf-8');
   const conformance = fs.readFileSync('../../specs/CONFORMANCE.md', 'utf-8');
   const cli = fs.readFileSync('../dfos-cli/CLI.md', 'utf-8');
@@ -64,6 +65,10 @@ export const GET: APIRoute = () => {
     '---',
     '',
     siwd,
+    '',
+    '---',
+    '',
+    signing,
     '',
     '---',
     '',

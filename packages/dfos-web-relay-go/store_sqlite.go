@@ -397,7 +397,7 @@ const selectSignRequest = `SELECT cid, request_token, requester_did, subject_did
 	FROM signing_requests`
 
 func (s *SQLiteStore) GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error) {
-	if err := s.pruneExpiredSignRequests(now); err != nil {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
 		return nil, err
 	}
 	return scanSignRequest(s.readerDB().QueryRow(
@@ -405,20 +405,35 @@ func (s *SQLiteStore) GetSignRequest(cid string, now time.Time) (*StoredSignRequ
 	))
 }
 
-func (s *SQLiteStore) pruneExpiredSignRequests(now time.Time) error {
+func (s *SQLiteStore) PruneExpiredSignRequests(now time.Time) error {
 	_, err := s.writerDB().Exec("DELETE FROM signing_requests WHERE expires_at <= ?", now.UTC().Format(signingTimeFormat))
 	return err
 }
 
 func (s *SQLiteStore) PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error) {
-	if err := s.pruneExpiredSignRequests(now); err != nil {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
 		return SigningConflict, err
 	}
+	existing, err := s.GetSignRequest(request.CID, now)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if existing != nil {
+		if existing.Request == request.Request {
+			return SigningIdentical, nil
+		}
+		return SigningConflict, nil
+	}
+	// Keep the capacity check and insertion in one writer statement so concurrent
+	// deposits cannot both observe the last free slot.
 	result, err := s.writerDB().Exec(`INSERT OR IGNORE INTO signing_requests
 		(cid, request_token, requester_did, subject_did, payload_typ, payload_bytes, expires_at, deposited_at, declined)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE (SELECT COUNT(*) FROM signing_requests
+			WHERE subject_did = ? AND expires_at > ? AND response_token IS NULL) < ?`,
 		request.CID, request.Request, request.RequesterDID, request.SubjectDID, request.PayloadTyp,
 		request.PayloadBytes, request.ExpiresAt, request.DepositedAt, boolToInt(request.Declined),
+		request.SubjectDID, now.UTC().Format(signingTimeFormat), MaxPendingSignRequestsPerMailbox,
 	)
 	if err != nil {
 		return SigningConflict, err
@@ -426,26 +441,29 @@ func (s *SQLiteStore) PutSignRequest(request StoredSignRequest, now time.Time) (
 	if affected, _ := result.RowsAffected(); affected == 1 {
 		return SigningCreated, nil
 	}
-	existing, err := s.GetSignRequest(request.CID, now)
+	existing, err = s.GetSignRequest(request.CID, now)
 	if err != nil {
 		return SigningConflict, err
 	}
 	if existing != nil && existing.Request == request.Request {
 		return SigningIdentical, nil
 	}
+	if existing == nil {
+		return SigningAtCapacity, nil
+	}
 	return SigningConflict, nil
 }
 
 func (s *SQLiteStore) ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error) {
-	if err := s.pruneExpiredSignRequests(now); err != nil {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
 		return nil, "", err
 	}
 	query := selectSignRequest + ` WHERE subject_did = ? AND expires_at > ? AND response_token IS NULL`
 	args := []any{subjectDID, now.UTC().Format(signingTimeFormat)}
 	if after != "" {
 		cursor, ok := decodeSigningCursor(after)
-		if !ok {
-			return nil, "", fmt.Errorf("invalid signing cursor")
+		if !ok || cursor.SubjectDID != subjectDID {
+			return nil, "", ErrInvalidSigningCursor
 		}
 		query += " AND (deposited_at > ? OR (deposited_at = ? AND cid > ?))"
 		args = append(args, cursor.DepositedAt, cursor.DepositedAt, cursor.CID)
@@ -471,13 +489,13 @@ func (s *SQLiteStore) ListPendingSignRequests(subjectDID, after string, limit in
 	cursor := ""
 	if len(requests) == limit && len(requests) > 0 {
 		last := requests[len(requests)-1]
-		cursor = encodeSigningCursor(signingCursor{DepositedAt: last.DepositedAt, CID: last.CID})
+		cursor = encodeSigningCursor(signingCursor{SubjectDID: subjectDID, DepositedAt: last.DepositedAt, CID: last.CID})
 	}
 	return requests, cursor, nil
 }
 
 func (s *SQLiteStore) PutSignResponse(cid, response string, now time.Time) (SigningPutResult, error) {
-	if err := s.pruneExpiredSignRequests(now); err != nil {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
 		return SigningConflict, err
 	}
 	result, err := s.writerDB().Exec(`UPDATE signing_requests SET response_token = ?
@@ -503,7 +521,7 @@ func (s *SQLiteStore) PutSignResponse(cid, response string, now time.Time) (Sign
 }
 
 func (s *SQLiteStore) DeclineSignRequest(cid string, now time.Time) (SigningPutResult, error) {
-	if err := s.pruneExpiredSignRequests(now); err != nil {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
 		return SigningConflict, err
 	}
 	result, err := s.writerDB().Exec(`UPDATE signing_requests SET declined = 1
@@ -1706,14 +1724,7 @@ func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocati
 		return nil, err
 	}
 
-	// Sorts on the persisted CreatedAt (resolved above) — same frozen v1 feed
-	// order as before, without a second unverified decode per row.
-	sort.Slice(revs, func(i, j int) bool {
-		if revs[i].CreatedAt != revs[j].CreatedAt {
-			return revs[i].CreatedAt < revs[j].CreatedAt
-		}
-		return revs[i].CredentialCID < revs[j].CredentialCID
-	})
+	sort.Slice(revs, func(i, j int) bool { return revs[i].CredentialCID < revs[j].CredentialCID })
 	return revs, nil
 }
 

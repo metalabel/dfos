@@ -144,6 +144,39 @@ func TestRevocationStatus_IssuerListing(t *testing.T) {
 	}
 }
 
+func TestRevocationStatus_IssuerUnknownCursorKeysetResumes(t *testing.T) {
+	store := NewMemoryStore()
+	r, err := NewRelay(RelayOptions{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer := createTestIdentity(t).did
+	prefix := "bafyrei" + strings.Repeat("a", 51)
+	cids := []string{prefix + "a", prefix + "b", prefix + "c"}
+	for _, cid := range cids {
+		if err := store.AddRevocation(StoredRevocation{
+			CID: "rev-" + cid, IssuerDID: issuer, CredentialCID: cid, JWSToken: "token-" + cid,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// This cursor was never issued and falls strictly between the first and
+	// second keys: keyset resumption must return b,c rather than 400.
+	req := httptest.NewRequest(http.MethodGet, "/revocations/v1/issuer/"+issuer+"?after="+cids[0]+"~&limit=10", nil)
+	recorder := httptest.NewRecorder()
+	r.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unknown keyset cursor status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body issuerRevocationList
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Revocations) != 2 || body.Revocations[0].CredentialCID != cids[1] || body.Revocations[1].CredentialCID != cids[2] || body.Next != nil {
+		t.Fatalf("keyset resumed page = %+v, next=%v", body.Revocations, body.Next)
+	}
+}
+
 func TestRevocationStatus_IssuerWithNoRevocations(t *testing.T) {
 	srv, _, _, _ := revocationRelay(t)
 

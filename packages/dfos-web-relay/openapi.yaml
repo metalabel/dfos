@@ -163,11 +163,12 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
-        '501':
-          description: Signing mailbox disabled
+        '429':
+          description: Subject mailbox is at the pending-request cap
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
     get:
       operationId: pollSigningMailbox
       summary: Poll the authenticated subject's pending sign requests
@@ -187,7 +188,6 @@ paths:
           schema:
             type: integer
             default: 100
-            maximum: 1000
           description: Maximum requests to return; values above 1000 are clamped
       responses:
         '200':
@@ -197,11 +197,7 @@ paths:
               schema: { $ref: '#/components/schemas/SigningMailboxResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '501':
-          description: Signing mailbox disabled
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
 
   /signing/v0/requests/{cid}/response:
     post:
@@ -246,11 +242,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
-        '501':
-          description: Signing mailbox disabled
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
     get:
       operationId: getSignResponse
       summary: Fetch request status or the response artifact
@@ -268,11 +260,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/SigningResponseStatus' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '501':
-          description: Signing mailbox disabled
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
 
   /signing/v0/requests/{cid}/decline:
     post:
@@ -299,11 +287,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
-        '501':
-          description: Signing mailbox disabled
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
 
   /proof/v1/operations:
     post:
@@ -344,6 +328,11 @@ paths:
                       $ref: '#/components/schemas/IngestionResult'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '413':
+          description: Aggregate request body exceeds 16 MiB
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '501':
           $ref: '#/components/responses/NotImplemented'
 
@@ -586,8 +575,7 @@ paths:
       summary: Paginated feed of all revocations ingested for an issuer
       description: |
         Every revocation this relay has ingested for the issuer, ordered by
-        revocation createdAt ascending (tiebreak credentialCID) and
-        cursor-paginated. Each entry carries the full revocation JWS
+        credentialCID ascending and cursor-paginated. Each entry carries the full revocation JWS
         (self-proving). An issuer with none returns an empty array — same honest
         absence semantics as the credential route.
       tags: [Revocation Status]
@@ -603,14 +591,14 @@ paths:
           required: false
           schema:
             type: string
-          description: Cursor — start after this credentialCID (from a prior page's next)
+          description: Strictly-greater credentialCID keyset cursor. It need not name a present row; an unknown value resumes at the next greater key.
         - name: limit
           in: query
           required: false
           schema:
             type: integer
             default: 100
-            maximum: 1000
+          description: Maximum rows to return; values above 1000 are clamped
       responses:
         '200':
           description: Issuer revocation list page (possibly empty)
@@ -636,9 +624,9 @@ paths:
                   next:
                     type: string
                     nullable: true
-                    description: Cursor for the next page (pass as `after`), or null on the last page
+                    description: Last row's credentialCID, or null when the page was not full
         '400':
-          description: Malformed did:dfos identifier or invalid relay-local cursor
+          description: Malformed did:dfos identifier
           content:
             application/json:
               schema:
@@ -695,7 +683,7 @@ paths:
           schema:
             type: integer
             default: 100
-            maximum: 1000
+          description: Maximum rows to return; values above 1000 are clamped
       responses:
         '200':
           description: Identity index page
@@ -761,7 +749,12 @@ paths:
                   next:
                     type: string
                     nullable: true
-                    description: Cursor for the next page (pass as `after`), or null on the last page
+                    description: Cursor for the next page (pass as `after`), or null when the page was not full
+        '400':
+          description: Invalid order or cursor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '501':
           $ref: '#/components/responses/NotImplemented'
 
@@ -810,7 +803,7 @@ paths:
           schema:
             type: integer
             default: 100
-            maximum: 1000
+          description: Maximum rows to return; values above 1000 are clamped
       responses:
         '200':
           description: Content index page
@@ -871,7 +864,7 @@ paths:
                   next:
                     type: string
                     nullable: true
-                    description: Cursor for the next page (pass as `after`), or null on the last page
+                    description: Cursor for the next page (pass as `after`), or null when the page was not full
         '400':
           description: Malformed creator DID
           content:
@@ -912,7 +905,7 @@ paths:
           schema:
             type: integer
             default: 100
-            maximum: 1000
+          description: Maximum rows to return; values above 1000 are clamped
       responses:
         '200':
           description: Countersignatures-by-witness page (possibly empty)
@@ -944,7 +937,7 @@ paths:
                   next:
                     type: string
                     nullable: true
-                    description: Cursor for the next page (pass as `after`), or null on the last page
+                    description: Cursor for the next page (pass as `after`), or null when the page was not full
         '400':
           description: Missing or malformed witness DID
           content:
@@ -996,7 +989,7 @@ paths:
           schema:
             type: integer
             default: 100
-            maximum: 1000
+          description: Maximum rows to return; values above 1000 are clamped
       responses:
         '200':
           description: Public-credentials page (possibly empty)
@@ -1035,7 +1028,7 @@ paths:
                   next:
                     type: string
                     nullable: true
-                    description: Cursor for the next page (pass as `after`), or null on the last page
+                    description: Cursor for the next page (pass as `after`), or null when the page was not full
         '400':
           description: Malformed issuer DID
           content:
@@ -1118,6 +1111,11 @@ paths:
                     type: string
         '400':
           $ref: '#/components/responses/BadRequest'
+        '413':
+          description: Blob body exceeds the configured maximum
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1131,9 +1129,11 @@ paths:
       summary: Download a content blob at a specific operation
       description: |
         Download the raw bytes of the document committed by a specific operation.
-        The ref parameter is an operation CID within the chain.
+        The ref parameter is an operation CID within the chain. Anonymous access
+        is legal when a standing public-read grant authorizes it.
       tags: [Content Plane]
       security:
+        - {}
         - BearerAuth: []
       parameters:
         - name: contentId
@@ -1180,9 +1180,12 @@ paths:
       summary: Download a content blob at head
       description: |
         Download the raw bytes of the current document at chain head.
-        Requires auth token. Non-creators must present a DFOS read credential.
+        Anonymous access is legal when a standing public-read grant authorizes
+        it. Otherwise an auth token is required, and non-creators must present a
+        DFOS read credential.
       tags: [Content Plane]
       security:
+        - {}
         - BearerAuth: []
       parameters:
         - name: contentId
@@ -1241,7 +1244,7 @@ paths:
           schema:
             type: integer
             default: 100
-            maximum: 1000
+          description: Maximum rows to return; values above 1000 are clamped
       responses:
         '200':
           description: Global log entries
@@ -1312,7 +1315,7 @@ paths:
           schema:
             type: integer
             default: 100
-            maximum: 1000
+          description: Maximum rows to return; values above 1000 are clamped
       responses:
         '200':
           description: Identity chain log entries
@@ -1376,7 +1379,7 @@ paths:
           schema:
             type: integer
             default: 100
-            maximum: 1000
+          description: Maximum rows to return; values above 1000 are clamped
       responses:
         '200':
           description: Content chain log entries
@@ -1441,7 +1444,7 @@ paths:
           schema:
             type: integer
             default: 100
-            maximum: 1000
+          description: Maximum rows to return; values above 1000 are clamped
       responses:
         '200':
           description: Countersignatures page

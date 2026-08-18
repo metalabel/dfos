@@ -2,7 +2,6 @@ package relay
 
 import (
 	"encoding/base64"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -12,12 +11,13 @@ import (
 )
 
 type signingCursor struct {
+	SubjectDID  string
 	DepositedAt string
 	CID         string
 }
 
 func encodeSigningCursor(cursor signingCursor) string {
-	return base64.RawURLEncoding.EncodeToString([]byte(cursor.DepositedAt + "|" + cursor.CID))
+	return base64.RawURLEncoding.EncodeToString([]byte(cursor.SubjectDID + "|" + cursor.DepositedAt + "|" + cursor.CID))
 }
 
 func decodeSigningCursor(encoded string) (signingCursor, bool) {
@@ -26,15 +26,15 @@ func decodeSigningCursor(encoded string) (signingCursor, bool) {
 		return signingCursor{}, false
 	}
 	decoded := string(bytes)
-	if strings.Count(decoded, "|") != 1 {
+	if strings.Count(decoded, "|") != 2 {
 		return signingCursor{}, false
 	}
-	parts := strings.SplitN(decoded, "|", 2)
-	depositedAt, err := time.Parse(signingTimeFormat, parts[0])
-	if err != nil || depositedAt.UTC().Format(signingTimeFormat) != parts[0] || parts[1] == "" {
+	parts := strings.SplitN(decoded, "|", 3)
+	depositedAt, err := time.Parse(signingTimeFormat, parts[1])
+	if err != nil || parts[0] == "" || depositedAt.UTC().Format(signingTimeFormat) != parts[1] || parts[2] == "" {
 		return signingCursor{}, false
 	}
-	return signingCursor{DepositedAt: parts[0], CID: parts[1]}, true
+	return signingCursor{SubjectDID: parts[0], DepositedAt: parts[1], CID: parts[2]}, true
 }
 
 // MemoryStore is an in-memory Store implementation for development and testing.
@@ -105,6 +105,13 @@ func (s *MemoryStore) pruneExpiredSignRequestsLocked(now time.Time) {
 	}
 }
 
+func (s *MemoryStore) PruneExpiredSignRequests(now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneExpiredSignRequestsLocked(now)
+	return nil
+}
+
 func (s *MemoryStore) PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,6 +121,15 @@ func (s *MemoryStore) PutSignRequest(request StoredSignRequest, now time.Time) (
 			return SigningIdentical, nil
 		}
 		return SigningConflict, nil
+	}
+	pending := 0
+	for _, existing := range s.signRequests {
+		if existing.SubjectDID == request.SubjectDID && existing.Response == "" {
+			pending++
+		}
+	}
+	if pending >= MaxPendingSignRequestsPerMailbox {
+		return SigningAtCapacity, nil
 	}
 	request.PayloadBytes = append([]byte(nil), request.PayloadBytes...)
 	s.signRequests[request.CID] = request
@@ -141,8 +157,8 @@ func (s *MemoryStore) ListPendingSignRequests(subjectDID, after string, limit in
 	start := 0
 	if after != "" {
 		cursor, ok := decodeSigningCursor(after)
-		if !ok {
-			return nil, "", fmt.Errorf("invalid signing cursor")
+		if !ok || cursor.SubjectDID != subjectDID {
+			return nil, "", ErrInvalidSigningCursor
 		}
 		for start < len(rows) && (rows[start].DepositedAt < cursor.DepositedAt ||
 			(rows[start].DepositedAt == cursor.DepositedAt && rows[start].CID <= cursor.CID)) {
@@ -157,7 +173,7 @@ func (s *MemoryStore) ListPendingSignRequests(subjectDID, after string, limit in
 	cursor := ""
 	if len(page) == limit && len(page) > 0 {
 		last := page[len(page)-1]
-		cursor = encodeSigningCursor(signingCursor{DepositedAt: last.DepositedAt, CID: last.CID})
+		cursor = encodeSigningCursor(signingCursor{SubjectDID: subjectDID, DepositedAt: last.DepositedAt, CID: last.CID})
 	}
 	return page, cursor, nil
 }
@@ -936,9 +952,6 @@ func (s *MemoryStore) GetRevocationForCredential(credentialCID string) (*StoredR
 func (s *MemoryStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	// Sorts on the PERSISTED CreatedAt (verified at ingest) rather than re-decoding
-	// each token unverified — same frozen v1 feed order, one less place that parses
-	// a token it did not check.
 	revs := []StoredRevocation{}
 	for _, rev := range s.revocations {
 		if rev.IssuerDID != issuerDID {
@@ -946,12 +959,7 @@ func (s *MemoryStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocati
 		}
 		revs = append(revs, rev)
 	}
-	sort.Slice(revs, func(i, j int) bool {
-		if revs[i].CreatedAt != revs[j].CreatedAt {
-			return revs[i].CreatedAt < revs[j].CreatedAt
-		}
-		return revs[i].CredentialCID < revs[j].CredentialCID
-	})
+	sort.Slice(revs, func(i, j int) bool { return revs[i].CredentialCID < revs[j].CredentialCID })
 	return revs, nil
 }
 

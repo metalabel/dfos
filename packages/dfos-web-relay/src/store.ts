@@ -38,6 +38,7 @@ import type {
 
 /** Ascending bytewise comparator — JS UTF-16 order over ASCII DIDs/CIDs. */
 const ascending = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+export const MAX_PENDING_SIGN_REQUESTS_PER_SUBJECT = 1024;
 
 /**
  * Page a projection: rows ascending by `keyOf`, strictly greater than `after`
@@ -163,24 +164,33 @@ export class MemoryRelayStore implements RelayStore {
     IndexCountersignatureRow & { witnessDID: string }
   >();
 
-  private pruneExpiredSignRequests(now: number): void {
+  async pruneExpiredSignRequests(now: number): Promise<void> {
     for (const [cid, request] of this.signRequests) {
       if (now >= Date.parse(request.expiresAt)) this.signRequests.delete(cid);
     }
   }
 
   async getSignRequest(cid: string, now: number): Promise<StoredSignRequest | undefined> {
-    this.pruneExpiredSignRequests(now);
+    await this.pruneExpiredSignRequests(now);
     return this.signRequests.get(cid);
   }
 
   async putSignRequest(
     request: StoredSignRequest,
     now: number,
-  ): Promise<'created' | 'identical' | 'conflict'> {
-    this.pruneExpiredSignRequests(now);
+  ): Promise<'created' | 'identical' | 'conflict' | 'capacity'> {
+    await this.pruneExpiredSignRequests(now);
     const existing = this.signRequests.get(request.cid);
     if (existing) return existing.request === request.request ? 'identical' : 'conflict';
+    const pendingForSubject = [...this.signRequests.values()].filter(
+      (candidate) =>
+        candidate.subjectDID === request.subjectDID &&
+        candidate.response === undefined &&
+        now < Date.parse(candidate.expiresAt),
+    ).length;
+    if (pendingForSubject >= MAX_PENDING_SIGN_REQUESTS_PER_SUBJECT) {
+      return 'capacity';
+    }
     this.signRequests.set(request.cid, request);
     return 'created';
   }
@@ -190,8 +200,8 @@ export class MemoryRelayStore implements RelayStore {
     after?: string;
     limit: number;
     now: number;
-  }): Promise<{ requests: StoredSignRequest[]; next: string | null }> {
-    this.pruneExpiredSignRequests(params.now);
+  }): Promise<{ requests: StoredSignRequest[]; next: string | null } | null> {
+    await this.pruneExpiredSignRequests(params.now);
     const rows = [...this.signRequests.values()]
       .filter(
         (request) =>
@@ -205,7 +215,7 @@ export class MemoryRelayStore implements RelayStore {
           : ascending(a.depositedAt, b.depositedAt),
       );
     const after = params.after ? decodeSigningCursor(params.after) : undefined;
-    if (params.after && !after) throw new Error('invalid signing cursor');
+    if (params.after && (!after || after.subjectDID !== params.subjectDID)) return null;
     const gated = after
       ? rows.filter(
           (request) =>
@@ -218,6 +228,7 @@ export class MemoryRelayStore implements RelayStore {
     const next =
       requests.length === params.limit && last
         ? encodeSigningCursor({
+            subjectDID: params.subjectDID,
             depositedAt: last.depositedAt,
             cid: last.cid,
           })
@@ -230,7 +241,7 @@ export class MemoryRelayStore implements RelayStore {
     response: string,
     now: number,
   ): Promise<'created' | 'identical' | 'conflict' | 'not-found'> {
-    this.pruneExpiredSignRequests(now);
+    await this.pruneExpiredSignRequests(now);
     const request = this.signRequests.get(cid);
     if (!request) return 'not-found';
     if (request.response !== undefined) {
@@ -244,7 +255,7 @@ export class MemoryRelayStore implements RelayStore {
     cid: string,
     now: number,
   ): Promise<'declined' | 'responded' | 'not-found'> {
-    this.pruneExpiredSignRequests(now);
+    await this.pruneExpiredSignRequests(now);
     const request = this.signRequests.get(cid);
     if (!request) return 'not-found';
     if (request.response !== undefined) return 'responded';
@@ -356,14 +367,8 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]> {
-    // Sorts on the PERSISTED createdAt (verified at ingest) rather than
-    // re-decoding each jwsToken unverified — same frozen v1 feed order, one less
-    // place that parses a token it did not check.
     const revs = [...this.revocations.values()].filter((rev) => rev.issuerDID === issuerDID);
-    revs.sort((a, b) => {
-      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
-      return ascending(a.credentialCID, b.credentialCID);
-    });
+    revs.sort((a, b) => ascending(a.credentialCID, b.credentialCID));
     return revs;
   }
 

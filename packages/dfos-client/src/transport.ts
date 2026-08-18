@@ -20,7 +20,7 @@ import type { LogOp, Provenance, RelayResponse } from './types';
 type PageFetcher = (
   url: string,
   params: { after?: string; limit: number },
-) => Promise<{ entries: LogOp[]; next: string | null } | null>;
+) => Promise<{ entries: LogOp[]; next: string | null } | 'invalid-cursor' | null>;
 
 type OperationPageFetcher = (
   url: string,
@@ -84,7 +84,7 @@ const drainRelay = async (
   for (let page = 0; page < MAX_PAGES; page++) {
     const params = cursor ? { after: cursor, limit: PAGE_LIMIT } : { limit: PAGE_LIMIT };
     const res = await fetchPage(url, params);
-    if (res === null) return null; // any page failure voids the whole answer
+    if (res === null || res === 'invalid-cursor') return null; // any page failure voids the whole answer
     out.push(...res.entries);
     if (!res.next || res.entries.length === 0) break;
     cursor = res.next;

@@ -60,6 +60,11 @@ export const createRevocationChecker = (
           url,
         ).toString();
         const res = await fetchImpl(target);
+        // 501 is an explicit capability absence, not a negative revocation
+        // answer. Exclude this relay exactly like an unreachable relay; callers
+        // retain the existing `revocation` unverifiable trust axis when nobody
+        // can answer.
+        if (res.status === 501) continue;
         if (!res.ok) continue;
         body = (await res.json()) as CredentialStatusBody;
       } catch {

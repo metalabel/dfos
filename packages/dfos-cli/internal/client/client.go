@@ -219,6 +219,7 @@ func (c *Client) GetContentLog(contentID string) ([]string, error) {
 func (c *Client) getLog(path string) ([]string, error) {
 	var tokens []string
 	after := ""
+	restarted := false
 	for {
 		u := c.BaseURL + path
 		if after != "" {
@@ -231,6 +232,16 @@ func (c *Client) getLog(path string) ([]string, error) {
 		if resp.StatusCode == 404 {
 			resp.Body.Close()
 			return nil, fmt.Errorf("not found: %s", path)
+		}
+		if resp.StatusCode == http.StatusBadRequest && after != "" && !restarted {
+			resp.Body.Close()
+			// Per-chain cursors are relay-local and may become invalid after a
+			// relay wipe. Restart this walk once, discarding the partial prefix;
+			// a second rejection is surfaced below.
+			tokens = nil
+			after = ""
+			restarted = true
+			continue
 		}
 		if resp.StatusCode != 200 {
 			body, _ := io.ReadAll(resp.Body)

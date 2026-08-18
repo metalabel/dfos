@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -846,6 +848,141 @@ func TestSyncEmptyPeer(t *testing.T) {
 	cursor, _ := store.GetPeerCursor("http://peer-a")
 	if cursor != "" {
 		t.Fatalf("expected empty cursor, got %s", cursor)
+	}
+}
+
+type invalidCursorSyncClient struct {
+	allInvalid bool
+	token      string
+	calls      []string
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestHTTPPeerClientDistinguishesPerChainInvalidCursors(t *testing.T) {
+	client := NewHttpPeerClient()
+	client.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"invalid cursor"}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	if _, err := client.GetIdentityLog("http://peer", "did:dfos:any", "cursor", 1); !errors.Is(err, ErrPeerInvalidCursor) {
+		t.Fatalf("identity log 400 = %v, want ErrPeerInvalidCursor", err)
+	}
+	if _, err := client.GetContentLog("http://peer", "content", "cursor", 1); !errors.Is(err, ErrPeerInvalidCursor) {
+		t.Fatalf("content log 400 = %v, want ErrPeerInvalidCursor", err)
+	}
+}
+
+type restartingWalkClient struct {
+	identityToken string
+	contentToken  string
+	identityCalls []string
+	contentCalls  []string
+}
+
+func restartWalkPage(token, after string, calls int) (*PeerLogPage, error) {
+	if after != "" {
+		return nil, ErrPeerInvalidCursor
+	}
+	next := "branch-cursor"
+	return &PeerLogPage{Entries: []PeerLogEntry{{JWSToken: token}}, Next: &next}, nil
+}
+
+func (c *restartingWalkClient) GetIdentityLog(_ string, _ string, after string, _ int) (*PeerLogPage, error) {
+	c.identityCalls = append(c.identityCalls, after)
+	return restartWalkPage(c.identityToken, after, len(c.identityCalls))
+}
+func (c *restartingWalkClient) GetContentLog(_ string, _ string, after string, _ int) (*PeerLogPage, error) {
+	c.contentCalls = append(c.contentCalls, after)
+	return restartWalkPage(c.contentToken, after, len(c.contentCalls))
+}
+func (c *restartingWalkClient) GetOperationLog(string, string, int) (*PeerLogPage, error) {
+	return nil, nil
+}
+func (c *restartingWalkClient) SubmitOperations(string, []string) error { return nil }
+func (c *restartingWalkClient) GetBlob(string, string, string) ([]byte, error) {
+	return nil, ErrBlobNotFound
+}
+
+func TestPerChainReadThroughRestartsOnceOnInvalidCursor(t *testing.T) {
+	creator := createTestIdentity(t)
+	contentToken, _, _ := createTestContent(t, creator)
+	client := &restartingWalkClient{identityToken: creator.token, contentToken: contentToken}
+	store := NewMemoryStore()
+	r, err := NewRelay(RelayOptions{Store: store, PeerClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.readThroughIdentity("peer", creator.did)
+	if got := client.identityCalls; !slices.Equal(got, []string{"", "branch-cursor", "", "branch-cursor"}) {
+		t.Fatalf("identity walk calls = %v", got)
+	}
+	r.readThroughContent("peer", "content")
+	if got := client.contentCalls; !slices.Equal(got, []string{"", "branch-cursor", "", "branch-cursor"}) {
+		t.Fatalf("content walk calls = %v", got)
+	}
+}
+
+func (c *invalidCursorSyncClient) GetIdentityLog(string, string, string, int) (*PeerLogPage, error) {
+	return nil, nil
+}
+func (c *invalidCursorSyncClient) GetContentLog(string, string, string, int) (*PeerLogPage, error) {
+	return nil, nil
+}
+func (c *invalidCursorSyncClient) GetOperationLog(_ string, after string, _ int) (*PeerLogPage, error) {
+	c.calls = append(c.calls, after)
+	if after == "old-peer-cursor" || c.allInvalid {
+		return nil, ErrPeerInvalidCursor
+	}
+	if after == "fresh-peer-cursor" {
+		return &PeerLogPage{Entries: []PeerLogEntry{}}, nil
+	}
+	next := "fresh-peer-cursor"
+	return &PeerLogPage{Entries: []PeerLogEntry{{JWSToken: c.token}}, Next: &next}, nil
+}
+func (c *invalidCursorSyncClient) SubmitOperations(string, []string) error { return nil }
+func (c *invalidCursorSyncClient) GetBlob(string, string, string) ([]byte, error) {
+	return nil, ErrBlobNotFound
+}
+
+func TestSyncInvalidCursorResetIsBoundedAndDurableOnlyAfterSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		allInvalid bool
+		wantCursor string
+		wantCalls  int
+	}{
+		{name: "peer rejects everything", allInvalid: true, wantCursor: "old-peer-cursor", wantCalls: 2},
+		{name: "genuine peer wipe", wantCursor: "fresh-peer-cursor", wantCalls: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewMemoryStore()
+			if err := store.SetPeerCursor("peer", "old-peer-cursor"); err != nil {
+				t.Fatal(err)
+			}
+			id := createTestIdentity(t)
+			client := &invalidCursorSyncClient{allInvalid: tc.allInvalid, token: id.token}
+			r, err := NewRelay(RelayOptions{Store: store, PeerClient: client, Peers: []PeerConfig{{URL: "peer"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.SyncFromPeers(); err != nil {
+				t.Fatal(err)
+			}
+			if len(client.calls) != tc.wantCalls {
+				t.Fatalf("fetch attempts = %d (%v), want %d", len(client.calls), client.calls, tc.wantCalls)
+			}
+			cursor, err := store.GetPeerCursor("peer")
+			if err != nil || cursor != tc.wantCursor {
+				t.Fatalf("persisted cursor = %q, err=%v; want %q", cursor, err, tc.wantCursor)
+			}
+		})
 	}
 }
 

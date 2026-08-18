@@ -34,26 +34,29 @@ export { REVOCATIONS_BASE_PATH } from './revocations';
 export const createHttpPeerClient = (options?: { fetch?: typeof fetch }): PeerClient => {
   const fetchImpl: typeof fetch = options?.fetch ?? ((input, init) => fetch(input, init));
 
-  const fetchJSON = async (url: string): Promise<unknown | null> => {
-    try {
-      const res = await fetchImpl(url);
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
-  };
-
   return {
     async getIdentityLog(peerUrl, did, params) {
       const url = new URL(`${PROOF_BASE_PATH}/identities/${encodeURIComponent(did)}/log`, peerUrl);
       if (params?.after) url.searchParams.set('after', params.after);
       if (params?.limit) url.searchParams.set('limit', String(params.limit));
-      const data = (await fetchJSON(url.toString())) as {
+      let res: Response;
+      try {
+        res = await fetchImpl(url.toString());
+      } catch {
+        return null;
+      }
+      if (res.status === 400 && params?.after) return 'invalid-cursor';
+      if (!res.ok) return null;
+      let data: {
         entries?: PeerLogEntry[];
         next?: string | null;
         cursor?: string | null;
-      } | null;
+      };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        return null;
+      }
       if (!data?.entries) return null;
       // `cursor` fallback: pre-rename relays emit only the deprecated alias.
       return { entries: data.entries, next: data.next ?? data.cursor ?? null };
@@ -66,11 +69,24 @@ export const createHttpPeerClient = (options?: { fetch?: typeof fetch }): PeerCl
       );
       if (params?.after) url.searchParams.set('after', params.after);
       if (params?.limit) url.searchParams.set('limit', String(params.limit));
-      const data = (await fetchJSON(url.toString())) as {
+      let res: Response;
+      try {
+        res = await fetchImpl(url.toString());
+      } catch {
+        return null;
+      }
+      if (res.status === 400 && params?.after) return 'invalid-cursor';
+      if (!res.ok) return null;
+      let data: {
         entries?: PeerLogEntry[];
         next?: string | null;
         cursor?: string | null;
-      } | null;
+      };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        return null;
+      }
       if (!data?.entries) return null;
       return { entries: data.entries, next: data.next ?? data.cursor ?? null };
     },

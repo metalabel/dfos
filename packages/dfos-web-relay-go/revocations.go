@@ -192,7 +192,7 @@ func (r *Relay) handleRevocationStatus(w http.ResponseWriter, req *http.Request)
 
 // handleIssuerRevocations serves GET /revocations/v1/issuer/{did}. Byte twin of
 // the TS route: 400 on a non-canonical did:dfos, 200 with a cursor-paginated
-// (possibly empty) revocation list sorted by createdAt then credentialCID.
+// (possibly empty) revocation list sorted by credentialCID.
 func (r *Relay) handleIssuerRevocations(w http.ResponseWriter, req *http.Request) {
 	if !r.revocationsEnabled {
 		writeError(w, 501, "revocation status not available")
@@ -216,19 +216,8 @@ func (r *Relay) handleIssuerRevocations(w http.ResponseWriter, req *http.Request
 
 	startIdx := 0
 	if after != "" {
-		found := false
-		for i, rev := range revs {
-			if rev.CredentialCID == after {
-				startIdx = i + 1
-				found = true
-				break
-			}
-		}
-		if !found {
-			// The sort key is createdAt while the cursor is a credentialCID, so
-			// resumption is positional and cursors are relay-local: unknown → 400.
-			writeError(w, 400, "invalid cursor")
-			return
+		for startIdx < len(revs) && revs[startIdx].CredentialCID <= after {
+			startIdx++
 		}
 	}
 

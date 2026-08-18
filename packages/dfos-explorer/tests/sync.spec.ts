@@ -118,6 +118,29 @@ describe('sync engine', () => {
     expect((await db.getChain('did:dfos:aaa'))?.opCount).toBe(1);
   });
 
+  it('replaying a partial 300-op tail preserves count and every stored seq', async () => {
+    const entries = Array.from({ length: 300 }, (_, i) =>
+      entry(
+        `bafy-tail-${i.toString().padStart(3, '0')}`,
+        'did:dfos:tail',
+        'identity-op',
+        new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(),
+        i === 0 ? 'create' : 'update',
+      ),
+    );
+    const client = createClient({ relays: ['http://fake'], peerClient: fakePeer([entries]) });
+    const db = await freshDb();
+
+    expect(await syncFromRelay({ db, client, relay: 'http://fake' })).toEqual({ added: 300 });
+    const before = await Promise.all(entries.map(async ({ cid }) => (await db.getOp(cid))?.seq));
+    expect((await db.getCursor('http://fake'))?.count).toBe(300);
+
+    expect(await syncFromRelay({ db, client, relay: 'http://fake' })).toEqual({ added: 0 });
+    const after = await Promise.all(entries.map(async ({ cid }) => (await db.getOp(cid))?.seq));
+    expect((await db.getCursor('http://fake'))?.count).toBe(300);
+    expect(after).toEqual(before);
+  });
+
   it('resumes from the stored cursor', async () => {
     const pageOne = [entry('bafy-a1', 'did:dfos:aaa', 'identity-op', '2026-01-01T00:00:00.000Z')];
     const pageTwo = [entry('bafy-a2', 'did:dfos:aaa', 'identity-op', '2026-01-02T00:00:00.000Z')];

@@ -236,27 +236,19 @@ func TestRevocationStatusIssuerPagination(t *testing.T) {
 		}
 	}
 
-	unknownResp := getJSON(t, base+"/revocations/v1/issuer/"+id.did+"?after=bafyunknown", nil)
-	if unknownResp.StatusCode != 400 {
-		t.Fatalf("issuer unknown cursor: status %d, want 400", unknownResp.StatusCode)
+	var resumed struct {
+		Revocations []revocationEntry `json:"revocations"`
+		Next        *string           `json:"next"`
 	}
-
-	createdAt := func(entry revocationEntry) string {
-		t.Helper()
-		_, payload, err := dfos.DecodeJWSUnsafe(entry.Revocation)
-		if err != nil {
-			t.Fatalf("decode revocation %s: %v", entry.CredentialCID, err)
-		}
-		value, _ := payload["createdAt"].(string)
-		return value
+	unknownResp := getJSON(t, base+"/revocations/v1/issuer/"+id.did+"?after=bafyunknown", &resumed)
+	if unknownResp.StatusCode != 200 || len(resumed.Revocations) != 0 || resumed.Next != nil {
+		t.Fatalf("issuer unknown keyset cursor: status=%d body=%+v, want caught-up 200", unknownResp.StatusCode, resumed)
 	}
 	for i := 1; i < len(paged); i++ {
 		prev := paged[i-1]
 		current := paged[i]
-		prevCreatedAt := createdAt(prev)
-		currentCreatedAt := createdAt(current)
-		if prevCreatedAt > currentCreatedAt || (prevCreatedAt == currentCreatedAt && prev.CredentialCID > current.CredentialCID) {
-			t.Fatalf("revocations not sorted by createdAt, credentialCID: prev=%+v current=%+v", prev, current)
+		if prev.CredentialCID > current.CredentialCID {
+			t.Fatalf("revocations not sorted by credentialCID: prev=%+v current=%+v", prev, current)
 		}
 	}
 }

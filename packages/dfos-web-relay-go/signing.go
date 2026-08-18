@@ -279,6 +279,10 @@ func (r *Relay) handleSigningDeposit(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusConflict, "request CID conflict")
 		return
 	}
+	if result == SigningAtCapacity {
+		writeError(w, http.StatusTooManyRequests, "signing mailbox pending limit reached")
+		return
+	}
 	status := http.StatusCreated
 	if result == SigningIdentical {
 		status = http.StatusOK
@@ -297,14 +301,12 @@ func (r *Relay) handleSigningPoll(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	after := req.URL.Query().Get("after")
-	if after != "" {
-		if _, ok := decodeSigningCursor(after); !ok {
-			writeError(w, http.StatusBadRequest, "invalid cursor")
-			return
-		}
-	}
 	limit := parseLimit(req, 100, 1000)
 	requests, nextCursor, err := r.signingMailboxStore().ListPendingSignRequests(auth.Iss, after, limit, time.Now())
+	if errors.Is(err, ErrInvalidSigningCursor) {
+		writeError(w, http.StatusBadRequest, "invalid cursor")
+		return
+	}
 	if storeErr(w, err) {
 		return
 	}

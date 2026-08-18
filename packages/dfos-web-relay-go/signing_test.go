@@ -5,8 +5,11 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -433,8 +436,8 @@ func TestSigningPollLimitAndMalformedCursor(t *testing.T) {
 	if got := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests?after=not-a-cursor", nil, auth); got.Code != http.StatusBadRequest {
 		t.Fatalf("malformed cursor: %d %s", got.Code, got.Body.String())
 	}
-	if !slices.Equal(store.limits, []int{1000, 100}) {
-		t.Fatalf("malformed cursor reached store: %v", store.limits)
+	if !slices.Equal(store.limits, []int{1000, 100, 100}) {
+		t.Fatalf("malformed cursor was not rejected by store authority: %v", store.limits)
 	}
 }
 
@@ -583,7 +586,7 @@ func TestSigningStoreCursorScopeStabilityAndPruning(t *testing.T) {
 		if err != nil || len(first) != 1 || first[0].CID != "a" || cursorA == "" {
 			t.Fatalf("first page: %+v %q %v", first, cursorA, err)
 		}
-		wantCursorA := base64.RawURLEncoding.EncodeToString([]byte(now.Format(signingTimeFormat) + "|a"))
+		wantCursorA := base64.RawURLEncoding.EncodeToString([]byte(subject + "|" + now.Format(signingTimeFormat) + "|a"))
 		if cursorA != wantCursorA {
 			t.Fatalf("first cursor = %q, want %q", cursorA, wantCursorA)
 		}
@@ -604,13 +607,123 @@ func TestSigningStoreCursorScopeStabilityAndPruning(t *testing.T) {
 			t.Fatalf("page after responded cursor: %+v %v", third, err)
 		}
 		foreign, foreignCursor, err := store.ListPendingSignRequests("did:dfos:foreign-subject", cursorA, 1, later)
-		if err != nil || len(foreign) != 0 || foreignCursor != "" {
-			t.Fatalf("foreign cursor leaked: %+v %q %v", foreign, foreignCursor, err)
+		if !errors.Is(err, ErrInvalidSigningCursor) || foreign != nil || foreignCursor != "" {
+			t.Fatalf("foreign cursor accepted: %+v %q %v", foreign, foreignCursor, err)
 		}
 		if malformed, malformedNext, err := store.ListPendingSignRequests(subject, "a", 1, later); err == nil || malformed != nil || malformedNext != "" {
 			t.Fatalf("malformed cursor: %+v %q %v", malformed, malformedNext, err)
 		}
 		assertSigningRequestPruned(t, store, "a")
+	})
+}
+
+func TestSigningMailboxCapAndIdempotentRedeposit(t *testing.T) {
+	forEachSigningStore(t, func(t *testing.T, store signingTestStore) {
+		now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		subject := "did:dfos:capacity-subject"
+		var first StoredSignRequest
+		for i := 0; i < MaxPendingSignRequestsPerMailbox; i++ {
+			request := StoredSignRequest{
+				CID: fmt.Sprintf("request-%04d", i), Request: fmt.Sprintf("token-%04d", i),
+				RequesterDID: "did:dfos:capacity-requester", SubjectDID: subject,
+				PayloadTyp: "test", PayloadBytes: []byte{1}, ExpiresAt: now.Add(time.Hour).Format(signingTimeFormat),
+				DepositedAt: now.Add(time.Duration(i) * time.Millisecond).Format(signingTimeFormat),
+			}
+			if i == 0 {
+				first = request
+			}
+			if result, err := store.PutSignRequest(request, now); err != nil || result != SigningCreated {
+				t.Fatalf("put %d: result=%s err=%v", i, result, err)
+			}
+		}
+		if result, err := store.PutSignRequest(first, now); err != nil || result != SigningIdentical {
+			t.Fatalf("idempotent re-deposit at cap: result=%s err=%v", result, err)
+		}
+		over := first
+		over.CID = "over-cap"
+		over.Request = "over-cap-token"
+		if result, err := store.PutSignRequest(over, now); err != nil || result != SigningAtCapacity {
+			t.Fatalf("deposit above cap: result=%s err=%v", result, err)
+		}
+	})
+}
+
+func TestSigningDepositReturns429AtMailboxCap(t *testing.T) {
+	store := NewMemoryStore()
+	enabled := true
+	r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newSigningFixture(t, store, "capacity-route")
+	now := time.Now().UTC()
+	for i := 0; i < MaxPendingSignRequestsPerMailbox; i++ {
+		result, err := store.PutSignRequest(StoredSignRequest{
+			CID: fmt.Sprintf("route-cap-%04d", i), Request: fmt.Sprintf("route-token-%04d", i),
+			RequesterDID: f.requester.did, SubjectDID: f.subject.did, PayloadTyp: "test",
+			PayloadBytes: []byte{1}, ExpiresAt: now.Add(time.Hour).Format(signingTimeFormat),
+			DepositedAt: now.Add(time.Duration(i) * time.Millisecond).Format(signingTimeFormat),
+		}, now)
+		if err != nil || result != SigningCreated {
+			t.Fatalf("fill mailbox %d: result=%s err=%v", i, result, err)
+		}
+	}
+	got := signingRequest(t, r, http.MethodPost, signingBasePath+"/requests", map[string]string{
+		"request": f.request, "credential": f.credential,
+	}, "")
+	if got.Code != http.StatusTooManyRequests || !bytes.Contains(got.Body.Bytes(), []byte(`"error"`)) {
+		t.Fatalf("deposit at cap: %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestSigningPollRejectsCrossSubjectCursor(t *testing.T) {
+	forEachSigningStore(t, func(t *testing.T, store signingTestStore) {
+		enabled := true
+		r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+		if err != nil {
+			t.Fatal(err)
+		}
+		subjectA := createTestIdentity(t)
+		subjectB := createTestIdentity(t)
+		IngestOperations([]string{subjectA.token, subjectB.token}, store)
+		now := time.Now().UTC()
+		for i := 0; i < 2; i++ {
+			_, err := store.PutSignRequest(StoredSignRequest{
+				CID: fmt.Sprintf("cross-%d", i), Request: fmt.Sprintf("token-%d", i),
+				RequesterDID: subjectB.did, SubjectDID: subjectA.did, PayloadTyp: "test",
+				PayloadBytes: []byte{1}, ExpiresAt: now.Add(time.Hour).Format(signingTimeFormat),
+				DepositedAt: now.Add(time.Duration(i) * time.Millisecond).Format(signingTimeFormat),
+			}, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, cursor, err := store.ListPendingSignRequests(subjectA.did, "", 1, now)
+		if err != nil || cursor == "" {
+			t.Fatalf("mint cursor: %q %v", cursor, err)
+		}
+		got := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests?after="+url.QueryEscape(cursor), nil, signingAuthToken(t, r, subjectB))
+		if got.Code != http.StatusBadRequest || !bytes.Contains(got.Body.Bytes(), []byte(`"error":"invalid cursor"`)) {
+			t.Fatalf("cross-subject cursor: %d %s", got.Code, got.Body.String())
+		}
+	})
+}
+
+func TestNewRelayPrunesExpiredSigningRowsWhenCapabilityDisabled(t *testing.T) {
+	forEachSigningStore(t, func(t *testing.T, store signingTestStore) {
+		now := time.Now().UTC()
+		_, err := store.PutSignRequest(StoredSignRequest{
+			CID: "startup-expired", Request: "expired-token", RequesterDID: "did:dfos:requester",
+			SubjectDID: "did:dfos:subject", PayloadTyp: "test", PayloadBytes: []byte{1},
+			ExpiresAt: now.Add(-time.Second).Format(signingTimeFormat), DepositedAt: now.Add(-time.Minute).Format(signingTimeFormat),
+		}, now.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewRelay(RelayOptions{Store: store}); err != nil {
+			t.Fatal(err)
+		}
+		assertSigningRequestPruned(t, store, "startup-expired")
 	})
 }
 

@@ -3126,6 +3126,168 @@ describe('web relay', () => {
         expect(chain!.log).toHaveLength(2);
       });
 
+      it('restarts each identity read-through walk once when a peer rejects a mid-walk cursor', async () => {
+        const identity = await createIdentity();
+        const newAuthKey = makeKey();
+        const updateOp: IdentityOperation = {
+          version: 1,
+          type: 'update',
+          previousOperationCID: identity.operationCID,
+          authKeys: [newAuthKey.key],
+          assertKeys: [],
+          controllerKeys: [identity.controller.key],
+          createdAt: ts(1),
+        };
+        const update = await signIdentityOperation({
+          operation: updateOp,
+          signer: identity.controller.signer,
+          keyId: identity.controller.keyId,
+          identityDID: identity.did,
+        });
+
+        for (const path of [
+          `/proof/v1/identities/${identity.did}`,
+          `/1.0/identifiers/${identity.did}`,
+        ]) {
+          const afters: Array<string | undefined> = [];
+          const peerClient: PeerClient = {
+            async getIdentityLog(_peerUrl, _did, params) {
+              afters.push(params?.after);
+              if (afters.length === 2) return 'invalid-cursor';
+              if (afters.length <= 3) {
+                return {
+                  entries: [{ cid: identity.operationCID, jwsToken: identity.jwsToken }],
+                  next: 'page-one',
+                };
+              }
+              return {
+                entries: [{ cid: update.operationCID, jwsToken: update.jwsToken }],
+                next: null,
+              };
+            },
+            async getContentLog() {
+              return null;
+            },
+            async getOperationLog() {
+              return null;
+            },
+            async submitOperations() {},
+          };
+          const localStore = new MemoryRelayStore();
+          const relay = await createRelay({
+            store: localStore,
+            identity: RELAY_IDENTITY,
+            peers: [{ url: 'http://peer-a' }],
+            peerClient,
+          });
+          expect((await relay.app.request(path)).status).toBe(200);
+          expect(afters).toEqual([undefined, 'page-one', undefined, 'page-one']);
+          expect((await localStore.getIdentityChain(identity.did))?.log).toHaveLength(2);
+        }
+      });
+
+      it('abandons an identity peer after its restarted walk rejects a second cursor', async () => {
+        const identity = await createIdentity();
+        const afters: Array<string | undefined> = [];
+        const peerClient: PeerClient = {
+          async getIdentityLog(_peerUrl, _did, params) {
+            afters.push(params?.after);
+            if (params?.after) return 'invalid-cursor';
+            return {
+              entries: [{ cid: identity.operationCID, jwsToken: identity.jwsToken }],
+              next: 'page-one',
+            };
+          },
+          async getContentLog() {
+            return null;
+          },
+          async getOperationLog() {
+            return null;
+          },
+          async submitOperations() {},
+        };
+        const localStore = new MemoryRelayStore();
+        const relay = await createRelay({
+          store: localStore,
+          identity: RELAY_IDENTITY,
+          peers: [{ url: 'http://peer-a' }],
+          peerClient,
+        });
+
+        expect((await relay.app.request(`/proof/v1/identities/${identity.did}`)).status).toBe(200);
+        expect(afters).toEqual([undefined, 'page-one', undefined, 'page-one']);
+        expect((await localStore.getIdentityChain(identity.did))?.log).toHaveLength(1);
+      });
+
+      it('continues both identity read-through routes to the next peer after abandonment', async () => {
+        const identity = await createIdentity();
+        const newAuthKey = makeKey();
+        const update = await signIdentityOperation({
+          operation: {
+            version: 1,
+            type: 'update',
+            previousOperationCID: identity.operationCID,
+            authKeys: [newAuthKey.key],
+            assertKeys: [],
+            controllerKeys: [identity.controller.key],
+            createdAt: ts(1),
+          },
+          signer: identity.controller.signer,
+          keyId: identity.controller.keyId,
+          identityDID: identity.did,
+        });
+
+        for (const path of [
+          `/proof/v1/identities/${identity.did}`,
+          `/1.0/identifiers/${identity.did}`,
+        ]) {
+          const calls: Array<{ peerUrl: string; after?: string }> = [];
+          const peerClient: PeerClient = {
+            async getIdentityLog(peerUrl, _did, params) {
+              calls.push({ peerUrl, ...(params?.after ? { after: params.after } : {}) });
+              if (peerUrl === 'http://peer-a') {
+                if (params?.after) return 'invalid-cursor';
+                return {
+                  entries: [{ cid: identity.operationCID, jwsToken: identity.jwsToken }],
+                  next: 'page-one',
+                };
+              }
+              return {
+                entries: [
+                  { cid: identity.operationCID, jwsToken: identity.jwsToken },
+                  { cid: update.operationCID, jwsToken: update.jwsToken },
+                ],
+                next: null,
+              };
+            },
+            async getContentLog() {
+              return null;
+            },
+            async getOperationLog() {
+              return null;
+            },
+            async submitOperations() {},
+          };
+          const localStore = new MemoryRelayStore();
+          const relay = await createRelay({
+            store: localStore,
+            identity: RELAY_IDENTITY,
+            peers: [{ url: 'http://peer-a' }, { url: 'http://peer-b' }],
+            peerClient,
+          });
+
+          expect((await relay.app.request(path)).status).toBe(200);
+          expect(calls.map((call) => call.peerUrl)).toEqual([
+            'http://peer-a',
+            'http://peer-a',
+            'http://peer-a',
+            'http://peer-a',
+            'http://peer-b',
+          ]);
+          expect((await localStore.getIdentityChain(identity.did))?.log).toHaveLength(2);
+        }
+      });
+
       it('should fetch content chain from peer on local miss', async () => {
         const peerStore = new MemoryRelayStore();
         const identity = await createIdentity();
@@ -3206,6 +3368,67 @@ describe('web relay', () => {
         const chain = await localStore.getContentChain(contentId);
         expect(chain).toBeDefined();
         expect(chain!.log).toHaveLength(2);
+      });
+
+      it('restarts content read-through once when a peer rejects a mid-walk cursor', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        const content = await createContentOp(identity);
+        const genesisResults = await ingestOperations(
+          [identity.jwsToken, content.jwsToken],
+          peerStore,
+        );
+        const contentId = genesisResults.find((result) => result.kind === 'content-op')!.chainId!;
+        const newDocEncoded = await dagCborCanonicalEncode({ type: 'post', title: 'updated' });
+        const update = await signContentOperation({
+          operation: {
+            version: 1,
+            type: 'update',
+            did: identity.did,
+            previousOperationCID: content.operationCID,
+            documentCID: newDocEncoded.cid.toString(),
+            baseDocumentCID: null,
+            createdAt: ts(2),
+            note: null,
+          },
+          signer: identity.authKey.signer,
+          kid: `${identity.did}#${identity.authKey.keyId}`,
+        });
+        const afters: Array<string | undefined> = [];
+        const peerClient: PeerClient = {
+          async getIdentityLog() {
+            return null;
+          },
+          async getContentLog(_peerUrl, _contentId, params) {
+            afters.push(params?.after);
+            if (afters.length === 2) return 'invalid-cursor';
+            if (afters.length <= 3) {
+              return {
+                entries: [{ cid: content.operationCID, jwsToken: content.jwsToken }],
+                next: 'page-one',
+              };
+            }
+            return {
+              entries: [{ cid: update.operationCID, jwsToken: update.jwsToken }],
+              next: null,
+            };
+          },
+          async getOperationLog() {
+            return null;
+          },
+          async submitOperations() {},
+        };
+        const localStore = new MemoryRelayStore();
+        await ingestOperations([identity.jwsToken], localStore);
+        const relay = await createRelay({
+          store: localStore,
+          identity: RELAY_IDENTITY,
+          peers: [{ url: 'http://peer-a' }],
+          peerClient,
+        });
+        expect((await relay.app.request(`/proof/v1/content/${contentId}`)).status).toBe(200);
+        expect(afters).toEqual([undefined, 'page-one', undefined, 'page-one']);
+        expect((await localStore.getContentChain(contentId))?.log).toHaveLength(2);
       });
 
       it('should not consult peers with readThrough: false', async () => {
@@ -3394,6 +3617,75 @@ describe('web relay', () => {
         const cursor = await localStore.getPeerCursor('http://peer-a');
         expect(cursor).toBeUndefined();
       });
+
+      it('aborts after two invalid-cursor responses without destroying persisted progress', async () => {
+        const localStore = new MemoryRelayStore();
+        await localStore.setPeerCursor('http://peer-a', 'persisted-high-water');
+        let attempts = 0;
+        const peerClient: PeerClient = {
+          async getIdentityLog() {
+            return null;
+          },
+          async getContentLog() {
+            return null;
+          },
+          async getOperationLog() {
+            attempts += 1;
+            return 'invalid-cursor';
+          },
+          async submitOperations() {},
+        };
+        const relay = await createRelay({
+          store: localStore,
+          identity: RELAY_IDENTITY,
+          peers: [{ url: 'http://peer-a' }],
+          peerClient,
+        });
+
+        await relay.syncFromPeers();
+
+        expect(attempts).toBe(2);
+        expect(await localStore.getPeerCursor('http://peer-a')).toBe('persisted-high-water');
+      });
+
+      it('restarts a genuinely wiped peer once and persists from-scratch progress', async () => {
+        const identity = await createIdentity();
+        const localStore = new MemoryRelayStore();
+        await localStore.setPeerCursor('http://peer-a', 'stale-high-water');
+        const afters: Array<string | undefined> = [];
+        const peerClient: PeerClient = {
+          async getIdentityLog() {
+            return null;
+          },
+          async getContentLog() {
+            return null;
+          },
+          async getOperationLog(_peerUrl, params) {
+            afters.push(params?.after);
+            if (params?.after === 'stale-high-water') return 'invalid-cursor';
+            if (!params?.after) {
+              return {
+                entries: [{ cid: identity.operationCID, jwsToken: identity.jwsToken }],
+                next: 'fresh-high-water',
+              };
+            }
+            return { entries: [], next: null };
+          },
+          async submitOperations() {},
+        };
+        const relay = await createRelay({
+          store: localStore,
+          identity: RELAY_IDENTITY,
+          peers: [{ url: 'http://peer-a' }],
+          peerClient,
+        });
+
+        await relay.syncFromPeers();
+
+        expect(afters).toEqual(['stale-high-water', undefined, 'fresh-high-water']);
+        expect(await localStore.getPeerCursor('http://peer-a')).toBe('fresh-high-water');
+        expect(await localStore.getIdentityChain(identity.did)).toBeDefined();
+      });
     });
   });
 
@@ -3533,18 +3825,10 @@ describe('web relay', () => {
       return { credentialCID, revocationJws: jwsToken };
     };
 
-    const revocationCreatedAt = (revocationJws: string) => {
-      const createdAt = decodeJwsUnsafe(revocationJws)?.payload?.createdAt;
-      return typeof createdAt === 'string' ? createdAt : '';
-    };
-
     const byRevocationOrder = (
       a: { credentialCID: string; revocationJws: string },
       b: { credentialCID: string; revocationJws: string },
     ) => {
-      const aCreatedAt = revocationCreatedAt(a.revocationJws);
-      const bCreatedAt = revocationCreatedAt(b.revocationJws);
-      if (aCreatedAt !== bCreatedAt) return aCreatedAt < bCreatedAt ? -1 : 1;
       if (a.credentialCID === b.credentialCID) return 0;
       return a.credentialCID < b.credentialCID ? -1 : 1;
     };
@@ -3580,7 +3864,7 @@ describe('web relay', () => {
       expect((await json(res)).error).toBe('invalid credential CID');
     });
 
-    it('lists all revocations for an issuer, sorted by revocation createdAt then credentialCID', async () => {
+    it('lists all revocations for an issuer, sorted by credentialCID', async () => {
       const issuer = await createIdentity();
       await postOps([issuer.jwsToken]);
 
@@ -3632,16 +3916,30 @@ describe('web relay', () => {
         revocations.map((r) => r.credentialCID).sort(),
       );
 
-      for (let i = 1; i < paged.length; i++) {
-        const prev = paged[i - 1]!;
-        const current = paged[i]!;
-        const prevCreatedAt = revocationCreatedAt(prev.revocation);
-        const currentCreatedAt = revocationCreatedAt(current.revocation);
-        expect(
-          prevCreatedAt < currentCreatedAt ||
-            (prevCreatedAt === currentCreatedAt && prev.credentialCID <= current.credentialCID),
-        ).toBe(true);
-      }
+      expect(paged.map((row) => row.credentialCID)).toEqual(
+        paged.map((row) => row.credentialCID).sort(),
+      );
+    });
+
+    it('resumes issuer revocations strictly after an unknown credentialCID cursor', async () => {
+      const issuer = await createIdentity();
+      await postOps([issuer.jwsToken]);
+      const revocations = [
+        await revokeCredentialForIssuer(issuer, 'chain:keysetA'),
+        await revokeCredentialForIssuer(issuer, 'chain:keysetB'),
+        await revokeCredentialForIssuer(issuer, 'chain:keysetC'),
+      ].sort(byRevocationOrder);
+      // Appending a byte to the first fixed-width CID produces an absent key
+      // strictly between the first and second rows.
+      const after = `${revocations[0]!.credentialCID}~`;
+      const response = await req(
+        `/revocations/v1/issuer/${issuer.did}?after=${encodeURIComponent(after)}`,
+      );
+      expect(response.status).toBe(200);
+      const body = await json(response);
+      expect(body.revocations.map((row: { credentialCID: string }) => row.credentialCID)).toEqual(
+        revocations.filter((row) => row.credentialCID > after).map((row) => row.credentialCID),
+      );
     });
 
     it('returns an empty array for an issuer with no revocations', async () => {

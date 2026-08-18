@@ -189,14 +189,32 @@ func (r *Relay) handlePostOperations(w http.ResponseWriter, req *http.Request) {
 		writeError(w, 501, "this relay is pull-only; writes are disabled")
 		return
 	}
-	// DoS cap: bound the body before decoding. A MaxBytesError surfaces as a
-	// decode error and flows through the existing 400 path.
+	// DoS cap: oversized transport bodies are distinct from malformed JSON.
+	if req.ContentLength > maxRequestBodyBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return
+	}
 	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
 	var body struct {
 		Operations []string `json:"operations"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		writeJSON(w, 400, map[string]string{"error": "invalid JSON body"})
+	decoder := json.NewDecoder(req.Body)
+	if err := decoder.Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			writeJSON(w, 400, map[string]string{"error": "invalid JSON body"})
+		}
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			writeJSON(w, 400, map[string]string{"error": "invalid JSON body"})
+		}
 		return
 	}
 	if len(body.Operations) == 0 || len(body.Operations) > 100 {
@@ -228,6 +246,68 @@ func (r *Relay) handleGetOperation(w http.ResponseWriter, req *http.Request) {
 // identities
 // ---------------------------------------------------------------------------
 
+func (r *Relay) readThroughIdentity(peerURL, did string) bool {
+	after := ""
+	restarted := false
+	for {
+		page, err := r.peerClient.GetIdentityLog(peerURL, did, after, 1000)
+		if errors.Is(err, ErrPeerInvalidCursor) {
+			if restarted {
+				return false
+			}
+			restarted = true
+			after = ""
+			continue
+		}
+		if err != nil || page == nil {
+			return false
+		}
+		if len(page.Entries) == 0 {
+			return true
+		}
+		tokens := make([]string, len(page.Entries))
+		for i, entry := range page.Entries {
+			tokens[i] = entry.JWSToken
+		}
+		r.Ingest(tokens)
+		if page.Resume() == nil {
+			return true
+		}
+		after = *page.Resume()
+	}
+}
+
+func (r *Relay) readThroughContent(peerURL, contentID string) bool {
+	after := ""
+	restarted := false
+	for {
+		page, err := r.peerClient.GetContentLog(peerURL, contentID, after, 1000)
+		if errors.Is(err, ErrPeerInvalidCursor) {
+			if restarted {
+				return false
+			}
+			restarted = true
+			after = ""
+			continue
+		}
+		if err != nil || page == nil {
+			return false
+		}
+		if len(page.Entries) == 0 {
+			return true
+		}
+		tokens := make([]string, len(page.Entries))
+		for i, entry := range page.Entries {
+			tokens[i] = entry.JWSToken
+		}
+		r.Ingest(tokens)
+		if page.Resume() == nil {
+			return true
+		}
+		after = *page.Resume()
+	}
+}
+
 func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 	did := req.PathValue("did")
 	chain, err := r.readStore.GetIdentityChain(did)
@@ -241,21 +321,9 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 			if peer.ReadThrough != nil && !*peer.ReadThrough {
 				continue
 			}
-			after := ""
-			for {
-				page, err := r.peerClient.GetIdentityLog(peer.URL, did, after, 1000)
-				if err != nil || page == nil || len(page.Entries) == 0 {
-					break
-				}
-				tokens := make([]string, len(page.Entries))
-				for i, e := range page.Entries {
-					tokens[i] = e.JWSToken
-				}
-				r.Ingest(tokens)
-				if page.Resume() == nil {
-					break
-				}
-				after = *page.Resume()
+			complete := r.readThroughIdentity(peer.URL, did)
+			if !complete {
+				continue
 			}
 			chain, _ = r.readStore.GetIdentityChain(did)
 			if chain != nil {
@@ -303,21 +371,9 @@ func (r *Relay) handleResolveDID(w http.ResponseWriter, req *http.Request) {
 			if peer.ReadThrough != nil && !*peer.ReadThrough {
 				continue
 			}
-			after := ""
-			for {
-				page, perr := r.peerClient.GetIdentityLog(peer.URL, did, after, 1000)
-				if perr != nil || page == nil || len(page.Entries) == 0 {
-					break
-				}
-				tokens := make([]string, len(page.Entries))
-				for i, e := range page.Entries {
-					tokens[i] = e.JWSToken
-				}
-				r.Ingest(tokens)
-				if page.Resume() == nil {
-					break
-				}
-				after = *page.Resume()
+			complete := r.readThroughIdentity(peer.URL, did)
+			if !complete {
+				continue
 			}
 			chain, _ = r.readStore.GetIdentityChain(did)
 			if chain != nil {
@@ -422,21 +478,9 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 			if peer.ReadThrough != nil && !*peer.ReadThrough {
 				continue
 			}
-			after := ""
-			for {
-				page, err := r.peerClient.GetContentLog(peer.URL, contentID, after, 1000)
-				if err != nil || page == nil || len(page.Entries) == 0 {
-					break
-				}
-				tokens := make([]string, len(page.Entries))
-				for i, e := range page.Entries {
-					tokens[i] = e.JWSToken
-				}
-				r.Ingest(tokens)
-				if page.Resume() == nil {
-					break
-				}
-				after = *page.Resume()
+			complete := r.readThroughContent(peer.URL, contentID)
+			if !complete {
+				continue
 			}
 			chain, _ = r.readStore.GetContentChain(contentID)
 			if chain != nil {
@@ -714,7 +758,12 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
 	bytes, err := io.ReadAll(req.Body)
 	if err != nil {
-		writeError(w, 400, "failed to read body")
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			writeError(w, 400, "failed to read body")
+		}
 		return
 	}
 

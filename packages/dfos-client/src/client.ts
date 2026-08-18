@@ -60,8 +60,9 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * Wrap a fetch implementation with the client's transport policy: a per-request
  * timeout (a hung relay must never stall the read loop — failover depends on
  * requests actually failing) and ONE retry with a short backoff on transient
- * failures (network throw or 5xx). Timeouts are NOT retried — a relay that hung
- * for the full window is not transient inside this call, failover handles it.
+ * failures (network throw or 5xx other than capability-absence 501). Timeouts
+ * are NOT retried — a relay that hung for the full window is not transient
+ * inside this call, failover handles it.
  */
 const withFetchPolicy = (base: typeof fetch, timeoutMs: number): typeof fetch => {
   const attempt = (
@@ -75,7 +76,8 @@ const withFetchPolicy = (base: typeof fetch, timeoutMs: number): typeof fetch =>
   return async (input, init) => {
     try {
       const res = await attempt(input, init);
-      if (res.status >= 500) {
+      // 501 is a durable capability absence, not a transient server failure.
+      if (res.status >= 500 && res.status !== 501) {
         await delay(RETRY_BACKOFF_MS);
         return await attempt(input, init);
       }
@@ -305,6 +307,7 @@ export const createClient = (config: ClientConfig): Client => {
     // relay-enforced 1..1000 window so an out-of-range ask can't 400
     const limit = Math.max(1, Math.min(1000, Math.floor(options?.limit ?? 100)));
     // a single page from the first reachable relay — a seam, not a sync engine
+    let invalidCursor = false;
     for (const url of relaysFor(options)) {
       let page: Awaited<ReturnType<typeof pager>> = null;
       try {
@@ -312,7 +315,10 @@ export const createClient = (config: ClientConfig): Client => {
       } catch {
         page = null;
       }
-      if (page === 'invalid-cursor') return page;
+      if (page === 'invalid-cursor') {
+        invalidCursor = true;
+        continue;
+      }
       if (page === null) continue;
       const provenance: Provenance = {
         answeredBy: url,
@@ -322,6 +328,7 @@ export const createClient = (config: ClientConfig): Client => {
       };
       return { entries: page.entries, next: page.next, provenance };
     }
+    if (invalidCursor) return 'invalid-cursor';
     return {
       entries: [],
       next: null,

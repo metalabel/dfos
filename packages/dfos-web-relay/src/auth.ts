@@ -6,6 +6,7 @@
 
 */
 
+import { decodeMultikey } from '@metalabel/dfos-protocol/chain';
 import {
   matchesResource,
   verifyAuthToken,
@@ -15,7 +16,8 @@ import {
   type VerifiedDFOSCredential,
 } from '@metalabel/dfos-protocol/credentials';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import { createCurrentKeyResolver, createHistoricalIdentityResolver } from './ingest';
+import { isValidDfosDid } from './did-document';
+import { createHistoricalIdentityResolver } from './ingest';
 import type { RelayStore } from './types';
 
 /**
@@ -59,14 +61,23 @@ export const authenticateRequest = async (
   const kid = decoded.header.kid;
   if (!kid || !kid.includes('#')) return null;
 
-  const identity = await store.getIdentityChain(kid.slice(0, kid.indexOf('#')));
-  if (!identity || identity.state.isDeleted) return null;
+  const hash = kid.indexOf('#');
+  const did = kid.slice(0, hash);
+  if (!isValidDfosDid(did)) return null;
 
-  const resolveKey = createCurrentKeyResolver(store);
+  const identity = await store.getIdentityChain(did);
+  if (!identity || identity.state.isDeleted) return null;
 
   let publicKey: Uint8Array;
   try {
-    publicKey = await resolveKey(kid);
+    const keyID = kid.slice(hash + 1);
+    const key = [
+      ...identity.state.authKeys,
+      ...identity.state.assertKeys,
+      ...identity.state.controllerKeys,
+    ].find((candidate) => candidate.id === keyID);
+    if (!key) return null;
+    publicKey = decodeMultikey(key.publicKeyMultibase).keyBytes;
   } catch {
     return null;
   }

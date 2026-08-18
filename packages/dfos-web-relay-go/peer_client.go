@@ -44,16 +44,23 @@ func NewHttpPeerClient() *HttpPeerClient {
 	}
 }
 
-func (c *HttpPeerClient) fetchJSON(rawURL string, out any) error {
+func (c *HttpPeerClient) fetchLog(rawURL, after string) (*PeerLogPage, error) {
 	resp, err := c.client.Get(rawURL)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("peer returned %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusBadRequest && after != "" {
+		return nil, ErrPeerInvalidCursor
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("peer returned %d", resp.StatusCode)
+	}
+	var page PeerLogPage
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return nil, err
+	}
+	return &page, nil
 }
 
 func (c *HttpPeerClient) GetIdentityLog(peerURL, did string, after string, limit int) (*PeerLogPage, error) {
@@ -70,11 +77,7 @@ func (c *HttpPeerClient) GetIdentityLog(peerURL, did string, after string, limit
 	}
 	u.RawQuery = q.Encode()
 
-	var page PeerLogPage
-	if err := c.fetchJSON(u.String(), &page); err != nil {
-		return nil, err
-	}
-	return &page, nil
+	return c.fetchLog(u.String(), after)
 }
 
 func (c *HttpPeerClient) GetContentLog(peerURL, contentID string, after string, limit int) (*PeerLogPage, error) {
@@ -91,11 +94,7 @@ func (c *HttpPeerClient) GetContentLog(peerURL, contentID string, after string, 
 	}
 	u.RawQuery = q.Encode()
 
-	var page PeerLogPage
-	if err := c.fetchJSON(u.String(), &page); err != nil {
-		return nil, err
-	}
-	return &page, nil
+	return c.fetchLog(u.String(), after)
 }
 
 // GetBlob fetches raw document bytes from peerURL's content plane. The blob
@@ -140,24 +139,7 @@ func (c *HttpPeerClient) GetOperationLog(peerURL string, after string, limit int
 	}
 	u.RawQuery = q.Encode()
 
-	resp, err := c.client.Get(u.String())
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	// A 400 with an `after` param is the peer rejecting our relay-local cursor —
-	// distinguishable so the sync loop can reset instead of stalling forever.
-	if resp.StatusCode == 400 && after != "" {
-		return nil, ErrPeerInvalidCursor
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("peer returned %d", resp.StatusCode)
-	}
-	var page PeerLogPage
-	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
-		return nil, err
-	}
-	return &page, nil
+	return c.fetchLog(u.String(), after)
 }
 
 func (c *HttpPeerClient) SubmitOperations(peerURL string, operations []string) error {

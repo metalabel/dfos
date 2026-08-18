@@ -22,8 +22,8 @@ import {
 import { describe, expect, it } from 'vitest';
 import { ingestOperations } from '../src/ingest';
 import { createRelay } from '../src/relay';
-import { MemoryRelayStore } from '../src/store';
-import type { RelayStore } from '../src/types';
+import { MAX_PENDING_SIGN_REQUESTS_PER_SUBJECT, MemoryRelayStore } from '../src/store';
+import type { RelayStore, StoredSignRequest } from '../src/types';
 
 const CONTENT_ID = 'cv7n8vkvr64cctf3294h9k4eanhff8z';
 const SIGNING = '/signing/v0';
@@ -239,6 +239,7 @@ describe('signing mailbox', () => {
     const store = new MemoryRelayStore();
     const signingMembers = new Set<PropertyKey>([
       'getSignRequest',
+      'pruneExpiredSignRequests',
       'putSignRequest',
       'listPendingSignRequests',
       'putSignResponse',
@@ -498,7 +499,15 @@ describe('signing mailbox', () => {
   });
 
   it('refuses deleted-subject deposits and deleted-subject mailbox auth', async () => {
-    const store = new MemoryRelayStore();
+    class CountingStore extends MemoryRelayStore {
+      identityReads = 0;
+
+      override async getIdentityChain(did: string) {
+        this.identityReads += 1;
+        return super.getIdentityChain(did);
+      }
+    }
+    const store = new CountingStore();
     const relay = await createRelay({ store, signing: true });
     const f = await fixture(store, 'deleted-subject');
     const deposit = { request: f.jwsToken, credential: f.credential };
@@ -508,6 +517,7 @@ describe('signing mailbox', () => {
     await deleteIdentity(store, f.subject);
 
     expect((await postJSON(relay.app, `${SIGNING}/requests`, deposit)).status).toBe(404);
+    store.identityReads = 0;
     expect(
       (
         await relay.app.request(`${SIGNING}/requests`, {
@@ -515,6 +525,51 @@ describe('signing mailbox', () => {
         })
       ).status,
     ).toBe(401);
+    expect(store.identityReads).toBe(1);
+  });
+
+  it('validates auth-token DIDs before lookup and loads a valid current chain once', async () => {
+    class CountingStore extends MemoryRelayStore {
+      identityReads = 0;
+
+      override async getIdentityChain(did: string) {
+        this.identityReads += 1;
+        return super.getIdentityChain(did);
+      }
+    }
+    const store = new CountingStore();
+    const relay = await createRelay({ store, signing: true });
+    const subject = await identity();
+    await seed(store, subject);
+    store.identityReads = 0;
+    const valid = await authFor(relay.did, subject);
+    expect(
+      (
+        await relay.app.request(`${SIGNING}/requests`, {
+          headers: { authorization: `Bearer ${valid}` },
+        })
+      ).status,
+    ).toBe(200);
+    expect(store.identityReads).toBe(1);
+
+    const now = Math.floor(Date.now() / 1000);
+    const malformed = await createAuthToken({
+      iss: 'did:dfos:not-canonical',
+      aud: relay.did,
+      exp: now + 300,
+      iat: now,
+      kid: 'did:dfos:not-canonical#attacker-key',
+      sign: subject.auth.signer,
+    });
+    store.identityReads = 0;
+    expect(
+      (
+        await relay.app.request(`${SIGNING}/requests`, {
+          headers: { authorization: `Bearer ${malformed}` },
+        })
+      ).status,
+    ).toBe(401);
+    expect(store.identityReads).toBe(0);
   });
 
   it('uses house limit fallback/clamping and rejects malformed cursors', async () => {
@@ -546,7 +601,62 @@ describe('signing mailbox', () => {
     expect(
       (await relay.app.request(`${SIGNING}/requests?after=not-a-cursor`, { headers })).status,
     ).toBe(400);
-    expect(store.limits).toEqual([1000, 100]);
+    expect(store.limits).toEqual([1000, 100, 100]);
+  });
+
+  it('enforces the pending cap but permits idempotent re-deposit at capacity', async () => {
+    const store = new MemoryRelayStore();
+    const now = Date.now();
+    const subjectDID = 'did:dfos:capacity-subject';
+    const request = (cid: string) => ({
+      cid,
+      request: `request-${cid}`,
+      requesterDID: 'did:dfos:capacity-requester',
+      subjectDID,
+      payloadTyp: 'test',
+      payloadBytes: new Uint8Array([1]),
+      expiresAt: new Date(now + 60_000).toISOString(),
+      depositedAt: new Date(now).toISOString(),
+      declined: false,
+    });
+    for (let index = 0; index < MAX_PENDING_SIGN_REQUESTS_PER_SUBJECT; index += 1) {
+      expect(await store.putSignRequest(request(`cid-${index}`), now)).toBe('created');
+    }
+    expect(await store.putSignRequest(request('overflow'), now)).toBe('capacity');
+    expect(await store.putSignRequest(request('cid-0'), now)).toBe('identical');
+
+    class CapacityStore extends MemoryRelayStore {
+      override async putSignRequest() {
+        return 'capacity' as const;
+      }
+    }
+    const capacityStore = new CapacityStore();
+    const relay = await createRelay({ store: capacityStore, signing: true });
+    const f = await fixture(capacityStore);
+    const response = await postJSON(relay.app, `${SIGNING}/requests`, {
+      request: f.jwsToken,
+      credential: f.credential,
+    });
+    expect(response.status).toBe(429);
+    expect(await response.json()).toEqual({ error: 'mailbox pending request cap reached' });
+  });
+
+  it('prunes expired signing rows at construction even when signing is disabled', async () => {
+    const store = new MemoryRelayStore();
+    const internal = store as unknown as { signRequests: Map<string, StoredSignRequest> };
+    internal.signRequests.set('expired', {
+      cid: 'expired',
+      request: 'expired-request',
+      requesterDID: 'did:dfos:requester',
+      subjectDID: 'did:dfos:subject',
+      payloadTyp: 'test',
+      payloadBytes: new Uint8Array([1]),
+      expiresAt: new Date(Date.now() - 1_000).toISOString(),
+      depositedAt: new Date(Date.now() - 2_000).toISOString(),
+      declined: false,
+    });
+    await createRelay({ store, signing: false });
+    expect(internal.signRequests.has('expired')).toBe(false);
   });
 
   it('validates responses and keeps the response slot first-write-wins across enrolled keys', async () => {
@@ -742,19 +852,19 @@ describe('signing mailbox', () => {
     await store.putSignRequest(makeRequest('c', '2026-01-01T00:00:02.000Z'), now);
 
     const first = await store.listPendingSignRequests({ subjectDID, limit: 1, now });
-    expect(first.next).toBe(
-      base64urlEncode(new TextEncoder().encode('2026-01-01T00:00:00.000Z|a')),
+    expect(first!.next).toBe(
+      base64urlEncode(new TextEncoder().encode(`${subjectDID}|2026-01-01T00:00:00.000Z|a`)),
     );
     const second = await store.listPendingSignRequests({
       subjectDID,
-      after: first.next!,
+      after: first!.next!,
       limit: 1,
       now: now + 2_000,
     });
-    expect(second.requests.map((request) => request.cid)).toEqual(['b']);
+    expect(second!.requests.map((request) => request.cid)).toEqual(['b']);
     const partial = await store.listPendingSignRequests({
       subjectDID,
-      after: second.next!,
+      after: second!.next!,
       limit: 2,
       now: now + 2_000,
     });
@@ -763,18 +873,61 @@ describe('signing mailbox', () => {
     await store.putSignResponse('b', 'response-b', now + 2_000);
     const third = await store.listPendingSignRequests({
       subjectDID,
-      after: second.next!,
+      after: second!.next!,
       limit: 1,
       now: now + 2_000,
     });
-    expect(third.requests.map((request) => request.cid)).toEqual(['c']);
+    expect(third!.requests.map((request) => request.cid)).toEqual(['c']);
 
     const foreign = await store.listPendingSignRequests({
       subjectDID: 'did:dfos:other-subject',
-      after: first.next!,
+      after: first!.next!,
       limit: 1,
       now: now + 2_000,
     });
-    expect(foreign).toEqual({ requests: [], next: null });
+    expect(foreign).toBeNull();
+    expect(
+      await store.listPendingSignRequests({
+        subjectDID,
+        after: 'not-a-cursor',
+        limit: 1,
+        now: now + 2_000,
+      }),
+    ).toBeNull();
+  });
+
+  it('returns 400 when a poll cursor is reused across subject mailboxes', async () => {
+    const store = new MemoryRelayStore();
+    const relay = await createRelay({ store, signing: true });
+    const firstSubject = await identity();
+    const secondSubject = await identity();
+    await seed(store, firstSubject, secondSubject);
+    const now = Date.now();
+    await store.putSignRequest(
+      {
+        cid: 'cursor-source',
+        request: 'cursor-source-request',
+        requesterDID: firstSubject.did,
+        subjectDID: firstSubject.did,
+        payloadTyp: 'test',
+        payloadBytes: new Uint8Array([1]),
+        expiresAt: new Date(now + 60_000).toISOString(),
+        depositedAt: new Date(now).toISOString(),
+        declined: false,
+      },
+      now,
+    );
+    const page = await store.listPendingSignRequests({
+      subjectDID: firstSubject.did,
+      limit: 1,
+      now,
+    });
+    const secondToken = await authFor(relay.did, secondSubject);
+    const response = await relay.app.request(
+      `${SIGNING}/requests?after=${encodeURIComponent(page!.next!)}`,
+      { headers: { authorization: `Bearer ${secondToken}` } },
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid cursor' });
   });
 });

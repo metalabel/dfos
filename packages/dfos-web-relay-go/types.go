@@ -14,6 +14,10 @@ import (
 // ingestion order); the route maps this to 400, never a silently empty page.
 var ErrUnknownLogCursor = errors.New("unknown log cursor")
 
+// ErrInvalidSigningCursor is returned when a signing mailbox cursor is either
+// malformed or belongs to a different subject mailbox.
+var ErrInvalidSigningCursor = errors.New("invalid signing cursor")
+
 // Version is the release version, set via ldflags at build time.
 var Version = "dev"
 
@@ -196,11 +200,16 @@ const signingTimeFormat = "2006-01-02T15:04:05.000Z"
 type SigningPutResult string
 
 const (
-	SigningCreated   SigningPutResult = "created"
-	SigningIdentical SigningPutResult = "identical"
-	SigningConflict  SigningPutResult = "conflict"
-	SigningNotFound  SigningPutResult = "not-found"
+	SigningCreated    SigningPutResult = "created"
+	SigningIdentical  SigningPutResult = "identical"
+	SigningConflict   SigningPutResult = "conflict"
+	SigningNotFound   SigningPutResult = "not-found"
+	SigningAtCapacity SigningPutResult = "at-capacity"
 )
+
+// MaxPendingSignRequestsPerMailbox is the reference relay's per-subject flood
+// fence. Idempotent re-deposits do not consume another slot.
+const MaxPendingSignRequestsPerMailbox = 1024
 
 // AttenuationPair is a resource + action pair.
 type AttenuationPair struct {
@@ -290,6 +299,7 @@ type IngestionResult struct {
 
 // SigningStore is the optional ephemeral signing-mailbox courier store.
 type SigningStore interface {
+	PruneExpiredSignRequests(now time.Time) error
 	GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error)
 	PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error)
 	ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error)
@@ -379,8 +389,8 @@ type Store interface {
 	// across stores and twins).
 	GetRevocationForCredential(credentialCID string) (*StoredRevocation, error)
 	// GetRevocationsByIssuer returns all stored revocations issued by a DID,
-	// sorted by revocation createdAt ascending with credentialCID as tiebreak
-	// (deterministic across stores and twins — the frozen v1 feed order).
+	// sorted by credentialCID ascending (the issuer route's transparent keyset
+	// order, deterministic across stores and twins).
 	GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error)
 
 	// public credentials (standing authorization)
