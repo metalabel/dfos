@@ -30,7 +30,7 @@ import type {
   ClientConfig,
   DocumentBlob,
   GlobalLogOptions,
-  GlobalLogPage,
+  GlobalLogResult,
   LogOp,
   Provenance,
   RelayHealth,
@@ -60,8 +60,9 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * Wrap a fetch implementation with the client's transport policy: a per-request
  * timeout (a hung relay must never stall the read loop — failover depends on
  * requests actually failing) and ONE retry with a short backoff on transient
- * failures (network throw or 5xx). Timeouts are NOT retried — a relay that hung
- * for the full window is not transient inside this call, failover handles it.
+ * failures (network throw or 5xx other than capability-absence 501). Timeouts
+ * are NOT retried — a relay that hung for the full window is not transient
+ * inside this call, failover handles it.
  */
 const withFetchPolicy = (base: typeof fetch, timeoutMs: number): typeof fetch => {
   const attempt = (
@@ -75,7 +76,8 @@ const withFetchPolicy = (base: typeof fetch, timeoutMs: number): typeof fetch =>
   return async (input, init) => {
     try {
       const res = await attempt(input, init);
-      if (res.status >= 500) {
+      // 501 is a durable capability absence, not a transient server failure.
+      if (res.status >= 500 && res.status !== 501) {
         await delay(RETRY_BACKOFF_MS);
         return await attempt(input, init);
       }
@@ -296,7 +298,10 @@ export const createClient = (config: ClientConfig): Client => {
     return { value, trust: trust(true, axes), provenance: res.provenance };
   };
 
-  const globalLog = async (cursor?: string, options?: GlobalLogOptions): Promise<GlobalLogPage> => {
+  const globalLog = async (
+    after?: string,
+    options?: GlobalLogOptions,
+  ): Promise<GlobalLogResult> => {
     const pager = operationPager(peerClient);
     // page size is caller-tunable (sync engines want big pages); clamp to the
     // relay-enforced 1..1000 window so an out-of-range ask can't 400
@@ -305,9 +310,12 @@ export const createClient = (config: ClientConfig): Client => {
     for (const url of relaysFor(options)) {
       let page: Awaited<ReturnType<typeof pager>> = null;
       try {
-        page = await pager(url, cursor ? { after: cursor, limit } : { limit });
+        page = await pager(url, after ? { after, limit } : { limit });
       } catch {
         page = null;
+      }
+      if (page === 'invalid-cursor') {
+        return 'invalid-cursor';
       }
       if (page === null) continue;
       const provenance: Provenance = {
@@ -316,11 +324,11 @@ export const createClient = (config: ClientConfig): Client => {
         agreed: true,
         fromCache: false,
       };
-      return { entries: page.entries, cursor: page.cursor, provenance };
+      return { entries: page.entries, next: page.next, provenance };
     }
     return {
       entries: [],
-      cursor: null,
+      next: null,
       provenance: { answeredBy: '', responses: [], agreed: false, fromCache: false },
     };
   };

@@ -3,10 +3,12 @@ package relay
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	_ "modernc.org/sqlite"
@@ -103,6 +105,22 @@ CREATE TABLE IF NOT EXISTS public_credentials (
 );
 
 CREATE INDEX IF NOT EXISTS idx_public_credentials_exp ON public_credentials(exp);
+
+CREATE TABLE IF NOT EXISTS signing_requests (
+	cid TEXT PRIMARY KEY,
+	request_token TEXT NOT NULL,
+	requester_did TEXT NOT NULL,
+	subject_did TEXT NOT NULL,
+	payload_typ TEXT NOT NULL,
+	payload_bytes BLOB NOT NULL,
+	expires_at TEXT NOT NULL,
+	deposited_at TEXT NOT NULL,
+	declined INTEGER NOT NULL DEFAULT 0,
+	response_token TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_signing_requests_subject_pending
+	ON signing_requests(subject_did, deposited_at, cid);
+CREATE INDEX IF NOT EXISTS idx_signing_requests_expiry ON signing_requests(expires_at);
 
 -- index (v0) materialized projection: flat-column rows the ingestion pipeline
 -- maintains incrementally so a /index/v0 page costs O(page), not O(corpus).
@@ -346,6 +364,183 @@ func ensureColumn(db *sql.DB, table, column, columnType string) error {
 func (s *SQLiteStore) Close() error {
 	s.readDB.Close()
 	return s.db.Close()
+}
+
+// ---------------------------------------------------------------------------
+// signing mailbox
+// ---------------------------------------------------------------------------
+
+func scanSignRequest(row interface{ Scan(...any) error }) (*StoredSignRequest, error) {
+	var request StoredSignRequest
+	var declined int
+	var response sql.NullString
+	err := row.Scan(
+		&request.CID, &request.Request, &request.RequesterDID, &request.SubjectDID,
+		&request.PayloadTyp, &request.PayloadBytes, &request.ExpiresAt,
+		&request.DepositedAt, &declined, &response,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	request.Declined = declined != 0
+	if response.Valid {
+		request.Response = response.String
+	}
+	return &request, nil
+}
+
+const selectSignRequest = `SELECT cid, request_token, requester_did, subject_did,
+	payload_typ, payload_bytes, expires_at, deposited_at, declined, response_token
+	FROM signing_requests`
+
+func (s *SQLiteStore) GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error) {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
+		return nil, err
+	}
+	return scanSignRequest(s.readerDB().QueryRow(
+		selectSignRequest+" WHERE cid = ? AND expires_at > ?", cid, now.UTC().Format(signingTimeFormat),
+	))
+}
+
+func (s *SQLiteStore) PruneExpiredSignRequests(now time.Time) error {
+	_, err := s.writerDB().Exec("DELETE FROM signing_requests WHERE expires_at <= ?", now.UTC().Format(signingTimeFormat))
+	return err
+}
+
+func (s *SQLiteStore) PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error) {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
+		return SigningConflict, err
+	}
+	existing, err := s.GetSignRequest(request.CID, now)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if existing != nil {
+		if existing.Request == request.Request {
+			return SigningIdentical, nil
+		}
+		return SigningConflict, nil
+	}
+	// Keep the capacity check and insertion in one writer statement so concurrent
+	// deposits cannot both observe the last free slot.
+	result, err := s.writerDB().Exec(`INSERT OR IGNORE INTO signing_requests
+		(cid, request_token, requester_did, subject_did, payload_typ, payload_bytes, expires_at, deposited_at, declined)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE (SELECT COUNT(*) FROM signing_requests
+			WHERE subject_did = ? AND expires_at > ? AND response_token IS NULL) < ?`,
+		request.CID, request.Request, request.RequesterDID, request.SubjectDID, request.PayloadTyp,
+		request.PayloadBytes, request.ExpiresAt, request.DepositedAt, boolToInt(request.Declined),
+		request.SubjectDID, now.UTC().Format(signingTimeFormat), MaxPendingSignRequestsPerMailbox,
+	)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if affected, _ := result.RowsAffected(); affected == 1 {
+		return SigningCreated, nil
+	}
+	existing, err = s.GetSignRequest(request.CID, now)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if existing != nil && existing.Request == request.Request {
+		return SigningIdentical, nil
+	}
+	if existing == nil {
+		return SigningAtCapacity, nil
+	}
+	return SigningConflict, nil
+}
+
+func (s *SQLiteStore) ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error) {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
+		return nil, "", err
+	}
+	query := selectSignRequest + ` WHERE subject_did = ? AND expires_at > ? AND response_token IS NULL`
+	args := []any{subjectDID, now.UTC().Format(signingTimeFormat)}
+	if after != "" {
+		cursor, ok := decodeSigningCursor(after)
+		if !ok || cursor.SubjectDID != subjectDID {
+			return nil, "", ErrInvalidSigningCursor
+		}
+		query += " AND (deposited_at > ? OR (deposited_at = ? AND cid > ?))"
+		args = append(args, cursor.DepositedAt, cursor.DepositedAt, cursor.CID)
+	}
+	query += " ORDER BY deposited_at ASC, cid ASC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	requests := make([]StoredSignRequest, 0)
+	for rows.Next() {
+		request, err := scanSignRequest(rows)
+		if err != nil {
+			return nil, "", err
+		}
+		requests = append(requests, *request)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	cursor := ""
+	if len(requests) == limit && len(requests) > 0 {
+		last := requests[len(requests)-1]
+		cursor = encodeSigningCursor(signingCursor{SubjectDID: subjectDID, DepositedAt: last.DepositedAt, CID: last.CID})
+	}
+	return requests, cursor, nil
+}
+
+func (s *SQLiteStore) PutSignResponse(cid, response string, now time.Time) (SigningPutResult, error) {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
+		return SigningConflict, err
+	}
+	result, err := s.writerDB().Exec(`UPDATE signing_requests SET response_token = ?
+		WHERE cid = ? AND expires_at > ? AND response_token IS NULL`,
+		response, cid, now.UTC().Format(signingTimeFormat))
+	if err != nil {
+		return SigningConflict, err
+	}
+	if affected, _ := result.RowsAffected(); affected == 1 {
+		return SigningCreated, nil
+	}
+	existing, err := s.GetSignRequest(cid, now)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if existing == nil {
+		return SigningNotFound, nil
+	}
+	if existing.Response == response {
+		return SigningIdentical, nil
+	}
+	return SigningConflict, nil
+}
+
+func (s *SQLiteStore) DeclineSignRequest(cid string, now time.Time) (SigningPutResult, error) {
+	if err := s.PruneExpiredSignRequests(now); err != nil {
+		return SigningConflict, err
+	}
+	result, err := s.writerDB().Exec(`UPDATE signing_requests SET declined = 1
+		WHERE cid = ? AND expires_at > ? AND response_token IS NULL`,
+		cid, now.UTC().Format(signingTimeFormat))
+	if err != nil {
+		return SigningConflict, err
+	}
+	if affected, _ := result.RowsAffected(); affected == 1 {
+		return SigningCreated, nil
+	}
+	existing, err := s.GetSignRequest(cid, now)
+	if err != nil {
+		return SigningConflict, err
+	}
+	if existing == nil {
+		return SigningNotFound, nil
+	}
+	return SigningConflict, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1049,12 +1244,21 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	var err error
 
 	if after != "" {
-		// find the seq of the cursor CID, then fetch after it
+		// Relay-local cursor: resolve the cursor CID's seq first — a CID this
+		// log never issued is a caller error the route answers with 400.
+		var afterSeq int64
+		if err := s.readerDB().QueryRow(
+			"SELECT seq FROM operation_log WHERE cid = ? LIMIT 1", after,
+		).Scan(&afterSeq); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, "", ErrUnknownLogCursor
+			}
+			return nil, "", err
+		}
 		rows, err = s.readerDB().Query(
 			`SELECT cid, jws_token, kind, chain_id FROM operation_log
-			 WHERE seq > (SELECT COALESCE((SELECT seq FROM operation_log WHERE cid = ? LIMIT 1), 999999999))
-			 ORDER BY seq ASC LIMIT ?`,
-			after, limit,
+			 WHERE seq > ? ORDER BY seq ASC LIMIT ?`,
+			afterSeq, limit,
 		)
 	} else {
 		rows, err = s.readerDB().Query(
@@ -1082,19 +1286,17 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 		entries = []LogEntry{}
 	}
 
-	// Return a resume cursor whenever the page has entries — NOT only when it's
-	// full. Gating on len==limit meant the final partial page returned an empty
-	// cursor, so a caught-up puller never advanced past it and re-fetched the whole
-	// tail (up to a full page) every sync cycle forever — pure anti-entropy chatter
-	// (re-decode + re-hash of already-sequenced ops, dedup-dropped). With a cursor on
-	// the final page, the puller advances to the head; its next fetch (seq > last)
-	// returns an empty page and it stops. New ops resume forward from there.
-	var cursor string
-	if len(entries) > 0 {
-		cursor = entries[len(entries)-1].CID
+	// `next` only on a FULL page — a partial page means caught up (the shared
+	// list envelope's contract, matching the production relay's paging). The
+	// puller retains its last persisted cursor on null and re-fetches the final
+	// partial page next cycle; the re-fetch dedups cheaply, and the bounded
+	// reconcile scrubber remains the backstop. Mirrors MemoryStore.ReadLog.
+	var next string
+	if len(entries) == limit {
+		next = entries[len(entries)-1].CID
 	}
 
-	return entries, cursor, nil
+	return entries, next, nil
 }
 
 func (s *SQLiteStore) RelayStats() (*RelayStats, error) {
@@ -1522,14 +1724,7 @@ func (s *SQLiteStore) GetRevocationsByIssuer(issuerDID string) ([]StoredRevocati
 		return nil, err
 	}
 
-	// Sorts on the persisted CreatedAt (resolved above) — same frozen v1 feed
-	// order as before, without a second unverified decode per row.
-	sort.Slice(revs, func(i, j int) bool {
-		if revs[i].CreatedAt != revs[j].CreatedAt {
-			return revs[i].CreatedAt < revs[j].CreatedAt
-		}
-		return revs[i].CredentialCID < revs[j].CredentialCID
-	})
+	sort.Slice(revs, func(i, j int) bool { return revs[i].CredentialCID < revs[j].CredentialCID })
 	return revs, nil
 }
 

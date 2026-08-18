@@ -62,19 +62,30 @@ Every proof plane route is namespaced under a single prefix, **`/proof/v1`**:
 
 The prefix encodes the plane and its version (`{plane}/{version}`), so the proof plane's version clock is legible in the URL and the plane mounts or proxies as a unit by prefix. The proof routes are **frozen with protocol v1** — a relay MUST serve them at exactly these paths.
 
-Four route families deliberately stay at the root, on their own clocks:
+Six route families deliberately stay at the root, on their own clocks:
 
 - **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and the relay's own release version.
 - **Content plane routes** (`/content/:contentId/blob[/:ref]`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
 - **Universal resolver** (`GET /1.0/identifiers/:did`) — the DID-core / DIF Universal Resolver binding on its own `1.0` clock (the DIF driver interface version, [DID-METHOD.md](https://protocol.dfos.com/did-method) §5.2.4). It is an additive, read-only projection of the same self-certified terminal state the proof plane serves at `/proof/v1/identities/:did`, rendered as a W3C DID Document. It stays at the root because it tracks the DIF driver clock, not the frozen proof plane.
 - **Revocation status** (`GET /revocations/v1/credential/:credentialCID`, `GET /revocations/v1/issuer/:did`) — an indexed, read-only projection of the relay's revocation set on its own frozen `v1` clock. Revocations still _enter_ through the frozen proof plane (`POST /proof/v1/operations`); this family only exposes a read over the index the relay already maintains for its own credential enforcement. See [Revocation Status](#revocation-status-v1).
 - **Index** (`GET /index/v0/*`) — an optional, non-authoritative query surface over the current-state projections the relay already folds: enumerate identities, filter content chains, reverse-look-up countersignatures by witness. On its own unfrozen `0.x` clock, gated by `capabilities.index`. See [Index (v0)](#index-v0).
+- **Signing mailbox** (`/signing/v0/*`) — an optional, opt-in courier for [sign requests](https://protocol.dfos.com/signing): deposit, poll, respond, decline. On the SIGNING spec's own unfrozen `0.x` clock — legible in the path exactly as `/index/v0`'s — gated by `capabilities.signing` (default off). Courier state is not proof plane — nothing deposited there is gossiped, indexed, or folded. Routes and semantics live entirely in [SIGNING.md](https://protocol.dfos.com/signing).
+
+## Error Responses
+
+Every route family answers failures with one body shape — `{ "error": "<prose>" }` — plus the appropriate status code. The prose is diagnostic, never contractual: callers branch on status codes and MUST NOT match message text. Two deliberate exceptions: `POST /proof/v1/operations` MAY carry an additive `details` array of per-item schema issues beside `error` on a `400` (same discipline — diagnostic only), and the universal resolver (`GET /1.0/identifiers/:did`) answers in the DIF resolution envelope its own contract requires (`didResolutionMetadata.error`), not this shape.
+
+Cursor-paginated list routes add one rule: **an unrecognized or undecodable cursor is a 400, never a silently empty page.** The precise behavior splits three ways, and each route names which it has:
+
+- **Relay-local positional routes** — the ingestion-ordered logs (global and per-chain) — answer an `after` the relay never issued with **400**: cursors there are meaningful only against the relay that issued them, and a client that receives the 400 restarts its walk from the beginning (ingestion is idempotent; for a per-chain log the 400 is also how a fork/head-switch mid-walk surfaces).
+- **Transparent keyset routes** — countersignature reads and the `/index/v0/*` lexical default — resume strictly past `after` whether or not it names a present row, so even a foreign cursor is safe and never errors.
+- **Opaque-token routes** — `/index/v0/*` ordered mode, the signing poll — resume strictly past the encoded composite key when the token decodes, and answer an **undecodable** token with **400** (a decodable token whose row has since expired or changed resumes at the next key, keyset-style).
 
 ---
 
 ## Operation Ingestion
 
-All proof plane operations enter through a single endpoint: `POST /proof/v1/operations`. The request body is an array of JWS tokens — identity operations, content operations, artifacts, and countersignatures can be mixed freely in the same batch.
+All proof plane operations enter through a single endpoint: `POST /proof/v1/operations`. The request body is an array of JWS tokens — identity operations, content operations, artifacts, and countersignatures can be mixed freely in the same batch. A batch carries at most **100 tokens** — a larger array is a **400** — and the reference implementations additionally guard the aggregate request body at 16 MB, answering an oversized body with **413** in both implementations (a client that sees 413 chunks and retries; 400 remains the malformed-content verdict); gossiping peers chunk larger runs to stay within the caps.
 
 ### Classification
 
@@ -248,7 +259,7 @@ The relay enforces semantic rules beyond cryptographic validity:
 
 One route serves countersignature data:
 
-- **`GET /proof/v1/countersignatures/:cid?after={cid}&limit=N`** — Primary lookup. Returns `{ cid, countersignatures: string[], next }`, sorted by each countersignature's own CID ascending and forward-only cursor-paginated. `after` is a countersignature CID, `limit` defaults to 100 and maxes at 1000, and `next` is the countersignature CID to resume from or `null` when caught up. Works for any CID-addressable target (operations, artifacts). Returns 404 only when the CID is neither a known operation nor has stored countersignatures.
+- **`GET /proof/v1/countersignatures/:cid?after={cid}&limit=N`** — Primary lookup. Returns `{ countersignatures: [{ cid, jwsToken }], next }`, sorted by each countersignature's own CID ascending and forward-only cursor-paginated — the same row shape as per-chain log entries, so a generic client handles both identically. `after` is a countersignature CID and a **strictly-greater keyset cursor** over that CID order: an `after` that is not a present key resumes at the next greater key rather than truncating, so cursors survive concurrent additions and even cross-relay replay. `limit` defaults to 100 and maxes at 1000 (values above the max clamped); `next` is the last returned row's CID, or `null` when the page was not full (caught up). Works for any CID-addressable target (operations, artifacts). Returns 404 only when the CID is neither a known operation nor has stored countersignatures. (Each countersignature's `targetCID` and `relation` live inside its signed payload — the token is the truth; the row fields are conveniences.)
 
 ---
 
@@ -290,7 +301,8 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
     "content": true,
     "log": true,
     "revocations": true,
-    "index": true
+    "index": true,
+    "signing": false
   },
   "profile": "eyJhbGciOiJFZERTQSIs...",
   "peers": [{ "endpoint": "https://peer.relay.example.com" }],
@@ -311,34 +323,39 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 }
 ```
 
-| Field                      | Type           | Description                                                                                                                                                          |
-| -------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `did`                      | string         | The relay's DID, resolvable on this relay's proof plane                                                                                                              |
-| `protocol`                 | string         | Protocol identifier, always `"dfos-web-relay"`                                                                                                                       |
-| `version`                  | string         | The relay's own release version (semver), independent of the frozen proof-plane clock — the proof version lives in the `/proof/v1` path prefix, not here             |
-| `capabilities`             | object         | Capability flags for optional features                                                                                                                               |
-| `capabilities.proof`       | boolean        | MUST be `true`. A relay without proof plane capability is not a relay                                                                                                |
-| `capabilities.write`       | boolean        | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                                     |
-| `capabilities.content`     | boolean        | Whether the relay supports the content plane (blob upload/download)                                                                                                  |
-| `capabilities.log`         | boolean        | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                                  |
-| `capabilities.revocations` | boolean        | Whether the [revocation status](#revocation-status-v1) index is served (`GET /revocations/v1/*`). Both reference relays always serve it                              |
-| `capabilities.index`       | boolean        | Whether the [index](#index-v0) query family is served (`GET /index/v0/*`). An absent flag (a relay predating the family) reads as `false`                            |
-| `profile`                  | string         | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                           |
-| `peers`                    | array          | OPTIONAL additive telemetry. Configured peer relays surfaced for mesh discovery; reference relays emit `[]` when no peers are configured                             |
-| `peers[].endpoint`         | string         | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                                            |
-| `stats`                    | object         | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                                         |
-| `stats.opCount`            | number         | OPTIONAL additive telemetry. Total entries in the global operation log                                                                                               |
-| `stats.countsByKind`       | object         | OPTIONAL additive telemetry. Global-log counts by primitive kind; reference relays emit `identity`, `content`, `artifact`, `credential`, `countersign`, `revocation` |
-| `stats.oldestOpAt`         | string \| null | OPTIONAL additive telemetry. `createdAt` of the oldest-position global-log entry, or `null` when the log is empty                                                    |
-| `stats.headCid`            | string \| null | OPTIONAL additive telemetry. CID of the global-log tip, or `null` when the log is empty                                                                              |
+| Field                      | Type           | Description                                                                                                                                                                                                                         |
+| -------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `did`                      | string         | The relay's DID, resolvable on this relay's proof plane                                                                                                                                                                             |
+| `protocol`                 | string         | Protocol identifier, always `"dfos-web-relay"`                                                                                                                                                                                      |
+| `version`                  | string         | The relay's own release version (semver), independent of the frozen proof-plane clock — the proof version lives in the `/proof/v1` path prefix, not here                                                                            |
+| `capabilities`             | object         | Capability flags for optional features                                                                                                                                                                                              |
+| `capabilities.proof`       | boolean        | MUST be `true`. A relay without proof plane capability is not a relay                                                                                                                                                               |
+| `capabilities.write`       | boolean        | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                                                                                                    |
+| `capabilities.content`     | boolean        | Whether the relay supports the content plane (blob upload/download)                                                                                                                                                                 |
+| `capabilities.log`         | boolean        | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                                                                                                 |
+| `capabilities.revocations` | boolean        | Whether the [revocation status](#revocation-status-v1) index is served (`GET /revocations/v1/*`). Reference relays serve it by default; a relay MAY disable it (501). An absent flag reads as `true` (the family predates the flag) |
+| `capabilities.index`       | boolean        | Whether the [index](#index-v0) query family is served (`GET /index/v0/*`). An absent flag (a relay predating the family) reads as `false`                                                                                           |
+| `capabilities.signing`     | boolean        | Whether the [signing mailbox](https://protocol.dfos.com/signing) courier is served (`/signing/v0/*`). Opt-in: reference relays default it off, and an absent flag reads as `false`                                                  |
+| `profile`                  | string         | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                                                                                          |
+| `peers`                    | array          | OPTIONAL additive telemetry. Configured peer relays surfaced for mesh discovery; reference relays emit `[]` when no peers are configured                                                                                            |
+| `peers[].endpoint`         | string         | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                                                                                                           |
+| `stats`                    | object         | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                                                                                                        |
+| `stats.opCount`            | number         | OPTIONAL additive telemetry. Total entries in the global operation log                                                                                                                                                              |
+| `stats.countsByKind`       | object         | OPTIONAL additive telemetry. Global-log counts by primitive kind; reference relays emit `identity`, `content`, `artifact`, `credential`, `countersign`, `revocation`                                                                |
+| `stats.oldestOpAt`         | string \| null | OPTIONAL additive telemetry. `createdAt` of the oldest-position global-log entry, or `null` when the log is empty                                                                                                                   |
+| `stats.headCid`            | string \| null | OPTIONAL additive telemetry. CID of the global-log tip, or `null` when the log is empty                                                                                                                                             |
 
-`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. When `capabilities.revocations: false`, the `/revocations/v1/*` routes return **501 Not Implemented** — the same capability-not-supported semantics. When `capabilities.index` is `false` or absent, the `/index/v0/*` routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
+`capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. When `capabilities.revocations: false`, the `/revocations/v1/*` routes return **501 Not Implemented** — the same capability-not-supported semantics. When `capabilities.index` is `false` or absent, the `/index/v0/*` routes return **501 Not Implemented**. When `capabilities.signing` is `false` or absent, the `/signing/v0/*` routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
+
+Capability gates fire **first** — before authentication, body parsing, or any store lookup — uniformly across every gated family. Where two gates stack (content-plane blob upload is gated by `content` and then `write`), the plane-existence gate fires before the write gate.
 
 ### Lite (pull-only) node — `capabilities.write: false`
 
 A relay MAY run as a **lite pull-only proof node**: it verifies, stores, and serves the proof plane, but accepts **no writes**. When `capabilities.write: false`, `POST /proof/v1/operations` returns **501 Not Implemented**. Because that endpoint is _both_ the client-write and the peer-gossip-ingest path (a gossiping peer POSTs operations here, and nothing in the request distinguishes a first-party submission from a peer push), refusing it disables **gossip-in along with client writes**. Such a node stays current by **pulling**: `syncFromPeers` polls its peers' `/proof/v1/log` and ingests verified operations locally. This is the smallest, safest mesh citizen — a tiny attack surface (no untrusted write endpoint) that still contributes verification and availability. All read routes behave normally. `dfos serve --no-write` runs this mode.
 
-**`capabilities.write: false` means the node accepts no writes of any kind.** It gates **every** write route, on both planes: `POST /proof/v1/operations` (proof plane) and `PUT /content/:contentId/blob/:operationCID` (content-plane blob upload) both return **501 Not Implemented**. Blob upload is the one route that accepts a multi-megabyte body, so leaving it open on a node whose whole point is a minimal attack surface would contradict the advertised capability.
+**`capabilities.write: false` means the node accepts no writes of any kind.** It gates **every** write route, on both planes: `POST /proof/v1/operations` (proof plane) and `PUT /content/:contentId/blob/:ref` (content-plane blob upload; the ref MUST be the committing operation CID) both return **501 Not Implemented**. Blob upload is the one route that accepts a multi-megabyte body, so leaving it open on a node whose whole point is a minimal attack surface would contradict the advertised capability.
+
+To be precise about what "writes" quantifies over: the two **replicated planes** — proof-plane ingestion and content-plane blob upload, the routes enumerated above. The optional [signing mailbox](https://protocol.dfos.com/signing) is on neither plane (courier state: never gossiped, never folded, retention bounded by each request's own expiry) and is governed solely by `capabilities.signing`. A `write: false` relay MAY therefore serve the mailbox; its no-ingest invariant is exactly "this relay never ingests proof-plane operations," and SIGNING.md's deposit gate — credential-authorized, byte-capped, verify-then-discard — is what keeps that invariant true on a node that couriers signing traffic.
 
 The two flags gate different things and compose:
 
@@ -376,22 +393,24 @@ Returns log entries starting after the given CID cursor.
       "chainId": "did:dfos:..."
     }
   ],
+  "next": "bafy...",
   "cursor": "bafy..."
 }
 ```
 
-| Field                | Type         | Description                                                                                                                                                  |
-| -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `entries[].cid`      | string       | Operation CID                                                                                                                                                |
-| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync                                                                                           |
-| `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `artifact`, `countersign`, `revocation`, `credential`                                                           |
-| `entries[].chainId`  | string       | DID (`identity-op`, `artifact`, `credential`, and `revocation` — all keyed to the issuer/signer DID), contentId (`content-op`), or targetCID (`countersign`) |
-| `cursor`             | string\|null | CID to pass as `after` for the next page. `null` means caught up                                                                                             |
+| Field                | Type         | Description                                                                                                                                                                           |
+| -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `entries[].cid`      | string       | Operation CID                                                                                                                                                                         |
+| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync                                                                                                                    |
+| `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `artifact`, `countersign`, `revocation`, `credential`                                                                                    |
+| `entries[].chainId`  | string       | DID (`identity-op`, `artifact`, `credential`, and `revocation` — all keyed to the issuer/signer DID), contentId (`content-op`), or targetCID (`countersign`)                          |
+| `next`               | string\|null | CID to pass as `after` for the next page — the shared list envelope's resume field. `null` when the page was not full (caught up)                                                     |
+| `cursor`             | string\|null | **Deprecated alias of `next`** — identical value, emitted for one release window for pre-rename consumers. Readers prefer `next`, falling back to `cursor`; removed at the next minor |
 
 Parameters:
 
-- **`after`** (optional): CID cursor. Omit to start from the beginning of the log
-- **`limit`** (optional): Max entries to return. Default: 100. Max: 1000
+- **`after`** (optional): cursor from a previous page's `next`, passed back verbatim. Omit to start from the beginning of the log. Cursors are **relay-local and implementation-shaped** (the reference relays use the entry CID; other conformant relays MAY use opaque composite tokens): an `after` the relay does not recognize is a **400**, never a silently empty page. A continuously syncing client therefore persists only server-supplied `next` values — never a fabricated one — and on `next: null` (caught up) retains its last persisted cursor, cheaply re-fetching the final partial page next cycle; on a `400` it resets its cursor and re-syncs from the start (ingestion is idempotent)
+- **`limit`** (optional): Max entries to return. Default: 100. Max: 1000. Values above the max are clamped, not rejected
 
 > **`chainId` is not a per-chain partition key.** Because `credential` and `revocation` entries carry `chainId` = the issuer DID — the **same** value as that DID's `identity-op` and `artifact` entries — folding the global log per-chain on `chainId` alone silently co-mingles credentials, revocations, artifacts, and identity ops under a single DID. An indexer reconstructing a specific chain MUST filter by `kind` first (e.g. `kind === 'identity-op'` to rebuild the identity chain) rather than grouping on `chainId` alone.
 
@@ -404,7 +423,7 @@ Identity and content chains expose their own log views with the same cursor-base
 - `GET /proof/v1/identities/:did/log?after={cid}&limit=N`
 - `GET /proof/v1/content/:contentId/log?after={cid}&limit=N`
 
-Same cursor-based pagination parameters as the global log. Per-chain log entries include `{ cid, jwsToken }` — the chain-specific subset of the global log entry shape. Returns operations belonging to that chain in chain order.
+Same pagination envelope and rules as the global log — `after` + `limit` in, `next` (plus the deprecated `cursor` alias, one release window) out, unknown cursor **400**. Per-chain log entries include `{ cid, jwsToken }` — the chain-specific subset of the global log entry shape. Returns operations belonging to that chain in chain order. The 400-on-unknown-cursor rule carries a correctness payoff here: a client paging a chain whose head switched branches under it (fork + head selection) is told its cursor is off the served branch and restarts, instead of being silently told it is caught up on a branch that is no longer the head.
 
 ---
 
@@ -464,7 +483,7 @@ Content plane requests carry a self-signed **auth token** in the `Bearer` header
 
 **Auth-token lifetime ceiling**: the relay rejects an auth token whose declared lifetime (`exp − iat`) exceeds a configured maximum (default **24 hours**), returning `401`. Auth tokens are ephemeral by design (minutes); this ceiling stops a buggy or malicious signer from minting an effectively-permanent bearer token. It applies only to auth tokens — DFOS credentials (read/write/standing) are verified on a separate path and may carry hours-to-months lifetimes. Setting the maximum to `≤ 0` disables the ceiling.
 
-### Blob Upload (`PUT /content/:contentId/blob/:operationCID`)
+### Blob Upload (`PUT /content/:contentId/blob/:ref`)
 
 The upload path mirrors the download path — the operation CID identifies which operation's document is being uploaded.
 
@@ -493,7 +512,7 @@ The optional `:ref` parameter selects which operation's document to return:
 
 ### Enumerating a Chain's Documents
 
-The former relay-side list route was removed because it was only a relay-decoded convenience over state the client can re-derive verifiably. Fetch `GET /content/:contentId/blob` for the document at head, `GET /content/:contentId/blob/:opCID` for the document any specific operation committed (immutable), and `GET /proof/v1/content/:contentId/log` to enumerate the chain's operations, each carrying its `documentCID`. This composition is strictly more verifiable: every blob is checked against its committed `documentCID`, and the op log is the frozen proof-plane enumeration.
+The former relay-side list route was removed because it was only a relay-decoded convenience over state the client can re-derive verifiably. Fetch `GET /content/:contentId/blob` for the document at head, `GET /content/:contentId/blob/:ref` for the document any specific operation committed (immutable), and `GET /proof/v1/content/:contentId/log` to enumerate the chain's operations, each carrying its `documentCID`. This composition is strictly more verifiable: every blob is checked against its committed `documentCID`, and the op log is the frozen proof-plane enumeration.
 
 ### Standing Authorization
 
@@ -543,7 +562,7 @@ Following is a per-relay, optional behavior on the content plane's own `0.x` clo
 
 A relay that enforces revocation already maintains an `(issuerDID, credentialCID)` revocation set (see [Revocation Ingestion](#revocation-ingestion)). The **revocation status** route family exposes an indexed, read-only projection of that set, so a client can ask "has this credential been revoked?" or "what has this issuer revoked?" with one GET instead of replaying the operation log.
 
-Like the universal resolver, this family is a **frozen `v1` contract at the relay root** on its own v1 clock — it is NOT part of, and is not mounted under, the frozen `/proof/v1` proof plane. Nothing about ingestion changes: revocations remain ordinary proof-plane operations (`typ: did:dfos:revocation`), submitted via `POST /proof/v1/operations` and gossiped like everything else. A relay advertises support via `capabilities.revocations` in the well-known; when unsupported, the routes return **501 Not Implemented** (capability not supported, consistent with `content`/`log`). Both reference relays serve the index unconditionally.
+Like the universal resolver, this family is a **frozen `v1` contract at the relay root** on its own v1 clock — it is NOT part of, and is not mounted under, the frozen `/proof/v1` proof plane. Nothing about ingestion changes: revocations remain ordinary proof-plane operations (`typ: did:dfos:revocation`), submitted via `POST /proof/v1/operations` and gossiped like everything else. A relay advertises support via `capabilities.revocations` in the well-known; when unsupported, the routes return **501 Not Implemented** (capability not supported, consistent with `content`/`log`). Reference relays serve the index by default and expose the flag as a construction option; disabling it changes only these read routes — revocation **enforcement** (ingest, content-plane, deposit gates) runs regardless, and a client MUST treat a 501 here as "this relay does not answer revocation-status questions," never as a negative answer.
 
 ### Credential Status (`GET /revocations/v1/credential/:credentialCID`)
 
@@ -577,7 +596,7 @@ If more than one issuer has revoked the same credential CID (possible, since the
 }
 ```
 
-- **`200`** — every revocation this relay has ingested for the issuer, sorted by revocation `createdAt` ascending (tiebreak `credentialCID`), forward-only cursor-paginated: `after` (a `credentialCID` cursor, omit to start from the first) and `limit` (default 100, max 1000); the response carries `next` — the `credentialCID` to pass as `after` for the next page, `null` when caught up. An issuer with none returns an empty array — same honest-absence semantics as above.
+- **`200`** — every revocation this relay has ingested for the issuer, sorted by `credentialCID` ascending, forward-only cursor-paginated: `after` (a `credentialCID` cursor, omit to start from the first) and `limit` (default 100, max 1000, values above the max clamped); the response carries `next` — the `credentialCID` to pass as `after` for the next page, `null` when the page was not full (caught up). The enumeration key IS the cursor, so resumption is a **strictly-greater keyset**: an `after` that is not a present key resumes at the next greater key, cursors survive concurrent ingestion and cross-relay replay, and — decisively — a revocation whose signer-claimed `createdAt` is backdated can never be inserted _behind_ a client's cursor and silently skipped, which a time-ordered enumeration could not promise (`createdAt` is author-claimed and unbounded downward). Chronology is a client-side sort over the returned rows, each of which carries its self-proving JWS. An issuer with none returns an empty array — same honest-absence semantics as above.
 - **`400`** — the param is not a canonical 31-char `did:dfos` identifier.
 
 ---
@@ -771,7 +790,7 @@ This route is amber and relay-asserted: `resource=chain:Y` returns a superset of
 The relay uses two key resolution strategies:
 
 - **Historical resolver** (for chain re-verification): searches all keys that have ever appeared in an identity chain's log, including rotated-out keys. This is necessary because re-verifying a full content chain from genesis must resolve keys from operations signed before a key rotation.
-- **Current-state resolver** (for live authentication): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for auth tokens. This prevents a compromised rotated-out key from being used to authenticate new requests.
+- **Current-state resolver** (for live authentication): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for auth tokens. This prevents a compromised rotated-out key from being used to authenticate new requests. A **deleted** identity has no live-authentication standing at all: a relay MUST reject an auth token whose issuer's current state is deleted, however valid its signature — deletion is the terminal off-switch, and live authentication is exactly the question deletion answers. (Re-verification of committed history is untouched, per the historical resolver above.)
 
 **Which primitive uses which resolver:**
 
@@ -803,10 +822,14 @@ interface RelayStore {
   addCountersignature(operationCID: string, jwsToken: string): Promise<void>;
 
   appendToLog(entry: LogEntry): Promise<void>;
+  // `null` (the whole result, not the `next` field) = the store does not
+  // recognize `after` — the relay MUST answer 400, never an empty page. A
+  // store that cannot signal this would silently mask foreign cursors as
+  // caught-up, permanently stalling any peer that trusted the answer.
   readLog(params: {
     after?: string;
     limit: number;
-  }): Promise<{ entries: LogEntry[]; cursor: string | null }>;
+  }): Promise<{ entries: LogEntry[]; next: string | null } | null>;
 
   // chain state at arbitrary CID (fork verification)
   getIdentityStateAtCID(
@@ -874,7 +897,12 @@ The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFrom
 | `GET`  | `/index/v0/content`                         | index       | none                                      |
 | `GET`  | `/index/v0/countersignatures`               | index       | none                                      |
 | `GET`  | `/index/v0/credentials`                     | index       | none                                      |
-| `PUT`  | `/content/:contentId/blob/:opCID`           | content     | auth token                                |
+| `POST` | `/signing/v0/requests`                      | signing     | deposit credential (in body)              |
+| `GET`  | `/signing/v0/requests`                      | signing     | auth token                                |
+| `POST` | `/signing/v0/requests/:cid/response`        | signing     | none — validity is the auth               |
+| `GET`  | `/signing/v0/requests/:cid/response`        | signing     | none — CID knowledge                      |
+| `POST` | `/signing/v0/requests/:cid/decline`         | signing     | none — advisory                           |
+| `PUT`  | `/content/:contentId/blob/:ref`             | content     | auth token                                |
 | `GET`  | `/content/:contentId/blob[/:ref]`           | content     | standing auth, or auth token + credential |
 
 ---
@@ -916,24 +944,30 @@ interface PeerClient {
     peerUrl: string,
     did: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
   getContentLog(
     peerUrl: string,
     contentId: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
+  // `null` = transport/peer failure; `'invalid-cursor'` = the peer explicitly
+  // rejected `after` (400) — the distinguished value the sync loop's self-heal
+  // requires. A client that collapses the 400 into `null` leaves the puller
+  // retrying a dead cursor forever after a peer wipes or rebuilds its log.
   getOperationLog(
     peerUrl: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
   submitOperations(peerUrl: string, operations: string[]): Promise<void>;
 }
 ```
 
-Each method corresponds to a peering behavior: `getIdentityLog` / `getContentLog` support read-through, `getOperationLog` supports sync-in, and `submitOperations` supports gossip-out. A `PeerLogEntry` is `{ cid: string; jwsToken: string }`.
+Each method corresponds to a peering behavior: `getIdentityLog` / `getContentLog` support read-through, `getOperationLog` supports sync-in, and `submitOperations` supports gossip-out. A `PeerLogEntry` is `{ cid: string; jwsToken: string }`. The per-chain log methods surface a mid-walk 400 the same distinguishable way (`'invalid-cursor'`): a fork whose head switches while a read-through walk is in flight invalidates the walk's cursor, and the correct response is one restart of that walk from the beginning — not silently treating the chain as fully fetched.
+
+**Sync discipline (normative for pullers).** A puller persists only peer-supplied `next` values — never a cursor fabricated from an entry CID (a peer whose cursor format is not a bare CID would 400 it). On `next: null` (caught up) it retains its last persisted cursor and cheaply re-fetches the final partial page next cycle; a peer whose whole log fits in one page is therefore re-read each cycle — a deliberate, bounded cost (one page, dedup-idempotent) accepted in exchange for never fabricating. On `'invalid-cursor'` it resets: at most **once per peer per sync cycle** (a second rejection in the same cycle aborts the cycle for that peer rather than looping), and the reset is persisted only after a from-scratch fetch succeeds — so one spurious 400 from an intermediary cannot destroy a real high-water mark.
 
 ---
 

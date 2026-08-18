@@ -200,6 +200,22 @@ These are known and deliberately accepted for v1.
   windows are obligations on the verifying third party, and SIWD has no reference
   implementation in this repository yet (SIWD.md note, `specs/SIWD.md`; SIWD.md
   "Security Considerations", `specs/SIWD.md`).
+- **Cursor validation is a cheap membership signal over already-public sets.** The
+  list routes' 400-on-unknown-cursor answers "does this relay hold X at this position"
+  with one status code — information already derivable by paging the same public
+  enumeration, so no new disclosure, but a lower-cost probe than the enumeration it
+  shortcuts (WEB-RELAY.md "Error Responses", `specs/WEB-RELAY.md`).
+- **The signing-mailbox courier reads pending payloads, and bundle deposits admit on
+  depositor-attested state** (SIGNING `0.x` — optional capability, default-off; listed
+  here because it adds adversary surface wherever enabled). A relay serving
+  `capabilities.signing` can read every pending sign-request payload in the clear
+  (encrypt-to-device is the named future seam), and a deposit `chain` bundle for a
+  foreign requester can hide a rotation, deletion, or revocation from the **relay** — a
+  chain prefix verifies, and head-ness is unprovable from the chain alone. The exposure
+  is bounded to **relay spam-admission** by the subject-rooted, expiring deposit
+  credential; integrity holds at the signer, which independently re-resolves the
+  requester to current state (SIGNING.md "Courier, Not Ledger"; the bundle
+  trust-boundary paragraphs under "POST /signing/v0/requests", `specs/SIGNING.md`).
 
 ---
 

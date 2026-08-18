@@ -115,11 +115,13 @@ func TestCrossBatchExtensionBeforeGenesis(t *testing.T) {
 
 	// verify the log has 2 entries
 	var log struct {
+		logCursorFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
 	}
 	getJSON(t, base+"/proof/v1/content/"+cc.contentID+"/log", &log)
+	assertLogCursorAlias(t, log.logCursorFields)
 	if len(log.Entries) != 2 {
 		t.Fatalf("expected 2 log entries (genesis + extension), got %d", len(log.Entries))
 	}
@@ -167,11 +169,13 @@ func TestCrossBatchForkBeforeAncestor(t *testing.T) {
 
 	// chain should have 4 ops: genesis, A, B (fork), C (resolved by sequencer)
 	var log struct {
+		logCursorFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
 	}
 	getJSON(t, base+"/proof/v1/content/"+cc.contentID+"/log", &log)
+	assertLogCursorAlias(t, log.logCursorFields)
 	if len(log.Entries) != 4 {
 		t.Fatalf("expected 4 log entries (genesis + A + B fork + C sequenced), got %d", len(log.Entries))
 	}

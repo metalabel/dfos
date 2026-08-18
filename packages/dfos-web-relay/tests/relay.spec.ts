@@ -151,7 +151,7 @@ class RelayBackedPeerClient implements PeerClient {
     _peerUrl: string,
     did: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | null> {
     const chain = await this.backingStore.getIdentityChain(did);
     if (!chain) return null;
     return this.paginateChainLog(chain.log, params);
@@ -161,7 +161,7 @@ class RelayBackedPeerClient implements PeerClient {
     _peerUrl: string,
     contentId: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | null> {
     const chain = await this.backingStore.getContentChain(contentId);
     if (!chain) return null;
     return this.paginateChainLog(chain.log, params);
@@ -170,15 +170,16 @@ class RelayBackedPeerClient implements PeerClient {
   async getOperationLog(
     _peerUrl: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null> {
     const limit = this.pageSize ?? params?.limit ?? 1000;
     const result = await this.backingStore.readLog({
       ...(params?.after ? { after: params.after } : {}),
       limit,
     });
+    if (!result) return 'invalid-cursor';
     return {
       entries: result.entries.map((e) => ({ cid: e.cid, jwsToken: e.jwsToken })),
-      cursor: result.cursor,
+      next: result.next,
     };
   }
 
@@ -189,7 +190,7 @@ class RelayBackedPeerClient implements PeerClient {
   private paginateChainLog(
     log: string[],
     params?: { after?: string; limit?: number },
-  ): { entries: PeerLogEntry[]; cursor: string | null } {
+  ): { entries: PeerLogEntry[]; next: string | null } {
     const limit = this.pageSize ?? params?.limit ?? 1000;
     const entries: PeerLogEntry[] = log.map((jws) => {
       const decoded = decodeJwsUnsafe(jws);
@@ -203,8 +204,8 @@ class RelayBackedPeerClient implements PeerClient {
     }
 
     const page = entries.slice(startIdx, startIdx + limit);
-    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
-    return { entries: page, cursor };
+    const next = page.length === limit ? page[page.length - 1]!.cid : null;
+    return { entries: page, next };
   }
 }
 
@@ -676,8 +677,9 @@ describe('web relay', () => {
 
       const body = await json(await req(`/proof/v1/countersignatures/${author.operationCID}`));
       expect(body.countersignatures).toHaveLength(1);
-      const decoded = decodeJwsUnsafe(body.countersignatures[0]);
+      const decoded = decodeJwsUnsafe(body.countersignatures[0].jwsToken);
       expect(decoded?.payload.relation).toBe('endorses');
+      expect(body.countersignatures[0].cid).toBe(decoded?.header.cid);
     });
   });
 
@@ -1086,7 +1088,6 @@ describe('web relay', () => {
       // should have exactly 2 distinct countersignatures
       const csRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       const csBody = await json(csRes);
-      expect(csBody.cid).toBe(content.operationCID);
       expect(csBody.countersignatures).toHaveLength(2);
 
       // resubmit both — count must not change
@@ -1139,11 +1140,21 @@ describe('web relay', () => {
       expect(page2.next).toBeNull();
 
       const all = [...page1.countersignatures, ...page2.countersignatures];
-      expect(new Set(all).size).toBe(3);
+      expect(new Set(all.map((row: { jwsToken: string }) => row.jwsToken)).size).toBe(3);
 
-      const cids = all.map((token) => decodeJwsUnsafe(token)?.header.cid ?? '');
+      const cids = all.map((row: { cid: string }) => row.cid);
       expect(new Set(cids).size).toBe(3);
       expect(cids).toEqual([...cids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+
+      // keyset: an `after` that is not a present key resumes at the next greater
+      // key instead of truncating to an empty page
+      const between = `${cids[0]}0`; // lexically between cids[0] and cids[1]
+      const resumed = await json(
+        await req(
+          `/proof/v1/countersignatures/${content.operationCID}?after=${encodeURIComponent(between)}`,
+        ),
+      );
+      expect(resumed.countersignatures.map((r: { cid: string }) => r.cid)).toEqual(cids.slice(1));
     });
 
     it('should accept a countersignature targeting an identity operation CID', async () => {
@@ -1490,6 +1501,61 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('identity delete', () => {
+    it('restores authentication when a later fork undeletes the projected head', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      const initial = await json(await postOps([identity.jwsToken, content.jwsToken]));
+      const contentId = initial.results.find(
+        (result: { kind: string }) => result.kind === 'content-op',
+      ).chainId;
+
+      const authenticatedReadStatus = async () => {
+        const token = await createTestAuthToken(identity);
+        return (
+          await req(`/content/${contentId}/blob`, {
+            headers: { authorization: `Bearer ${token}` },
+          })
+        ).status;
+      };
+      expect(await authenticatedReadStatus()).toBe(404);
+
+      const deleteOp: IdentityOperation = {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: identity.operationCID,
+        createdAt: ts(2),
+      };
+      const { jwsToken: deleteToken } = await signIdentityOperation({
+        operation: deleteOp,
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+      expect((await json(await postOps([deleteToken]))).results[0].status).toBe('new');
+      expect(await authenticatedReadStatus()).toBe(401);
+
+      const undeleteFork: IdentityOperation = {
+        version: 1,
+        type: 'update',
+        previousOperationCID: identity.operationCID,
+        authKeys: [identity.authKey.key],
+        assertKeys: [],
+        controllerKeys: [identity.controller.key],
+        createdAt: ts(3),
+      };
+      const { jwsToken: undeleteToken } = await signIdentityOperation({
+        operation: undeleteFork,
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+      expect((await json(await postOps([undeleteToken]))).results[0].status).toBe('new');
+
+      const chain = await store.getIdentityChain(identity.did);
+      expect(chain?.state.isDeleted).toBe(false);
+      expect(await authenticatedReadStatus()).toBe(404);
+    });
+
     it('should accept identity delete and set isDeleted', async () => {
       const identity = await createIdentity();
       await postOps([identity.jwsToken]);
@@ -2310,6 +2376,25 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('request body caps', () => {
+    const oversizedChunkedRequest = (path: string, method: 'POST' | 'PUT') => {
+      const chunk = new Uint8Array(8 * 1024 * 1024);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(chunk);
+          controller.enqueue(chunk);
+          controller.enqueue(new Uint8Array([0]));
+          controller.close();
+        },
+      });
+      const request = new Request(`http://localhost${path}`, {
+        method,
+        headers: { 'content-type': 'application/octet-stream' },
+        body,
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' });
+      return app.app.fetch(request);
+    };
+
     it('should reject POST /operations with an oversized Content-Length (413)', async () => {
       const res = await req('/proof/v1/operations', {
         method: 'POST',
@@ -2319,6 +2404,16 @@ describe('web relay', () => {
         },
         body: JSON.stringify({ operations: ['x'] }),
       });
+      expect(res.status).toBe(413);
+    });
+
+    it('should reject chunked POST /operations while buffering at 16MB (413)', async () => {
+      const res = await oversizedChunkedRequest('/proof/v1/operations', 'POST');
+      expect(res.status).toBe(413);
+    });
+
+    it('should reject chunked PUT blob while buffering at 16MB before auth (413)', async () => {
+      const res = await oversizedChunkedRequest('/content/anychain/blob/anyop', 'PUT');
       expect(res.status).toBe(413);
     });
 
@@ -2720,27 +2815,30 @@ describe('web relay', () => {
       const res1 = await req(`/proof/v1/log?after=${bootstrapCursor}&limit=2`);
       const body1 = await json(res1);
       expect(body1.entries).toHaveLength(2);
-      expect(body1.cursor).not.toBeNull();
+      expect(body1.next).not.toBeNull();
+      // deprecated alias mirrors `next` for one release window
+      expect(body1.cursor).toBe(body1.next);
 
-      // read with cursor — the final partial page now carries a resume cursor, so a
-      // caught-up puller advances past it instead of re-fetching the tail every cycle
-      const res2 = await req(`/proof/v1/log?after=${body1.cursor}`);
+      // final partial page: caught up → `next` null (shared envelope contract);
+      // a puller persists its position from the last entry's cid instead
+      const res2 = await req(`/proof/v1/log?after=${body1.next}`);
       const body2 = await json(res2);
       expect(body2.entries).toHaveLength(1);
-      expect(body2.cursor).not.toBeNull();
+      expect(body2.next).toBeNull();
 
-      // fetching from the final cursor returns an empty page (caught up) — not a
-      // re-serve of the tail
-      const res3 = await req(`/proof/v1/log?after=${body2.cursor}`);
+      // resuming from the last ingested entry's cid returns an empty page
+      const lastCid = body2.entries[0].cid;
+      const res3 = await req(`/proof/v1/log?after=${lastCid}`);
       const body3 = await json(res3);
       expect(body3.entries).toEqual([]);
+      expect(body3.next).toBeNull();
     });
 
-    it('should handle unknown cursor gracefully', async () => {
+    it('rejects an unknown cursor with 400 (relay-local cursors)', async () => {
       const res = await req('/proof/v1/log?after=nonexistent');
+      expect(res.status).toBe(400);
       const body = await json(res);
-      expect(body.entries).toEqual([]);
-      expect(body.cursor).toBeNull();
+      expect(body.error).toBeDefined();
     });
   });
 
@@ -3112,6 +3210,168 @@ describe('web relay', () => {
         expect(chain!.log).toHaveLength(2);
       });
 
+      it('restarts each identity read-through walk once when a peer rejects a mid-walk cursor', async () => {
+        const identity = await createIdentity();
+        const newAuthKey = makeKey();
+        const updateOp: IdentityOperation = {
+          version: 1,
+          type: 'update',
+          previousOperationCID: identity.operationCID,
+          authKeys: [newAuthKey.key],
+          assertKeys: [],
+          controllerKeys: [identity.controller.key],
+          createdAt: ts(1),
+        };
+        const update = await signIdentityOperation({
+          operation: updateOp,
+          signer: identity.controller.signer,
+          keyId: identity.controller.keyId,
+          identityDID: identity.did,
+        });
+
+        for (const path of [
+          `/proof/v1/identities/${identity.did}`,
+          `/1.0/identifiers/${identity.did}`,
+        ]) {
+          const afters: Array<string | undefined> = [];
+          const peerClient: PeerClient = {
+            async getIdentityLog(_peerUrl, _did, params) {
+              afters.push(params?.after);
+              if (afters.length === 2) return 'invalid-cursor';
+              if (afters.length <= 3) {
+                return {
+                  entries: [{ cid: identity.operationCID, jwsToken: identity.jwsToken }],
+                  next: 'page-one',
+                };
+              }
+              return {
+                entries: [{ cid: update.operationCID, jwsToken: update.jwsToken }],
+                next: null,
+              };
+            },
+            async getContentLog() {
+              return null;
+            },
+            async getOperationLog() {
+              return null;
+            },
+            async submitOperations() {},
+          };
+          const localStore = new MemoryRelayStore();
+          const relay = await createRelay({
+            store: localStore,
+            identity: RELAY_IDENTITY,
+            peers: [{ url: 'http://peer-a' }],
+            peerClient,
+          });
+          expect((await relay.app.request(path)).status).toBe(200);
+          expect(afters).toEqual([undefined, 'page-one', undefined, 'page-one']);
+          expect((await localStore.getIdentityChain(identity.did))?.log).toHaveLength(2);
+        }
+      });
+
+      it('abandons an identity peer after its restarted walk rejects a second cursor', async () => {
+        const identity = await createIdentity();
+        const afters: Array<string | undefined> = [];
+        const peerClient: PeerClient = {
+          async getIdentityLog(_peerUrl, _did, params) {
+            afters.push(params?.after);
+            if (params?.after) return 'invalid-cursor';
+            return {
+              entries: [{ cid: identity.operationCID, jwsToken: identity.jwsToken }],
+              next: 'page-one',
+            };
+          },
+          async getContentLog() {
+            return null;
+          },
+          async getOperationLog() {
+            return null;
+          },
+          async submitOperations() {},
+        };
+        const localStore = new MemoryRelayStore();
+        const relay = await createRelay({
+          store: localStore,
+          identity: RELAY_IDENTITY,
+          peers: [{ url: 'http://peer-a' }],
+          peerClient,
+        });
+
+        expect((await relay.app.request(`/proof/v1/identities/${identity.did}`)).status).toBe(200);
+        expect(afters).toEqual([undefined, 'page-one', undefined, 'page-one']);
+        expect((await localStore.getIdentityChain(identity.did))?.log).toHaveLength(1);
+      });
+
+      it('continues both identity read-through routes to the next peer after abandonment', async () => {
+        const identity = await createIdentity();
+        const newAuthKey = makeKey();
+        const update = await signIdentityOperation({
+          operation: {
+            version: 1,
+            type: 'update',
+            previousOperationCID: identity.operationCID,
+            authKeys: [newAuthKey.key],
+            assertKeys: [],
+            controllerKeys: [identity.controller.key],
+            createdAt: ts(1),
+          },
+          signer: identity.controller.signer,
+          keyId: identity.controller.keyId,
+          identityDID: identity.did,
+        });
+
+        for (const path of [
+          `/proof/v1/identities/${identity.did}`,
+          `/1.0/identifiers/${identity.did}`,
+        ]) {
+          const calls: Array<{ peerUrl: string; after?: string }> = [];
+          const peerClient: PeerClient = {
+            async getIdentityLog(peerUrl, _did, params) {
+              calls.push({ peerUrl, ...(params?.after ? { after: params.after } : {}) });
+              if (peerUrl === 'http://peer-a') {
+                if (params?.after) return 'invalid-cursor';
+                return {
+                  entries: [{ cid: identity.operationCID, jwsToken: identity.jwsToken }],
+                  next: 'page-one',
+                };
+              }
+              return {
+                entries: [
+                  { cid: identity.operationCID, jwsToken: identity.jwsToken },
+                  { cid: update.operationCID, jwsToken: update.jwsToken },
+                ],
+                next: null,
+              };
+            },
+            async getContentLog() {
+              return null;
+            },
+            async getOperationLog() {
+              return null;
+            },
+            async submitOperations() {},
+          };
+          const localStore = new MemoryRelayStore();
+          const relay = await createRelay({
+            store: localStore,
+            identity: RELAY_IDENTITY,
+            peers: [{ url: 'http://peer-a' }, { url: 'http://peer-b' }],
+            peerClient,
+          });
+
+          expect((await relay.app.request(path)).status).toBe(200);
+          expect(calls.map((call) => call.peerUrl)).toEqual([
+            'http://peer-a',
+            'http://peer-a',
+            'http://peer-a',
+            'http://peer-a',
+            'http://peer-b',
+          ]);
+          expect((await localStore.getIdentityChain(identity.did))?.log).toHaveLength(2);
+        }
+      });
+
       it('should fetch content chain from peer on local miss', async () => {
         const peerStore = new MemoryRelayStore();
         const identity = await createIdentity();
@@ -3194,6 +3454,67 @@ describe('web relay', () => {
         expect(chain!.log).toHaveLength(2);
       });
 
+      it('restarts content read-through once when a peer rejects a mid-walk cursor', async () => {
+        const peerStore = new MemoryRelayStore();
+        const identity = await createIdentity();
+        const content = await createContentOp(identity);
+        const genesisResults = await ingestOperations(
+          [identity.jwsToken, content.jwsToken],
+          peerStore,
+        );
+        const contentId = genesisResults.find((result) => result.kind === 'content-op')!.chainId!;
+        const newDocEncoded = await dagCborCanonicalEncode({ type: 'post', title: 'updated' });
+        const update = await signContentOperation({
+          operation: {
+            version: 1,
+            type: 'update',
+            did: identity.did,
+            previousOperationCID: content.operationCID,
+            documentCID: newDocEncoded.cid.toString(),
+            baseDocumentCID: null,
+            createdAt: ts(2),
+            note: null,
+          },
+          signer: identity.authKey.signer,
+          kid: `${identity.did}#${identity.authKey.keyId}`,
+        });
+        const afters: Array<string | undefined> = [];
+        const peerClient: PeerClient = {
+          async getIdentityLog() {
+            return null;
+          },
+          async getContentLog(_peerUrl, _contentId, params) {
+            afters.push(params?.after);
+            if (afters.length === 2) return 'invalid-cursor';
+            if (afters.length <= 3) {
+              return {
+                entries: [{ cid: content.operationCID, jwsToken: content.jwsToken }],
+                next: 'page-one',
+              };
+            }
+            return {
+              entries: [{ cid: update.operationCID, jwsToken: update.jwsToken }],
+              next: null,
+            };
+          },
+          async getOperationLog() {
+            return null;
+          },
+          async submitOperations() {},
+        };
+        const localStore = new MemoryRelayStore();
+        await ingestOperations([identity.jwsToken], localStore);
+        const relay = await createRelay({
+          store: localStore,
+          identity: RELAY_IDENTITY,
+          peers: [{ url: 'http://peer-a' }],
+          peerClient,
+        });
+        expect((await relay.app.request(`/proof/v1/content/${contentId}`)).status).toBe(200);
+        expect(afters).toEqual([undefined, 'page-one', undefined, 'page-one']);
+        expect((await localStore.getContentChain(contentId))?.log).toHaveLength(2);
+      });
+
       it('should not consult peers with readThrough: false', async () => {
         const peerStore = new MemoryRelayStore();
         const identity = await createIdentity();
@@ -3268,13 +3589,12 @@ describe('web relay', () => {
         expect(chain!.did).toBe(identity.did);
       });
 
-      it('should persist cursor as last entry CID on final page', async () => {
+      it('persists only peer-supplied cursors — never fabricated ones', async () => {
         const peerStore = new MemoryRelayStore();
         const identity = await createIdentity();
-        const results = await ingestOperations([identity.jwsToken], peerStore, {
+        await ingestOperations([identity.jwsToken], peerStore, {
           logEnabled: true,
         });
-        const opCID = results[0]!.cid;
 
         const { relay, localStore } = await createPeeredRelay({
           peerStore,
@@ -3283,9 +3603,17 @@ describe('web relay', () => {
 
         await relay.syncFromPeers();
 
-        // single op < page size → final page → cursor = last entry CID
+        // single op < page size → final partial page → `next` null → the puller
+        // retains its (absent) persisted cursor rather than fabricating one from
+        // the last entry's CID (a fabricated cursor would 400 against a relay
+        // whose cursor format is not a bare CID, e.g. production's opaque token).
         const cursor = await localStore.getPeerCursor('http://peer-a');
-        expect(cursor).toBe(opCID);
+        expect(cursor).toBeUndefined();
+
+        // the op still ingested, and a second sync is idempotent
+        expect(await localStore.getIdentityChain(identity.did)).toBeDefined();
+        await relay.syncFromPeers();
+        expect(await localStore.getIdentityChain(identity.did)).toBeDefined();
       });
 
       it('should handle multi-page sync', async () => {
@@ -3372,6 +3700,75 @@ describe('web relay', () => {
         // no cursor should be set (nothing to sync)
         const cursor = await localStore.getPeerCursor('http://peer-a');
         expect(cursor).toBeUndefined();
+      });
+
+      it('aborts after two invalid-cursor responses without destroying persisted progress', async () => {
+        const localStore = new MemoryRelayStore();
+        await localStore.setPeerCursor('http://peer-a', 'persisted-high-water');
+        let attempts = 0;
+        const peerClient: PeerClient = {
+          async getIdentityLog() {
+            return null;
+          },
+          async getContentLog() {
+            return null;
+          },
+          async getOperationLog() {
+            attempts += 1;
+            return 'invalid-cursor';
+          },
+          async submitOperations() {},
+        };
+        const relay = await createRelay({
+          store: localStore,
+          identity: RELAY_IDENTITY,
+          peers: [{ url: 'http://peer-a' }],
+          peerClient,
+        });
+
+        await relay.syncFromPeers();
+
+        expect(attempts).toBe(2);
+        expect(await localStore.getPeerCursor('http://peer-a')).toBe('persisted-high-water');
+      });
+
+      it('restarts a genuinely wiped peer once and persists from-scratch progress', async () => {
+        const identity = await createIdentity();
+        const localStore = new MemoryRelayStore();
+        await localStore.setPeerCursor('http://peer-a', 'stale-high-water');
+        const afters: Array<string | undefined> = [];
+        const peerClient: PeerClient = {
+          async getIdentityLog() {
+            return null;
+          },
+          async getContentLog() {
+            return null;
+          },
+          async getOperationLog(_peerUrl, params) {
+            afters.push(params?.after);
+            if (params?.after === 'stale-high-water') return 'invalid-cursor';
+            if (!params?.after) {
+              return {
+                entries: [{ cid: identity.operationCID, jwsToken: identity.jwsToken }],
+                next: 'fresh-high-water',
+              };
+            }
+            return { entries: [], next: null };
+          },
+          async submitOperations() {},
+        };
+        const relay = await createRelay({
+          store: localStore,
+          identity: RELAY_IDENTITY,
+          peers: [{ url: 'http://peer-a' }],
+          peerClient,
+        });
+
+        await relay.syncFromPeers();
+
+        expect(afters).toEqual(['stale-high-water', undefined, 'fresh-high-water']);
+        expect(await localStore.getPeerCursor('http://peer-a')).toBe('fresh-high-water');
+        expect(await localStore.getIdentityChain(identity.did)).toBeDefined();
       });
     });
   });
@@ -3512,18 +3909,10 @@ describe('web relay', () => {
       return { credentialCID, revocationJws: jwsToken };
     };
 
-    const revocationCreatedAt = (revocationJws: string) => {
-      const createdAt = decodeJwsUnsafe(revocationJws)?.payload?.createdAt;
-      return typeof createdAt === 'string' ? createdAt : '';
-    };
-
     const byRevocationOrder = (
       a: { credentialCID: string; revocationJws: string },
       b: { credentialCID: string; revocationJws: string },
     ) => {
-      const aCreatedAt = revocationCreatedAt(a.revocationJws);
-      const bCreatedAt = revocationCreatedAt(b.revocationJws);
-      if (aCreatedAt !== bCreatedAt) return aCreatedAt < bCreatedAt ? -1 : 1;
       if (a.credentialCID === b.credentialCID) return 0;
       return a.credentialCID < b.credentialCID ? -1 : 1;
     };
@@ -3559,7 +3948,7 @@ describe('web relay', () => {
       expect((await json(res)).error).toBe('invalid credential CID');
     });
 
-    it('lists all revocations for an issuer, sorted by revocation createdAt then credentialCID', async () => {
+    it('lists all revocations for an issuer, sorted by credentialCID', async () => {
       const issuer = await createIdentity();
       await postOps([issuer.jwsToken]);
 
@@ -3611,16 +4000,30 @@ describe('web relay', () => {
         revocations.map((r) => r.credentialCID).sort(),
       );
 
-      for (let i = 1; i < paged.length; i++) {
-        const prev = paged[i - 1]!;
-        const current = paged[i]!;
-        const prevCreatedAt = revocationCreatedAt(prev.revocation);
-        const currentCreatedAt = revocationCreatedAt(current.revocation);
-        expect(
-          prevCreatedAt < currentCreatedAt ||
-            (prevCreatedAt === currentCreatedAt && prev.credentialCID <= current.credentialCID),
-        ).toBe(true);
-      }
+      expect(paged.map((row) => row.credentialCID)).toEqual(
+        paged.map((row) => row.credentialCID).sort(),
+      );
+    });
+
+    it('resumes issuer revocations strictly after an unknown credentialCID cursor', async () => {
+      const issuer = await createIdentity();
+      await postOps([issuer.jwsToken]);
+      const revocations = [
+        await revokeCredentialForIssuer(issuer, 'chain:keysetA'),
+        await revokeCredentialForIssuer(issuer, 'chain:keysetB'),
+        await revokeCredentialForIssuer(issuer, 'chain:keysetC'),
+      ].sort(byRevocationOrder);
+      // Appending a byte to the first fixed-width CID produces an absent key
+      // strictly between the first and second rows.
+      const after = `${revocations[0]!.credentialCID}~`;
+      const response = await req(
+        `/revocations/v1/issuer/${issuer.did}?after=${encodeURIComponent(after)}`,
+      );
+      expect(response.status).toBe(200);
+      const body = await json(response);
+      expect(body.revocations.map((row: { credentialCID: string }) => row.credentialCID)).toEqual(
+        revocations.filter((row) => row.credentialCID > after).map((row) => row.credentialCID),
+      );
     });
 
     it('returns an empty array for an issuer with no revocations', async () => {
@@ -3639,6 +4042,29 @@ describe('web relay', () => {
     it('advertises the revocations capability in the well-known', async () => {
       const body = await json(await req('/.well-known/dfos-relay'));
       expect(body.capabilities.revocations).toBe(true);
+    });
+
+    it('gates both routes first and advertises false when revocations are disabled', async () => {
+      const disabled = await createRelay({
+        store,
+        identity: RELAY_IDENTITY,
+        revocations: false,
+      });
+      const disabledReq = (path: string) => disabled.app.request(`http://localhost${path}`);
+
+      // Deliberately malformed params prove the capability gate fires before
+      // validation (and therefore before any store lookup).
+      for (const path of [
+        '/revocations/v1/credential/not-a-cid',
+        '/revocations/v1/issuer/not-a-did',
+      ]) {
+        const res = await disabledReq(path);
+        expect(res.status).toBe(501);
+        expect(await json(res)).toEqual({ error: 'revocation status not available' });
+      }
+
+      const body = await json(await disabledReq('/.well-known/dfos-relay'));
+      expect(body.capabilities.revocations).toBe(false);
     });
   });
 

@@ -260,6 +260,56 @@ func TestIsAttenuatedEmptyChild(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// IsAttenuated — non-chain resource types (mailbox:<id>, SIGNING 0.x)
+// ---------------------------------------------------------------------------
+
+// Non-chain forms narrow by exact byte equality of the full resource string
+// only. MUST agree with the TS twin's verdicts (credentials.spec.ts).
+func TestIsAttenuatedNonChainExactEquality(t *testing.T) {
+	const mailbox = "mailbox:nzkf838efr424433rn2rzkdv8h7t9ae"
+
+	if !IsAttenuated([]AttEntry{{Resource: mailbox, Action: "deposit"}},
+		[]AttEntry{{Resource: mailbox, Action: "deposit"}}) {
+		t.Fatal("identical mailbox entry should be attenuated")
+	}
+	if !IsAttenuated([]AttEntry{{Resource: mailbox, Action: "deposit,read"}},
+		[]AttEntry{{Resource: mailbox, Action: "deposit"}}) {
+		t.Fatal("action narrowing on the same mailbox should be attenuated")
+	}
+	if IsAttenuated([]AttEntry{{Resource: mailbox, Action: "deposit"}},
+		[]AttEntry{{Resource: mailbox, Action: "deposit,read"}}) {
+		t.Fatal("action widening on the same mailbox should NOT be attenuated")
+	}
+	if IsAttenuated([]AttEntry{{Resource: mailbox, Action: "deposit"}},
+		[]AttEntry{{Resource: "mailbox:cnnnft9f8a2rn938d6nkz38r847v2kr", Action: "deposit"}}) {
+		t.Fatal("a different mailbox id should NOT be covered")
+	}
+}
+
+// The wildcard is a chain:-only concept: a literal '*' id in any other type is
+// an ordinary id covering only itself, and coverage never crosses types.
+func TestIsAttenuatedNonChainWildcardIsLiteral(t *testing.T) {
+	const mailbox = "mailbox:nzkf838efr424433rn2rzkdv8h7t9ae"
+
+	if IsAttenuated([]AttEntry{{Resource: "mailbox:*", Action: "deposit"}},
+		[]AttEntry{{Resource: mailbox, Action: "deposit"}}) {
+		t.Fatal("mailbox:* must NOT cover a concrete mailbox (no non-chain wildcard)")
+	}
+	if !IsAttenuated([]AttEntry{{Resource: "mailbox:*", Action: "deposit"}},
+		[]AttEntry{{Resource: "mailbox:*", Action: "deposit"}}) {
+		t.Fatal("mailbox:* covers only its literal self")
+	}
+	if IsAttenuated([]AttEntry{{Resource: "chain:*", Action: "deposit"}},
+		[]AttEntry{{Resource: mailbox, Action: "deposit"}}) {
+		t.Fatal("chain:* must NOT cover a mailbox resource (no cross-type coverage)")
+	}
+	if IsAttenuated([]AttEntry{{Resource: mailbox, Action: "write"}},
+		[]AttEntry{{Resource: "chain:content1", Action: "write"}}) {
+		t.Fatal("a mailbox parent must NOT cover a chain child (no cross-type coverage)")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // IsAttenuated — chain:* wildcard
 // ---------------------------------------------------------------------------
 

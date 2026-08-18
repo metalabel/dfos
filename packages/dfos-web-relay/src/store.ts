@@ -22,6 +22,7 @@ import type {
   IndexOrderedCursor,
 } from './index-routes';
 import { createKeyResolver } from './ingest';
+import { decodeSigningCursor, encodeSigningCursor } from './types';
 import type {
   BlobKey,
   LogEntry,
@@ -32,10 +33,12 @@ import type {
   StoredOperation,
   StoredPublicCredential,
   StoredRevocation,
+  StoredSignRequest,
 } from './types';
 
 /** Ascending bytewise comparator — JS UTF-16 order over ASCII DIDs/CIDs. */
 const ascending = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+export const MAX_PENDING_SIGN_REQUESTS_PER_SUBJECT = 1024;
 
 /**
  * Page a projection: rows ascending by `keyOf`, strictly greater than `after`
@@ -136,6 +139,7 @@ const revocationSupersedes = (
  * Suitable for development, testing, and short-lived relay instances.
  */
 export class MemoryRelayStore implements RelayStore {
+  private signRequests = new Map<string, StoredSignRequest>();
   private operations = new Map<string, StoredOperation>();
   private identityChains = new Map<string, StoredIdentityChain>();
   private contentChains = new Map<string, StoredContentChain>();
@@ -159,6 +163,105 @@ export class MemoryRelayStore implements RelayStore {
     string,
     IndexCountersignatureRow & { witnessDID: string }
   >();
+
+  async pruneExpiredSignRequests(now: number): Promise<void> {
+    for (const [cid, request] of this.signRequests) {
+      if (now >= Date.parse(request.expiresAt)) this.signRequests.delete(cid);
+    }
+  }
+
+  async getSignRequest(cid: string, now: number): Promise<StoredSignRequest | undefined> {
+    await this.pruneExpiredSignRequests(now);
+    return this.signRequests.get(cid);
+  }
+
+  async putSignRequest(
+    request: StoredSignRequest,
+    now: number,
+  ): Promise<'created' | 'identical' | 'conflict' | 'capacity'> {
+    await this.pruneExpiredSignRequests(now);
+    const existing = this.signRequests.get(request.cid);
+    if (existing) return existing.request === request.request ? 'identical' : 'conflict';
+    const pendingForSubject = [...this.signRequests.values()].filter(
+      (candidate) =>
+        candidate.subjectDID === request.subjectDID &&
+        candidate.response === undefined &&
+        now < Date.parse(candidate.expiresAt),
+    ).length;
+    if (pendingForSubject >= MAX_PENDING_SIGN_REQUESTS_PER_SUBJECT) {
+      return 'capacity';
+    }
+    this.signRequests.set(request.cid, request);
+    return 'created';
+  }
+
+  async listPendingSignRequests(params: {
+    subjectDID: string;
+    after?: string;
+    limit: number;
+    now: number;
+  }): Promise<{ requests: StoredSignRequest[]; next: string | null } | null> {
+    await this.pruneExpiredSignRequests(params.now);
+    const rows = [...this.signRequests.values()]
+      .filter(
+        (request) =>
+          request.subjectDID === params.subjectDID &&
+          params.now < Date.parse(request.expiresAt) &&
+          request.response === undefined,
+      )
+      .sort((a, b) =>
+        a.depositedAt === b.depositedAt
+          ? ascending(a.cid, b.cid)
+          : ascending(a.depositedAt, b.depositedAt),
+      );
+    const after = params.after ? decodeSigningCursor(params.after) : undefined;
+    if (params.after && (!after || after.subjectDID !== params.subjectDID)) return null;
+    const gated = after
+      ? rows.filter(
+          (request) =>
+            request.depositedAt > after.depositedAt ||
+            (request.depositedAt === after.depositedAt && request.cid > after.cid),
+        )
+      : rows;
+    const requests = gated.slice(0, params.limit);
+    const last = requests.at(-1);
+    const next =
+      requests.length === params.limit && last
+        ? encodeSigningCursor({
+            subjectDID: params.subjectDID,
+            depositedAt: last.depositedAt,
+            cid: last.cid,
+          })
+        : null;
+    return { requests, next };
+  }
+
+  async putSignResponse(
+    cid: string,
+    response: string,
+    now: number,
+  ): Promise<'created' | 'identical' | 'conflict' | 'not-found'> {
+    await this.pruneExpiredSignRequests(now);
+    const request = this.signRequests.get(cid);
+    if (!request) return 'not-found';
+    if (request.response !== undefined) {
+      return request.response === response ? 'identical' : 'conflict';
+    }
+    request.response = response;
+    return 'created';
+  }
+
+  async declineSignRequest(
+    cid: string,
+    now: number,
+  ): Promise<'declined' | 'responded' | 'not-found'> {
+    await this.pruneExpiredSignRequests(now);
+    const request = this.signRequests.get(cid);
+    if (!request) return 'not-found';
+    if (request.response !== undefined) return 'responded';
+    request.declined = true;
+    return 'declined';
+  }
 
   async getOperation(cid: string): Promise<StoredOperation | undefined> {
     return this.operations.get(cid);
@@ -264,14 +367,8 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]> {
-    // Sorts on the PERSISTED createdAt (verified at ingest) rather than
-    // re-decoding each jwsToken unverified — same frozen v1 feed order, one less
-    // place that parses a token it did not check.
     const revs = [...this.revocations.values()].filter((rev) => rev.issuerDID === issuerDID);
-    revs.sort((a, b) => {
-      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
-      return ascending(a.credentialCID, b.credentialCID);
-    });
+    revs.sort((a, b) => ascending(a.credentialCID, b.credentialCID));
     return revs;
   }
 
@@ -474,21 +571,21 @@ export class MemoryRelayStore implements RelayStore {
   async readLog(params: {
     after?: string;
     limit: number;
-  }): Promise<{ entries: LogEntry[]; cursor: string | null }> {
+  }): Promise<{ entries: LogEntry[]; next: string | null } | null> {
     let startIdx = 0;
     if (params.after) {
       const idx = this.operationLog.findIndex((e) => e.cid === params.after);
-      if (idx >= 0) startIdx = idx + 1;
-      else startIdx = this.operationLog.length; // cursor not found → empty
+      if (idx < 0) return null; // relay-local cursor this log never issued → 400 at the route
+      startIdx = idx + 1;
     }
 
     const entries = this.operationLog.slice(startIdx, startIdx + params.limit);
-    // Return a resume cursor whenever the page has entries — NOT only when full — so
-    // a caught-up puller advances past the final partial page instead of re-fetching
-    // the tail every sync cycle (anti-entropy chatter). Its next fetch from this
-    // cursor returns an empty page and it stops. Mirrors the Go twin's ReadLog.
-    const cursor = entries.length > 0 ? entries[entries.length - 1]!.cid : null;
-    return { entries, cursor };
+    // `next` only on a FULL page — a partial page means caught up (the shared list
+    // envelope's contract). Pullers advance their persisted cursor from the last
+    // ingested entry's cid, so a null here never strands progress; the sync loop
+    // already does exactly that. Mirrors the Go twin's ReadLog.
+    const next = entries.length === params.limit ? entries[entries.length - 1]!.cid : null;
+    return { entries, next };
   }
 
   async getStats(): Promise<RelayStats> {

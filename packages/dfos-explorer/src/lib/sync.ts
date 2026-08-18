@@ -51,6 +51,7 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
   let cursor = state?.cursor ?? null;
   let count = state?.count ?? 0;
   let added = 0;
+  let resetAttempted = false;
 
   // preload the rollups once so per-page merges need no reads; counts are
   // incremented only for ops that were not already present (union across relays)
@@ -62,6 +63,17 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
       relays: [relay],
       limit: SYNC_PAGE_LIMIT,
     });
+    if (page === 'invalid-cursor') {
+      if (resetAttempted) {
+        throw new Error(`relay rejected cursor again after reset: ${relay}`);
+      }
+      // Log cursors are relay-local. A relay wipe/rebuild invalidates the saved
+      // position, so clear it only in memory and restart this same idempotent
+      // walk from zero. Preserve the durable cursor until that fetch succeeds.
+      resetAttempted = true;
+      cursor = null;
+      continue;
+    }
     if (!page.provenance.answeredBy) throw new Error(`relay unreachable: ${relay}`);
     if (page.entries.length === 0) {
       // a zero-entry page still completes the sync — record the cursor so
@@ -75,6 +87,10 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
     const ops: ExplorerOp[] = [];
     const touched = new Map<string, ChainRollup>();
     for (const entry of page.entries) {
+      // A partial-tail replay is expected when the relay issued no resumable
+      // cursor. Existing CIDs are a complete no-op: preserve their stored seq
+      // and do not inflate this relay's persistent arrival count.
+      if (known.has(entry.cid)) continue;
       const kind = isOpKind(entry.kind) ? entry.kind : 'artifact';
       const chainId = typeof entry.chainId === 'string' ? entry.chainId : '';
       if (!entry.cid || !entry.jwsToken || !chainId) continue;
@@ -102,56 +118,58 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
       });
       count += 1;
 
-      if (!known.has(entry.cid)) {
-        const existing = rollups.get(chainId);
-        const rollup = existing ?? {
-          chainId,
-          kind,
-          opCount: 0,
-          firstCreatedAt: createdAt,
-          lastCreatedAt: '',
-          headCid: '',
-        };
-        // KIND precedence: identity/content ops define a chain and OWN its
-        // rollup. A credential/countersign/revocation op rides a SHARED chainId
-        // (a credential chains under its ISSUER's identity chain — see db.ts
-        // CHAIN_KINDS) and must never relabel that chain's rollup nor pollute
-        // its head/opCount. A chain op reclaims a rollup previously seen only as
-        // a non-chain primitive, restarting its chain-history fields.
-        const opIsChain = CHAIN_KINDS.includes(kind);
-        const rollupIsChain = CHAIN_KINDS.includes(rollup.kind);
-        if (opIsChain && existing && !rollupIsChain) {
-          rollup.kind = kind;
-          rollup.opCount = 0;
-          rollup.firstCreatedAt = createdAt;
-          rollup.lastCreatedAt = '';
-          rollup.headCid = '';
-        } else if (opIsChain || !rollupIsChain) {
-          rollup.kind = kind;
-        }
-        // fold into the chain-history fields only for ops of the rollup's
-        // settled kind — foreign primitives sharing the chainId live in the ops
-        // index (counted there per-kind), never in this rollup's length/head.
-        if (kind === rollup.kind) {
-          rollup.opCount += 1;
-          if (!rollup.firstCreatedAt || (createdAt && createdAt < rollup.firstCreatedAt))
-            rollup.firstCreatedAt = createdAt;
-          if (createdAt >= rollup.lastCreatedAt) {
-            rollup.lastCreatedAt = createdAt;
-            rollup.headCid = entry.cid;
-          }
-        }
-        rollups.set(chainId, rollup);
-        touched.set(chainId, rollup);
-        added += 1;
+      const existing = rollups.get(chainId);
+      const rollup = existing ?? {
+        chainId,
+        kind,
+        opCount: 0,
+        firstCreatedAt: createdAt,
+        lastCreatedAt: '',
+        headCid: '',
+      };
+      // KIND precedence: identity/content ops define a chain and OWN its
+      // rollup. A credential/countersign/revocation op rides a SHARED chainId
+      // (a credential chains under its ISSUER's identity chain — see db.ts
+      // CHAIN_KINDS) and must never relabel that chain's rollup nor pollute
+      // its head/opCount. A chain op reclaims a rollup previously seen only as
+      // a non-chain primitive, restarting its chain-history fields.
+      const opIsChain = CHAIN_KINDS.includes(kind);
+      const rollupIsChain = CHAIN_KINDS.includes(rollup.kind);
+      if (opIsChain && existing && !rollupIsChain) {
+        rollup.kind = kind;
+        rollup.opCount = 0;
+        rollup.firstCreatedAt = createdAt;
+        rollup.lastCreatedAt = '';
+        rollup.headCid = '';
+      } else if (opIsChain || !rollupIsChain) {
+        rollup.kind = kind;
       }
+      // fold into the chain-history fields only for ops of the rollup's
+      // settled kind — foreign primitives sharing the chainId live in the ops
+      // index (counted there per-kind), never in this rollup's length/head.
+      if (kind === rollup.kind) {
+        rollup.opCount += 1;
+        if (!rollup.firstCreatedAt || (createdAt && createdAt < rollup.firstCreatedAt))
+          rollup.firstCreatedAt = createdAt;
+        if (createdAt >= rollup.lastCreatedAt) {
+          rollup.lastCreatedAt = createdAt;
+          rollup.headCid = entry.cid;
+        }
+      }
+      rollups.set(chainId, rollup);
+      touched.set(chainId, rollup);
+      added += 1;
     }
 
     await db.putBatch(ops, [...touched.values()]);
-    cursor = page.cursor;
+    // Persist only relay-issued resume positions. When a partial page reports
+    // `next: null`, retain the last issued value instead of fabricating one
+    // from an entry CID (or clearing it and replaying the whole log next run).
+    const resume = page.next;
+    if (resume) cursor = resume;
     await db.setCursor({ relay, cursor, count, updatedAt: new Date().toISOString() });
     onProgress?.({ relay, count, added, chains: rollups.size });
-    if (!cursor) break;
+    if (!resume) break;
   }
 
   return { added };

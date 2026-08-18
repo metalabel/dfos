@@ -46,6 +46,7 @@ import {
   REVOCATIONS_BASE_PATH,
 } from './revocations';
 import { computeOpCID, sequenceOps } from './sequencer';
+import { registerSigningRoutes } from './signing';
 import { PROOF_BASE_PATH } from './types';
 import type {
   PeerClient,
@@ -55,6 +56,9 @@ import type {
   RelayStore,
   StoredContentChain,
 } from './types';
+
+/** Optional SIGNING 0.1 courier clock; byte twin of signingBasePath in routes.go. */
+export const SIGNING_BASE_PATH = '/signing/v0';
 
 // -----------------------------------------------------------------------------
 // relay result type
@@ -107,14 +111,51 @@ const MAX_BODY_BYTES = 16 << 20;
 
 /**
  * Returns true if a Content-Length header is present and exceeds the 16MB body
- * cap. A missing/unparseable header returns false — the streamed length is
- * bounded separately (PUT blob re-checks the materialized size; serve.ts caps
- * the unauthenticated streaming path above this route cap).
+ * cap. A missing/unparseable header returns false; readCappedBytes still
+ * enforces the limit incrementally while consuming the request stream.
  */
 const exceedsBodyCap = (contentLength: string | undefined): boolean => {
   if (!contentLength) return false;
   const n = Number(contentLength);
   return Number.isFinite(n) && n > MAX_BODY_BYTES;
+};
+
+const readCappedBytes = async (
+  request: Request,
+  maximum: number,
+): Promise<{ ok: true; bytes: Uint8Array } | { ok: false; tooLarge: boolean }> => {
+  if (exceedsBodyCap(request.headers.get('content-length') ?? undefined)) {
+    return { ok: false, tooLarge: true };
+  }
+  if (!request.body) return { ok: true, bytes: new Uint8Array() };
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maximum) {
+        await reader.cancel().catch(() => {});
+        return { ok: false, tooLarge: true };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, tooLarge: false };
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, bytes };
 };
 
 // -----------------------------------------------------------------------------
@@ -163,8 +204,26 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const { store } = options;
   const contentEnabled = options.content !== false;
   const logEnabled = options.log !== false;
+  const revocationsEnabled = options.revocations !== false;
   const indexEnabled = options.index !== false;
   const writeEnabled = options.write !== false;
+  const signingEnabled = options.signing === true;
+  if (
+    signingEnabled &&
+    [
+      store.getSignRequest,
+      store.pruneExpiredSignRequests,
+      store.putSignRequest,
+      store.listPendingSignRequests,
+      store.putSignResponse,
+      store.declineSignRequest,
+    ].some((member) => typeof member !== 'function')
+  ) {
+    throw new Error('signing capability requires a store implementing the signing members');
+  }
+  if (typeof store.pruneExpiredSignRequests === 'function') {
+    await store.pruneExpiredSignRequests(Date.now());
+  }
   const maxAuthTokenTTLSeconds =
     options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS;
 
@@ -227,6 +286,31 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     return results;
   };
 
+  const ingestPeerLogWithOneRestart = async (
+    getPage: (
+      after: string | undefined,
+    ) => Promise<
+      { entries: { jwsToken: string }[]; next: string | null } | 'invalid-cursor' | null
+    >,
+  ): Promise<boolean> => {
+    let after: string | undefined;
+    let restarted = false;
+    while (true) {
+      const page = await getPage(after);
+      if (page === 'invalid-cursor') {
+        if (restarted) return false;
+        restarted = true;
+        after = undefined;
+        continue;
+      }
+      if (!page) return false;
+      if (page.entries.length === 0) return true;
+      await ingestWithGossip(page.entries.map((entry) => entry.jwsToken));
+      if (!page.next) return true;
+      after = page.next;
+    }
+  };
+
   const app = new Hono();
 
   // -------------------------------------------------------------------------
@@ -285,11 +369,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         write: writeEnabled,
         content: contentEnabled,
         log: logEnabled,
-        // The reference relay always serves the revocation-status index
-        // (/revocations/v1). A relay that does not would advertise false and
-        // 501 those routes, mirroring the content/log capability semantics.
-        revocations: true,
+        revocations: revocationsEnabled,
         index: indexEnabled,
+        signing: signingEnabled,
       },
       profile: profileArtifactJws,
       peers: peerInfos,
@@ -298,6 +380,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         ...(stats ?? {}),
       },
     });
+  });
+
+  registerSigningRoutes({
+    app,
+    store,
+    relayDID,
+    basePath: SIGNING_BASE_PATH,
+    enabled: signingEnabled,
+    maxAuthTokenTTLSeconds,
   });
 
   // -------------------------------------------------------------------------
@@ -313,17 +404,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (!writeEnabled) {
       return c.json({ error: 'this relay is pull-only; writes are disabled' }, 501);
     }
-    // Per-route DoS cap: reject an oversized body before buffering it. Mirrors
-    // the Go twin's 16MB MaxBytesReader on the blob route. The Content-Length
-    // header (when present) is the cheap pre-read check; serve.ts streams a
-    // hard cap above this for the Content-Length-absent (chunked) case.
-    if (exceedsBodyCap(c.req.header('content-length'))) {
-      return c.json({ error: 'request body too large' }, 413);
-    }
+    // Enforce the route cap while consuming the stream. Content-Length is a
+    // cheap early rejection, but chunked/direct Fetch requests are bounded too.
+    const read = await readCappedBytes(c.req.raw, MAX_BODY_BYTES);
+    if (!read.ok && read.tooLarge) return c.json({ error: 'request body too large' }, 413);
+    if (!read.ok) return c.json({ error: 'invalid JSON body' }, 400);
 
     let body: unknown;
     try {
-      body = await c.req.json();
+      body = JSON.parse(new TextDecoder().decode(read.bytes));
     } catch {
       return c.json({ error: 'invalid JSON body' }, 400);
     }
@@ -368,13 +457,18 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     let startIdx = 0;
     if (after) {
       const idx = entries.findIndex((e) => e.cid === after);
-      startIdx = idx >= 0 ? idx + 1 : entries.length;
+      // Relay-local positional cursor: an `after` not on the served branch is a
+      // caller error (or a fork/head switch) — 400 tells the client to restart
+      // instead of silently claiming it is caught up.
+      if (idx < 0) return c.json({ error: 'invalid cursor' }, 400);
+      startIdx = idx + 1;
     }
 
     const page = entries.slice(startIdx, startIdx + limit);
-    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
+    const next = page.length === limit ? page[page.length - 1]!.cid : null;
 
-    return c.json({ entries: page, cursor });
+    // `cursor` is a deprecated alias of `next`, emitted for one release window.
+    return c.json({ entries: page, next, cursor: next });
   });
 
   app.get(`${PROOF_BASE_PATH}/identities/:did{.+}`, async (c) => {
@@ -384,19 +478,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // read-through: try peers on local miss (paginate through full log)
     if (!chain && readThroughPeers.length > 0 && peerClient) {
       for (const peer of readThroughPeers) {
-        let after: string | undefined;
-        while (true) {
-          const logPage = await peerClient.getIdentityLog(peer.url, did, {
+        const completed = await ingestPeerLogWithOneRestart((after) =>
+          peerClient.getIdentityLog(peer.url, did, {
             ...(after ? { after } : {}),
             limit: 1000,
-          });
-          if (!logPage || logPage.entries.length === 0) break;
-          await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
-          if (!logPage.cursor) break;
-          after = logPage.cursor;
-        }
+          }),
+        );
         chain = await store.getIdentityChain(did);
-        if (chain) break;
+        if (completed && chain) break;
       }
     }
 
@@ -439,19 +528,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // read-through: try peers on local miss (paginate through full log)
     if (!chain && readThroughPeers.length > 0 && peerClient) {
       for (const peer of readThroughPeers) {
-        let after: string | undefined;
-        while (true) {
-          const logPage = await peerClient.getIdentityLog(peer.url, did, {
+        const completed = await ingestPeerLogWithOneRestart((after) =>
+          peerClient.getIdentityLog(peer.url, did, {
             ...(after ? { after } : {}),
             limit: 1000,
-          });
-          if (!logPage || logPage.entries.length === 0) break;
-          await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
-          if (!logPage.cursor) break;
-          after = logPage.cursor;
-        }
+          }),
+        );
         chain = await store.getIdentityChain(did);
-        if (chain) break;
+        if (completed && chain) break;
       }
     }
 
@@ -484,6 +568,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
   /** Revocation status for a single credential CID */
   app.get(`${REVOCATIONS_BASE_PATH}/credential/:credentialCID`, async (c) => {
+    if (!revocationsEnabled) {
+      return c.json({ error: 'revocation status not available' }, 501);
+    }
     const credentialCID = c.req.param('credentialCID');
 
     // reject anything that is not a credential-shaped CID — a malformed param
@@ -498,6 +585,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
   /** All revocations issued by a DID */
   app.get(`${REVOCATIONS_BASE_PATH}/issuer/:did{.+}`, async (c) => {
+    if (!revocationsEnabled) {
+      return c.json({ error: 'revocation status not available' }, 501);
+    }
     const did = c.req.param('did');
 
     // must be the exact canonical 31-char did:dfos form
@@ -509,13 +599,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
 
-    let startIdx = 0;
-    if (after) {
-      const idx = revocations.findIndex((rev) => rev.credentialCID === after);
-      startIdx = idx >= 0 ? idx + 1 : revocations.length;
-    }
-
-    const page = revocations.slice(startIdx, startIdx + limit);
+    const eligible = after
+      ? revocations.filter((revocation) => revocation.credentialCID > after)
+      : revocations;
+    const page = eligible.slice(0, limit);
     const next = page.length === limit ? page[page.length - 1]!.credentialCID : null;
 
     return c.json(issuerRevocationList(did, page, next));
@@ -663,13 +750,16 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     let startIdx = 0;
     if (after) {
       const idx = entries.findIndex((e) => e.cid === after);
-      startIdx = idx >= 0 ? idx + 1 : entries.length;
+      // Same relay-local rule as the identity log: off-branch cursor → 400.
+      if (idx < 0) return c.json({ error: 'invalid cursor' }, 400);
+      startIdx = idx + 1;
     }
 
     const page = entries.slice(startIdx, startIdx + limit);
-    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
+    const next = page.length === limit ? page[page.length - 1]!.cid : null;
 
-    return c.json({ entries: page, cursor });
+    // `cursor` is a deprecated alias of `next`, emitted for one release window.
+    return c.json({ entries: page, next, cursor: next });
   });
 
   /** Get a content chain by content ID */
@@ -680,19 +770,14 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // read-through: try peers on local miss (paginate through full log)
     if (!chain && readThroughPeers.length > 0 && peerClient) {
       for (const peer of readThroughPeers) {
-        let after: string | undefined;
-        while (true) {
-          const logPage = await peerClient.getContentLog(peer.url, contentId, {
+        const completed = await ingestPeerLogWithOneRestart((after) =>
+          peerClient.getContentLog(peer.url, contentId, {
             ...(after ? { after } : {}),
             limit: 1000,
-          });
-          if (!logPage || logPage.entries.length === 0) break;
-          await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
-          if (!logPage.cursor) break;
-          after = logPage.cursor;
-        }
+          }),
+        );
         chain = await store.getContentChain(contentId);
-        if (chain) break;
+        if (completed && chain) break;
       }
     }
 
@@ -723,16 +808,20 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
 
-    let startIdx = 0;
-    if (after) {
-      const idx = decorated.findIndex((d) => d.csCid === after);
-      startIdx = idx >= 0 ? idx + 1 : decorated.length;
-    }
+    // True keyset over the CID sort order: resume strictly past `after`, whether
+    // or not it names a present row — cursors survive concurrent additions and
+    // cross-relay replay (the enumeration key IS the sort key here).
+    const remaining = after ? decorated.filter((d) => d.csCid > after) : decorated;
 
-    const page = decorated.slice(startIdx, startIdx + limit);
+    const page = remaining.slice(0, limit);
     const next = page.length === limit ? page[page.length - 1]!.csCid : null;
 
-    return c.json({ cid, countersignatures: page.map((d) => d.jws), next });
+    // Rows are { cid, jwsToken } — the per-chain log entry shape. targetCID and
+    // relation live inside the signed payload; the token is the truth.
+    return c.json({
+      countersignatures: page.map((d) => ({ cid: d.csCid, jwsToken: d.jws })),
+      next,
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -745,7 +834,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const afterParam = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const result = await store.readLog(afterParam ? { after: afterParam, limit } : { limit });
-    return c.json(result);
+    // null = relay-local cursor this log never issued (or another relay's) → 400.
+    if (!result) return c.json({ error: 'invalid cursor' }, 400);
+    // `cursor` is a deprecated alias of `next`, emitted for one release window.
+    return c.json({ entries: result.entries, next: result.next, cursor: result.next });
   });
 
   // -------------------------------------------------------------------------
@@ -766,11 +858,11 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const contentId = c.req.param('contentId');
     const operationCID = c.req.param('operationCID');
 
-    // Per-route DoS cap (16MB, mirrors the Go twin's MaxBytesReader on this
-    // route). Reject by Content-Length before authenticating or buffering.
-    if (exceedsBodyCap(c.req.header('content-length'))) {
-      return c.json({ error: 'request body too large' }, 413);
-    }
+    // Enforce the route cap while consuming the stream, before authentication.
+    // This covers both declared lengths and chunked/direct Fetch requests.
+    const read = await readCappedBytes(c.req.raw, MAX_BODY_BYTES);
+    if (!read.ok && read.tooLarge) return c.json({ error: 'request body too large' }, 413);
+    if (!read.ok) return c.json({ error: 'blob bytes do not match documentCID' }, 400);
 
     // authenticate
     const auth = await authenticateRequest(
@@ -807,13 +899,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'not authorized — must be chain creator or operation signer' }, 403);
     }
 
-    // read blob bytes and verify they match the documentCID from the operation.
-    // Bound the post-read size too: a Content-Length-absent (chunked) body
-    // bypasses the header check above, so re-check the materialized length.
-    const bytes = new Uint8Array(await c.req.arrayBuffer());
-    if (bytes.byteLength > MAX_BODY_BYTES) {
-      return c.json({ error: 'request body too large' }, 413);
-    }
+    // Verify the bounded blob bytes match the documentCID from the operation.
+    const bytes = read.bytes;
     try {
       const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
       const encoded = await dagCborCanonicalEncode(parsed);
@@ -875,17 +962,46 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     for (const peer of syncPeers) {
       let cursor = await store.getPeerCursor(peer.url);
       let fetched = 0;
+      let resetAttempted = false;
+      let resetPending = false;
       while (fetched < maxOpsPerSyncCycle) {
         const page = await peerClient.getOperationLog(peer.url, {
           ...(cursor ? { after: cursor } : {}),
           limit: 1000,
         });
-        if (!page || page.entries.length === 0) break;
+        if (page === 'invalid-cursor') {
+          if (resetAttempted) {
+            console.warn(`peer ${peer.url} rejected its cursor twice; abandoning sync cycle`);
+            break;
+          }
+          resetAttempted = true;
+          resetPending = true;
+          cursor = undefined;
+          continue;
+        }
+        if (!page) break;
+        if (page.entries.length === 0) {
+          if (resetPending) await store.setPeerCursor(peer.url, page.next ?? '');
+          break;
+        }
         await ingestWithGossip(page.entries.map((e) => e.jwsToken));
         fetched += page.entries.length;
-        cursor = page.cursor ?? page.entries[page.entries.length - 1]!.cid;
+        if (resetPending) {
+          // Only a successful from-scratch page proves that the old cursor was
+          // genuinely invalid. Until then, preserve the persisted high-water
+          // mark against transient edge-generated 400s.
+          if (!page.next) await store.setPeerCursor(peer.url, '');
+          resetPending = false;
+        }
+        // Persist ONLY peer-supplied cursors — never fabricate one from the last
+        // entry's CID. A peer whose cursor format is not a bare CID (production
+        // pages a timestamp|cid token) would 400 a fabricated cursor and force a
+        // full resync every cycle. `next` null = caught up: break retaining the
+        // last persisted cursor; the final partial page re-fetches next cycle
+        // and dedups cheaply. Mirrors the Go twin's pullPeerOps.
+        if (!page.next) break;
+        cursor = page.next;
         await store.setPeerCursor(peer.url, cursor);
-        if (!page.cursor) break;
       }
     }
   };

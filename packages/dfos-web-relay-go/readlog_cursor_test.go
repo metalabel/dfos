@@ -1,19 +1,26 @@
 package relay
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 )
 
-// TestReadLogFinalPageReturnsResumeCursor is the anti-entropy-chatter regression
-// guard. A caught-up puller must be able to advance PAST the final partial page;
-// if ReadLog returns an empty cursor whenever the page isn't full, the puller
-// resumes from the prior checkpoint and re-fetches the whole tail (up to a page)
-// every sync cycle forever — re-decoding and re-hashing already-sequenced ops. The
-// fix: return a resume cursor whenever the page has entries, so the next fetch from
-// it (seq > last) returns an empty page and the puller stops. Verified for both
-// store backends (they are parity-enforced twins).
-func TestReadLogFinalPageReturnsResumeCursor(t *testing.T) {
+// TestReadLogCursorContract guards the shared list-envelope contract on the
+// global log, for both store backends (parity-enforced twins):
+//
+//   - `next` only on a FULL page; a partial page means caught up and returns "".
+//     The old behavior (resume cursor on any non-empty page) was an anti-entropy
+//     optimization; it was retired when the envelope was unified because the
+//     puller never fabricates cursors and retains its last persisted one on
+//     null — re-fetching a single final partial page per cycle, deduped cheaply,
+//     with the bounded reconcile scrubber as backstop. This matches how the
+//     production relay has always paged (opaque cursor, null on final page).
+//   - An unknown `after` returns ErrUnknownLogCursor (the route maps it to 400,
+//     never a silently empty page) — log cursors are relay-local.
+//   - Resuming from the last entry of a full page serves the remainder exactly
+//     once; no entry is skipped or re-served.
+func TestReadLogCursorContract(t *testing.T) {
 	cases := []struct {
 		name  string
 		store func(t *testing.T) Store
@@ -36,33 +43,51 @@ func TestReadLogFinalPageReturnsResumeCursor(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// Seed a handful of ops — fewer than the page limit, so the only page is
-			// a partial final page.
 			const seeded = 5
 			for i := 0; i < seeded; i++ {
 				id := createTestIdentity(t)
 				r.Ingest([]string{id.token})
 			}
 
-			entries, cursor, err := store.ReadLog("", 1000)
+			// Partial (not-full) page → caught up → empty `next`.
+			entries, next, err := store.ReadLog("", 1000)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(entries) == 0 {
 				t.Fatal("no entries seeded into the operation log")
 			}
-			if cursor == "" {
-				t.Fatal("final partial page returned an empty cursor — a caught-up puller would re-fetch the tail every cycle (anti-entropy chatter)")
+			if next != "" {
+				t.Fatalf("partial page returned next=%q, want empty (caught up)", next)
 			}
 
-			// Resuming from the final cursor must return an empty page (caught up) —
-			// NOT re-serve the tail.
-			next, _, err := store.ReadLog(cursor, 1000)
+			// Full page → `next` = last entry's CID; resuming serves the remainder
+			// exactly once.
+			pageSize := len(entries) - 2
+			firstPage, next, err := store.ReadLog("", pageSize)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(next) != 0 {
-				t.Fatalf("resuming from the final cursor returned %d entries, want 0 — the puller would loop re-fetching them", len(next))
+			if len(firstPage) != pageSize {
+				t.Fatalf("full page returned %d entries, want %d", len(firstPage), pageSize)
+			}
+			if next != firstPage[len(firstPage)-1].CID {
+				t.Fatalf("full page next=%q, want last entry CID %q", next, firstPage[len(firstPage)-1].CID)
+			}
+			rest, restNext, err := store.ReadLog(next, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rest) != len(entries)-pageSize {
+				t.Fatalf("resume served %d entries, want %d", len(rest), len(entries)-pageSize)
+			}
+			if restNext != "" {
+				t.Fatalf("final partial page returned next=%q, want empty", restNext)
+			}
+
+			// Unknown cursor → ErrUnknownLogCursor, never a silently empty page.
+			if _, _, err := store.ReadLog("bafynonexistentcursor", 1000); !errors.Is(err, ErrUnknownLogCursor) {
+				t.Fatalf("unknown cursor returned err=%v, want ErrUnknownLogCursor", err)
 			}
 		})
 	}

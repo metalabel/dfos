@@ -24,7 +24,7 @@ import (
 //
 // Bodies are compared after CANONICALIZING JSON (recursive key sort): Go's
 // writeJSON encodes map[string]any with keys sorted, while Hono's c.json keeps
-// insertion order, so even {entries, cursor} differs at the raw-byte level while
+// insertion order, so even {entries, next, cursor} differs at the raw-byte level while
 // being semantically identical. Canonicalization is the correct equality.
 //
 // Run via packages/relay-conformance/scripts/run-parity.sh, which sets
@@ -149,11 +149,13 @@ func logEntryCount(t *testing.T, base string) int {
 	t.Helper()
 	_, body := getBody(t, base+"/proof/v1/log?limit=1000")
 	var parsed struct {
+		logCursorFields
 		Entries []json.RawMessage `json:"entries"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return -1
 	}
+	assertLogCursorAlias(t, parsed.logCursorFields)
 	return len(parsed.Entries)
 }
 
@@ -213,7 +215,7 @@ func TestDualRelayParity(t *testing.T) {
 		"/index/v0/credentials?resource=chain:*&limit=1000",
 	}
 
-	for _, route := range routes {
+	for routeIndex, route := range routes {
 		t.Run(route, func(t *testing.T) {
 			tsStatus, tsBody := getBody(t, tsURL+route)
 			goStatus, goBody := getBody(t, goURL+route)
@@ -224,12 +226,32 @@ func TestDualRelayParity(t *testing.T) {
 			if tsStatus != 200 {
 				t.Fatalf("expected 200 on %s, got %d (TS body: %s)", route, tsStatus, tsBody)
 			}
+			if routeIndex < 3 {
+				var tsLog, goLog logCursorFields
+				if err := json.Unmarshal(tsBody, &tsLog); err != nil {
+					t.Fatalf("parse TS log envelope: %v", err)
+				}
+				if err := json.Unmarshal(goBody, &goLog); err != nil {
+					t.Fatalf("parse Go log envelope: %v", err)
+				}
+				assertLogCursorAlias(t, tsLog)
+				assertLogCursorAlias(t, goLog)
+			}
 
 			tsCanon := canonicalize(t, tsBody)
 			goCanon := canonicalize(t, goBody)
 			if tsCanon != goCanon {
 				t.Fatalf("PARITY MISMATCH on %s\n%s\n--- TS (canonical) ---\n%s\n--- Go (canonical) ---\n%s",
 					route, prettyDiff(tsCanon, goCanon), tsCanon, goCanon)
+			}
+		})
+	}
+
+	for name, base := range map[string]string{"ts": tsURL, "go": goURL} {
+		t.Run(name+" global log unknown cursor", func(t *testing.T) {
+			status, _ := getBody(t, base+"/proof/v1/log?after=bafyunknown")
+			if status != http.StatusBadRequest {
+				t.Fatalf("unknown global-log cursor: status %d, want 400", status)
 			}
 		})
 	}

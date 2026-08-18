@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -24,8 +25,10 @@ type Relay struct {
 	profileArtifactJWS string
 	contentEnabled     bool
 	logEnabled         bool
+	revocationsEnabled bool
 	indexEnabled       bool
-	writeEnabled       bool   // false = LITE pull-only node (POST /operations rejected)
+	writeEnabled       bool // false = LITE pull-only node (POST /operations rejected)
+	signingEnabled     bool
 	contentFollow      string // "eager" = materialize granted public content blobs; else off
 	logger             *slog.Logger
 	peers              []PeerConfig
@@ -76,9 +79,10 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 
 	contentEnabled := opts.Content == nil || *opts.Content
 	logEnabled := opts.Log == nil || *opts.Log
+	revocationsEnabled := opts.Revocations == nil || *opts.Revocations
 	indexEnabled := opts.Index == nil || *opts.Index
 	writeEnabled := opts.Write == nil || *opts.Write
-
+	signingEnabled := opts.Signing != nil && *opts.Signing
 	identity := opts.Identity
 	if identity == nil {
 		var err error
@@ -99,6 +103,21 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	readStore := opts.Store
 	if sqlStore, ok := opts.Store.(*SQLiteStore); ok {
 		readStore = sqlStore.ReadStore()
+	}
+	if signingEnabled {
+		if _, ok := opts.Store.(SigningStore); !ok {
+			return nil, fmt.Errorf("signing capability requires an ingestion store implementing SigningStore")
+		}
+		if _, ok := readStore.(SigningStore); !ok {
+			return nil, fmt.Errorf("signing capability requires a read store implementing SigningStore")
+		}
+	}
+	// Retention is independent of the capability flag: sweep courier state at
+	// construction whenever the backing store supports signing.
+	if signingStore, ok := opts.Store.(SigningStore); ok {
+		if err := signingStore.PruneExpiredSignRequests(time.Now()); err != nil {
+			return nil, fmt.Errorf("prune expired sign requests: %w", err)
+		}
 	}
 
 	maxAuthTokenTTL := opts.MaxAuthTokenTTL
@@ -123,8 +142,10 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		profileArtifactJWS: identity.ProfileArtifactJWS,
 		contentEnabled:     contentEnabled,
 		logEnabled:         logEnabled,
+		revocationsEnabled: revocationsEnabled,
 		indexEnabled:       indexEnabled,
 		writeEnabled:       writeEnabled,
+		signingEnabled:     signingEnabled,
 		contentFollow:      opts.ContentFollow,
 		logger:             logger,
 		peers:              opts.Peers,
@@ -301,7 +322,7 @@ func (r *Relay) SyncFromPeers() error {
 		}
 		// readStore for the cursor read — never races on the ingestion tx.
 		cursor, _ := r.readStore.GetPeerCursor(peer.URL)
-		fetched, reached := r.pullPeerOps(peer.URL, cursor, maxOpsPerSyncCycle, true)
+		fetched, reached, resetUnresolved := r.pullPeerOps(peer.URL, cursor, maxOpsPerSyncCycle, true)
 		if fetched > 0 {
 			r.logger.Info("peer sync fetched ops",
 				"peer", peer.URL,
@@ -310,7 +331,9 @@ func (r *Relay) SyncFromPeers() error {
 			)
 		}
 		// Bounded anti-entropy: self-heal a wedged/stale forward cursor.
-		r.reconcilePeer(peer.URL, reached)
+		if !resetUnresolved {
+			r.reconcilePeer(peer.URL, reached)
+		}
 	}
 
 	// sequence all stored ops — fixed-point loop until no more progress
@@ -324,17 +347,52 @@ func (r *Relay) SyncFromPeers() error {
 // high-water cursor is advanced as each page commits (the normal forward pull);
 // when false the stored high-water cursor is left untouched and the caller owns
 // the cursor bookkeeping (the bounded scrub sweep). On a transient store failure
-// it stops without advancing, so the same page is re-fetched next cycle.
-func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist bool) (int, string) {
+// it stops without advancing, so the same page is re-fetched next cycle. The
+// third result reports whether a cursor reset remains unresolved this cycle.
+func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist bool) (int, string, bool) {
 	cursor := startCursor
 	fetched := 0
+	resetAttempted := false
+	resetPending := false
 	for fetched < maxOps {
 		page, err := r.peerClient.GetOperationLog(peerURL, cursor, 1000)
+		if errors.Is(err, ErrPeerInvalidCursor) {
+			if resetAttempted {
+				r.logger.Warn("peer sync: peer rejected cursor again after reset — aborting cycle", "peer", peerURL)
+				break
+			}
+			// The peer no longer recognizes our persisted cursor (wiped/rebuilt
+			// log, or a pre-fix fabricated cursor). Reset only in memory and
+			// persist it only after a from-scratch page succeeds.
+			r.logger.Warn("peer sync: peer rejected cursor — resetting", "peer", peerURL)
+			resetAttempted = true
+			resetPending = true
+			cursor = ""
+			continue
+		}
 		if err != nil {
 			r.logger.Error("peer sync failed", "peer", peerURL, "error", err)
 			break
 		}
-		if page == nil || len(page.Entries) == 0 {
+		if page == nil {
+			break
+		}
+		if len(page.Entries) == 0 {
+			if resetPending {
+				if persist {
+					resume := ""
+					if page.Resume() != nil {
+						resume = *page.Resume()
+					}
+					if err := r.store.SetPeerCursor(peerURL, resume); err != nil {
+						r.logger.Error("peer sync: failed to persist peer cursor reset", "peer", peerURL, "error", err)
+					} else {
+						resetPending = false
+					}
+				} else {
+					resetPending = false
+				}
+			}
 			break
 		}
 		// Raw-op + cursor writes go through the ingestion store's writerDB(),
@@ -377,7 +435,7 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			break
 		}
 		fetched += len(page.Entries)
-		if page.Cursor == nil {
+		if page.Resume() == nil {
 			// The peer signals no further pages from this cursor. Do NOT
 			// fabricate a resume cursor from the last entry's CID: a peer whose
 			// cursor format is not a bare CID — notably the production relay,
@@ -389,10 +447,21 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			// re-fetches the final partial page, which dedups cheaply. A relay
 			// that already persisted a fabricated bare CID (pre-fix) self-heals
 			// via the bounded reconcile scrubber, which re-walks from the start.
+			if resetPending {
+				if persist {
+					if err := r.store.SetPeerCursor(peerURL, ""); err != nil {
+						r.logger.Error("peer sync: failed to persist peer cursor reset", "peer", peerURL, "error", err)
+					} else {
+						resetPending = false
+					}
+				} else {
+					resetPending = false
+				}
+			}
 			r.ingestMu.Unlock()
 			break
 		}
-		cursor = *page.Cursor
+		cursor = *page.Resume()
 		if persist {
 			// Check the SetPeerCursor return — a silent failure here would let
 			// the high-water mark drift. On failure, stop without persisting
@@ -406,10 +475,13 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 				r.ingestMu.Unlock()
 				break
 			}
+			resetPending = false
+		} else {
+			resetPending = false
 		}
 		r.ingestMu.Unlock()
 	}
-	return fetched, cursor
+	return fetched, cursor, resetPending
 }
 
 // reconcilePeer advances the bounded anti-entropy scrubber for one peer. Every
@@ -433,7 +505,7 @@ func (r *Relay) reconcilePeer(peerURL, highWater string) {
 
 	rcKey := peerURL + reconcileCursorSuffix
 	anchor, _ := r.readStore.GetPeerCursor(rcKey)
-	fetched, reached := r.pullPeerOps(peerURL, anchor, reconcileWindow, false)
+	fetched, reached, _ := r.pullPeerOps(peerURL, anchor, reconcileWindow, false)
 
 	// Advance the trailing cursor; lap back to the start once the scrub reaches
 	// the head (short page, or caught up to the forward high-water mark), so the

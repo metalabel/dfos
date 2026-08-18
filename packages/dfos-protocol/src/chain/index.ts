@@ -8,3 +8,4 @@ export * from './countersign';
 export * from './artifact';
 export * from './revocation';
 export * from './credit-claim';
+export * from './sign-request';

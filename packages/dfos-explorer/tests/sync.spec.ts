@@ -39,7 +39,7 @@ const fakePeer = (pages: FakeEntry[][]): PeerClient => ({
     const index = params?.after ? Number(params.after) : 0;
     const page = pages[index] ?? [];
     const next = index + 1 < pages.length ? String(index + 1) : null;
-    return { entries: page as unknown as { cid: string; jwsToken: string }[], cursor: next };
+    return { entries: page as unknown as { cid: string; jwsToken: string }[], next };
   },
   submitOperations: async () => {},
 });
@@ -118,6 +118,29 @@ describe('sync engine', () => {
     expect((await db.getChain('did:dfos:aaa'))?.opCount).toBe(1);
   });
 
+  it('replaying a partial 300-op tail preserves count and every stored seq', async () => {
+    const entries = Array.from({ length: 300 }, (_, i) =>
+      entry(
+        `bafy-tail-${i.toString().padStart(3, '0')}`,
+        'did:dfos:tail',
+        'identity-op',
+        new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString(),
+        i === 0 ? 'create' : 'update',
+      ),
+    );
+    const client = createClient({ relays: ['http://fake'], peerClient: fakePeer([entries]) });
+    const db = await freshDb();
+
+    expect(await syncFromRelay({ db, client, relay: 'http://fake' })).toEqual({ added: 300 });
+    const before = await Promise.all(entries.map(async ({ cid }) => (await db.getOp(cid))?.seq));
+    expect((await db.getCursor('http://fake'))?.count).toBe(300);
+
+    expect(await syncFromRelay({ db, client, relay: 'http://fake' })).toEqual({ added: 0 });
+    const after = await Promise.all(entries.map(async ({ cid }) => (await db.getOp(cid))?.seq));
+    expect((await db.getCursor('http://fake'))?.count).toBe(300);
+    expect(after).toEqual(before);
+  });
+
   it('resumes from the stored cursor', async () => {
     const pageOne = [entry('bafy-a1', 'did:dfos:aaa', 'identity-op', '2026-01-01T00:00:00.000Z')];
     const pageTwo = [entry('bafy-a2', 'did:dfos:aaa', 'identity-op', '2026-01-02T00:00:00.000Z')];
@@ -138,6 +161,81 @@ describe('sync engine', () => {
     const result = await syncFromRelay({ db, client: second, relay: 'http://fake' });
     expect(result.added).toBe(1);
     expect((await db.counts()).ops).toBe(2);
+  });
+
+  it('clears a rejected persisted cursor and recovers from the start', async () => {
+    const pageOne = [entry('bafy-a1', 'did:dfos:aaa', 'identity-op', '2026-01-01T00:00:00.000Z')];
+    const pageTwo = [
+      entry('bafy-a2', 'did:dfos:aaa', 'identity-op', '2026-01-02T00:00:00.000Z', 'update'),
+    ];
+    const db = await freshDb();
+
+    await syncFromRelay({
+      db,
+      client: createClient({
+        relays: ['http://fake'],
+        peerClient: fakePeer([pageOne, []]),
+      }),
+      relay: 'http://fake',
+    });
+    expect((await db.getCursor('http://fake'))?.cursor).toBe('1');
+
+    const afters: Array<string | undefined> = [];
+    const recoveringPeer: PeerClient = {
+      ...fakePeer([]),
+      async getOperationLog(_url, params) {
+        afters.push(params?.after);
+        if (params?.after) return 'invalid-cursor';
+        return {
+          entries: [...pageOne, ...pageTwo] as unknown as {
+            cid: string;
+            jwsToken: string;
+          }[],
+          next: null,
+        };
+      },
+    };
+    const result = await syncFromRelay({
+      db,
+      client: createClient({ relays: ['http://fake'], peerClient: recoveringPeer }),
+      relay: 'http://fake',
+    });
+
+    expect(afters).toEqual(['1', undefined]);
+    expect(result.added).toBe(1);
+    expect((await db.getCursor('http://fake'))?.cursor).toBeNull();
+    expect((await db.getCursor('http://fake'))?.count).toBe(2);
+    expect((await db.counts()).ops).toBe(2);
+    expect((await db.getChain('did:dfos:aaa'))?.opCount).toBe(2);
+  });
+
+  it('bounds an always-rejected reset and preserves the persisted cursor', async () => {
+    const db = await freshDb();
+    await db.setCursor({
+      relay: 'http://fake',
+      cursor: 'persisted-high-water',
+      count: 7,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const afters: Array<string | undefined> = [];
+    const rejectingPeer: PeerClient = {
+      ...fakePeer([]),
+      async getOperationLog(_url, params) {
+        afters.push(params?.after);
+        return 'invalid-cursor';
+      },
+    };
+    const client = createClient({ relays: ['http://fake'], peerClient: rejectingPeer });
+
+    await expect(syncFromRelay({ db, client, relay: 'http://fake' })).rejects.toThrow(
+      /rejected cursor again after reset/,
+    );
+
+    expect(afters).toEqual(['persisted-high-water', undefined]);
+    expect(await db.getCursor('http://fake')).toMatchObject({
+      cursor: 'persisted-high-water',
+      count: 7,
+    });
   });
 
   it('JIT indexing never writes a sync cursor (only a deep sync does)', async () => {

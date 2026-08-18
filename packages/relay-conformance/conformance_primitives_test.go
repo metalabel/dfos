@@ -249,18 +249,19 @@ func TestLogGlobal(t *testing.T) {
 
 	// fetch global log
 	var logResp struct {
+		logCursorFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
 			Kind     string `json:"kind"`
 			ChainID  string `json:"chainId"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
 	resp := getJSON(t, base+"/proof/v1/log", &logResp)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /log: status %d", resp.StatusCode)
 	}
+	assertLogCursorAlias(t, logResp.logCursorFields)
 
 	if len(logResp.Entries) < 2 {
 		t.Fatalf("expected at least 2 log entries (relay bootstrap ops), got %d", len(logResp.Entries))
@@ -291,10 +292,10 @@ func TestLogPagination(t *testing.T) {
 
 	// fetch with limit=2
 	var page1 struct {
+		logCursorFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
 	resp := getJSON(t, base+"/proof/v1/log?limit=2", &page1)
 	if resp.StatusCode != 200 {
@@ -304,21 +305,23 @@ func TestLogPagination(t *testing.T) {
 	if len(page1.Entries) != 2 {
 		t.Fatalf("expected 2 entries on page 1, got %d", len(page1.Entries))
 	}
-	if page1.Cursor == nil {
-		t.Fatal("expected non-nil cursor on page 1")
+	next := assertLogCursorAlias(t, page1.logCursorFields)
+	if next == nil {
+		t.Fatal("expected non-nil next on page 1")
 	}
 
 	// fetch page 2
 	var page2 struct {
+		logCursorFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
-	resp2 := getJSON(t, fmt.Sprintf("%s/proof/v1/log?limit=2&after=%s", base, *page1.Cursor), &page2)
+	resp2 := getJSON(t, fmt.Sprintf("%s/proof/v1/log?limit=2&after=%s", base, *next), &page2)
 	if resp2.StatusCode != 200 {
 		t.Fatalf("GET /log page 2: status %d", resp2.StatusCode)
 	}
+	assertLogCursorAlias(t, page2.logCursorFields)
 
 	if len(page2.Entries) < 1 {
 		t.Fatal("expected at least 1 entry on page 2")
@@ -335,16 +338,17 @@ func TestLogPerIdentity(t *testing.T) {
 	id := createIdentity(t, base)
 
 	var logResp struct {
+		logCursorFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
 	resp := getJSON(t, base+"/proof/v1/identities/"+id.did+"/log", &logResp)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /identities/%s/log: status %d", id.did, resp.StatusCode)
 	}
+	assertLogCursorAlias(t, logResp.logCursorFields)
 
 	if len(logResp.Entries) != 1 {
 		t.Fatalf("expected 1 identity log entry (genesis), got %d", len(logResp.Entries))
@@ -364,16 +368,17 @@ func TestLogPerContent(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	var logResp struct {
+		logCursorFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
 	resp := getJSON(t, base+"/proof/v1/content/"+cc.contentID+"/log", &logResp)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /content/%s/log: status %d", cc.contentID, resp.StatusCode)
 	}
+	assertLogCursorAlias(t, logResp.logCursorFields)
 
 	if len(logResp.Entries) != 1 {
 		t.Fatalf("expected 1 content log entry (genesis), got %d", len(logResp.Entries))
@@ -413,10 +418,8 @@ func TestLogContainsAllKinds(t *testing.T) {
 	// fetch the global log — paginate to find all kinds (relay may have
 	// pre-existing data from prior tests or load testing).
 	//
-	// A conforming relay's cursor advances monotonically over an append-only
-	// log: each full page ends on a distinct CID, and the walk terminates on
-	// the first short page. If the relay instead orders by a non-unique key
-	// (e.g. timestamp), pages overlap and the page-boundary cursor repeats —
+	// A conforming relay's server-issued next value advances monotonically over
+	// an append-only log. If pages overlap and a resume value repeats,
 	// a client paginating to completion then loops forever. Guard the walk so
 	// a non-convergent cursor fails fast with a clear diagnostic instead of
 	// hanging until the test timeout.
@@ -430,6 +433,7 @@ func TestLogContainsAllKinds(t *testing.T) {
 			url += "&after=" + cursor
 		}
 		var logResp struct {
+			logCursorFields
 			Entries []struct {
 				CID  string `json:"cid"`
 				Kind string `json:"kind"`
@@ -438,12 +442,13 @@ func TestLogContainsAllKinds(t *testing.T) {
 		getJSON(t, url, &logResp)
 		for _, e := range logResp.Entries {
 			kinds[e.Kind] = true
-			cursor = e.CID
 		}
-		if len(logResp.Entries) < 100 {
-			break // a short page is the only valid terminus
+		next := assertLogCursorAlias(t, logResp.logCursorFields)
+		if next == nil {
+			break
 		}
-		// full page — the cursor must advance to a CID we have not already
+		cursor = *next
+		// The relay-issued cursor must advance to a value we have not already
 		// followed, else the relay's /log pagination does not converge.
 		if seen[cursor] {
 			t.Fatalf("global /log cursor did not converge: page-boundary CID %s "+

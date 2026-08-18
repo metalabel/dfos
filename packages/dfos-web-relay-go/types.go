@@ -2,11 +2,21 @@ package relay
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"log/slog"
 	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
+
+// ErrUnknownLogCursor is returned by Store.ReadLog when `after` names a cursor
+// this relay's log never issued. Log cursors are relay-local (per-relay
+// ingestion order); the route maps this to 400, never a silently empty page.
+var ErrUnknownLogCursor = errors.New("unknown log cursor")
+
+// ErrInvalidSigningCursor is returned when a signing mailbox cursor is either
+// malformed or belongs to a different subject mailbox.
+var ErrInvalidSigningCursor = errors.New("invalid signing cursor")
 
 // Version is the release version, set via ldflags at build time.
 var Version = "dev"
@@ -21,16 +31,19 @@ type RelayIdentity struct {
 
 // RelayOptions configures a new Relay instance.
 type RelayOptions struct {
-	Store    Store
-	Identity *RelayIdentity
-	Content  *bool // nil or true = enabled (default), false = disabled
-	Log      *bool // nil or true = enabled (default), false = disabled
-	Index    *bool // nil or true = enabled (default), false = disabled
+	Store       Store
+	Identity    *RelayIdentity
+	Content     *bool // nil or true = enabled (default), false = disabled
+	Log         *bool // nil or true = enabled (default), false = disabled
+	Revocations *bool // nil or true = enabled (default), false = disabled
+	Index       *bool // nil or true = enabled (default), false = disabled
 	// Write, when false, makes this a LITE pull-only proof node: POST
 	// /proof/v1/operations is rejected (501), so neither client writes nor peer
 	// gossip-in are accepted. The node still ingests by PULLING from peers
 	// (SyncFromPeers polls their /log). nil or true = accept writes (default).
-	Write        *bool
+	Write *bool
+	// Signing enables the optional SIGNING 0.1 mailbox. nil = disabled.
+	Signing      *bool
 	Logger       *slog.Logger // nil = slog.Default()
 	Peers        []PeerConfig
 	PeerClient   PeerClient // injected peer transport (nil = no peering)
@@ -78,10 +91,22 @@ type PeerClient interface {
 	GetBlob(peerURL, contentID, ref string) ([]byte, error)
 }
 
-// PeerLogPage is a paginated log response from a peer.
+// PeerLogPage is a paginated log response from a peer. `next` is the shared
+// list envelope's resume field; `cursor` is the deprecated pre-rename alias
+// still emitted by older relays — Resume() prefers `next` and falls back.
 type PeerLogPage struct {
 	Entries []PeerLogEntry `json:"entries"`
+	Next    *string        `json:"next"`
 	Cursor  *string        `json:"cursor"`
+}
+
+// Resume returns the page's resume cursor: `next` when present, else the
+// deprecated `cursor` alias (older peers), else nil (caught up).
+func (p *PeerLogPage) Resume() *string {
+	if p.Next != nil {
+		return p.Next
+	}
+	return p.Cursor
 }
 
 // IdentityStateAtCID holds the materialized identity state at a specific
@@ -155,6 +180,36 @@ type StoredPublicCredential struct {
 	Exp       int64             `json:"exp"`
 	JWSToken  string            `json:"jwsToken"`
 }
+
+// StoredSignRequest is ephemeral signing-mailbox courier state.
+type StoredSignRequest struct {
+	CID          string `json:"cid"`
+	Request      string `json:"request"`
+	RequesterDID string `json:"requesterDID"`
+	SubjectDID   string `json:"subjectDID"`
+	PayloadTyp   string `json:"payloadTyp"`
+	PayloadBytes []byte `json:"-"`
+	ExpiresAt    string `json:"expiresAt"`
+	DepositedAt  string `json:"depositedAt"`
+	Declined     bool   `json:"declined"`
+	Response     string `json:"response,omitempty"`
+}
+
+const signingTimeFormat = "2006-01-02T15:04:05.000Z"
+
+type SigningPutResult string
+
+const (
+	SigningCreated    SigningPutResult = "created"
+	SigningIdentical  SigningPutResult = "identical"
+	SigningConflict   SigningPutResult = "conflict"
+	SigningNotFound   SigningPutResult = "not-found"
+	SigningAtCapacity SigningPutResult = "at-capacity"
+)
+
+// MaxPendingSignRequestsPerMailbox is the reference relay's per-subject flood
+// fence. Idempotent re-deposits do not consume another slot.
+const MaxPendingSignRequestsPerMailbox = 1024
 
 // AttenuationPair is a resource + action pair.
 type AttenuationPair struct {
@@ -242,6 +297,16 @@ type IngestionResult struct {
 	DependencyMissing bool `json:"dependencyMissing,omitempty"`
 }
 
+// SigningStore is the optional ephemeral signing-mailbox courier store.
+type SigningStore interface {
+	PruneExpiredSignRequests(now time.Time) error
+	GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error)
+	PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error)
+	ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error)
+	PutSignResponse(cid, response string, now time.Time) (SigningPutResult, error)
+	DeclineSignRequest(cid string, now time.Time) (SigningPutResult, error)
+}
+
 // Store is the storage backend for a DFOS web relay.
 type Store interface {
 	// operations
@@ -324,8 +389,8 @@ type Store interface {
 	// across stores and twins).
 	GetRevocationForCredential(credentialCID string) (*StoredRevocation, error)
 	// GetRevocationsByIssuer returns all stored revocations issued by a DID,
-	// sorted by revocation createdAt ascending with credentialCID as tiebreak
-	// (deterministic across stores and twins — the frozen v1 feed order).
+	// sorted by credentialCID ascending (the issuer route's transparent keyset
+	// order, deterministic across stores and twins).
 	GetRevocationsByIssuer(issuerDID string) ([]StoredRevocation, error)
 
 	// public credentials (standing authorization)

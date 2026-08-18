@@ -20,6 +20,37 @@ import (
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
+// logCursorFields captures both names emitted during the proof-log deprecation
+// window. RawMessage distinguishes an explicitly present null from an absent
+// field, which lets the suite require both fields on every log response.
+type logCursorFields struct {
+	Next   json.RawMessage `json:"next"`
+	Cursor json.RawMessage `json:"cursor"`
+}
+
+func assertLogCursorAlias(t *testing.T, fields logCursorFields) *string {
+	t.Helper()
+	if fields.Next == nil {
+		t.Fatal("log response missing next field")
+	}
+	if fields.Cursor == nil {
+		t.Fatal("log response missing deprecated cursor alias")
+	}
+	if !bytes.Equal(fields.Next, fields.Cursor) {
+		t.Fatalf("log cursor alias mismatch: next=%s cursor=%s", fields.Next, fields.Cursor)
+	}
+	var next *string
+	if err := json.Unmarshal(fields.Next, &next); err != nil {
+		t.Fatalf("invalid next field: %v", err)
+	}
+	return next
+}
+
+type countersignatureRow struct {
+	CID      string `json:"cid"`
+	JWSToken string `json:"jwsToken"`
+}
+
 // ===================================================================
 // well-known
 // ===================================================================
@@ -612,6 +643,7 @@ func TestContentForkDAGLog(t *testing.T) {
 
 	// chain log should contain all 3 ops (genesis + 2 fork branches)
 	var logResp struct {
+		logCursorFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
@@ -621,6 +653,7 @@ func TestContentForkDAGLog(t *testing.T) {
 	if logRes.StatusCode != 200 {
 		t.Fatalf("log: expected 200, got %d", logRes.StatusCode)
 	}
+	assertLogCursorAlias(t, logResp.logCursorFields)
 	if len(logResp.Entries) != 3 {
 		t.Fatalf("expected 3 log entries (genesis + 2 forks), got %d", len(logResp.Entries))
 	}
@@ -716,7 +749,7 @@ func TestCountersignature(t *testing.T) {
 	witnessKid := witness.did + "#" + witness.auth.keyID
 
 	// countersign using the new standalone format
-	csToken, _, err := dfos.SignCountersign(witness.did, cc.genCID, witnessKid, witness.auth.priv)
+	csToken, csCID, err := dfos.SignCountersign(witness.did, cc.genCID, witnessKid, witness.auth.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,18 +763,21 @@ func TestCountersignature(t *testing.T) {
 
 	// query countersigs
 	var csResult struct {
-		Cid               string   `json:"cid"`
-		Countersignatures []string `json:"countersignatures"`
+		Countersignatures []countersignatureRow `json:"countersignatures"`
+		CID               json.RawMessage       `json:"cid"`
 	}
 	resp := getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET countersigs: status %d", resp.StatusCode)
 	}
-	if csResult.Cid != cc.genCID {
-		t.Fatalf("expected cid %q, got %q", cc.genCID, csResult.Cid)
-	}
 	if len(csResult.Countersignatures) != 1 {
 		t.Fatalf("expected 1 countersig, got %d", len(csResult.Countersignatures))
+	}
+	if csResult.CID != nil {
+		t.Fatalf("deprecated top-level cid echo must be absent, got %s", csResult.CID)
+	}
+	if csResult.Countersignatures[0].CID != csCID || csResult.Countersignatures[0].JWSToken != csToken {
+		t.Fatalf("unexpected countersignature row: %+v", csResult.Countersignatures[0])
 	}
 }
 
@@ -760,7 +796,7 @@ func TestCountersignatureIdempotent(t *testing.T) {
 	postOperations(t, base, []string{csToken}).Body.Close()
 
 	var csResult struct {
-		Countersignatures []string `json:"countersignatures"`
+		Countersignatures []countersignatureRow `json:"countersignatures"`
 	}
 	getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if len(csResult.Countersignatures) != 1 {
@@ -787,13 +823,13 @@ func TestCountersignatureResponseDedup(t *testing.T) {
 	postOperations(t, base, []string{csToken}).Body.Close()
 
 	var csResult struct {
-		Countersignatures []string `json:"countersignatures"`
+		Countersignatures []countersignatureRow `json:"countersignatures"`
 	}
 	getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 
 	seen := map[string]int{}
-	for _, t := range csResult.Countersignatures {
-		seen[t]++
+	for _, row := range csResult.Countersignatures {
+		seen[row.JWSToken]++
 	}
 	for tok, n := range seen {
 		if n > 1 {
@@ -819,7 +855,7 @@ func TestCountersignatureMultiWitness(t *testing.T) {
 	}
 
 	var csResult struct {
-		Countersignatures []string `json:"countersignatures"`
+		Countersignatures []countersignatureRow `json:"countersignatures"`
 	}
 	getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if len(csResult.Countersignatures) != 2 {
@@ -843,8 +879,8 @@ func TestCountersignaturePagination(t *testing.T) {
 	}
 
 	var page1 struct {
-		Countersignatures []string `json:"countersignatures"`
-		Next              *string  `json:"next"`
+		Countersignatures []countersignatureRow `json:"countersignatures"`
+		Next              *string               `json:"next"`
 	}
 	resp := getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID+"?limit=2", &page1)
 	if resp.StatusCode != 200 {
@@ -858,8 +894,8 @@ func TestCountersignaturePagination(t *testing.T) {
 	}
 
 	var page2 struct {
-		Countersignatures []string `json:"countersignatures"`
-		Next              *string  `json:"next"`
+		Countersignatures []countersignatureRow `json:"countersignatures"`
+		Next              *string               `json:"next"`
 	}
 	getJSON(t, fmt.Sprintf("%s/proof/v1/countersignatures/%s?after=%s&limit=2", base, cc.genCID, *page1.Next), &page2)
 	if len(page2.Countersignatures) != 1 {
@@ -869,20 +905,23 @@ func TestCountersignaturePagination(t *testing.T) {
 		t.Fatalf("page2: expected nil next, got %s", *page2.Next)
 	}
 
-	all := append(append([]string{}, page1.Countersignatures...), page2.Countersignatures...)
+	all := append(append([]countersignatureRow{}, page1.Countersignatures...), page2.Countersignatures...)
 	if len(all) != 3 {
 		t.Fatalf("expected 3 countersigs across pages, got %d", len(all))
 	}
 
 	cids := make([]string, 0, len(all))
 	seen := map[string]bool{}
-	for _, token := range all {
-		header, _, err := dfos.DecodeJWSUnsafe(token)
+	for _, row := range all {
+		header, _, err := dfos.DecodeJWSUnsafe(row.JWSToken)
 		if err != nil {
 			t.Fatalf("DecodeJWSUnsafe: %v", err)
 		}
 		if header == nil || header.CID == "" {
 			t.Fatal("countersig missing header cid")
+		}
+		if row.CID != header.CID {
+			t.Fatalf("countersig row cid %s does not match JWS header cid %s", row.CID, header.CID)
 		}
 		if seen[header.CID] {
 			t.Fatalf("duplicate countersig cid %s", header.CID)
@@ -896,6 +935,28 @@ func TestCountersignaturePagination(t *testing.T) {
 		if cids[i] != sorted[i] {
 			t.Fatalf("countersigs not sorted by header cid: got %v, want %v", cids, sorted)
 		}
+	}
+
+	// `after` is a strictly-greater keyset cursor, not a present-key lookup.
+	// Appending a character to the first fixed-width CID produces an absent key
+	// that remains lexically between the first and second existing CIDs.
+	between := sorted[0] + "x"
+	var resumed struct {
+		Countersignatures []countersignatureRow `json:"countersignatures"`
+		Next              *string               `json:"next"`
+	}
+	resumeResp := getJSON(t, fmt.Sprintf("%s/proof/v1/countersignatures/%s?after=%s&limit=10", base, cc.genCID, between), &resumed)
+	if resumeResp.StatusCode != 200 {
+		t.Fatalf("absent keyset cursor: expected 200, got %d", resumeResp.StatusCode)
+	}
+	if len(resumed.Countersignatures) != 2 {
+		t.Fatalf("absent keyset cursor: got %d rows, want 2", len(resumed.Countersignatures))
+	}
+	if resumed.Countersignatures[0].CID != sorted[1] || resumed.Countersignatures[1].CID != sorted[2] {
+		t.Fatalf("absent keyset cursor resumed at %v, want %v", resumed.Countersignatures, sorted[1:])
+	}
+	if resumed.Next != nil {
+		t.Fatalf("absent keyset cursor: expected nil next, got %s", *resumed.Next)
 	}
 }
 
@@ -1571,13 +1632,13 @@ func TestIdentityLogPagination(t *testing.T) {
 		prevCID = opCID
 	}
 
-	// 1. Full log (no params) — should have 3 entries, no cursor (< default limit)
+	// 1. Full log (no params) — should have 3 entries, next null (< default limit)
 	var fullLog struct {
+		logCursorFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
 	resp := getJSON(t, base+"/proof/v1/identities/"+id.did+"/log", &fullLog)
 	if resp.StatusCode != 200 {
@@ -1586,87 +1647,87 @@ func TestIdentityLogPagination(t *testing.T) {
 	if len(fullLog.Entries) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(fullLog.Entries))
 	}
-	if fullLog.Cursor != nil {
-		t.Fatalf("expected nil cursor on last page, got %s", *fullLog.Cursor)
+	if next := assertLogCursorAlias(t, fullLog.logCursorFields); next != nil {
+		t.Fatalf("expected nil next on last page, got %s", *next)
 	}
 
-	// 2. Paginate with limit=1 — first page has 1 entry + cursor
+	// 2. Paginate with limit=1 — first page has 1 entry + next
 	var page1 struct {
+		logCursorFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
 	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?limit=1", base, id.did), &page1)
 	if len(page1.Entries) != 1 {
 		t.Fatalf("page1: expected 1 entry, got %d", len(page1.Entries))
 	}
-	if page1.Cursor == nil {
-		t.Fatal("page1: expected cursor")
+	page1Next := assertLogCursorAlias(t, page1.logCursorFields)
+	if page1Next == nil {
+		t.Fatal("page1: expected next")
 	}
 
-	// 3. Second page via cursor
+	// 3. Second page via next
 	var page2 struct {
+		logCursorFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
-	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page1.Cursor), &page2)
+	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page1Next), &page2)
 	if len(page2.Entries) != 1 {
 		t.Fatalf("page2: expected 1 entry, got %d", len(page2.Entries))
 	}
-	if page2.Cursor == nil {
-		t.Fatal("page2: expected cursor")
+	page2Next := assertLogCursorAlias(t, page2.logCursorFields)
+	if page2Next == nil {
+		t.Fatal("page2: expected next")
 	}
 
 	// 4. Third (final) page
 	var page3 struct {
+		logCursorFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
-	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page2.Cursor), &page3)
+	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page2Next), &page3)
 	if len(page3.Entries) != 1 {
 		t.Fatalf("page3: expected 1 entry, got %d", len(page3.Entries))
 	}
-	// cursor may or may not be set on the final page when entry count == limit;
-	// if set, following it must yield an empty page
-	if page3.Cursor != nil {
-		var page4 struct {
-			Entries []struct{} `json:"entries"`
-		}
-		getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page3.Cursor), &page4)
-		if len(page4.Entries) != 0 {
-			t.Fatalf("page after final: expected 0 entries, got %d", len(page4.Entries))
-		}
+	page3Next := assertLogCursorAlias(t, page3.logCursorFields)
+	if page3Next == nil {
+		t.Fatal("page3: full page must emit next")
 	}
-
-	// 5. After with unknown CID returns empty (not error)
-	var empty struct {
+	var page4 struct {
+		logCursorFields
 		Entries []struct{} `json:"entries"`
-		Cursor  *string    `json:"cursor"`
 	}
-	emptyResp := getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=bafyunknown", base, id.did), &empty)
-	if emptyResp.StatusCode != 200 {
-		t.Fatalf("unknown cursor: expected 200, got %d", emptyResp.StatusCode)
+	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page3Next), &page4)
+	if len(page4.Entries) != 0 {
+		t.Fatalf("page after final: expected 0 entries, got %d", len(page4.Entries))
 	}
-	if len(empty.Entries) != 0 {
-		t.Fatalf("unknown cursor: expected 0 entries, got %d", len(empty.Entries))
+	if next := assertLogCursorAlias(t, page4.logCursorFields); next != nil {
+		t.Fatalf("empty page: expected nil next, got %s", *next)
 	}
 
-	// 6. Exact page boundary — limit=3 should return all entries with nil cursor
+	// 5. An unknown relay-local cursor is rejected.
+	emptyResp := getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=bafyunknown", base, id.did), nil)
+	if emptyResp.StatusCode != 400 {
+		t.Fatalf("unknown cursor: expected 400, got %d", emptyResp.StatusCode)
+	}
+
+	// 6. Exact page boundary — limit=3 returns all entries and a non-nil next
 	var exactPage struct {
+		logCursorFields
 		Entries []struct{} `json:"entries"`
-		Cursor  *string    `json:"cursor"`
 	}
 	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?limit=3", base, id.did), &exactPage)
 	if len(exactPage.Entries) != 3 {
 		t.Fatalf("exact boundary: expected 3 entries, got %d", len(exactPage.Entries))
 	}
-	// when entry count equals limit, cursor may or may not be set depending
-	// on implementation — both are valid. The consumer checks the next page.
+	if next := assertLogCursorAlias(t, exactPage.logCursorFields); next == nil {
+		t.Fatal("exact boundary: full page must emit next")
+	}
 }
 
 func TestGlobalLogPagination(t *testing.T) {
@@ -1681,10 +1742,10 @@ func TestGlobalLogPagination(t *testing.T) {
 
 	// paginate with limit=1
 	var page1 struct {
+		logCursorFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
 	resp := getJSON(t, base+"/proof/v1/log?limit=1", &page1)
 	if resp.StatusCode != 200 {
@@ -1693,18 +1754,19 @@ func TestGlobalLogPagination(t *testing.T) {
 	if len(page1.Entries) != 1 {
 		t.Fatalf("page1: expected 1 entry, got %d", len(page1.Entries))
 	}
-	if page1.Cursor == nil {
-		t.Fatal("page1: expected cursor")
+	page1Next := assertLogCursorAlias(t, page1.logCursorFields)
+	if page1Next == nil {
+		t.Fatal("page1: expected next")
 	}
 
-	// follow cursor to page 2
+	// follow next to page 2
 	var page2 struct {
+		logCursorFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
-		Cursor *string `json:"cursor"`
 	}
-	getJSON(t, fmt.Sprintf("%s/proof/v1/log?after=%s&limit=1", base, *page1.Cursor), &page2)
+	getJSON(t, fmt.Sprintf("%s/proof/v1/log?after=%s&limit=1", base, *page1Next), &page2)
 	if len(page2.Entries) != 1 {
 		t.Fatalf("page2: expected 1 entry, got %d", len(page2.Entries))
 	}
@@ -1716,41 +1778,34 @@ func TestGlobalLogPagination(t *testing.T) {
 
 	// 3. Drain all remaining pages — global log may have relay bootstrap entries
 	//    beyond our 3 identities. Verify pagination terminates correctly.
-	cursor := page2.Cursor
+	cursor := assertLogCursorAlias(t, page2.logCursorFields)
 	totalEntries := 2                         // already consumed 2 entries from page1 + page2
 	for cursor != nil && totalEntries < 100 { // safety bound
 		var page struct {
+			logCursorFields
 			Entries []struct {
 				CID string `json:"cid"`
 			} `json:"entries"`
-			Cursor *string `json:"cursor"`
 		}
 		getJSON(t, fmt.Sprintf("%s/proof/v1/log?after=%s&limit=1", base, *cursor), &page)
 		totalEntries += len(page.Entries)
+		next := assertLogCursorAlias(t, page.logCursorFields)
 		if len(page.Entries) == 0 {
-			// empty page means we're past the end — cursor should be nil
-			if page.Cursor != nil {
-				t.Fatal("empty page should have nil cursor")
+			if next != nil {
+				t.Fatal("empty page should have nil next")
 			}
 			break
 		}
-		cursor = page.Cursor
+		cursor = next
 	}
 	// we created 3 identities; relay may have bootstrap entries too
 	if totalEntries < 3 {
 		t.Fatalf("expected at least 3 total entries, got %d", totalEntries)
 	}
 
-	// 4. Unknown after CID returns empty (not error)
-	var empty struct {
-		Entries []struct{} `json:"entries"`
-		Cursor  *string    `json:"cursor"`
-	}
-	emptyResp := getJSON(t, base+"/proof/v1/log?after=bafyunknown", &empty)
-	if emptyResp.StatusCode != 200 {
-		t.Fatalf("unknown cursor: expected 200, got %d", emptyResp.StatusCode)
-	}
-	if len(empty.Entries) != 0 {
-		t.Fatalf("unknown cursor: expected 0 entries, got %d", len(empty.Entries))
+	// 4. Unknown relay-local cursor is rejected, never treated as caught up.
+	emptyResp := getJSON(t, base+"/proof/v1/log?after=bafyunknown", nil)
+	if emptyResp.StatusCode != 400 {
+		t.Fatalf("unknown cursor: expected 400, got %d", emptyResp.StatusCode)
 	}
 }

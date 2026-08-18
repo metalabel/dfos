@@ -20,7 +20,12 @@ import type { LogOp, Provenance, RelayResponse } from './types';
 type PageFetcher = (
   url: string,
   params: { after?: string; limit: number },
-) => Promise<{ entries: LogOp[]; cursor: string | null } | null>;
+) => Promise<{ entries: LogOp[]; next: string | null } | 'invalid-cursor' | null>;
+
+type OperationPageFetcher = (
+  url: string,
+  params: { after?: string; limit: number },
+) => ReturnType<PeerClient['getOperationLog']>;
 
 const PAGE_LIMIT = 1000;
 const MAX_PAGES = 10_000; // hard stop against a pathological cursor loop
@@ -79,10 +84,10 @@ const drainRelay = async (
   for (let page = 0; page < MAX_PAGES; page++) {
     const params = cursor ? { after: cursor, limit: PAGE_LIMIT } : { limit: PAGE_LIMIT };
     const res = await fetchPage(url, params);
-    if (res === null) return null; // any page failure voids the whole answer
+    if (res === null || res === 'invalid-cursor') return null; // any page failure voids the whole answer
     out.push(...res.entries);
-    if (!res.cursor || res.entries.length === 0) break;
-    cursor = res.cursor;
+    if (!res.next || res.entries.length === 0) break;
+    cursor = res.next;
   }
   return out;
 };
@@ -209,6 +214,6 @@ export const contentPager =
 
 /** Bind the peer client's global operation-log method into a PageFetcher. */
 export const operationPager =
-  (peerClient: PeerClient): PageFetcher =>
+  (peerClient: PeerClient): OperationPageFetcher =>
   (url, params) =>
     peerClient.getOperationLog(url, params);

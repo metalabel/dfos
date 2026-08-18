@@ -25,8 +25,9 @@ import (
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
-// requireRevocationsCapability fetches the well-known and skips the test unless
-// capabilities.revocations is true.
+// requireRevocationsCapability fetches the well-known and skips the test only
+// when capabilities.revocations is explicitly false. An absent flag defaults
+// to true under the frozen WEB-RELAY contract.
 func requireRevocationsCapability(t *testing.T, base string) {
 	t.Helper()
 	var wellKnown struct {
@@ -36,7 +37,7 @@ func requireRevocationsCapability(t *testing.T, base string) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /.well-known/dfos-relay: status %d", resp.StatusCode)
 	}
-	if wellKnown.Capabilities["revocations"] != true {
+	if revocations, present := wellKnown.Capabilities["revocations"]; present && revocations == false {
 		t.Skip("relay does not advertise capabilities.revocations — skipping revocation-status conformance")
 	}
 }
@@ -236,22 +237,19 @@ func TestRevocationStatusIssuerPagination(t *testing.T) {
 		}
 	}
 
-	createdAt := func(entry revocationEntry) string {
-		t.Helper()
-		_, payload, err := dfos.DecodeJWSUnsafe(entry.Revocation)
-		if err != nil {
-			t.Fatalf("decode revocation %s: %v", entry.CredentialCID, err)
-		}
-		value, _ := payload["createdAt"].(string)
-		return value
+	var resumed struct {
+		Revocations []revocationEntry `json:"revocations"`
+		Next        *string           `json:"next"`
+	}
+	unknownResp := getJSON(t, base+"/revocations/v1/issuer/"+id.did+"?after=bafyunknown", &resumed)
+	if unknownResp.StatusCode != 200 || len(resumed.Revocations) != 0 || resumed.Next != nil {
+		t.Fatalf("issuer unknown keyset cursor: status=%d body=%+v, want caught-up 200", unknownResp.StatusCode, resumed)
 	}
 	for i := 1; i < len(paged); i++ {
 		prev := paged[i-1]
 		current := paged[i]
-		prevCreatedAt := createdAt(prev)
-		currentCreatedAt := createdAt(current)
-		if prevCreatedAt > currentCreatedAt || (prevCreatedAt == currentCreatedAt && prev.CredentialCID > current.CredentialCID) {
-			t.Fatalf("revocations not sorted by createdAt, credentialCID: prev=%+v current=%+v", prev, current)
+		if prev.CredentialCID > current.CredentialCID {
+			t.Fatalf("revocations not sorted by credentialCID: prev=%+v current=%+v", prev, current)
 		}
 	}
 }

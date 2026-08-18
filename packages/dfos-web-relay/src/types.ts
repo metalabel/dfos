@@ -8,6 +8,7 @@
 
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
+import { base64urlDecode, base64urlEncode } from '@metalabel/dfos-protocol/crypto';
 import type {
   IndexContentRow,
   IndexCountersignatureRow,
@@ -46,6 +47,8 @@ export interface RelayOptions {
   content?: boolean;
   /** Whether the global operation log is enabled (default: true) */
   log?: boolean;
+  /** Whether the revocation status route family is enabled (default: true) */
+  revocations?: boolean;
   /** Whether the index query family is enabled (default: true) */
   index?: boolean;
   /**
@@ -55,6 +58,8 @@ export interface RelayOptions {
    * PULLING from peers (syncFromPeers polls their /log).
    */
   write?: boolean;
+  /** Whether the ephemeral signing mailbox is enabled (default: false) */
+  signing?: boolean;
   /** Peer relay configurations */
   peers?: PeerConfig[];
   /** Injected peer client — if omitted, a default HTTP implementation is used */
@@ -106,20 +111,26 @@ export interface PeerClient {
     peerUrl: string,
     did: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
   /** Fetch content chain log from a peer */
   getContentLog(
     peerUrl: string,
     contentId: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
-  /** Fetch global operation log from a peer */
+  /**
+   * Fetch global operation log from a peer. Returns the page, `null` on any
+   * transport/peer failure, or `'invalid-cursor'` when the peer explicitly
+   * rejected the `after` cursor (400) — cursors are relay-local, so a peer that
+   * wiped or rebuilt its log invalidates ours; the sync loop resets and
+   * re-syncs from the start (ingestion is idempotent).
+   */
   getOperationLog(
     peerUrl: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
   /** Push operations to a peer (fire-and-forget) */
   submitOperations(peerUrl: string, operations: string[]): Promise<void>;
@@ -245,6 +256,63 @@ export interface StoredCountersignature {
   jwsToken: string;
 }
 
+/** Ephemeral courier state for one sign request. */
+export interface StoredSignRequest {
+  cid: string;
+  request: string;
+  requesterDID: string;
+  subjectDID: string;
+  payloadTyp: string;
+  payloadBytes: Uint8Array;
+  expiresAt: string;
+  depositedAt: string;
+  declined: boolean;
+  response?: string;
+}
+
+export type SigningPutResult = 'created' | 'identical' | 'conflict' | 'not-found' | 'capacity';
+export type SigningDeclineResult = 'declined' | 'responded' | 'not-found';
+
+export interface SigningCursor {
+  subjectDID: string;
+  depositedAt: string;
+  cid: string;
+}
+
+const signingCursorEncoder = new TextEncoder();
+const signingCursorDecoder = new TextDecoder('utf-8', { fatal: true });
+
+/** Unpadded base64url of `<subjectDID>|<depositedAt-ISO-millis>|<cid>`. */
+export const encodeSigningCursor = (cursor: SigningCursor): string =>
+  base64urlEncode(
+    signingCursorEncoder.encode(`${cursor.subjectDID}|${cursor.depositedAt}|${cursor.cid}`),
+  );
+
+export const decodeSigningCursor = (raw: string): SigningCursor | undefined => {
+  try {
+    const bytes = base64urlDecode(raw);
+    if (base64urlEncode(bytes) !== raw) return undefined;
+    const decoded = signingCursorDecoder.decode(bytes);
+    const firstSeparator = decoded.indexOf('|');
+    const secondSeparator = decoded.indexOf('|', firstSeparator + 1);
+    if (
+      firstSeparator <= 0 ||
+      secondSeparator <= firstSeparator + 1 ||
+      secondSeparator !== decoded.lastIndexOf('|') ||
+      secondSeparator === decoded.length - 1
+    ) {
+      return undefined;
+    }
+    const subjectDID = decoded.slice(0, firstSeparator);
+    const depositedAt = decoded.slice(firstSeparator + 1, secondSeparator);
+    const cid = decoded.slice(secondSeparator + 1);
+    if (new Date(depositedAt).toISOString() !== depositedAt) return undefined;
+    return { subjectDID, depositedAt, cid };
+  } catch {
+    return undefined;
+  }
+};
+
 // -----------------------------------------------------------------------------
 // relay store interface
 // -----------------------------------------------------------------------------
@@ -261,6 +329,20 @@ export interface StoredCountersignature {
  * from silently overwriting each other.
  */
 export interface RelayStore {
+  // --- signing mailbox (ephemeral courier state) ---
+
+  getSignRequest?(cid: string, now: number): Promise<StoredSignRequest | undefined>;
+  pruneExpiredSignRequests?(now: number): Promise<void>;
+  putSignRequest?(request: StoredSignRequest, now: number): Promise<SigningPutResult>;
+  listPendingSignRequests?(params: {
+    subjectDID: string;
+    after?: string;
+    limit: number;
+    now: number;
+  }): Promise<{ requests: StoredSignRequest[]; next: string | null } | null>;
+  putSignResponse?(cid: string, response: string, now: number): Promise<SigningPutResult>;
+  declineSignRequest?(cid: string, now: number): Promise<SigningDeclineResult>;
+
   // --- operations ---
 
   getOperation(cid: string): Promise<StoredOperation | undefined>;
@@ -289,12 +371,15 @@ export interface RelayStore {
 
   // --- operation log ---
   // Global append-only log of all accepted operations. CID-based cursor pagination.
+  // Cursors are relay-local (per-relay ingestion order): readLog resolves `after`
+  // positionally and returns null for a cursor this log does not contain — the
+  // route maps that to 400, never a silently empty page.
 
   appendToLog(entry: LogEntry): Promise<void>;
   readLog(params: {
     after?: string;
     limit: number;
-  }): Promise<{ entries: LogEntry[]; cursor: string | null }>;
+  }): Promise<{ entries: LogEntry[]; next: string | null } | null>;
   /**
    * Optional: compute operational statistics over the global log for the well-known
    * response. A store that omits this leaves opCount/countsByKind/oldestOpAt/headCid
@@ -374,9 +459,9 @@ export interface RelayStore {
    */
   getRevocationForCredential(credentialCID: string): Promise<StoredRevocation | undefined>;
   /**
-   * Get all stored revocations issued by a DID, sorted by revocation
-   * `createdAt` ascending with credentialCID as tiebreak (deterministic
-   * across stores and twins — the frozen v1 feed order). Serves the
+   * Get all stored revocations issued by a DID, sorted by credentialCID
+   * ascending (deterministic across stores and twins — the frozen v1 keyset
+   * order). Serves the
    * `/revocations/v1/issuer/:did` listing route.
    */
   getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]>;
@@ -504,6 +589,19 @@ export interface RelayStore {
   /** Reset all non-rejected raw ops to pending (re-sequence) */
   resetSequencer(): Promise<void>;
 }
+
+export type SigningStore = RelayStore &
+  Required<
+    Pick<
+      RelayStore,
+      | 'getSignRequest'
+      | 'pruneExpiredSignRequests'
+      | 'putSignRequest'
+      | 'listPendingSignRequests'
+      | 'putSignResponse'
+      | 'declineSignRequest'
+    >
+  >;
 
 // -----------------------------------------------------------------------------
 // ingestion result

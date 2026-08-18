@@ -44,10 +44,17 @@ func AuthenticateRequest(authHeader string, relayDID string, store Store, maxAut
 	if kid == "" || !strings.Contains(kid, "#") {
 		return nil
 	}
+	did := kid[:strings.Index(kid, "#")]
+	if err := dfos.ValidateDID(did); err != nil {
+		return nil
+	}
+	identity, err := store.GetIdentityChain(did)
+	if err != nil || identity == nil || identity.State.IsDeleted {
+		return nil
+	}
 
-	resolveKey := CreateCurrentKeyResolver(store)
-
-	publicKey, err := resolveKey(kid)
+	keyID := kid[strings.Index(kid, "#")+1:]
+	publicKey, err := keyFromState(identity.State, keyID)
 	if err != nil {
 		return nil
 	}

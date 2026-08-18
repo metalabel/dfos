@@ -49,10 +49,10 @@ describe('fanOutLog', () => {
       if (url === A) {
         // page 1 succeeds with a resume cursor, page 2 fails — the drained
         // prefix must be voided, never digested as A's complete answer
-        if (!params.after) return { entries: [full[0]!], cursor: 'op1' };
+        if (!params.after) return { entries: [full[0]!], next: 'op1' };
         return null;
       }
-      return params.after ? { entries: [], cursor: null } : { entries: full, cursor: null };
+      return params.after ? { entries: [], next: null } : { entries: full, next: null };
     };
 
     const result = await fanOutLog(fetchPage, [A, B], 1, undefined, async (entries) => entries);
@@ -64,7 +64,7 @@ describe('fanOutLog', () => {
   });
 
   it('throws (not silently degrades) when candidates exist but ALL fail verification', async () => {
-    const fetchPage = async () => ({ entries: [op('bad')], cursor: null });
+    const fetchPage = async () => ({ entries: [op('bad')], next: null });
     await expect(
       fanOutLog(fetchPage, [A, B], 1, undefined, async () => {
         throw new Error('invalid signature');
@@ -204,7 +204,9 @@ describe('globalLog resilience', () => {
     };
     const client = createClient({ relays: [A], peerClient: throwing });
     const page = await client.globalLog();
+    if (page === 'invalid-cursor') throw new Error('unexpected invalid cursor');
     expect(page.entries).toEqual([]);
+    expect(page.next).toBeNull();
     expect(page.provenance.answeredBy).toBe('');
   });
 
@@ -215,7 +217,9 @@ describe('globalLog resilience', () => {
     });
     const client = createClient({ relays: [B, A], peerClient });
     const page = await client.globalLog();
+    if (page === 'invalid-cursor') throw new Error('unexpected invalid cursor');
     expect(page.entries).toEqual(toEntries(id.log));
+    expect(page.next).toBeNull();
     expect(page.provenance.answeredBy).toBe(A);
   });
 
@@ -225,7 +229,7 @@ describe('globalLog resilience', () => {
       ...fakePeerClient({}),
       async getOperationLog(_url, params) {
         asked.push(params?.limit);
-        return { entries: [], cursor: null };
+        return { entries: [], next: null };
       },
     };
     const client = createClient({ relays: [A], peerClient: limitSpy });
@@ -236,6 +240,44 @@ describe('globalLog resilience', () => {
     expect(asked).toEqual([100, 500, 1000, 1]);
   });
 
+  it('surfaces a relay rejection of an after cursor', async () => {
+    const rejecting: PeerClient = {
+      ...fakePeerClient({}),
+      async getOperationLog(_url, params) {
+        return params?.after ? 'invalid-cursor' : { entries: [], next: null };
+      },
+    };
+    const client = createClient({ relays: [A], peerClient: rejecting });
+    await expect(client.globalLog('stale-relay-local-cursor')).resolves.toBe('invalid-cursor');
+  });
+
+  it('returns immediately when one relay rejects its relay-local after cursor', async () => {
+    const asked: string[] = [];
+    const rejecting: PeerClient = {
+      ...fakePeerClient({}),
+      async getOperationLog(url) {
+        asked.push(url);
+        if (url === A) return 'invalid-cursor';
+        return { entries: [], next: null };
+      },
+    };
+    const client = createClient({ relays: [A, B], peerClient: rejecting });
+    await expect(client.globalLog('relay-local-cursor')).resolves.toBe('invalid-cursor');
+    expect(asked).toEqual([A]);
+  });
+
+  it('does not try a transport-unreachable relay after an invalid cursor', async () => {
+    const mixed: PeerClient = {
+      ...fakePeerClient({}),
+      async getOperationLog(url) {
+        if (url === A) return 'invalid-cursor';
+        throw new Error('unreachable');
+      },
+    };
+    const client = createClient({ relays: [A, B], peerClient: mixed });
+    await expect(client.globalLog('rejected-cursor')).resolves.toBe('invalid-cursor');
+  });
+
   it('preserves relay-asserted kind/chainId hints on global-log entries', async () => {
     const annotated: PeerClient = {
       ...fakePeerClient({}),
@@ -244,12 +286,13 @@ describe('globalLog resilience', () => {
           entries: [
             { cid: 'bafy-1', jwsToken: 'a.b.c', kind: 'identity-op', chainId: 'did:dfos:aaa' },
           ],
-          cursor: null,
+          next: null,
         };
       },
     };
     const client = createClient({ relays: [A], peerClient: annotated });
     const page = await client.globalLog();
+    if (page === 'invalid-cursor') throw new Error('unexpected invalid cursor');
     expect(page.entries[0]?.kind).toBe('identity-op');
     expect(page.entries[0]?.chainId).toBe('did:dfos:aaa');
   });

@@ -197,6 +197,23 @@ describe('createRevocationChecker', () => {
     expect(await isRevoked(issuer.did, credentialCID)).toBe(false);
   });
 
+  it('excludes 501 relays and surfaces all-unavailable status as unverifiable', async () => {
+    const { issuer, credential, credentialCID } = await setup();
+    const peerClient = fakePeerClient({ [A]: { identities: { [issuer.did]: issuer.log } } });
+    const statuses: number[] = [];
+    const noStatusSupport: typeof fetch = async () => {
+      statuses.push(501);
+      return new Response('{"error":"not implemented"}', { status: 501 });
+    };
+    const client = createClient({ relays: [A], peerClient, fetch: noStatusSupport });
+
+    const result = await client.credential(credential);
+    expect(result.value.credential.credentialCID).toBe(credentialCID);
+    expect(result.value.revoked).toBe(false);
+    expect(result.trust).toEqual({ ok: true, unverifiable: ['revocation'] });
+    expect(statuses).toEqual([501]);
+  });
+
   // ---------------------------------------------------------------------------
   // as-of gate — a revocation only reaches back as far as its own createdAt
   // ---------------------------------------------------------------------------

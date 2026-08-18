@@ -1,13 +1,14 @@
 package relay
 
 import (
-	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
 // ===================================================================
@@ -330,7 +331,6 @@ func TestCORSHeadersOnProofPlane(t *testing.T) {
 	}
 	srv := httptest.NewServer(relay.Handler())
 	defer srv.Close()
-
 	const (
 		wantOrigin  = "*"
 		wantMethods = "GET, POST, PUT, OPTIONS"
@@ -378,32 +378,23 @@ func TestCORSHeadersOnProofPlane(t *testing.T) {
 // TestPostOperationsRejectsOversizedBody verifies that POST /operations bounds
 // the request body at maxRequestBodyBytes (16MB). Without the MaxBytesReader the
 // decoder would buffer the whole payload before the .max(100) item check fires —
-// an unauthenticated OOM vector. The MaxBytesError surfaces as a decode error
-// through the existing 400 path.
+// an unauthenticated OOM vector. MaxBytesError is the transport-level 413 path.
 func TestPostOperationsRejectsOversizedBody(t *testing.T) {
 	relay, err := NewRelay(RelayOptions{Store: NewMemoryStore()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(relay.Handler())
-	defer srv.Close()
 
 	// Build a JSON body well over the 16MB cap: a single string padded past the
 	// limit. The cap fires before any item-count or per-op validation.
 	huge := strings.Repeat("a", maxRequestBodyBytes+1024)
 	body := `{"operations":["` + huge + `"]}`
 
-	resp, err := http.Post(srv.URL+"/proof/v1/operations", "application/json", bytes.NewReader([]byte(body)))
-	if err != nil {
-		t.Fatalf("POST /operations: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// MaxBytesReader truncates the read → JSON decode fails → 400. (The exact
-	// status is the existing invalid-body path; the point is it is rejected, not
-	// fully buffered.)
-	if resp.StatusCode != 400 {
-		t.Fatalf("expected 400 for oversized body, got %d", resp.StatusCode)
+	req := httptest.NewRequest(http.MethodPost, "/proof/v1/operations", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	relay.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversized body, got %d", recorder.Code)
 	}
 }
 
@@ -414,17 +405,38 @@ func TestPostOperationsAcceptsNormalBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(relay.Handler())
-	defer srv.Close()
-
 	id := createTestIdentity(t)
 	body := `{"operations":["` + id.token + `"]}`
-	resp, err := http.Post(srv.URL+"/proof/v1/operations", "application/json", bytes.NewReader([]byte(body)))
-	if err != nil {
-		t.Fatalf("POST /operations: %v", err)
+	req := httptest.NewRequest(http.MethodPost, "/proof/v1/operations", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+	relay.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != 200 {
+		t.Fatalf("expected 200 for normal body, got %d", recorder.Code)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		t.Fatalf("expected 200 for normal body, got %d", resp.StatusCode)
+}
+
+func TestPutBlobRejectsOversizedBodyWith413(t *testing.T) {
+	store := NewMemoryStore()
+	r, err := NewRelay(RelayOptions{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	creator := createTestIdentity(t)
+	contentToken, contentID, operationCID := createTestContent(t, creator)
+	if results := r.Ingest([]string{creator.token, contentToken}); results[0].Status != "new" || results[1].Status != "new" {
+		t.Fatalf("seed content: %+v", results)
+	}
+	auth, err := dfos.CreateAuthToken(creator.did, r.did, creator.did+"#"+creator.auth.keyID, time.Minute, creator.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/content/x/blob/y", strings.NewReader(strings.Repeat("x", maxRequestBodyBytes+1)))
+	req.SetPathValue("contentId", contentID)
+	req.SetPathValue("operationCID", operationCID)
+	req.Header.Set("Authorization", "Bearer "+auth)
+	recorder := httptest.NewRecorder()
+	r.handlePutBlob(recorder, req)
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized blob status = %d, want 413; body=%s", recorder.Code, recorder.Body.String())
 	}
 }

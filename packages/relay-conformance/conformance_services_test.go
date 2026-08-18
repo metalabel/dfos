@@ -421,7 +421,7 @@ func TestCountersignRelationRoundTrip(t *testing.T) {
 	postOperations(t, base, []string{csToken})
 
 	var csResult struct {
-		Countersignatures []string `json:"countersignatures"`
+		Countersignatures []countersignatureRow `json:"countersignatures"`
 	}
 	resp := getJSON(t, base+"/proof/v1/countersignatures/"+cc.genCID, &csResult)
 	if resp.StatusCode != 200 {
@@ -432,7 +432,7 @@ func TestCountersignRelationRoundTrip(t *testing.T) {
 	}
 
 	// the relation rides inside the served countersign JWS — decode and assert.
-	payload, err := dfos.PayloadFromJWS(csResult.Countersignatures[0])
+	payload, err := dfos.PayloadFromJWS(csResult.Countersignatures[0].JWSToken)
 	if err != nil {
 		t.Fatalf("PayloadFromJWS: %v", err)
 	}
