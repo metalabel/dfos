@@ -1144,6 +1144,8 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/services`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/services.ts) — `classifyAnchor`, `relayEndpoints`, `anchorsByLabel`
 - [`chain/artifact`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/artifact.ts) — `signArtifact`, `verifyArtifact`
 - [`chain/countersign`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/countersign.ts) — `signCountersignature`, `verifyCountersignature`
+- [`chain/credit-claim`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/credit-claim.ts) — `signCreditClaim`, `verifyCreditClaim`, `verifyCreditEntry`
+- [`chain/sign-request`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/sign-request.ts) — `buildSignRequest`, `verifySignRequest`, `assertCanonicalSignRequestPayload`
 - [`credentials/auth-token`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/auth-token.ts) — `createAuthToken`, `verifyAuthToken`
 - [`chain/revocation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/revocation.ts) — `signRevocation`, `verifyRevocation`
 - [`credentials/dfos-credential`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/dfos-credential.ts) — `createDFOSCredential`, `verifyDFOSCredential`, `decodeDFOSCredentialUnsafe`
@@ -1152,9 +1154,15 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 ### Related Specifications
 
 - [DID Method: `did:dfos`](https://protocol.dfos.com/did-method) — W3C DID method specification for identity chains
-- [Credentials](https://protocol.dfos.com/credentials) — Auth tokens, DFOS credentials, and revocation
 - [Content Model](https://protocol.dfos.com/content-model) — Standard content schemas (post, profile) for document content objects
+- [Credentials](https://protocol.dfos.com/credentials) — UCAN-style authorization credentials for the DFOS protocol
+- [Credits](https://protocol.dfos.com/credits) — Verifiable attribution for DFOS content
+- [Sign In With DFOS](https://protocol.dfos.com/siwd) — Cryptographic identity verification for third-party applications
+- [Signing](https://protocol.dfos.com/signing) — A transport-agnostic way for one party to ask another to produce a DFOS signature
 - [Web Relay](https://protocol.dfos.com/web-relay) — HTTP relay specification for ingestion, state, and content plane
+- [Document Gateway](https://protocol.dfos.com/document-gateway) — A stateless, content-addressed blob store with authorization derived from the proof plane
+- [Threat Model](https://protocol.dfos.com/threat-model) — A consolidated map of the DFOS adversary model and trust boundaries
+- [Conformance](https://protocol.dfos.com/conformance) — Conformance tiers and their proving corpora
 
 ### Cross-Language Verification
 

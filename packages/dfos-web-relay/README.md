@@ -34,6 +34,10 @@ const relay = await createRelay({
 export default relay.app;
 ```
 
+Set `signing: true` to enable the optional signing mailbox; it is disabled by default.
+The store must implement the optional signing members or `createRelay` throws
+`signing capability requires a store implementing the signing members`.
+
 ### Standalone (Node.js)
 
 ```typescript
@@ -44,23 +48,32 @@ serve({ port: 4444 });
 
 ## Routes
 
-| Method | Path                                        | Description                                                 |
-| ------ | ------------------------------------------- | ----------------------------------------------------------- |
-| `GET`  | `/.well-known/dfos-relay`                   | Relay metadata (DID, capabilities, profile, peers, stats)   |
-| `POST` | `/proof/v1/operations`                      | Submit signed operations (identity, content, countersig)    |
-| `GET`  | `/proof/v1/identities/:did`                 | Get identity chain terminal state                           |
-| `GET`  | `/proof/v1/identities/:did/log`             | Paginated identity chain operation log                      |
-| `GET`  | `/proof/v1/content/:contentId`              | Get content chain terminal state                            |
-| `GET`  | `/proof/v1/content/:contentId/log`          | Paginated content chain operation log                       |
-| `GET`  | `/proof/v1/log`                             | Paginated global operation log (`log` capability)           |
-| `GET`  | `/proof/v1/operations/:cid`                 | Get a single operation by CID                               |
-| `GET`  | `/proof/v1/countersignatures/:cid`          | Paginated countersignatures for any CID (ops, artifacts)    |
-| `GET`  | `/1.0/identifiers/:did`                     | Resolve a `did:dfos` to a W3C DID Document (DIF-compat)     |
-| `GET`  | `/revocations/v1/credential/:credentialCID` | Revocation status for a credential (self-proving JWS)       |
-| `GET`  | `/revocations/v1/issuer/:did`               | Paginated feed of all revocations ingested for an issuer    |
-| `PUT`  | `/content/:contentId/blob/:operationCID`    | Upload blob (auth required)                                 |
-| `GET`  | `/content/:contentId/blob`                  | Download blob at head (standing auth, or auth + credential) |
-| `GET`  | `/content/:contentId/blob/:ref`             | Download blob at specific operation ref                     |
+| Method | Path                                        | Description                                                          |
+| ------ | ------------------------------------------- | -------------------------------------------------------------------- |
+| `GET`  | `/.well-known/dfos-relay`                   | Relay metadata (DID, capabilities, profile, peers, stats)            |
+| `POST` | `/proof/v1/operations`                      | Submit signed operations (identity, content, countersig)             |
+| `GET`  | `/proof/v1/identities/:did`                 | Get identity chain terminal state                                    |
+| `GET`  | `/proof/v1/identities/:did/log`             | Paginated identity chain operation log                               |
+| `GET`  | `/proof/v1/content/:contentId`              | Get content chain terminal state                                     |
+| `GET`  | `/proof/v1/content/:contentId/log`          | Paginated content chain operation log                                |
+| `GET`  | `/proof/v1/log`                             | Paginated global operation log (`log` capability)                    |
+| `GET`  | `/proof/v1/operations/:cid`                 | Get a single operation by CID                                        |
+| `GET`  | `/proof/v1/countersignatures/:cid`          | Paginated countersignatures for any CID (ops, artifacts)             |
+| `GET`  | `/1.0/identifiers/:did`                     | Resolve a `did:dfos` to a W3C DID Document (DIF-compat)              |
+| `GET`  | `/revocations/v1/credential/:credentialCID` | Revocation status for a credential (self-proving JWS)                |
+| `GET`  | `/revocations/v1/issuer/:did`               | Paginated feed of all revocations ingested for an issuer             |
+| `POST` | `/signing/v0/requests`                      | Deposit a sign request (`signing` capability; 501 when disabled)     |
+| `GET`  | `/signing/v0/requests`                      | Poll pending sign requests (`signing` capability; 501 when disabled) |
+| `POST` | `/signing/v0/requests/:cid/response`        | Submit a sign response (`signing` capability; 501 when disabled)     |
+| `GET`  | `/signing/v0/requests/:cid/response`        | Poll sign response status (`signing` capability; 501 when disabled)  |
+| `POST` | `/signing/v0/requests/:cid/decline`         | Decline a sign request (`signing` capability; 501 when disabled)     |
+| `GET`  | `/index/v0/identities`                      | Query materialized identity projections (`index` capability)         |
+| `GET`  | `/index/v0/content`                         | Query materialized content projections (`index` capability)          |
+| `GET`  | `/index/v0/countersignatures`               | Query countersignatures by witness (`index` capability)              |
+| `GET`  | `/index/v0/credentials`                     | Query credential projections (`index` capability)                    |
+| `PUT`  | `/content/:contentId/blob/:operationCID`    | Upload blob (auth required)                                          |
+| `GET`  | `/content/:contentId/blob`                  | Download blob at head (standing auth, or auth + credential)          |
+| `GET`  | `/content/:contentId/blob/:ref`             | Download blob at specific operation ref                              |
 
 ## DID Resolution
 
