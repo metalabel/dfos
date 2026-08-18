@@ -11,6 +11,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { copyToClipboard, short } from '../lib/format';
+import type { RevocationStatus } from '../lib/revocations';
 
 // -----------------------------------------------------------------------------
 // panel
@@ -220,19 +221,43 @@ export const KidLink = (props: { kid: string }) => {
 };
 
 /**
- * Credential active/revoked chip. `revokedByOp` is the CID of a synced
- * revocation op that names this credential (from the local revocation fold);
- * when present the chip is red and links to that op, else green "active".
- * Relay-asserted until opened — the credential view re-verifies any proof.
+ * Credential status chip — THREE states, because absence is not proof (see
+ * lib/revocations.ts). Red "revoked" links to the revoking op when its CID is
+ * known; green "active" is licensed ONLY by a completed sweep of the relay set;
+ * anything unswept is amber "unknown" and never green. Relay-asserted until
+ * opened — the credential view re-verifies any proof.
  */
-export const CredStatus = (props: { revokedByOp?: string | undefined }) =>
-  props.revokedByOp ? (
-    <a href={`#/op/${props.revokedByOp}`} class="ck bad" title="revoked — open the revocation op">
-      revoked
-    </a>
-  ) : (
-    <span class="ck ok">active</span>
+export const CredStatus = (props: {
+  status: RevocationStatus;
+  revokedByOp?: string | undefined;
+}) => {
+  if (props.status === 'revoked') {
+    return props.revokedByOp ? (
+      <a href={`#/op/${props.revokedByOp}`} class="ck bad" title="revoked — open the revocation op">
+        revoked
+      </a>
+    ) : (
+      <span class="ck bad" title="a relay served a revocation for this credential">
+        revoked
+      </span>
+    );
+  }
+  if (props.status === 'unknown') {
+    return (
+      <span
+        class="ck warn"
+        title="no relay answered for this credential — its status is unknown, which is NOT the same as active"
+      >
+        unknown
+      </span>
+    );
+  }
+  return (
+    <span class="ck ok" title="no relay we asked holds a revocation — absence is not proof">
+      active
+    </span>
   );
+};
 
 /**
  * Middle-truncated identifier with click-to-copy + a full-value title. The one

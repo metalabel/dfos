@@ -81,17 +81,18 @@ export const localOpRows = (ops: ExplorerOp[]): LogRow[] =>
 export type LogSource = 'relay' | 'local';
 
 /**
- * Page the RELAY's global log forward from genesis. `initialCursor` restores a
- * deep link; a cursor the relay never issued (a rebuilt log, or a link minted
- * against a different relay) rejects, which surfaces as the pager's honest error
- * + retry — `⇤ first` re-enters from the top.
+ * Page the RELAY's global log forward from genesis. `cursor` is the position the
+ * URL states — it restores a deep link and keeps following the hash thereafter.
+ * A cursor the relay never issued (a rebuilt log, or a link minted against a
+ * different relay) rejects, which surfaces as the pager's honest error + retry —
+ * `⇤ first` re-enters from the top.
  */
 export const useRelayLog = (
   enabled: boolean,
-  initialCursor: string,
+  cursor: string,
   onCursor: (cursor: string) => void,
 ): IndexPage<LogRow> =>
-  useIndexPageStack(enabled, 'relay-log', initialCursor, onCursor, async (after) => {
+  useIndexPageStack(enabled, 'relay-log', cursor, onCursor, async (after) => {
     const page = await getClient().globalLog(after, { limit: PAGE });
     if (page === 'invalid-cursor') throw new Error('the relay rejected this log cursor');
     if (!page.provenance.answeredBy) throw new Error('no relay served the operation log');

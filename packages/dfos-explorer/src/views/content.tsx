@@ -42,7 +42,14 @@ import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
-import { fetchCredentialRevocations } from '../lib/revocations';
+import {
+  emptyRevocations,
+  fetchCredentialRevocations,
+  localRevocations,
+  mergeRevocations,
+  revocationStatus,
+  type RevocationView,
+} from '../lib/revocations';
 import { jitIndexChain } from '../lib/sync-store';
 import { NotFound } from './not-found';
 
@@ -50,6 +57,11 @@ import { NotFound } from './not-found';
  *  live relay index is the unbounded-corpus answer; this lane exists for a relay
  *  that serves no index, where the local fold is all there is. */
 const LOCAL_CREDENTIAL_SCAN = 5000;
+
+/** Ceiling on the offline revocation fold. Revocations are the rarest primitive,
+ *  and this lane only ever ADDS positives — it never licenses "active" — so the
+ *  ceiling can only cost a red chip we'd have shown, never paint a false green. */
+const LOCAL_REVOCATION_SCAN = 5000;
 
 interface DocState {
   blob: BlobResult;
@@ -74,8 +86,12 @@ export const Content = (props: { id: string }) => {
   // predates the route): capability.index does NOT imply this sub-route exists, so on
   // error we fall back to the local fold rather than showing a false-empty panel.
   const [grantsIndexErr, setGrantsIndexErr] = useState(false);
-  // credentialCID → revoking op CID, folded from synced revocation ops (local-first)
-  const [revoked, setRevoked] = useState<Map<string, string>>(new Map());
+  // three-state revocation verdict for the grants shown (see lib/revocations.ts):
+  // the relay sweep unioned with whatever the local fold already holds.
+  const [revoked, setRevoked] = useState<RevocationView>(emptyRevocations);
+  // positives from the synced revocation ops — an offline source that can only
+  // ever ADD a revocation, never license "active"
+  const [localRevoked, setLocalRevoked] = useState<RevocationView>(emptyRevocations);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -85,7 +101,7 @@ export const Content = (props: { id: string }) => {
     setRows([]);
     setDoc(null);
     setGrants(null);
-    setRevoked(new Map());
+    setRevoked(emptyRevocations());
     setError('');
     const relays = getRelays();
     const client = getClient();
@@ -96,10 +112,19 @@ export const Content = (props: { id: string }) => {
     // bounded at LOCAL_CREDENTIAL_SCAN rows so a large synced corpus can't turn
     // a detail page into a whole-partition read; the index lane, not a bigger
     // number, is the answer for a corpus past that.
+    // The same pass folds the local REVOCATION ops. That fold is not a fallback
+    // that the relay sweep replaces — it is a second SOURCE OF POSITIVES that is
+    // always unioned in, so a revocation this tab already holds still turns the
+    // chip red when every relay is unreachable or predates /revocations/v1.
     void getDb()
-      .then((db) => db.opsOfKind('credential', LOCAL_CREDENTIAL_SCAN))
-      .then((credOps) => {
-        if (!dead) setGrants(grantsForChain(credOps, props.id));
+      .then(async (db) => ({
+        credentials: await db.opsOfKind('credential', LOCAL_CREDENTIAL_SCAN),
+        revocations: await db.opsOfKind('revocation', LOCAL_REVOCATION_SCAN),
+      }))
+      .then(({ credentials, revocations }) => {
+        if (dead) return;
+        setGrants(grantsForChain(credentials, props.id));
+        setLocalRevoked(localRevocations(revocations));
       })
       .catch(() => {
         if (!dead) setGrants([]);
@@ -188,19 +213,18 @@ export const Content = (props: { id: string }) => {
     };
   }, [props.id, indexed]);
 
-  // revocation status for the grants actually rendered — one bounded query per
-  // credential against the relay's own /revocations/v1 feed, always fresh and
-  // no-sync, replacing what used to be a scan of the entire local revocation
-  // partition. A credential no relay answers for stays absent from the map and
-  // renders "active", which is the honest read of "no relay we asked has seen a
-  // revocation" (the credential view carries the rigorous check).
+  // revocation status for the grants actually rendered — each credential swept
+  // across the WHOLE relay set via /revocations/v1, always fresh and no-sync,
+  // replacing what used to be a scan of the entire local revocation partition.
+  // A credential no relay answered for comes back UNKNOWN (amber), never a
+  // silent green: absence of an answer is not absence of a revocation.
   const grantCids = [...(grantsIndex ?? []), ...(grants ?? [])].map((g) => g.cid);
   const grantKey = grantCids.join(',');
   useEffect(() => {
     let dead = false;
     if (grantCids.length === 0) return;
-    void fetchCredentialRevocations(grantCids, getRelays()).then((m) => {
-      if (!dead) setRevoked(m);
+    void fetchCredentialRevocations(grantCids, getRelays()).then((view) => {
+      if (!dead) setRevoked(view);
     });
     return () => {
       dead = true;
@@ -365,7 +389,7 @@ export const Content = (props: { id: string }) => {
 
       <GrantsPanel
         grants={grantsFromRelayIndex ? grantsIndex : grants}
-        revoked={revoked}
+        revoked={mergeRevocations(revoked, localRevoked)}
         publicBytes={!!doc?.blob.bytes}
         gated={!!doc?.blob.gated}
         indexed={grantsFromRelayIndex}
@@ -456,7 +480,7 @@ const SchemaPanels = (props: {
  */
 const GrantsPanel = (props: {
   grants: GrantSummary[] | null;
-  revoked: Map<string, string>;
+  revoked: RevocationView;
   publicBytes: boolean;
   gated: boolean;
   /** true when grants came from the live relay index (amber, superset incl. chain:*
@@ -496,7 +520,10 @@ const GrantsPanel = (props: {
                     <CredLink cid={g.cid} />
                   </td>
                   <td>
-                    <CredStatus revokedByOp={props.revoked.get(g.cid)} />
+                    <CredStatus
+                      status={revocationStatus(props.revoked, g.cid)}
+                      revokedByOp={props.revoked.revoked.get(g.cid)}
+                    />
                   </td>
                   <td>
                     {g.isPublic ? (

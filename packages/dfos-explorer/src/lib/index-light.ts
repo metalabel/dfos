@@ -231,7 +231,14 @@ export const indexCredSource = (indexed: boolean | null, indexError: boolean): b
  * the relay's opaque `next` cursor and backward via a stack of the cursors already
  * visited (a keyset index serves no "page N-1" — the only honest back is the one
  * you walked in on). `resetKey` bumps to re-enter the enumeration from the top
- * (e.g. a filter toggle); `initialCursor` restores a deep link on first mount.
+ * (e.g. a filter toggle).
+ *
+ * `cursor` is the position as the URL states it, and the URL WINS. It seeds the
+ * stack on mount (restoring a deep link) and is also watched: a change this pager
+ * did not itself write — the header link back to a bare `#/documents`, a hand-edited
+ * hash, a same-route link while the component stays mounted — re-enters at that
+ * position, so the page shown can never disagree with the address bar. An
+ * externally supplied position carries no walk history, so it resets the stack.
  *
  * A `run` id invalidates in-flight loads across a page change/unmount so a slow
  * page can't clobber a fresher one; `busy` guards against overlapping fetches.
@@ -239,12 +246,12 @@ export const indexCredSource = (indexed: boolean | null, indexError: boolean): b
 export const useIndexPageStack = <T>(
   enabled: boolean,
   resetKey: string,
-  initialCursor: string,
+  cursorParam: string,
   onCursor: ((cursor: string) => void) | undefined,
   fetchPage: (after?: string) => Promise<{ items: T[]; next: string | null }>,
 ): IndexPage<T> => {
   // the cursors walked to reach here; the last is the CURRENT page ('' = first)
-  const [stack, setStack] = useState<string[]>(() => [initialCursor]);
+  const [stack, setStack] = useState<string[]>(() => [cursorParam]);
   const [rows, setRows] = useState<T[]>([]);
   const [loading, setLoading] = useState(false);
   const [next, setNext] = useState<string>('');
@@ -253,6 +260,9 @@ export const useIndexPageStack = <T>(
   const runRef = useRef(0);
   const busyRef = useRef(false);
   const resetKeyRef = useRef(resetKey);
+  // the last cursor THIS pager put in the URL — so its own write echoing back
+  // through the hash is not mistaken for someone else moving the position
+  const writtenRef = useRef(cursorParam);
   // hold the latest fetch closure without making it an effect dependency
   const fetchRef = useRef(fetchPage);
   fetchRef.current = fetchPage;
@@ -261,15 +271,33 @@ export const useIndexPageStack = <T>(
 
   const cursor = stack[stack.length - 1] ?? '';
 
+  /** Move to a new position and tell the URL about it. */
+  const setPosition = (nextStack: string[]): void => {
+    const at = nextStack[nextStack.length - 1] ?? '';
+    writtenRef.current = at;
+    setStack(nextStack);
+    onCursorRef.current?.(at);
+  };
+
   // a filter change re-enters the enumeration from the top — a cursor minted
   // against the old query means nothing to the new one. Guarded on an actual
   // CHANGE so a deep-linked first mount keeps its restored cursor.
   useEffect(() => {
     if (resetKeyRef.current === resetKey) return;
     resetKeyRef.current = resetKey;
-    setStack(['']);
-    onCursorRef.current?.('');
+    setPosition(['']);
+    // setPosition is stable enough for this guarded one-shot
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetKey]);
+
+  // the URL moved and it wasn't us — adopt it. Without this the address bar and
+  // the rendered page silently disagree (clearing `?after=` via the header link
+  // leaves the old deep page on screen under a first-page URL).
+  useEffect(() => {
+    if (cursorParam === writtenRef.current) return;
+    writtenRef.current = cursorParam;
+    setStack([cursorParam]); // no walk history for a position we didn't walk to
+  }, [cursorParam]);
 
   useEffect(() => {
     if (!enabled) {
@@ -308,8 +336,7 @@ export const useIndexPageStack = <T>(
 
   const go = (nextStack: string[]): void => {
     if (loading || busyRef.current) return;
-    setStack(nextStack);
-    onCursorRef.current?.(nextStack[nextStack.length - 1] ?? '');
+    setPosition(nextStack);
   };
 
   return {

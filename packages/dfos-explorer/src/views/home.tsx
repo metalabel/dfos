@@ -31,6 +31,7 @@ import { GLOSSARY } from '../lib/glossary';
 import { useIndexCapable, useIndexContent, useIndexIter2 } from '../lib/index-light';
 import { useLocalLog, useRelayLog, type LogRow, type LogSource } from '../lib/log-feed';
 import { fetchRelayHint, type RelayHint } from '../lib/relay-hint';
+import { getRelays } from '../lib/relays';
 import { getPublicOnly, setPublicOnly } from '../lib/settings';
 import { startSync, stopSync, useSyncState } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
@@ -70,11 +71,20 @@ const HINT_KEY: Partial<Record<OpKind, string>> = {
 };
 
 interface Observatory {
-  /** ops folded into the local index — also the gate for the newest-first feed. */
+  /** ops in the local index — INCLUDING ops landed by JIT folds while browsing,
+   *  so this counts what the tab holds, not what it has synced. */
   ops: number;
   chains: number;
   oldestOpAt: string;
   storageBytes: number | null;
+  /**
+   * A LOG SYNC has actually run against some configured relay — sync.ts records a
+   * cursor row per relay when a run completes (it records one even for an empty
+   * log, precisely so "has ever synced this relay" reads true). This, NOT the op
+   * count, gates the newest-first feed: opening a single detail page JIT-indexes
+   * that chain's ops, and a two-op corpus from browsing is not "your synced log".
+   */
+  logSynced: boolean;
 }
 
 // -----------------------------------------------------------------------------
@@ -220,15 +230,25 @@ const OpPlainRow = (props: { row: LogRow }) => (
   </tr>
 );
 
-const OperationsPanel = (props: { localOps: number | null }) => {
+const OperationsPanel = (props: { obs: Observatory | null; assertedOps: number }) => {
   const [cursor, setCursor] = useHashParam('ops');
   const [srcParam, setSrcParam] = useHashParam('src');
-  // the local corpus is the only source with a real newest-first order, so it
-  // leads once a sync exists; `?src=relay` opts back into the log-from-genesis
-  // walk (which is also the only source before a sync).
-  const synced = props.localOps !== null && props.localOps > 0;
+  // The local corpus is the only source with a real newest-first order, so it
+  // leads once a LOG SYNC has run; `?src=relay` opts back into the walk from
+  // genesis (which is also the only source before a sync).
+  //
+  // The gate is the sync CURSOR, not the op count. Opening any detail page JIT-
+  // indexes that chain's ops, so a count-based gate flips this panel to "your
+  // synced log" over a handful of ops picked up by browsing — a label that is
+  // simply false about where the rows came from.
+  const synced = props.obs?.logSynced === true;
   const source: LogSource = !synced || srcParam === 'relay' ? 'relay' : 'local';
-  const ready = props.localOps !== null;
+  const ready = props.obs !== null;
+  // a sync pages FORWARD from the start of the log, so a run that was stopped (or
+  // is still going) holds the log's oldest ops — "newest first" over it is newest
+  // of what you HOLD, which is not the newest on the network. Say which it is.
+  const localOps = props.obs?.ops ?? 0;
+  const partial = props.assertedOps > 0 && localOps < props.assertedOps;
 
   const relay = useRelayLog(ready && source === 'relay', cursor, setCursor);
   const local = useLocalLog(ready && source === 'local');
@@ -241,7 +261,9 @@ const OperationsPanel = (props: { localOps: number | null }) => {
       right={
         <span class="lbl">
           {source === 'local'
-            ? 'newest first · from your synced log'
+            ? partial
+              ? 'newest first · from the part of the log you have synced'
+              : 'newest first · from your synced log'
             : 'append order · live from the relay log'}
         </span>
       }
@@ -252,6 +274,15 @@ const OperationsPanel = (props: { localOps: number | null }) => {
             Every operation you have synced, newest first. Rows are the relay's own log entries —
             browsing metadata, not proof; open one to verify its signature, or watch a chain row
             green as your tab folds it.
+            {partial ? (
+              <>
+                {' '}
+                Your sync holds <b>{fmtCount(localOps)}</b> of the relay's asserted{' '}
+                {fmtCount(props.assertedOps)} operations, and a sync pages <b>forward</b> from the
+                start of the log — so this is the newest of what <i>you</i> hold, not the newest on
+                the network. Finish the sync to close that gap.
+              </>
+            ) : null}
           </>
         ) : (
           <>
@@ -560,13 +591,20 @@ export const Home = () => {
       // honestly instead of an unhandled rejection.
       const db = await getDb().catch(() => null);
       if (dead || !db) return;
-      const [counts, oldestOpAt, storageBytes] = await Promise.all([
+      const [counts, oldestOpAt, storageBytes, cursors] = await Promise.all([
         db.counts(),
         db.oldestOpAt(),
         estimateStorageBytes(),
+        Promise.all(getRelays().map((relay) => db.getCursor(relay))),
       ]);
       if (dead) return;
-      setObs({ ops: counts.ops, chains: counts.chains, oldestOpAt, storageBytes });
+      setObs({
+        ops: counts.ops,
+        chains: counts.chains,
+        oldestOpAt,
+        storageBytes,
+        logSynced: cursors.some((c) => c !== undefined),
+      });
     })();
     return () => {
       dead = true;
@@ -586,7 +624,7 @@ export const Home = () => {
   return (
     <>
       <NetworkPanel obs={obs} hint={hint} />
-      <OperationsPanel localOps={obs?.ops ?? null} />
+      <OperationsPanel obs={obs} assertedOps={hint.opCount ?? 0} />
       <PostsPanel indexed={indexed} ordered={ordered} />
       <SyncInstrument obs={obs} />
 

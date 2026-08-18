@@ -54,15 +54,22 @@ import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
 import { fetchBlobRaw, fetchClaim, type ClaimResult } from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
-import { fetchIssuerRevocations, revokedByCredential } from '../lib/revocations';
+import {
+  emptyRevocations,
+  fetchIssuerRevocations,
+  localRevocations,
+  mergeRevocations,
+  revocationStatus,
+  type RevocationView,
+} from '../lib/revocations';
 import { jitIndexChain } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
 import { NotFound } from './not-found';
 
 /** Ceiling on the offline revocation fold. Revocations are the rarest primitive
- *  (46 across the public relay's whole corpus at time of writing), so this is a
- *  safety ceiling on a degraded path, not a working page size — the relay's
- *  issuer feed above is the real answer. */
+ *  (46 across the public relay's whole corpus at time of writing). This lane only
+ *  ever ADDS positives — it never licenses "active" — so the ceiling can at worst
+ *  cost a red chip we would otherwise have shown, never paint a false green. */
 const LOCAL_REVOCATION_SCAN = 5000;
 
 interface IdentityClaimState {
@@ -91,7 +98,7 @@ export const Identity = (props: { did: string }) => {
   // local scan rather than showing a false-empty "issued no credentials".
   const [issuedIndexErr, setIssuedIndexErr] = useState(false);
   // credentialCID → revoking op CID, folded from synced revocation ops (local-first)
-  const [revoked, setRevoked] = useState<Map<string, string>>(new Map());
+  const [revoked, setRevoked] = useState<RevocationView>(emptyRevocations);
   // operations this identity has WITNESSED — a relay-index reverse lookup by
   // witness DID (attributed hint; open a target op to fold the real proof)
   const [witnessed, setWitnessed] = useState<IndexCountersignatureRow[] | null>(null);
@@ -117,7 +124,7 @@ export const Identity = (props: { did: string }) => {
     setVerified(null);
     setRows([]);
     setCreds(null);
-    setRevoked(new Map());
+    setRevoked(emptyRevocations());
     setError('');
     const relays = getRelays();
 
@@ -160,23 +167,24 @@ export const Identity = (props: { did: string }) => {
         if (!dead) setCreds([]);
       });
 
-    // active/revoked for the credentials this DID issued. The relay's
-    // /revocations/v1/issuer feed answers exactly that question — one bounded,
-    // always-fresh, no-sync query — so ask it first. A relay without the feed
-    // (or none reachable) returns null, NOT an empty set, and we fall back to
-    // folding the local revocation ops, bounded at LOCAL_REVOCATION_SCAN.
-    // Absence is never proof of non-revocation either way; the credential view
-    // re-verifies any proof.
+    // Status for the credentials this DID issued, from BOTH sources UNIONED —
+    // never one-or-the-other. The relay's /revocations/v1/issuer feed is swept
+    // across the whole relay set (a relay serving an empty feed is not evidence
+    // that another isn't holding the revocation), and the local fold is always
+    // added on top so a revocation this tab already holds still shows red when
+    // no relay answers. Only a served feed licenses "active"; with none reachable
+    // every credential renders UNKNOWN, which is the honest state — absence of an
+    // answer is not absence of a revocation.
     void (async () => {
-      const fromRelay = await fetchIssuerRevocations(props.did, relays);
+      const [fromRelay, db] = await Promise.all([
+        fetchIssuerRevocations(props.did, relays),
+        getDb().catch(() => null),
+      ]);
+      const local = db
+        ? localRevocations(await db.opsOfKind('revocation', LOCAL_REVOCATION_SCAN))
+        : emptyRevocations();
       if (dead) return;
-      if (fromRelay) {
-        setRevoked(fromRelay);
-        return;
-      }
-      const db = await getDb().catch(() => null);
-      if (dead || !db) return;
-      setRevoked(revokedByCredential(await db.opsOfKind('revocation', LOCAL_REVOCATION_SCAN)));
+      setRevoked(mergeRevocations(fromRelay, local));
     })();
 
     return () => {
@@ -589,7 +597,7 @@ const ActorLedger = (props: {
   witnessedErr: boolean;
   credSource: { cid: string; jwsToken: string }[] | null;
   credFromRelayIndex: boolean;
-  revoked: Map<string, string>;
+  revoked: RevocationView;
 }) => {
   const [tab, setTab] = useState<LedgerTab>('created');
   // suppress the count while loading (rows null) OR errored (rows []) so a tab
@@ -727,7 +735,7 @@ const WitnessedTable = (props: {
 const IssuedTable = (props: {
   credSource: { cid: string; jwsToken: string }[] | null;
   credFromRelayIndex: boolean;
-  revoked: Map<string, string>;
+  revoked: RevocationView;
 }) => {
   const { credSource, credFromRelayIndex } = props;
   if (credSource === null)
@@ -769,7 +777,10 @@ const IssuedTable = (props: {
                   <CredLink cid={op.cid} />
                 </td>
                 <td>
-                  <CredStatus revokedByOp={props.revoked.get(op.cid)} />
+                  <CredStatus
+                    status={revocationStatus(props.revoked, op.cid)}
+                    revokedByOp={props.revoked.revoked.get(op.cid)}
+                  />
                 </td>
                 <td>
                   {aud === '*' ? (

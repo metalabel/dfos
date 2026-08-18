@@ -17,7 +17,7 @@
 */
 
 import type { IndexIdentityRow } from '@metalabel/dfos-client';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { IndexLightNote, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { Pager, Panel, Term } from '../components/ui';
 import { fmtCount, short } from '../lib/format';
@@ -60,13 +60,29 @@ export const Search = () => {
   const [cursor, setCursor] = useHashParam('after');
   const [draft, setDraft] = useState(q);
   const needle = useDebounced(draft.trim(), 250);
+  // the last value THIS view wrote into `q`, so its own write echoing back through
+  // the hash is not mistaken for someone else changing the search
+  const written = useRef(q);
 
   // the settled box drives the hash, so the URL always names what is on screen
   useEffect(() => {
-    if (needle !== q) setQ(needle);
-    // setQ is a stable hash writer; q is the value it wrote
+    if (needle === written.current) return;
+    written.current = needle;
+    setQ(needle);
+    // setQ is a stable hash writer
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [needle]);
+
+  // `q` moved and it wasn't us — the global search bar submitted a new query while
+  // this view was already mounted (same route, so no remount). Adopt it: without
+  // this the box and the results keep showing the OLD search, and worse, the
+  // debounce above writes that stale value straight back over the new one, so the
+  // URL silently reverts to a search the user has already left.
+  useEffect(() => {
+    if (q === written.current) return;
+    written.current = q;
+    setDraft(q);
+  }, [q]);
 
   const index = useIndexIdentities(indexed === true && needle.length > 0, true, {
     nameContains: needle,
