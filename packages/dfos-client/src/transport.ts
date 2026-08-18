@@ -66,31 +66,46 @@ export const digestOps = (ops: LogOp[]): string => {
 };
 
 /**
- * Drain a single relay's log from `after` to its tip, across pages —
- * ALL-OR-NOTHING. Returns `null` when the relay never answered (unreachable /
+ * Drain a single relay's full log from zero across pages — ALL-OR-NOTHING.
+ * Relay-issued cursors live only inside this conversation. If one is rejected,
+ * discard the partial answer and restart from zero once; any further rejection
+ * fails the relay. Returns `null` when the relay never answered (unreachable /
  * 404) AND when any later page fails: a partially-drained log must never be
  * mistaken for the relay's complete answer (it would digest as a plausible
- * truncated chain). A reachable relay that is simply caught up (zero new ops
- * after `after`) returns `[]`, so "nothing newer" stays distinguishable from
- * "no answer".
+ * truncated chain). A reachable relay with an empty log returns `[]`, so an
+ * empty answer stays distinguishable from "no answer".
  */
-const drainRelay = async (
-  fetchPage: PageFetcher,
-  url: string,
-  after: string | undefined,
-): Promise<LogOp[] | null> => {
+const drainRelay = async (fetchPage: PageFetcher, url: string): Promise<LogOp[] | null> => {
   const out: LogOp[] = [];
-  let cursor = after;
+  let cursor: string | undefined;
+  let restarted = false;
   for (let page = 0; page < MAX_PAGES; page++) {
     const params = cursor ? { after: cursor, limit: PAGE_LIMIT } : { limit: PAGE_LIMIT };
     const res = await fetchPage(url, params);
-    if (res === null || res === 'invalid-cursor') return null; // any page failure voids the whole answer
+    if (res === 'invalid-cursor') {
+      if (!cursor || restarted) return null;
+      out.length = 0;
+      cursor = undefined;
+      restarted = true;
+      continue;
+    }
+    if (res === null) return null; // any page failure voids the whole answer
     out.push(...res.entries);
     if (!res.next || res.entries.length === 0) break;
     cursor = res.next;
   }
   return out;
 };
+
+/**
+ * A `verifyCandidate` may throw this to reject a candidate that is merely
+ * STALE — consistent with the caller's trusted prefix but strictly behind it,
+ * carrying no new information. It fails the candidate like a transport miss:
+ * the fan-out keeps failing over, and if nothing else verifies the outcome is
+ * 'unreachable' (so the caller may fall back to its cache) rather than a
+ * verification error.
+ */
+export class StaleAnswerError extends Error {}
 
 export interface FanOutResult<V> {
   /**
@@ -100,6 +115,7 @@ export interface FanOutResult<V> {
    */
   outcome: 'verified' | 'unreachable';
   value?: V;
+  /** The winning candidate's full fetched log, drained from zero. */
   entries: LogOp[];
   provenance: Provenance;
 }
@@ -120,7 +136,6 @@ export const fanOutLog = async <V>(
   fetchPage: PageFetcher,
   relays: string[],
   quorum: number,
-  after: string | undefined,
   verifyCandidate: (entries: LogOp[]) => Promise<V>,
 ): Promise<FanOutResult<V>> => {
   const responses: RelayResponse[] = [];
@@ -131,7 +146,7 @@ export const fanOutLog = async <V>(
   for (const url of relays) {
     let entries: LogOp[] | null = null;
     try {
-      entries = await drainRelay(fetchPage, url, after);
+      entries = await drainRelay(fetchPage, url);
     } catch {
       entries = null;
     }
@@ -159,7 +174,7 @@ export const fanOutLog = async <V>(
           provenance: { answeredBy: group.url, responses, agreed: true, fromCache: false },
         };
       } catch (err) {
-        lastVerifyError = err;
+        if (!(err instanceof StaleAnswerError)) lastVerifyError = err;
         badDigests.add(digest);
       }
     }
@@ -180,7 +195,7 @@ export const fanOutLog = async <V>(
         provenance: { answeredBy: group.url, responses, agreed: false, fromCache: false },
       };
     } catch (err) {
-      lastVerifyError = err;
+      if (!(err instanceof StaleAnswerError)) lastVerifyError = err;
       badDigests.add(digest);
     }
   }
