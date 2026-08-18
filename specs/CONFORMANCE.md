@@ -115,7 +115,16 @@ A relay ingests, sequences, and serves. It implements:
 - **Capability / feature flags + 501 semantics** — the well-known response advertises
   capabilities; unsupported optional features return **501 Not Implemented** (not 404)
   (WEB-RELAY.md "Well-Known Endpoint", `specs/WEB-RELAY.md`; "Two Planes",
-  `specs/WEB-RELAY.md`).
+  `specs/WEB-RELAY.md`). The `revocations` gate is currently proven by in-package unit
+  tests in both reference relays; no disabled-mode live serve variant exists yet (the
+  conformance suite's disabled tests self-skip unless a relay advertises `false`).
+- **List-route pagination envelope** — `limit` (default 100, max 1000, clamp above max) +
+  `after` + `next`, with the per-route cursor behavior (relay-local 400 / transparent
+  keyset / opaque token) as specified per route, and — during the deprecation window
+  only — the log routes' `cursor` alias emitted equal to `next` (WEB-RELAY.md "Error
+  Responses" and each route's section, `specs/WEB-RELAY.md`). The conformance suite
+  asserts the alias for the window; that assertion is removed with the alias at the
+  next minor.
 
 **The content plane is OPTIONAL.** A compliant relay **always** serves the proof plane
 (`capabilities.proof: false` is not a valid value); when `capabilities.content: false`,
@@ -127,7 +136,7 @@ its own `0.x` clock — outside the v1 conformance tiers.
 **Writes are OPTIONAL too.** A lite (pull-only) proof node MAY advertise
 `capabilities.write: false`, in which case every write route returns **501 Not
 Implemented** — `POST /proof/v1/operations` and the content-plane blob upload
-`PUT /content/{contentId}/blob/{operationCID}` — while read routes on both planes remain
+`PUT /content/{contentId}/blob/{ref}` — while read routes on both planes remain
 conformant; the node stays current
 by pulling peers' logs (WEB-RELAY.md "Lite (pull-only) node"). So a conformant proof node
 need not accept writes — only serve and verify them. A read-only node cannot be seeded by
