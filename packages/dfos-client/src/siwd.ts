@@ -14,8 +14,17 @@
 
 */
 
-import { decodeMultikey } from '@metalabel/dfos-protocol/chain';
 import {
+  buildSignRequest,
+  decodeMultikey,
+  SignRequestVerifyError,
+  verifySignRequest,
+  type Signer,
+  type VerifiedIdentity,
+  type VerifiedSignRequest,
+} from '@metalabel/dfos-protocol/chain';
+import {
+  assertJwsProfile,
   base64urlDecode,
   base64urlEncode,
   decodeJwsUnsafe,
@@ -61,6 +70,58 @@ export interface SiwdSession {
   kid: string;
 }
 
+const SIWD_CHALLENGE_FIELDS = new Set(['domain', 'nonce', 'timestamp', 'statement', 'did']);
+const WHOLE_SECOND_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.000Z$/;
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const MAX_SIGN_REQUEST_WINDOW_SECONDS = 604_800;
+
+const validateSiwdChallenge = (value: unknown): SiwdChallenge => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('invalid SIWD challenge: expected a JSON object');
+  }
+
+  const raw = value as Record<string, unknown>;
+  for (const field of Object.keys(raw)) {
+    if (!SIWD_CHALLENGE_FIELDS.has(field)) {
+      throw new Error(`invalid SIWD challenge: unknown member ${field}`);
+    }
+  }
+
+  for (const field of ['domain', 'nonce', 'timestamp'] as const) {
+    if (typeof raw[field] !== 'string' || raw[field].length === 0) {
+      throw new Error(`invalid SIWD challenge: ${field} must be a non-empty string`);
+    }
+  }
+  for (const field of ['statement', 'did'] as const) {
+    if (raw[field] !== undefined && typeof raw[field] !== 'string') {
+      throw new Error(`invalid SIWD challenge: ${field} must be a string when present`);
+    }
+  }
+
+  const strings = [raw['domain'], raw['nonce'], raw['timestamp'], raw['statement'], raw['did']];
+  if (strings.some((field) => typeof field === 'string' && LONE_SURROGATE.test(field))) {
+    throw new Error('invalid SIWD challenge: string members must be well-formed Unicode');
+  }
+
+  const timestamp = raw['timestamp'] as string;
+  const timestampMs = Date.parse(timestamp);
+  if (
+    !WHOLE_SECOND_TIMESTAMP.test(timestamp) ||
+    Number.isNaN(timestampMs) ||
+    new Date(timestampMs).toISOString() !== timestamp
+  ) {
+    throw new Error('invalid SIWD challenge: timestamp must be ISO-8601 UTC whole-second .000Z');
+  }
+
+  return {
+    domain: raw['domain'] as string,
+    nonce: raw['nonce'] as string,
+    timestamp,
+    ...(raw['statement'] !== undefined ? { statement: raw['statement'] as string } : {}),
+    ...(raw['did'] !== undefined ? { did: raw['did'] as string } : {}),
+  };
+};
+
 /**
  * The byte contract. Serializes a challenge to the canonical bytes that ARE the
  * JWS payload and the base64url query-param body — a fixed key order
@@ -68,14 +129,48 @@ export interface SiwdSession {
  * PURE and clientless: import it in an edge minter and in a browser wallet alike.
  */
 export const siwdSigningInput = (challenge: SiwdChallenge): Uint8Array => {
+  const parsed = validateSiwdChallenge(challenge);
   const canonical: Record<string, unknown> = {
-    domain: challenge.domain,
-    nonce: challenge.nonce,
-    timestamp: challenge.timestamp,
+    domain: parsed.domain,
+    nonce: parsed.nonce,
+    timestamp: parsed.timestamp,
   };
-  if (challenge.statement !== undefined) canonical['statement'] = challenge.statement;
-  if (challenge.did !== undefined) canonical['did'] = challenge.did;
+  if (parsed.statement !== undefined) canonical['statement'] = parsed.statement;
+  if (parsed.did !== undefined) canonical['did'] = parsed.did;
   return new TextEncoder().encode(JSON.stringify(canonical));
+};
+
+/**
+ * Parse exact SIWD challenge octets under the signer-side WYSIWYS contract.
+ * The input must be UTF-8 JSON, satisfy the closed challenge schema, and equal
+ * the canonical serialization byte for byte.
+ */
+export const parseSiwdChallenge = (octets: Uint8Array): SiwdChallenge => {
+  let source: string;
+  try {
+    source = new TextDecoder('utf-8', { fatal: true }).decode(octets);
+  } catch {
+    throw new Error('invalid SIWD challenge: payload is not valid UTF-8 JSON');
+  }
+  if (source.startsWith('\uFEFF')) {
+    throw new Error('invalid SIWD challenge: payload must not carry a UTF-8 BOM');
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(source);
+  } catch {
+    throw new Error('invalid SIWD challenge: payload is not valid JSON');
+  }
+  const challenge = validateSiwdChallenge(raw);
+  const canonical = siwdSigningInput(challenge);
+  if (
+    canonical.length !== octets.length ||
+    !canonical.every((byte, index) => byte === octets[index])
+  ) {
+    throw new Error('invalid SIWD challenge: payload bytes are not canonical');
+  }
+  return challenge;
 };
 
 export interface CreateChallengeInput {
@@ -100,7 +195,13 @@ export const createSiwdChallenge = (
   input: CreateChallengeInput,
 ): { challenge: SiwdChallenge; encoded: string; nonce: string } => {
   const nonce = input.nonce ?? generateIdNoPrefix();
-  const timestamp = input.timestamp ?? new Date(input.now ? input.now() : Date.now()).toISOString();
+  const timestampValue =
+    input.timestamp ?? new Date(input.now ? input.now() : Date.now()).toISOString();
+  const timestampMs = Date.parse(timestampValue);
+  if (Number.isNaN(timestampMs)) {
+    throw new Error(`invalid SIWD challenge: unparseable timestamp: ${timestampValue}`);
+  }
+  const timestamp = new Date(Math.floor(timestampMs / 1000) * 1000).toISOString();
   const challenge: SiwdChallenge = {
     domain: input.domain,
     nonce,
@@ -113,17 +214,119 @@ export const createSiwdChallenge = (
 };
 
 /** Decode a base64url `challenge` query-param body back into a challenge object. */
-export const decodeSiwdChallenge = (encoded: string): SiwdChallenge => {
-  const parsed = JSON.parse(new TextDecoder().decode(base64urlDecode(encoded))) as SiwdChallenge;
-  if (
-    !parsed ||
-    typeof parsed.domain !== 'string' ||
-    typeof parsed.nonce !== 'string' ||
-    typeof parsed.timestamp !== 'string'
-  ) {
-    throw new Error('invalid SIWD challenge');
+export const decodeSiwdChallenge = (encoded: string): SiwdChallenge =>
+  parseSiwdChallenge(base64urlDecode(encoded));
+
+// -----------------------------------------------------------------------------
+// sign-request profile B
+// -----------------------------------------------------------------------------
+
+export interface BuildSiwdSignRequestInput {
+  /** Requester DID that signs the courier envelope. */
+  did: string;
+  /** DID being asked to sign the SIWD artifact. */
+  subject: string;
+  challenge: SiwdChallenge;
+  /** Explicit composer policy; no implicit SIWD mailbox lifetime exists. */
+  acceptanceWindowSeconds: number;
+  expiresAt: string;
+  createdAt?: string;
+  signer: Signer;
+  keyId: string;
+}
+
+export interface ValidateSiwdSignRequestOptions {
+  signerDid: string;
+  /** Must be the composer's stated acceptance policy for this request. */
+  acceptanceWindowSeconds: number;
+  resolveIdentity: (did: string) => Promise<VerifiedIdentity | undefined>;
+  /** Unix milliseconds; defaults to Date.now(). */
+  now?: number;
+}
+
+export interface ValidatedSiwdSignRequest extends VerifiedSignRequest {
+  /** Strictly parsed canonical challenge used by the signer for rendering. */
+  challenge: SiwdChallenge;
+}
+
+const assertSiwdAcceptanceWindow = (seconds: number): void => {
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) {
+    throw new Error('SIWD acceptanceWindowSeconds must be a positive integer');
   }
-  return parsed;
+  if (seconds > MAX_SIGN_REQUEST_WINDOW_SECONDS) {
+    throw new Error('SIWD acceptanceWindowSeconds exceeds the sign-request 604800-second ceiling');
+  }
+};
+
+const assertSiwdOneClock = (
+  challengeTimestamp: string,
+  expiresAt: string,
+  acceptanceWindowSeconds: number,
+): void => {
+  assertSiwdAcceptanceWindow(acceptanceWindowSeconds);
+  const challengeMs = Date.parse(challengeTimestamp);
+  const expiresMs = Date.parse(expiresAt);
+  if (Number.isNaN(expiresMs)) {
+    throw new Error(`invalid SIWD sign request: unparseable expiresAt: ${expiresAt}`);
+  }
+  const normalizedExpiresMs = Math.floor(expiresMs / 1000) * 1000;
+  if (normalizedExpiresMs > challengeMs + acceptanceWindowSeconds * 1000) {
+    throw new Error('SIWD sign request expiresAt exceeds the challenge acceptance window');
+  }
+};
+
+/** Compose SIWD profile B using the generic sign-request envelope. */
+export const buildSiwdSignRequest = async (
+  input: BuildSiwdSignRequestInput,
+): Promise<{ jwsToken: string; requestCID: string }> => {
+  const challenge = validateSiwdChallenge(input.challenge);
+  if (challenge.did !== undefined && challenge.did !== input.subject) {
+    throw new Error('SIWD challenge did does not match sign request subject');
+  }
+  assertSiwdOneClock(challenge.timestamp, input.expiresAt, input.acceptanceWindowSeconds);
+  return buildSignRequest({
+    did: input.did,
+    subject: input.subject,
+    payloadTyp: SIWD_JWS_TYP,
+    payload: siwdSigningInput(challenge),
+    expiresAt: input.expiresAt,
+    ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
+    signer: input.signer,
+    keyId: input.keyId,
+  });
+};
+
+/** Verify and strictly parse a SIWD profile-B request before rendering/signing. */
+export const validateSiwdSignRequest = async (
+  jwsToken: string,
+  options: ValidateSiwdSignRequestOptions,
+): Promise<ValidatedSiwdSignRequest> => {
+  assertSiwdAcceptanceWindow(options.acceptanceWindowSeconds);
+  const request = await verifySignRequest(jwsToken, {
+    resolveIdentity: options.resolveIdentity,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  });
+  // Every post-envelope family gate is a definitive "invalid" verdict — wrap in
+  // the sign-request error taxonomy so consumers branch on `reason`, matching
+  // the Go twin (ErrSignRequestInvalid), never on message text.
+  const invalid = (message: string) => new SignRequestVerifyError('invalid', message);
+  if (request.subject !== options.signerDid) {
+    throw invalid('SIWD sign request subject does not match signer DID');
+  }
+  if (request.payloadTyp !== SIWD_JWS_TYP) {
+    throw invalid(`invalid SIWD sign request payloadTyp: ${request.payloadTyp}`);
+  }
+  let challenge: SiwdChallenge;
+  try {
+    challenge = parseSiwdChallenge(request.payloadBytes);
+    assertSiwdOneClock(challenge.timestamp, request.expiresAt, options.acceptanceWindowSeconds);
+  } catch (err) {
+    throw invalid(err instanceof Error ? err.message : 'invalid SIWD sign request payload');
+  }
+  if (challenge.did !== undefined && challenge.did !== options.signerDid) {
+    throw invalid('SIWD challenge did does not match signer DID');
+  }
+  return { ...request, challenge };
 };
 
 // -----------------------------------------------------------------------------
@@ -168,26 +371,29 @@ export const verifySiwd = async (
     const decoded = decodeJwsUnsafe(jws);
     if (!decoded) return fail('failed to decode JWS');
 
+    const rawHeader = decoded.header as unknown;
+    if (typeof rawHeader !== 'object' || rawHeader === null || Array.isArray(rawHeader)) {
+      return fail('SIWD protected header must be an object');
+    }
+    assertJwsProfile(rawHeader as Record<string, unknown>, (message) => new Error(message));
+
     // typ gate — normative per SIWD.md; also what client.verify() routes on
     if (decoded.header.typ !== SIWD_JWS_TYP) {
       return fail(`invalid typ: expected ${SIWD_JWS_TYP}, got ${decoded.header.typ}`);
     }
 
     const kid = decoded.header.kid;
+    if (typeof kid !== 'string') return fail('kid must be a DID URL');
     const hashIdx = kid.indexOf('#');
     if (hashIdx < 0) return fail('kid must be a DID URL');
     const did = kid.substring(0, hashIdx);
     const keyId = kid.substring(hashIdx + 1);
 
-    // parse the challenge payload
-    const payload = decoded.payload as Partial<SiwdChallenge>;
-    if (
-      typeof payload.domain !== 'string' ||
-      typeof payload.nonce !== 'string' ||
-      typeof payload.timestamp !== 'string'
-    ) {
-      return fail('challenge payload malformed');
-    }
+    // Parse the original payload octets, not decodeJwsUnsafe's lossy JSON view:
+    // duplicate members and non-canonical spellings must remain observable.
+    const payloadSegment = jws.split('.')[1];
+    if (payloadSegment === undefined) return fail('failed to decode JWS payload');
+    const payload = parseSiwdChallenge(base64urlDecode(payloadSegment));
 
     // challenge binding — if the challenge names a DID it must match the signer
     if (payload.did !== undefined && payload.did !== did) {

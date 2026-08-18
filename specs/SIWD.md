@@ -1,69 +1,100 @@
 # Sign In With DFOS (SIWD)
 
-Cryptographic identity verification for third-party applications — Ed25519 challenge-response via a universal `/authorize` endpoint. One flow, two signing paths (managed and sovereign), same JWS output. Verification is pure crypto — no DFOS server in the loop after issuance.
+Cryptographic identity verification for third-party applications — an Ed25519 challenge-response artifact, deliverable by a hosted web redirect or by a [sign-request](https://protocol.dfos.com/signing) mailbox. One artifact, two couriers, identical verification. Verification is pure crypto — no DFOS server in the loop after issuance.
 
-> **SIWD version 0.1.** Sign In With DFOS is an **optional authentication seam on its own `0.x` clock, independent of the Protocol v1 freeze** — it is **not part of the frozen protocol surface**. SIWD builds _on top of_ the frozen primitives (the identity chain, the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile), and [DFOS Credentials](https://protocol.dfos.com/credentials)) and may reference them, but the frozen protocol never depends on SIWD. The challenge-response and verification rules below are protocol-normative for any SIWD verifier; the platform endpoint, KMS custody, local CLI port, and health-check behavior are **reference-implementation** details of the DFOS platform, not normative requirements. No reference implementation of the third-party verifier exists yet in this repository — published here for review and to inform implementors. Discuss in the [DFOS](https://nce.dfos.com) space.
+> **SIWD version 0.1.** Sign In With DFOS is an **optional authentication seam on its own `0.x` clock, independent of the Protocol v1 freeze** — it is **not part of the frozen protocol surface**. SIWD builds _on top of_ the frozen primitives (the identity chain, the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile), and [DFOS Credentials](https://protocol.dfos.com/credentials)) and may reference them, but the frozen protocol never depends on SIWD. This revision recasts SIWD as a **registered signing family**: the challenge proof is a `payloadTyp` under [SIGNING](https://protocol.dfos.com/signing), the web-redirect flow is one courier profile, and the sign-request mailbox is the other. The earlier localhost-CLI "sovereign path" is **removed** — its role is served by the mailbox profile. The challenge schema and verification rules below are protocol-normative for any SIWD verifier; the hosted endpoint and its custody model are **reference-implementation** details of a hosting platform, not normative requirements. Reference helpers live in [`@metalabel/dfos-client/siwd`](https://protocol.dfos.com) and `dfos-protocol-go`. Discuss in the [DFOS](https://nce.dfos.com) space.
 
 ---
 
 ## Overview
 
-SIWD lets any third-party application verify a user's DFOS identity. The third party redirects to a single `/authorize` URL on the DFOS platform. The user consents, the challenge is signed with their DID key, and the callback delivers a standard JWS. The third party verifies the signature against the user's identity chain — resolved from any relay — without contacting the DFOS platform.
+SIWD lets any third-party application verify a user's DFOS identity. The third party produces a **challenge**; the user's key signs it; the third party verifies the signature against the user's identity chain — resolved from a relay — without contacting any DFOS platform server.
 
-Two signing paths exist behind the same endpoint:
+The artifact is always the same: the canonical challenge bytes, signed as a JWS with `typ: "did:dfos:siwd"`. What varies is the **courier** — how the challenge reaches a key and the signature comes back:
 
-| Path          | Signer                                  | Trust model                                                         |
-| ------------- | --------------------------------------- | ------------------------------------------------------------------- |
-| **Managed**   | Platform signs via KMS-held key         | Platform custody — user trusts the platform to sign on their behalf |
-| **Sovereign** | User's local Go CLI signs via local key | Self-custody — user holds the key, platform never touches it        |
+| Profile                      | Transport                                                             | Latency                        | Signer                                                                  |
+| ---------------------------- | --------------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------- |
+| **A — Web redirect**         | Browser redirect to a hosted `/authorize`                             | Interactive (seconds)          | The hosting platform's custodial key, or any signer the host integrates |
+| **B — Sign-request mailbox** | [SIGNING](https://protocol.dfos.com/signing) deposit → poll → respond | Asynchronous (minutes to days) | Any keyholder polling the subject's mailbox — phone, CLI, agent         |
 
-The third party never knows which path was used. Both produce the same JWS format, both reference keys in the same identity chain, both verify identically.
+A verifier cannot tell which courier delivered the artifact, and does not need to. Profile A is the **front door** — it works today against fully custodial identities and is where a relationship (and its credentials) is established. Profile B is the **hallway** — once a deposit grant exists, every subsequent ask travels async with no redirect ceremony.
+
+The `typ` value `did:dfos:siwd` is registered in the [protocol `typ` registry](https://protocol.dfos.com/spec#jws-typ-registry) and as a signing family under SIGNING.
 
 ---
 
-## Flow
+## The SIWD Artifact
+
+### Challenge schema
+
+The challenge is a JSON object:
+
+```json
+{
+  "domain": "3p.com",
+  "nonce": "a8f2e93b...",
+  "timestamp": "2026-04-13T15:30:00.000Z",
+  "statement": "Sign in to 3P App",
+  "did": "did:dfos:<id>"
+}
+```
+
+| Field       | Required | Description                                                                                                                                   |
+| ----------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `domain`    | Yes      | Origin domain of the requesting application. Under profile A it MUST match the domain in `redirect_uri`.                                      |
+| `nonce`     | Yes      | Unique value generated by the third party, used for replay prevention.                                                                        |
+| `timestamp` | Yes      | ISO 8601 timestamp of challenge creation, **floor-normalized to whole seconds** (`.000Z` millisecond component).                              |
+| `statement` | No       | Human-readable description shown to the user at consent. Requester-controlled text — see [Rendering the statement](#rendering-the-statement). |
+| `did`       | No       | If provided, binds the challenge to a specific DID. A signer MUST refuse to sign if its own DID does not match.                               |
+
+**Timestamps are whole-second.** Producers MUST normalize `timestamp` to the `.000Z` form (floor, never round) — the same normalization the sign-request envelope family applies. A strict signer validating this family rejects a sub-second timestamp as a schema violation. This removes the one canonicalization ambiguity that previously separated SIWD from the rest of the envelope family.
+
+The challenge is signed as a JWS using a key from the user's identity chain with `alg: "EdDSA"`. The JWS protected header MUST set `typ: "did:dfos:siwd"` — verifiers MUST reject any other `typ`. This follows the protocol's convention of typ-scoped envelopes (`did:dfos:identity-op`, `did:dfos:credential`, …) and is what lets a typ-routing verifier tell a SIWD proof apart from every other DFOS token; without the gate, a JWS signed for one purpose could be presented as another. The JWS `kid` header contains the DID URL of the signing key (`did:dfos:<id>#<keyId>`), following the same convention as identity and content chain operations.
+
+### Canonical signing input
+
+The signer and the verifier MUST agree on the exact bytes that are signed — otherwise a field reordering or an omitted optional silently breaks verification across the package boundary. The **canonical signing input** is the challenge object serialized as minimal UTF-8 JSON (no insignificant whitespace) with its members in this fixed order, omitting any absent optional member:
+
+```
+domain, nonce, timestamp, statement?, did?
+```
+
+These bytes are simultaneously: the JWS payload segment (what the `alg: "EdDSA"` signature covers), the body base64url-encoded into profile A's `challenge` query parameter, and the octets a profile B sign-request carries in its `payload` field — the same bytes serve every role, so a holder of any encoding can confirm they describe the same object. This is the standard canonical-serialization rule the whole envelope family uses (see [SIGNING → canonical serialization](https://protocol.dfos.com/signing)). Reference implementations of the byte contract are `siwdSigningInput(challenge)` in [`@metalabel/dfos-client/siwd`](https://protocol.dfos.com) and its byte-twin in `dfos-protocol-go`, so the encoding lives in exactly one place per language.
+
+---
+
+## Profile A — Web Redirect
+
+The synchronous, interactive courier: the third party redirects the user's browser to a hosted `/authorize` endpoint; consent and signing happen there; the signed artifact returns by redirect. This is the profile to use when the user is present and latency matters.
 
 ### 1. Redirect to authorize
 
-The third-party application redirects the user to the platform's `/authorize` endpoint:
-
 ```
 https://dfos.com/authorize?
-  challenge=<base64url-encoded challenge JSON>
+  challenge=<base64url-encoded canonical challenge bytes>
   &redirect_uri=https://3p.com/callback
   &scope=identity
+  &client_did=did:dfos:<3p id>
 ```
 
-Query parameters:
+| Parameter      | Required                          | Description                                                                            |
+| -------------- | --------------------------------- | -------------------------------------------------------------------------------------- |
+| `challenge`    | Yes                               | Base64url of the canonical challenge bytes (see [Challenge schema](#challenge-schema)) |
+| `redirect_uri` | Yes                               | URL the host redirects to after signing                                                |
+| `scope`        | Yes                               | A single requested scope (one scope per authorization request)                         |
+| `client_did`   | When `scope` returns a credential | The third party's own DFOS DID — the `aud` any returned credential is issued to        |
 
-| Parameter      | Required | Description                                                                    |
-| -------------- | -------- | ------------------------------------------------------------------------------ |
-| `challenge`    | Yes      | Base64url-encoded challenge object (see [Challenge Schema](#challenge-schema)) |
-| `redirect_uri` | Yes      | URL the platform redirects to after signing                                    |
-| `scope`        | Yes      | A single requested scope (one scope per authorization request)                 |
+`client_did` closes a gap in the earlier revision, which promised credentials issued to "the third-party app's DID" while carrying no parameter that named it. The host MUST display `client_did` (or an identity resolved from it) alongside `domain` on the consent screen; the credential's audience binding is to the DID the user consented to, and `domain` remains the phishing-relevant binding (see [Security](#security-considerations)).
 
-Scopes:
+### 2. Consent
 
-| Scope              | Meaning                                                                  |
-| ------------------ | ------------------------------------------------------------------------ |
-| `identity`         | Prove DID ownership only                                                 |
-| `read:<contentId>` | Prove DID + return a read credential for the content chain `<contentId>` |
-
-The `<contentId>` is the content chain's content ID as defined by the protocol. A `read:<contentId>` scope maps to exactly one [DFOS credential](https://protocol.dfos.com/credentials) attenuation: `{ "resource": "chain:<contentId>", "action": "read" }`. SIWD does not define a resource grammar of its own — the resource form, action vocabulary, and matching rules are the credential spec's `chain:<contentId>` exact-match form (see [Credentials — Resource Types](https://protocol.dfos.com/credentials)). There is no separate "chain type" dimension; every content resource is a `chain:` resource.
-
-### 2. Consent screen
-
-The platform authenticates the user (existing session) and presents a consent screen. The screen describes what the third party is requesting — identity verification alone, or identity plus scoped resource access.
-
-If the user has local signing enabled, both signing options are presented. Otherwise, only managed signing is available.
+The host authenticates the user (existing session) and presents a consent screen describing what the third party requests — identity verification alone, or identity plus a scoped credential. The `statement`, if present, is rendered under the [rendering rule](#rendering-the-statement).
 
 ### 3. Signing
 
-The user's DID key signs the challenge as a JWS compact token. See [Managed Signing Path](#managed-signing-path) and [Sovereign Signing Path](#sovereign-signing-path) for details.
+A key from the user's identity chain signs the canonical challenge bytes. For a custodially-hosted identity, the host signs with the user's custodial key after consent (the custody mechanics — KMS, session handling — are reference-implementation details; what is normative is only that the signature is produced by a key declared in the identity chain and verifies under the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile)). A host MAY integrate other signers behind the same consent screen.
 
 ### 4. Callback
-
-The platform (or local CLI) redirects to the `redirect_uri` with the signed challenge:
 
 ```
 https://3p.com/callback?
@@ -77,120 +108,95 @@ If a credential was requested via `scope`, it is included as an additional param
   &credential=<DFOS credential JWS>
 ```
 
----
-
-## Challenge Schema
-
-The challenge is a JSON object, base64url-encoded in the `challenge` query parameter:
-
-```json
-{
-  "domain": "3p.com",
-  "nonce": "a8f2e93b...",
-  "timestamp": "2026-04-13T15:30:00.000Z",
-  "statement": "Sign in to 3P App",
-  "did": "did:dfos:<id>"
-}
-```
-
-| Field       | Required | Description                                                                                                                          |
-| ----------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `domain`    | Yes      | Origin domain of the requesting application. MUST match the domain in `redirect_uri`.                                                |
-| `nonce`     | Yes      | Unique value generated by the third party, used for replay prevention.                                                               |
-| `timestamp` | Yes      | ISO 8601 timestamp of challenge creation.                                                                                            |
-| `statement` | No       | Human-readable description shown on the consent screen.                                                                              |
-| `did`       | No       | If provided, binds the challenge to a specific DID. The platform MUST reject signing if the authenticated user's DID does not match. |
-
-The challenge is signed as a JWS using the user's DID key with `alg: "EdDSA"`. The JWS protected header MUST set `typ: "did:dfos:siwd"` — verifiers MUST reject any other `typ`. This follows the protocol's convention of typ-scoped envelopes (`did:dfos:identity-op`, `did:dfos:credential`, …) and is what lets a typ-routing verifier tell a SIWD proof apart from every other DFOS token; without the gate, a JWS signed for one purpose could be presented as another. The JWS `kid` header contains the DID URL of the signing key (`did:dfos:<id>#<keyId>`), following the same convention as identity and content chain operations.
-
-### Canonical signing input
-
-The signer and the verifier MUST agree on the exact bytes that are signed — otherwise a field reordering or an omitted optional silently breaks verification across the package boundary. The **canonical signing input** is the challenge object serialized as UTF-8 JSON with its members in this fixed order, omitting any absent optional member:
-
-```
-domain, nonce, timestamp, statement?, did?
-```
-
-These bytes are both the JWS payload (the segment the `alg: "EdDSA"` signature covers) and the body that is base64url-encoded into the `challenge` query parameter — the same bytes serve both roles, so a verifier that holds the encoded challenge and the JWS can confirm they describe the same object. A reference implementation of this byte contract is `siwdSigningInput(challenge)` in [`@metalabel/dfos-client/siwd`](https://protocol.dfos.com), a pure function both a browser wallet (signing) and a third-party verifier (checking) import so the encoding lives in exactly one place.
+> **Removed: the localhost sovereign path.** Earlier revisions specified a second redirect target (`http://localhost:8420/authorize`) where a local CLI signed. It was synchronous, port-squatting, and browser-to-localhost — the worst properties of both worlds. Self-custodied signing is now profile B: the same CLI holds the same key and polls a mailbox instead of listening on a port. The `localSigningEnabled` / `localSigningPort` settings and the `GET /health` preflight are gone with it.
 
 ---
 
-## Managed Signing Path
+## Profile B — Sign-Request Mailbox
 
-The platform holds the user's DID key material in a KMS (Key Management Service). When the user consents via the managed path:
-
-1. Platform verifies the user's session.
-2. Platform signs the challenge with the user's KMS-held key.
-3. Platform redirects to `redirect_uri` with the signed JWS and DID.
-
-The KMS key is one of the user's `authKeys` declared in the identity chain — the authentication key set that verification resolves against (see step 2 below). The signature is indistinguishable from any other Ed25519 signature over the challenge — the third party verifies it against the identity chain like any other key.
-
-The KMS custody model and the platform's session handling are **reference-implementation** details; what is normative is only that the signature is produced by a key declared in the identity chain and verifies under the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile).
-
----
-
-## Sovereign Signing Path
-
-Users who hold their own keys via the DFOS Go CLI can sign challenges locally. The platform does not touch the key material.
-
-### Configuration
-
-The user enables local signing in their platform settings:
-
-| Setting               | Type    | Description                                                          |
-| --------------------- | ------- | -------------------------------------------------------------------- |
-| `localSigningEnabled` | boolean | Whether the sovereign signing option is presented on consent screens |
-| `localSigningPort`    | number  | Port the local CLI listens on (default: `8420`)                      |
-
-> These settings, the `localhost` port, and the preflight `GET /health` probe are **reference-implementation** behavior of the DFOS platform and Go CLI, not protocol-normative. A SIWD verifier never observes them — it sees only the resulting JWS.
+The asynchronous courier: the third party wraps the canonical challenge bytes in a [sign-request envelope](https://protocol.dfos.com/signing) (`payloadTyp: "did:dfos:siwd"`), deposits it in the subject's relay signing mailbox, and polls for the response. The subject's own signer — phone, CLI, agent — polls its mailbox, renders the challenge, and signs. No browser, no redirect, no hosted endpoint.
 
 ### Flow
 
-1. User selects "Sign locally" on the consent screen.
-2. Platform redirects to `http://localhost:<port>/authorize` with the same `challenge` and `redirect_uri` parameters.
-3. The Go CLI receives the request, presents consent (terminal or local web UI), and signs the challenge with the locally-held key.
-4. The CLI redirects to `redirect_uri` with the signed JWS and DID.
+1. **Compose.** The third party (as envelope requester, signing with its own current key) builds a sign-request: `subject` = the user's DID, `payloadTyp` = `"did:dfos:siwd"`, `payload` = base64url of the canonical challenge bytes.
+2. **Deposit.** `POST /signing/v0/requests` at the subject's relay, authorized by a `mailbox:<subject id>` / `deposit` credential (obtained at a prior profile-A consent via the [`deposit` scope](#scopes-and-credentials), or from a published open grant — see [SIGNING → deposit authorization](https://protocol.dfos.com/signing)).
+3. **Sign.** The subject's signer polls, applies the [signer obligations](#signer-obligations-for-this-family), and responds with the signed artifact.
+4. **Collect.** The third party polls `GET /signing/v0/requests/{cid}/response` and receives the same JWS a profile-A callback would have delivered. Verification is identical.
 
-The local key MUST be declared in the user's identity chain (`authKeys`). The third party resolves the identity chain and finds the key — same verification as the managed path.
+### The one-clock rule
 
-### Failure handling
+A sign-request carrying a SIWD challenge MUST set its `expiresAt` no later than the moment the composer's own verifier would reject the challenge's `timestamp` as stale. **The envelope may not outlive the semantics of its payload** — an envelope valid for six days wrapping a challenge its own composer would reject after five minutes is incoherent, and this rule makes it unrepresentable.
 
-If the user selects sovereign signing but the CLI is not running, the browser fails to connect to localhost. The user navigates back and falls through to managed signing. No state is corrupted — the challenge is stateless and can be signed by either path.
+The practical consequence: a composer using this profile sizes its challenge-acceptance window to the asynchronous latency it actually intends to allow — minutes for a login push, days for a low-urgency attestation — up to the envelope family's 7-day ceiling, and sets `expiresAt` to match. The redirect profile's conventional ~5-minute window is a property of that profile's interactivity, not of SIWD.
 
-The platform MAY perform a preflight health check (`GET http://localhost:<port>/health`) to disable the sovereign signing button when the CLI is not reachable.
+### Signer obligations for this family
+
+A signer handling `payloadTyp: "did:dfos:siwd"` applies the full [WYSIWYS contract](https://protocol.dfos.com/signing) with these family specifics:
+
+- **Strict schema.** The decoded payload MUST parse as a challenge object with no unknown members, `timestamp` in whole-second `.000Z` form, and — when `did` is present — `did` equal to the signer's own DID (refuse otherwise, before signing).
+- **Re-canonicalize and byte-compare** per the standard rule; the canonical form is the [canonical signing input](#canonical-signing-input) above.
+- **Render `domain` prominently.** The domain is what the user is authenticating _to_; it is the primary phishing-relevant fact and MUST be shown.
+- **Render the statement as untrusted text** — see below.
+
+#### Rendering the statement
+
+SIWD is the one envelope-family payload that carries requester-controlled prose. The sign-request envelope itself deliberately has no display text — that omission is its phishing posture — and the exception survives here only because the `statement` is inside the signed bytes and owned by this family. A signer MUST render the statement visibly delimited as third-party-supplied text (quoted, boxed, or otherwise set off) and MUST NOT interleave it with the signer's own UI chrome, instructions, or security indicators. A statement is a message _from_ the requester, and it must always look like one.
+
+### The custodial signer agent
+
+A subject with no self-held key cannot poll a mailbox — poll authorization _is_ key possession. A custodial platform holding a subject's keys MAY act as the subject's **signing agent**: it reads asks addressed to its custodial users, applies the signer obligations above (rendering consent in its own product surface), and signs with the custodial key on the user's approval. The obligations do not weaken — the agent runs the same strict parse, byte-compare, and rendering rules on the user's behalf. This is the bridge posture for custodial identities; a subject who later enrolls a device key takes over polling with no change visible to any requester.
+
+### Delivery expectations
+
+The mailbox is poll-only — there is no push in the protocol. Profile B therefore behaves like a device-authorization flow from the third party's perspective: "ask, then wait for the subject's signer to come around." A platform that operates both a relay and its users' signing agent can close the latency gap out-of-band (push-notify "go poll"); that is an operational nicety, not protocol surface.
+
+**Dead-letter note (implementors).** The mailbox response gate resolves the signer's key against **historical** identity state (the courier is deliberately never stricter than an artifact's own verifier), while SIWD verification is **current-state**. A response signed with a rotated-out key therefore _passes the mailbox and fails at the third-party verifier_. This is not a security hole — the verifier holds the line — but it is a failure mode to surface in tooling rather than debug blind: a collected response that fails step 2 below with a rotated key should be reported as "signer key no longer current," not "bad signature."
 
 ---
 
 ## Third-Party Verification
 
-Verification is identical regardless of signing path. The JWS signature MUST be checked under the DFOS [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile) — the same profile every DFOS verifier applies — not unprofiled "standard Ed25519 verification":
+Verification is identical regardless of courier. The JWS signature MUST be checked under the DFOS [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile) — the same profile every DFOS verifier applies — not unprofiled "standard Ed25519 verification":
 
 1. **Decode the JWS** — extract the challenge payload, `kid` header (DID URL of signing key), and signature. Before any signature work, apply the header gates: the protected header `typ` MUST equal the exact string `"did:dfos:siwd"`; the protected header `alg` MUST equal the exact string `"EdDSA"`; a `crit` member MUST cause rejection; and an embedded header key (`jwk`, `x5c`, or any key-bearing member) MUST cause rejection. The key is never read from the header.
-2. **Resolve the DID** — fetch the identity chain from any DFOS relay and replay it to its **current state**. Extract the public key matching the `kid` from the current `authKeys`. Keys that have been rotated out, and identities that have been deleted, MUST NOT verify — a challenge signed by a key that is no longer current (or by a deleted identity) MUST be rejected. (The protocol has no identity-revocation primitive; deletion is the terminal state a verifier checks. Credential-scoped revocation is a separate mechanism that applies to the optional returned credential, not to the identity.)
+2. **Resolve the DID** — fetch the identity chain from a DFOS relay and replay it to its **current state**. Extract the public key matching the `kid` from the current `authKeys`. Keys that have been rotated out, and identities that have been deleted, MUST NOT verify — a challenge signed by a key that is no longer current (or by a deleted identity) MUST be rejected. (The protocol has no identity-revocation primitive; deletion is the terminal state a verifier checks. Credential-scoped revocation is a separate mechanism that applies to the optional returned credential, not to the identity.)
+
+   > **Staleness caveat.** "Current state" means current _as the chosen relay has seen it_: a relay that has not ingested the chain's newest operations reports an older head as current, so a single-relay resolution can accept a key its subject has already rotated out (or miss a deletion). The verified prefix is still authentic — signatures cannot be forged — but currency is only as fresh as the relay. A verifier with higher assurance needs SHOULD resolve from more than one relay (in particular, from the relays the subject's own identity state lists in its `services` entries) and take the longest verified chain.
+
 3. **Verify the signature** — Ed25519 verification of the JWS against the resolved public key, with the canonical-scalar gate (`S < L`) and the 64-byte length check from the profile.
-4. **Validate the nonce** — confirm the `nonce` in the challenge payload matches the server-side value issued to this session. Discard the nonce after use.
-5. **Validate the timestamp** — reject challenges older than a reasonable window (implementation-defined, e.g., 5 minutes).
+4. **Validate the nonce** — confirm the `nonce` in the challenge payload matches the server-side value issued for this authorization. Discard the nonce after use.
+5. **Validate the timestamp** — reject challenges outside the acceptance window the composer chose for the courier in use: conventionally ~5 minutes under profile A, and exactly the window implied by the envelope's `expiresAt` under profile B (the [one-clock rule](#the-one-clock-rule) guarantees the two agree).
 6. **Validate the domain** — confirm the `domain` in the challenge matches the verifier's own origin.
 
-If a credential was returned, the third party stores it and presents it to relays for scoped access. See [Optional Credential Return](#optional-credential-return).
+If a credential was returned, the third party stores it and presents it to relays for scoped access. See [Scopes and Credentials](#scopes-and-credentials).
 
-No DFOS platform server is contacted during verification. The third party only needs access to a relay (any relay) to resolve the DID's identity chain.
+No DFOS platform server is contacted during verification. The third party only needs access to a relay to resolve the DID's identity chain.
 
 ---
 
-## Optional Credential Return
+## Scopes and Credentials
 
-When `scope` includes resource access beyond `identity`, the callback includes a DFOS credential alongside the signed challenge.
+Identity proof is inherent — the signed challenge itself proves DID ownership. A `scope` beyond `identity` additionally returns one [DFOS credential](https://protocol.dfos.com/credentials); one scope per authorization request.
 
-### User-owned content
+| Scope              | Returned credential                                                                               |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
+| `identity`         | None — the signed challenge alone                                                                 |
+| `read:<contentId>` | `{ "resource": "chain:<contentId>", "action": "read" }`, issued to `client_did`                   |
+| `deposit`          | `{ "resource": "mailbox:<subject id>", "action": "deposit" }`, issued to `client_did` — see below |
 
-For content owned by the user's DID, the credential is issued by that DID: a standard [DFOS credential](https://protocol.dfos.com/credentials) with `iss` = the user's DID, `aud` = the third-party app's DID, and a single attenuation `{ "resource": "chain:<contentId>", "action": "read" }` covering the requested content chain. The envelope, signing, CID derivation, and validity bounds are exactly as the [credential spec](https://protocol.dfos.com/credentials) defines — SIWD adds no fields and no separate credential format.
+SIWD does not define a resource grammar of its own — resource forms, action vocabulary, and matching rules are the [credential spec's](https://protocol.dfos.com/credentials) (`chain:<contentId>` exact-match; `mailbox:<id>` / `deposit` exact-match as registered by [SIGNING](https://protocol.dfos.com/signing)).
 
-### Space-owned content
+### `read:<contentId>`
 
-For content owned by a space (a separate DID), the credential is issued by the **space's DID**, not the user's. The platform mediates: the user consents, the platform verifies the user's membership and permissions within the space, then issues the credential from the space's DID.
+For content owned by the user's DID, the credential is issued by that DID: `iss` = the user's DID, `aud` = `client_did`, one attenuation covering the requested chain. For content owned by a space (a separate DID), the credential is issued by the **space's DID** — the host mediates: the user consents, the host verifies the user's membership and permissions within the space, then issues from the space's DID. The envelope, signing, CID derivation, and validity bounds are exactly as the credential spec defines — SIWD adds no fields and no separate credential format.
 
-The third party presents the credential to any relay hosting that content. The relay verifies the credential against the space's identity chain and grants scoped access.
+### `deposit` — the enrollment loop
+
+The `deposit` scope is how a third party earns the right to use profile B at all: consenting to it issues a `mailbox:<subject id>` / `deposit` credential to `client_did`, rooted at the subject (issued by the subject's key — custodially by the host today, by the subject's own key under self-custody, same shape). The compound flow this enables is the intended shape of a standing relationship:
+
+> **Sign in once through the front door; every later ask arrives through the hallway.** A first profile-A authorization with `scope=deposit` establishes identity _and_ grants deposit. From then on the third party never redirects again — approvals, attestations, and countersignature asks all travel as sign-requests through the subject's mailbox.
+
+Revoking the deposit credential (standard [credential revocation](https://protocol.dfos.com/credentials)) severs the relationship: the relay's deposit gate re-checks revocation on every deposit, so revocation is the user's "disconnect this app."
 
 ---
 
@@ -198,37 +204,22 @@ The third party presents the credential to any relay hosting that content. The r
 
 ### Replay prevention
 
-The `nonce` field is the primary replay defense. The third party MUST:
+The `nonce` field is the primary replay defense. The third party MUST: generate a cryptographically random nonce per authorization request; store it server-side, bound to the authorization; reject any artifact whose nonce does not match or has already been consumed; and expire unused nonces with their acceptance window. The `timestamp` bound is secondary — stale challenges SHOULD be rejected even with a valid nonce.
 
-- Generate a cryptographically random nonce per authorization request.
-- Store it server-side, bound to the user's session.
-- Reject any callback where the nonce does not match or has already been consumed.
-- Expire unused nonces after a short window.
+### Redirect URI validation (profile A)
 
-The `timestamp` field provides a secondary bound — challenges with stale timestamps SHOULD be rejected even if the nonce is valid.
+The host MUST validate `redirect_uri` against a registered allowlist for the requesting application. Open redirectors allow phishing — an attacker could substitute their own callback URL to capture signed challenges. The `domain` field in the challenge MUST match the domain of the `redirect_uri`; the host MUST reject requests where these diverge.
 
-### Redirect URI validation
-
-The platform MUST validate `redirect_uri` against a registered allowlist for the requesting application. Open redirectors allow phishing — an attacker could substitute their own callback URL to capture signed challenges.
-
-The `domain` field in the challenge MUST match the domain of the `redirect_uri`. The platform MUST reject requests where these diverge.
+Under profile B there is no redirect and no `redirect_uri` — the domain binding lives entirely inside the signed challenge, and the signer's obligation to render `domain` prominently is the corresponding control: the user sees exactly which origin they are authenticating to before signing.
 
 ### Challenge binding
 
-If the `did` field is present in the challenge, the platform MUST refuse to sign with any other DID. This prevents an attacker from substituting a different user's identity into a challenge intended for a specific user.
+If the `did` field is present in the challenge, the signer MUST refuse to sign with any other DID. This prevents an attacker from substituting a different user's identity into a challenge intended for a specific user.
 
-### Localhost security (sovereign path)
+### Client identity (`client_did`)
 
-The sovereign path redirects to `localhost`, which is not TLS-protected. This is acceptable because:
-
-- The signing key never leaves the local machine.
-- The challenge is not secret — it is a value the user is explicitly consenting to sign.
-- The redirect back to `redirect_uri` uses HTTPS.
-
-The CLI SHOULD bind exclusively to `127.0.0.1` (not `0.0.0.0`) to prevent network-adjacent access.
+`domain` — not `client_did` — is the phishing-relevant binding: nothing in this spec proves that a DID controls a domain, so the consent surface MUST always lead with the domain. `client_did` determines only _who can exercise a returned credential_ (its `aud`), which the credential machinery enforces cryptographically. A mismatch between a displayed domain and the party controlling `client_did` costs the attacker nothing they haven't already achieved by controlling the consent's `domain` — but a host SHOULD display both, and MAY apply its own client-registration policy on top.
 
 ### Token lifetime
 
-Signed challenges are single-use authentication proofs, not bearer tokens. Third parties SHOULD establish their own session after verification and discard the JWS.
-
-Credentials returned via `scope` have an explicit `exp` (expiration) field. Third parties MUST respect expiration and re-request credentials when they expire.
+Signed challenges are single-use authentication proofs, not bearer tokens. Third parties SHOULD establish their own session after verification and discard the JWS. Credentials returned via `scope` carry an explicit `exp`; third parties MUST respect expiration and re-request when expired.

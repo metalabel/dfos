@@ -49,7 +49,7 @@ run_variant() {
   echo ""
   echo "=== $label signing relay on :$port ==="
   (cd "$CONFORMANCE_DIR" && RELAY_URL="http://localhost:$port" \
-    go test -v -count=1 -timeout 90s -run 'TestSigning' ./...)
+    go test -v -count=1 -timeout 90s -run 'Test(Signing|Siwd)' ./...)
 }
 
 TS_PORT="$(free_port)"

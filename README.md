@@ -38,6 +38,25 @@ This repository contains the protocol specification, reference implementations i
 - [Threat Model](https://protocol.dfos.com/threat-model) — adversary classes and the trustless-proof / honest-host split
 - [Conformance](https://protocol.dfos.com/conformance) — tiered conformance definition and self-certification
 - [JSON Schemas](https://schemas.dfos.com) — hosted schema definitions for DFOS documents
+
+## Specification status
+
+Each spec declares its own clock in its header; this table is the index, not the authority.
+
+| Spec                                            | Clock / status                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------- |
+| [PROTOCOL](./specs/PROTOCOL.md)                 | **v1 — frozen**, not yet final                                       |
+| [WEB-RELAY](./specs/WEB-RELAY.md)               | Proof plane frozen with v1; other surfaces reference-impl, own clock |
+| [DID-METHOD](./specs/DID-METHOD.md)             | **v1 — frozen**                                                      |
+| [CREDENTIALS](./specs/CREDENTIALS.md)           | **v1 — frozen**                                                      |
+| [CONTENT-MODEL](./specs/CONTENT-MODEL.md)       | Encoding rule frozen with v1; schema vocabulary on its own `0.x`     |
+| [CREDITS](./specs/CREDITS.md)                   | Settled — additive capability on v1                                  |
+| [SIGNING](./specs/SIGNING.md)                   | `0.1` — optional capability, own `0.x` clock                         |
+| [SIWD](./specs/SIWD.md)                         | `0.1` — optional authentication seam, own `0.x` clock                |
+| [DOCUMENT-GATEWAY](./specs/DOCUMENT-GATEWAY.md) | `0.1` — optional service, own `0.x` clock                            |
+| [THREAT-MODEL](./specs/THREAT-MODEL.md)         | Companion — assembles specified surface, defines no rules            |
+| [CONFORMANCE](./specs/CONFORMANCE.md)           | Companion — tiers over the normative MUST sets, defines no rules     |
+
 - [Chain verifier](https://verify.dfos.com) — browser-based chain verification tool
 - [DFOS app](https://app.dfos.com) — the platform
 - [npm package](https://www.npmjs.com/package/@metalabel/dfos-protocol) — `@metalabel/dfos-protocol`

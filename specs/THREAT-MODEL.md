@@ -1,5 +1,7 @@
 # DFOS Threat Model
 
+> **Status — companion document, no clock of its own.** This document defines no protocol rules; it assembles the adversary model already specified across the normative specs, and is corrected in place as they evolve.
+
 A consolidated map of the DFOS adversary model and trust boundaries. This document
 does not introduce new protocol rules — it assembles the threat surface that is
 already specified, in prose, across [PROTOCOL.md](https://protocol.dfos.com/spec),
