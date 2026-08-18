@@ -7,16 +7,15 @@ See [WEB-RELAY.md](../../specs/WEB-RELAY.md) for the full relay specification.
 ## Quick Start
 
 ```bash
-# build
-cd packages/dfos-web-relay-go
-go build -o relay ./cmd/relay
+# build the dfos CLI from the repo root
+cd packages/dfos-cli
+go build -o dfos ./cmd/dfos
 
-# run (SQLite, generates new identity on first boot)
-RELAY_NAME="my-relay" ./relay
-
-# run (in-memory, no persistence)
-STORE=memory ./relay
+# run the embedded relay (SQLite, generates a new identity on first boot)
+RELAY_NAME="my-relay" ./dfos serve
 ```
+
+This package is the Go relay library embedded by the `dfos serve` command.
 
 ## Docker
 
@@ -36,16 +35,18 @@ The container generates Ed25519 keys on first boot and persists them in SQLite. 
 
 All configuration is via environment variables:
 
-| Variable            | Default          | Description                                                      |
-| ------------------- | ---------------- | ---------------------------------------------------------------- |
-| `PORT`              | `8080`           | HTTP listen port                                                 |
-| `STORE`             | `sqlite`         | Storage backend: `sqlite` or `memory`                            |
-| `SQLITE_PATH`       | `/data/relay.db` | Path to SQLite database                                          |
-| `RELAY_NAME`        | `DFOS Relay`     | Profile name (shown in well-known endpoint)                      |
-| `RELAY_DESCRIPTION` | _(empty)_        | Profile description                                              |
-| `PEERS`             | _(empty)_        | Peer relay URLs (see below)                                      |
-| `SYNC_INTERVAL`     | `30s`            | How often to poll peers for new operations                       |
-| `CONTENT_FOLLOW`    | `none`           | `eager` = pull & cache granted public document bytes (see below) |
+| Variable         | Default            | Description                                                      |
+| ---------------- | ------------------ | ---------------------------------------------------------------- |
+| `PORT`           | `4444`             | HTTP listen port                                                 |
+| `SQLITE_PATH`    | `~/.dfos/relay.db` | Path to SQLite database                                          |
+| `RELAY_NAME`     | `DFOS Relay`       | Profile name (shown in well-known endpoint)                      |
+| `PEERS`          | _(empty)_          | Peer relay URLs (see below)                                      |
+| `RESYNC`         | `false`            | `true` resets peer cursors for a full re-sync on boot            |
+| `SYNC_INTERVAL`  | `30s`              | How often to poll peers for new operations                       |
+| `CONTENT_FOLLOW` | `none`             | `eager` = pull & cache granted public document bytes (see below) |
+| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`       |
+
+When embedding this library, signing is available through `RelayOptions.Signing`; it is not exposed by `dfos serve`.
 
 ### Peer Configuration
 

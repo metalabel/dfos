@@ -14,7 +14,8 @@ This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com)
 
 ## Trust Boundaries
 
-DFOS has two planes with fundamentally different trust models.
+DFOS has two replicated planes with fundamentally different trust models. The
+optional signing mailbox's courier state sits outside both.
 
 ### Proof plane — self-authenticating, trustless
 
@@ -45,6 +46,13 @@ gated by an auth token plus (for non-creators) a read credential (WEB-RELAY.md
 
 The security posture of a document is therefore the security posture of the relay
 operator that holds it.
+
+### Signing mailbox — ephemeral courier state outside both planes
+
+Signing mailbox state is on neither plane: it is never gossiped, never folded, and
+its retention is bounded by each request's own expiry. See
+[SIGNING.md "Security Considerations"](https://protocol.dfos.com/signing#security-considerations)
+for the detailed analysis.
 
 ### Countersignatures live on the public proof plane
 
