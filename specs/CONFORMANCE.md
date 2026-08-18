@@ -6,8 +6,9 @@ points at the normative MUST sets already specified in
 [PROTOCOL.md](https://protocol.dfos.com/spec),
 [CREDENTIALS.md](https://protocol.dfos.com/credentials),
 [CREDITS.md](https://protocol.dfos.com/credits),
-[WEB-RELAY.md](https://protocol.dfos.com/web-relay), and
-[DID-METHOD.md](https://protocol.dfos.com/did-method), and binds each tier to the tests
+[WEB-RELAY.md](https://protocol.dfos.com/web-relay),
+[DID-METHOD.md](https://protocol.dfos.com/did-method), and
+[SIGNING.md](https://protocol.dfos.com/signing) (`0.x`), and binds each tier to the tests
 that exercise it.
 
 This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
@@ -62,6 +63,13 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   is history, authorization is standing), and the **`invalid` vs `unverifiable`** verdicts
   MUST stay distinct, with neither rendered as `unclaimed` (CREDITS.md "Verification
   Algorithm" / "Verification States" / "Two-Way Binding", `specs/CREDITS.md`).
+- **Sign-request envelope verification** (if it consumes sign requests; SIGNING `0.x`) —
+  the 8192-byte token cap checked before any decode, the profile header gates, `typ`
+  exactly `did:dfos:sign-request`, payload schema, unpadded-base64url target bytes
+  (non-empty, ≤ 4096), `kid`-DID equal to payload `did`, **current-state** requester
+  resolution (the auth-token rule, not the credential rule — deliberate), signature, CID
+  integrity, the ≤ 7-day temporal window, and the same structural `invalid` vs
+  `unverifiable` verdict split (SIGNING.md "Verification Algorithm", `specs/SIGNING.md`).
 
 ### Tier 2 — Signer
 
@@ -73,8 +81,8 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
 - **`kid` rules** — bare key ID for identity genesis, DID URL otherwise; content ops always
   DID URL (PROTOCOL.md "kid Rules", `specs/PROTOCOL.md`).
 - **`cid` header** — present on every operation JWS, artifacts, countersignatures,
-  credentials, revocations, credit claims; absent on auth-token JWTs (PROTOCOL.md
-  "`cid` Header", `specs/PROTOCOL.md`).
+  credentials, revocations, credit claims, and sign-request envelopes; absent on
+  auth-token JWTs (PROTOCOL.md "`cid` Header", `specs/PROTOCOL.md`).
 - **Credit-claim emission** (if it signs attribution) — derive `kid` from the claimant DID
   so a `kid`↔`did` mismatch is unrepresentable, bind to the chain's 31-char `contentId`
   (never a `documentCID` or head CID), omit `asOfDocumentCID` rather than emitting it empty,
@@ -83,6 +91,15 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
 - **Canonicalization discipline** — integer number bounds, no Unicode normalization, no
   duplicate keys (PROTOCOL.md "Number Encoding" / "String Encoding" / "JSON Payload
   Canonicalization", `specs/PROTOCOL.md`, `specs/PROTOCOL.md`, `specs/PROTOCOL.md`).
+- **WYSIWYS signer obligations** (if it signs on request; SIGNING `0.x`) — the heaviest
+  signer MUST set in the corpus: subject-is-self, refuse unimplemented `payloadTyp`s,
+  strict target-schema validation with **no unknown fields**, re-canonicalize-and-
+  byte-compare against the decoded input, render only from the validated parse, sign the
+  **original** bytes (SIGNING.md "Signer Obligations (WYSIWYS)", `specs/SIGNING.md`).
+  The adversarial canonicalization vector set shipped with the reference packages
+  (duplicate keys, non-shortest numbers, permuted order, whitespace, unicode escapes,
+  unknown fields, sub-second timestamps) is the proving corpus; an independent signer
+  copies it wholesale.
 
 ### Tier 3 — Relay
 
@@ -170,7 +187,7 @@ core is unambiguous across languages.
   (`scripts/run-write-disabled.sh` — recompute-from-log read-only conformance when
   `capabilities.write: false`), and the signing pair — enabled-behavior tests that run
   only when `capabilities.signing: true` (`scripts/run-signing.sh`), and a disabled suite
-  asserting 501 on every `/signing/v1/*` route when the flag is `false` or absent
+  asserting 501 on every `/signing/v0/*` route when the flag is `false` or absent
   (SIGNING.md).
 - **Content following** is inherently a **two-relay** behavior (a follower materializing an
   origin's bytes), so it is exercised in the Go relay library's race-tested in-package suite

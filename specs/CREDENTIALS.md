@@ -259,7 +259,7 @@ Revocation — not expiry — is the **timely lever** for invalidating a credent
 
 ## Resource Types
 
-The frozen v1 surface defines two resource forms, both under the `chain:` prefix. New capabilities register additional forms **additively** as they land — the resource grammar (`type:id`) is open by construction, and an unrecognized resource type simply never matches a request. One additive form is registered so far: [`mailbox:<id>`](#mailboxid----signing-mailbox-deposit-additive-signing-0x), below.
+The frozen v1 surface defines two resource forms, both under the `chain:` prefix. New capabilities register additional forms **additively** as they land — the resource grammar (`type:id`) is open by construction, and an unrecognized resource type simply never matches a request. (Never _matches_ — it may still be carried down a delegation chain under the exact-equality rule in [Attenuation Between Forms](#attenuation-between-forms); matching a request and surviving the attenuation walk are different questions, and only registered forms are ever matched.) One additive form is registered so far: [`mailbox:<id>`](#mailboxid----signing-mailbox-deposit-additive-signing-0x), below.
 
 ### `chain:<contentId>` -- Exact Match
 
@@ -294,6 +294,11 @@ This is the broadest resource scope. Common use case: granting a collaborator ac
 
 The resource hierarchy from broadest to narrowest is: `chain:*` > `chain:X`. Each delegation hop can only move down this hierarchy, never up.
 
+Two of these rules are general — normative for **every** resource form, present and future, not just `chain:`:
+
+- **Coverage never crosses resource types.** A `chain:` entry never covers a `mailbox:` request (nor any other pairing), in the delegation walk and in request matching alike.
+- **For every non-`chain:` form, attenuation narrows by exact byte equality of the full resource string.** The wildcard is a `chain:`-only concept: a literal `*` id in any other type is an ordinary id covering only itself. A verifier that generalized the wildcard would widen every future resource form's delegation semantics unilaterally; exact equality is the default a newly registered form gets unless its own registration states otherwise (none does).
+
 ### `mailbox:<id>` -- Signing Mailbox Deposit (additive, SIGNING 0.x)
 
 > **Status.** This form is **not** part of the frozen v1 credential surface. It lands additively with the [signing mailbox](https://protocol.dfos.com/signing) capability and rides that spec's `0.x` clock; the credential envelope, delegation, attenuation, and revocation machinery it uses are the frozen machinery above, unchanged.
@@ -305,7 +310,7 @@ Grants the audience the right to **deposit** sign requests into the subject's re
 ```
 
 - **`deposit` is the only action.** There is deliberately no `collect`: reading one's own mailbox is proven by key possession, not delegated by credential — credentials delegate authority to _others_, and being yourself is not a delegation. See [SIGNING.md](https://protocol.dfos.com/signing) for the reasoning; a credential attenuated to any other action on a `mailbox:` resource grants nothing.
-- **Exact match only — in the deposit gate AND the attenuation walk.** No wildcard form is defined for `mailbox`, and a relay MUST NOT honor `mailbox:*` (or any non-exact form) as covering a deposit. The same rule governs delegation: attenuation coverage for a `mailbox:` entry (and any non-`chain:` form a future capability registers) is **exact byte equality of the full resource string** — the `chain:*` wildcard is a `chain:`-only concept, a literal `*` id in any other type is an ordinary id covering only itself, and coverage never crosses resource types. Verifiers MUST agree on this exactly: an implementation that generalized the wildcard to other types would widen every future resource form's delegation semantics unilaterally.
+- **Exact match only — in the deposit gate AND the attenuation walk.** No wildcard form is defined for `mailbox`, and a relay MUST NOT honor `mailbox:*` (or any non-exact form) as covering a deposit. Delegation follows the general non-`chain:` rule in [Attenuation Between Forms](#attenuation-between-forms): coverage for a `mailbox:` entry is exact byte equality of the full resource string, and coverage never crosses resource types.
 - **The consuming rule lives in SIGNING.md**, including the one that gives the form its teeth: a deposit credential's delegation chain MUST **root at the subject DID** — only the subject is original authority over its own mailbox.
 
 ---

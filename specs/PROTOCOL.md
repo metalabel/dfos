@@ -148,9 +148,10 @@ The JWS `typ` header uses protocol-specific values (not IANA media types):
 | `did:dfos:revocation`   | Credential revocation artifacts               |
 | `did:dfos:credential`   | DFOS authorization credentials                |
 | `did:dfos:credit-claim` | Document-plane credit claims (attribution)    |
+| `did:dfos:sign-request` | Sign-request envelopes (SIGNING, `0.x`)       |
 | `JWT`                   | Auth tokens (DID-signed relay authentication) |
 
-Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for credential `typ` values and format, and [CREDITS.md](https://protocol.dfos.com/credits) for the credit-claim envelope — a document-plane artifact that relays never see as a claim, so it appears in this registry but in no relay ingestion path.
+Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for credential `typ` values and format, and [CREDITS.md](https://protocol.dfos.com/credits) for the credit-claim envelope — a document-plane artifact that relays never see as a claim, so it appears in this registry but in no relay ingestion path. The sign-request envelope ([SIGNING.md](https://protocol.dfos.com/signing), an optional `0.x` capability) follows the same pattern: registered here so `typ`-routing verifiers know the value, but it moves through the optional signing-mailbox courier, never through `POST /proof/v1/operations`.
 
 ### Operation Versioning
 
@@ -470,7 +471,7 @@ Every operation JWS (identity-op and content-op) includes a `cid` field in the p
 
 A CID mismatch between header and derived value immediately surfaces dag-cbor encoding disagreements across implementations.
 
-Note: JWT auth tokens do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). This field is present on operation JWS tokens, artifacts, countersignatures, credentials, and revocations.
+Note: JWT auth tokens do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). This field is present on operation JWS tokens, artifacts, countersignatures, credentials, revocations, credit claims ([CREDITS.md](https://protocol.dfos.com/credits)), and sign-request envelopes ([SIGNING.md](https://protocol.dfos.com/signing)).
 
 ### CID Derivation
 

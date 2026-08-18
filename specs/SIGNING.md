@@ -192,17 +192,17 @@ The mailbox is a courier. The doctrine, normatively:
 
 ### Capability
 
-A relay advertises the mailbox via `capabilities.signing` in its well-known response ([WEB-RELAY.md](https://protocol.dfos.com/web-relay)). The flag defaults to **false** and an absent flag reads as false — this is an opt-in surface, and the reference relays ship it disabled. When `false` or absent, every `/signing/v1/*` route returns **501 Not Implemented** — not 404 — with the gate firing before authentication, body parsing, or any store lookup, per the relay's uniform capability discipline.
+A relay advertises the mailbox via `capabilities.signing` in its well-known response ([WEB-RELAY.md](https://protocol.dfos.com/web-relay)). The flag defaults to **false** and an absent flag reads as false — this is an opt-in surface, and the reference relays ship it disabled. When `false` or absent, every `/signing/v0/*` route returns **501 Not Implemented** — not 404 — with the gate firing before authentication, body parsing, or any store lookup, per the relay's uniform capability discipline.
 
 **Interaction with `capabilities.write: false`.** The `write` flag governs the two replicated planes — proof-plane operation ingest and content-plane blob upload — and courier state is on neither. A relay MAY therefore serve `signing: true` alongside `write: false`, and this combination is expected in practice: a public read-only relay that couriers signing traffic without ingesting a single operation. Its no-ingest invariant is stated precisely as _"this relay never ingests proof-plane operations"_ — and the deposit gate below is what keeps the signing surface from becoming an ingest path in disguise (bundles are verified ephemerally, never stored, never folded). On such a relay the deposit surface is its only authenticated write of any kind, which is why the byte caps and the credential gate in this section are load-bearing DoS controls, not hygiene: a relay MUST enforce them, and SHOULD apply per-requester rate limits on deposit as well.
 
-The mailbox requires the relay to resolve the **subject's** identity chain locally — a mailbox lives where its subject's identity lives. A deposit for a subject the relay cannot resolve is refused (404); a composer picks the subject's relay, not an arbitrary one.
+The mailbox requires the relay to resolve the **subject's** identity chain locally — a mailbox lives where its subject's identity lives. A deposit for a subject the relay cannot resolve is refused (404), and so is a deposit for a subject whose local state is **deleted**: a tombstoned identity cannot be asked to sign, and its mailbox does not exist — the same "no such mailbox" class, not a new one. (The deposit credential reaches the same conclusion independently — a deleted subject's root issuance dies with it, per [CREDENTIALS.md](https://protocol.dfos.com/credentials) — but the gate states it directly rather than leaving it to inference.) A composer picks the subject's relay, not an arbitrary one — and finding it is already protocol vocabulary: the subject's resolved identity state carries its `services` entries of `type: "DfosRelay"` ([PROTOCOL.md → Services](https://protocol.dfos.com/spec#services)), resolvable from any relay. A future `SigningMailbox` service type — the closed-dispatch extension path for a mailbox hosted somewhere other than the subject's identity relay — is a named seam, not part of 0.1.
 
 ### Routes
 
-All routes live under `/signing/v1` at the relay root — an own-clock family beside `/index/v0` and `/revocations/v1`, not part of the frozen `/proof/v1` plane. Errors use the relay's uniform `{ "error": "<prose>" }` body; callers branch on status codes, never on message text.
+All routes live under `/signing/v0` at the relay root — an own-clock family beside `/index/v0` and `/revocations/v1`, not part of the frozen `/proof/v1` plane. The `v0` is this spec's `0.x` clock made legible in the path, exactly as `/index/v0`'s: when SIGNING exits `0.x`, the family re-mounts at `/signing/v1` and `v0` is retired. Errors use the relay's uniform error body ([WEB-RELAY.md → Error Responses](https://protocol.dfos.com/web-relay)); callers branch on status codes, never on message text.
 
-#### `POST /signing/v1/requests` — deposit (credentialed)
+#### `POST /signing/v0/requests` — deposit (credentialed)
 
 ```json
 {
@@ -222,15 +222,17 @@ The relay verifies the envelope (full [algorithm](#verification-algorithm) above
 
 **The deposit is self-contained.** Verifying it requires resolving the _requester's_ identity chain (envelope signature) and every _issuer_ in the credential chain — identities the subject's relay may not host. The relay resolves locally first; `chain` fills the gaps for foreign identities. Bundled operations are verified exactly as chain verification always verifies them — genesis derivation, hash-linking, signatures — then used ephemerally for key resolution and **discarded**. They are never ingested, stored, gossiped, or folded, whatever the relay's write posture. A deposit MUST NOT become a cross-relay resolution dependency: if the bundle plus local state does not suffice, the deposit is refused, not deferred.
 
-**What the bundle proves, and what it cannot (normative trust boundary).** A supplied `chain` bundle is a set of validly-signed, hash-linked operations — but a **prefix** of an append-only chain is itself a valid chain, and a relay that does not host the identity has no way to know it holds the chain's _head_. For an identity resolved **from the bundle** (never for one resolved **locally** — local state is always the chain's true head and always wins), three guarantees therefore degrade to **as attested by the depositor**:
+**What the bundle proves, and what it cannot (normative trust boundary).** A supplied `chain` bundle is a set of validly-signed, hash-linked operations — but a **prefix** of an append-only chain is itself a valid chain, and a relay that does not host the identity has no way to know it holds the chain's _head_. For an identity resolved **from the bundle** (never for one resolved **locally** — local state is always the chain's true head and always wins), three guarantees the **relay** checks at deposit time therefore degrade to **as attested by the depositor**:
 
 - **Current-state key resolution** (the envelope's requester key): a bundle truncated just before a key rotation presents a rotated-out key as current. The relay cannot detect this.
 - **Deletion** (a credential issuer): a bundle omitting the deletion operation presents a tombstoned issuer as live.
 - **Revocation** (a sub-delegation in the credential chain): the relay holds revocations only for credentials it has seen; a foreign issuer's revocation of a mid-chain delegation is invisible to it.
 
-This is not a hole to be patched at the courier — it is inherent to accepting a self-contained bundle for an identity the relay does not track, and the honest bound is a **credentialed, expiring one**: every one of these degradations is confined by the deposit credential, which MUST root at the locally-resolved `subject` (rule 2 below, checked against true head state) and carries its own `exp`. The exposure is therefore "a party the subject already authorized to deposit, whose key was compromised _and_ rotated, can keep depositing in its own name until its deposit credential expires" — a bounded amplification of an already-granted trust, not a path to a mailbox the subject never opened. A deployment that will not accept even that bound MUST require the requester and every credential issuer to be **locally resolvable** and reject bundle-only deposits; the reference relays accept the bundle and inherit the bound. (The subject-signing side is unaffected end to end: a response is verified against the subject's key and its bytes by the composer regardless of any relay's identity knowledge.)
+None of these degradations reaches **what the subject signs**. The relay verifies a deposit and then **discards** the bundle, and a signer runs the full [verification algorithm](#verification-algorithm) on every polled request — resolving the requester to current state through its own resolution path, never through the depositor's bytes, which no longer exist to consult. A bundle truncated to hide a rotation is therefore caught at the signer: its resolver sees the true head, the dead-key signature fails step 7, and the request is rejected. What a truncated bundle buys is **relay spam-admission** — a request the relay admitted but the signer will refuse occupies a mailbox slot until it is polled and rejected, or expires.
 
-#### `GET /signing/v1/requests` — poll (subject only)
+Even that admission is not a hole to be patched at the courier — it is inherent to accepting a self-contained bundle for an identity the relay does not track, and the honest bound is a **credentialed, expiring one**: every admission is confined by the deposit credential, which MUST root at the locally-resolved `subject` (rule 2 below, checked against true head state) and carries its own `exp`. The exposure is therefore "a party the subject already authorized to deposit, whose key was compromised _and_ rotated, can keep occupying mailbox slots in its own name until its deposit credential expires" — a bounded amplification of an already-granted trust; never a path to a mailbox the subject did not open, and never a path to a signature. A deployment that will not accept even that bound MUST require the requester and every credential issuer to be **locally resolvable** and reject bundle-only deposits; the reference relays accept the bundle and inherit the bound. (The response side is likewise unaffected end to end: a response is verified against the subject's key and its bytes by the composer regardless of any relay's identity knowledge. The one residual that does reach a signer is ordinary resolver staleness — the signer's own source can be behind, as any single source can be for any current-state question in the protocol — and the bundle neither causes nor worsens it.)
+
+#### `GET /signing/v0/requests` — poll (subject only)
 
 Authenticated with the relay's standard **DID auth token** ([WEB-RELAY.md](https://protocol.dfos.com/web-relay)) — the existing key-possession proof: self-signed by a **current** key on the subject's identity chain, short-lived, audience-bound to this relay. The mailbox read is exactly a "prove you are currently this DID" question, and the auth token is exactly that proof; being yourself requires no credential, and no `collect` grant exists (see [Deposit Authorization](#deposit-authorization) for why). Revoking a device's mailbox access is key rotation, which the protocol already has.
 
@@ -246,15 +248,15 @@ The subject is the token's `iss`. The response lists **pending** requests — de
       "declined": false
     }
   ],
-  "cursor": "..."
+  "next": "..."
 }
 ```
 
-`cursor` is an opaque pagination token (`?cursor=` on the next call); page size is relay policy. Polling is the v0.1 transport in full — no server push, no SSE, no delivery callbacks. Native push (APNs/FCM) is a signer-app concern layered outside this spec: a push notification may _prompt_ a poll, but delivery is always the poll.
+Pagination is the relay's one shared list envelope ([WEB-RELAY.md](https://protocol.dfos.com/web-relay)): `after` (cursor), `limit` (default 100, max 1000, values above the max clamped), and `next` — the cursor to pass as `after` on the next call, or `null` when the page was not full (caught up). The pending set is ordered by deposit time ascending (tiebreak: request CID), and because that is a composite key, `after`/`next` are **opaque cursor tokens** exactly as in the index's ordered mode — a caller passes `next` back verbatim and MUST NOT parse or construct one; resumption is strictly past the composite key, so a cursor whose request has since expired or been responded resumes at the next key rather than truncating. Polling is the v0.1 transport in full — no server push, no SSE, no delivery callbacks. Native push (APNs/FCM) is a signer-app concern layered outside this spec: a push notification may _prompt_ a poll, but delivery is always the poll.
 
 A signer MUST run the full [verification algorithm](#verification-algorithm) and every [signer obligation](#signer-obligations-wysiwys) on each polled envelope. The mailbox's own checks are anti-abuse, not delegated trust — a signer treats a polled request exactly as one that arrived by QR code from a stranger.
 
-#### `POST /signing/v1/requests/{cid}/response` — respond (validity is the auth)
+#### `POST /signing/v0/requests/{cid}/response` — respond (validity is the auth)
 
 ```json
 { "response": "<produced artifact JWS>" }
@@ -262,7 +264,7 @@ A signer MUST run the full [verification algorithm](#verification-algorithm) and
 
 **Unauthenticated, deliberately.** A valid response is unforgeable — only a holder of the subject's key can produce it — so proving who _couriers_ it adds nothing: anyone may deliver a sealed letter. This also frees the signing device from needing any relationship with the relay beyond reachability, and lets a composer relay a response it obtained out-of-band.
 
-The relay accepts the response iff **all** of the following hold; otherwise **400** (or **404** for an unknown or expired `cid`):
+The aggregate request body MUST NOT exceed **8704 bytes** — the 8192-byte token cap plus JSON-wrapper headroom — checked before any decode (**413** over it). The relay accepts the response iff **all** of the following hold; otherwise **400** (or **404** for an unknown or expired `cid`):
 
 1. A pending request with this CID exists and is unexpired.
 2. The token does not exceed **8192 bytes** (checked before any decode).
@@ -274,7 +276,7 @@ The relay accepts the response iff **all** of the following hold; otherwise **40
 
 The slot is **first-write-wins**: at most one response per request, the first valid one stored. A re-put of the byte-identical token is idempotent (**200**); a _different_ valid artifact — possible when the subject holds multiple enrolled keys — is refused (**409**), and the composer reads the one that won. **201** on first acceptance. Responding to a declined request is legal (decline is advisory); the response simply wins. A response arriving for a `cid` that has expired or was never deposited is **404**, not 400 — the same not-found semantics the requester-poll route uses, so the two failure classes stay machine-distinguishable across all four routes.
 
-#### `GET /signing/v1/requests/{cid}/response` — requester poll
+#### `GET /signing/v0/requests/{cid}/response` — requester poll
 
 **Unauthenticated.** Knowledge of the request CID is the capability: it is held by the composer that deposited the request and the subject that polled it, and is not enumerable (there is no route that lists CIDs). Note the precise strength of this: the CID is a hash of the requester-signed payload, and those inputs are not secret — a party who can guess or reconstruct the exact envelope bytes can compute the CID. This route therefore protects against **enumeration**, not against a determined guesser who already knows what was asked; and what it guards is only the response artifact, which is itself self-authenticating and independently verifiable, not a secret. A deployment wanting response-fetch to be a true secret must carry entropy the requester does not derive from public inputs (a random correlation token established out of band) — a future seam this route's shape does not foreclose. Responses:
 
@@ -288,9 +290,9 @@ The slot is **first-write-wins**: at most one response per request, the first va
 
 A composer MUST verify a fetched response itself, under the artifact's own spec — the courier's checks are not a verification the composer inherits.
 
-#### `POST /signing/v1/requests/{cid}/decline` — decline (advisory)
+#### `POST /signing/v0/requests/{cid}/decline` — decline (advisory)
 
-Unauthenticated, no body. Sets the advisory decline flag on a pending request: **204** (idempotent on repeat); **409** if a response already exists; **404** unknown or expired. Unauthenticated is coherent because the flag carries no authority — see [The Response](#the-response) — and requiring subject auth would only lend it a credibility the spec explicitly denies it. No reason text is carried: a decline reason is exactly the kind of requester-facing display string this envelope refuses to courier.
+Unauthenticated, no body (a body over **512 bytes** is refused with **413** — the route takes none). Sets the advisory decline flag on a pending request: **204** (idempotent on repeat); **409** if a response already exists; **404** unknown or expired. Unauthenticated is coherent because the flag carries no authority — see [The Response](#the-response) — and requiring subject auth would only lend it a credibility the spec explicitly denies it. No reason text is carried: a decline reason is exactly the kind of requester-facing display string this envelope refuses to courier.
 
 ### Deposit Authorization
 
@@ -308,6 +310,8 @@ A relay MUST verify, at deposit time:
 **Why there is no `collect` action.** An earlier draft paired `deposit` with a `collect` grant for the subject's devices. It was cut on a clean principle: **credentials delegate authority to others; being yourself is not a delegation.** A signer is, by definition, a holder of a key on the subject's own chain — key possession (the poll route's auth token) is necessary and sufficient to read the subject's own mailbox, and a `collect` credential would be a second, revocable-in-a-second-way statement of a fact the identity chain already states. Device de-enrollment is key rotation. The resource form therefore carries exactly one action, and a credential attenuated to `collect` on a mailbox grants nothing.
 
 **Issuance moments.** The deposit credential is designed to fall out of consent moments that already exist, not to require new ones: a SIWD authorization can return a deposit credential alongside its proof (the third-party app can now ask for signatures); joining a space can carry a deposit grant to the space (the space can now route ceremony requests to its members); a custodial platform holding a user's controller key issues deposit credentials on the user's behalf today, and a sovereign user issues the identical shape from their own key tomorrow — the credential grammar does not know the difference, which is the point. And a subject-rooted grant to a platform, sub-delegated onward through linear chains, lets the platform authorize its own services without ever re-touching the subject's key.
+
+Every one of these moments presupposes a standing relationship, and that is the honest bound of 0.1: **a stranger with no prior grant cannot deposit at all, by any route.** The open-mailbox posture exists (`aud: "*"`, rule 3 above), but how a stranger _obtains_ a subject's public deposit credential — publication, directory, QR — is deliberately unspecified here. Distribution of standing authorizations is its own seam, and SIGNING 0.1 defines no discovery surface for credentials.
 
 ---
 
@@ -333,4 +337,4 @@ SIWD is this protocol's ancestor and will become its client. The settled directi
 
 ## Conformance
 
-The mailbox is covered by the relay conformance suite ([CONFORMANCE.md](https://protocol.dfos.com/conformance)) under the standard capability discipline: enabled-behavior tests self-skip unless the relay advertises `capabilities.signing`, and a paired disabled suite asserts that every `/signing/v1/*` route returns **501** — never 404 — on a relay with the capability off, with adjacent surfaces unaffected. The envelope itself is covered by cross-implementation vectors in the TypeScript and Go reference packages, including the adversarial canonicalization set (the WYSIWYS byte contract is only as strong as the vectors that attack it).
+The mailbox is covered by the relay conformance suite ([CONFORMANCE.md](https://protocol.dfos.com/conformance)) under the standard capability discipline: enabled-behavior tests self-skip unless the relay advertises `capabilities.signing`, and a paired disabled suite asserts that every `/signing/v0/*` route returns **501** — never 404 — on a relay with the capability off, with adjacent surfaces unaffected. The envelope itself is covered by cross-implementation vectors in the TypeScript and Go reference packages, including the adversarial canonicalization set (the WYSIWYS byte contract is only as strong as the vectors that attack it).
