@@ -1,5 +1,7 @@
 # DFOS Conformance
 
+> **Status — companion document, no clock of its own.** This document defines no protocol rules; it tiers and indexes the normative MUST sets of the specs it cites, and is corrected in place as they evolve.
+
 What it means to be a _conformant_ DFOS implementation, by tier, and how to prove it
 against the existing proving corpora. This document defines no new protocol rules — it
 points at the normative MUST sets already specified in
