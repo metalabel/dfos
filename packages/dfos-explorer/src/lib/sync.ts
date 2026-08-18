@@ -62,6 +62,14 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
       relays: [relay],
       limit: SYNC_PAGE_LIMIT,
     });
+    if (page === 'invalid-cursor') {
+      // Log cursors are relay-local. A relay wipe/rebuild invalidates the saved
+      // position, so clear it and restart this same idempotent walk from zero.
+      cursor = null;
+      count = 0;
+      await db.setCursor({ relay, cursor, count, updatedAt: new Date().toISOString() });
+      continue;
+    }
     if (!page.provenance.answeredBy) throw new Error(`relay unreachable: ${relay}`);
     if (page.entries.length === 0) {
       // a zero-entry page still completes the sync — record the cursor so
@@ -148,10 +156,14 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
     }
 
     await db.putBatch(ops, [...touched.values()]);
-    cursor = page.cursor;
+    // Persist only relay-issued resume positions. When a partial page reports
+    // `next: null`, retain the last issued value instead of fabricating one
+    // from an entry CID (or clearing it and replaying the whole log next run).
+    const resume = page.next;
+    if (resume) cursor = resume;
     await db.setCursor({ relay, cursor, count, updatedAt: new Date().toISOString() });
     onProgress?.({ relay, count, added, chains: rollups.size });
-    if (!cursor) break;
+    if (!resume) break;
   }
 
   return { added };

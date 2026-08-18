@@ -241,7 +241,7 @@ func TestCountersignatureEmptyResult(t *testing.T) {
 
 	// query countersigs for genesis op — nobody has countersigned it
 	var csResult struct {
-		Countersignatures []string `json:"countersignatures"`
+		Countersignatures []countersignatureRow `json:"countersignatures"`
 	}
 	resp := getJSON(t, base+"/proof/v1/countersignatures/"+id.genCID, &csResult)
 	if resp.StatusCode != 200 {

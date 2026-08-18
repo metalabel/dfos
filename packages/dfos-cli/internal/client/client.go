@@ -187,7 +187,17 @@ type LogEntry struct {
 // logPage is one page of a paginated /log response.
 type logPage struct {
 	Entries []LogEntry `json:"entries"`
-	Cursor  *string    `json:"cursor"`
+	Next    *string    `json:"next"`
+	Cursor  *string    `json:"cursor"` // deprecated fallback for older relays
+}
+
+// Resume prefers the shared `next` field and falls back to the deprecated
+// `cursor` alias emitted by older relays.
+func (p logPage) Resume() *string {
+	if p.Next != nil {
+		return p.Next
+	}
+	return p.Cursor
 }
 
 // GetIdentityLog pulls the full operation chain for a DID, following cursors,
@@ -205,7 +215,7 @@ func (c *Client) GetContentLog(contentID string) ([]string, error) {
 
 // getLog walks a paginated /log endpoint via the `after` cursor and returns
 // every JWS token. Mirrors the relay's own peer-sync pull (peer_client.go /
-// relay.go SyncFromPeers): accumulate entries, stop when cursor is null.
+// relay.go SyncFromPeers): accumulate entries, stop when next is null.
 func (c *Client) getLog(path string) ([]string, error) {
 	var tokens []string
 	after := ""
@@ -236,12 +246,13 @@ func (c *Client) getLog(path string) ([]string, error) {
 		for _, e := range page.Entries {
 			tokens = append(tokens, e.JWSToken)
 		}
-		// cursor==nil terminates; a non-nil cursor with no entries would loop
+		// next==nil terminates; a non-nil resume value with no entries would loop
 		// forever against a misbehaving peer, so stop making progress there too.
-		if page.Cursor == nil || len(page.Entries) == 0 {
+		resume := page.Resume()
+		if resume == nil || len(page.Entries) == 0 {
 			break
 		}
-		after = *page.Cursor
+		after = *resume
 	}
 	return tokens, nil
 }
@@ -277,7 +288,7 @@ func (c *Client) GetCountersignatures(cid string) (map[string]any, error) {
 		}
 		next, ok := resp["next"].(string)
 		if !ok || next == "" {
-			return map[string]any{"cid": cid, "countersignatures": countersignatures}, nil
+			return map[string]any{"countersignatures": countersignatures}, nil
 		}
 		after = next
 	}

@@ -196,7 +196,7 @@ export interface RelayData {
 const page = (
   entries: PeerLogEntry[],
   params?: { after?: string; limit?: number },
-): { entries: PeerLogEntry[]; cursor: string | null } => {
+): { entries: PeerLogEntry[]; next: string | null } => {
   const limit = params?.limit ?? 1000;
   let start = 0;
   if (params?.after) {
@@ -204,8 +204,8 @@ const page = (
     start = idx >= 0 ? idx + 1 : entries.length;
   }
   const slice = entries.slice(start, start + limit);
-  const cursor = slice.length === limit ? (slice[slice.length - 1]?.cid ?? null) : null;
-  return { entries: slice, cursor };
+  const next = slice.length === limit ? (slice[slice.length - 1]?.cid ?? null) : null;
+  return { entries: slice, next };
 };
 
 /**

@@ -180,9 +180,12 @@ export interface GlobalLogOptions extends CallOptions {
 /** A page of the global operation log — a seam, not a sync engine (v1). */
 export interface GlobalLogPage {
   entries: LogOp[];
-  cursor: string | null;
+  next: string | null;
   provenance: Provenance;
 }
+
+/** A global-log page, or a relay-local resume position rejected with HTTP 400. */
+export type GlobalLogResult = GlobalLogPage | 'invalid-cursor';
 
 /** Parsed `/.well-known/dfos-relay` body, passed through untouched. */
 export interface RelayHealth {
@@ -350,7 +353,7 @@ export interface Client {
 
   /** Raw floor. */
   log(kind: 'identity' | 'content', id: string, options?: CallOptions): Promise<Resolved<LogOp[]>>;
-  globalLog(cursor?: string, options?: GlobalLogOptions): Promise<GlobalLogPage>;
+  globalLog(after?: string, options?: GlobalLogOptions): Promise<GlobalLogResult>;
   health(options?: CallOptions): Promise<RelayHealth[]>;
 
   /**

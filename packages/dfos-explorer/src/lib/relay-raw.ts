@@ -106,7 +106,8 @@ export const fetchOpRaw = async (
  * ANY countersignable target (operations AND artifacts). The operation-scoped
  * `/operations/:cid/countersignatures` route 404s on non-operation CIDs, so an
  * artifact's witnesses were invisible here before — the op view renders
- * artifacts too. Parser is response-shape-agnostic (reads body.countersignatures).
+ * artifacts too. New relays return `{ cid, jwsToken }` rows; bare strings remain
+ * readable as a compatibility fallback for older relays.
  */
 export const fetchCountersigs = async (cid: string, relays: string[]): Promise<string[]> => {
   for (const relay of relays) {
@@ -128,7 +129,17 @@ export const fetchCountersigs = async (cid: string, relays: string[]): Promise<s
         const body = (await res.json()) as { countersignatures?: unknown; next?: unknown };
         if (Array.isArray(body.countersignatures)) {
           countersignatures.push(
-            ...body.countersignatures.filter((v): v is string => typeof v === 'string'),
+            ...body.countersignatures.flatMap((row): string[] => {
+              if (typeof row === 'string') return [row];
+              if (
+                typeof row === 'object' &&
+                row !== null &&
+                typeof (row as Record<string, unknown>)['jwsToken'] === 'string'
+              ) {
+                return [(row as Record<string, string>)['jwsToken']!];
+              }
+              return [];
+            }),
           );
         }
 

@@ -39,7 +39,7 @@ const fakePeer = (pages: FakeEntry[][]): PeerClient => ({
     const index = params?.after ? Number(params.after) : 0;
     const page = pages[index] ?? [];
     const next = index + 1 < pages.length ? String(index + 1) : null;
-    return { entries: page as unknown as { cid: string; jwsToken: string }[], cursor: next };
+    return { entries: page as unknown as { cid: string; jwsToken: string }[], next };
   },
   submitOperations: async () => {},
 });
@@ -138,6 +138,52 @@ describe('sync engine', () => {
     const result = await syncFromRelay({ db, client: second, relay: 'http://fake' });
     expect(result.added).toBe(1);
     expect((await db.counts()).ops).toBe(2);
+  });
+
+  it('clears a rejected persisted cursor and recovers from the start', async () => {
+    const pageOne = [entry('bafy-a1', 'did:dfos:aaa', 'identity-op', '2026-01-01T00:00:00.000Z')];
+    const pageTwo = [
+      entry('bafy-a2', 'did:dfos:aaa', 'identity-op', '2026-01-02T00:00:00.000Z', 'update'),
+    ];
+    const db = await freshDb();
+
+    await syncFromRelay({
+      db,
+      client: createClient({
+        relays: ['http://fake'],
+        peerClient: fakePeer([pageOne, []]),
+      }),
+      relay: 'http://fake',
+    });
+    expect((await db.getCursor('http://fake'))?.cursor).toBe('1');
+
+    const afters: Array<string | undefined> = [];
+    const recoveringPeer: PeerClient = {
+      ...fakePeer([]),
+      async getOperationLog(_url, params) {
+        afters.push(params?.after);
+        if (params?.after) return 'invalid-cursor';
+        return {
+          entries: [...pageOne, ...pageTwo] as unknown as {
+            cid: string;
+            jwsToken: string;
+          }[],
+          next: null,
+        };
+      },
+    };
+    const result = await syncFromRelay({
+      db,
+      client: createClient({ relays: ['http://fake'], peerClient: recoveringPeer }),
+      relay: 'http://fake',
+    });
+
+    expect(afters).toEqual(['1', undefined]);
+    expect(result.added).toBe(1);
+    expect((await db.getCursor('http://fake'))?.cursor).toBeNull();
+    expect((await db.getCursor('http://fake'))?.count).toBe(2);
+    expect((await db.counts()).ops).toBe(2);
+    expect((await db.getChain('did:dfos:aaa'))?.opCount).toBe(2);
   });
 
   it('JIT indexing never writes a sync cursor (only a deep sync does)', async () => {

@@ -20,7 +20,8 @@ import (
 //   3. malformedCID   — 400 invalid-credential-CID envelope.
 //   4. issuerListing  — 200 { did, revocations:[...] } for issuer B.
 //   5. issuerEmpty    — 200 empty `[]` (never null) for issuer A (revoked nothing).
-//   6. malformedDID   — 400 invalid-DID envelope.
+//   6. unknownAfter   — 400 for a relay-local cursor the issuer feed never issued.
+//   7. malformedDID   — 400 invalid-DID envelope.
 //
 // compareResolver (resolver_parity_test.go) already handles ANY status, so it
 // catches divergence in the 400 envelopes too. The test name contains the
@@ -57,6 +58,9 @@ func TestDualRelayParity_RevocationStatus(t *testing.T) {
 	t.Run("issuerEmpty", func(t *testing.T) {
 		// QueryDID (user A) never revoked anything — empty `[]` on both twins
 		compareResolver(t, tsURL, goURL, "/revocations/v1/issuer/"+fix.QueryDID, 200)
+	})
+	t.Run("unknownAfter", func(t *testing.T) {
+		compareResolver(t, tsURL, goURL, "/revocations/v1/issuer/"+fix.QueryRevocationIssuerDID+"?after=bafyunknown", 400)
 	})
 	t.Run("malformedDID", func(t *testing.T) {
 		compareResolver(t, tsURL, goURL, "/revocations/v1/issuer/did:dfos:short", 400)

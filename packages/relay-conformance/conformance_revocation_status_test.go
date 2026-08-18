@@ -236,6 +236,11 @@ func TestRevocationStatusIssuerPagination(t *testing.T) {
 		}
 	}
 
+	unknownResp := getJSON(t, base+"/revocations/v1/issuer/"+id.did+"?after=bafyunknown", nil)
+	if unknownResp.StatusCode != 400 {
+		t.Fatalf("issuer unknown cursor: status %d, want 400", unknownResp.StatusCode)
+	}
+
 	createdAt := func(entry revocationEntry) string {
 		t.Helper()
 		_, payload, err := dfos.DecodeJWSUnsafe(entry.Revocation)

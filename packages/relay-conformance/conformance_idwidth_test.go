@@ -42,10 +42,8 @@ func TestIdentifierWidthConformance(t *testing.T) {
 	seed := createIdentity(t, base)
 	createContent(t, base, seed)
 
-	// Walk the global operation log. Mirrors the convergence-guarded pagination
-	// used in the global-log test: advance by last CID, stop on the first short
-	// page, and fail fast if a page-boundary cursor repeats (non-convergent
-	// /log) rather than hang until the test timeout.
+	// Walk the global operation log using only server-issued `next` values, and
+	// fail fast if a resume value repeats rather than hang until timeout.
 	checked := 0
 	cursor := ""
 	seen := map[string]bool{}
@@ -56,6 +54,7 @@ func TestIdentifierWidthConformance(t *testing.T) {
 			url += "&after=" + cursor
 		}
 		var logResp struct {
+			logCursorFields
 			Entries []struct {
 				CID     string `json:"cid"`
 				Kind    string `json:"kind"`
@@ -64,8 +63,6 @@ func TestIdentifierWidthConformance(t *testing.T) {
 		}
 		getJSON(t, url, &logResp)
 		for _, e := range logResp.Entries {
-			cursor = e.CID
-
 			// Only identity-op and content-op carry a derived identifier as
 			// their chainId. An identity DID is "did:dfos:<id>"; a content ID is
 			// the bare "<id>".
@@ -90,9 +87,11 @@ func TestIdentifierWidthConformance(t *testing.T) {
 					e.ChainID, e.Kind, len(idPart), canonical, len(idPart))
 			}
 		}
-		if len(logResp.Entries) < 100 {
-			break // a short page is the only valid terminus
+		next := assertLogCursorAlias(t, logResp.logCursorFields)
+		if next == nil {
+			break
 		}
+		cursor = *next
 		if seen[cursor] {
 			t.Fatalf("global /log cursor did not converge: page-boundary CID %s "+
 				"repeated after %d pages", cursor, pages+1)

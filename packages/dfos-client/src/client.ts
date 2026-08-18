@@ -30,7 +30,7 @@ import type {
   ClientConfig,
   DocumentBlob,
   GlobalLogOptions,
-  GlobalLogPage,
+  GlobalLogResult,
   LogOp,
   Provenance,
   RelayHealth,
@@ -296,7 +296,10 @@ export const createClient = (config: ClientConfig): Client => {
     return { value, trust: trust(true, axes), provenance: res.provenance };
   };
 
-  const globalLog = async (cursor?: string, options?: GlobalLogOptions): Promise<GlobalLogPage> => {
+  const globalLog = async (
+    after?: string,
+    options?: GlobalLogOptions,
+  ): Promise<GlobalLogResult> => {
     const pager = operationPager(peerClient);
     // page size is caller-tunable (sync engines want big pages); clamp to the
     // relay-enforced 1..1000 window so an out-of-range ask can't 400
@@ -305,10 +308,11 @@ export const createClient = (config: ClientConfig): Client => {
     for (const url of relaysFor(options)) {
       let page: Awaited<ReturnType<typeof pager>> = null;
       try {
-        page = await pager(url, cursor ? { after: cursor, limit } : { limit });
+        page = await pager(url, after ? { after, limit } : { limit });
       } catch {
         page = null;
       }
+      if (page === 'invalid-cursor') return page;
       if (page === null) continue;
       const provenance: Provenance = {
         answeredBy: url,
@@ -316,11 +320,11 @@ export const createClient = (config: ClientConfig): Client => {
         agreed: true,
         fromCache: false,
       };
-      return { entries: page.entries, cursor: page.cursor, provenance };
+      return { entries: page.entries, next: page.next, provenance };
     }
     return {
       entries: [],
-      cursor: null,
+      next: null,
       provenance: { answeredBy: '', responses: [], agreed: false, fromCache: false },
     };
   };

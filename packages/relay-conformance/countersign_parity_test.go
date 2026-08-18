@@ -13,9 +13,9 @@ import (
 // as TestDualRelayParity (started by run-parity.sh from the pinned fixture) and
 // compares canonicalized bodies across the cases the projection cares about:
 //
-//   1. present     — 200 { cid, countersignatures:[<JWS>], next } for the
+//   1. present     — 200 { countersignatures:[{cid,jwsToken}], next } for the
 //                     fixture's B-witnessed A-content-create CID. Pins the
-//                     { cid, countersignatures, next } shape and the csCid sort.
+//                     { countersignatures, next } shape and the csCid sort.
 //   2. paginated   — 200 with ?limit=1 over the same CID: pins the `next`
 //                     cursor emission (full page) parity. (One countersig, so
 //                     limit=1 is a full page → next present on both twins.)

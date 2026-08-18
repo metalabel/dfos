@@ -22,6 +22,7 @@ export type {
   DocumentBlob,
   GlobalLogOptions,
   GlobalLogPage,
+  GlobalLogResult,
   IndexCapabilities,
   IndexContentPage,
   IndexContentRow,

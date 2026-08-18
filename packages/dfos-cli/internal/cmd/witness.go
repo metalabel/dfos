@@ -175,7 +175,11 @@ func newCountersigsCmd() *cobra.Command {
 
 			fmt.Printf("Countersignatures for %s (%d):\n\n", cid, len(csArr))
 			for i, cs := range csArr {
-				csStr, ok := cs.(string)
+				row, ok := cs.(map[string]any)
+				if !ok {
+					continue
+				}
+				csStr, ok := row["jwsToken"].(string)
 				if !ok {
 					continue
 				}
