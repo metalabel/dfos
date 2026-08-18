@@ -59,6 +59,9 @@ export const authenticateRequest = async (
   const kid = decoded.header.kid;
   if (!kid || !kid.includes('#')) return null;
 
+  const identity = await store.getIdentityChain(kid.slice(0, kid.indexOf('#')));
+  if (!identity || identity.state.isDeleted) return null;
+
   const resolveKey = createCurrentKeyResolver(store);
 
   let publicKey: Uint8Array;

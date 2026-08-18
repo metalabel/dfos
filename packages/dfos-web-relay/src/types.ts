@@ -8,6 +8,7 @@
 
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
+import { base64urlDecode, base64urlEncode } from '@metalabel/dfos-protocol/crypto';
 import type {
   IndexContentRow,
   IndexCountersignatureRow,
@@ -264,6 +265,40 @@ export interface StoredSignRequest {
 export type SigningPutResult = 'created' | 'identical' | 'conflict' | 'not-found';
 export type SigningDeclineResult = 'declined' | 'responded' | 'not-found';
 
+export interface SigningCursor {
+  depositedAt: string;
+  cid: string;
+}
+
+const signingCursorEncoder = new TextEncoder();
+const signingCursorDecoder = new TextDecoder('utf-8', { fatal: true });
+
+/** Unpadded base64url of `<depositedAt-ISO-millis>|<cid>`. */
+export const encodeSigningCursor = (cursor: SigningCursor): string =>
+  base64urlEncode(signingCursorEncoder.encode(`${cursor.depositedAt}|${cursor.cid}`));
+
+export const decodeSigningCursor = (raw: string): SigningCursor | undefined => {
+  try {
+    const bytes = base64urlDecode(raw);
+    if (base64urlEncode(bytes) !== raw) return undefined;
+    const decoded = signingCursorDecoder.decode(bytes);
+    const separator = decoded.indexOf('|');
+    if (
+      separator <= 0 ||
+      separator !== decoded.lastIndexOf('|') ||
+      separator === decoded.length - 1
+    ) {
+      return undefined;
+    }
+    const depositedAt = decoded.slice(0, separator);
+    const cid = decoded.slice(separator + 1);
+    if (new Date(depositedAt).toISOString() !== depositedAt) return undefined;
+    return { depositedAt, cid };
+  } catch {
+    return undefined;
+  }
+};
+
 // -----------------------------------------------------------------------------
 // relay store interface
 // -----------------------------------------------------------------------------
@@ -282,16 +317,16 @@ export type SigningDeclineResult = 'declined' | 'responded' | 'not-found';
 export interface RelayStore {
   // --- signing mailbox (ephemeral courier state) ---
 
-  getSignRequest(cid: string, now: number): Promise<StoredSignRequest | undefined>;
-  putSignRequest(request: StoredSignRequest, now: number): Promise<SigningPutResult>;
-  listPendingSignRequests(params: {
+  getSignRequest?(cid: string, now: number): Promise<StoredSignRequest | undefined>;
+  putSignRequest?(request: StoredSignRequest, now: number): Promise<SigningPutResult>;
+  listPendingSignRequests?(params: {
     subjectDID: string;
     after?: string;
     limit: number;
     now: number;
-  }): Promise<{ requests: StoredSignRequest[]; cursor: string | null }>;
-  putSignResponse(cid: string, response: string, now: number): Promise<SigningPutResult>;
-  declineSignRequest(cid: string, now: number): Promise<SigningDeclineResult>;
+  }): Promise<{ requests: StoredSignRequest[]; next: string | null }>;
+  putSignResponse?(cid: string, response: string, now: number): Promise<SigningPutResult>;
+  declineSignRequest?(cid: string, now: number): Promise<SigningDeclineResult>;
 
   // --- operations ---
 
@@ -536,6 +571,18 @@ export interface RelayStore {
   /** Reset all non-rejected raw ops to pending (re-sequence) */
   resetSequencer(): Promise<void>;
 }
+
+export type SigningStore = RelayStore &
+  Required<
+    Pick<
+      RelayStore,
+      | 'getSignRequest'
+      | 'putSignRequest'
+      | 'listPendingSignRequests'
+      | 'putSignResponse'
+      | 'declineSignRequest'
+    >
+  >;
 
 // -----------------------------------------------------------------------------
 // ingestion result

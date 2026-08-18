@@ -444,19 +444,7 @@ func (s *SQLiteStore) ListPendingSignRequests(subjectDID, after string, limit in
 	if after != "" {
 		cursor, ok := decodeSigningCursor(after)
 		if !ok {
-			err := s.readerDB().QueryRow(
-				"SELECT deposited_at FROM signing_requests WHERE cid = ? AND subject_did = ? AND expires_at > ?",
-				after, subjectDID, now.UTC().Format(signingTimeFormat),
-			).Scan(&cursor.DepositedAt)
-			if err == nil {
-				cursor = signingCursor{SubjectDID: subjectDID, DepositedAt: cursor.DepositedAt, CID: after}
-				ok = true
-			} else if err != sql.ErrNoRows {
-				return nil, "", err
-			}
-		}
-		if !ok || cursor.SubjectDID != subjectDID {
-			return []StoredSignRequest{}, "", nil
+			return nil, "", fmt.Errorf("invalid signing cursor")
 		}
 		query += " AND (deposited_at > ? OR (deposited_at = ? AND cid > ?))"
 		args = append(args, cursor.DepositedAt, cursor.DepositedAt, cursor.CID)
@@ -482,7 +470,7 @@ func (s *SQLiteStore) ListPendingSignRequests(subjectDID, after string, limit in
 	cursor := ""
 	if len(requests) == limit && len(requests) > 0 {
 		last := requests[len(requests)-1]
-		cursor = encodeSigningCursor(signingCursor{SubjectDID: subjectDID, DepositedAt: last.DepositedAt, CID: last.CID})
+		cursor = encodeSigningCursor(signingCursor{DepositedAt: last.DepositedAt, CID: last.CID})
 	}
 	return requests, cursor, nil
 }

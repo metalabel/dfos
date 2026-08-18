@@ -269,15 +269,17 @@ type IngestionResult struct {
 	DependencyMissing bool `json:"dependencyMissing,omitempty"`
 }
 
-// Store is the storage backend for a DFOS web relay.
-type Store interface {
-	// signing mailbox (ephemeral courier state)
+// SigningStore is the optional ephemeral signing-mailbox courier store.
+type SigningStore interface {
 	GetSignRequest(cid string, now time.Time) (*StoredSignRequest, error)
 	PutSignRequest(request StoredSignRequest, now time.Time) (SigningPutResult, error)
 	ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error)
 	PutSignResponse(cid, response string, now time.Time) (SigningPutResult, error)
 	DeclineSignRequest(cid string, now time.Time) (SigningPutResult, error)
+}
 
+// Store is the storage backend for a DFOS web relay.
+type Store interface {
 	// operations
 	GetOperation(cid string) (*StoredOperation, error)
 	PutOperation(op StoredOperation) error

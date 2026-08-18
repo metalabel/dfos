@@ -59,7 +59,7 @@ describes the protocol-package surface of that release.
   verification for `did:dfos:sign-request`, plus the strict byte-canonical
   WYSIWYS check for requested `did:dfos:credit-claim` payloads. The matching
   relay-side `signing` mailbox courier capability (opt-in, `capabilities.signing`,
-  default off; `/signing/v1/*` routes) ships in `@metalabel/dfos-web-relay` and
+  default off; `/signing/v0/*` routes) ships in `@metalabel/dfos-web-relay` and
   the Go relay in the same release — deposit is credential-gated and rooted at
   the subject, poll is DID-auth-token gated, respond/decline are unauthenticated
   (a valid response is self-authenticating). See

@@ -2,7 +2,7 @@ package relay
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -12,14 +12,12 @@ import (
 )
 
 type signingCursor struct {
-	SubjectDID  string `json:"subjectDID"`
-	DepositedAt string `json:"depositedAt"`
-	CID         string `json:"cid"`
+	DepositedAt string
+	CID         string
 }
 
 func encodeSigningCursor(cursor signingCursor) string {
-	encoded, _ := json.Marshal(cursor)
-	return base64.RawURLEncoding.EncodeToString(encoded)
+	return base64.RawURLEncoding.EncodeToString([]byte(cursor.DepositedAt + "|" + cursor.CID))
 }
 
 func decodeSigningCursor(encoded string) (signingCursor, bool) {
@@ -27,11 +25,16 @@ func decodeSigningCursor(encoded string) (signingCursor, bool) {
 	if err != nil || base64.RawURLEncoding.EncodeToString(bytes) != encoded {
 		return signingCursor{}, false
 	}
-	var cursor signingCursor
-	if err := json.Unmarshal(bytes, &cursor); err != nil || cursor.SubjectDID == "" || cursor.DepositedAt == "" || cursor.CID == "" {
+	decoded := string(bytes)
+	if strings.Count(decoded, "|") != 1 {
 		return signingCursor{}, false
 	}
-	return cursor, true
+	parts := strings.SplitN(decoded, "|", 2)
+	depositedAt, err := time.Parse(signingTimeFormat, parts[0])
+	if err != nil || depositedAt.UTC().Format(signingTimeFormat) != parts[0] || parts[1] == "" {
+		return signingCursor{}, false
+	}
+	return signingCursor{DepositedAt: parts[0], CID: parts[1]}, true
 }
 
 // MemoryStore is an in-memory Store implementation for development and testing.
@@ -139,13 +142,7 @@ func (s *MemoryStore) ListPendingSignRequests(subjectDID, after string, limit in
 	if after != "" {
 		cursor, ok := decodeSigningCursor(after)
 		if !ok {
-			if legacy, exists := s.signRequests[after]; exists {
-				cursor = signingCursor{SubjectDID: legacy.SubjectDID, DepositedAt: legacy.DepositedAt, CID: legacy.CID}
-				ok = true
-			}
-		}
-		if !ok || cursor.SubjectDID != subjectDID {
-			return []StoredSignRequest{}, "", nil
+			return nil, "", fmt.Errorf("invalid signing cursor")
 		}
 		for start < len(rows) && (rows[start].DepositedAt < cursor.DepositedAt ||
 			(rows[start].DepositedAt == cursor.DepositedAt && rows[start].CID <= cursor.CID)) {
@@ -160,7 +157,7 @@ func (s *MemoryStore) ListPendingSignRequests(subjectDID, after string, limit in
 	cursor := ""
 	if len(page) == limit && len(page) > 0 {
 		last := page[len(page)-1]
-		cursor = encodeSigningCursor(signingCursor{SubjectDID: subjectDID, DepositedAt: last.DepositedAt, CID: last.CID})
+		cursor = encodeSigningCursor(signingCursor{DepositedAt: last.DepositedAt, CID: last.CID})
 	}
 	return page, cursor, nil
 }

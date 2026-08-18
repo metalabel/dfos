@@ -120,7 +120,7 @@ paths:
                         nullable: true
                         description: CID of the newest operation in the log (the tip), or null when empty
 
-  /signing/v1/requests:
+  /signing/v0/requests:
     post:
       operationId: depositSignRequest
       summary: Deposit a credential-authorized sign request
@@ -176,15 +176,26 @@ paths:
       security:
         - BearerAuth: []
       parameters:
-        - name: cursor
+        - name: after
           in: query
+          required: false
           schema: { type: string }
+          description: Opaque composite-key cursor from a prior page's `next`
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+          description: Maximum requests to return; values above 1000 are clamped
       responses:
         '200':
           description: Pending requests, oldest first
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SigningMailboxResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '501':
           description: Signing mailbox disabled
@@ -192,7 +203,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
-  /signing/v1/requests/{cid}/response:
+  /signing/v0/requests/{cid}/response:
     post:
       operationId: submitSignResponse
       summary: Submit the subject-signed response artifact
@@ -263,7 +274,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 
-  /signing/v1/requests/{cid}/decline:
+  /signing/v0/requests/{cid}/decline:
     post:
       operationId: declineSignRequest
       summary: Set the advisory decline flag
@@ -1435,7 +1446,7 @@ components:
 
     SigningMailboxResponse:
       type: object
-      required: [requests, cursor]
+      required: [requests, next]
       properties:
         requests:
           type: array
@@ -1449,10 +1460,10 @@ components:
                 type: string
                 format: date-time
               declined: { type: boolean }
-        cursor:
+        next:
           type: string
           nullable: true
-          description: Opaque cursor for the next page, or null on the last page
+          description: Opaque cursor to pass as `after`, or null when the page was not full
 
     SigningStoredResponse:
       type: object

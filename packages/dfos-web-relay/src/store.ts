@@ -12,7 +12,7 @@ import {
   verifyContentChain,
   verifyIdentityChain,
 } from '@metalabel/dfos-protocol/chain';
-import { base64urlDecode, base64urlEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
+import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
   IndexContentRow,
   IndexCountersignatureRow,
@@ -22,6 +22,7 @@ import type {
   IndexOrderedCursor,
 } from './index-routes';
 import { createKeyResolver } from './ingest';
+import { decodeSigningCursor, encodeSigningCursor } from './types';
 import type {
   BlobKey,
   LogEntry,
@@ -37,36 +38,6 @@ import type {
 
 /** Ascending bytewise comparator — JS UTF-16 order over ASCII DIDs/CIDs. */
 const ascending = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-
-interface SigningCursor {
-  subjectDID: string;
-  depositedAt: string;
-  cid: string;
-}
-
-const signingCursorEncoder = new TextEncoder();
-const signingCursorDecoder = new TextDecoder('utf-8', { fatal: true });
-
-const encodeSigningCursor = (cursor: SigningCursor): string =>
-  base64urlEncode(signingCursorEncoder.encode(JSON.stringify(cursor)));
-
-const decodeSigningCursor = (cursor: string): SigningCursor | undefined => {
-  try {
-    const value = JSON.parse(
-      signingCursorDecoder.decode(base64urlDecode(cursor)),
-    ) as Partial<SigningCursor>;
-    if (
-      typeof value.subjectDID !== 'string' ||
-      typeof value.depositedAt !== 'string' ||
-      typeof value.cid !== 'string'
-    ) {
-      return undefined;
-    }
-    return { subjectDID: value.subjectDID, depositedAt: value.depositedAt, cid: value.cid };
-  } catch {
-    return undefined;
-  }
-};
 
 /**
  * Page a projection: rows ascending by `keyOf`, strictly greater than `after`
@@ -219,7 +190,7 @@ export class MemoryRelayStore implements RelayStore {
     after?: string;
     limit: number;
     now: number;
-  }): Promise<{ requests: StoredSignRequest[]; cursor: string | null }> {
+  }): Promise<{ requests: StoredSignRequest[]; next: string | null }> {
     this.pruneExpiredSignRequests(params.now);
     const rows = [...this.signRequests.values()]
       .filter(
@@ -233,20 +204,8 @@ export class MemoryRelayStore implements RelayStore {
           ? ascending(a.cid, b.cid)
           : ascending(a.depositedAt, b.depositedAt),
       );
-    let after = params.after ? decodeSigningCursor(params.after) : undefined;
-    if (params.after && !after) {
-      const legacy = this.signRequests.get(params.after);
-      if (legacy) {
-        after = {
-          subjectDID: legacy.subjectDID,
-          depositedAt: legacy.depositedAt,
-          cid: legacy.cid,
-        };
-      }
-    }
-    if (params.after && (!after || after.subjectDID !== params.subjectDID)) {
-      return { requests: [], cursor: null };
-    }
+    const after = params.after ? decodeSigningCursor(params.after) : undefined;
+    if (params.after && !after) throw new Error('invalid signing cursor');
     const gated = after
       ? rows.filter(
           (request) =>
@@ -256,15 +215,14 @@ export class MemoryRelayStore implements RelayStore {
       : rows;
     const requests = gated.slice(0, params.limit);
     const last = requests.at(-1);
-    const cursor =
+    const next =
       requests.length === params.limit && last
         ? encodeSigningCursor({
-            subjectDID: params.subjectDID,
             depositedAt: last.depositedAt,
             cid: last.cid,
           })
         : null;
-    return { requests, cursor };
+    return { requests, next };
   }
 
   async putSignResponse(

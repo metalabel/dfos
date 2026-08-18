@@ -21,7 +21,8 @@ import {
 import { Hono, type Context } from 'hono';
 import { authenticateRequest, DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS } from './auth';
 import { createHistoricalIdentityResolver, mergeHistoricalIdentity } from './ingest';
-import type { RelayStore, StoredSignRequest } from './types';
+import { decodeSigningCursor } from './types';
+import type { RelayStore, SigningStore, StoredSignRequest } from './types';
 
 const MAX_DEPOSIT_BODY_BYTES = 524_288;
 const MAX_RESPONSE_TOKEN_BYTES = 8_192;
@@ -29,6 +30,14 @@ const MAX_RESPONSE_BODY_BYTES = MAX_RESPONSE_TOKEN_BYTES + 512;
 const MAX_DECLINE_BODY_BYTES = 512;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+
+const parseSigningLimit = (raw: string | undefined): number => {
+  if (raw === undefined || raw === '') return 100;
+  if (!/^-?\d+$/.test(raw)) return 100;
+  const limit = Number(raw);
+  if (!Number.isSafeInteger(limit) || limit < 1) return 100;
+  return Math.min(limit, 1000);
+};
 
 type BundledIdentity = { state: VerifiedIdentity; log: string[] };
 
@@ -160,6 +169,7 @@ export const registerSigningRoutes = (options: {
   maxAuthTokenTTLSeconds?: number;
 }): void => {
   const { app, store, relayDID, basePath, enabled } = options;
+  const signingStore = store as SigningStore;
   const unavailable = (c: Context) => c.json({ error: 'signing mailbox not available' }, 501);
 
   app.post(`${basePath}/requests`, async (c) => {
@@ -209,7 +219,9 @@ export const registerSigningRoutes = (options: {
     }
 
     const subject = await store.getIdentityChain(verifiedRequest.subject);
-    if (!subject) return c.json({ error: 'subject identity not found' }, 404);
+    if (!subject || subject.state.isDeleted) {
+      return c.json({ error: 'subject identity not found' }, 404);
+    }
 
     try {
       const credential = await verifyDFOSCredential(body.credential, {
@@ -234,7 +246,7 @@ export const registerSigningRoutes = (options: {
     }
 
     const now = Date.now();
-    const result = await store.putSignRequest(
+    const result = await signingStore.putSignRequest(
       {
         cid: verifiedRequest.requestCID,
         request: body.request,
@@ -264,11 +276,13 @@ export const registerSigningRoutes = (options: {
       options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS,
     );
     if (!auth) return c.json({ error: 'authentication required' }, 401);
-    const cursor = c.req.query('cursor');
-    const result = await store.listPendingSignRequests({
+    const after = c.req.query('after');
+    if (after && !decodeSigningCursor(after)) return c.json({ error: 'invalid cursor' }, 400);
+    const limit = parseSigningLimit(c.req.query('limit'));
+    const result = await signingStore.listPendingSignRequests({
       subjectDID: auth.iss,
-      ...(cursor ? { after: cursor } : {}),
-      limit: 100,
+      ...(after ? { after } : {}),
+      limit,
       now: Date.now(),
     });
     return c.json({
@@ -278,13 +292,13 @@ export const registerSigningRoutes = (options: {
         depositedAt: request.depositedAt,
         declined: request.declined,
       })),
-      cursor: result.cursor,
+      next: result.next,
     });
   });
 
   app.post(`${basePath}/requests/:cid/response`, async (c) => {
     if (!enabled) return unavailable(c);
-    const request = await store.getSignRequest(c.req.param('cid'), Date.now());
+    const request = await signingStore.getSignRequest(c.req.param('cid'), Date.now());
     if (!request) return c.json({ error: 'sign request not found' }, 404);
     const read = await readCappedJSON(c.req.raw, MAX_RESPONSE_BODY_BYTES);
     if (!read.ok) {
@@ -301,7 +315,7 @@ export const registerSigningRoutes = (options: {
     } catch {
       return c.json({ error: 'invalid response' }, 400);
     }
-    const result = await store.putSignResponse(request.cid, response, Date.now());
+    const result = await signingStore.putSignResponse(request.cid, response, Date.now());
     if (result === 'not-found') return c.json({ error: 'sign request not found' }, 404);
     if (result === 'conflict') return c.json({ error: 'response already exists' }, 409);
     return c.json({ status: 'stored' }, result === 'created' ? 201 : 200);
@@ -309,7 +323,7 @@ export const registerSigningRoutes = (options: {
 
   app.get(`${basePath}/requests/:cid/response`, async (c) => {
     if (!enabled) return unavailable(c);
-    const request = await store.getSignRequest(c.req.param('cid'), Date.now());
+    const request = await signingStore.getSignRequest(c.req.param('cid'), Date.now());
     if (!request) return c.json({ error: 'sign request not found' }, 404);
     if (request.response !== undefined) {
       return c.json({ status: 'responded', response: request.response });
@@ -324,7 +338,7 @@ export const registerSigningRoutes = (options: {
     if (read.bytes.some((byte) => ![9, 10, 13, 32].includes(byte))) {
       return c.json({ error: 'request body must be empty' }, 400);
     }
-    const result = await store.declineSignRequest(c.req.param('cid'), Date.now());
+    const result = await signingStore.declineSignRequest(c.req.param('cid'), Date.now());
     if (result === 'not-found') return c.json({ error: 'sign request not found' }, 404);
     if (result === 'responded') return c.json({ error: 'response already exists' }, 409);
     return c.body(null, 204);

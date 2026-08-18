@@ -109,17 +109,17 @@ func TestSigningHappyPath(t *testing.T) {
 	base := signingBase(t)
 	f := signingFixtureFor(t, base, "signing-conformance")
 	deposit := map[string]any{"request": f.request, "credential": f.credential}
-	createdBody := assertSigningStatus(t, signingPost(t, base+"/signing/v1/requests", deposit, ""), http.StatusCreated)
+	createdBody := assertSigningStatus(t, signingPost(t, base+"/signing/v0/requests", deposit, ""), http.StatusCreated)
 	var created struct {
 		ExpiresAt string `json:"expiresAt"`
 	}
 	if err := json.Unmarshal(createdBody, &created); err != nil || created.ExpiresAt != f.expiresAt {
 		t.Fatalf("deposit expiresAt: got %q, want %q (body: %s)", created.ExpiresAt, f.expiresAt, createdBody)
 	}
-	assertSigningStatus(t, signingPost(t, base+"/signing/v1/requests", deposit, ""), http.StatusOK)
+	assertSigningStatus(t, signingPost(t, base+"/signing/v0/requests", deposit, ""), http.StatusOK)
 
 	token := authToken(t, base, f.subject)
-	req, _ := http.NewRequest(http.MethodGet, base+"/signing/v1/requests", nil)
+	req, _ := http.NewRequest(http.MethodGet, base+"/signing/v0/requests", nil)
 	req.Header.Set("authorization", "Bearer "+token)
 	poll, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -129,14 +129,19 @@ func TestSigningHappyPath(t *testing.T) {
 		Requests []struct {
 			CID string `json:"cid"`
 		} `json:"requests"`
+		Next *string `json:"next"`
 	}
 	body := assertSigningStatus(t, poll, http.StatusOK)
-	if err := json.Unmarshal(body, &pending); err != nil || len(pending.Requests) != 1 || pending.Requests[0].CID != f.cid {
+	if err := json.Unmarshal(body, &pending); err != nil || len(pending.Requests) != 1 || pending.Requests[0].CID != f.cid || pending.Next != nil {
 		t.Fatalf("unexpected mailbox poll: %s", body)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil || string(envelope["next"]) != "null" || envelope["cursor"] != nil {
+		t.Fatalf("unexpected mailbox pagination envelope: %s", body)
 	}
 
 	respond := map[string]string{"response": f.response}
-	responseURL := base + "/signing/v1/requests/" + f.cid + "/response"
+	responseURL := base + "/signing/v0/requests/" + f.cid + "/response"
 	assertSigningStatus(t, signingPost(t, responseURL, respond, ""), http.StatusCreated)
 	assertSigningStatus(t, signingPost(t, responseURL, respond, ""), http.StatusOK)
 	var fetched map[string]any
@@ -162,7 +167,7 @@ func TestSigningDepositRejections(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assertSigningStatus(t, signingPost(t, base+"/signing/v1/requests", map[string]string{"request": f.request, "credential": tc.credential}, ""), tc.status)
+			assertSigningStatus(t, signingPost(t, base+"/signing/v0/requests", map[string]string{"request": f.request, "credential": tc.credential}, ""), tc.status)
 		})
 	}
 
@@ -171,29 +176,29 @@ func TestSigningDepositRejections(t *testing.T) {
 	payload, _ := base64.RawURLEncoding.DecodeString(string(bytes.Split([]byte(claim), []byte("."))[1]))
 	request, _, _ := dfos.BuildSignRequest(f.requester.did, unknown.did, "did:dfos:credit-claim", payload, time.Now().Add(time.Minute), f.requester.auth.keyID, f.requester.auth.priv, dfos.SignRequestOptions{})
 	credential := mustCredential(t, unknown.identity, f.requester.did, "mailbox:"+unknown.did[len("did:dfos:"):], "deposit")
-	assertSigningStatus(t, signingPost(t, base+"/signing/v1/requests", map[string]any{"request": request, "credential": credential, "chain": []string{unknown.genesisToken}}, ""), http.StatusNotFound)
+	assertSigningStatus(t, signingPost(t, base+"/signing/v0/requests", map[string]any{"request": request, "credential": credential, "chain": []string{unknown.genesisToken}}, ""), http.StatusNotFound)
 
 	expired, _, _ := dfos.BuildSignRequest(f.requester.did, f.subject.did, "did:dfos:credit-claim", payload, time.Now().Add(-time.Second), f.requester.auth.keyID, f.requester.auth.priv, dfos.SignRequestOptions{CreatedAt: time.Now().Add(-time.Minute)})
-	assertSigningStatus(t, signingPost(t, base+"/signing/v1/requests", map[string]string{"request": expired, "credential": f.credential}, ""), http.StatusBadRequest)
+	assertSigningStatus(t, signingPost(t, base+"/signing/v0/requests", map[string]string{"request": expired, "credential": f.credential}, ""), http.StatusBadRequest)
 }
 
 func TestSigningPollAuthAndDecline(t *testing.T) {
 	base := signingBase(t)
 	f := signingFixtureFor(t, base, "signing-decline")
-	assertSigningStatus(t, signingPost(t, base+"/signing/v1/requests", map[string]string{"request": f.request, "credential": f.credential}, ""), http.StatusCreated)
-	resp, err := http.Get(base + "/signing/v1/requests")
+	assertSigningStatus(t, signingPost(t, base+"/signing/v0/requests", map[string]string{"request": f.request, "credential": f.credential}, ""), http.StatusCreated)
+	resp, err := http.Get(base + "/signing/v0/requests")
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertSigningStatus(t, resp, http.StatusUnauthorized)
-	declineURL := base + "/signing/v1/requests/" + f.cid + "/decline"
+	declineURL := base + "/signing/v0/requests/" + f.cid + "/decline"
 	assertSigningStatus(t, signingPost(t, declineURL, nil, ""), http.StatusNoContent)
 	var status map[string]any
-	get := getJSON(t, base+"/signing/v1/requests/"+f.cid+"/response", &status)
+	get := getJSON(t, base+"/signing/v0/requests/"+f.cid+"/response", &status)
 	if get.StatusCode != http.StatusOK || status["status"] != "declined" {
 		t.Fatalf("unexpected declined status: %v", status)
 	}
-	assertSigningStatus(t, signingPost(t, base+"/signing/v1/requests/"+f.cid+"/response", map[string]string{"response": f.response}, ""), http.StatusCreated)
+	assertSigningStatus(t, signingPost(t, base+"/signing/v0/requests/"+f.cid+"/response", map[string]string{"response": f.response}, ""), http.StatusCreated)
 }
 
 func mustCredential(t *testing.T, issuer identity, aud, resource, action string) string {

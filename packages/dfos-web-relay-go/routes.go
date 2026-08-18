@@ -25,7 +25,7 @@ const proofBasePath = "/proof/v1"
 
 // signingBasePath is the optional SIGNING 0.1 courier clock. Byte twin of
 // SIGNING_BASE_PATH in the TypeScript relay.
-const signingBasePath = "/signing/v1"
+const signingBasePath = "/signing/v0"
 
 func newRouter(r *Relay) http.Handler {
 	mux := http.NewServeMux()

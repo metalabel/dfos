@@ -80,6 +80,11 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	indexEnabled := opts.Index == nil || *opts.Index
 	writeEnabled := opts.Write == nil || *opts.Write
 	signingEnabled := opts.Signing != nil && *opts.Signing
+	if signingEnabled {
+		if _, ok := opts.Store.(SigningStore); !ok {
+			return nil, fmt.Errorf("signing capability requires a store implementing SigningStore")
+		}
+	}
 
 	identity := opts.Identity
 	if identity == nil {

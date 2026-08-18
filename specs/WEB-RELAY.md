@@ -786,7 +786,7 @@ This route is amber and relay-asserted: `resource=chain:Y` returns a superset of
 The relay uses two key resolution strategies:
 
 - **Historical resolver** (for chain re-verification): searches all keys that have ever appeared in an identity chain's log, including rotated-out keys. This is necessary because re-verifying a full content chain from genesis must resolve keys from operations signed before a key rotation.
-- **Current-state resolver** (for live authentication): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for auth tokens. This prevents a compromised rotated-out key from being used to authenticate new requests.
+- **Current-state resolver** (for live authentication): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for auth tokens. This prevents a compromised rotated-out key from being used to authenticate new requests. A **deleted** identity has no live-authentication standing at all: a relay MUST reject an auth token whose issuer's current state is deleted, however valid its signature — deletion is the terminal off-switch, and live authentication is exactly the question deletion answers. (Re-verification of committed history is untouched, per the historical resolver above.)
 
 **Which primitive uses which resolver:**
 

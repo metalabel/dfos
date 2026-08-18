@@ -44,6 +44,11 @@ func AuthenticateRequest(authHeader string, relayDID string, store Store, maxAut
 	if kid == "" || !strings.Contains(kid, "#") {
 		return nil
 	}
+	did := kid[:strings.Index(kid, "#")]
+	identity, err := store.GetIdentityChain(did)
+	if err != nil || identity == nil || identity.State.IsDeleted {
+		return nil
+	}
 
 	resolveKey := CreateCurrentKeyResolver(store)
 

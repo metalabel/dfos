@@ -27,6 +27,10 @@ type bundledSigningIdentity struct {
 	log   []string
 }
 
+func (r *Relay) signingMailboxStore() SigningStore {
+	return r.readStore.(SigningStore)
+}
+
 func verifySigningBundle(tokens []string) (map[string]bundledSigningIdentity, error) {
 	grouped := make(map[string][]string)
 	for _, token := range tokens {
@@ -253,7 +257,7 @@ func (r *Relay) handleSigningDeposit(w http.ResponseWriter, req *http.Request) {
 	if storeErr(w, err) {
 		return
 	}
-	if subject == nil {
+	if subject == nil || subject.State.IsDeleted {
 		writeError(w, http.StatusNotFound, "subject identity not found")
 		return
 	}
@@ -262,7 +266,7 @@ func (r *Relay) handleSigningDeposit(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	result, err := r.readStore.PutSignRequest(StoredSignRequest{
+	result, err := r.signingMailboxStore().PutSignRequest(StoredSignRequest{
 		CID: verified.RequestCID, Request: body.Request, RequesterDID: verified.DID,
 		SubjectDID: verified.Subject, PayloadTyp: verified.PayloadTyp,
 		PayloadBytes: append([]byte(nil), verified.PayloadBytes...), ExpiresAt: verified.ExpiresAt,
@@ -292,7 +296,15 @@ func (r *Relay) handleSigningPoll(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	requests, cursor, err := r.readStore.ListPendingSignRequests(auth.Iss, req.URL.Query().Get("cursor"), 100, time.Now())
+	after := req.URL.Query().Get("after")
+	if after != "" {
+		if _, ok := decodeSigningCursor(after); !ok {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+	}
+	limit := parseLimit(req, 100, 1000)
+	requests, nextCursor, err := r.signingMailboxStore().ListPendingSignRequests(auth.Iss, after, limit, time.Now())
 	if storeErr(w, err) {
 		return
 	}
@@ -307,10 +319,10 @@ func (r *Relay) handleSigningPoll(w http.ResponseWriter, req *http.Request) {
 		items[i] = item{request.CID, request.Request, request.DepositedAt, request.Declined}
 	}
 	var next any
-	if cursor != "" {
-		next = cursor
+	if nextCursor != "" {
+		next = nextCursor
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"requests": items, "cursor": next})
+	writeJSON(w, http.StatusOK, map[string]any{"requests": items, "next": next})
 }
 
 func decodeCanonicalSigningResponse(token string) (*dfos.JWSHeader, []byte, error) {
@@ -368,7 +380,7 @@ func (r *Relay) handleSigningRespond(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	now := time.Now()
-	request, err := r.readStore.GetSignRequest(req.PathValue("cid"), now)
+	request, err := r.signingMailboxStore().GetSignRequest(req.PathValue("cid"), now)
 	if storeErr(w, err) {
 		return
 	}
@@ -407,7 +419,7 @@ func (r *Relay) handleSigningRespond(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid response")
 		return
 	}
-	result, err := r.readStore.PutSignResponse(request.CID, body.Response, time.Now())
+	result, err := r.signingMailboxStore().PutSignResponse(request.CID, body.Response, time.Now())
 	if storeErr(w, err) {
 		return
 	}
@@ -431,7 +443,7 @@ func (r *Relay) handleSigningGetResponse(w http.ResponseWriter, req *http.Reques
 		writeError(w, http.StatusNotImplemented, "signing mailbox not available")
 		return
 	}
-	request, err := r.readStore.GetSignRequest(req.PathValue("cid"), time.Now())
+	request, err := r.signingMailboxStore().GetSignRequest(req.PathValue("cid"), time.Now())
 	if storeErr(w, err) {
 		return
 	}
@@ -470,7 +482,7 @@ func (r *Relay) handleSigningDecline(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, "request body must be empty")
 		return
 	}
-	result, err := r.readStore.DeclineSignRequest(req.PathValue("cid"), time.Now())
+	result, err := r.signingMailboxStore().DeclineSignRequest(req.PathValue("cid"), time.Now())
 	if storeErr(w, err) {
 		return
 	}

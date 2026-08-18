@@ -23,9 +23,10 @@ import { describe, expect, it } from 'vitest';
 import { ingestOperations } from '../src/ingest';
 import { createRelay } from '../src/relay';
 import { MemoryRelayStore } from '../src/store';
+import type { RelayStore } from '../src/types';
 
 const CONTENT_ID = 'cv7n8vkvr64cctf3294h9k4eanhff8z';
-const SIGNING = '/signing/v1';
+const SIGNING = '/signing/v0';
 
 const key = () => {
   const pair = createNewEd25519Keypair();
@@ -77,6 +78,23 @@ const seed = async (store: MemoryRelayStore, ...identities: TestIdentity[]) => {
     store,
   );
   expect(results.every((result) => result.status === 'new')).toBe(true);
+};
+
+const deleteIdentity = async (store: MemoryRelayStore, subject: TestIdentity) => {
+  const createdAt = decodeJwsUnsafe(subject.token)!.payload['createdAt'] as string;
+  const operation: IdentityOperation = {
+    version: 1,
+    type: 'delete',
+    previousOperationCID: subject.headCID,
+    createdAt: new Date(Date.parse(createdAt) + 1_000).toISOString(),
+  };
+  const deleted = await signIdentityOperation({
+    operation,
+    signer: subject.controller.signer,
+    keyId: subject.controller.keyId,
+    identityDID: subject.did,
+  });
+  expect((await ingestOperations([deleted.jwsToken], store))[0]!.status).toBe('new');
 };
 
 const credential = async (
@@ -217,6 +235,29 @@ const customRequest = async (
 };
 
 describe('signing mailbox', () => {
+  it('requires signing store members only when the capability is enabled', async () => {
+    const store = new MemoryRelayStore();
+    const signingMembers = new Set<PropertyKey>([
+      'getSignRequest',
+      'putSignRequest',
+      'listPendingSignRequests',
+      'putSignResponse',
+      'declineSignRequest',
+    ]);
+    const nonSigningStore = new Proxy(store, {
+      get(target, property, receiver) {
+        if (signingMembers.has(property)) return undefined;
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as RelayStore;
+
+    await expect(createRelay({ store: nonSigningStore })).resolves.toBeDefined();
+    await expect(createRelay({ store: nonSigningStore, signing: true })).rejects.toThrow(
+      'signing capability requires a store implementing the signing members',
+    );
+  });
+
   it('defaults off, advertises false, and gates all five routes before parsing or auth', async () => {
     const relay = await createRelay({ store: new MemoryRelayStore() });
     const metadata = await relay.app.request('/.well-known/dfos-relay');
@@ -248,10 +289,12 @@ describe('signing mailbox', () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(poll.status).toBe(200);
-    expect(await poll.json()).toMatchObject({
+    const pollBody = (await poll.json()) as Record<string, unknown>;
+    expect(pollBody).toMatchObject({
       requests: [{ cid: f.requestCID, request: f.jwsToken, declined: false }],
-      cursor: null,
+      next: null,
     });
+    expect(pollBody).not.toHaveProperty('cursor');
 
     const responsePath = `${SIGNING}/requests/${f.requestCID}/response`;
     expect((await postJSON(relay.app, responsePath, { response: f.response })).status).toBe(201);
@@ -454,6 +497,58 @@ describe('signing mailbox', () => {
     expect(huge.status).toBe(413);
   });
 
+  it('refuses deleted-subject deposits and deleted-subject mailbox auth', async () => {
+    const store = new MemoryRelayStore();
+    const relay = await createRelay({ store, signing: true });
+    const f = await fixture(store, 'deleted-subject');
+    const deposit = { request: f.jwsToken, credential: f.credential };
+    expect((await postJSON(relay.app, `${SIGNING}/requests`, deposit)).status).toBe(201);
+    const token = await authFor(relay.did, f.subject);
+
+    await deleteIdentity(store, f.subject);
+
+    expect((await postJSON(relay.app, `${SIGNING}/requests`, deposit)).status).toBe(404);
+    expect(
+      (
+        await relay.app.request(`${SIGNING}/requests`, {
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).status,
+    ).toBe(401);
+  });
+
+  it('uses house limit fallback/clamping and rejects malformed cursors', async () => {
+    class LimitCapturingStore extends MemoryRelayStore {
+      readonly limits: number[] = [];
+
+      override async listPendingSignRequests(
+        params: Parameters<MemoryRelayStore['listPendingSignRequests']>[0],
+      ) {
+        this.limits.push(params.limit);
+        return super.listPendingSignRequests(params);
+      }
+    }
+
+    const store = new LimitCapturingStore();
+    const relay = await createRelay({ store, signing: true });
+    const subject = await identity();
+    await seed(store, subject);
+    const token = await authFor(relay.did, subject);
+    const headers = { authorization: `Bearer ${token}` };
+
+    expect((await relay.app.request(`${SIGNING}/requests?limit=1001`, { headers })).status).toBe(
+      200,
+    );
+    expect((await relay.app.request(`${SIGNING}/requests?limit=wat`, { headers })).status).toBe(
+      200,
+    );
+    expect(store.limits).toEqual([1000, 100]);
+    expect(
+      (await relay.app.request(`${SIGNING}/requests?after=not-a-cursor`, { headers })).status,
+    ).toBe(400);
+    expect(store.limits).toEqual([1000, 100]);
+  });
+
   it('validates responses and keeps the response slot first-write-wins across enrolled keys', async () => {
     const store = new MemoryRelayStore();
     const relay = await createRelay({ store, signing: true });
@@ -627,48 +722,59 @@ describe('signing mailbox', () => {
     expect(internal.signRequests.has(expiring.requestCID)).toBe(false);
   }, 5_000);
 
-  it('keeps signing pagination stable when the cursor row leaves the pending set', async () => {
+  it('uses stable composite keyset cursors when rows expire or leave the pending set', async () => {
     const store = new MemoryRelayStore();
     const now = Date.now();
     const subjectDID = 'did:dfos:pagination-subject';
-    const makeRequest = (cid: string, depositedAt: string) => ({
+    const makeRequest = (cid: string, depositedAt: string, expiresAt = now + 60_000) => ({
       cid,
       request: `request-${cid}`,
       requesterDID: 'did:dfos:pagination-requester',
       subjectDID,
       payloadTyp: 'test',
       payloadBytes: new Uint8Array([1]),
-      expiresAt: new Date(now + 60_000).toISOString(),
+      expiresAt: new Date(expiresAt).toISOString(),
       depositedAt,
       declined: false,
     });
-    await store.putSignRequest(makeRequest('a', '2026-01-01T00:00:00.000Z'), now);
+    await store.putSignRequest(makeRequest('a', '2026-01-01T00:00:00.000Z', now + 1_000), now);
     await store.putSignRequest(makeRequest('b', '2026-01-01T00:00:01.000Z'), now);
     await store.putSignRequest(makeRequest('c', '2026-01-01T00:00:02.000Z'), now);
 
     const first = await store.listPendingSignRequests({ subjectDID, limit: 1, now });
+    expect(first.next).toBe(
+      base64urlEncode(new TextEncoder().encode('2026-01-01T00:00:00.000Z|a')),
+    );
     const second = await store.listPendingSignRequests({
       subjectDID,
-      after: first.cursor!,
+      after: first.next!,
       limit: 1,
-      now,
+      now: now + 2_000,
     });
     expect(second.requests.map((request) => request.cid)).toEqual(['b']);
-    await store.putSignResponse('b', 'response-b', now);
+    const partial = await store.listPendingSignRequests({
+      subjectDID,
+      after: second.next!,
+      limit: 2,
+      now: now + 2_000,
+    });
+    expect(partial).toMatchObject({ requests: [{ cid: 'c' }], next: null });
+
+    await store.putSignResponse('b', 'response-b', now + 2_000);
     const third = await store.listPendingSignRequests({
       subjectDID,
-      after: second.cursor!,
+      after: second.next!,
       limit: 1,
-      now,
+      now: now + 2_000,
     });
     expect(third.requests.map((request) => request.cid)).toEqual(['c']);
 
     const foreign = await store.listPendingSignRequests({
       subjectDID: 'did:dfos:other-subject',
-      after: first.cursor!,
+      after: first.next!,
       limit: 1,
-      now,
+      now: now + 2_000,
     });
-    expect(foreign).toEqual({ requests: [], cursor: null });
+    expect(foreign).toEqual({ requests: [], next: null });
   });
 });

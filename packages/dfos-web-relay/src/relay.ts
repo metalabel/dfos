@@ -58,7 +58,7 @@ import type {
 } from './types';
 
 /** Optional SIGNING 0.1 courier clock; byte twin of signingBasePath in routes.go. */
-export const SIGNING_BASE_PATH = '/signing/v1';
+export const SIGNING_BASE_PATH = '/signing/v0';
 
 // -----------------------------------------------------------------------------
 // relay result type
@@ -170,6 +170,18 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const indexEnabled = options.index !== false;
   const writeEnabled = options.write !== false;
   const signingEnabled = options.signing === true;
+  if (
+    signingEnabled &&
+    [
+      store.getSignRequest,
+      store.putSignRequest,
+      store.listPendingSignRequests,
+      store.putSignResponse,
+      store.declineSignRequest,
+    ].some((member) => typeof member !== 'function')
+  ) {
+    throw new Error('signing capability requires a store implementing the signing members');
+  }
   const maxAuthTokenTTLSeconds =
     options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS;
 

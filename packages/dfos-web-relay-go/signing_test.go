@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,26 @@ type signingTestFixture struct {
 	response   string
 	payload    []byte
 	credential string
+}
+
+type signingTestStore interface {
+	Store
+	SigningStore
+}
+
+type nonSigningTestStore struct {
+	Store
+}
+
+type limitCapturingSigningStore struct {
+	Store
+	SigningStore
+	limits []int
+}
+
+func (s *limitCapturingSigningStore) ListPendingSignRequests(subjectDID, after string, limit int, now time.Time) ([]StoredSignRequest, string, error) {
+	s.limits = append(s.limits, limit)
+	return s.SigningStore.ListPendingSignRequests(subjectDID, after, limit, now)
 }
 
 func signingMailbox(id testIdentity) string {
@@ -187,12 +208,23 @@ func TestSigningDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestSigningStoreRequiredOnlyWhenEnabled(t *testing.T) {
+	store := nonSigningTestStore{Store: NewMemoryStore()}
+	if _, err := NewRelay(RelayOptions{Store: store}); err != nil {
+		t.Fatalf("signing-disabled relay rejected non-signing store: %v", err)
+	}
+	enabled := true
+	if _, err := NewRelay(RelayOptions{Store: store, Signing: &enabled}); err == nil || !strings.Contains(err.Error(), "SigningStore") {
+		t.Fatalf("signing-enabled relay accepted non-signing store: %v", err)
+	}
+}
+
 var signingStoreFactories = []struct {
 	name string
-	open func(*testing.T) (Store, func())
+	open func(*testing.T) (signingTestStore, func())
 }{
-	{"memory", func(_ *testing.T) (Store, func()) { return NewMemoryStore(), func() {} }},
-	{"sqlite", func(t *testing.T) (Store, func()) {
+	{"memory", func(_ *testing.T) (signingTestStore, func()) { return NewMemoryStore(), func() {} }},
+	{"sqlite", func(t *testing.T) (signingTestStore, func()) {
 		store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "signing.sqlite"))
 		if err != nil {
 			t.Fatal(err)
@@ -201,7 +233,7 @@ var signingStoreFactories = []struct {
 	}},
 }
 
-func forEachSigningStore(t *testing.T, test func(*testing.T, Store)) {
+func forEachSigningStore(t *testing.T, test func(*testing.T, signingTestStore)) {
 	t.Helper()
 	for _, factory := range signingStoreFactories {
 		factory := factory
@@ -214,7 +246,7 @@ func forEachSigningStore(t *testing.T, test func(*testing.T, Store)) {
 }
 
 func TestSigningHappyPathBothStores(t *testing.T) {
-	forEachSigningStore(t, func(t *testing.T, store Store) {
+	forEachSigningStore(t, func(t *testing.T, store signingTestStore) {
 		enabled := true
 		r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
 		if err != nil {
@@ -236,6 +268,13 @@ func TestSigningHappyPathBothStores(t *testing.T) {
 		if poll.Code != http.StatusOK || !bytes.Contains(poll.Body.Bytes(), []byte(f.cid)) {
 			t.Fatalf("poll: %d %s", poll.Code, poll.Body.String())
 		}
+		var pollBody map[string]any
+		if err := json.Unmarshal(poll.Body.Bytes(), &pollBody); err != nil || pollBody["next"] != nil {
+			t.Fatalf("poll envelope: %s (%v)", poll.Body.String(), err)
+		}
+		if _, exists := pollBody["cursor"]; exists {
+			t.Fatalf("poll emitted removed cursor field: %s", poll.Body.String())
+		}
 		path := signingBasePath + "/requests/" + f.cid + "/response"
 		if got := signingRequest(t, r, http.MethodPost, path, map[string]string{"response": f.response}, ""); got.Code != http.StatusCreated {
 			t.Fatalf("respond: %d %s", got.Code, got.Body.String())
@@ -254,7 +293,7 @@ func TestSigningDepositAuthorizationAndEnvelopeGates(t *testing.T) {
 	forEachSigningStore(t, testSigningDepositAuthorizationAndEnvelopeGates)
 }
 
-func testSigningDepositAuthorizationAndEnvelopeGates(t *testing.T, store Store) {
+func testSigningDepositAuthorizationAndEnvelopeGates(t *testing.T, store signingTestStore) {
 	enabled := true
 	r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
 	if err != nil {
@@ -338,11 +377,72 @@ func testSigningDepositAuthorizationAndEnvelopeGates(t *testing.T, store Store) 
 	}
 }
 
+func TestSigningDeletedSubjectDepositAndPoll(t *testing.T) {
+	forEachSigningStore(t, func(t *testing.T, store signingTestStore) {
+		enabled := true
+		r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := newSigningFixture(t, store, "deleted-subject")
+		deposit := map[string]string{"request": f.request, "credential": f.credential}
+		if got := signingRequest(t, r, http.MethodPost, signingBasePath+"/requests", deposit, ""); got.Code != http.StatusCreated {
+			t.Fatalf("deposit before delete: %d %s", got.Code, got.Body.String())
+		}
+		auth := signingAuthToken(t, r, f.subject)
+		deleted, _, err := dfos.SignIdentityDelete(f.subject.opCID, f.subject.did+"#"+f.subject.controller.keyID, f.subject.controller.priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := IngestOperations([]string{deleted}, store)[0]; result.Status != "new" {
+			t.Fatalf("delete subject: %+v", result)
+		}
+		if got := signingRequest(t, r, http.MethodPost, signingBasePath+"/requests", deposit, ""); got.Code != http.StatusNotFound {
+			t.Fatalf("deposit after delete: %d %s", got.Code, got.Body.String())
+		}
+		if got := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests", nil, auth); got.Code != http.StatusUnauthorized {
+			t.Fatalf("poll after delete: %d %s", got.Code, got.Body.String())
+		}
+	})
+}
+
+func TestSigningPollLimitAndMalformedCursor(t *testing.T) {
+	base := NewMemoryStore()
+	store := &limitCapturingSigningStore{Store: base, SigningStore: base}
+	enabled := true
+	r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := createTestIdentity(t)
+	if result := IngestOperations([]string{subject.token}, store)[0]; result.Status != "new" {
+		t.Fatalf("seed subject: %+v", result)
+	}
+	auth := signingAuthToken(t, r, subject)
+	for _, path := range []string{
+		signingBasePath + "/requests?limit=1001",
+		signingBasePath + "/requests?limit=wat",
+	} {
+		if got := signingRequest(t, r, http.MethodGet, path, nil, auth); got.Code != http.StatusOK {
+			t.Fatalf("poll %s: %d %s", path, got.Code, got.Body.String())
+		}
+	}
+	if !slices.Equal(store.limits, []int{1000, 100}) {
+		t.Fatalf("poll limits = %v, want [1000 100]", store.limits)
+	}
+	if got := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests?after=not-a-cursor", nil, auth); got.Code != http.StatusBadRequest {
+		t.Fatalf("malformed cursor: %d %s", got.Code, got.Body.String())
+	}
+	if !slices.Equal(store.limits, []int{1000, 100}) {
+		t.Fatalf("malformed cursor reached store: %v", store.limits)
+	}
+}
+
 func TestSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T) {
 	forEachSigningStore(t, testSigningResponseDeclineExpiryIsolationAndWriteFalse)
 }
 
-func testSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T, store Store) {
+func testSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T, store signingTestStore) {
 	enabled, disabled := true, false
 	r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled, Write: &disabled})
 	if err != nil {
@@ -461,7 +561,7 @@ func testSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T, store 
 }
 
 func TestSigningStoreCursorScopeStabilityAndPruning(t *testing.T) {
-	forEachSigningStore(t, func(t *testing.T, store Store) {
+	forEachSigningStore(t, func(t *testing.T, store signingTestStore) {
 		now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		subject := "did:dfos:pagination-subject"
 		put := func(cid string, depositedAt time.Time, expiresAt time.Time) {
@@ -483,10 +583,18 @@ func TestSigningStoreCursorScopeStabilityAndPruning(t *testing.T) {
 		if err != nil || len(first) != 1 || first[0].CID != "a" || cursorA == "" {
 			t.Fatalf("first page: %+v %q %v", first, cursorA, err)
 		}
+		wantCursorA := base64.RawURLEncoding.EncodeToString([]byte(now.Format(signingTimeFormat) + "|a"))
+		if cursorA != wantCursorA {
+			t.Fatalf("first cursor = %q, want %q", cursorA, wantCursorA)
+		}
 		later := now.Add(2 * time.Second)
 		second, cursorB, err := store.ListPendingSignRequests(subject, cursorA, 1, later)
 		if err != nil || len(second) != 1 || second[0].CID != "b" || cursorB == "" {
 			t.Fatalf("page after expired cursor: %+v %q %v", second, cursorB, err)
+		}
+		partial, partialNext, err := store.ListPendingSignRequests(subject, cursorB, 2, later)
+		if err != nil || len(partial) != 1 || partial[0].CID != "c" || partialNext != "" {
+			t.Fatalf("partial page: %+v %q %v", partial, partialNext, err)
 		}
 		if result, err := store.PutSignResponse("b", "response-b", later); err != nil || result != SigningCreated {
 			t.Fatalf("respond b: %s %v", result, err)
@@ -499,21 +607,8 @@ func TestSigningStoreCursorScopeStabilityAndPruning(t *testing.T) {
 		if err != nil || len(foreign) != 0 || foreignCursor != "" {
 			t.Fatalf("foreign cursor leaked: %+v %q %v", foreign, foreignCursor, err)
 		}
-		expiredLegacy, expiredLegacyCursor, err := store.ListPendingSignRequests(subject, "a", 1, later)
-		if err != nil || len(expiredLegacy) != 0 || expiredLegacyCursor != "" {
-			t.Fatalf("expired legacy cursor leaked: %+v %q %v", expiredLegacy, expiredLegacyCursor, err)
-		}
-		result, err := store.PutSignRequest(StoredSignRequest{
-			CID: "foreign", Request: "request-foreign", RequesterDID: "did:dfos:pagination-requester",
-			SubjectDID: "did:dfos:foreign-subject", PayloadTyp: "test", PayloadBytes: []byte{1},
-			ExpiresAt: now.Add(time.Minute).Format(signingTimeFormat), DepositedAt: now.Format(signingTimeFormat),
-		}, later)
-		if err != nil || result != SigningCreated {
-			t.Fatalf("put foreign cursor row: %s %v", result, err)
-		}
-		foreignLegacy, foreignLegacyCursor, err := store.ListPendingSignRequests(subject, "foreign", 1, later)
-		if err != nil || len(foreignLegacy) != 0 || foreignLegacyCursor != "" {
-			t.Fatalf("foreign legacy cursor leaked: %+v %q %v", foreignLegacy, foreignLegacyCursor, err)
+		if malformed, malformedNext, err := store.ListPendingSignRequests(subject, "a", 1, later); err == nil || malformed != nil || malformedNext != "" {
+			t.Fatalf("malformed cursor: %+v %q %v", malformed, malformedNext, err)
 		}
 		assertSigningRequestPruned(t, store, "a")
 	})
