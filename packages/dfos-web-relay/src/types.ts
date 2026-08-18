@@ -47,6 +47,8 @@ export interface RelayOptions {
   content?: boolean;
   /** Whether the global operation log is enabled (default: true) */
   log?: boolean;
+  /** Whether the revocation status route family is enabled (default: true) */
+  revocations?: boolean;
   /** Whether the index query family is enabled (default: true) */
   index?: boolean;
   /**

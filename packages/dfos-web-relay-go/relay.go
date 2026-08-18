@@ -25,6 +25,7 @@ type Relay struct {
 	profileArtifactJWS string
 	contentEnabled     bool
 	logEnabled         bool
+	revocationsEnabled bool
 	indexEnabled       bool
 	writeEnabled       bool // false = LITE pull-only node (POST /operations rejected)
 	signingEnabled     bool
@@ -78,6 +79,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 
 	contentEnabled := opts.Content == nil || *opts.Content
 	logEnabled := opts.Log == nil || *opts.Log
+	revocationsEnabled := opts.Revocations == nil || *opts.Revocations
 	indexEnabled := opts.Index == nil || *opts.Index
 	writeEnabled := opts.Write == nil || *opts.Write
 	signingEnabled := opts.Signing != nil && *opts.Signing
@@ -131,6 +133,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		profileArtifactJWS: identity.ProfileArtifactJWS,
 		contentEnabled:     contentEnabled,
 		logEnabled:         logEnabled,
+		revocationsEnabled: revocationsEnabled,
 		indexEnabled:       indexEnabled,
 		writeEnabled:       writeEnabled,
 		signingEnabled:     signingEnabled,

@@ -162,14 +162,11 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 		"protocol": "dfos-web-relay",
 		"version":  Version,
 		"capabilities": map[string]any{
-			"proof":   true,
-			"write":   r.writeEnabled,
-			"content": r.contentEnabled,
-			"log":     r.logEnabled,
-			// The reference relay always serves the revocation-status index
-			// (/revocations/v1). A relay that does not would advertise false and
-			// 501 those routes, mirroring the content/log capability semantics.
-			"revocations": true,
+			"proof":       true,
+			"write":       r.writeEnabled,
+			"content":     r.contentEnabled,
+			"log":         r.logEnabled,
+			"revocations": r.revocationsEnabled,
 			"index":       r.indexEnabled,
 			"signing":     r.signingEnabled,
 		},

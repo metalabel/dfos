@@ -162,6 +162,10 @@ type issuerRevocationList struct {
 // Byte twin of the TS route in relay.ts: 400 on a malformed CID param, 200 with
 // the self-proving revocation JWS when revoked, 200 revoked:false otherwise.
 func (r *Relay) handleRevocationStatus(w http.ResponseWriter, req *http.Request) {
+	if !r.revocationsEnabled {
+		writeError(w, 501, "revocation status not available")
+		return
+	}
 	credentialCID := req.PathValue("credentialCID")
 
 	// reject anything that is not a credential-shaped CID — a malformed param
@@ -190,6 +194,10 @@ func (r *Relay) handleRevocationStatus(w http.ResponseWriter, req *http.Request)
 // the TS route: 400 on a non-canonical did:dfos, 200 with a cursor-paginated
 // (possibly empty) revocation list sorted by createdAt then credentialCID.
 func (r *Relay) handleIssuerRevocations(w http.ResponseWriter, req *http.Request) {
+	if !r.revocationsEnabled {
+		writeError(w, 501, "revocation status not available")
+		return
+	}
 	did := req.PathValue("did")
 
 	// must be the exact canonical 31-char did:dfos form

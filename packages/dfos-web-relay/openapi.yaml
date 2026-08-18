@@ -345,7 +345,7 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '501':
-          description: Writes disabled — relay is a lite pull-only node (capabilities.write is false)
+          $ref: '#/components/responses/NotImplemented'
 
   /proof/v1/operations/{cid}:
     get:
@@ -578,7 +578,7 @@ paths:
                     type: string
                     example: invalid credential CID
         '501':
-          description: Revocation status index not supported by this relay
+          $ref: '#/components/responses/NotImplemented'
 
   /revocations/v1/issuer/{did}:
     get:
@@ -638,7 +638,7 @@ paths:
                     nullable: true
                     description: Cursor for the next page (pass as `after`), or null on the last page
         '400':
-          description: Malformed did:dfos identifier
+          description: Malformed did:dfos identifier or invalid relay-local cursor
           content:
             application/json:
               schema:
@@ -648,7 +648,7 @@ paths:
                     type: string
                     example: invalid DID
         '501':
-          description: Revocation status index not supported by this relay
+          $ref: '#/components/responses/NotImplemented'
 
   /index/v0/identities:
     get:
@@ -763,7 +763,7 @@ paths:
                     nullable: true
                     description: Cursor for the next page (pass as `after`), or null on the last page
         '501':
-          description: Index capability not supported by this relay
+          $ref: '#/components/responses/NotImplemented'
 
   /index/v0/content:
     get:
@@ -879,7 +879,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '501':
-          description: Index capability not supported by this relay
+          $ref: '#/components/responses/NotImplemented'
 
   /index/v0/countersignatures:
     get:
@@ -952,7 +952,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '501':
-          description: Index capability not supported by this relay
+          $ref: '#/components/responses/NotImplemented'
 
   /index/v0/credentials:
     get:
@@ -1043,7 +1043,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '501':
-          description: Index capability not supported by this relay
+          $ref: '#/components/responses/NotImplemented'
 
   /proof/v1/content/{contentId}:
     get:
@@ -1067,14 +1067,15 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /content/{contentId}/blob/{operationCID}:
+  /content/{contentId}/blob/{ref}:
     put:
       operationId: uploadBlob
       summary: Upload a content blob
       description: |
         Upload raw bytes for a document referenced by a content chain operation.
         Requires auth token. Caller must be the chain creator or the signer of the
-        referenced operation.
+        referenced operation. For PUT, `ref` MUST be the operation CID whose
+        `documentCID` this blob satisfies.
       tags: [Content Plane]
       security:
         - BearerAuth: []
@@ -1084,12 +1085,12 @@ paths:
           required: true
           schema:
             type: string
-        - name: operationCID
+        - name: ref
           in: path
           required: true
           schema:
             type: string
-          description: CID of the content operation whose documentCID this blob satisfies
+          description: MUST be the CID of the content operation whose documentCID this blob satisfies
       requestBody:
         required: true
         content:
@@ -1123,50 +1124,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-
-  /content/{contentId}/blob:
-    get:
-      operationId: downloadBlob
-      summary: Download a content blob at head
-      description: |
-        Download the raw bytes of the current document at chain head.
-        Requires auth token. Non-creators must present a DFOS read credential.
-      tags: [Content Plane]
-      security:
-        - BearerAuth: []
-      parameters:
-        - name: contentId
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: X-Credential
-          in: header
-          required: false
-          schema:
-            type: string
-          description: DFOS read credential JWS (required for non-creators)
-      responses:
-        '200':
-          description: Blob data
-          headers:
-            X-Document-CID:
-              schema:
-                type: string
-              description: The documentCID of the returned blob
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /content/{contentId}/blob/{ref}:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
     get:
       operationId: downloadBlobAtRef
       summary: Download a content blob at a specific operation
@@ -1212,6 +1171,52 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /content/{contentId}/blob:
+    get:
+      operationId: downloadBlob
+      summary: Download a content blob at head
+      description: |
+        Download the raw bytes of the current document at chain head.
+        Requires auth token. Non-creators must present a DFOS read credential.
+      tags: [Content Plane]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Credential
+          in: header
+          required: false
+          schema:
+            type: string
+          description: DFOS read credential JWS (required for non-creators)
+      responses:
+        '200':
+          description: Blob data
+          headers:
+            X-Document-CID:
+              schema:
+                type: string
+              description: The documentCID of the returned blob
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
 
   /proof/v1/log:
     get:
@@ -1244,7 +1249,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [entries, cursor]
+                required: [entries, next, cursor]
                 properties:
                   entries:
                     type: array
@@ -1263,11 +1268,22 @@ paths:
                         chainId:
                           type: string
                           description: Chain identifier (DID or contentId)
+                  next:
+                    type: string
+                    nullable: true
+                    description: CID to pass as `after`, or null when the page was not full
                   cursor:
                     type: string
                     nullable: true
+                    deprecated: true
+                    description: Deprecated alias of `next`; removed in the next minor release
+        '400':
+          description: Invalid relay-local cursor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '501':
-          description: Global log capability not enabled
+          $ref: '#/components/responses/NotImplemented'
 
   /proof/v1/identities/{did}/log:
     get:
@@ -1304,7 +1320,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [entries, cursor]
+                required: [entries, next, cursor]
                 properties:
                   entries:
                     type: array
@@ -1316,9 +1332,20 @@ paths:
                           type: string
                         jwsToken:
                           type: string
+                  next:
+                    type: string
+                    nullable: true
+                    description: CID to pass as `after`, or null when the page was not full
                   cursor:
                     type: string
                     nullable: true
+                    deprecated: true
+                    description: Deprecated alias of `next`; removed in the next minor release
+        '400':
+          description: Invalid relay-local cursor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -1357,7 +1384,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [entries, cursor]
+                required: [entries, next, cursor]
                 properties:
                   entries:
                     type: array
@@ -1369,9 +1396,20 @@ paths:
                           type: string
                         jwsToken:
                           type: string
+                  next:
+                    type: string
+                    nullable: true
+                    description: CID to pass as `after`, or null when the page was not full
                   cursor:
                     type: string
                     nullable: true
+                    deprecated: true
+                    description: Deprecated alias of `next`; removed in the next minor release
+        '400':
+          description: Invalid relay-local cursor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -1411,15 +1449,20 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [cid, countersignatures, next]
+                required: [countersignatures, next]
                 properties:
-                  cid:
-                    type: string
                   countersignatures:
                     type: array
                     items:
-                      type: string
-                      description: JWS compact serialization (witness signature)
+                      type: object
+                      required: [cid, jwsToken]
+                      properties:
+                        cid:
+                          type: string
+                          description: CID of the countersignature itself
+                        jwsToken:
+                          type: string
+                          description: JWS compact serialization (witness signature)
                   next:
                     type: string
                     nullable: true
@@ -1508,6 +1551,19 @@ components:
         chainId:
           type: string
           description: Chain identifier (DID or contentId)
+        revokedGrant:
+          type: object
+          required: [wildcard, contentIds]
+          description: Revoked public grant scope; omitted when the credential was not held
+          properties:
+            wildcard:
+              type: boolean
+            contentIds:
+              type: array
+              items: { type: string }
+        dependencyMissing:
+          type: boolean
+          description: True when rejection is retryable because a dependency is missing
 
     StoredOperation:
       type: object
@@ -1644,6 +1700,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    NotImplemented:
+      description: Capability not supported by this relay
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
 
 tags:
   - name: Meta
@@ -1654,6 +1716,8 @@ tags:
     description: Authenticated routes for content blob storage and retrieval
   - name: DID Resolution
     description: DIF Universal Resolver binding — resolve a did:dfos to a W3C DID Document
+  - name: Revocation Status
+    description: Read-only credential revocation status and issuer feeds
   - name: Index
     description: Non-authoritative query surface over the relay's current-state projections — discovery hints, verified by the client against the proof plane
   - name: Signing Mailbox

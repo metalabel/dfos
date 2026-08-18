@@ -183,3 +183,49 @@ func TestRevocationStatus_WellKnownCapability(t *testing.T) {
 		t.Fatalf("capabilities.revocations = %v, want true", caps["revocations"])
 	}
 }
+
+func TestRevocationStatus_DisabledGateFiresFirst(t *testing.T) {
+	disabled := false
+	r, err := NewRelay(RelayOptions{
+		Store:       NewMemoryStore(),
+		Revocations: &disabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := r.Handler()
+	request := func(path string) (int, map[string]any) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		var body map[string]any
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode GET %s: %v (body: %s)", path, err, recorder.Body.String())
+		}
+		return recorder.Code, body
+	}
+
+	// Deliberately malformed params prove the capability gate fires before
+	// validation (and therefore before any store lookup).
+	for _, path := range []string{
+		"/revocations/v1/credential/not-a-cid",
+		"/revocations/v1/issuer/not-a-did",
+	} {
+		status, body := request(path)
+		if status != 501 {
+			t.Fatalf("GET %s status = %d, want 501", path, status)
+		}
+		if body["error"] != "revocation status not available" {
+			t.Fatalf("GET %s error = %v", path, body["error"])
+		}
+	}
+
+	status, body := request("/.well-known/dfos-relay")
+	if status != 200 {
+		t.Fatalf("well-known status = %d, want 200", status)
+	}
+	caps, _ := body["capabilities"].(map[string]any)
+	if caps["revocations"] != false {
+		t.Fatalf("capabilities.revocations = %v, want false", caps["revocations"])
+	}
+}

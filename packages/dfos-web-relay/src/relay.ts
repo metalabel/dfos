@@ -167,6 +167,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const { store } = options;
   const contentEnabled = options.content !== false;
   const logEnabled = options.log !== false;
+  const revocationsEnabled = options.revocations !== false;
   const indexEnabled = options.index !== false;
   const writeEnabled = options.write !== false;
   const signingEnabled = options.signing === true;
@@ -302,10 +303,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         write: writeEnabled,
         content: contentEnabled,
         log: logEnabled,
-        // The reference relay always serves the revocation-status index
-        // (/revocations/v1). A relay that does not would advertise false and
-        // 501 those routes, mirroring the content/log capability semantics.
-        revocations: true,
+        revocations: revocationsEnabled,
         index: indexEnabled,
         signing: signingEnabled,
       },
@@ -516,6 +514,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
   /** Revocation status for a single credential CID */
   app.get(`${REVOCATIONS_BASE_PATH}/credential/:credentialCID`, async (c) => {
+    if (!revocationsEnabled) {
+      return c.json({ error: 'revocation status not available' }, 501);
+    }
     const credentialCID = c.req.param('credentialCID');
 
     // reject anything that is not a credential-shaped CID — a malformed param
@@ -530,6 +531,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
   /** All revocations issued by a DID */
   app.get(`${REVOCATIONS_BASE_PATH}/issuer/:did{.+}`, async (c) => {
+    if (!revocationsEnabled) {
+      return c.json({ error: 'revocation status not available' }, 501);
+    }
     const did = c.req.param('did');
 
     // must be the exact canonical 31-char did:dfos form

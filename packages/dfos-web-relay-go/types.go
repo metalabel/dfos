@@ -27,11 +27,12 @@ type RelayIdentity struct {
 
 // RelayOptions configures a new Relay instance.
 type RelayOptions struct {
-	Store    Store
-	Identity *RelayIdentity
-	Content  *bool // nil or true = enabled (default), false = disabled
-	Log      *bool // nil or true = enabled (default), false = disabled
-	Index    *bool // nil or true = enabled (default), false = disabled
+	Store       Store
+	Identity    *RelayIdentity
+	Content     *bool // nil or true = enabled (default), false = disabled
+	Log         *bool // nil or true = enabled (default), false = disabled
+	Revocations *bool // nil or true = enabled (default), false = disabled
+	Index       *bool // nil or true = enabled (default), false = disabled
 	// Write, when false, makes this a LITE pull-only proof node: POST
 	// /proof/v1/operations is rejected (501), so neither client writes nor peer
 	// gossip-in are accepted. The node still ingests by PULLING from peers

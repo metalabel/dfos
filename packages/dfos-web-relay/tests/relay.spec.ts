@@ -3661,6 +3661,29 @@ describe('web relay', () => {
       const body = await json(await req('/.well-known/dfos-relay'));
       expect(body.capabilities.revocations).toBe(true);
     });
+
+    it('gates both routes first and advertises false when revocations are disabled', async () => {
+      const disabled = await createRelay({
+        store,
+        identity: RELAY_IDENTITY,
+        revocations: false,
+      });
+      const disabledReq = (path: string) => disabled.app.request(`http://localhost${path}`);
+
+      // Deliberately malformed params prove the capability gate fires before
+      // validation (and therefore before any store lookup).
+      for (const path of [
+        '/revocations/v1/credential/not-a-cid',
+        '/revocations/v1/issuer/not-a-did',
+      ]) {
+        const res = await disabledReq(path);
+        expect(res.status).toBe(501);
+        expect(await json(res)).toEqual({ error: 'revocation status not available' });
+      }
+
+      const body = await json(await disabledReq('/.well-known/dfos-relay'));
+      expect(body.capabilities.revocations).toBe(false);
+    });
   });
 
   // ---------------------------------------------------------------------------
