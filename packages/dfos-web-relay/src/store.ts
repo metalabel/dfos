@@ -566,21 +566,21 @@ export class MemoryRelayStore implements RelayStore {
   async readLog(params: {
     after?: string;
     limit: number;
-  }): Promise<{ entries: LogEntry[]; cursor: string | null }> {
+  }): Promise<{ entries: LogEntry[]; next: string | null } | null> {
     let startIdx = 0;
     if (params.after) {
       const idx = this.operationLog.findIndex((e) => e.cid === params.after);
-      if (idx >= 0) startIdx = idx + 1;
-      else startIdx = this.operationLog.length; // cursor not found → empty
+      if (idx < 0) return null; // relay-local cursor this log never issued → 400 at the route
+      startIdx = idx + 1;
     }
 
     const entries = this.operationLog.slice(startIdx, startIdx + params.limit);
-    // Return a resume cursor whenever the page has entries — NOT only when full — so
-    // a caught-up puller advances past the final partial page instead of re-fetching
-    // the tail every sync cycle (anti-entropy chatter). Its next fetch from this
-    // cursor returns an empty page and it stops. Mirrors the Go twin's ReadLog.
-    const cursor = entries.length > 0 ? entries[entries.length - 1]!.cid : null;
-    return { entries, cursor };
+    // `next` only on a FULL page — a partial page means caught up (the shared list
+    // envelope's contract). Pullers advance their persisted cursor from the last
+    // ingested entry's cid, so a null here never strands progress; the sync loop
+    // already does exactly that. Mirrors the Go twin's ReadLog.
+    const next = entries.length === params.limit ? entries[entries.length - 1]!.cid : null;
+    return { entries, next };
   }
 
   async getStats(): Promise<RelayStats> {

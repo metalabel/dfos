@@ -395,13 +395,18 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     let startIdx = 0;
     if (after) {
       const idx = entries.findIndex((e) => e.cid === after);
-      startIdx = idx >= 0 ? idx + 1 : entries.length;
+      // Relay-local positional cursor: an `after` not on the served branch is a
+      // caller error (or a fork/head switch) — 400 tells the client to restart
+      // instead of silently claiming it is caught up.
+      if (idx < 0) return c.json({ error: 'invalid cursor' }, 400);
+      startIdx = idx + 1;
     }
 
     const page = entries.slice(startIdx, startIdx + limit);
-    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
+    const next = page.length === limit ? page[page.length - 1]!.cid : null;
 
-    return c.json({ entries: page, cursor });
+    // `cursor` is a deprecated alias of `next`, emitted for one release window.
+    return c.json({ entries: page, next, cursor: next });
   });
 
   app.get(`${PROOF_BASE_PATH}/identities/:did{.+}`, async (c) => {
@@ -419,8 +424,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
           });
           if (!logPage || logPage.entries.length === 0) break;
           await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
-          if (!logPage.cursor) break;
-          after = logPage.cursor;
+          if (!logPage.next) break;
+          after = logPage.next;
         }
         chain = await store.getIdentityChain(did);
         if (chain) break;
@@ -474,8 +479,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
           });
           if (!logPage || logPage.entries.length === 0) break;
           await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
-          if (!logPage.cursor) break;
-          after = logPage.cursor;
+          if (!logPage.next) break;
+          after = logPage.next;
         }
         chain = await store.getIdentityChain(did);
         if (chain) break;
@@ -539,7 +544,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     let startIdx = 0;
     if (after) {
       const idx = revocations.findIndex((rev) => rev.credentialCID === after);
-      startIdx = idx >= 0 ? idx + 1 : revocations.length;
+      // The sort key is createdAt while the cursor is a credentialCID, so
+      // resumption is positional and cursors are relay-local: unknown → 400.
+      if (idx < 0) return c.json({ error: 'invalid cursor' }, 400);
+      startIdx = idx + 1;
     }
 
     const page = revocations.slice(startIdx, startIdx + limit);
@@ -690,13 +698,16 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     let startIdx = 0;
     if (after) {
       const idx = entries.findIndex((e) => e.cid === after);
-      startIdx = idx >= 0 ? idx + 1 : entries.length;
+      // Same relay-local rule as the identity log: off-branch cursor → 400.
+      if (idx < 0) return c.json({ error: 'invalid cursor' }, 400);
+      startIdx = idx + 1;
     }
 
     const page = entries.slice(startIdx, startIdx + limit);
-    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
+    const next = page.length === limit ? page[page.length - 1]!.cid : null;
 
-    return c.json({ entries: page, cursor });
+    // `cursor` is a deprecated alias of `next`, emitted for one release window.
+    return c.json({ entries: page, next, cursor: next });
   });
 
   /** Get a content chain by content ID */
@@ -715,8 +726,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
           });
           if (!logPage || logPage.entries.length === 0) break;
           await ingestWithGossip(logPage.entries.map((e) => e.jwsToken));
-          if (!logPage.cursor) break;
-          after = logPage.cursor;
+          if (!logPage.next) break;
+          after = logPage.next;
         }
         chain = await store.getContentChain(contentId);
         if (chain) break;
@@ -750,16 +761,20 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
 
-    let startIdx = 0;
-    if (after) {
-      const idx = decorated.findIndex((d) => d.csCid === after);
-      startIdx = idx >= 0 ? idx + 1 : decorated.length;
-    }
+    // True keyset over the CID sort order: resume strictly past `after`, whether
+    // or not it names a present row — cursors survive concurrent additions and
+    // cross-relay replay (the enumeration key IS the sort key here).
+    const remaining = after ? decorated.filter((d) => d.csCid > after) : decorated;
 
-    const page = decorated.slice(startIdx, startIdx + limit);
+    const page = remaining.slice(0, limit);
     const next = page.length === limit ? page[page.length - 1]!.csCid : null;
 
-    return c.json({ cid, countersignatures: page.map((d) => d.jws), next });
+    // Rows are { cid, jwsToken } — the per-chain log entry shape. targetCID and
+    // relation live inside the signed payload; the token is the truth.
+    return c.json({
+      countersignatures: page.map((d) => ({ cid: d.csCid, jwsToken: d.jws })),
+      next,
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -772,7 +787,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const afterParam = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const result = await store.readLog(afterParam ? { after: afterParam, limit } : { limit });
-    return c.json(result);
+    // null = relay-local cursor this log never issued (or another relay's) → 400.
+    if (!result) return c.json({ error: 'invalid cursor' }, 400);
+    // `cursor` is a deprecated alias of `next`, emitted for one release window.
+    return c.json({ entries: result.entries, next: result.next, cursor: result.next });
   });
 
   // -------------------------------------------------------------------------
@@ -907,12 +925,25 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
           ...(cursor ? { after: cursor } : {}),
           limit: 1000,
         });
+        if (page === 'invalid-cursor') {
+          // The peer no longer recognizes our persisted cursor (wiped/rebuilt
+          // log). Reset and re-sync from the start next cycle — idempotent.
+          cursor = undefined;
+          await store.setPeerCursor(peer.url, '');
+          continue;
+        }
         if (!page || page.entries.length === 0) break;
         await ingestWithGossip(page.entries.map((e) => e.jwsToken));
         fetched += page.entries.length;
-        cursor = page.cursor ?? page.entries[page.entries.length - 1]!.cid;
+        // Persist ONLY peer-supplied cursors — never fabricate one from the last
+        // entry's CID. A peer whose cursor format is not a bare CID (production
+        // pages a timestamp|cid token) would 400 a fabricated cursor and force a
+        // full resync every cycle. `next` null = caught up: break retaining the
+        // last persisted cursor; the final partial page re-fetches next cycle
+        // and dedups cheaply. Mirrors the Go twin's pullPeerOps.
+        if (!page.next) break;
+        cursor = page.next;
         await store.setPeerCursor(peer.url, cursor);
-        if (!page.cursor) break;
       }
     }
   };

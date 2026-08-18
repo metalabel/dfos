@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -338,6 +339,20 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 	fetched := 0
 	for fetched < maxOps {
 		page, err := r.peerClient.GetOperationLog(peerURL, cursor, 1000)
+		if errors.Is(err, ErrPeerInvalidCursor) {
+			// The peer no longer recognizes our persisted cursor (wiped/rebuilt
+			// log, or a pre-fix fabricated cursor). Reset and re-sync from the
+			// start next iteration — ingestion is idempotent.
+			r.logger.Warn("peer sync: peer rejected cursor — resetting", "peer", peerURL)
+			cursor = ""
+			if persist {
+				if err := r.store.SetPeerCursor(peerURL, ""); err != nil {
+					r.logger.Error("peer sync: failed to reset peer cursor", "peer", peerURL, "error", err)
+					break
+				}
+			}
+			continue
+		}
 		if err != nil {
 			r.logger.Error("peer sync failed", "peer", peerURL, "error", err)
 			break
@@ -385,7 +400,7 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			break
 		}
 		fetched += len(page.Entries)
-		if page.Cursor == nil {
+		if page.Resume() == nil {
 			// The peer signals no further pages from this cursor. Do NOT
 			// fabricate a resume cursor from the last entry's CID: a peer whose
 			// cursor format is not a bare CID — notably the production relay,
@@ -400,7 +415,7 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			r.ingestMu.Unlock()
 			break
 		}
-		cursor = *page.Cursor
+		cursor = *page.Resume()
 		if persist {
 			// Check the SetPeerCursor return — a silent failure here would let
 			// the high-water mark drift. On failure, stop without persisting

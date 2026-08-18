@@ -51,10 +51,12 @@ export const createHttpPeerClient = (options?: { fetch?: typeof fetch }): PeerCl
       if (params?.limit) url.searchParams.set('limit', String(params.limit));
       const data = (await fetchJSON(url.toString())) as {
         entries?: PeerLogEntry[];
+        next?: string | null;
         cursor?: string | null;
       } | null;
       if (!data?.entries) return null;
-      return { entries: data.entries, cursor: data.cursor ?? null };
+      // `cursor` fallback: pre-rename relays emit only the deprecated alias.
+      return { entries: data.entries, next: data.next ?? data.cursor ?? null };
     },
 
     async getContentLog(peerUrl, contentId, params) {
@@ -66,22 +68,35 @@ export const createHttpPeerClient = (options?: { fetch?: typeof fetch }): PeerCl
       if (params?.limit) url.searchParams.set('limit', String(params.limit));
       const data = (await fetchJSON(url.toString())) as {
         entries?: PeerLogEntry[];
+        next?: string | null;
         cursor?: string | null;
       } | null;
       if (!data?.entries) return null;
-      return { entries: data.entries, cursor: data.cursor ?? null };
+      return { entries: data.entries, next: data.next ?? data.cursor ?? null };
     },
 
     async getOperationLog(peerUrl, params) {
       const url = new URL(`${PROOF_BASE_PATH}/log`, peerUrl);
       if (params?.after) url.searchParams.set('after', params.after);
       if (params?.limit) url.searchParams.set('limit', String(params.limit));
-      const data = (await fetchJSON(url.toString())) as {
-        entries?: PeerLogEntry[];
-        cursor?: string | null;
-      } | null;
+      let res: Response;
+      try {
+        res = await fetchImpl(url.toString());
+      } catch {
+        return null;
+      }
+      // A 400 with an `after` param is the peer rejecting our relay-local
+      // cursor — distinguishable so the sync loop can reset instead of stall.
+      if (res.status === 400 && params?.after) return 'invalid-cursor';
+      if (!res.ok) return null;
+      let data: { entries?: PeerLogEntry[]; next?: string | null; cursor?: string | null };
+      try {
+        data = (await res.json()) as typeof data;
+      } catch {
+        return null;
+      }
       if (!data?.entries) return null;
-      return { entries: data.entries, cursor: data.cursor ?? null };
+      return { entries: data.entries, next: data.next ?? data.cursor ?? null };
     },
 
     async submitOperations(peerUrl, operations) {

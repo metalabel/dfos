@@ -151,7 +151,7 @@ class RelayBackedPeerClient implements PeerClient {
     _peerUrl: string,
     did: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | null> {
     const chain = await this.backingStore.getIdentityChain(did);
     if (!chain) return null;
     return this.paginateChainLog(chain.log, params);
@@ -161,7 +161,7 @@ class RelayBackedPeerClient implements PeerClient {
     _peerUrl: string,
     contentId: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | null> {
     const chain = await this.backingStore.getContentChain(contentId);
     if (!chain) return null;
     return this.paginateChainLog(chain.log, params);
@@ -170,15 +170,16 @@ class RelayBackedPeerClient implements PeerClient {
   async getOperationLog(
     _peerUrl: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null> {
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null> {
     const limit = this.pageSize ?? params?.limit ?? 1000;
     const result = await this.backingStore.readLog({
       ...(params?.after ? { after: params.after } : {}),
       limit,
     });
+    if (!result) return 'invalid-cursor';
     return {
       entries: result.entries.map((e) => ({ cid: e.cid, jwsToken: e.jwsToken })),
-      cursor: result.cursor,
+      next: result.next,
     };
   }
 
@@ -189,7 +190,7 @@ class RelayBackedPeerClient implements PeerClient {
   private paginateChainLog(
     log: string[],
     params?: { after?: string; limit?: number },
-  ): { entries: PeerLogEntry[]; cursor: string | null } {
+  ): { entries: PeerLogEntry[]; next: string | null } {
     const limit = this.pageSize ?? params?.limit ?? 1000;
     const entries: PeerLogEntry[] = log.map((jws) => {
       const decoded = decodeJwsUnsafe(jws);
@@ -203,8 +204,8 @@ class RelayBackedPeerClient implements PeerClient {
     }
 
     const page = entries.slice(startIdx, startIdx + limit);
-    const cursor = page.length === limit ? page[page.length - 1]!.cid : null;
-    return { entries: page, cursor };
+    const next = page.length === limit ? page[page.length - 1]!.cid : null;
+    return { entries: page, next };
   }
 }
 
@@ -676,8 +677,9 @@ describe('web relay', () => {
 
       const body = await json(await req(`/proof/v1/countersignatures/${author.operationCID}`));
       expect(body.countersignatures).toHaveLength(1);
-      const decoded = decodeJwsUnsafe(body.countersignatures[0]);
+      const decoded = decodeJwsUnsafe(body.countersignatures[0].jwsToken);
       expect(decoded?.payload.relation).toBe('endorses');
+      expect(body.countersignatures[0].cid).toBe(decoded?.header.cid);
     });
   });
 
@@ -1086,7 +1088,6 @@ describe('web relay', () => {
       // should have exactly 2 distinct countersignatures
       const csRes = await req(`/proof/v1/countersignatures/${content.operationCID}`);
       const csBody = await json(csRes);
-      expect(csBody.cid).toBe(content.operationCID);
       expect(csBody.countersignatures).toHaveLength(2);
 
       // resubmit both — count must not change
@@ -1139,11 +1140,21 @@ describe('web relay', () => {
       expect(page2.next).toBeNull();
 
       const all = [...page1.countersignatures, ...page2.countersignatures];
-      expect(new Set(all).size).toBe(3);
+      expect(new Set(all.map((row: { jwsToken: string }) => row.jwsToken)).size).toBe(3);
 
-      const cids = all.map((token) => decodeJwsUnsafe(token)?.header.cid ?? '');
+      const cids = all.map((row: { cid: string }) => row.cid);
       expect(new Set(cids).size).toBe(3);
       expect(cids).toEqual([...cids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+
+      // keyset: an `after` that is not a present key resumes at the next greater
+      // key instead of truncating to an empty page
+      const between = `${cids[0]}0`; // lexically between cids[0] and cids[1]
+      const resumed = await json(
+        await req(
+          `/proof/v1/countersignatures/${content.operationCID}?after=${encodeURIComponent(between)}`,
+        ),
+      );
+      expect(resumed.countersignatures.map((r: { cid: string }) => r.cid)).toEqual(cids.slice(1));
     });
 
     it('should accept a countersignature targeting an identity operation CID', async () => {
@@ -2720,27 +2731,30 @@ describe('web relay', () => {
       const res1 = await req(`/proof/v1/log?after=${bootstrapCursor}&limit=2`);
       const body1 = await json(res1);
       expect(body1.entries).toHaveLength(2);
-      expect(body1.cursor).not.toBeNull();
+      expect(body1.next).not.toBeNull();
+      // deprecated alias mirrors `next` for one release window
+      expect(body1.cursor).toBe(body1.next);
 
-      // read with cursor — the final partial page now carries a resume cursor, so a
-      // caught-up puller advances past it instead of re-fetching the tail every cycle
-      const res2 = await req(`/proof/v1/log?after=${body1.cursor}`);
+      // final partial page: caught up → `next` null (shared envelope contract);
+      // a puller persists its position from the last entry's cid instead
+      const res2 = await req(`/proof/v1/log?after=${body1.next}`);
       const body2 = await json(res2);
       expect(body2.entries).toHaveLength(1);
-      expect(body2.cursor).not.toBeNull();
+      expect(body2.next).toBeNull();
 
-      // fetching from the final cursor returns an empty page (caught up) — not a
-      // re-serve of the tail
-      const res3 = await req(`/proof/v1/log?after=${body2.cursor}`);
+      // resuming from the last ingested entry's cid returns an empty page
+      const lastCid = body2.entries[0].cid;
+      const res3 = await req(`/proof/v1/log?after=${lastCid}`);
       const body3 = await json(res3);
       expect(body3.entries).toEqual([]);
+      expect(body3.next).toBeNull();
     });
 
-    it('should handle unknown cursor gracefully', async () => {
+    it('rejects an unknown cursor with 400 (relay-local cursors)', async () => {
       const res = await req('/proof/v1/log?after=nonexistent');
+      expect(res.status).toBe(400);
       const body = await json(res);
-      expect(body.entries).toEqual([]);
-      expect(body.cursor).toBeNull();
+      expect(body.error).toBeDefined();
     });
   });
 
@@ -3268,13 +3282,12 @@ describe('web relay', () => {
         expect(chain!.did).toBe(identity.did);
       });
 
-      it('should persist cursor as last entry CID on final page', async () => {
+      it('persists only peer-supplied cursors — never fabricated ones', async () => {
         const peerStore = new MemoryRelayStore();
         const identity = await createIdentity();
-        const results = await ingestOperations([identity.jwsToken], peerStore, {
+        await ingestOperations([identity.jwsToken], peerStore, {
           logEnabled: true,
         });
-        const opCID = results[0]!.cid;
 
         const { relay, localStore } = await createPeeredRelay({
           peerStore,
@@ -3283,9 +3296,17 @@ describe('web relay', () => {
 
         await relay.syncFromPeers();
 
-        // single op < page size → final page → cursor = last entry CID
+        // single op < page size → final partial page → `next` null → the puller
+        // retains its (absent) persisted cursor rather than fabricating one from
+        // the last entry's CID (a fabricated cursor would 400 against a relay
+        // whose cursor format is not a bare CID, e.g. production's opaque token).
         const cursor = await localStore.getPeerCursor('http://peer-a');
-        expect(cursor).toBe(opCID);
+        expect(cursor).toBeUndefined();
+
+        // the op still ingested, and a second sync is idempotent
+        expect(await localStore.getIdentityChain(identity.did)).toBeDefined();
+        await relay.syncFromPeers();
+        expect(await localStore.getIdentityChain(identity.did)).toBeDefined();
       });
 
       it('should handle multi-page sync', async () => {

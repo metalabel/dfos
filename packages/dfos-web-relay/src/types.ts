@@ -109,20 +109,26 @@ export interface PeerClient {
     peerUrl: string,
     did: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | null>;
 
   /** Fetch content chain log from a peer */
   getContentLog(
     peerUrl: string,
     contentId: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | null>;
 
-  /** Fetch global operation log from a peer */
+  /**
+   * Fetch global operation log from a peer. Returns the page, `null` on any
+   * transport/peer failure, or `'invalid-cursor'` when the peer explicitly
+   * rejected the `after` cursor (400) — cursors are relay-local, so a peer that
+   * wiped or rebuilt its log invalidates ours; the sync loop resets and
+   * re-syncs from the start (ingestion is idempotent).
+   */
   getOperationLog(
     peerUrl: string,
     params?: { after?: string; limit?: number },
-  ): Promise<{ entries: PeerLogEntry[]; cursor: string | null } | null>;
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
   /** Push operations to a peer (fire-and-forget) */
   submitOperations(peerUrl: string, operations: string[]): Promise<void>;
@@ -356,12 +362,15 @@ export interface RelayStore {
 
   // --- operation log ---
   // Global append-only log of all accepted operations. CID-based cursor pagination.
+  // Cursors are relay-local (per-relay ingestion order): readLog resolves `after`
+  // positionally and returns null for a cursor this log does not contain — the
+  // route maps that to 400, never a silently empty page.
 
   appendToLog(entry: LogEntry): Promise<void>;
   readLog(params: {
     after?: string;
     limit: number;
-  }): Promise<{ entries: LogEntry[]; cursor: string | null }>;
+  }): Promise<{ entries: LogEntry[]; next: string | null } | null>;
   /**
    * Optional: compute operational statistics over the global log for the well-known
    * response. A store that omits this leaves opCount/countsByKind/oldestOpAt/headCid

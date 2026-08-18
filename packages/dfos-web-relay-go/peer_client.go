@@ -25,6 +25,13 @@ var ErrPeerWriteDisabled = errors.New("peer is write-disabled (pull-only)")
 // source," NOT "this peer is down," so it must not trip the source circuit breaker.
 var ErrBlobNotFound = errors.New("peer does not have this blob")
 
+// ErrPeerInvalidCursor is returned by GetOperationLog when the peer explicitly
+// rejects our `after` cursor with 400. Log cursors are relay-local, so a peer
+// that wiped or rebuilt its log invalidates ours; the sync loop resets its
+// persisted cursor and re-syncs from the start (ingestion is idempotent),
+// instead of stalling on the dead cursor forever.
+var ErrPeerInvalidCursor = errors.New("peer rejected log cursor")
+
 // HttpPeerClient implements PeerClient using HTTP requests.
 type HttpPeerClient struct {
 	client *http.Client
@@ -133,8 +140,21 @@ func (c *HttpPeerClient) GetOperationLog(peerURL string, after string, limit int
 	}
 	u.RawQuery = q.Encode()
 
+	resp, err := c.client.Get(u.String())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	// A 400 with an `after` param is the peer rejecting our relay-local cursor —
+	// distinguishable so the sync loop can reset instead of stalling forever.
+	if resp.StatusCode == 400 && after != "" {
+		return nil, ErrPeerInvalidCursor
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("peer returned %d", resp.StatusCode)
+	}
 	var page PeerLogPage
-	if err := c.fetchJSON(u.String(), &page); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
 		return nil, err
 	}
 	return &page, nil

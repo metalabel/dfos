@@ -217,7 +217,10 @@ func (r *Relay) handleIssuerRevocations(w http.ResponseWriter, req *http.Request
 			}
 		}
 		if !found {
-			startIdx = len(revs)
+			// The sort key is createdAt while the cursor is a credentialCID, so
+			// resumption is positional and cursors are relay-local: unknown → 400.
+			writeError(w, 400, "invalid cursor")
+			return
 		}
 	}
 

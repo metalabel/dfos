@@ -3,6 +3,7 @@ package relay
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -1225,12 +1226,21 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	var err error
 
 	if after != "" {
-		// find the seq of the cursor CID, then fetch after it
+		// Relay-local cursor: resolve the cursor CID's seq first — a CID this
+		// log never issued is a caller error the route answers with 400.
+		var afterSeq int64
+		if err := s.readerDB().QueryRow(
+			"SELECT seq FROM operation_log WHERE cid = ? LIMIT 1", after,
+		).Scan(&afterSeq); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, "", ErrUnknownLogCursor
+			}
+			return nil, "", err
+		}
 		rows, err = s.readerDB().Query(
 			`SELECT cid, jws_token, kind, chain_id FROM operation_log
-			 WHERE seq > (SELECT COALESCE((SELECT seq FROM operation_log WHERE cid = ? LIMIT 1), 999999999))
-			 ORDER BY seq ASC LIMIT ?`,
-			after, limit,
+			 WHERE seq > ? ORDER BY seq ASC LIMIT ?`,
+			afterSeq, limit,
 		)
 	} else {
 		rows, err = s.readerDB().Query(
@@ -1258,19 +1268,17 @@ func (s *SQLiteStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 		entries = []LogEntry{}
 	}
 
-	// Return a resume cursor whenever the page has entries — NOT only when it's
-	// full. Gating on len==limit meant the final partial page returned an empty
-	// cursor, so a caught-up puller never advanced past it and re-fetched the whole
-	// tail (up to a full page) every sync cycle forever — pure anti-entropy chatter
-	// (re-decode + re-hash of already-sequenced ops, dedup-dropped). With a cursor on
-	// the final page, the puller advances to the head; its next fetch (seq > last)
-	// returns an empty page and it stops. New ops resume forward from there.
-	var cursor string
-	if len(entries) > 0 {
-		cursor = entries[len(entries)-1].CID
+	// `next` only on a FULL page — a partial page means caught up (the shared
+	// list envelope's contract, matching the production relay's paging). The
+	// puller retains its last persisted cursor on null and re-fetches the final
+	// partial page next cycle; the re-fetch dedups cheaply, and the bounded
+	// reconcile scrubber remains the backstop. Mirrors MemoryStore.ReadLog.
+	var next string
+	if len(entries) == limit {
+		next = entries[len(entries)-1].CID
 	}
 
-	return entries, cursor, nil
+	return entries, next, nil
 }
 
 func (s *SQLiteStore) RelayStats() (*RelayStats, error) {

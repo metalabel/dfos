@@ -2,11 +2,17 @@ package relay
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"log/slog"
 	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
+
+// ErrUnknownLogCursor is returned by Store.ReadLog when `after` names a cursor
+// this relay's log never issued. Log cursors are relay-local (per-relay
+// ingestion order); the route maps this to 400, never a silently empty page.
+var ErrUnknownLogCursor = errors.New("unknown log cursor")
 
 // Version is the release version, set via ldflags at build time.
 var Version = "dev"
@@ -80,10 +86,22 @@ type PeerClient interface {
 	GetBlob(peerURL, contentID, ref string) ([]byte, error)
 }
 
-// PeerLogPage is a paginated log response from a peer.
+// PeerLogPage is a paginated log response from a peer. `next` is the shared
+// list envelope's resume field; `cursor` is the deprecated pre-rename alias
+// still emitted by older relays — Resume() prefers `next` and falls back.
 type PeerLogPage struct {
 	Entries []PeerLogEntry `json:"entries"`
+	Next    *string        `json:"next"`
 	Cursor  *string        `json:"cursor"`
+}
+
+// Resume returns the page's resume cursor: `next` when present, else the
+// deprecated `cursor` alias (older peers), else nil (caught up).
+func (p *PeerLogPage) Resume() *string {
+	if p.Next != nil {
+		return p.Next
+	}
+	return p.Cursor
 }
 
 // IdentityStateAtCID holds the materialized identity state at a specific

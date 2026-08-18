@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sort"
@@ -254,10 +255,10 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 					tokens[i] = e.JWSToken
 				}
 				r.Ingest(tokens)
-				if page.Cursor == nil {
+				if page.Resume() == nil {
 					break
 				}
-				after = *page.Cursor
+				after = *page.Resume()
 			}
 			chain, _ = r.readStore.GetIdentityChain(did)
 			if chain != nil {
@@ -316,10 +317,10 @@ func (r *Relay) handleResolveDID(w http.ResponseWriter, req *http.Request) {
 					tokens[i] = e.JWSToken
 				}
 				r.Ingest(tokens)
-				if page.Cursor == nil {
+				if page.Resume() == nil {
 					break
 				}
-				after = *page.Cursor
+				after = *page.Resume()
 			}
 			chain, _ = r.readStore.GetIdentityChain(did)
 			if chain != nil {
@@ -368,7 +369,9 @@ func (r *Relay) handleIdentityLog(w http.ResponseWriter, req *http.Request) {
 		entries = append(entries, logEntry{CID: cid, JWSToken: jws})
 	}
 
-	// apply cursor pagination
+	// Relay-local positional cursor: an `after` not on the served branch is a
+	// caller error (or a fork/head switch) — 400 tells the client to restart
+	// instead of silently claiming it is caught up.
 	startIdx := 0
 	if after != "" {
 		found := false
@@ -380,7 +383,8 @@ func (r *Relay) handleIdentityLog(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		if !found {
-			startIdx = len(entries)
+			writeError(w, 400, "invalid cursor")
+			return
 		}
 	}
 
@@ -390,15 +394,17 @@ func (r *Relay) handleIdentityLog(w http.ResponseWriter, req *http.Request) {
 	}
 	page := entries[startIdx:end]
 
-	var cursor *string
+	var next *string
 	if len(page) == limit {
-		c := page[len(page)-1].CID
-		cursor = &c
+		n := page[len(page)-1].CID
+		next = &n
 	}
 
+	// `cursor` is a deprecated alias of `next`, emitted for one release window.
 	writeJSON(w, 200, map[string]any{
 		"entries": page,
-		"cursor":  cursor,
+		"next":    next,
+		"cursor":  next,
 	})
 }
 
@@ -430,10 +436,10 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 					tokens[i] = e.JWSToken
 				}
 				r.Ingest(tokens)
-				if page.Cursor == nil {
+				if page.Resume() == nil {
 					break
 				}
-				after = *page.Cursor
+				after = *page.Resume()
 			}
 			chain, _ = r.readStore.GetContentChain(contentID)
 			if chain != nil {
@@ -482,6 +488,7 @@ func (r *Relay) handleContentLog(w http.ResponseWriter, req *http.Request) {
 		entries = append(entries, logEntry{CID: cid, JWSToken: jws})
 	}
 
+	// Same relay-local rule as the identity log: off-branch cursor → 400.
 	startIdx := 0
 	if after != "" {
 		found := false
@@ -493,7 +500,8 @@ func (r *Relay) handleContentLog(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		if !found {
-			startIdx = len(entries)
+			writeError(w, 400, "invalid cursor")
+			return
 		}
 	}
 
@@ -503,15 +511,17 @@ func (r *Relay) handleContentLog(w http.ResponseWriter, req *http.Request) {
 	}
 	page := entries[startIdx:end]
 
-	var cursor *string
+	var next *string
 	if len(page) == limit {
-		c := page[len(page)-1].CID
-		cursor = &c
+		n := page[len(page)-1].CID
+		next = &n
 	}
 
+	// `cursor` is a deprecated alias of `next`, emitted for one release window.
 	writeJSON(w, 200, map[string]any{
 		"entries": page,
-		"cursor":  cursor,
+		"next":    next,
+		"cursor":  next,
 	})
 }
 
@@ -555,26 +565,24 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 	after := req.URL.Query().Get("after")
 	limit := parseLimit(req, 100, 1000)
 
-	startIdx := 0
+	// True keyset over the CID sort order: resume strictly past `after`, whether
+	// or not it names a present row — cursors survive concurrent additions and
+	// cross-relay replay (the enumeration key IS the sort key here).
+	remaining := decorated
 	if after != "" {
-		found := false
-		for i, e := range decorated {
-			if e.csCid == after {
-				startIdx = i + 1
-				found = true
-				break
+		remaining = remaining[:0:0]
+		for _, e := range decorated {
+			if e.csCid > after {
+				remaining = append(remaining, e)
 			}
-		}
-		if !found {
-			startIdx = len(decorated)
 		}
 	}
 
-	end := startIdx + limit
-	if end > len(decorated) {
-		end = len(decorated)
+	end := limit
+	if end > len(remaining) {
+		end = len(remaining)
 	}
-	page := decorated[startIdx:end]
+	page := remaining[:end]
 
 	var next *string
 	if len(page) == limit {
@@ -582,14 +590,19 @@ func (r *Relay) handleGetCountersignatures(w http.ResponseWriter, req *http.Requ
 		next = &n
 	}
 
-	tokens := []string{}
+	// Rows are { cid, jwsToken } — the per-chain log entry shape. targetCID and
+	// relation live inside the signed payload; the token is the truth.
+	type countersignatureRow struct {
+		CID      string `json:"cid"`
+		JWSToken string `json:"jwsToken"`
+	}
+	rows := []countersignatureRow{}
 	for _, entry := range page {
-		tokens = append(tokens, entry.jws)
+		rows = append(rows, countersignatureRow{CID: entry.csCid, JWSToken: entry.jws})
 	}
 
 	writeJSON(w, 200, map[string]any{
-		"cid":               cid,
-		"countersignatures": tokens,
+		"countersignatures": rows,
 		"next":              next,
 	})
 }
@@ -606,7 +619,11 @@ func (r *Relay) handleGetLog(w http.ResponseWriter, req *http.Request) {
 	after := req.URL.Query().Get("after")
 	limit := parseLimit(req, 100, 1000)
 
-	entries, cursor, err := r.readStore.ReadLog(after, limit)
+	entries, next, err := r.readStore.ReadLog(after, limit)
+	if errors.Is(err, ErrUnknownLogCursor) {
+		writeError(w, 400, "invalid cursor")
+		return
+	}
 	if storeErr(w, err) {
 		return
 	}
@@ -614,14 +631,16 @@ func (r *Relay) handleGetLog(w http.ResponseWriter, req *http.Request) {
 		entries = []LogEntry{}
 	}
 
-	var cursorPtr *string
-	if cursor != "" {
-		cursorPtr = &cursor
+	var nextPtr *string
+	if next != "" {
+		nextPtr = &next
 	}
 
+	// `cursor` is a deprecated alias of `next`, emitted for one release window.
 	writeJSON(w, 200, map[string]any{
 		"entries": entries,
-		"cursor":  cursorPtr,
+		"next":    nextPtr,
+		"cursor":  nextPtr,
 	})
 }
 

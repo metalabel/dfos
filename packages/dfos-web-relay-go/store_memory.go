@@ -608,7 +608,9 @@ func (s *MemoryStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 			}
 		}
 		if !found {
-			startIdx = len(s.operationLog) // cursor not found → empty
+			// Relay-local cursor this log never issued → the route answers 400,
+			// never a silently empty page.
+			return nil, "", ErrUnknownLogCursor
 		}
 	}
 
@@ -621,15 +623,16 @@ func (s *MemoryStore) ReadLog(after string, limit int) ([]LogEntry, string, erro
 	result := make([]LogEntry, len(entries))
 	copy(result, entries)
 
-	// Return a resume cursor whenever the page has entries (not only when full), so
-	// a caught-up puller advances past the final partial page instead of re-fetching
-	// the tail every cycle. Mirrors SQLiteStore.ReadLog.
-	var cursor string
-	if len(result) > 0 {
-		cursor = result[len(result)-1].CID
+	// `next` only on a FULL page — a partial page means caught up (the shared
+	// list envelope's contract). The puller retains its last persisted cursor on
+	// null and re-fetches the final partial page next cycle (cheap dedup), so
+	// nothing strands. Mirrors SQLiteStore.ReadLog and the TS twin.
+	var next string
+	if len(result) == limit {
+		next = result[len(result)-1].CID
 	}
 
-	return result, cursor, nil
+	return result, next, nil
 }
 
 func (s *MemoryStore) RelayStats() (*RelayStats, error) {
