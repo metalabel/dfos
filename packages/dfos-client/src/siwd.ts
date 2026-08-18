@@ -17,6 +17,7 @@
 import {
   buildSignRequest,
   decodeMultikey,
+  SignRequestVerifyError,
   verifySignRequest,
   type Signer,
   type VerifiedIdentity,
@@ -305,16 +306,25 @@ export const validateSiwdSignRequest = async (
     resolveIdentity: options.resolveIdentity,
     ...(options.now !== undefined ? { now: options.now } : {}),
   });
+  // Every post-envelope family gate is a definitive "invalid" verdict — wrap in
+  // the sign-request error taxonomy so consumers branch on `reason`, matching
+  // the Go twin (ErrSignRequestInvalid), never on message text.
+  const invalid = (message: string) => new SignRequestVerifyError('invalid', message);
   if (request.subject !== options.signerDid) {
-    throw new Error('SIWD sign request subject does not match signer DID');
+    throw invalid('SIWD sign request subject does not match signer DID');
   }
   if (request.payloadTyp !== SIWD_JWS_TYP) {
-    throw new Error(`invalid SIWD sign request payloadTyp: ${request.payloadTyp}`);
+    throw invalid(`invalid SIWD sign request payloadTyp: ${request.payloadTyp}`);
   }
-  const challenge = parseSiwdChallenge(request.payloadBytes);
-  assertSiwdOneClock(challenge.timestamp, request.expiresAt, options.acceptanceWindowSeconds);
+  let challenge: SiwdChallenge;
+  try {
+    challenge = parseSiwdChallenge(request.payloadBytes);
+    assertSiwdOneClock(challenge.timestamp, request.expiresAt, options.acceptanceWindowSeconds);
+  } catch (err) {
+    throw invalid(err instanceof Error ? err.message : 'invalid SIWD sign request payload');
+  }
   if (challenge.did !== undefined && challenge.did !== options.signerDid) {
-    throw new Error('SIWD challenge did does not match signer DID');
+    throw invalid('SIWD challenge did does not match signer DID');
   }
   return { ...request, challenge };
 };
