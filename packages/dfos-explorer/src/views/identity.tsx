@@ -54,10 +54,16 @@ import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
 import { fetchBlobRaw, fetchClaim, type ClaimResult } from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
-import { revokedByCredential } from '../lib/revocations';
+import { fetchIssuerRevocations, revokedByCredential } from '../lib/revocations';
 import { jitIndexChain } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
 import { NotFound } from './not-found';
+
+/** Ceiling on the offline revocation fold. Revocations are the rarest primitive
+ *  (46 across the public relay's whole corpus at time of writing), so this is a
+ *  safety ceiling on a degraded path, not a working page size — the relay's
+ *  issuer feed above is the real answer. */
+const LOCAL_REVOCATION_SCAN = 5000;
 
 interface IdentityClaimState {
   isDeleted?: boolean;
@@ -154,17 +160,24 @@ export const Identity = (props: { did: string }) => {
         if (!dead) setCreds([]);
       });
 
-    // fold revocation status locally: every synced revocation op names the
-    // credentialCID it invalidates, so an issued credential's active/revoked
-    // state comes from the math already in the index (no relay round-trip).
-    void getDb()
-      .then((db) => db.opsOfKind('revocation', 100000))
-      .then((ops) => {
-        if (!dead) setRevoked(revokedByCredential(ops));
-      })
-      .catch(() => {
-        if (!dead) setRevoked(new Map());
-      });
+    // active/revoked for the credentials this DID issued. The relay's
+    // /revocations/v1/issuer feed answers exactly that question — one bounded,
+    // always-fresh, no-sync query — so ask it first. A relay without the feed
+    // (or none reachable) returns null, NOT an empty set, and we fall back to
+    // folding the local revocation ops, bounded at LOCAL_REVOCATION_SCAN.
+    // Absence is never proof of non-revocation either way; the credential view
+    // re-verifies any proof.
+    void (async () => {
+      const fromRelay = await fetchIssuerRevocations(props.did, relays);
+      if (dead) return;
+      if (fromRelay) {
+        setRevoked(fromRelay);
+        return;
+      }
+      const db = await getDb().catch(() => null);
+      if (dead || !db) return;
+      setRevoked(revokedByCredential(await db.opsOfKind('revocation', LOCAL_REVOCATION_SCAN)));
+    })();
 
     return () => {
       dead = true;

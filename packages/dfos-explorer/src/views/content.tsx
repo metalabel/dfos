@@ -42,9 +42,14 @@ import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
-import { revokedByCredential } from '../lib/revocations';
+import { fetchCredentialRevocations } from '../lib/revocations';
 import { jitIndexChain } from '../lib/sync-store';
 import { NotFound } from './not-found';
+
+/** Ceiling on the offline credential scan behind the access-grants panel. The
+ *  live relay index is the unbounded-corpus answer; this lane exists for a relay
+ *  that serves no index, where the local fold is all there is. */
+const LOCAL_CREDENTIAL_SCAN = 5000;
 
 interface DocState {
   blob: BlobResult;
@@ -85,16 +90,16 @@ export const Content = (props: { id: string }) => {
     const relays = getRelays();
     const client = getClient();
 
-    // related grants — scan the synced credential ops for any naming this chain,
-    // and fold local revocation ops so each grant shows active/revoked
+    // related grants, offline lane — the synced credential ops naming this chain.
+    // This is the FALLBACK: an index-capable relay answers the same question
+    // fresh via /index/v0/credentials?resource= (the effect below). The scan is
+    // bounded at LOCAL_CREDENTIAL_SCAN rows so a large synced corpus can't turn
+    // a detail page into a whole-partition read; the index lane, not a bigger
+    // number, is the answer for a corpus past that.
     void getDb()
-      .then((db) =>
-        Promise.all([db.opsOfKind('credential', 100000), db.opsOfKind('revocation', 100000)]),
-      )
-      .then(([credOps, revOps]) => {
-        if (dead) return;
-        setGrants(grantsForChain(credOps, props.id));
-        setRevoked(revokedByCredential(revOps));
+      .then((db) => db.opsOfKind('credential', LOCAL_CREDENTIAL_SCAN))
+      .then((credOps) => {
+        if (!dead) setGrants(grantsForChain(credOps, props.id));
       })
       .catch(() => {
         if (!dead) setGrants([]);
@@ -182,6 +187,27 @@ export const Content = (props: { id: string }) => {
       dead = true;
     };
   }, [props.id, indexed]);
+
+  // revocation status for the grants actually rendered — one bounded query per
+  // credential against the relay's own /revocations/v1 feed, always fresh and
+  // no-sync, replacing what used to be a scan of the entire local revocation
+  // partition. A credential no relay answers for stays absent from the map and
+  // renders "active", which is the honest read of "no relay we asked has seen a
+  // revocation" (the credential view carries the rigorous check).
+  const grantCids = [...(grantsIndex ?? []), ...(grants ?? [])].map((g) => g.cid);
+  const grantKey = grantCids.join(',');
+  useEffect(() => {
+    let dead = false;
+    if (grantCids.length === 0) return;
+    void fetchCredentialRevocations(grantCids, getRelays()).then((m) => {
+      if (!dead) setRevoked(m);
+    });
+    return () => {
+      dead = true;
+    };
+    // grantKey is the stable identity of grantCids
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grantKey]);
 
   if (claim && !claim.body && error) {
     return <NotFound kind="content" id={props.id} claim={claim} />;

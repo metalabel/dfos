@@ -11,7 +11,7 @@
     "url": "https://github.com/metalabel/dfos.git",
     "directory": "packages/dfos-explorer"
   },
-  "homepage": "https://protocol.dfos.com",
+  "homepage": "https://explore.dfos.com",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

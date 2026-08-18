@@ -19,9 +19,9 @@
   no longer gates enumeration — it is an explicit "audit completeness" action.
 
   Enumeration is intrinsically incomplete under "completeness is outside the
-  proof": these loaders page on demand (load-more), and any name search filters
-  the LOADED rows only — the relay has no search, and this never pretends
-  otherwise.
+  proof": these loaders serve ONE PAGE AT A TIME off the relay's keyset cursor.
+  Name search is the relay's own `nameContains` filter, applied server-side
+  before pagination — never a client-side pass over already-loaded rows.
 
 */
 
@@ -30,9 +30,9 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { getClient } from './client';
 import { getRelays } from './relays';
 
-/** Per-page size for the index loaders — one page is the initial browse, and
- *  "load more" pulls the next page on demand (no silent whole-corpus cap). */
-const PAGE = 200;
+/** Per-page size for every index surface — small enough to read, paged with a
+ *  real prev/next off the relay's `next` cursor (no whole-corpus scroll). */
+export const PAGE = 25;
 
 /**
  * Whether any configured relay advertises the index capability. `null` while the
@@ -158,19 +158,30 @@ export const useIndexIter2 = (): boolean | null => {
   return supported;
 };
 
-export interface IndexLoad<T> {
+export interface IndexPage<T> {
+  /** the rows of the CURRENT page only — paging replaces them, never appends. */
   rows: T[];
   loading: boolean;
-  /** the relay index has a next page — `loadMore` will pull it. */
-  hasMore: boolean;
-  /** pull the next page and append it (no-op while loading or exhausted). */
-  loadMore: () => void;
-  /** the INITIAL index load REJECTED (relay unreachable / index errored) — this
-   *  is distinct from a successful but genuinely-empty page (rows [], error
-   *  false). Consumers use it to fall back to the local corpus / show an honest
-   *  error instead of a false "the index returned nothing". */
+  /** the index load REJECTED (relay unreachable / index errored) — this is
+   *  distinct from a successful but genuinely-empty page (rows [], error false).
+   *  Consumers use it to fall back to the local corpus / show an honest error
+   *  instead of a false "the index returned nothing". */
   error: boolean;
-  /** re-run the initial load — a retry after an error, or a refresh from head. */
+  /** the cursor that produced this page ('' = the first page) — the deep-link key. */
+  cursor: string;
+  /** the relay issued a `next` — a further page exists. */
+  hasNext: boolean;
+  /** this page was reached by paging forward, so `prev` can pop back to it. A
+   *  DEEP-LINKED page has no history to pop: it reports false here and true on
+   *  `offFirst`, which is the honest difference (we know we're not at the start,
+   *  we just don't know the cursor of the page before this one). */
+  hasPrev: boolean;
+  /** not the first page — `first` re-enters the enumeration from the top. */
+  offFirst: boolean;
+  next: () => void;
+  prev: () => void;
+  first: () => void;
+  /** re-run the current page — a retry after an error. */
   retry: () => void;
 }
 
@@ -216,114 +227,135 @@ export const indexCredSource = (indexed: boolean | null, indexError: boolean): b
   indexed === true && !indexError;
 
 /**
- * Generic cursor pager over an index projection. Loads the first page when
- * enabled, exposes `loadMore` to append the next page via the relay's `next`
- * cursor. `resetKey` bumps to reload from scratch (e.g. a filter toggle).
+ * Generic KEYSET PAGER over an index projection: one page at a time, forward via
+ * the relay's opaque `next` cursor and backward via a stack of the cursors already
+ * visited (a keyset index serves no "page N-1" — the only honest back is the one
+ * you walked in on). `resetKey` bumps to re-enter the enumeration from the top
+ * (e.g. a filter toggle); `initialCursor` restores a deep link on first mount.
  *
- * A `run` id invalidates in-flight loads across a reset/unmount so a slow first
- * page can't clobber a fresh one; `busy` guards against overlapping fetches.
+ * A `run` id invalidates in-flight loads across a page change/unmount so a slow
+ * page can't clobber a fresher one; `busy` guards against overlapping fetches.
  */
-const useIndexPager = <T>(
+export const useIndexPageStack = <T>(
   enabled: boolean,
   resetKey: string,
+  initialCursor: string,
+  onCursor: ((cursor: string) => void) | undefined,
   fetchPage: (after?: string) => Promise<{ items: T[]; next: string | null }>,
-): IndexLoad<T> => {
+): IndexPage<T> => {
+  // the cursors walked to reach here; the last is the CURRENT page ('' = first)
+  const [stack, setStack] = useState<string[]>(() => [initialCursor]);
   const [rows, setRows] = useState<T[]>([]);
   const [loading, setLoading] = useState(false);
-  const [next, setNext] = useState<string | undefined>(undefined);
-  const [hasMore, setHasMore] = useState(false);
+  const [next, setNext] = useState<string>('');
   const [error, setError] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
   const runRef = useRef(0);
   const busyRef = useRef(false);
+  const resetKeyRef = useRef(resetKey);
   // hold the latest fetch closure without making it an effect dependency
   const fetchRef = useRef(fetchPage);
   fetchRef.current = fetchPage;
+  const onCursorRef = useRef(onCursor);
+  onCursorRef.current = onCursor;
 
-  const loadPage = (after: string | undefined, run: number, reset: boolean): void => {
-    if (busyRef.current) return;
-    busyRef.current = true;
+  const cursor = stack[stack.length - 1] ?? '';
+
+  // a filter change re-enters the enumeration from the top — a cursor minted
+  // against the old query means nothing to the new one. Guarded on an actual
+  // CHANGE so a deep-linked first mount keeps its restored cursor.
+  useEffect(() => {
+    if (resetKeyRef.current === resetKey) return;
+    resetKeyRef.current = resetKey;
+    setStack(['']);
+    onCursorRef.current?.('');
+  }, [resetKey]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setRows([]);
+      setNext('');
+      setError(false);
+      return;
+    }
+    const run = ++runRef.current;
     setLoading(true);
+    busyRef.current = true;
     void fetchRef
-      .current(after)
+      .current(cursor || undefined)
       .then((page) => {
-        if (run !== runRef.current) return; // superseded by a reset/unmount
+        if (run !== runRef.current) return; // superseded by a page change/unmount
         setError(false); // reachable — a genuinely-empty page is NOT an error
-        setRows((prev) => (reset ? page.items : [...prev, ...page.items]));
-        setNext(page.next ?? undefined);
-        setHasMore(!!page.next);
+        setRows(page.items);
+        setNext(page.next ?? '');
       })
       .catch(() => {
         if (run !== runRef.current) return;
-        // only the INITIAL load flags error — a failed load-more leaves the rows
-        // already shown intact (and its own button handles the retry affordance)
-        if (reset) {
-          setError(true);
-          setRows([]);
-          setNext(undefined);
-          setHasMore(false);
-        }
+        setError(true);
+        setRows([]);
+        setNext('');
       })
       .finally(() => {
         busyRef.current = false;
         if (run === runRef.current) setLoading(false);
       });
-  };
-
-  useEffect(() => {
-    if (!enabled) {
-      setRows([]);
-      setNext(undefined);
-      setHasMore(false);
-      setError(false);
-      return;
-    }
-    const run = ++runRef.current;
-    setRows([]);
-    setNext(undefined);
-    setHasMore(false);
-    setError(false);
-    loadPage(undefined, run, true);
     return () => {
       runRef.current += 1; // invalidate any in-flight load on dep change / unmount
     };
     // fetchPage is read via fetchRef so it is intentionally not a dependency
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, resetKey, reloadTick]);
+  }, [enabled, resetKey, cursor, reloadTick]);
 
-  const loadMore = (): void => {
-    if (!enabled || !hasMore || loading || busyRef.current) return;
-    loadPage(next, runRef.current, false);
+  const go = (nextStack: string[]): void => {
+    if (loading || busyRef.current) return;
+    setStack(nextStack);
+    onCursorRef.current?.(nextStack[nextStack.length - 1] ?? '');
   };
 
-  // retry re-runs the INITIAL load via the effect (a failed first page leaves
-  // hasMore false, so loadMore can't recover it — reloadTick can).
-  const retry = (): void => setReloadTick((t) => t + 1);
-
-  return { rows, loading, hasMore, loadMore, error, retry };
+  return {
+    rows,
+    loading,
+    error,
+    cursor,
+    hasNext: !!next,
+    hasPrev: stack.length > 1,
+    offFirst: cursor !== '',
+    next: () => {
+      if (next) go([...stack, next]);
+    },
+    prev: () => {
+      if (stack.length > 1) go(stack.slice(0, -1));
+    },
+    first: () => {
+      if (cursor !== '') go(['']);
+    },
+    retry: () => setReloadTick((t) => t + 1),
+  };
 };
 
 /** Options common to the index list hooks — a server-side `nameContains` substring
  *  (identities only) and a time `order`. Both bump the pager's resetKey, so changing
- *  either re-pages from the relay and the loaded rows always reflect the live query. */
+ *  either re-enters the enumeration and the shown page always reflects the live query. */
 export interface IndexListOpts {
   nameContains?: string;
   order?: IndexOrder;
 }
 
-/** Page the identity index (optionally public-profile-only) with load-more. A
- *  `nameContains` substring is applied SERVER-SIDE (the relay filters over the
- *  projected profile name before paginating — amber/non-authoritative), and an
- *  `order` selects recently-arrived / recently-active enumeration. Both re-page
- *  from the relay when changed. */
+/** Page the identity index (optionally public-profile-only). A `nameContains`
+ *  substring is applied SERVER-SIDE (the relay filters over the projected profile
+ *  name before paginating — amber/non-authoritative), and an `order` selects
+ *  recently-arrived / recently-active enumeration. Both re-enter the enumeration
+ *  when changed. `cursor`/`onCursor` carry the deep-linked page position. */
 export const useIndexIdentities = (
   enabled: boolean,
   publicOnly: boolean,
-  opts?: IndexListOpts,
-): IndexLoad<IndexIdentityRow> =>
-  useIndexPager(
+  opts?: IndexListOpts & { cursor?: string; onCursor?: (cursor: string) => void },
+): IndexPage<IndexIdentityRow> =>
+  useIndexPageStack(
     enabled,
     `identities:${publicOnly}:${opts?.nameContains ?? ''}:${opts?.order ?? ''}`,
+    opts?.cursor ?? '',
+    opts?.onCursor,
     (after) =>
       getClient()
         .indexIdentities({
@@ -339,16 +371,25 @@ export const useIndexIdentities = (
 /** Page the content index (optionally public-read-only), optionally narrowed to a
  *  single `$schema` and/or a `creator` / `signer` DID server-side, in the lexical
  *  default or a time `order`. Every filter bumps the resetKey, so changing one
- *  re-pages from the relay and the loaded rows always reflect the live query. In
+ *  re-enters the enumeration and the shown page always reflects the live query. In
  *  ordered mode the relay's `next` is an opaque token, passed back verbatim. */
 export const useIndexContent = (
   enabled: boolean,
   publicOnly: boolean,
-  opts?: { docSchema?: string; creator?: string; signer?: string; order?: IndexOrder },
-): IndexLoad<IndexContentRow> =>
-  useIndexPager(
+  opts?: {
+    docSchema?: string;
+    creator?: string;
+    signer?: string;
+    order?: IndexOrder;
+    cursor?: string;
+    onCursor?: (cursor: string) => void;
+  },
+): IndexPage<IndexContentRow> =>
+  useIndexPageStack(
     enabled,
     `content:${publicOnly}:${opts?.docSchema ?? ''}:${opts?.creator ?? ''}:${opts?.signer ?? ''}:${opts?.order ?? ''}`,
+    opts?.cursor ?? '',
+    opts?.onCursor,
     (after) =>
       getClient()
         .indexContent({

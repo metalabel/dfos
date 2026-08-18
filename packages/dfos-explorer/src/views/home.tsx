@@ -1,46 +1,43 @@
 /*
 
-  HOME — the network observatory
+  HOME — the network, then what's happening on it
 
-  Not a landing page: a live instrument. Two sources, one honest palette:
-  RELAY-ASSERTED figures (the relay's /.well-known claim) are the amber
-  headline; VERIFIED-LOCALLY figures (folded in your tab) are green. The gap
-  between them IS the thesis — speed from the relay, truth from the math. As
-  you browse, rows verify locally and the verified-ops figure climbs toward the
-  relay's assertion; a deep sync closes it entirely (and audits for omissions).
+  The stat band is still here and still honest — RELAY-ASSERTED figures amber,
+  VERIFIED-LOCALLY figures green, the gap between them the whole thesis — but it
+  has been compacted to one strip and is no longer the headline. What leads is
+  what an explorer is for: things you can open.
 
-  Everything reads from the LOCAL db + the relay hint. No new verification
-  inputs here — the figures reflect what's already been folded.
+    operations   a real browser over the raw operation log (see lib/log-feed.ts
+                 for why "newest first" is only available once you've synced)
+    posts        the public post feed off the relay's content index
+
+  Both page 25 at a time off a keyset cursor, and both carry their position in
+  the hash so a view can be linked.
 
 */
 
-import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
+import type { IndexContentRow } from '@metalabel/dfos-client';
+import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
+import { DidChip } from '../components/did-chip';
 import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
-import { Panel, Term } from '../components/ui';
-import type { ChainRollup, OpKind } from '../lib/db';
+import { ContentLink, OpLink, Pager, Panel, Term } from '../components/ui';
+import type { OpKind } from '../lib/db';
 import { estimateStorageBytes, OP_KINDS } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
+import { useIndexRowLabel } from '../lib/doc-label';
 import { fmtAge, fmtBytes, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import {
-  indexListState,
-  useIndexCapable,
-  useIndexContent,
-  useIndexIdentities,
-  useIndexIter2,
-  type IndexLoad,
-} from '../lib/index-light';
+import { useIndexCapable, useIndexContent, useIndexIter2 } from '../lib/index-light';
+import { useLocalLog, useRelayLog, type LogRow, type LogSource } from '../lib/log-feed';
 import { fetchRelayHint, type RelayHint } from '../lib/relay-hint';
+import { getPublicOnly, setPublicOnly } from '../lib/settings';
 import { startSync, stopSync, useSyncState } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
+import { useHashParam } from '../router';
 
-const SAMPLES: { label: string; q: string }[] = [
-  { label: 'identity', q: 'did:dfos:tn7kkfz7ehzvv6fzvate9rz2874nc3e' },
-  { label: 'public content', q: 'dn2nc79k7z6ekzfhd43he4v8tr6h236' },
-  { label: 'issuer (has credential)', q: 'did:dfos:tz49rzd68z98dfvre622nv2ta3a28vt' },
-];
+/** The lead content feed's type. Everything else lives under #/documents. */
+const POST_SCHEMA = 'https://schemas.dfos.com/post/v1';
 
 // the six primitive buckets, in a stable render order for the by-kind bar
 const KIND_LABEL: Record<OpKind, string> = {
@@ -62,7 +59,7 @@ const KIND_COLOR: Record<OpKind, string> = {
 };
 
 // relays key countsByKind by PRIMITIVE ('identity'), the local index by op-kind
-// ('identity-op') — map so the asserted subline lines up with the local figure.
+// ('identity-op') — map so the asserted figure lines up with the local one.
 const HINT_KEY: Partial<Record<OpKind, string>> = {
   'identity-op': 'identity',
   'content-op': 'content',
@@ -72,169 +69,78 @@ const HINT_KEY: Partial<Record<OpKind, string>> = {
   revocation: 'revocation',
 };
 
-interface Counts {
+interface Observatory {
+  /** ops folded into the local index — also the gate for the newest-first feed. */
   ops: number;
   chains: number;
-  byKind: Partial<Record<OpKind, number>>;
-}
-
-interface Observatory {
-  counts: Counts;
   oldestOpAt: string;
-  publicDocs: number;
-  recent: ChainRollup[];
-  identities: { chainId: string; name: string; avatarRef?: string }[];
   storageBytes: number | null;
 }
 
-const chainRoute = (row: ChainRollup): string =>
-  row.kind === 'content-op' ? `#/content/${row.chainId}` : `#/did/${row.chainId}`;
-
 // -----------------------------------------------------------------------------
-// one stat cell. Trust palette: amber = RELAY-ASSERTED (the network's claim, a
-// hint), green = VERIFIED LOCALLY (folded in your tab). The headline numeral is
-// the relay-asserted figure in amber; a green subline shows how much of it your
-// tab has verified. When the whole figure is verified locally the numeral goes
-// green. `verifiedText` overrides the subline for figures that are inherently
-// local (e.g. public docs resolved in-tab).
+// NETWORK — one compact strip. Trust palette unchanged: amber = RELAY-ASSERTED
+// (the network's claim, a hint), green = VERIFIED LOCALLY (folded in your tab).
+// Only OPERATIONS carries a numeric verified delta — it is the one figure where
+// local and relay share a unit (ops vs ops); the per-kind figures are CHAIN
+// counts locally but OP counts in the hint, so they stay relay-asserted.
 // -----------------------------------------------------------------------------
 
-const Stat = (props: {
-  label: string;
-  asserted: number | null;
-  assertedText?: string | undefined;
-  verified?: number | null | undefined;
-  verifiedText?: string | undefined;
-  fullyVerified?: boolean | undefined;
-  // amber/dim subline override for a figure with no relay assertion to verify
-  // against (e.g. a local-only count that needs a deep sync to compute).
-  noteText?: string | undefined;
-}) => {
-  const known = props.assertedText != null || props.asserted != null;
-  const main = props.assertedText ?? (props.asserted != null ? fmtCount(props.asserted) : '—');
-  const verified = props.verified ?? 0;
-  const green = props.verifiedText != null || props.fullyVerified === true || verified > 0;
-  const sub =
-    props.verifiedText ??
-    (props.fullyVerified === true
-      ? 'verified locally'
-      : verified > 0
-        ? `${fmtCount(verified)} verified`
-        : (props.noteText ?? (known ? 'relay-asserted' : 'no relay hint')));
-  // the NUMERAL goes green only when the whole figure is verified locally
-  // (a deep audit, or an inherently-local resolved figure); a partial verified
-  // delta greens only the SUBLINE, leaving the relay-asserted headline amber.
-  const numGreen = props.fullyVerified === true || props.verifiedText != null;
-  return (
-    <div class="stat">
-      <div class={`stat-num ${numGreen ? 'ok' : 'asserted'}`}>{main}</div>
-      <div class="stat-unit">{props.label}</div>
-      <div class={`stat-sub ${green ? 'ok' : 'asserted'}`}>{sub}</div>
-    </div>
-  );
-};
-
-// -----------------------------------------------------------------------------
-// NETWORK — stat band + by-kind proportional bar
-// -----------------------------------------------------------------------------
+const StatCell = (props: { label: string; value: string; green: boolean }) => (
+  <span class="ss">
+    <b class={`ss-num ${props.green ? 'ok' : 'asserted'}`}>{props.value}</b>
+    <span class="ss-unit">{props.label}</span>
+  </span>
+);
 
 const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
-  const sync = useSyncState();
-  const resolving = sync.phase === 'resolving';
-  const syncing = sync.phase === 'syncing';
   const { obs, hint } = props;
-  const counts = obs?.counts ?? { ops: 0, chains: 0, byKind: {} };
   const hk = hint.countsByKind ?? {};
   const asserted = (k: OpKind): number | null => {
     const key = HINT_KEY[k];
     return key ? (hk[key] ?? null) : null;
   };
+  const num = (n: number | null): string => (n != null ? fmtCount(n) : '—');
 
-  // the one unit-safe local-vs-network comparison: OPERATIONS folded in your tab
-  // (JIT folds as you browse + any deep sync) vs the ops the relay asserts. This
-  // is the honest "how much of the network have I verified" figure; it grows as
-  // you browse and completes on a deep sync. Per-kind identity/content figures
-  // are CHAIN counts locally but OP counts in the hint, so they carry no verified
-  // delta — they stay relay-asserted headline figures.
-  const localOps = counts.ops;
+  const localOps = obs?.ops ?? 0;
   const assertedOps = hint.opCount ?? 0;
   const fullyVerified = assertedOps > 0 && localOps >= assertedOps;
-
-  const assertedOldest = hint.oldestOpAt ? fmtAge(hint.oldestOpAt) : undefined;
-  const localOldest = obs?.oldestOpAt ? fmtAge(obs.oldestOpAt) : undefined;
-  const publicDocs = obs?.publicDocs ?? null;
+  const oldest = fullyVerified && obs?.oldestOpAt ? obs.oldestOpAt : hint.oldestOpAt;
 
   // by-kind: relay-asserted proportions — the network's shape, always available.
   const kindCounts: [OpKind, number][] = OP_KINDS.map((k) => [k, asserted(k) ?? 0]);
   const total = kindCounts.reduce((n, [, c]) => n + c, 0);
 
-  const right = fullyVerified
-    ? 'fully verified locally'
-    : localOps > 0
-      ? `relay-asserted · ${fmtCount(localOps)} ops verified locally`
-      : 'relay-asserted';
-
   return (
     <Panel
       title="network"
       accent={fullyVerified ? 'ok' : 'warn'}
-      right={<span class="lbl">{right}</span>}
+      right={
+        <span class="lbl">
+          {fullyVerified
+            ? 'fully verified locally'
+            : localOps > 0
+              ? `relay-asserted · ${fmtCount(localOps)} ops verified locally`
+              : 'relay-asserted'}
+        </span>
+      }
     >
-      {/* Headline numerals are the relay's assertion (amber = hint); a green
-          subline shows what your tab has folded (verified locally). Only
-          operations carries a numeric verified delta — it is the one figure
-          where local and relay share a unit (ops vs ops). */}
-      <div class="statband">
-        <Stat
-          label="operations"
-          asserted={assertedOps}
-          verified={localOps}
-          fullyVerified={fullyVerified}
-        />
-        <Stat label="identities" asserted={asserted('identity-op')} fullyVerified={fullyVerified} />
-        <Stat
+      <div class="statstrip">
+        {/* the verified delta lives in the panel's right label, not inline — one
+            statement of it, and the strip stays one line. */}
+        <StatCell label="operations" value={num(hint.opCount ?? null)} green={fullyVerified} />
+        <StatCell label="identities" value={num(asserted('identity-op'))} green={fullyVerified} />
+        <StatCell
           label="content chains"
-          asserted={asserted('content-op')}
-          fullyVerified={fullyVerified}
+          value={num(asserted('content-op'))}
+          green={fullyVerified}
         />
-        <Stat label="credentials" asserted={asserted('credential')} fullyVerified={fullyVerified} />
-        <Stat
-          label="public docs"
-          asserted={null}
-          assertedText={
-            resolving
-              ? 'resolving'
-              : publicDocs != null && publicDocs > 0
-                ? fmtCount(publicDocs)
-                : '—'
-          }
-          verifiedText={
-            publicDocs != null && publicDocs > 0 && !resolving ? 'verified locally' : undefined
-          }
-          noteText={
-            resolving
-              ? 'resolving'
-              : publicDocs && publicDocs > 0
-                ? undefined
-                : 'local · deep-sync to count'
-          }
-        />
-        <Stat
-          label="oldest op"
-          asserted={null}
-          assertedText={
-            (fullyVerified && localOldest ? localOldest : assertedOldest) ?? localOldest ?? '—'
-          }
-          verifiedText={fullyVerified && localOldest ? 'verified locally' : undefined}
-        />
+        <StatCell label="credentials" value={num(asserted('credential'))} green={fullyVerified} />
+        <StatCell label="oldest op" value={oldest ? fmtAge(oldest) : '—'} green={fullyVerified} />
       </div>
 
       {total > 0 ? (
-        <div style={{ marginTop: 12 }}>
-          <div class="lbl" style={{ marginBottom: 6 }}>
-            by kind · relay-asserted
-          </div>
-          <div class="kindbar">
+        <>
+          <div class="kindbar sm">
             {kindCounts.map(([k, c]) =>
               c > 0 ? (
                 <div
@@ -254,335 +160,311 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
               </span>
             ))}
           </div>
-        </div>
+        </>
       ) : null}
-
-      <div class="hero-actions" style={{ marginTop: 12 }}>
-        {syncing ? (
-          <button onClick={() => stopSync()}>stop</button>
-        ) : (
-          <button class={fullyVerified ? '' : 'primary'} onClick={() => void startSync('manual')}>
-            {fullyVerified ? 're-audit full log' : 'deep-sync · verify the full log'}
-          </button>
-        )}
-        <span class="muted">
-          {fullyVerified
-            ? 'Every figure above is counted from the math in your tab. A deep sync re-audits the full log for completeness — it can detect a relay index’s omissions.'
-            : 'Headline figures are relay-asserted hints; rows you browse verify locally as you view them. Deep-sync folds the entire operation log into your tab — every figure then counted from math, not taken on faith, and relay omissions become detectable.'}
-        </span>
-      </div>
     </Panel>
   );
 };
 
 // -----------------------------------------------------------------------------
-// RECENT ACTIVITY — public content chains by most-recent head time
-//   index-capable path: content `order=headAt.desc` — genuinely recency-ordered
-//   (the relay serves the sort), each row an attributed hint that greens as it
-//   scrolls into view and its chain folds. This is the network's pulse AND the
-//   recent-public-documents feed: the title projection surfaces on each row.
-//   local (non-indexed) path: latest local chains by last op, as before.
+// OPERATIONS — the op browser (no such surface existed before)
 // -----------------------------------------------------------------------------
 
-// how many recent rows home shows and verifies live
-const RECENT_N = 60;
+/** A chain identifier rendered by what it actually is: an identity resolves to
+ *  its public profile name, a content chain links to its chain, a bare CID to
+ *  its op. Non-chain primitives (credential / countersign / revocation) ride a
+ *  shared chainId, which is why this is a switch and not a single link. */
+const ChainCell = (props: { chainId: string }) => {
+  const { chainId } = props;
+  if (!chainId) return <span class="muted">—</span>;
+  if (chainId.startsWith('did:dfos:')) return <DidChip did={chainId} />;
+  if (chainId.startsWith('baf')) return <OpLink cid={chainId} />;
+  return <ContentLink id={chainId} />;
+};
 
-/** One recent-content row: the projected title (attributed) + when, with a live
- *  verify badge that flips to verified as the row enters view and its chain folds
- *  in the tab. opCount/deletion reconcile to the fold (the fold wins). */
-const RecentContentRow = (props: { row: IndexContentRow }) => {
+/** The shared cells of an operation row; the two wrappers below differ only in
+ *  whether the chain is one the verify-queue can fold. */
+const OpCells = (props: { row: LogRow; badge?: ComponentChildren }) => {
+  const { row } = props;
+  return (
+    <>
+      <td>
+        <span class={`kind ${row.kind}`}>{row.kind.replace('-op', '')}</span>
+      </td>
+      <td onClick={(e) => e.stopPropagation()}>
+        <ChainCell chainId={row.chainId} /> {props.badge}
+      </td>
+      <td>{row.type ? <span class="k-role">{row.type}</span> : null}</td>
+      <td class="n">{fmtAge(row.createdAt)}</td>
+      <td class="cid">{short(row.cid, 10, 6)}</td>
+    </>
+  );
+};
+
+/** identity-op / content-op: the chain folds, so the row greens as it is seen. */
+const OpChainRow = (props: { row: LogRow; kind: 'identity' | 'content' }) => {
+  const { row } = props;
+  const ref = useVerifyOnVisible<HTMLTableRowElement>(props.kind, row.chainId);
+  return (
+    <tr ref={ref} onClick={() => (location.hash = `#/op/${row.cid}`)}>
+      <OpCells row={row} badge={<VerifyBadge kind={props.kind} chainId={row.chainId} />} />
+    </tr>
+  );
+};
+
+/** artifact / credential / countersign / revocation: standalone ops with no
+ *  chain history to fold — the op page itself is where they verify. */
+const OpPlainRow = (props: { row: LogRow }) => (
+  <tr onClick={() => (location.hash = `#/op/${props.row.cid}`)}>
+    <OpCells row={props.row} />
+  </tr>
+);
+
+const OperationsPanel = (props: { localOps: number | null }) => {
+  const [cursor, setCursor] = useHashParam('ops');
+  const [srcParam, setSrcParam] = useHashParam('src');
+  // the local corpus is the only source with a real newest-first order, so it
+  // leads once a sync exists; `?src=relay` opts back into the log-from-genesis
+  // walk (which is also the only source before a sync).
+  const synced = props.localOps !== null && props.localOps > 0;
+  const source: LogSource = !synced || srcParam === 'relay' ? 'relay' : 'local';
+  const ready = props.localOps !== null;
+
+  const relay = useRelayLog(ready && source === 'relay', cursor, setCursor);
+  const local = useLocalLog(ready && source === 'local');
+  const feed = source === 'local' ? local : relay;
+
+  return (
+    <Panel
+      title="operations"
+      accent="warn"
+      right={
+        <span class="lbl">
+          {source === 'local'
+            ? 'newest first · from your synced log'
+            : 'append order · live from the relay log'}
+        </span>
+      }
+    >
+      <div class="ck-note" style={{ marginBottom: 8 }}>
+        {source === 'local' ? (
+          <>
+            Every operation you have synced, newest first. Rows are the relay's own log entries —
+            browsing metadata, not proof; open one to verify its signature, or watch a chain row
+            green as your tab folds it.
+          </>
+        ) : (
+          <>
+            Every operation the relay has accepted, in its own append order. The log route is
+            <b> forward-only</b> — it serves no reverse order and no offset — so this walks from the
+            first operation the relay holds. <b>Deep-sync the full log</b> and this panel flips to
+            newest-first, counted from your own store.
+          </>
+        )}
+      </div>
+
+      {synced ? (
+        <div class="filters" style={{ marginBottom: 8 }}>
+          <button class={source === 'local' ? 'on' : ''} onClick={() => setSrcParam('')}>
+            newest first
+          </button>
+          <button class={source === 'relay' ? 'on' : ''} onClick={() => setSrcParam('relay')}>
+            from the beginning
+          </button>
+        </div>
+      ) : null}
+
+      {feed.error ? (
+        <div class="ck-note">
+          couldn’t read the operation log.{' '}
+          <button onClick={feed.retry} disabled={feed.loading}>
+            {feed.loading ? 'retrying…' : 'retry'}
+          </button>
+          {feed.offFirst ? <button onClick={feed.first}> start over</button> : null}
+        </div>
+      ) : feed.rows.length === 0 ? (
+        <span class="muted">
+          {feed.loading ? 'reading the operation log…' : 'the operation log is empty'}
+        </span>
+      ) : (
+        <div class="index-rows">
+          <table>
+            <thead>
+              <tr>
+                <th>kind</th>
+                <th>chain</th>
+                <th>op</th>
+                <th>when</th>
+                <th>operation CID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {feed.rows.map((row) =>
+                row.kind === 'identity-op' ? (
+                  <OpChainRow key={row.cid} row={row} kind="identity" />
+                ) : row.kind === 'content-op' ? (
+                  <OpChainRow key={row.cid} row={row} kind="content" />
+                ) : (
+                  <OpPlainRow key={row.cid} row={row} />
+                ),
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Pager
+        count={feed.rows.length}
+        noun="operations"
+        loading={feed.loading}
+        hasNext={feed.hasNext}
+        hasPrev={feed.hasPrev}
+        offFirst={feed.offFirst}
+        onFirst={feed.first}
+        onPrev={feed.prev}
+        onNext={feed.next}
+      />
+    </Panel>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// POSTS — the public post feed off the relay's content index
+// -----------------------------------------------------------------------------
+
+const PostRow = (props: { row: IndexContentRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
   const rec = useVerifyStatus('content', row.contentId);
-  const doc = useDocSnippet(
-    row.contentId,
-    rec.status !== 'attributed' && !row.title && !!row.docSchema && row.publicRead,
-  );
-  const label = deriveDocLabel({
-    // Honest degradation: only a relay-marked-public title is safe to render. An
-    // unupgraded relay may still send a non-public title; never surface it.
-    title: row.publicRead ? row.title : null,
-    docSchema: row.docSchema,
-    contentId: row.contentId,
-    doc,
-  });
+  const label = useIndexRowLabel(row, rec.status === 'attributed');
+  const gated = !(row.docSchema && row.publicRead);
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        <span class="kind content-op">content</span>
+        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
+        {gated ? <span class="err"> gated</span> : null}
+        {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
       <td>
-        <DocName label={label} />{' '}
-        {row.docSchema ? <span class="k-role">{schemaLabel(row.docSchema)}</span> : null}{' '}
-        <VerifyBadge kind="content" chainId={row.contentId} />
-        {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
+        {row.docSchema ? (
+          <span class="k-role">{schemaLabel(row.docSchema)}</span>
+        ) : (
+          <span class="muted">untyped</span>
+        )}
+      </td>
+      <td onClick={(e) => e.stopPropagation()}>
+        <DidChip did={row.creatorDID} />
       </td>
       <td class="n">{fmtAge(row.headAt)}</td>
     </tr>
   );
 };
 
-const RecentPanel = (props: {
-  obs: Observatory | null;
-  indexed: boolean | null;
-  content: IndexLoad<IndexContentRow>;
-}) => {
-  // index-capable → the live recent-public-documents feed, content ordered by
-  // author-claimed head time (recency), every row verifying in real time. Where
-  // no relay advertises the index, fall back to the local recent-activity view.
-  if (props.indexed === true) {
-    const rows = props.content.rows.slice(0, RECENT_N);
-    const state = indexListState(props.content.loading, props.content.error, rows.length);
+const PostsPanel = (props: { indexed: boolean | null; ordered: boolean | null }) => {
+  const [cursor, setCursor] = useHashParam('posts');
+  const [pubParam, setPubParam] = useHashParam('pub');
+  // the hash param wins for THIS view (so a link carries what it shows); absent,
+  // the persisted preference decides.
+  const publicOnly = pubParam ? pubParam !== '0' : getPublicOnly();
+  // an ordered feed is meaningless on a relay that ignores `order=` — it would
+  // serve LEXICAL rows under a recency label. Hold (null) until the probe settles.
+  const ordered = props.ordered === true;
+  const index = useIndexContent(props.indexed === true && props.ordered !== null, publicOnly, {
+    docSchema: POST_SCHEMA,
+    ...(ordered ? { order: 'headAt.desc' as const } : {}),
+    cursor,
+    onCursor: setCursor,
+  });
+
+  const toggle = (): void => {
+    const next = !publicOnly;
+    setPublicOnly(next);
+    setPubParam(next ? '1' : '0');
+  };
+
+  if (props.indexed === false) {
     return (
-      <Panel
-        title="recent activity"
-        accent="warn"
-        right={
-          <span class="lbl">
-            public documents · newest active · from relay index · verifying live
-          </span>
-        }
-      >
-        {state === 'rows' ? (
-          <div class="index-rows">
-            <table>
-              <tbody>
-                {rows.map((row) => (
-                  <RecentContentRow key={row.contentId} row={row} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : state === 'error' ? (
-          <span class="muted">couldn’t reach the relay index.</span>
-        ) : state === 'loading' ? (
-          <span class="muted">loading recent public documents…</span>
-        ) : (
-          <span class="muted">no public documents in the relay index</span>
-        )}
+      <Panel title="posts" right={<span class="lbl">needs a relay index</span>}>
+        <span class="muted">
+          no configured relay serves an index — posts enumerate from <code>/index/v0/content</code>.
+          Add an index-capable relay on the <a href="#/relays">relays</a> page.
+        </span>
       </Panel>
     );
   }
 
-  const rows = props.obs?.recent ?? [];
-  const populated = (props.obs?.counts.chains ?? 0) > 0;
   return (
     <Panel
-      title="recent activity"
-      accent={populated ? 'ok' : undefined}
-      right={<span class="lbl">latest chains · from local index</span>}
+      title="posts"
+      accent="warn"
+      right={
+        <span class="lbl">
+          post/v1 · {ordered ? 'most recently updated' : 'relay order'} · from relay index
+        </span>
+      }
     >
-      {rows.length === 0 ? (
-        <span class="muted">{populated ? 'no chains yet' : 'sync the log to see activity'}</span>
+      <div class="filters" style={{ marginBottom: 8 }}>
+        <button class={publicOnly ? 'on' : ''} onClick={toggle}>
+          public only
+        </button>
+        <span class="lbl">
+          {publicOnly
+            ? 'gated chains hidden'
+            : 'including gated chains — their titles are never rendered'}
+        </span>
+      </div>
+      {!ordered && props.ordered !== null ? (
+        <div class="ck-note" style={{ marginBottom: 8 }}>
+          this relay doesn’t honour <code>order=</code>, so these are in the index’s lexical order,
+          not by recency — the explorer won’t relabel one as the other.
+        </div>
+      ) : null}
+
+      {index.error ? (
+        <div class="ck-note">
+          couldn’t reach the relay index for posts.{' '}
+          <button onClick={index.retry} disabled={index.loading}>
+            {index.loading ? 'retrying…' : 'retry'}
+          </button>
+        </div>
+      ) : index.rows.length === 0 ? (
+        <span class="muted">
+          {index.loading ? 'loading posts…' : 'the relay index holds no posts on this page'}
+        </span>
       ) : (
         <div class="index-rows">
           <table>
+            <thead>
+              <tr>
+                <th>title</th>
+                <th>type</th>
+                <th>author</th>
+                <th>updated</th>
+              </tr>
+            </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.chainId} onClick={() => (location.hash = chainRoute(row))}>
-                  <td>
-                    <span class={`kind ${row.kind}`}>{row.kind.replace('-op', '')}</span>
-                  </td>
-                  <td>
-                    {row.kind === 'content-op' ? (
-                      <>
-                        <DocName
-                          label={deriveDocLabel({
-                            title: row.title,
-                            snippet: row.snippet,
-                            docSchema: row.docSchema,
-                            contentId: row.chainId,
-                          })}
-                        />{' '}
-                        {row.docSchema ? (
-                          <span class="k-role">{schemaLabel(row.docSchema)}</span>
-                        ) : null}
-                      </>
-                    ) : row.name ? (
-                      <b>{row.name}</b>
-                    ) : (
-                      <span class="cid">{short(row.chainId, 14, 5)}</span>
-                    )}
-                  </td>
-                  <td class="n">{fmtCount(row.opCount)} ops</td>
-                  <td class="n">{fmtAge(row.lastCreatedAt)}</td>
-                </tr>
+              {index.rows.map((row) => (
+                <PostRow key={row.contentId} row={row} />
               ))}
             </tbody>
           </table>
         </div>
       )}
-    </Panel>
-  );
-};
 
-// -----------------------------------------------------------------------------
-// RECENTLY ARRIVED IDENTITIES — identities `order=genesisAt.desc`, the newest
-// chains first (the relay serves the sort). Each row an attributed name that
-// greens as its chain folds. Local fallback: the synced identity strip.
-// -----------------------------------------------------------------------------
-
-const ARRIVED_N = 60;
-
-/** One recently-arrived identity row: attributed name + when it arrived
- *  (genesisAt), with a live verify badge that greens as its chain folds. */
-const ArrivedIdentityRow = (props: { row: IndexIdentityRow }) => {
-  const { row } = props;
-  const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did, row.opCount);
-  const rec = useVerifyStatus('identity', row.did);
-  // Honest degradation: only surface a projected name the relay marks public. An
-  // unupgraded relay may still send a non-public name; never render it.
-  const name = row.profile?.publicRead ? (row.profile.name ?? '') : '';
-  return (
-    <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>
-      <td>
-        <span class="kind identity-op">identity</span>
-      </td>
-      <td>
-        {name ? <span class="attr">{name}</span> : <span class="cid">{short(row.did, 14, 5)}</span>}{' '}
-        <VerifyBadge kind="identity" chainId={row.did} />
-        {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
-      </td>
-      <td class="n">{fmtAge(row.genesisAt)}</td>
-    </tr>
-  );
-};
-
-const ArrivedIdentitiesPanel = (props: {
-  obs: Observatory | null;
-  indexed: boolean | null;
-  ids: IndexLoad<IndexIdentityRow>;
-}) => {
-  // hook stays above the indexed branch — `indexed` resolves null→true/false
-  // after mount, and a conditional hook would change the hook order mid-life
-  const sync = useSyncState();
-  if (props.indexed === true) {
-    const rows = props.ids.rows.slice(0, ARRIVED_N);
-    const state = indexListState(props.ids.loading, props.ids.error, rows.length);
-    return (
-      <Panel
-        title="recently arrived identities"
-        accent="warn"
-        right={<span class="lbl">newest first · from relay index · verifying live</span>}
-      >
-        {state === 'rows' ? (
-          <div class="index-rows">
-            <table>
-              <tbody>
-                {rows.map((row) => (
-                  <ArrivedIdentityRow key={row.did} row={row} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : state === 'error' ? (
-          <span class="muted">couldn’t reach the relay index.</span>
-        ) : state === 'loading' ? (
-          <span class="muted">loading recently-arrived identities…</span>
-        ) : (
-          <span class="muted">no identities in the relay index</span>
-        )}
-        <div class="lbl" style={{ marginTop: 9 }}>
-          <a href="#/identities">browse all identities →</a>
-        </div>
-      </Panel>
-    );
-  }
-
-  // local fallback: the synced identity strip (attributed chips), as before.
-  const busy = sync.phase === 'resolving' || sync.phase === 'syncing';
-  const ids = props.obs?.identities ?? [];
-  const populated = (props.obs?.counts.chains ?? 0) > 0;
-  return (
-    <Panel
-      title="public identities"
-      accent={ids.length > 0 ? 'warn' : undefined}
-      right={<span class="lbl">attributed · from local index</span>}
-    >
-      {ids.length === 0 ? (
-        <span class="muted">
-          {!populated
-            ? 'sync the log to surface identities'
-            : busy
-              ? 'resolving projections…'
-              : 'no attributed public profiles yet'}
-        </span>
-      ) : (
-        <>
-          <div class="idstrip">
-            {ids.map((id) => (
-              <a key={id.chainId} class="idchip" href={`#/did/${id.chainId}`} title={id.name}>
-                <span class="av">{(id.name || '·').slice(0, 1).toUpperCase()}</span>
-                <span class="nm">{id.name}</span>
-              </a>
-            ))}
-          </div>
-          <div class="lbl" style={{ marginTop: 9 }}>
-            <a href="#/identities">browse all identities →</a>
-          </div>
-        </>
-      )}
-    </Panel>
-  );
-};
-
-// -----------------------------------------------------------------------------
-// RECENTLY ACTIVE IDENTITIES — DERIVED, not curated: the distinct creator DIDs
-// of the recent-content feed, in first-seen (most-recent-activity) order. No
-// random sampling — who actually moved the chain most recently. Names come from
-// the recently-arrived identity rows when known, else the DID stands in.
-// Index-only (it derives from the index content feed); silent otherwise.
-// -----------------------------------------------------------------------------
-
-const ACTIVE_N = 12;
-
-const ActiveIdentitiesPanel = (props: {
-  indexed: boolean | null;
-  content: IndexLoad<IndexContentRow>;
-  arrived: IndexIdentityRow[];
-}) => {
-  if (props.indexed !== true) return null;
-  // did → attributed name, from whatever recently-arrived rows we've loaded
-  const nameByDid = new Map<string, string>();
-  for (const r of props.arrived) {
-    // Honest degradation: only a relay-marked-public name is safe to attribute.
-    const n = r.profile?.publicRead ? r.profile.name : null;
-    if (typeof n === 'string' && n.length > 0) nameByDid.set(r.did, n);
-  }
-  // distinct creators in recent-activity order (first appearance wins)
-  const seen = new Set<string>();
-  const actors: { did: string; name: string }[] = [];
-  for (const row of props.content.rows) {
-    if (seen.has(row.creatorDID)) continue;
-    seen.add(row.creatorDID);
-    actors.push({ did: row.creatorDID, name: nameByDid.get(row.creatorDID) ?? '' });
-    if (actors.length >= ACTIVE_N) break;
-  }
-  const state = indexListState(props.content.loading, props.content.error, actors.length);
-  return (
-    <Panel
-      title="recently active identities"
-      accent={actors.length > 0 ? 'warn' : undefined}
-      right={<span class="lbl">derived from recent activity · attributed</span>}
-    >
-      {state === 'rows' ? (
-        <div class="idstrip">
-          {actors.map((a) => (
-            <a key={a.did} class="idchip" href={`#/did/${a.did}`} title={a.name || a.did}>
-              <span class="av">
-                {(a.name || a.did.replace('did:dfos:', '') || '·').slice(0, 1).toUpperCase()}
-              </span>
-              <span class="nm">{a.name || short(a.did, 12, 4)}</span>
-            </a>
-          ))}
-        </div>
-      ) : state === 'error' ? (
-        <span class="muted">couldn’t reach the relay index.</span>
-      ) : state === 'loading' ? (
-        <span class="muted">deriving active identities from recent activity…</span>
-      ) : (
-        <span class="muted">no recent public activity to derive from</span>
-      )}
+      <Pager
+        count={index.rows.length}
+        noun="posts"
+        loading={index.loading}
+        hasNext={index.hasNext}
+        hasPrev={index.hasPrev}
+        offFirst={index.offFirst}
+        onFirst={index.first}
+        onPrev={index.prev}
+        onNext={index.next}
+      />
+      <div class="lbl" style={{ marginTop: 8 }}>
+        <a href="#/documents">browse every public document →</a>
+      </div>
     </Panel>
   );
 };
@@ -607,7 +489,7 @@ const SyncInstrument = (props: { obs: Observatory | null }) => {
   const sync = useSyncState();
   const syncing = sync.phase === 'syncing';
   const resolving = sync.phase === 'resolving';
-  const populated = (props.obs?.counts.chains ?? 0) > 0;
+  const populated = (props.obs?.chains ?? 0) > 0;
   const bytes = props.obs?.storageBytes ?? null;
 
   return (
@@ -616,7 +498,7 @@ const SyncInstrument = (props: { obs: Observatory | null }) => {
       right={
         populated ? (
           <span class="lbl">
-            {fmtCount(props.obs?.counts.chains ?? 0)} chains
+            {fmtCount(props.obs?.chains ?? 0)} chains
             {bytes ? ` · ${fmtBytes(bytes)}` : ''}
             {sync.lastSyncAt ? ` · ${ago(sync.lastSyncAt)}` : ''}
           </span>
@@ -642,12 +524,12 @@ const SyncInstrument = (props: { obs: Observatory | null }) => {
       ) : (
         <div class="hero-actions">
           <button class={populated ? '' : 'primary'} onClick={() => void startSync('manual')}>
-            {populated ? 're-sync' : 'sync full log'}
+            {populated ? 're-sync' : 'deep-sync · verify the full log'}
           </button>
           <span class="muted">
             {populated
               ? 'Pulls new ops since your last sync and re-resolves drifted projections.'
-              : 'Pull the full operation log into a local store — chains then fold offline.'}
+              : 'Pull the full operation log into a local store — chains then fold offline, the figures above are counted from math instead of taken on faith, and relay omissions become detectable.'}
           </span>
           {sync.error ? <div class="err">{sync.error}</div> : null}
         </div>
@@ -660,60 +542,31 @@ const SyncInstrument = (props: { obs: Observatory | null }) => {
 // home
 // -----------------------------------------------------------------------------
 
-export const Home = (props: { onSample: (q: string) => void }) => {
+export const Home = () => {
   const sync = useSyncState();
   const [obs, setObs] = useState<Observatory | null>(null);
   const [hint, setHint] = useState<RelayHint>({});
   const indexed = useIndexCapable();
-  // the recency panels (recent activity, recently arrived, derived active) are
-  // ENTIRELY about `order=` — meaningless on a relay that ignores it (it would
-  // serve LEXICAL rows under a recency label). Gate them on iteration-2 support:
-  // `orderedIndexed` is true only when the relay is index-capable AND honours
-  // order, null while either is still resolving (hold, don't flash), else false —
-  // and false routes each panel to its existing LOCAL-fallback rendering.
   const iter2 = useIndexIter2();
-  const orderedIndexed: boolean | null =
-    indexed === null || iter2 === null ? null : indexed && iter2;
-  // recent public documents by head time (recency) — feeds the recent-activity
-  // panel AND the derived recently-active identities; recently-arrived identities
-  // by genesis time. Both index-only AND order-only; local paths fall back to the
-  // synced corpus (which IS genuinely recency-ordered, by last local op).
-  const recentContent = useIndexContent(orderedIndexed === true, true, { order: 'headAt.desc' });
-  // recently-arrived identities are public-profile-only by design, so the panel
-  // enumerates identities that have affirmatively published a profile.
-  const arrivedIds = useIndexIdentities(orderedIndexed === true, true, {
-    order: 'genesisAt.desc',
-  });
+  // ordered = the relay is index-capable AND honours `order=`; null while either
+  // is still resolving (hold, don't flash a recency label over lexical rows).
+  const ordered: boolean | null = indexed === null || iter2 === null ? null : indexed && iter2;
 
   useEffect(() => {
     let dead = false;
     void (async () => {
       // a local-index open failure (e.g. another tab blocking an upgrade) leaves
-      // obs null — the panels already render their empty state (0 chains, no
-      // spinner), so home degrades honestly instead of an unhandled rejection.
+      // obs null — the panels already render their empty state, so home degrades
+      // honestly instead of an unhandled rejection.
       const db = await getDb().catch(() => null);
       if (dead || !db) return;
-      const [counts, oldestOpAt, docs, recentRes, idRes, storageBytes] = await Promise.all([
+      const [counts, oldestOpAt, storageBytes] = await Promise.all([
         db.counts(),
         db.oldestOpAt(),
-        db.browseDocuments({ limit: 1 }),
-        db.chainsQuery({ sort: 'recent', limit: 15 }),
-        db.browseIdentities({ limit: 12 }),
         estimateStorageBytes(),
       ]);
       if (dead) return;
-      setObs({
-        counts,
-        oldestOpAt,
-        publicDocs: docs.publicCount,
-        recent: recentRes.rows,
-        identities: idRes.rows.map((r) => ({
-          chainId: r.chainId,
-          name: r.name ?? '',
-          ...(r.avatarRef ? { avatarRef: r.avatarRef } : {}),
-        })),
-        storageBytes,
-      });
+      setObs({ ops: counts.ops, chains: counts.chains, oldestOpAt, storageBytes });
     })();
     return () => {
       dead = true;
@@ -732,26 +585,9 @@ export const Home = (props: { onSample: (q: string) => void }) => {
 
   return (
     <>
-      <div class="samples" style={{ marginBottom: 14 }}>
-        <span class="lbl">try</span>
-        {SAMPLES.map((s) => (
-          <span key={s.q} class="chip" onClick={() => props.onSample(s.q)}>
-            {s.label}
-          </span>
-        ))}
-        <span class="muted" style={{ marginLeft: 'auto' }}>
-          new here? read the <a href="#/glossary">glossary</a>
-        </span>
-      </div>
-
       <NetworkPanel obs={obs} hint={hint} />
-      <RecentPanel obs={obs} indexed={orderedIndexed} content={recentContent} />
-      <ArrivedIdentitiesPanel obs={obs} indexed={orderedIndexed} ids={arrivedIds} />
-      <ActiveIdentitiesPanel
-        indexed={orderedIndexed}
-        content={recentContent}
-        arrived={arrivedIds.rows}
-      />
+      <OperationsPanel localOps={obs?.ops ?? null} />
+      <PostsPanel indexed={indexed} ordered={ordered} />
       <SyncInstrument obs={obs} />
 
       <Panel title="what this is">
@@ -764,12 +600,9 @@ export const Home = (props: { onSample: (q: string) => void }) => {
           <div class="v muted">
             Signatures, CIDs, and chain linkage recompute locally via{' '}
             <code>@metalabel/dfos-client</code> — the relay's claims render first, then flip to
-            verified (or <b>MISMATCH</b>, loudly).
-          </div>
-          <div class="k">no canonical state</div>
-          <div class="v muted">
-            Completeness is outside the proof — you see what these relays hold. Full definitions in
-            the <Term word="glossary" def={GLOSSARY['verifiedLocal'] ?? ''} />.
+            verified (or <b>MISMATCH</b>, loudly). Completeness stays outside the proof: you see
+            what these relays hold. Definitions in the{' '}
+            <Term word="glossary" def={GLOSSARY['verifiedLocal'] ?? ''} />.
           </div>
         </div>
       </Panel>

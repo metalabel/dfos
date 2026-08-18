@@ -1,39 +1,44 @@
 /*
 
-  BROWSE — public identities / documents / artifacts
+  BROWSE — public identities / documents
 
-  Identities and documents enumerate LIVE from the relay's /index/v0 whenever a
-  relay advertises the index capability — always, even after a deep sync (the live
-  index is fresher than a past sync). Each row is an ATTRIBUTED relay hint,
-  promoted to VERIFIED as it scrolls into view and its chain folds (the fold
-  wins). Where no relay advertises the index, these fall back to the LOCAL synced
-  index. Artifacts have no index projection (their type is inline in the JWS), so
-  they always browse from the local log. Each is a different primitive:
+  Both enumerate LIVE from the relay's /index/v0 whenever a relay advertises the
+  index capability — always, even after a deep sync (the live index is fresher
+  than a past sync). Each row is an ATTRIBUTED relay hint, promoted to VERIFIED
+  as it scrolls into view and its chain folds (the fold wins). Where no relay
+  advertises the index, these fall back to the LOCAL synced index. Each is a
+  different primitive:
 
     identities — who. Attributed public profiles, substring-searchable by name.
     documents  — what content. Public content chains, typed by their doc $schema.
-    artifacts  — signed claims. Standalone statements, type read from the JWS.
 
-  Enumeration is never a completeness claim ("completeness is outside the proof");
-  a deep sync is the exhaustive AUDIT stance that alone detects a relay's
-  omissions. Public-only by default, with an honest count of what's hidden and a
-  toggle (decision D).
+  The browse surface is a 1:1 MIRROR OF THE RELAY'S INDEX CAPABILITY SURFACE, so
+  what it can do is legible: what the index projects, you can browse; what it
+  doesn't, you can't. Artifacts have no index projection (their type is inline in
+  the JWS, and no relay materializes them), so there is no artifacts browse —
+  rather than a page that only works after a full local sync and quietly means
+  something different from its neighbours. Reach an artifact by its CID.
+
+  Pages are 25 rows off the relay's keyset cursor, with the position carried in
+  the hash so a browse view can be linked. Enumeration is never a completeness
+  claim ("completeness is outside the proof"); a deep sync is the exhaustive
+  AUDIT stance that alone detects a relay's omissions.
 
 */
 
 import type { IndexContentRow, IndexIdentityRow, IndexOrder } from '@metalabel/dfos-client';
-import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
+import { DidChip } from '../components/did-chip';
 import {
   DocName,
   IndexLightNote,
   useVerifyOnVisible,
   VerifyBadge,
 } from '../components/index-light';
-import { Badge, DidLink, Panel, Pill, Term } from '../components/ui';
-import type { ChainRollup, DocumentsBrowse, ExplorerOp, IdentitiesBrowse } from '../lib/db';
+import { Badge, Pager, Panel, Pill, Term } from '../components/ui';
+import type { ChainRollup, DocumentsBrowse, IdentitiesBrowse } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
+import { deriveDocLabel, useIndexRowLabel } from '../lib/doc-label';
 import { fmtAge, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
@@ -42,10 +47,12 @@ import {
   useIndexContent,
   useIndexIdentities,
   useIndexIter2,
+  type IndexPage,
 } from '../lib/index-light';
 import { fetchRelayHint } from '../lib/relay-hint';
 import { startProjections, startSync, stopSync, useSyncState } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
+import { useHashParam } from '../router';
 
 const BROWSE_LIMIT = 300;
 
@@ -63,7 +70,6 @@ const useDebounced = <T,>(value: T, ms: number): T => {
 // stable references so useAvailable's effect runs once, not every render
 const ID_KEYS = ['identity', 'identity-op'];
 const DOC_KEYS = ['content', 'content-op'];
-const ART_KEYS = ['artifact'];
 
 /**
  * Relay-advertised count for a browse kind (max across relays), or undefined when
@@ -126,22 +132,6 @@ const SyncPrompt = (props: { syncing: boolean }) => (
 // advertises it, the surfaces below fall back to the local synced index.
 // -----------------------------------------------------------------------------
 
-/** Pull the next index page on demand — enumeration pages instead of a silent
- *  whole-corpus cap; the relay's `next` cursor drives it. */
-const LoadMore = (props: {
-  hasMore: boolean;
-  loading: boolean;
-  onMore: () => void;
-  noun: string;
-}) =>
-  props.hasMore ? (
-    <div class="ck-note" style={{ marginTop: 8 }}>
-      <button onClick={props.onMore} disabled={props.loading}>
-        {props.loading ? 'loading…' : `load more ${props.noun}`}
-      </button>
-    </div>
-  ) : null;
-
 /** The relay index couldn't be reached and there's no local corpus to fall back
  *  on — an honest error with a retry, never a false "the index returned nothing". */
 const IndexUnavailable = (props: { noun: string; loading: boolean; onRetry: () => void }) => (
@@ -184,28 +174,21 @@ const IndexIdentityRowView = (props: { row: IndexIdentityRow }) => {
   );
 };
 
-const IndexIdentitiesLight = (props: {
-  rows: IndexIdentityRow[];
-  loading: boolean;
-  hasMore: boolean;
-  loadMore: () => void;
-  query: string;
-}) => {
-  const { rows, loading } = props;
+const IndexIdentitiesLight = (props: { page: IndexPage<IndexIdentityRow>; query: string }) => {
+  const { page } = props;
   const needle = props.query.trim();
   // rows are ALREADY filtered SERVER-SIDE (the relay's `nameContains` runs before
-  // pagination) — render them straight, no client-side needle pass. Load-more
-  // appends the next page of matches; PAGE + user-driven load-more bound growth.
+  // pagination) — render them straight, no client-side needle pass.
   return (
     <>
       <IndexLightNote />
-      {loading && rows.length === 0 ? (
+      {page.loading && page.rows.length === 0 ? (
         <span class="muted">
           {needle
             ? `searching the relay index for “${needle}”…`
             : 'loading identities from the relay index…'}
         </span>
-      ) : rows.length === 0 ? (
+      ) : page.rows.length === 0 ? (
         <span class="muted">
           {needle
             ? `no public identities in the relay index match “${needle}”.`
@@ -221,7 +204,7 @@ const IndexIdentitiesLight = (props: {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {page.rows.map((row) => (
               <IndexIdentityRowView key={row.did} row={row} />
             ))}
           </tbody>
@@ -229,16 +212,21 @@ const IndexIdentitiesLight = (props: {
       )}
       {needle ? (
         <div class="ck-note" style={{ marginTop: 8 }}>
-          <b>{fmtCount(rows.length)}</b> match(es) — a relay-asserted case-insensitive substring
-          over projected profile names (<b>amber</b>, verified as each row folds). Completeness is
-          never proven; a deep-sync of the full log audits for names the relay withheld.
+          A relay-asserted case-insensitive substring over projected profile names (<b>amber</b>,
+          verified as each row folds). Completeness is never proven; a deep-sync of the full log
+          audits for names the relay withheld.
         </div>
       ) : null}
-      <LoadMore
-        hasMore={props.hasMore}
-        loading={loading}
-        onMore={props.loadMore}
+      <Pager
+        count={page.rows.length}
         noun="identities"
+        loading={page.loading}
+        hasNext={page.hasNext}
+        hasPrev={page.hasPrev}
+        offFirst={page.offFirst}
+        onFirst={page.first}
+        onPrev={page.prev}
+        onNext={page.next}
       />
     </>
   );
@@ -254,21 +242,7 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
   const rec = useVerifyStatus('content', row.contentId);
   const opCount = rec.facts?.opCount ?? row.opCount;
   const gated = !(row.docSchema && row.publicRead);
-  // an untitled but typed/public row: fetch its bytes lazily for a snippet, but
-  // only once it's on-screen (the verify enqueue that visibility triggers flips
-  // status off 'attributed') — no snippet fetch for rows the eye never reaches.
-  const doc = useDocSnippet(
-    row.contentId,
-    rec.status !== 'attributed' && !row.title && !!row.docSchema && row.publicRead,
-  );
-  const label = deriveDocLabel({
-    // Honest degradation: only a relay-marked-public title is safe to render. An
-    // unupgraded relay may still send a non-public title; never surface it.
-    title: row.publicRead ? row.title : null,
-    docSchema: row.docSchema,
-    contentId: row.contentId,
-    doc,
-  });
+  const label = useIndexRowLabel(row, rec.status === 'attributed');
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
@@ -284,7 +258,7 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
         {gated ? <span class="err"> gated</span> : null}
       </td>
       <td onClick={(e) => e.stopPropagation()}>
-        <DidLink did={row.creatorDID} />
+        <DidChip did={row.creatorDID} />
       </td>
       <td class="n">{fmtAge(row.headAt)}</td>
       <td class="cid">{short(row.contentId, 16, 6)}</td>
@@ -293,21 +267,14 @@ const IndexContentRowView = (props: { row: IndexContentRow }) => {
   );
 };
 
-const IndexDocumentsLight = (props: {
-  rows: IndexContentRow[];
-  loading: boolean;
-  hasMore: boolean;
-  loadMore: () => void;
-}) => {
-  const { rows, loading } = props;
-  // render ALL loaded index rows — load-more appends past any fixed cap (FIX)
-  const shown = rows;
+const IndexDocumentsLight = (props: { page: IndexPage<IndexContentRow> }) => {
+  const { page } = props;
   return (
     <>
       <IndexLightNote />
-      {loading && rows.length === 0 ? (
+      {page.loading && page.rows.length === 0 ? (
         <span class="muted">loading content chains from the relay index…</span>
-      ) : shown.length === 0 ? (
+      ) : page.rows.length === 0 ? (
         <span class="muted">the relay index returned no public content chains.</span>
       ) : (
         <table>
@@ -322,17 +289,22 @@ const IndexDocumentsLight = (props: {
             </tr>
           </thead>
           <tbody>
-            {shown.map((row) => (
+            {page.rows.map((row) => (
               <IndexContentRowView key={row.contentId} row={row} />
             ))}
           </tbody>
         </table>
       )}
-      <LoadMore
-        hasMore={props.hasMore}
-        loading={loading}
-        onMore={props.loadMore}
+      <Pager
+        count={page.rows.length}
         noun="documents"
+        loading={page.loading}
+        hasNext={page.hasNext}
+        hasPrev={page.hasPrev}
+        offFirst={page.offFirst}
+        onFirst={page.first}
+        onPrev={page.prev}
+        onNext={page.next}
       />
     </>
   );
@@ -345,7 +317,8 @@ const IndexDocumentsLight = (props: {
 export const BrowseIdentities = () => {
   const sync = useSyncState();
   const indexed = useIndexCapable();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useHashParam('q');
+  const [cursor, setCursor] = useHashParam('after');
   const [includeGated, setIncludeGated] = useState(false);
   const [result, setResult] = useState<IdentitiesBrowse | null>(null);
   const available = useAvailable(ID_KEYS);
@@ -353,7 +326,11 @@ export const BrowseIdentities = () => {
   // a keystroke doesn't re-page the index on every character; the relay filters
   // over the projected profile name (amber) before paginating.
   const nameContains = useDebounced(query.trim(), 250);
-  const index = useIndexIdentities(indexed === true, true, { nameContains });
+  const index = useIndexIdentities(indexed === true, true, {
+    nameContains,
+    cursor,
+    onCursor: setCursor,
+  });
 
   useEffect(() => {
     let dead = false;
@@ -426,13 +403,7 @@ export const BrowseIdentities = () => {
       ) : null}
 
       {mode === 'index' ? (
-        <IndexIdentitiesLight
-          rows={index.rows}
-          loading={index.loading}
-          hasMore={index.hasMore}
-          loadMore={index.loadMore}
-          query={query}
-        />
+        <IndexIdentitiesLight page={index} query={query} />
       ) : mode === 'index-unavailable' ? (
         <IndexUnavailable noun="identities" loading={index.loading} onRetry={index.retry} />
       ) : !result || total === 0 ? (
@@ -496,13 +467,15 @@ export const BrowseDocuments = () => {
   const iter2 = useIndexIter2();
   const ordered = iter2 === true;
   const [includeGated, setIncludeGated] = useState(false);
-  const [schema, setSchema] = useState<string | null>(null);
+  const [schema, setSchema] = useHashParam('schema');
+  const [cursor, setCursor] = useHashParam('after');
   // enumeration order for the index path: newest (genesisAt.desc) is the default
   // — a browse-by-recency feed is what a reader wants, not the relay's lexical
   // contentId order (which is meaningless to a human). "recently active"
   // (headAt.desc) is the other offered ordering; the lexical default is no longer
   // surfaced. Only sent to a relay that honours `order=` (iteration-2, gated below).
-  const [order, setOrder] = useState<IndexOrder>('genesisAt.desc');
+  const [orderParam, setOrderParam] = useHashParam('order');
+  const order: IndexOrder = orderParam === 'headAt.desc' ? 'headAt.desc' : 'genesisAt.desc';
   // never send `order=` to a relay that ignores it (would mislabel lexical rows
   // as recency-ordered); the toggle is hidden there, but guard the query too.
   const effectiveOrder = ordered ? order : null;
@@ -511,6 +484,8 @@ export const BrowseDocuments = () => {
   const index = useIndexContent(indexed === true, true, {
     ...(schema ? { docSchema: schema } : {}),
     ...(effectiveOrder ? { order: effectiveOrder } : {}),
+    cursor,
+    onCursor: setCursor,
   });
 
   // monotonic set of $schemas seen across loaded rows — so the facet bar stays
@@ -572,8 +547,7 @@ export const BrowseDocuments = () => {
           <>
             Content chains whose document bytes were served to an anonymous fetch and{' '}
             <Term word="re-hashed" def={GLOSSARY['publicProjection'] ?? ''} /> to the on-chain
-            committed CID — typed by the document's <code>$schema</code>. The view is type-agnostic;
-            today every public doc is a <code>profile/v1</code>.
+            committed CID — typed by the document's <code>$schema</code>.
           </>
         )
       }
@@ -609,24 +583,20 @@ export const BrowseDocuments = () => {
       ) : null}
 
       {/* enumeration order — the relay serves lexical (contentId) by default, or a
-          recency ordering via `order=`. "recently active" (headAt.desc) over the
-          post/v1 facet is the client-composed "recent public posts" feed. Hidden
-          entirely on a relay that doesn't honour `order=` (pre-iteration-2 UX):
-          offering recency there would just relabel lexical rows. */}
+          recency ordering via `order=`. Hidden entirely on a relay that doesn't
+          honour `order=` (pre-iteration-2 UX): offering recency there would just
+          relabel lexical rows. */}
       {mode === 'index' && ordered ? (
         <div class="filters" style={{ marginBottom: 8 }}>
           <span class="lbl" style={{ marginRight: 2 }}>
             order
           </span>
-          <button
-            class={order === 'genesisAt.desc' ? 'on' : ''}
-            onClick={() => setOrder('genesisAt.desc')}
-          >
+          <button class={order === 'genesisAt.desc' ? 'on' : ''} onClick={() => setOrderParam('')}>
             newest
           </button>
           <button
             class={order === 'headAt.desc' ? 'on' : ''}
-            onClick={() => setOrder('headAt.desc')}
+            onClick={() => setOrderParam('headAt.desc')}
           >
             recently active
           </button>
@@ -644,7 +614,7 @@ export const BrowseDocuments = () => {
           schema corpus needs no filter). Chips gate exactly like the toggle above. */}
       {mode === 'index' && schemas.length > 1 ? (
         <div class="filters" style={{ marginBottom: 8 }}>
-          <button class={schema === null ? 'on' : ''} onClick={() => setSchema(null)}>
+          <button class={schema === '' ? 'on' : ''} onClick={() => setSchema('')}>
             all types
           </button>
           {schemas.map((s) => (
@@ -654,7 +624,7 @@ export const BrowseDocuments = () => {
           ))}
         </div>
       ) : null}
-      {mode === 'index' && schema !== null ? (
+      {mode === 'index' && schema !== '' ? (
         <div class="ck-note" style={{ marginBottom: 8 }}>
           filtering by <code>$schema</code> server-side — options are the schemas seen so far;
           select one to page all of that type.
@@ -662,12 +632,7 @@ export const BrowseDocuments = () => {
       ) : null}
 
       {mode === 'index' ? (
-        <IndexDocumentsLight
-          rows={index.rows}
-          loading={index.loading}
-          hasMore={index.hasMore}
-          loadMore={index.loadMore}
-        />
+        <IndexDocumentsLight page={index} />
       ) : mode === 'index-unavailable' ? (
         <IndexUnavailable noun="documents" loading={index.loading} onRetry={index.retry} />
       ) : !hasLocal ? (
@@ -694,7 +659,7 @@ export const BrowseDocuments = () => {
               </tr>
             </thead>
             <tbody>
-              {result?.rows.map((row) => {
+              {result?.rows.map((row: ChainRollup) => {
                 const gated = !(row.docSchema && row.publicRead);
                 // local projections carry the same material the relay index does:
                 // a post/v1 title/snippet on the rollup, a profile name via names-join.
@@ -741,115 +706,6 @@ export const BrowseDocuments = () => {
             </div>
           ) : null}
         </>
-      )}
-    </Panel>
-  );
-};
-
-// -----------------------------------------------------------------------------
-// artifacts
-// -----------------------------------------------------------------------------
-
-/** The embedded content document of an artifact, read straight from its JWS. */
-const artifactContent = (op: ExplorerOp): Record<string, unknown> | null => {
-  const decoded = decodeJwsUnsafe(op.jwsToken);
-  const content = decoded?.payload['content'];
-  return typeof content === 'object' && content !== null
-    ? (content as Record<string, unknown>)
-    : null;
-};
-
-/** Artifact "type" = the $schema of its embedded content, read from the JWS. */
-const artifactType = (op: ExplorerOp): string => {
-  const schema = artifactContent(op)?.['$schema'];
-  return typeof schema === 'string' ? schemaLabel(schema) : 'artifact';
-};
-
-/** Human title of an artifact from its embedded content (name → title), if any.
- *  No projection needed — the document lives inline in the JWS. */
-const artifactTitle = (op: ExplorerOp): string => {
-  const content = artifactContent(op);
-  const name = content?.['name'] ?? content?.['title'];
-  return typeof name === 'string' ? name.trim() : '';
-};
-
-export const BrowseArtifacts = () => {
-  const sync = useSyncState();
-  const [rows, setRows] = useState<ExplorerOp[] | null>(null);
-  // the rows list is capped at BROWSE_LIMIT; the TRUE synced count drives the
-  // relay-hint comparison so it doesn't nag "sync more" once the cap is hit
-  const [total, setTotal] = useState(0);
-  const available = useAvailable(ART_KEYS);
-
-  useEffect(() => {
-    let dead = false;
-    void getDb()
-      .then(async (db) => ({
-        rows: await db.opsOfKind('artifact', BROWSE_LIMIT),
-        counts: await db.counts(),
-      }))
-      .then(({ rows: r, counts }) => {
-        if (dead) return;
-        setRows(r);
-        setTotal(counts.byKind['artifact'] ?? 0);
-      })
-      // local-index open failure → empty state (SyncPrompt), never a hung spinner.
-      .catch(() => {
-        if (!dead) setRows(null);
-      });
-    return () => {
-      dead = true;
-    };
-  }, [sync.dbEpoch, sync.phase]);
-
-  const syncing = sync.phase === 'syncing';
-
-  return (
-    <Panel
-      title={<>public artifacts {rows ? <Pill state="ok">{fmtCount(rows.length)}</Pill> : null}</>}
-      right={<span class="lbl">signed claims · from local index</span>}
-      orient={
-        <>
-          Standalone signed <Term word="artifacts" def={GLOSSARY['artifact'] ?? ''} /> — immutable
-          statements addressed by their own CID, with no predecessor or successor. Type is read
-          straight from the embedded document's <code>$schema</code> in the JWS — no projection
-          needed. Open one to verify its self-CID and any countersignatures.
-        </>
-      }
-    >
-      <AvailableHint available={available} localCount={total} />
-      {!rows || rows.length === 0 ? (
-        <SyncPrompt syncing={syncing} />
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>name / title</th>
-              <th>type</th>
-              <th>artifact CID</th>
-              <th>signer</th>
-              <th>when</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((op) => {
-              const title = artifactTitle(op);
-              return (
-                <tr key={op.cid} onClick={() => (location.hash = `#/op/${op.cid}`)}>
-                  <td>{title ? <b>{title}</b> : <span class="muted">—</span>}</td>
-                  <td>
-                    <span class="k-role">{artifactType(op)}</span>
-                  </td>
-                  <td class="cid">{short(op.cid, 14, 8)}</td>
-                  <td class="cid">
-                    {op.kid ? short(op.kid, 14, 4) : <span class="muted">—</span>}
-                  </td>
-                  <td class="muted">{op.createdAt ? op.createdAt.slice(0, 10) : ''}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
       )}
     </Panel>
   );

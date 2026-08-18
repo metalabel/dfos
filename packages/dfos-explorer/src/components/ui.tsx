@@ -136,6 +136,45 @@ export const TermBar = () => {
 };
 
 // -----------------------------------------------------------------------------
+// pager — the footer of every keyset-paged surface
+//
+// A relay index serves a KEYSET cursor, not offsets: there is no "page 7", and
+// the only honest back is the cursor you walked in on. So the controls are
+// first / prev / next, `prev` disabled on a page reached by a deep link (we know
+// we're not at the start — that's `offFirst` — but not what came before it).
+// -----------------------------------------------------------------------------
+
+export const Pager = (props: {
+  /** rows on THIS page — never a corpus total (completeness is outside the proof). */
+  count: number;
+  noun: string;
+  loading: boolean;
+  hasNext: boolean;
+  hasPrev: boolean;
+  offFirst: boolean;
+  onFirst: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+}) => (
+  <div class="pager">
+    <button disabled={!props.offFirst || props.loading} onClick={props.onFirst}>
+      ⇤ first
+    </button>
+    <button disabled={!props.hasPrev || props.loading} onClick={props.onPrev}>
+      ‹ prev
+    </button>
+    <button disabled={!props.hasNext || props.loading} onClick={props.onNext}>
+      next ›
+    </button>
+    <span class="lbl">
+      {props.loading
+        ? 'loading…'
+        : `${props.count} ${props.noun}${props.offFirst ? ' · paged' : ''}`}
+    </span>
+  </div>
+);
+
+// -----------------------------------------------------------------------------
 // links
 // -----------------------------------------------------------------------------
 

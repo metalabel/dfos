@@ -181,3 +181,35 @@ export const useDocSnippet = (contentId: string, need: boolean): Record<string, 
   }, [contentId, need]);
   return doc;
 };
+
+/**
+ * The label for one relay-index content row — the single place the honesty rule
+ * for a projected title lives, so every table that renders index rows obeys it
+ * identically. `attributed` is the row's verify status still sitting at the
+ * attributed floor; an untitled public row fetches its snippet only once that
+ * flips (i.e. once the row has actually been seen).
+ *
+ * HONEST DEGRADATION: only a relay-marked-PUBLIC title is safe to render. An
+ * unupgraded relay may still send a title for a non-public chain; it never
+ * reaches the screen.
+ */
+export const useIndexRowLabel = (
+  row: {
+    contentId: string;
+    title: string | null;
+    docSchema: string | null;
+    publicRead: boolean;
+  },
+  attributed: boolean,
+): DocLabel => {
+  const doc = useDocSnippet(
+    row.contentId,
+    !attributed && !row.title && !!row.docSchema && row.publicRead,
+  );
+  return deriveDocLabel({
+    title: row.publicRead ? row.title : null,
+    docSchema: row.docSchema,
+    contentId: row.contentId,
+    doc,
+  });
+};
