@@ -47,7 +47,7 @@ interface Resolved<T> {
 }
 ```
 
-Trust degrades honestly: `revocation` when non-revocation cannot be proven, `tip` whenever an answer's freshness rests on a cached head — either the cache alone (relays unreachable) or relays' empty-delta claim against it. **Tip freshness is never proven in v1**: a relay that never saw your cached head answers the same empty page as one that is genuinely caught up, so the client refuses to launder that claim into proof (relay head-proofs / `tipProven` are v2). Nothing is ever claimed as proven that was not.
+Trust degrades honestly: `revocation` when non-revocation cannot be proven, `tip` whenever an answer's freshness rests on the cache — either the cache alone (relays unreachable) or a fully drained relay log that exactly matches the cached log. **Tip freshness is never proven in v1**: a relay's complete answer can verify the known history but cannot prove that no newer operation exists, so the client refuses to launder that claim into proof (relay head-proofs / `tipProven` are v2). Nothing is ever claimed as proven that was not.
 
 ### Quorum
 
@@ -73,7 +73,7 @@ const { resolveKey } = resolvers(['https://relay.example']); // zero object grap
 import { indexedDbStore, memoryStore } from '@metalabel/dfos-client/store';
 ```
 
-`memoryStore()` (the isomorphic default) caches the **log** and verifies forward from the trusted prefix, so a key rotation costs one incremental op and the cache is never stale-wrong. `indexedDbStore()` is the browser-only durable adapter — the only heavy dependency, quarantined behind this subpath.
+`memoryStore()` (the isomorphic default) caches the **log**. Chain reads fully drain from zero, require the fetched JWS tokens to match the trusted cached prefix, and verify forward only the suffix, so a key rotation costs one verification op and the cache is never stale-wrong. `indexedDbStore()` is the browser-only durable adapter — the only heavy dependency, quarantined behind this subpath.
 
 ### `@metalabel/dfos-client/siwd`
 

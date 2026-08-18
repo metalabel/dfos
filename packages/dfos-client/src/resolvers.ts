@@ -5,18 +5,19 @@
   The cache-the-log / verify-forward core, and the bound protocol-lib callbacks
   built on top of it. This module contains ZERO verification logic of its own —
   every proof comes from @metalabel/dfos-protocol. What it adds is orchestration:
-  fetch logs (via transport), cache the LOG (never a terminal verified state),
-  and verify FORWARD from the trusted prefix using the protocol's O(1) extension
-  verifiers. Rotation costs one op; the cache is never stale-wrong.
+  fully drain logs from zero (via transport), require their JWS tokens to match
+  the trusted cached prefix, then verify only the suffix using the protocol's
+  O(1) extension verifiers. Rotation costs one verification op; the cache is
+  never stale-wrong.
 
   Trust rules enforced here:
   - a candidate log that fails verification is failed over, not fatal (transport
     handles the failover; verification is the candidate filter)
   - the cache is only written back when the answer both VERIFIED and met quorum —
     a failed-quorum minority answer never becomes the trusted prefix
-  - `tipUnverified` is true whenever the answer's freshness rests on a cached
-    head that relays merely did not extend (the empty-delta claim) or on the
-    cache alone — tip freshness is never PROVEN in v1
+  - `tipUnverified` is true whenever a full relay answer exactly matches the
+    cached log, or when the answer comes from cache alone — tip freshness is
+    never PROVEN in v1
 
 */
 
@@ -32,7 +33,13 @@ import {
 } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { PeerClient } from '@metalabel/dfos-web-relay/peer-client';
-import { contentPager, fanOutLog, identityPager, normalizeRelays } from './transport';
+import {
+  contentPager,
+  fanOutLog,
+  identityPager,
+  normalizeRelays,
+  StaleAnswerError,
+} from './transport';
 import type { Callbacks, CallOptions, LogOp, Provenance, RevChecker, Store } from './types';
 
 const DID_PREFIX = 'did:dfos';
@@ -144,7 +151,7 @@ export interface IdentityResolution {
   state: VerifiedIdentity;
   log: string[];
   provenance: Provenance;
-  /** True when tip freshness rests on the cache or on relays' empty-delta claim. */
+  /** True when cache is the only answer or a full relay log exactly matches it. */
   tipUnverified: boolean;
 }
 
@@ -152,7 +159,7 @@ export interface ContentResolution {
   state: VerifiedContentChain;
   log: string[];
   provenance: Provenance;
-  /** True when tip freshness rests on the cache or on relays' empty-delta claim. */
+  /** True when cache is the only answer or a full relay log exactly matches it. */
   tipUnverified: boolean;
 }
 
@@ -201,11 +208,24 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
         const last = opMeta(log[log.length - 1]!);
         return { state, log, headCID: last.cid, lastCreatedAt: last.createdAt };
       }
+      // consistency is judged over the OVERLAP: a mismatched token is a
+      // fork/forgery claim and fails the candidate outright, while a
+      // consistent-but-shorter answer is just a relay with no new information
+      // (behind, mid-resync) — fail over like a transport miss so a fresher
+      // relay can win and the cache fallback stays reachable
+      if (
+        cached.log.some((jws, index) => index < entries.length && entries[index]!.jwsToken !== jws)
+      ) {
+        throw new Error(`identity log diverges from the verified cached prefix: ${did}`);
+      }
+      if (entries.length < cached.log.length) {
+        throw new StaleAnswerError(`identity log is behind the verified cached prefix: ${did}`);
+      }
       let state = cached.state;
       let headCID = cached.headCID;
       let lastCreatedAt = cached.lastCreatedAt;
       const log = [...cached.log];
-      for (const entry of entries) {
+      for (const entry of entries.slice(cached.log.length)) {
         const r = await verifyIdentityExtensionFromTrustedState({
           currentState: state,
           headCID,
@@ -224,7 +244,6 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       identityPager(deps.peerClient, did),
       relaysFor(options),
       deps.quorum,
-      cached?.headCID,
       verifyCandidate,
     );
 
@@ -243,7 +262,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     const candidate = fetched.value!;
     // cache only an answer that both verified AND met quorum — a minority
     // answer must never become the trusted prefix
-    if (fetched.provenance.agreed && fetched.entries.length > 0) {
+    if (fetched.provenance.agreed && (!cached || candidate.log.length > cached.log.length)) {
       await deps.store.set(key, {
         log: candidate.log,
         state: candidate.state,
@@ -255,9 +274,8 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       state: candidate.state,
       log: candidate.log,
       provenance: fetched.provenance,
-      // an empty delta against a cached head is a relay CLAIM of freshness, not
-      // proof — the tip axis stays unverifiable whenever the answer leans on it
-      tipUnverified: cached !== undefined && fetched.entries.length === 0,
+      // an unchanged full answer is still a relay CLAIM of freshness, not proof
+      tipUnverified: cached !== undefined && candidate.log.length === cached.log.length,
     };
   };
 
@@ -321,10 +339,21 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
         const last = opMeta(log[log.length - 1]!);
         return { state, log, headCID: last.cid, lastCreatedAt: last.createdAt };
       }
+      // overlap-consistency rule — see the identity resolver's twin above
+      if (
+        cached.log.some((jws, index) => index < entries.length && entries[index]!.jwsToken !== jws)
+      ) {
+        throw new Error(`content log diverges from the verified cached prefix: ${contentId}`);
+      }
+      if (entries.length < cached.log.length) {
+        throw new StaleAnswerError(
+          `content log is behind the verified cached prefix: ${contentId}`,
+        );
+      }
       let state = cached.state;
       let lastCreatedAt = cached.lastCreatedAt;
       const log = [...cached.log];
-      for (const entry of entries) {
+      for (const entry of entries.slice(cached.log.length)) {
         const r = await verifyContentExtensionFromTrustedState({
           currentState: state,
           lastCreatedAt,
@@ -345,7 +374,6 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       contentPager(deps.peerClient, contentId),
       relaysFor(options),
       deps.quorum,
-      cached?.headCID,
       verifyCandidate,
     );
 
@@ -362,7 +390,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
     }
 
     const candidate = fetched.value!;
-    if (fetched.provenance.agreed && fetched.entries.length > 0) {
+    if (fetched.provenance.agreed && (!cached || candidate.log.length > cached.log.length)) {
       await deps.store.set(key, {
         log: candidate.log,
         state: candidate.state,
@@ -374,7 +402,7 @@ export const createResolvers = (deps: ResolverDeps): Resolvers => {
       state: candidate.state,
       log: candidate.log,
       provenance: fetched.provenance,
-      tipUnverified: cached !== undefined && fetched.entries.length === 0,
+      tipUnverified: cached !== undefined && candidate.log.length === cached.log.length,
     };
   };
 

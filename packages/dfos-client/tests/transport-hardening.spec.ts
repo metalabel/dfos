@@ -55,7 +55,7 @@ describe('fanOutLog', () => {
       return params.after ? { entries: [], next: null } : { entries: full, next: null };
     };
 
-    const result = await fanOutLog(fetchPage, [A, B], 1, undefined, async (entries) => entries);
+    const result = await fanOutLog(fetchPage, [A, B], 1, async (entries) => entries);
     expect(result.outcome).toBe('verified');
     expect(result.entries).toHaveLength(2);
     expect(result.provenance.answeredBy).toBe(B);
@@ -66,7 +66,7 @@ describe('fanOutLog', () => {
   it('throws (not silently degrades) when candidates exist but ALL fail verification', async () => {
     const fetchPage = async () => ({ entries: [op('bad')], next: null });
     await expect(
-      fanOutLog(fetchPage, [A, B], 1, undefined, async () => {
+      fanOutLog(fetchPage, [A, B], 1, async () => {
         throw new Error('invalid signature');
       }),
     ).rejects.toThrow(/failed verification.*invalid signature/);
@@ -77,11 +77,65 @@ describe('fanOutLog', () => {
       async () => null,
       [A, B],
       1,
-      undefined,
       async (e) => e,
     );
     expect(result.outcome).toBe('unreachable');
     expect(result.provenance.responses.every((r) => !r.ok)).toBe(true);
+  });
+
+  it('restarts once from zero when a relay rejects a mid-drain cursor', async () => {
+    const full = [op('op1'), op('op2')];
+    const asked: (string | undefined)[] = [];
+    let firstDrain = true;
+    const fetchPage = async (_url: string, params: { after?: string; limit: number }) => {
+      asked.push(params.after);
+      if (!params.after) {
+        if (firstDrain) {
+          firstDrain = false;
+          return { entries: [full[0]!], next: 'relay-cursor-1' };
+        }
+        return { entries: full, next: null };
+      }
+      return 'invalid-cursor' as const;
+    };
+
+    const result = await fanOutLog(fetchPage, [A], 1, async (entries) => entries);
+    expect(asked).toEqual([undefined, 'relay-cursor-1', undefined]);
+    expect(result.entries).toEqual(full);
+    expect(result.provenance.answeredBy).toBe(A);
+    expect(result.provenance.responses).toEqual([{ url: A, ok: true, digest: digestOps(full) }]);
+  });
+
+  it('marks a relay failed after a second invalid cursor following restart', async () => {
+    let zeroPage = 0;
+    const fetchPage = async (_url: string, params: { after?: string; limit: number }) => {
+      if (!params.after) {
+        zeroPage += 1;
+        return { entries: [op('op1')], next: `relay-cursor-${zeroPage}` };
+      }
+      return 'invalid-cursor' as const;
+    };
+
+    const result = await fanOutLog(fetchPage, [A], 1, async (entries) => entries);
+    expect(zeroPage).toBe(2);
+    expect(result.outcome).toBe('unreachable');
+    expect(result.provenance.responses).toEqual([{ url: A, ok: false, digest: '' }]);
+  });
+
+  it('marks a relay failed without looping when its cursorless first page rejects', async () => {
+    let calls = 0;
+    const result = await fanOutLog(
+      async () => {
+        calls += 1;
+        return 'invalid-cursor';
+      },
+      [A],
+      1,
+      async (entries) => entries,
+    );
+    expect(calls).toBe(1);
+    expect(result.outcome).toBe('unreachable');
+    expect(result.provenance.responses).toEqual([{ url: A, ok: false, digest: '' }]);
   });
 
   it('digestOps distinguishes op sets and is stable', () => {

@@ -41,6 +41,7 @@ const CAP_LABELS: { key: string; label: string }[] = [
   // serves the instant attributed browse the explorer's light mode reads from.
   { key: 'index', label: 'index' },
   { key: 'write', label: 'write' },
+  { key: 'signing', label: 'signing' },
 ];
 
 const Caps = (props: { capabilities: Record<string, unknown> | undefined }) => {
