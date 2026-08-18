@@ -25,8 +25,9 @@ import (
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
-// requireRevocationsCapability fetches the well-known and skips the test unless
-// capabilities.revocations is true.
+// requireRevocationsCapability fetches the well-known and skips the test only
+// when capabilities.revocations is explicitly false. An absent flag defaults
+// to true under the frozen WEB-RELAY contract.
 func requireRevocationsCapability(t *testing.T, base string) {
 	t.Helper()
 	var wellKnown struct {
@@ -36,7 +37,7 @@ func requireRevocationsCapability(t *testing.T, base string) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /.well-known/dfos-relay: status %d", resp.StatusCode)
 	}
-	if wellKnown.Capabilities["revocations"] != true {
+	if revocations, present := wellKnown.Capabilities["revocations"]; present && revocations == false {
 		t.Skip("relay does not advertise capabilities.revocations — skipping revocation-status conformance")
 	}
 }

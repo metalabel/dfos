@@ -638,7 +638,7 @@ describe('signing mailbox', () => {
       credential: f.credential,
     });
     expect(response.status).toBe(429);
-    expect(await response.json()).toEqual({ error: 'mailbox pending request cap reached' });
+    expect(await response.json()).toEqual({ error: 'signing mailbox pending limit reached' });
   });
 
   it('prunes expired signing rows at construction even when signing is disabled', async () => {

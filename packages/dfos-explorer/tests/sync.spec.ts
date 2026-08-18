@@ -209,6 +209,35 @@ describe('sync engine', () => {
     expect((await db.getChain('did:dfos:aaa'))?.opCount).toBe(2);
   });
 
+  it('bounds an always-rejected reset and preserves the persisted cursor', async () => {
+    const db = await freshDb();
+    await db.setCursor({
+      relay: 'http://fake',
+      cursor: 'persisted-high-water',
+      count: 7,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    const afters: Array<string | undefined> = [];
+    const rejectingPeer: PeerClient = {
+      ...fakePeer([]),
+      async getOperationLog(_url, params) {
+        afters.push(params?.after);
+        return 'invalid-cursor';
+      },
+    };
+    const client = createClient({ relays: ['http://fake'], peerClient: rejectingPeer });
+
+    await expect(syncFromRelay({ db, client, relay: 'http://fake' })).rejects.toThrow(
+      /rejected cursor again after reset/,
+    );
+
+    expect(afters).toEqual(['persisted-high-water', undefined]);
+    expect(await db.getCursor('http://fake')).toMatchObject({
+      cursor: 'persisted-high-water',
+      count: 7,
+    });
+  });
+
   it('JIT indexing never writes a sync cursor (only a deep sync does)', async () => {
     // a per-relay sync CURSOR means an audit-grade full-log sweep ran against
     // that relay. The verify queue's JIT folds (which land ops in the corpus)

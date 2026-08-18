@@ -307,7 +307,6 @@ export const createClient = (config: ClientConfig): Client => {
     // relay-enforced 1..1000 window so an out-of-range ask can't 400
     const limit = Math.max(1, Math.min(1000, Math.floor(options?.limit ?? 100)));
     // a single page from the first reachable relay — a seam, not a sync engine
-    let invalidCursor = false;
     for (const url of relaysFor(options)) {
       let page: Awaited<ReturnType<typeof pager>> = null;
       try {
@@ -316,8 +315,7 @@ export const createClient = (config: ClientConfig): Client => {
         page = null;
       }
       if (page === 'invalid-cursor') {
-        invalidCursor = true;
-        continue;
+        return 'invalid-cursor';
       }
       if (page === null) continue;
       const provenance: Provenance = {
@@ -328,7 +326,6 @@ export const createClient = (config: ClientConfig): Client => {
       };
       return { entries: page.entries, next: page.next, provenance };
     }
-    if (invalidCursor) return 'invalid-cursor';
     return {
       entries: [],
       next: null,

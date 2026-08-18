@@ -480,9 +480,11 @@ func (r *Relay) handleSigningDecline(w http.ResponseWriter, req *http.Request) {
 		}
 		return
 	}
-	if len(bytes.TrimSpace(body)) != 0 {
-		writeError(w, http.StatusBadRequest, "request body must be empty")
-		return
+	for _, b := range body {
+		if b != '\t' && b != '\n' && b != '\r' && b != ' ' {
+			writeError(w, http.StatusBadRequest, "request body must be empty")
+			return
+		}
 	}
 	result, err := r.signingMailboxStore().DeclineSignRequest(req.PathValue("cid"), time.Now())
 	if storeErr(w, err) {

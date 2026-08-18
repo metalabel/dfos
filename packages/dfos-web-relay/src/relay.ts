@@ -111,14 +111,51 @@ const MAX_BODY_BYTES = 16 << 20;
 
 /**
  * Returns true if a Content-Length header is present and exceeds the 16MB body
- * cap. A missing/unparseable header returns false — the streamed length is
- * bounded separately (PUT blob re-checks the materialized size; serve.ts caps
- * the unauthenticated streaming path above this route cap).
+ * cap. A missing/unparseable header returns false; readCappedBytes still
+ * enforces the limit incrementally while consuming the request stream.
  */
 const exceedsBodyCap = (contentLength: string | undefined): boolean => {
   if (!contentLength) return false;
   const n = Number(contentLength);
   return Number.isFinite(n) && n > MAX_BODY_BYTES;
+};
+
+const readCappedBytes = async (
+  request: Request,
+  maximum: number,
+): Promise<{ ok: true; bytes: Uint8Array } | { ok: false; tooLarge: boolean }> => {
+  if (exceedsBodyCap(request.headers.get('content-length') ?? undefined)) {
+    return { ok: false, tooLarge: true };
+  }
+  if (!request.body) return { ok: true, bytes: new Uint8Array() };
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maximum) {
+        await reader.cancel().catch(() => {});
+        return { ok: false, tooLarge: true };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return { ok: false, tooLarge: false };
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, bytes };
 };
 
 // -----------------------------------------------------------------------------
@@ -367,17 +404,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (!writeEnabled) {
       return c.json({ error: 'this relay is pull-only; writes are disabled' }, 501);
     }
-    // Per-route DoS cap: reject an oversized body before buffering it. Mirrors
-    // the Go twin's 16MB MaxBytesReader on the blob route. The Content-Length
-    // header (when present) is the cheap pre-read check; serve.ts streams a
-    // hard cap above this for the Content-Length-absent (chunked) case.
-    if (exceedsBodyCap(c.req.header('content-length'))) {
-      return c.json({ error: 'request body too large' }, 413);
-    }
+    // Enforce the route cap while consuming the stream. Content-Length is a
+    // cheap early rejection, but chunked/direct Fetch requests are bounded too.
+    const read = await readCappedBytes(c.req.raw, MAX_BODY_BYTES);
+    if (!read.ok && read.tooLarge) return c.json({ error: 'request body too large' }, 413);
+    if (!read.ok) return c.json({ error: 'invalid JSON body' }, 400);
 
     let body: unknown;
     try {
-      body = await c.req.json();
+      body = JSON.parse(new TextDecoder().decode(read.bytes));
     } catch {
       return c.json({ error: 'invalid JSON body' }, 400);
     }
@@ -823,11 +858,11 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const contentId = c.req.param('contentId');
     const operationCID = c.req.param('operationCID');
 
-    // Per-route DoS cap (16MB, mirrors the Go twin's MaxBytesReader on this
-    // route). Reject by Content-Length before authenticating or buffering.
-    if (exceedsBodyCap(c.req.header('content-length'))) {
-      return c.json({ error: 'request body too large' }, 413);
-    }
+    // Enforce the route cap while consuming the stream, before authentication.
+    // This covers both declared lengths and chunked/direct Fetch requests.
+    const read = await readCappedBytes(c.req.raw, MAX_BODY_BYTES);
+    if (!read.ok && read.tooLarge) return c.json({ error: 'request body too large' }, 413);
+    if (!read.ok) return c.json({ error: 'blob bytes do not match documentCID' }, 400);
 
     // authenticate
     const auth = await authenticateRequest(
@@ -864,13 +899,8 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'not authorized — must be chain creator or operation signer' }, 403);
     }
 
-    // read blob bytes and verify they match the documentCID from the operation.
-    // Bound the post-read size too: a Content-Length-absent (chunked) body
-    // bypasses the header check above, so re-check the materialized length.
-    const bytes = new Uint8Array(await c.req.arrayBuffer());
-    if (bytes.byteLength > MAX_BODY_BYTES) {
-      return c.json({ error: 'request body too large' }, 413);
-    }
+    // Verify the bounded blob bytes match the documentCID from the operation.
+    const bytes = read.bytes;
     try {
       const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
       const encoded = await dagCborCanonicalEncode(parsed);

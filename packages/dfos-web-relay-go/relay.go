@@ -322,7 +322,7 @@ func (r *Relay) SyncFromPeers() error {
 		}
 		// readStore for the cursor read — never races on the ingestion tx.
 		cursor, _ := r.readStore.GetPeerCursor(peer.URL)
-		fetched, reached, invalidCursorAbort := r.pullPeerOps(peer.URL, cursor, maxOpsPerSyncCycle, true)
+		fetched, reached, resetUnresolved := r.pullPeerOps(peer.URL, cursor, maxOpsPerSyncCycle, true)
 		if fetched > 0 {
 			r.logger.Info("peer sync fetched ops",
 				"peer", peer.URL,
@@ -331,7 +331,7 @@ func (r *Relay) SyncFromPeers() error {
 			)
 		}
 		// Bounded anti-entropy: self-heal a wedged/stale forward cursor.
-		if !invalidCursorAbort {
+		if !resetUnresolved {
 			r.reconcilePeer(peer.URL, reached)
 		}
 	}
@@ -347,19 +347,18 @@ func (r *Relay) SyncFromPeers() error {
 // high-water cursor is advanced as each page commits (the normal forward pull);
 // when false the stored high-water cursor is left untouched and the caller owns
 // the cursor bookkeeping (the bounded scrub sweep). On a transient store failure
-// it stops without advancing, so the same page is re-fetched next cycle.
+// it stops without advancing, so the same page is re-fetched next cycle. The
+// third result reports whether a cursor reset remains unresolved this cycle.
 func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist bool) (int, string, bool) {
 	cursor := startCursor
 	fetched := 0
 	resetAttempted := false
 	resetPending := false
-	invalidCursorAbort := false
 	for fetched < maxOps {
 		page, err := r.peerClient.GetOperationLog(peerURL, cursor, 1000)
 		if errors.Is(err, ErrPeerInvalidCursor) {
 			if resetAttempted {
 				r.logger.Warn("peer sync: peer rejected cursor again after reset — aborting cycle", "peer", peerURL)
-				invalidCursorAbort = true
 				break
 			}
 			// The peer no longer recognizes our persisted cursor (wiped/rebuilt
@@ -379,9 +378,17 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			break
 		}
 		if len(page.Entries) == 0 {
-			if persist && resetPending {
-				if err := r.store.SetPeerCursor(peerURL, ""); err != nil {
-					r.logger.Error("peer sync: failed to persist peer cursor reset", "peer", peerURL, "error", err)
+			if resetPending {
+				if persist {
+					resume := ""
+					if page.Resume() != nil {
+						resume = *page.Resume()
+					}
+					if err := r.store.SetPeerCursor(peerURL, resume); err != nil {
+						r.logger.Error("peer sync: failed to persist peer cursor reset", "peer", peerURL, "error", err)
+					} else {
+						resetPending = false
+					}
 				} else {
 					resetPending = false
 				}
@@ -440,9 +447,13 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			// re-fetches the final partial page, which dedups cheaply. A relay
 			// that already persisted a fabricated bare CID (pre-fix) self-heals
 			// via the bounded reconcile scrubber, which re-walks from the start.
-			if persist && resetPending {
-				if err := r.store.SetPeerCursor(peerURL, ""); err != nil {
-					r.logger.Error("peer sync: failed to persist peer cursor reset", "peer", peerURL, "error", err)
+			if resetPending {
+				if persist {
+					if err := r.store.SetPeerCursor(peerURL, ""); err != nil {
+						r.logger.Error("peer sync: failed to persist peer cursor reset", "peer", peerURL, "error", err)
+					} else {
+						resetPending = false
+					}
 				} else {
 					resetPending = false
 				}
@@ -465,10 +476,12 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 				break
 			}
 			resetPending = false
+		} else {
+			resetPending = false
 		}
 		r.ingestMu.Unlock()
 	}
-	return fetched, cursor, invalidCursorAbort || resetPending
+	return fetched, cursor, resetPending
 }
 
 // reconcilePeer advances the bounded anti-entropy scrubber for one peer. Every

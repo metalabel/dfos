@@ -513,6 +513,9 @@ func testSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T, store 
 	if got := signingRequest(t, r, http.MethodPost, declinePath, map[string]bool{"unexpected": true}, ""); got.Code != http.StatusBadRequest {
 		t.Fatalf("non-empty decline: %d %s", got.Code, got.Body.String())
 	}
+	if got := signingRequest(t, r, http.MethodPost, declinePath, []byte{'\f'}, ""); got.Code != http.StatusBadRequest {
+		t.Fatalf("form-feed decline body: %d %s", got.Code, got.Body.String())
+	}
 	if got := signingRequest(t, r, http.MethodPost, declinePath, bytes.Repeat([]byte("x"), maxSigningDeclineBody+1), ""); got.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized decline: %d %s", got.Code, got.Body.String())
 	}

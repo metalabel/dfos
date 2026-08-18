@@ -260,7 +260,8 @@ export const registerSigningRoutes = (options: {
       now,
     );
     if (result === 'conflict') return c.json({ error: 'request CID conflict' }, 409);
-    if (result === 'capacity') return c.json({ error: 'mailbox pending request cap reached' }, 429);
+    if (result === 'capacity')
+      return c.json({ error: 'signing mailbox pending limit reached' }, 429);
     return c.json(
       { cid: verifiedRequest.requestCID, expiresAt: verifiedRequest.expiresAt },
       result === 'created' ? 201 : 200,

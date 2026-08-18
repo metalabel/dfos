@@ -1501,6 +1501,61 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('identity delete', () => {
+    it('restores authentication when a later fork undeletes the projected head', async () => {
+      const identity = await createIdentity();
+      const content = await createContentOp(identity);
+      const initial = await json(await postOps([identity.jwsToken, content.jwsToken]));
+      const contentId = initial.results.find(
+        (result: { kind: string }) => result.kind === 'content-op',
+      ).chainId;
+
+      const authenticatedReadStatus = async () => {
+        const token = await createTestAuthToken(identity);
+        return (
+          await req(`/content/${contentId}/blob`, {
+            headers: { authorization: `Bearer ${token}` },
+          })
+        ).status;
+      };
+      expect(await authenticatedReadStatus()).toBe(404);
+
+      const deleteOp: IdentityOperation = {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: identity.operationCID,
+        createdAt: ts(2),
+      };
+      const { jwsToken: deleteToken } = await signIdentityOperation({
+        operation: deleteOp,
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+      expect((await json(await postOps([deleteToken]))).results[0].status).toBe('new');
+      expect(await authenticatedReadStatus()).toBe(401);
+
+      const undeleteFork: IdentityOperation = {
+        version: 1,
+        type: 'update',
+        previousOperationCID: identity.operationCID,
+        authKeys: [identity.authKey.key],
+        assertKeys: [],
+        controllerKeys: [identity.controller.key],
+        createdAt: ts(3),
+      };
+      const { jwsToken: undeleteToken } = await signIdentityOperation({
+        operation: undeleteFork,
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+      expect((await json(await postOps([undeleteToken]))).results[0].status).toBe('new');
+
+      const chain = await store.getIdentityChain(identity.did);
+      expect(chain?.state.isDeleted).toBe(false);
+      expect(await authenticatedReadStatus()).toBe(404);
+    });
+
     it('should accept identity delete and set isDeleted', async () => {
       const identity = await createIdentity();
       await postOps([identity.jwsToken]);
@@ -2321,6 +2376,25 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('request body caps', () => {
+    const oversizedChunkedRequest = (path: string, method: 'POST' | 'PUT') => {
+      const chunk = new Uint8Array(8 * 1024 * 1024);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(chunk);
+          controller.enqueue(chunk);
+          controller.enqueue(new Uint8Array([0]));
+          controller.close();
+        },
+      });
+      const request = new Request(`http://localhost${path}`, {
+        method,
+        headers: { 'content-type': 'application/octet-stream' },
+        body,
+        duplex: 'half',
+      } as RequestInit & { duplex: 'half' });
+      return app.app.fetch(request);
+    };
+
     it('should reject POST /operations with an oversized Content-Length (413)', async () => {
       const res = await req('/proof/v1/operations', {
         method: 'POST',
@@ -2330,6 +2404,16 @@ describe('web relay', () => {
         },
         body: JSON.stringify({ operations: ['x'] }),
       });
+      expect(res.status).toBe(413);
+    });
+
+    it('should reject chunked POST /operations while buffering at 16MB (413)', async () => {
+      const res = await oversizedChunkedRequest('/proof/v1/operations', 'POST');
+      expect(res.status).toBe(413);
+    });
+
+    it('should reject chunked PUT blob while buffering at 16MB before auth (413)', async () => {
+      const res = await oversizedChunkedRequest('/content/anychain/blob/anyop', 'PUT');
       expect(res.status).toBe(413);
     });
 

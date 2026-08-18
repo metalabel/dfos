@@ -51,6 +51,7 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
   let cursor = state?.cursor ?? null;
   let count = state?.count ?? 0;
   let added = 0;
+  let resetAttempted = false;
 
   // preload the rollups once so per-page merges need no reads; counts are
   // incremented only for ops that were not already present (union across relays)
@@ -63,10 +64,14 @@ export const syncFromRelay = async (options: SyncOptions): Promise<{ added: numb
       limit: SYNC_PAGE_LIMIT,
     });
     if (page === 'invalid-cursor') {
+      if (resetAttempted) {
+        throw new Error(`relay rejected cursor again after reset: ${relay}`);
+      }
       // Log cursors are relay-local. A relay wipe/rebuild invalidates the saved
-      // position, so clear it and restart this same idempotent walk from zero.
+      // position, so clear it only in memory and restart this same idempotent
+      // walk from zero. Preserve the durable cursor until that fetch succeeds.
+      resetAttempted = true;
       cursor = null;
-      await db.setCursor({ relay, cursor, count, updatedAt: new Date().toISOString() });
       continue;
     }
     if (!page.provenance.answeredBy) throw new Error(`relay unreachable: ${relay}`);

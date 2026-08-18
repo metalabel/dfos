@@ -251,23 +251,22 @@ describe('globalLog resilience', () => {
     await expect(client.globalLog('stale-relay-local-cursor')).resolves.toBe('invalid-cursor');
   });
 
-  it('fails over after one relay rejects an after cursor', async () => {
-    const id = await buildIdentity();
-    const failover: PeerClient = {
+  it('returns immediately when one relay rejects its relay-local after cursor', async () => {
+    const asked: string[] = [];
+    const rejecting: PeerClient = {
       ...fakePeerClient({}),
-      async getOperationLog(url, params) {
+      async getOperationLog(url) {
+        asked.push(url);
         if (url === A) return 'invalid-cursor';
-        return { entries: toEntries(id.log), next: params?.after ?? null };
+        return { entries: [], next: null };
       },
     };
-    const client = createClient({ relays: [A, B], peerClient: failover });
-    const page = await client.globalLog('portable-cursor');
-    if (page === 'invalid-cursor') throw new Error('expected failover page');
-    expect(page.entries).toEqual(toEntries(id.log));
-    expect(page.provenance.answeredBy).toBe(B);
+    const client = createClient({ relays: [A, B], peerClient: rejecting });
+    await expect(client.globalLog('relay-local-cursor')).resolves.toBe('invalid-cursor');
+    expect(asked).toEqual([A]);
   });
 
-  it('returns invalid-cursor only when no relay returns a page', async () => {
+  it('does not try a transport-unreachable relay after an invalid cursor', async () => {
     const mixed: PeerClient = {
       ...fakePeerClient({}),
       async getOperationLog(url) {

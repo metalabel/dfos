@@ -535,6 +535,58 @@ func TestReadThroughIdentityMultiPage(t *testing.T) {
 	}
 }
 
+type failingAfterFirstIdentityPageClient struct {
+	token string
+	calls int
+}
+
+func (c *failingAfterFirstIdentityPageClient) GetIdentityLog(string, string, string, int) (*PeerLogPage, error) {
+	c.calls++
+	if c.calls == 1 {
+		next := "next-page"
+		return &PeerLogPage{Entries: []PeerLogEntry{{JWSToken: c.token}}, Next: &next}, nil
+	}
+	return nil, errors.New("peer failed mid-walk")
+}
+func (c *failingAfterFirstIdentityPageClient) GetContentLog(string, string, string, int) (*PeerLogPage, error) {
+	return nil, nil
+}
+func (c *failingAfterFirstIdentityPageClient) GetOperationLog(string, string, int) (*PeerLogPage, error) {
+	return nil, nil
+}
+func (c *failingAfterFirstIdentityPageClient) SubmitOperations(string, []string) error { return nil }
+func (c *failingAfterFirstIdentityPageClient) GetBlob(string, string, string) ([]byte, error) {
+	return nil, ErrBlobNotFound
+}
+
+func TestReadThroughIdentityServesVerifiedPrefixAfterMidWalkFailure(t *testing.T) {
+	id := createTestIdentity(t)
+	client := &failingAfterFirstIdentityPageClient{token: id.token}
+	store := NewMemoryStore()
+	r, err := NewRelay(RelayOptions{
+		Store:      store,
+		PeerClient: client,
+		Peers:      []PeerConfig{{URL: "http://peer-a"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/proof/v1/identities/"+id.did, nil)
+	rec := httptest.NewRecorder()
+	r.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("verified prefix status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if client.calls != 2 {
+		t.Fatalf("peer calls = %d, want 2", client.calls)
+	}
+	chain, err := store.GetIdentityChain(id.did)
+	if err != nil || chain == nil || len(chain.Log) != 1 {
+		t.Fatalf("stored verified prefix = %+v, err=%v", chain, err)
+	}
+}
+
 func TestReadThroughContent(t *testing.T) {
 	peerStore := NewMemoryStore()
 	id := createTestIdentity(t)
@@ -853,6 +905,7 @@ func TestSyncEmptyPeer(t *testing.T) {
 
 type invalidCursorSyncClient struct {
 	allInvalid bool
+	emptyNext  string
 	token      string
 	calls      []string
 }
@@ -940,6 +993,10 @@ func (c *invalidCursorSyncClient) GetOperationLog(_ string, after string, _ int)
 	if after == "old-peer-cursor" || c.allInvalid {
 		return nil, ErrPeerInvalidCursor
 	}
+	if after == "" && c.emptyNext != "" {
+		next := c.emptyNext
+		return &PeerLogPage{Entries: []PeerLogEntry{}, Next: &next}, nil
+	}
 	if after == "fresh-peer-cursor" {
 		return &PeerLogPage{Entries: []PeerLogEntry{}}, nil
 	}
@@ -955,11 +1012,13 @@ func TestSyncInvalidCursorResetIsBoundedAndDurableOnlyAfterSuccess(t *testing.T)
 	for _, tc := range []struct {
 		name       string
 		allInvalid bool
+		emptyNext  string
 		wantCursor string
 		wantCalls  int
 	}{
 		{name: "peer rejects everything", allInvalid: true, wantCursor: "old-peer-cursor", wantCalls: 2},
 		{name: "genuine peer wipe", wantCursor: "fresh-peer-cursor", wantCalls: 3},
+		{name: "empty reset page supplies watermark", emptyNext: "empty-watermark", wantCursor: "empty-watermark", wantCalls: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := NewMemoryStore()
@@ -967,7 +1026,7 @@ func TestSyncInvalidCursorResetIsBoundedAndDurableOnlyAfterSuccess(t *testing.T)
 				t.Fatal(err)
 			}
 			id := createTestIdentity(t)
-			client := &invalidCursorSyncClient{allInvalid: tc.allInvalid, token: id.token}
+			client := &invalidCursorSyncClient{allInvalid: tc.allInvalid, emptyNext: tc.emptyNext, token: id.token}
 			r, err := NewRelay(RelayOptions{Store: store, PeerClient: client, Peers: []PeerConfig{{URL: "peer"}}})
 			if err != nil {
 				t.Fatal(err)
@@ -981,6 +1040,36 @@ func TestSyncInvalidCursorResetIsBoundedAndDurableOnlyAfterSuccess(t *testing.T)
 			cursor, err := store.GetPeerCursor("peer")
 			if err != nil || cursor != tc.wantCursor {
 				t.Fatalf("persisted cursor = %q, err=%v; want %q", cursor, err, tc.wantCursor)
+			}
+		})
+	}
+}
+
+func TestPullPeerOpsReportsOnlyUnresolvedResetState(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		client         *invalidCursorSyncClient
+		wantUnresolved bool
+	}{
+		{
+			name:           "second rejection leaves reset unresolved",
+			client:         &invalidCursorSyncClient{allInvalid: true},
+			wantUnresolved: true,
+		},
+		{
+			name:           "successful from-scratch page resolves reset",
+			client:         &invalidCursorSyncClient{emptyNext: "empty-watermark"},
+			wantUnresolved: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := NewRelay(RelayOptions{Store: NewMemoryStore(), PeerClient: tc.client})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, unresolved := r.pullPeerOps("peer", "old-peer-cursor", 100, false)
+			if unresolved != tc.wantUnresolved {
+				t.Fatalf("unresolved reset = %v, want %v", unresolved, tc.wantUnresolved)
 			}
 		})
 	}

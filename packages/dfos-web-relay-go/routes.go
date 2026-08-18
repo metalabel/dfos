@@ -322,11 +322,8 @@ func (r *Relay) handleGetIdentity(w http.ResponseWriter, req *http.Request) {
 				continue
 			}
 			complete := r.readThroughIdentity(peer.URL, did)
-			if !complete {
-				continue
-			}
 			chain, _ = r.readStore.GetIdentityChain(did)
-			if chain != nil {
+			if chain != nil && complete {
 				break
 			}
 		}
@@ -372,11 +369,8 @@ func (r *Relay) handleResolveDID(w http.ResponseWriter, req *http.Request) {
 				continue
 			}
 			complete := r.readThroughIdentity(peer.URL, did)
-			if !complete {
-				continue
-			}
 			chain, _ = r.readStore.GetIdentityChain(did)
-			if chain != nil {
+			if chain != nil && complete {
 				break
 			}
 		}
@@ -479,11 +473,8 @@ func (r *Relay) handleGetContent(w http.ResponseWriter, req *http.Request) {
 				continue
 			}
 			complete := r.readThroughContent(peer.URL, contentID)
-			if !complete {
-				continue
-			}
 			chain, _ = r.readStore.GetContentChain(contentID)
-			if chain != nil {
+			if chain != nil && complete {
 				break
 			}
 		}

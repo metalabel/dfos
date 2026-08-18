@@ -459,9 +459,9 @@ export interface RelayStore {
    */
   getRevocationForCredential(credentialCID: string): Promise<StoredRevocation | undefined>;
   /**
-   * Get all stored revocations issued by a DID, sorted by revocation
-   * `createdAt` ascending with credentialCID as tiebreak (deterministic
-   * across stores and twins — the frozen v1 feed order). Serves the
+   * Get all stored revocations issued by a DID, sorted by credentialCID
+   * ascending (deterministic across stores and twins — the frozen v1 keyset
+   * order). Serves the
    * `/revocations/v1/issuer/:did` listing route.
    */
   getRevocationsByIssuer(issuerDID: string): Promise<StoredRevocation[]>;
