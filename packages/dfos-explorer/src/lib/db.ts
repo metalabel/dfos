@@ -188,6 +188,18 @@ export interface ExplorerDb {
    *  (credentials, artifacts) that don't surface as their own chain rollup. */
   opsOfKind(kind: OpKind, limit: number): Promise<ExplorerOp[]>;
   /**
+   * One page of the synced operation log, NEWEST FIRST. This is the local
+   * counterpart of the relay's /proof/v1/log — which is forward-only, so a
+   * "most recent operations" ordering exists here and nowhere else (see
+   * lib/log-feed.ts). `before` is a `${createdAt}|${cid}` key from a prior
+   * page's `next`; '' starts at the head. `next` is issued only on a FULL page,
+   * mirroring the relay's list-envelope contract.
+   */
+  opsPage(q: {
+    before: string;
+    limit: number;
+  }): Promise<{ rows: ExplorerOp[]; next: string | null }>;
+  /**
    * counts.byKind is per-primitive: CHAIN counts for identity/content, OP counts
    * for credential/artifact/etc. (see CHAIN_KINDS) — so a credential colliding
    * with its issuer's identity chain is still counted.
@@ -483,6 +495,41 @@ export const openExplorerDb = async (
     return rows.slice(0, limit);
   };
 
+  /** `${createdAt}|${cid}` — the total order the newest-first op pager resumes on.
+   *  createdAt is a fixed-width, lexicographically-chronological grammar; the cid
+   *  breaks ties so a page boundary inside one timestamp is deterministic. */
+  const opKey = (op: ExplorerOp): string => `${op.createdAt}|${op.cid}`;
+
+  const opsPage = (q: {
+    before: string;
+    limit: number;
+  }): Promise<{ rows: ExplorerOp[]; next: string | null }> => {
+    const store = db.transaction('ops').objectStore('ops');
+    // walk the createdAt index backwards from the resume timestamp (INCLUSIVE, so
+    // same-second rows are still seen) and skip past the exact resume key.
+    const at = q.before ? q.before.slice(0, q.before.indexOf('|')) : '';
+    const range = at ? IDBKeyRange.upperBound(at) : null;
+    const rows: ExplorerOp[] = [];
+    let scanned = 0;
+    return new Promise((resolve, reject) => {
+      const cursorReq = store.index('createdAt').openCursor(range, 'prev');
+      cursorReq.onsuccess = () => {
+        const cursor = cursorReq.result;
+        if (!cursor || rows.length >= q.limit || scanned >= MAX_SCAN) {
+          // `next` only on a FULL page — a short page means the corpus ran out
+          const last = rows[rows.length - 1];
+          const next = last && rows.length >= q.limit ? opKey(last) : null;
+          return resolve({ rows, next });
+        }
+        scanned += 1;
+        const row = cursor.value as ExplorerOp;
+        if (!q.before || opKey(row) < q.before) rows.push(row);
+        cursor.continue();
+      };
+      cursorReq.onerror = () => reject(cursorReq.error ?? new Error('ops page query failed'));
+    });
+  };
+
   const chainsQuery = (q: ChainsQuery): Promise<BrowseResult<ChainRollup>> => {
     const store = db.transaction('chains').objectStore('chains');
     const index = q.sort === 'ops' ? store.index('opCount') : store.index('lastCreatedAt');
@@ -611,6 +658,7 @@ export const openExplorerDb = async (
     allChains,
     oldestOpAt,
     opsOfKind,
+    opsPage,
     counts,
     chainsQuery,
     browseIdentities,

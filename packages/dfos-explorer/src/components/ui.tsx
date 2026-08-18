@@ -11,6 +11,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { copyToClipboard, short } from '../lib/format';
+import type { RevocationStatus } from '../lib/revocations';
 
 // -----------------------------------------------------------------------------
 // panel
@@ -136,6 +137,45 @@ export const TermBar = () => {
 };
 
 // -----------------------------------------------------------------------------
+// pager — the footer of every keyset-paged surface
+//
+// A relay index serves a KEYSET cursor, not offsets: there is no "page 7", and
+// the only honest back is the cursor you walked in on. So the controls are
+// first / prev / next, `prev` disabled on a page reached by a deep link (we know
+// we're not at the start — that's `offFirst` — but not what came before it).
+// -----------------------------------------------------------------------------
+
+export const Pager = (props: {
+  /** rows on THIS page — never a corpus total (completeness is outside the proof). */
+  count: number;
+  noun: string;
+  loading: boolean;
+  hasNext: boolean;
+  hasPrev: boolean;
+  offFirst: boolean;
+  onFirst: () => void;
+  onPrev: () => void;
+  onNext: () => void;
+}) => (
+  <div class="pager">
+    <button disabled={!props.offFirst || props.loading} onClick={props.onFirst}>
+      ⇤ first
+    </button>
+    <button disabled={!props.hasPrev || props.loading} onClick={props.onPrev}>
+      ‹ prev
+    </button>
+    <button disabled={!props.hasNext || props.loading} onClick={props.onNext}>
+      next ›
+    </button>
+    <span class="lbl">
+      {props.loading
+        ? 'loading…'
+        : `${props.count} ${props.noun}${props.offFirst ? ' · paged' : ''}`}
+    </span>
+  </div>
+);
+
+// -----------------------------------------------------------------------------
 // links
 // -----------------------------------------------------------------------------
 
@@ -181,19 +221,43 @@ export const KidLink = (props: { kid: string }) => {
 };
 
 /**
- * Credential active/revoked chip. `revokedByOp` is the CID of a synced
- * revocation op that names this credential (from the local revocation fold);
- * when present the chip is red and links to that op, else green "active".
- * Relay-asserted until opened — the credential view re-verifies any proof.
+ * Credential status chip — THREE states, because absence is not proof (see
+ * lib/revocations.ts). Red "revoked" links to the revoking op when its CID is
+ * known; green "active" is licensed ONLY by a completed sweep of the relay set;
+ * anything unswept is amber "unknown" and never green. Relay-asserted until
+ * opened — the credential view re-verifies any proof.
  */
-export const CredStatus = (props: { revokedByOp?: string | undefined }) =>
-  props.revokedByOp ? (
-    <a href={`#/op/${props.revokedByOp}`} class="ck bad" title="revoked — open the revocation op">
-      revoked
-    </a>
-  ) : (
-    <span class="ck ok">active</span>
+export const CredStatus = (props: {
+  status: RevocationStatus;
+  revokedByOp?: string | undefined;
+}) => {
+  if (props.status === 'revoked') {
+    return props.revokedByOp ? (
+      <a href={`#/op/${props.revokedByOp}`} class="ck bad" title="revoked — open the revocation op">
+        revoked
+      </a>
+    ) : (
+      <span class="ck bad" title="a relay served a revocation for this credential">
+        revoked
+      </span>
+    );
+  }
+  if (props.status === 'unknown') {
+    return (
+      <span
+        class="ck warn"
+        title="no relay answered for this credential — its status is unknown, which is NOT the same as active"
+      >
+        unknown
+      </span>
+    );
+  }
+  return (
+    <span class="ck ok" title="no relay we asked holds a revocation — absence is not proof">
+      active
+    </span>
   );
+};
 
 /**
  * Middle-truncated identifier with click-to-copy + a full-value title. The one

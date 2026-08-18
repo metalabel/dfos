@@ -810,6 +810,62 @@ tr:hover td {
   color: var(--dim);
 }
 
+/* ---------------------------------------------------------------- pager
+
+   first / prev / next over a keyset cursor — no page numbers, because a keyset
+   index has none to give. */
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.pager button {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 3px 9px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.pager button:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.pager button:disabled {
+  color: var(--dim);
+  border-color: var(--line2);
+  cursor: default;
+}
+
+.pager .lbl {
+  margin-left: auto;
+}
+
+/* -------------------------------------------------------------- did chip
+
+   A DID resolved to its public profile name. The name is plain ink, NOT the
+   amber `.attr` used for relay projections — it came from bytes re-hashed to the
+   chain's committed CID in this tab. Unresolved, it is the short DID as before. */
+
+.did-chip {
+  overflow-wrap: anywhere;
+}
+
+.did-name {
+  color: var(--ink);
+  border-bottom: 1px solid var(--line2);
+}
+
+.did-chip:hover .did-name {
+  color: var(--link);
+  border-bottom-color: var(--link);
+}
+
 /* ---------------------------------------------------------------- foot */
 
 .foot {
@@ -1185,6 +1241,48 @@ button.primary:hover {
   color: var(--ok);
 }
 
+/* ------------------------------------------------ compact network stat strip
+
+   The observatory band, compacted to one line. Same trust palette as the old
+   grid: amber = relay-asserted, green = verified locally. */
+
+.statstrip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 15px;
+  padding-bottom: 10px;
+}
+
+.ss {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ss-num {
+  font-size: 16px;
+  line-height: 1.1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ss-num.asserted {
+  color: var(--warn);
+}
+
+.ss-num.ok {
+  color: var(--ok);
+}
+
+.ss-unit {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
 /* ---------------------------------------------------------- by-kind bar */
 
 .kindbar {
@@ -1198,6 +1296,11 @@ button.primary:hover {
 .kindbar-seg {
   min-width: 2px;
   height: 100%;
+}
+
+/* the home strip's shorter bar — same segments, less shouting */
+.kindbar.sm {
+  height: 8px;
 }
 
 .kindbar-legend {

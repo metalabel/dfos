@@ -12,7 +12,7 @@ import { getRelays, subscribeRelays } from './lib/relays';
 import { dispatchInput, routeFor } from './lib/resolve-input';
 import { startAutoSyncScheduler, useSyncState } from './lib/sync-store';
 import { navigate, useRoute } from './router';
-import { BrowseArtifacts, BrowseDocuments, BrowseIdentities } from './views/browse';
+import { BrowseDocuments, BrowseIdentities } from './views/browse';
 import { Content } from './views/content';
 import { Credential } from './views/credential';
 import { Glossary } from './views/glossary';
@@ -21,6 +21,7 @@ import { Identity } from './views/identity';
 import { LocalIndex } from './views/local-index';
 import { Op } from './views/op';
 import { Relays } from './views/relays';
+import { Search } from './views/search';
 
 const SyncTicker = () => {
   const sync = useSyncState();
@@ -123,7 +124,6 @@ const Header = (props: {
         <div class="hnav">
           <a href="#/identities">identities</a>
           <a href="#/documents">documents</a>
-          <a href="#/artifacts">artifacts</a>
           <a href="#/relays">relays</a>
           <a href="#/glossary">glossary</a>
         </div>
@@ -145,46 +145,36 @@ const Header = (props: {
   );
 };
 
+/**
+ * One box, two outcomes. A pasted IDENTIFIER dispatches straight to its view (a
+ * DID, a contentId, a CID — the resolve-in-one-step the explorer has always had).
+ * Anything else is a NAME, and goes to the grouped search results, where the
+ * relay's server-side name filter answers and the content group says honestly
+ * what the index cannot do. There is no dead end.
+ */
 const SearchBar = () => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [error, setError] = useState('');
 
   const go = (): void => {
-    const value = inputRef.current?.value ?? '';
+    const value = (inputRef.current?.value ?? '').trim();
+    if (!value) return;
     const target = dispatchInput(value);
-    if (!target) {
-      setError(
-        value.trim()
-          ? 'unrecognized identifier — expected did:dfos:…, a contentId, or a baf… CID'
-          : '',
-      );
-      return;
-    }
-    setError('');
-    navigate(routeFor(target));
+    navigate(target ? routeFor(target) : `#/search?q=${encodeURIComponent(value)}`);
   };
 
   return (
-    <>
-      <div class="search">
-        <input
-          ref={inputRef}
-          placeholder="paste a did:dfos:… / contentId / operation CID (baf…)"
-          autocomplete="off"
-          spellcheck={false}
-          onInput={() => setError('')}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') go();
-          }}
-        />
-        <button onClick={go}>resolve</button>
-      </div>
-      {error ? (
-        <div class="err" style={{ marginBottom: 10, fontSize: 11 }}>
-          {error}
-        </div>
-      ) : null}
-    </>
+    <div class="search">
+      <input
+        ref={inputRef}
+        placeholder="search names, or paste a did:dfos:… / contentId / operation CID (baf…)"
+        autocomplete="off"
+        spellcheck={false}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') go();
+        }}
+      />
+      <button onClick={go}>search</button>
+    </div>
   );
 };
 
@@ -207,23 +197,18 @@ export const App = () => {
     setIndexOpen(false);
   }, [route]);
 
-  const onSample = (q: string): void => {
-    const target = dispatchInput(q);
-    if (target) navigate(routeFor(target));
-  };
-
   const view = (() => {
     switch (route.view) {
       case 'glossary':
         return <Glossary />;
       case 'relays':
         return <Relays />;
+      case 'search':
+        return <Search />;
       case 'identities':
         return <BrowseIdentities />;
       case 'documents':
         return <BrowseDocuments />;
-      case 'artifacts':
-        return <BrowseArtifacts />;
       case 'did':
         return <Identity did={route.id} />;
       case 'content':
@@ -233,7 +218,7 @@ export const App = () => {
       case 'cred':
         return <Credential cid={route.id} />;
       default:
-        return <Home onSample={onSample} />;
+        return <Home />;
     }
   })();
 
@@ -241,10 +226,7 @@ export const App = () => {
   // pages (did/content/op/cred), the glossary, and the relay browser go full
   // width and carry their own crosslink panels instead.
   const showSidebar =
-    route.view === 'home' ||
-    route.view === 'identities' ||
-    route.view === 'documents' ||
-    route.view === 'artifacts';
+    route.view === 'home' || route.view === 'identities' || route.view === 'documents';
 
   return (
     <>

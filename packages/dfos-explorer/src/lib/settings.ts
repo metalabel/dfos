@@ -2,12 +2,14 @@
 
   SETTINGS — small user preferences, localStorage-backed, observable
 
-  Currently just the auto-sync interval. Kept separate from relays.ts because
-  these are UI ergonomics, not the trust-relevant relay/quorum parameters.
+  The auto-sync interval and the public-only feed filter. Kept separate from
+  relays.ts because these are UI ergonomics, not the trust-relevant relay/quorum
+  parameters.
 
 */
 
 const AUTO_SYNC_KEY = 'dfos.explorer.autoSyncMinutes';
+const PUBLIC_ONLY_KEY = 'dfos.explorer.publicOnly';
 
 /** Allowed auto-sync cadences in minutes; 0 = off. */
 export const AUTO_SYNC_OPTIONS = [0, 5, 15, 30, 60] as const;
@@ -44,6 +46,29 @@ export const setAutoSyncMinutes = (n: number): void => {
     storage()?.setItem(AUTO_SYNC_KEY, String(value));
   } catch {
     // storage unavailable — in-memory listeners still fire for this session
+  }
+  for (const fn of listeners) fn();
+};
+
+/**
+ * Whether content feeds hide gated (non-public-read) rows. Defaults to ON —
+ * public-only is what a stranger's explorer should show first, and a gated row
+ * carries no readable title to show anyway. A `pub` hash param overrides this
+ * per-link; the toggle writes both.
+ */
+export const getPublicOnly = (): boolean => {
+  try {
+    return storage()?.getItem(PUBLIC_ONLY_KEY) !== '0';
+  } catch {
+    return true;
+  }
+};
+
+export const setPublicOnly = (on: boolean): void => {
+  try {
+    storage()?.setItem(PUBLIC_ONLY_KEY, on ? '1' : '0');
+  } catch {
+    // storage unavailable — the hash param still carries it for this view
   }
   for (const fn of listeners) fn();
 };
