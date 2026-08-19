@@ -402,7 +402,10 @@ export const Content = (props: { id: string }) => {
 
       <DocPanel doc={doc} committedCid={docCid} verified={!!chain} />
 
-      {credits ? <Credits contentId={props.id} entries={credits} /> : null}
+      {/* one panel, two tiers: the relay's projection of this document's credits
+          renders immediately, amber, and this fold replaces it the moment
+          `credits` is non-null. Renders nothing when neither tier has rows. */}
+      <Credits contentId={props.id} entries={credits} indexed={indexed} />
 
       <GrantsPanel
         grants={grantsFromRelayIndex ? grantsIndex : grants}

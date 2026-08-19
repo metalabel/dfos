@@ -1,6 +1,6 @@
 /*
 
-  CREDITS — document attribution, re-verified from the claimant's side
+  CREDITS — document attribution, in two tiers
 
   The document signer asserts every entry by committing to these bytes. An
   optional credit-claim JWS adds the claimant's matching assertion. Verification
@@ -13,18 +13,34 @@
   MESSAGES to tell "could not check" from "checked and failed", which reads the
   wrong verdict the moment that prose is reworded.
 
-  Only mounted when the served document bytes have been re-hashed to the committed
-  document CID on a verified chain — see the gate in views/content.tsx.
+  TWO TIERS, ONE PANEL. The verified tier above needs the served bytes re-hashed
+  to the committed document CID on a verified chain — three round trips and a fold
+  — and until then a content page showed nothing at all. The relay's credit
+  projection (`/index/v0/credits?contentId=`) answers "who does this public
+  document say made it" in one request, so it renders first, AMBER, and is
+  replaced in place the moment the verified tier lands. Same panel, same row
+  vocabulary, upgraded — the profile-name pattern applied to attribution.
+
+  What the amber tier may and may not say is exactly bounded. The relay is
+  deliberately not credit-claim aware: a row restates the entry's DID, role, and
+  display position, and `hasClaim` is BYTE-PRESENCE of a claim token. It is never
+  a verdict. So the amber tier never renders "claimed" — that word belongs to the
+  fold, which checks the signature and the three-component bind. It says a
+  self-claim is PRESENT, and marks that amber like every other relay projection.
 
 */
 
 import { verifyCreditEntry } from '@metalabel/dfos-protocol/chain';
 import type { CreditEntryState, VerifiedCreditEntry } from '@metalabel/dfos-protocol/chain';
+import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { getClient } from '../lib/client';
 import { GLOSSARY } from '../lib/glossary';
+import type { IndexPage } from '../lib/index-light';
+import { useIndexCredits, type IndexCreditRow } from '../lib/index-raw';
 import { Check, Checks, type CheckState } from './checks';
-import { Badge, DidLink, Panel, Term } from './ui';
+import { DidChip } from './did-chip';
+import { Badge, DidLink, Pager, Panel, Term } from './ui';
 
 /** `pending` is a render-only state — the library never returns it */
 type DisplayState = CreditEntryState | 'pending';
@@ -89,7 +105,45 @@ const stateBadge = (state: DisplayState) => {
   return <Badge state="neutral">unclaimed</Badge>;
 };
 
-export const Credits = (props: { contentId: string; entries: readonly unknown[] }) => {
+/** The shared shell, so the amber tier and the verified tier are visibly the same
+ *  panel in two states rather than two panels that happen to both say "credits". */
+const CreditsPanel = (props: { verified: boolean; children: ComponentChildren }) => (
+  <Panel
+    title="credits"
+    accent={props.verified ? undefined : 'warn'}
+    right={
+      <span class="lbl">
+        {props.verified
+          ? 'claimant assertions re-verified locally'
+          : 'relay-asserted · from relay index'}
+      </span>
+    }
+    orient={
+      <>
+        A <Term word="credit claim" def={GLOSSARY['creditClaim'] ?? ''} /> binds the claimant's
+        signature to this chain, credited DID, and byte-exact role.{' '}
+        <b>Attribution, not authorization.</b>
+        {props.verified ? null : (
+          <>
+            {' '}
+            These rows are the relay's projection of the current public head document — it restates
+            who the document credits, and whether an entry carries a claim token, but{' '}
+            <b>never whether that token verifies</b>. The verified fold replaces them once this tab
+            has the bytes.
+          </>
+        )}
+      </>
+    }
+  >
+    {props.children}
+  </Panel>
+);
+
+// -----------------------------------------------------------------------------
+// the VERIFIED tier — the fold over bytes this tab re-hashed itself
+// -----------------------------------------------------------------------------
+
+const VerifiedCredits = (props: { contentId: string; entries: readonly unknown[] }) => {
   const displays = props.entries.map(readDisplay);
   const [results, setResults] = useState<CreditResult[]>(() => displays.map(initialResult));
 
@@ -126,17 +180,7 @@ export const Credits = (props: { contentId: string; entries: readonly unknown[] 
   }, [props.contentId, props.entries]);
 
   return (
-    <Panel
-      title="credits"
-      right={<span class="lbl">claimant assertions re-verified locally</span>}
-      orient={
-        <>
-          A <Term word="credit claim" def={GLOSSARY['creditClaim'] ?? ''} /> binds the claimant's
-          signature to this chain, credited DID, and byte-exact role.{' '}
-          <b>Attribution, not authorization.</b>
-        </>
-      }
-    >
+    <CreditsPanel verified>
       <Checks>
         {displays.map((display, index) => {
           const result = results[index] ?? initialResult(display);
@@ -156,6 +200,99 @@ export const Credits = (props: { contentId: string; entries: readonly unknown[] 
           );
         })}
       </Checks>
-    </Panel>
+    </CreditsPanel>
   );
+};
+
+// -----------------------------------------------------------------------------
+// the AMBER tier — the relay's projection of the same list, one request
+// -----------------------------------------------------------------------------
+
+/** One projected credit. `position` 0 is the primary author (the entry array's
+ *  order is the document's display order), and a claim is reported as PRESENT —
+ *  never as valid, which the relay does not and must not know. */
+const IndexCreditRowView = (props: { row: IndexCreditRow }) => {
+  const { row } = props;
+  return (
+    <Check
+      state="pend"
+      note={
+        row.hasClaim
+          ? 'the head document carries a self-claim token for this entry — byte-presence, not a verdict; the fold below checks its signature and bind'
+          : 'the document signer asserts this credit; no claim token accompanies it'
+      }
+    >
+      <DidChip did={row.did} />
+      {' · '}
+      {row.role !== null ? (
+        <span class="k-role">{row.role || 'empty role'}</span>
+      ) : (
+        <span class="muted">no role</span>
+      )}
+      {row.position === 0 ? <span class="lbl"> primary</span> : null}{' '}
+      {row.hasClaim ? (
+        <Badge state="warn">self-claimed</Badge>
+      ) : (
+        <Badge state="neutral">unclaimed</Badge>
+      )}
+    </Check>
+  );
+};
+
+const IndexCredits = (props: { page: IndexPage<IndexCreditRow> }) => {
+  const { page } = props;
+  return (
+    <CreditsPanel verified={false}>
+      <Checks>
+        {page.rows.map((row) => (
+          <IndexCreditRowView key={`${row.did}:${row.position}`} row={row} />
+        ))}
+      </Checks>
+      {page.hasNext || page.offFirst ? (
+        <Pager
+          count={page.rows.length}
+          noun="credits"
+          loading={page.loading}
+          hasNext={page.hasNext}
+          hasPrev={page.hasPrev}
+          offFirst={page.offFirst}
+          onFirst={page.first}
+          onPrev={page.prev}
+          onNext={page.next}
+        />
+      ) : null}
+    </CreditsPanel>
+  );
+};
+
+// -----------------------------------------------------------------------------
+
+/**
+ * The credits panel in whichever tier is actually available. `entries` is the
+ * document's own `credits[]`, present only once the served bytes re-hashed to the
+ * committed document CID on a verified chain (see the gate in views/content.tsx);
+ * when it is null the relay's projection stands in, amber.
+ *
+ * Renders NOTHING when neither tier has anything: an uncredited document, a relay
+ * whose index predates the credits family, or a chain that is not publicly
+ * readable (which by design has zero credit rows — attribution is never more
+ * public than the content it attributes). Credits are enrichment, so their
+ * absence is silent rather than an error panel.
+ */
+export const Credits = (props: {
+  contentId: string;
+  entries: readonly unknown[] | null;
+  indexed: boolean | null;
+}) => {
+  // the amber prelude runs only while the verified tier is unavailable — once the
+  // fold has the bytes there is nothing a projection can add
+  const page = useIndexCredits(props.indexed === true && props.entries === null, {
+    contentId: props.contentId,
+  });
+
+  if (props.entries !== null) {
+    return <VerifiedCredits contentId={props.contentId} entries={props.entries} />;
+  }
+  if (page.rows.length === 0) return null;
+  return <IndexCredits page={page} />;
 };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextCursor, toArtifactRows, toOperationRows } from '../src/lib/index-raw';
+import { nextCursor, toArtifactRows, toCreditRows, toOperationRows } from '../src/lib/index-raw';
 
 describe('toOperationRows — /index/v0/operations page → rows', () => {
   it('reads the documented row shape', () => {
@@ -73,6 +73,66 @@ describe('toArtifactRows — /index/v0/artifacts page → rows', () => {
     expect(
       toArtifactRows({ artifacts: [{ cid: 'bafy1', docSchema: null }] })[0]?.docSchema,
     ).toBeNull();
+  });
+});
+
+describe('toCreditRows — /index/v0/credits page → rows', () => {
+  it('reads the documented row shape', () => {
+    expect(
+      toCreditRows({
+        credits: [
+          {
+            contentId: 'a3n7r3nde8e4keeak92rr3aeztftvc2',
+            did: 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr',
+            role: 'photography',
+            position: 1,
+            hasClaim: true,
+          },
+        ],
+        next: null,
+      }),
+    ).toEqual([
+      {
+        contentId: 'a3n7r3nde8e4keeak92rr3aeztftvc2',
+        did: 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr',
+        role: 'photography',
+        position: 1,
+        hasClaim: true,
+      },
+    ]);
+  });
+
+  it('an unroled credit keeps the honest null — it is ordinary, not an error', () => {
+    const [row] = toCreditRows({ credits: [{ contentId: 'c1', did: 'did:dfos:a', position: 0 }] });
+    expect(row?.role).toBeNull();
+    expect(row?.position).toBe(0);
+  });
+
+  it('hasClaim is byte-presence and strictly boolean — anything else is no claim', () => {
+    // the relay reports whether a claim TOKEN sits in the entry, never whether it
+    // verifies; a non-boolean must not soften into a truthy "probably claimed"
+    const rows = toCreditRows({
+      credits: [
+        { contentId: 'c1', did: 'did:dfos:a', hasClaim: true },
+        { contentId: 'c2', did: 'did:dfos:a', hasClaim: 'yes' },
+        { contentId: 'c3', did: 'did:dfos:a' },
+      ],
+    });
+    expect(rows.map((r) => r.hasClaim)).toEqual([true, false, false]);
+  });
+
+  it('drops a row missing either half of the credit — it names a credit OF someone ON something', () => {
+    expect(
+      toCreditRows({
+        credits: [{ contentId: 'c1' }, { did: 'did:dfos:a' }, { contentId: '', did: '' }],
+      }),
+    ).toEqual([]);
+  });
+
+  it('a body that is not a page yields no rows', () => {
+    expect(toCreditRows(null)).toEqual([]);
+    expect(toCreditRows({})).toEqual([]);
+    expect(toCreditRows({ credits: 'nope' })).toEqual([]);
   });
 });
 

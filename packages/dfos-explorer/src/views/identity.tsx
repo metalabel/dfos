@@ -25,11 +25,13 @@ import { ProfileCard } from '../components/profile';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
 import {
+  Badge,
   ContentLink,
   CredLink,
   CredStatus,
   DidLink,
   OpLink,
+  Pager,
   Panel,
   Pill,
   Related,
@@ -46,9 +48,12 @@ import { GLOSSARY } from '../lib/glossary';
 import {
   indexCredSource,
   indexListState,
+  indexListStateFor,
   useIndexCapable,
   useIndexIter2,
 } from '../lib/index-light';
+import { projectedTitle, useIndexContentRow } from '../lib/index-point';
+import { useIndexCredits, type IndexCreditRow } from '../lib/index-raw';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
@@ -64,6 +69,7 @@ import {
 } from '../lib/revocations';
 import { jitIndexChain } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
+import { useHashParam } from '../router';
 import { NotFound } from './not-found';
 
 /** Ceiling on the offline revocation fold. Revocations are the rarest primitive
@@ -449,6 +455,8 @@ export const Identity = (props: { did: string }) => {
         revoked={revoked}
       />
 
+      <CreditedOn did={props.did} indexed={indexed} />
+
       <Panel title="operation history">
         {rows.length === 0 ? (
           <span class="muted">{error ? <span class="err">{error}</span> : 'loading log…'}</span>
@@ -490,6 +498,136 @@ export const Identity = (props: { did: string }) => {
         ]}
       />
     </>
+  );
+};
+
+// -----------------------------------------------------------------------------
+// CREDITED ON — public works whose head document says this identity made them
+//
+// A different KIND of claim from the actor ledger below, which is why it is its
+// own panel and not a fifth tab there. The ledger is proof-tier and actor-axis:
+// this DID's key actually signed something, re-derivable from the proof plane.
+// This is assertion-tier: other people's documents SAY so, and the signer of
+// each document staked its signature on that statement — real, but a different
+// thing entirely, and collapsing them would launder one into the other.
+//
+// PUBLIC BY CONSTRUCTION. The credit projection derives only from publicly
+// readable head documents, so a private work crediting this DID has zero rows.
+// That is the condition under which the enumeration was sanctioned at all:
+// attribution is never more public than the content it attributes. An empty
+// panel therefore means "no PUBLIC work here credits this DID" — never "this
+// identity made nothing."
+// -----------------------------------------------------------------------------
+
+/** One credited work: the title if the relay projects one (amber), the role, and
+ *  whether the document carries a self-claim token — byte-presence, not validity.
+ *  Opening the work is where the claim is actually folded. */
+const CreditedRow = (props: { row: IndexCreditRow }) => {
+  const { row } = props;
+  const title = projectedTitle(useIndexContentRow(row.contentId));
+  return (
+    <tr onClick={() => (location.hash = `#/content/${row.contentId}`)}>
+      <td>
+        {title ? (
+          <span class="attr">{title}</span>
+        ) : (
+          <span class="cid">{short(row.contentId, 14, 5)}</span>
+        )}
+        {row.position === 0 ? <span class="lbl"> primary</span> : null}
+      </td>
+      <td>
+        {row.role !== null ? (
+          <span class="k-role">{row.role || 'empty role'}</span>
+        ) : (
+          <span class="muted">no role</span>
+        )}
+      </td>
+      <td>
+        {row.hasClaim ? (
+          <Badge state="warn">self-claimed</Badge>
+        ) : (
+          <Badge state="neutral">unclaimed</Badge>
+        )}
+      </td>
+    </tr>
+  );
+};
+
+const CreditedOn = (props: { did: string; indexed: boolean | null }) => {
+  const [cursor, setCursor] = useHashParam('cafter');
+  const page = useIndexCredits(props.indexed === true, {
+    did: props.did,
+    cursor,
+    onCursor: setCursor,
+  });
+  const state = indexListStateFor(props.indexed, page.loading, page.error, page.rows.length);
+
+  // A relay whose index predates `/index/v0/credits` has nothing to say here, and
+  // credits are enrichment rather than primary content — so the section is simply
+  // absent rather than explaining its own absence. A TRANSIENT failure still says
+  // so below: that one is worth a retry.
+  if (props.indexed === false || page.routeAbsent) return null;
+
+  return (
+    <Panel
+      title="credited on"
+      accent="warn"
+      right={<span class="lbl">public works · from relay index</span>}
+      orient={
+        <>
+          Publicly readable works whose current head document credits this identity — the relay's{' '}
+          <Term word="credit" def={GLOSSARY['creditClaim'] ?? ''} /> projection, <b>amber</b>: the
+          document's signer asserts each one. Open a work to fold its claim and see whether the
+          credited party signed too. Private works crediting this identity are <b>never</b> listed.
+        </>
+      }
+    >
+      {state === 'error' ? (
+        <div class="ck-note">
+          couldn’t reach the relay index for credits.{' '}
+          <button onClick={page.retry} disabled={page.loading}>
+            {page.loading ? 'retrying…' : 'retry'}
+          </button>
+        </div>
+      ) : state === 'loading' ? (
+        <span class="muted">reading credited works…</span>
+      ) : state === 'empty' ? (
+        <span class="muted">
+          no public work these relays hold credits this identity — omission is always possible, so
+          this is not a claim that none exists.
+        </span>
+      ) : (
+        <>
+          <div class="index-rows">
+            <table>
+              <thead>
+                <tr>
+                  <th>work</th>
+                  <th>role</th>
+                  <th>claim</th>
+                </tr>
+              </thead>
+              <tbody>
+                {page.rows.map((row) => (
+                  <CreditedRow key={`${row.contentId}:${row.position}`} row={row} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager
+            count={page.rows.length}
+            noun="credits"
+            loading={page.loading}
+            hasNext={page.hasNext}
+            hasPrev={page.hasPrev}
+            offFirst={page.offFirst}
+            onFirst={page.first}
+            onPrev={page.prev}
+            onNext={page.next}
+          />
+        </>
+      )}
+    </Panel>
   );
 };
 
