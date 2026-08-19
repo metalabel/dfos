@@ -57,6 +57,26 @@ export interface IndexOperationRow {
   ingestedAt: string;
 }
 
+/**
+ * One row of `/index/v0/credits` — the credit projection restated.
+ *
+ * Every field is ASSERTION-TIER: it says what a public head document claims, not
+ * what is true. `position` is the entry's array index, and 0 is the primary
+ * author. `hasClaim` is BYTE-PRESENCE of a claim token and nothing more — the
+ * relay is deliberately not credit-claim aware, so a row can never tell you a
+ * claim verifies. The four verification states (claimed / unclaimed / invalid /
+ * unverifiable) are a client fold over the fetched document bytes, which is what
+ * components/credits.tsx does when it has them.
+ */
+export interface IndexCreditRow {
+  contentId: string;
+  did: string;
+  /** the entry's open-vocabulary role, or null when the entry declared none. */
+  role: string | null;
+  position: number;
+  hasClaim: boolean;
+}
+
 /** One row of `/index/v0/artifacts`. `docSchema` is the inline document's
  *  `$schema` matched as an opaque string; the wire shape is nullable to preserve
  *  the index's honest-unknown convention, though an accepted artifact always
@@ -163,6 +183,34 @@ export const toArtifactRows = (body: unknown): IndexArtifactRow[] => {
   });
 };
 
+/**
+ * Coerce an `/index/v0/credits` page body into rows. A row needs both a
+ * `contentId` and a `did` to mean anything — it names a credit OF someone ON
+ * something — so an entry missing either is dropped rather than rendered as a
+ * half-credit. `role` keeps the honest null (an unroled credit is ordinary, not
+ * an error); `position` defaults to 0 only when the relay sent no number, which
+ * would already be a malformed row. Pure, unit-tested.
+ */
+export const toCreditRows = (body: unknown): IndexCreditRow[] => {
+  const rows = (body as { credits?: unknown } | null)?.credits;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row): IndexCreditRow[] => {
+    const r = row as Record<string, unknown>;
+    const contentId = str(r['contentId']);
+    const did = str(r['did']);
+    if (!contentId || !did) return [];
+    return [
+      {
+        contentId,
+        did,
+        role: typeof r['role'] === 'string' ? r['role'] : null,
+        position: typeof r['position'] === 'number' ? r['position'] : 0,
+        hasClaim: r['hasClaim'] === true,
+      },
+    ];
+  });
+};
+
 /** The page cursor a relay issued, or null when the enumeration is caught up.
  *  Pure, unit-tested. */
 export const nextCursor = (body: unknown): string | null => {
@@ -215,6 +263,63 @@ export const fetchArtifactsPage = async (params: {
   );
   return { items: toArtifactRows(body), next: nextCursor(body) };
 };
+
+/** One page of the credit projection. Throws when no relay serves the route. */
+export const fetchCreditsPage = async (params: {
+  did?: string;
+  contentId?: string;
+  role?: string;
+  after?: string;
+  limit?: number;
+}): Promise<{ items: IndexCreditRow[]; next: string | null }> => {
+  const body = await fetchIndexPage<unknown>(
+    'credits',
+    {
+      ...(params.did ? { did: params.did } : {}),
+      ...(params.contentId ? { contentId: params.contentId } : {}),
+      ...(params.role ? { role: params.role } : {}),
+      ...(params.after ? { after: params.after } : {}),
+      limit: params.limit ?? PAGE,
+    },
+    getRelays(),
+  );
+  return { items: toCreditRows(body), next: nextCursor(body) };
+};
+
+/**
+ * Page the credit projection — `did=` for "which public works credit this
+ * identity", `contentId=` for "who this public document says made it". Rows come
+ * back in `(contentId, position)` order, and the cursor is opaque in every mode
+ * because the natural key is composite; it is passed back verbatim.
+ *
+ * A single chain's set may be REPLACED wholesale between pages when its head is
+ * revised, so an in-flight enumeration can miss a row that changed underneath it.
+ * That is the route's stated contract, not a bug to paper over: the complete
+ * answer for one chain is a fresh `contentId=` page, or the document itself.
+ */
+export const useIndexCredits = (
+  enabled: boolean,
+  opts: {
+    did?: string;
+    contentId?: string;
+    role?: string;
+    cursor?: string;
+    onCursor?: (cursor: string) => void;
+  },
+): IndexPage<IndexCreditRow> =>
+  useIndexPageStack(
+    enabled,
+    `credits:${opts.did ?? ''}:${opts.contentId ?? ''}:${opts.role ?? ''}`,
+    opts.cursor ?? '',
+    opts.onCursor,
+    (after) =>
+      fetchCreditsPage({
+        ...(opts.did ? { did: opts.did } : {}),
+        ...(opts.contentId ? { contentId: opts.contentId } : {}),
+        ...(opts.role ? { role: opts.role } : {}),
+        ...(after ? { after } : {}),
+      }),
+  );
 
 /**
  * Page the artifact index, newest-signed first by default. `cursor`/`onCursor`

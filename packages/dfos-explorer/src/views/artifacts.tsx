@@ -140,9 +140,14 @@ export const BrowseArtifacts = () => {
             <>couldn’t reach the relay index for artifacts just now. </>
           )}
           {page.routeAbsent ? null : (
-            <button onClick={page.retry} disabled={page.loading}>
-              {page.loading ? 'retrying…' : 'retry'}
-            </button>
+            <>
+              <button onClick={page.retry} disabled={page.loading}>
+                {page.loading ? 'retrying…' : 'retry'}
+              </button>
+              {/* same trap the credits pager has: a stale or hand-edited `?after=`
+                  is rejected by the relay, and retry re-sends it unchanged. */}
+              {page.offFirst ? <button onClick={page.first}> start over</button> : null}
+            </>
           )}
         </div>
       ) : state === 'loading' ? (
