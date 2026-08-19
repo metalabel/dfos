@@ -23,6 +23,16 @@
   DID renders bare. This is strictly stronger than the relay index's projected
   `name` (attributed): here the bytes are bound to the chain by math.
 
+  THAT RIGOUR COSTS THREE ROUND TRIPS, which is a long time for a table of DIDs
+  to sit as hash soup. So the hook also runs the relay index's POINT LOOKUP
+  (`/index/v0/identities?did=` — lib/index-point.ts) alongside it, which answers
+  "what does this DID call itself" in ONE request. That answer is a relay
+  projection, so it renders in the ATTRIBUTED tier (amber) and is replaced the
+  moment the verified name lands — the same attributed→verified promotion every
+  index-light row makes. The point lookup never relaxes the invariant above: the
+  index withholds a non-public profile's name by spec, and the projection is
+  additionally checked to be public here before it can render.
+
   Avatar bytes are deliberately NOT rendered in row contexts — the MediaObject is
   carried here so a detail surface can gate it through the existing verified-bytes
   Avatar (components/profile.tsx), which is the one place image bytes render.
@@ -36,6 +46,7 @@
 
 import { useEffect, useState } from 'preact/hooks';
 import { getClient } from './client';
+import { projectedName, useIndexIdentityRow } from './index-point';
 import { parseMediaObject, type MediaObject } from './media';
 import { isProfileContent, profileAnchorOf } from './profile';
 
@@ -213,15 +224,22 @@ const enqueue = (did: string): void => {
   pump();
 };
 
+/** Which tier the returned `profile` came from: `verified` = bound to the chain
+ *  by math in this tab (see the header note) · `attributed` = the relay index's
+ *  projection, standing in until the verified answer lands. Meaningless when
+ *  `profile` is null. */
+export type DidProfileTier = 'attributed' | 'verified';
+
 /**
  * Resolve a DID to its public profile, hydrating in place as the result lands.
  * `need` gates the work so a chip can hold off (an already-named row needs no
- * resolve). Returns the attributed floor — `pending` — until the resolve settles.
+ * resolve). Returns the attributed floor — `pending` — until the resolve settles,
+ * with the relay index's projected name standing in meanwhile (tier `attributed`).
  */
 export const useDidProfile = (
   did: string,
   need = true,
-): { profile: DidProfile | null; state: DidProfileState } => {
+): { profile: DidProfile | null; state: DidProfileState; tier: DidProfileTier } => {
   const [profile, setProfile] = useState<DidProfile | null>(() => cache.get(did) ?? null);
   const [state, setState] = useState<DidProfileState>(() =>
     cache.has(did) ? (cache.get(did) ? 'resolved' : 'none') : 'pending',
@@ -249,5 +267,19 @@ export const useDidProfile = (
     };
   }, [did, need]);
 
-  return { profile, state };
+  // AMBER PRELUDE — one round trip against the index's point lookup while the
+  // three-beat verified resolve above is still running. Dropped the instant the
+  // verified answer lands (or resolves to "no public profile"), so a projection
+  // never outlives the proof it was standing in for.
+  const indexRow = useIndexIdentityRow(did, need && state === 'pending');
+  const projected = projectedName(indexRow);
+  if (state === 'pending' && !profile && projected) {
+    return {
+      profile: { did, name: projected, description: '', avatar: null },
+      state,
+      tier: 'attributed',
+    };
+  }
+
+  return { profile, state, tier: 'verified' };
 };

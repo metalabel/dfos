@@ -12,6 +12,7 @@ import { getRelays, subscribeRelays } from './lib/relays';
 import { dispatchInput, routeFor } from './lib/resolve-input';
 import { startAutoSyncScheduler, useSyncState } from './lib/sync-store';
 import { navigate, useRoute } from './router';
+import { BrowseArtifacts } from './views/artifacts';
 import { BrowseDocuments, BrowseIdentities } from './views/browse';
 import { Content } from './views/content';
 import { Credential } from './views/credential';
@@ -124,6 +125,7 @@ const Header = (props: {
         <div class="hnav">
           <a href="#/identities">identities</a>
           <a href="#/documents">documents</a>
+          <a href="#/artifacts">artifacts</a>
           <a href="#/relays">relays</a>
           <a href="#/glossary">glossary</a>
         </div>
@@ -209,6 +211,8 @@ export const App = () => {
         return <BrowseIdentities />;
       case 'documents':
         return <BrowseDocuments />;
+      case 'artifacts':
+        return <BrowseArtifacts />;
       case 'did':
         return <Identity did={route.id} />;
       case 'content':
@@ -226,7 +230,10 @@ export const App = () => {
   // pages (did/content/op/cred), the glossary, and the relay browser go full
   // width and carry their own crosslink panels instead.
   const showSidebar =
-    route.view === 'home' || route.view === 'identities' || route.view === 'documents';
+    route.view === 'home' ||
+    route.view === 'identities' ||
+    route.view === 'documents' ||
+    route.view === 'artifacts';
 
   return (
     <>

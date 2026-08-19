@@ -14,10 +14,11 @@
 
   The browse surface is a 1:1 MIRROR OF THE RELAY'S INDEX CAPABILITY SURFACE, so
   what it can do is legible: what the index projects, you can browse; what it
-  doesn't, you can't. Artifacts have no index projection (their type is inline in
-  the JWS, and no relay materializes them), so there is no artifacts browse —
-  rather than a page that only works after a full local sync and quietly means
-  something different from its neighbours. Reach an artifact by its CID.
+  doesn't, you can't. Artifacts joined that surface when `/index/v0/artifacts`
+  shipped and now browse in views/artifacts.tsx — on relays that serve the route,
+  which is not every relay, so that page detects and says so rather than
+  pretending. They live in their own view because an artifact has no chain to
+  fold, and therefore no attributed→verified promotion in place.
 
   Pages are 25 rows off the relay's keyset cursor, with the position carried in
   the hash so a browse view can be linked. Enumeration is never a completeness

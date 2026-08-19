@@ -38,6 +38,7 @@ import { fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { isIndexDocument } from '../lib/index-fold';
 import { indexCredSource, useIndexCapable } from '../lib/index-light';
+import { projectedTitle, useIndexContentRow } from '../lib/index-point';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
@@ -74,6 +75,12 @@ interface DocState {
 
 export const Content = (props: { id: string }) => {
   const indexed = useIndexCapable();
+  // the index's POINT LOOKUP for this exact chain — one request that names what
+  // the chain calls itself, landing well before the document bytes do. It is a
+  // relay projection over held bytes, so it renders amber and grounds nothing:
+  // the document panel below re-hashes the real bytes and is the actual answer.
+  const indexRow = useIndexContentRow(props.id, indexed === true);
+  const projectedName = projectedTitle(indexRow);
   const [claim, setClaim] = useState<ClaimResult | null>(null);
   const [resolved, setResolved] = useState<Resolved<ResolvedContent> | null>(null);
   const [rows, setRows] = useState<OpRow[]>([]);
@@ -294,6 +301,16 @@ export const Content = (props: { id: string }) => {
           <div class="v">
             <TruncId value={props.id} head={31} tail={0} />
           </div>
+          {projectedName ? (
+            <>
+              <div class="k">
+                title <span class="lbl">relay-asserted</span>
+              </div>
+              <div class="v">
+                <span class="attr">{projectedName}</span>
+              </div>
+            </>
+          ) : null}
           <div class="k">creator</div>
           <div class="v">{creatorDID ? <DidLink did={creatorDID} full /> : '…'}</div>
           <div class="k">ops</div>

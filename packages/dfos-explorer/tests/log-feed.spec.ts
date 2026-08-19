@@ -1,7 +1,7 @@
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { describe, expect, it } from 'vitest';
 import { openExplorerDb, type ExplorerOp } from '../src/lib/db';
-import { localOpRows, toLogRows } from '../src/lib/log-feed';
+import { indexOpRows, localOpRows, logSource, toLogRows } from '../src/lib/log-feed';
 
 // the keyset queries use the global IDBKeyRange a browser provides; the node
 // test environment has only the injected factory, so supply the matching one.
@@ -74,6 +74,60 @@ describe('localOpRows — local index ops → the same row shape', () => {
         createdAt: '2026-02-02T00:00:00.000Z',
       },
     ]);
+  });
+});
+
+describe('indexOpRows — index operation rows → the same display shape', () => {
+  const row = {
+    cid: 'bafy1',
+    kind: 'content-op',
+    chainId: 'a3n7r3nde8e4keeak92rr3aeztftvc2',
+    createdAt: '2026-04-02T00:00:00.000Z',
+    ingestedAt: '2026-04-02T00:00:01.123Z',
+  };
+
+  it('carries the metadata through with an EMPTY type — the index carries no payload', () => {
+    expect(indexOpRows([row])).toEqual([
+      {
+        cid: 'bafy1',
+        kind: 'content-op',
+        chainId: 'a3n7r3nde8e4keeak92rr3aeztftvc2',
+        type: '',
+        createdAt: '2026-04-02T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('an unknown kind falls into the standalone-op bucket, as the global log does', () => {
+    expect(indexOpRows([{ ...row, kind: 'something-new' }])[0]?.kind).toBe('artifact');
+  });
+});
+
+describe('logSource — which operation source is actually true right now', () => {
+  it('the live index leads whenever it can serve — the cold-start recency answer', () => {
+    expect(logSource(true, false, false, '')).toBe('index');
+    // even after a deep sync: a live index is fresher than a past sync
+    expect(logSource(true, false, true, '')).toBe('index');
+  });
+
+  it('a relay that does not serve /index/v0/operations falls back honestly', () => {
+    expect(logSource(true, true, true, '')).toBe('local');
+    expect(logSource(true, true, false, '')).toBe('relay');
+  });
+
+  it('no index-capable relay (false/null) uses the local corpus, else the forward walk', () => {
+    expect(logSource(false, false, true, '')).toBe('local');
+    expect(logSource(false, false, false, '')).toBe('relay');
+    expect(logSource(null, false, false, '')).toBe('relay');
+  });
+
+  it('an explicit choice wins wherever it is viable, and degrades where it is not', () => {
+    expect(logSource(true, false, true, 'relay')).toBe('relay');
+    expect(logSource(true, false, true, 'local')).toBe('local');
+    // pinned to a source that cannot serve: fall through, never render nothing
+    expect(logSource(true, false, false, 'local')).toBe('relay');
+    expect(logSource(true, true, true, 'index')).toBe('local');
+    expect(logSource(false, false, false, 'index')).toBe('relay');
   });
 });
 

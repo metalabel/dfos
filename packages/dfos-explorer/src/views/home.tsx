@@ -7,8 +7,9 @@
   has been compacted to one strip and is no longer the headline. What leads is
   what an explorer is for: things you can open.
 
-    operations   a real browser over the raw operation log (see lib/log-feed.ts
-                 for why "newest first" is only available once you've synced)
+    operations   a real browser over the operation log, leading with the relay
+                 index's recency feed so a COLD tab shows what just happened —
+                 see lib/log-feed.ts for the three sources and when each is true
     posts        the public post feed off the relay's content index
 
   Both page 25 at a time off a keyset cursor, and both carry their position in
@@ -29,7 +30,14 @@ import { useIndexRowLabel } from '../lib/doc-label';
 import { fmtAge, fmtBytes, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { useIndexCapable, useIndexContent, useIndexIter2 } from '../lib/index-light';
-import { useLocalLog, useRelayLog, type LogRow, type LogSource } from '../lib/log-feed';
+import {
+  logSource,
+  useIndexLog,
+  useLocalLog,
+  useRelayLog,
+  type LogRow,
+  type LogSource,
+} from '../lib/log-feed';
 import { fetchRelayHint, type RelayHint } from '../lib/relay-hint';
 import { getRelays } from '../lib/relays';
 import { getPublicOnly, setPublicOnly } from '../lib/settings';
@@ -230,29 +238,61 @@ const OpPlainRow = (props: { row: LogRow }) => (
   </tr>
 );
 
-const OperationsPanel = (props: { obs: Observatory | null; assertedOps: number }) => {
+const OperationsPanel = (props: {
+  obs: Observatory | null;
+  assertedOps: number;
+  indexed: boolean | null;
+}) => {
+  // ONE CURSOR PARAM PER SOURCE. The three feeds speak different cursor
+  // vocabularies — an opaque ordered token, a log CID, a local `createdAt|cid`
+  // key — and a single shared param hands one source's position to another the
+  // moment the source changes, including the AUTOMATIC change below, where the
+  // reader never touched a control and would just land on an invalid-cursor
+  // error. `ops` stays the forward log walk's (deep links minted before the index
+  // feed existed still resolve); the index feed carries its own.
   const [cursor, setCursor] = useHashParam('ops');
+  const [indexCursor, setIndexCursor] = useHashParam('iops');
   const [srcParam, setSrcParam] = useHashParam('src');
-  // The local corpus is the only source with a real newest-first order, so it
-  // leads once a LOG SYNC has run; `?src=relay` opts back into the walk from
-  // genesis (which is also the only source before a sync).
-  //
-  // The gate is the sync CURSOR, not the op count. Opening any detail page JIT-
-  // indexes that chain's ops, so a count-based gate flips this panel to "your
-  // synced log" over a handful of ops picked up by browsing — a label that is
-  // simply false about where the rows came from.
+  // `/index/v0/operations` is NEWER than the `capabilities.index` flag, so its
+  // absence can only be discovered by asking. ONLY the durable verdict latches —
+  // every relay answering 404/501, i.e. the route is genuinely not served. A
+  // transient failure (unreachable, 5xx, a rejected cursor) leaves the index
+  // selected and retryable in place: latching on one of those would let a single
+  // bad page hide a working feed for the rest of the session. The durable latch
+  // also can't oscillate, since it never clears.
+  const [indexFailed, setIndexFailed] = useState(false);
+
+  // The gate on the LOCAL source is the sync CURSOR, not the op count. Opening any
+  // detail page JIT-indexes that chain's ops, so a count-based gate flips this
+  // panel to "your synced log" over a handful of ops picked up by browsing — a
+  // label that is simply false about where the rows came from.
   const synced = props.obs?.logSynced === true;
-  const source: LogSource = !synced || srcParam === 'relay' ? 'relay' : 'local';
-  const ready = props.obs !== null;
+  // hold until BOTH the local store and the index capability have settled, so the
+  // panel never flashes the genesis walk and then jumps to the recency feed
+  const ready = props.obs !== null && props.indexed !== null;
+  const source: LogSource = logSource(props.indexed, indexFailed, synced, srcParam);
+  const indexOk = props.indexed === true && !indexFailed;
   // a sync pages FORWARD from the start of the log, so a run that was stopped (or
   // is still going) holds the log's oldest ops — "newest first" over it is newest
   // of what you HOLD, which is not the newest on the network. Say which it is.
   const localOps = props.obs?.ops ?? 0;
   const partial = props.assertedOps > 0 && localOps < props.assertedOps;
 
+  const index = useIndexLog(
+    ready && source === 'index',
+    'ingestedAt.desc',
+    indexCursor,
+    setIndexCursor,
+  );
   const relay = useRelayLog(ready && source === 'relay', cursor, setCursor);
   const local = useLocalLog(ready && source === 'local');
-  const feed = source === 'local' ? local : relay;
+  const feed = source === 'index' ? index : source === 'local' ? local : relay;
+
+  useEffect(() => {
+    if (index.routeAbsent) setIndexFailed(true);
+  }, [index.routeAbsent]);
+
+  const pick = (src: string): void => setSrcParam(src);
 
   return (
     <Panel
@@ -260,16 +300,27 @@ const OperationsPanel = (props: { obs: Observatory | null; assertedOps: number }
       accent="warn"
       right={
         <span class="lbl">
-          {source === 'local'
-            ? partial
-              ? 'newest first · from the part of the log you have synced'
-              : 'newest first · from your synced log'
-            : 'append order · live from the relay log'}
+          {source === 'index'
+            ? 'newest first · live from the relay index'
+            : source === 'local'
+              ? partial
+                ? 'newest first · from the part of the log you have synced'
+                : 'newest first · from your synced log'
+              : 'append order · live from the relay log'}
         </span>
       }
     >
       <div class="ck-note" style={{ marginBottom: 8 }}>
-        {source === 'local' ? (
+        {source === 'index' ? (
+          <>
+            The most recent operations the relay has accepted, straight off its{' '}
+            <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> — no sync, no walk from
+            genesis. Rows are <b>attributed</b> relay metadata (the index carries no JWS); open one
+            to verify its signature, or watch a chain row green as your tab folds it. The ordering
+            is this relay’s own <b>arrival</b> order, which is browse chronology, not a network
+            clock — and completeness is never proven, so a <b>deep sync</b> stays the audit stance.
+          </>
+        ) : source === 'local' ? (
           <>
             Every operation you have synced, newest first. Rows are the relay's own log entries —
             browsing metadata, not proof; open one to verify its signature, or watch a chain row
@@ -288,18 +339,38 @@ const OperationsPanel = (props: { obs: Observatory | null; assertedOps: number }
           <>
             Every operation the relay has accepted, in its own append order. The log route is
             <b> forward-only</b> — it serves no reverse order and no offset — so this walks from the
-            first operation the relay holds. <b>Deep-sync the full log</b> and this panel flips to
-            newest-first, counted from your own store.
+            first operation the relay holds.{' '}
+            {indexOk ? (
+              <>
+                The relay’s <code>/index/v0/operations</code> feed answers the same question
+                newest-first.
+              </>
+            ) : (
+              <>
+                <b>Deep-sync the full log</b> and this panel flips to newest-first, counted from
+                your own store.
+              </>
+            )}
           </>
         )}
       </div>
 
-      {synced ? (
+      {indexOk || synced ? (
         <div class="filters" style={{ marginBottom: 8 }}>
-          <button class={source === 'local' ? 'on' : ''} onClick={() => setSrcParam('')}>
-            newest first
-          </button>
-          <button class={source === 'relay' ? 'on' : ''} onClick={() => setSrcParam('relay')}>
+          {indexOk ? (
+            <button class={source === 'index' ? 'on' : ''} onClick={() => pick('')}>
+              newest on the network
+            </button>
+          ) : null}
+          {synced ? (
+            <button
+              class={source === 'local' ? 'on' : ''}
+              onClick={() => pick(indexOk ? 'local' : '')}
+            >
+              newest you’ve synced
+            </button>
+          ) : null}
+          <button class={source === 'relay' ? 'on' : ''} onClick={() => pick('relay')}>
             from the beginning
           </button>
         </div>
@@ -624,7 +695,7 @@ export const Home = () => {
   return (
     <>
       <NetworkPanel obs={obs} hint={hint} />
-      <OperationsPanel obs={obs} assertedOps={hint.opCount ?? 0} />
+      <OperationsPanel obs={obs} assertedOps={hint.opCount ?? 0} indexed={indexed} />
       <PostsPanel indexed={indexed} ordered={ordered} />
       <SyncInstrument obs={obs} />
 

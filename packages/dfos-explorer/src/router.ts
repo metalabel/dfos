@@ -6,6 +6,7 @@
     #/search           grouped search results (?q=)
     #/identities       browse public identities
     #/documents        browse public documents
+    #/artifacts        browse standalone signed artifacts
     #/did/<did>        identity
     #/content/<id>     content chain
     #/op/<cid>         operation
@@ -31,6 +32,7 @@ export type Route =
   | { view: 'relays' }
   | { view: 'identities' }
   | { view: 'documents' }
+  | { view: 'artifacts' }
   | { view: 'did'; id: string }
   | { view: 'content'; id: string }
   | { view: 'op'; id: string }
@@ -52,6 +54,7 @@ export const parseRoute = (hash: string): Route => {
   if (head === 'relays') return { view: 'relays' };
   if (head === 'identities') return { view: 'identities' };
   if (head === 'documents') return { view: 'documents' };
+  if (head === 'artifacts') return { view: 'artifacts' };
   if (head === 'did' && id) return { view: 'did', id };
   if (head === 'content' && id) return { view: 'content', id };
   if (head === 'op' && id) return { view: 'op', id };
