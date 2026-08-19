@@ -388,7 +388,7 @@ export const Identity = (props: { did: string }) => {
           <div class="k">status</div>
           <div class="v">
             {'isDeleted' in state && state.isDeleted ? (
-              <span class="err">deleted (tombstoned)</span>
+              <span class="err">deleted</span>
             ) : (
               'active'
             )}

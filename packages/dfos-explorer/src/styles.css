@@ -130,6 +130,15 @@ code {
   color: var(--bad);
 }
 
+/* op-type accents — delete suspends, restore reactivates */
+.op-type.delete {
+  color: var(--bad);
+}
+
+.op-type.restore {
+  color: var(--ok);
+}
+
 .wrap {
   max-width: 1100px;
   margin: 0 auto;
