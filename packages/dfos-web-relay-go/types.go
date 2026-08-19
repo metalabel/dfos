@@ -170,6 +170,8 @@ type StoredCountersignature struct {
 	WitnessDID string  `json:"witnessDID"`
 	Relation   *string `json:"relation"`
 	JWSToken   string  `json:"jwsToken"`
+	CreatedAt  string  `json:"-"`
+	IngestedAt string  `json:"-"`
 }
 
 // StoredPublicCredential represents a public credential (standing authorization).
@@ -417,20 +419,23 @@ type Store interface {
 
 	// QueryIndexIdentities pages identity projection rows ascending by DID,
 	// did > After, length <= Limit. HasPublicProfile (≡ profile != nil &&
-	// profile.publicRead) filters to identities exposing a public profile.
+	// profile.publicRead) filters to identities exposing a public profile; DID is
+	// an exact point lookup.
 	QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error)
 	// QueryIndexContent pages content projection rows ascending by contentId,
 	// contentId > After, length <= Limit, filtered by any provided
-	// Creator / DocSchema / PublicRead.
+	// point ID / actor / document / visibility / deletion predicates.
 	QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error)
 	// QueryIndexCountersignatures pages countersignature projection rows for one
 	// witness ascending by cid, cid > After, length <= Limit. Reflects the
 	// store's ACCEPTED countersign set (deduped one-per-witness-per-target).
 	QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error)
 	// QueryIndexCredentials pages held public credentials ascending by cid,
-	// cid > After, length <= Limit, filtered by issuer and/or resource exact
-	// match. For chain resources, the chain:* bucket is unioned.
+	// cid > After, length <= Limit, filtered by issuer, resource, and/or action
+	// exact match. For chain resources, the chain:* bucket is unioned.
 	QueryIndexCredentials(q IndexCredentialQuery) ([]indexCredentialRow, error)
+	// QueryIndexOperations pages the accepted operation log by relay or author recency.
+	QueryIndexOperations(q IndexOperationQuery) ([]indexOperationRow, error)
 
 	// PutIndexIdentityRow upserts an identity projection row by DID.
 	PutIndexIdentityRow(row indexIdentityRow) error
@@ -460,6 +465,7 @@ type Store interface {
 
 // IndexIdentityQuery is the keyset-paged filter for identity projection rows.
 type IndexIdentityQuery struct {
+	DID              string // "" = no filter
 	HasPublicProfile *bool  // nil = no filter
 	NameContains     string // "" = no filter
 	After            string
@@ -470,11 +476,13 @@ type IndexIdentityQuery struct {
 
 // IndexContentQuery is the keyset-paged filter for content projection rows.
 type IndexContentQuery struct {
+	ContentID    *string // nil = no filter
 	Creator      string  // "" = no filter
 	Signer       string  // "" = no filter
 	DocSchema    *string // nil = no filter
 	DocumentCID  *string // nil = no filter
 	PublicRead   *bool   // nil = no filter
+	IsDeleted    *bool   // nil = no filter
 	After        string
 	OrderedAfter *indexOrderedCursor
 	Order        string
@@ -484,17 +492,30 @@ type IndexContentQuery struct {
 // IndexCountersignatureQuery is the keyset-paged filter for countersignature
 // projection rows scoped to a single witness.
 type IndexCountersignatureQuery struct {
-	Witness string
-	After   string
-	Limit   int
+	Witness      string
+	Relation     *string
+	After        string
+	OrderedAfter *indexOrderedCursor
+	Order        string
+	Limit        int
 }
 
 // IndexCredentialQuery is the keyset-paged filter for held public credentials.
 type IndexCredentialQuery struct {
 	Issuer   string
 	Resource *string // nil = no filter
+	Action   *string // nil = no filter
 	After    string
 	Limit    int
+}
+
+// IndexOperationQuery is the always-time-ordered filter over accepted operations.
+type IndexOperationQuery struct {
+	Kind         string
+	ChainID      *string
+	OrderedAfter *indexOrderedCursor
+	Order        string
+	Limit        int
 }
 
 // storedIndexCountersignature is a countersignature projection row plus the
@@ -506,6 +527,8 @@ type storedIndexCountersignature struct {
 	Relation   *string
 	JWSToken   string
 	WitnessDID string
+	CreatedAt  string
+	IngestedAt string
 }
 
 // RebuildableIndexStore is an OPTIONAL store capability (type-asserted like

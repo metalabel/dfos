@@ -215,7 +215,7 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 		if !allowPublicGrant {
 			return fmt.Errorf("public credential does not grant access to this resource")
 		}
-	} else if requesterDID != "" && aud != requesterDID {
+	} else if requesterDID == "" || aud != requesterDID {
 		return fmt.Errorf("credential audience does not match requester")
 	}
 

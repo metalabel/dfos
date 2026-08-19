@@ -35,6 +35,7 @@ import {
   INDEX_BASE_PATH,
   parseBooleanQuery,
   parseIndexOrder,
+  parseIndexRecencyOrder,
   redactNonPublicContentRow,
   redactNonPublicIdentityRow,
 } from './index-routes';
@@ -615,6 +616,11 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
 
     const hasPublicProfile = parseBooleanQuery(c.req.query('hasPublicProfile'));
+    if (hasPublicProfile === null) return c.json({ error: 'invalid boolean' }, 400);
+    const did = c.req.query('did');
+    if (did !== undefined && !isValidDfosDid(did)) {
+      return c.json({ error: 'invalid DID' }, 400);
+    }
     const nameContains = c.req.query('nameContains');
     const order = parseIndexOrder(c.req.query('order'));
     if (order === null) return c.json({ error: 'invalid order' }, 400);
@@ -624,6 +630,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = (
       await store.queryIndexIdentities({
+        ...(did !== undefined ? { did } : {}),
         ...(hasPublicProfile !== undefined ? { hasPublicProfile } : {}),
         ...(nameContains ? { nameContains } : {}),
         ...(order ? { order } : {}),
@@ -658,7 +665,11 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
 
     const docSchema = c.req.query('docSchema');
     const documentCID = c.req.query('documentCID');
+    const contentId = c.req.query('contentId');
     const publicRead = parseBooleanQuery(c.req.query('publicRead'));
+    if (publicRead === null) return c.json({ error: 'invalid boolean' }, 400);
+    const isDeleted = parseBooleanQuery(c.req.query('isDeleted'));
+    if (isDeleted === null) return c.json({ error: 'invalid boolean' }, 400);
     const order = parseIndexOrder(c.req.query('order'));
     if (order === null) return c.json({ error: 'invalid order' }, 400);
     const after = c.req.query('after');
@@ -667,11 +678,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = (
       await store.queryIndexContent({
+        ...(contentId !== undefined ? { contentId } : {}),
         ...(creator ? { creator } : {}),
         ...(signer ? { signer } : {}),
         ...(docSchema !== undefined ? { docSchema } : {}),
         ...(documentCID !== undefined ? { documentCID } : {}),
         ...(publicRead !== undefined ? { publicRead } : {}),
+        ...(isDeleted !== undefined ? { isDeleted } : {}),
         ...(order ? { order } : {}),
         ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
         limit,
@@ -698,16 +711,34 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'invalid DID' }, 400);
     }
 
+    const relation = c.req.query('relation');
+    const order = parseIndexRecencyOrder(c.req.query('order'));
+    if (order === null) return c.json({ error: 'invalid order' }, 400);
     const after = c.req.query('after');
+    const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
+    if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = await store.queryIndexCountersignatures({
       witness,
-      ...(after ? { after } : {}),
+      ...(relation !== undefined ? { relation } : {}),
+      ...(order ? { order } : {}),
+      ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
       limit,
     });
-    const next = rows.length === limit ? rows[rows.length - 1]!.cid : null;
+    const next =
+      rows.length === limit
+        ? order
+          ? encodeIndexOrderedCursor(
+              rows[rows.length - 1]![order === 'createdAt.desc' ? 'createdAt' : 'ingestedAt'],
+              rows[rows.length - 1]!.cid,
+            )
+          : rows[rows.length - 1]!.cid
+        : null;
+    const countersignatures = rows.map(
+      ({ createdAt: _createdAt, ingestedAt: _ingestedAt, ...row }) => row,
+    );
 
-    return c.json({ witness, countersignatures: rows, next });
+    return c.json({ witness, countersignatures, next });
   });
 
   app.get(`${INDEX_BASE_PATH}/credentials`, async (c) => {
@@ -719,17 +750,60 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
 
     const resource = c.req.query('resource');
+    const action = c.req.query('action');
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'), 100, 1000);
     const rows = await store.queryIndexCredentials({
       ...(issuer ? { issuer } : {}),
       ...(resource !== undefined ? { resource } : {}),
+      ...(action !== undefined ? { action } : {}),
       ...(after ? { after } : {}),
       limit,
     });
     const next = rows.length === limit ? rows[rows.length - 1]!.cid : null;
 
     return c.json({ credentials: rows, next });
+  });
+
+  app.get(`${INDEX_BASE_PATH}/operations`, async (c) => {
+    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+
+    const rawKind = c.req.query('kind');
+    const operationKinds = new Set([
+      'identity-op',
+      'content-op',
+      'artifact',
+      'countersign',
+      'revocation',
+      'credential',
+    ]);
+    if (rawKind !== undefined && !operationKinds.has(rawKind)) {
+      return c.json({ error: 'invalid kind' }, 400);
+    }
+    const kind = rawKind as import('./types').OperationKind | undefined;
+    const chainId = c.req.query('chainId');
+    const order = parseIndexRecencyOrder(c.req.query('order'), 'ingestedAt.desc');
+    if (order === null || order === undefined) return c.json({ error: 'invalid order' }, 400);
+    const after = c.req.query('after');
+    const orderedAfter = after ? decodeIndexOrderedCursor(after) : undefined;
+    if (after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+    const rows = await store.queryIndexOperations({
+      ...(kind !== undefined ? { kind } : {}),
+      ...(chainId !== undefined ? { chainId } : {}),
+      ...(orderedAfter ? { orderedAfter } : {}),
+      order,
+      limit,
+    });
+    const next =
+      rows.length === limit
+        ? encodeIndexOrderedCursor(
+            rows[rows.length - 1]![order === 'createdAt.desc' ? 'createdAt' : 'ingestedAt'],
+            rows[rows.length - 1]!.cid,
+          )
+        : null;
+
+    return c.json({ operations: rows, next });
   });
 
   /** Get a content chain log */

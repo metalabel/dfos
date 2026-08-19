@@ -26,6 +26,7 @@ import type {
   IndexCredentialsPage,
   IndexIdentitiesPage,
   IndexOrder,
+  IndexRecencyOrder,
 } from './types';
 
 // Mirrors the relay package's INDEX_BASE_PATH (packages/dfos-web-relay). Kept as
@@ -85,6 +86,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
 
   const indexIdentities = (
     params?: {
+      did?: string;
       hasPublicProfile?: boolean;
       nameContains?: string;
       order?: IndexOrder;
@@ -98,6 +100,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
       fetchImpl,
       (base) => {
         const url = new URL(`${INDEX_BASE_PATH}/identities`, base);
+        setParam(url, 'did', params?.did);
         setParam(url, 'hasPublicProfile', params?.hasPublicProfile);
         setParam(url, 'nameContains', params?.nameContains);
         setParam(url, 'order', params?.order);
@@ -110,11 +113,13 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
 
   const indexContent = (
     params?: {
+      contentId?: string;
       creator?: string;
       signer?: string;
       docSchema?: string;
       documentCID?: string;
       publicRead?: boolean;
+      isDeleted?: boolean;
       order?: IndexOrder;
       after?: string;
       limit?: number;
@@ -126,11 +131,13 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
       fetchImpl,
       (base) => {
         const url = new URL(`${INDEX_BASE_PATH}/content`, base);
+        setParam(url, 'contentId', params?.contentId);
         setParam(url, 'creator', params?.creator);
         setParam(url, 'signer', params?.signer);
         setParam(url, 'docSchema', params?.docSchema);
         setParam(url, 'documentCID', params?.documentCID);
         setParam(url, 'publicRead', params?.publicRead);
+        setParam(url, 'isDeleted', params?.isDeleted);
         setParam(url, 'order', params?.order);
         setParam(url, 'after', params?.after);
         setParam(url, 'limit', params?.limit);
@@ -141,7 +148,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
 
   const indexCountersignatures = (
     witness: string,
-    params?: { after?: string; limit?: number },
+    params?: { relation?: string; order?: IndexRecencyOrder; after?: string; limit?: number },
     options?: CallOptions,
   ): Promise<IndexCountersignaturesPage> =>
     fetchIndexPage(
@@ -150,6 +157,8 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
       (base) => {
         const url = new URL(`${INDEX_BASE_PATH}/countersignatures`, base);
         setParam(url, 'witness', witness);
+        setParam(url, 'relation', params?.relation);
+        setParam(url, 'order', params?.order);
         setParam(url, 'after', params?.after);
         setParam(url, 'limit', params?.limit);
         return url;
@@ -158,7 +167,13 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
     );
 
   const indexCredentials = (
-    params?: { issuer?: string; resource?: string; after?: string; limit?: number },
+    params?: {
+      issuer?: string;
+      resource?: string;
+      action?: string;
+      after?: string;
+      limit?: number;
+    },
     options?: CallOptions,
   ): Promise<IndexCredentialsPage> =>
     fetchIndexPage(
@@ -168,6 +183,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
         const url = new URL(`${INDEX_BASE_PATH}/credentials`, base);
         setParam(url, 'issuer', params?.issuer);
         setParam(url, 'resource', params?.resource);
+        setParam(url, 'action', params?.action);
         setParam(url, 'after', params?.after);
         setParam(url, 'limit', params?.limit);
         return url;

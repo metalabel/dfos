@@ -623,7 +623,7 @@ The invariant has a semantic reading that bounds the query vocabulary itself:
 
 > **The index knows who acted, when, and what things call themselves. Nothing else.**
 
-Every index field and filter is an instance of one of three axes — **actor** (creator, signer, witness, issuer), **clock** (`genesisAt` / `headAt`), or **name** (the [display-name registry](#well-known-projections)). A query that cannot be phrased under these axes is not an index feature: it is a client-composed filter over them, a client-side fold over verified bytes, or `/search` (deferred, on its own clock).
+Every index field and filter is an instance of one of three axes — **actor** (creator, signer, witness, issuer), **clock** (`genesisAt` / `headAt` / operation `createdAt` / relay `ingestedAt`), or **name** (the [display-name registry](#well-known-projections)). A query that cannot be phrased under these axes is not an index feature: it is a client-composed filter over them, a client-side fold over verified bytes, or `/search` (deferred, on its own clock).
 
 Concretely, the index may serve:
 
@@ -652,15 +652,40 @@ Extracted values are **attribution-tier claims**: the value is whatever the sign
 
 ### Determinism and Coverage
 
-- **Deterministic enumeration.** By default every index list is ordered lexicographically ascending by its cursor key (identity rows by `did`, content rows by `contentId`, countersign rows by countersignature `cid`); identity and content enumerations additionally accept a time ordering via `order=` (below). Two relays holding the same operations serve identical page ordering — in either mode — and identical structural fields — the same convergence property the proof plane guarantees for head state, extended to enumeration. Held-bytes-dependent fields (`docSchema`, projected values) additionally require the same held blobs to agree, per coverage below.
+- **Deterministic enumeration.** By default identity, content, credential, and countersignature lists are ordered lexicographically ascending by their cursor key (`did`, `contentId`, or `cid`); identities, content, and countersignatures additionally accept the route-specific time orderings below. Operations are the deliberate exception: they are a recency feed and default to `ingestedAt.desc`. Two relays holding the same operations serve identical author-time ordering and identical structural fields; relay-observed ingestion ordering is local by definition and need not converge across relays. Held-bytes-dependent fields (`docSchema`, projected values) additionally require the same held blobs to agree, per coverage below.
 - **Keyset pagination is the normative shared envelope.** Every index route paginates identically — `after` (keyset cursor), `limit` (default 100, max 1000), `next` (the resume cursor, or `null` when caught up) — over the route's enumeration order. New index routes inherit this envelope; none may invent another. In the default lexical mode `after` is a **strictly-greater** cursor: a page returns the rows whose (post-filter) cursor key is lexicographically **greater than** `after`, ascending, capped at `limit`; `next` is the last returned row's key, or `null` when the page was not full (caught up). The cursor need not be a currently-present key — a value that falls between keys, or names a row that was mutated out of the active filter between pages, resumes at the next greater key rather than truncating to an empty page. This makes enumeration stable under concurrent row changes: keys are immutable natural identifiers, so a row's filtered membership or projected values may change between pages without dropping or duplicating other rows.
 - **Time-ordered enumeration (`order=`).** `/identities` and `/content` accept `order=genesisAt.desc` (newest chains first) or `order=headAt.desc` (most recently active first). The sort key is the composite `(timestamp descending, cursor key ascending)` — the timestamps are the same author-claimed, head-selection-trusted `createdAt` values already surfaced as `genesisAt` / `headAt`, so ordered pages are exactly as deterministic and convergent across relays as the lexical default: an ordering of _claimed_ times, never receipt times, inheriting precisely the trust posture of the fields it sorts by. In ordered mode `after` and `next` are **opaque cursor tokens** — a client resumes by passing `next` back verbatim and MUST NOT parse or construct one; the token encoding is implementation-internal. Envelope semantics carry over (`limit` bounds, strictly-past-the-composite-key resumption), with one honest weakening of the lexical mode's stability guarantee: `genesisAt.desc` sorts by an immutable key and is fully stable under concurrent row changes, but `headAt` is a **mutable** sort key. It is monotonically non-decreasing (per-branch timestamp ordering plus max-over-tips head selection — an accepted operation can only raise it), so a chain updated mid-enumeration moves strictly toward the top of `headAt.desc` — into pages already served. An in-flight `headAt.desc` enumeration therefore never duplicates a row but MAY miss one that was updated while paginating; the row is not gone, it has moved to the front of a fresher enumeration. This is the correct contract for a recency feed — clients refresh from the top; completeness remains the job of the lexical enumeration (immutable keys, fully stable) or the log replay. Absent `order`, enumeration is the lexical default above — existing clients are untouched. Only the two enumerated values exist; an unrecognized value is a `400`.
+- **Operation recency ordering.** `/operations` accepts `createdAt.desc` and `ingestedAt.desc` and defaults to `ingestedAt.desc`; `/countersignatures` accepts the same values while retaining lexical CID order when `order` is absent. Both use the same descending-timestamp/CID-ascending composite and opaque ordered cursor described above. `createdAt` is author-claimed; `ingestedAt` is when this relay accepted the operation, so it is relay-local browse chronology rather than protocol authority. Unrecognized orders and undecodable ordered cursors are `400`.
+- **Boolean parameters fail closed.** A boolean filter is either absent (no filter), exactly `true`, or exactly `false`. A present empty or otherwise unparseable value is `400` with `{ "error": "invalid boolean" }`; it never silently widens to an unfiltered query.
 - **Coverage is bounded by held bytes.** `docSchema` and projected fields are computable only for chains whose current head document bytes the relay holds (uploaded, or pulled via [content following](#content-following)). A chain whose bytes are absent reports `docSchema: null` — honest unknown, not a claim of schemalessness. A `docSchema` filter therefore matches only chains with held, decodable head bytes; callers MUST treat the result as a lower bound.
 - **Timestamps are author-claimed.** `genesisAt` / `headAt` surface the `createdAt` fields signed inside the operations — the same values head selection uses — not relay receipt times.
 - **Maintenance.** The index is fully re-derivable from the operation log plus held blobs. Reference implementations maintain it incrementally at ingestion and expose a rebuild path for pre-existing corpora; either way the serving contract is identical.
 - **`publicRead` is a last-touch snapshot, and MAY lag time-based transitions.** A materialized `publicRead` reflects whether a standing public-read grant authorized anonymous read **at the moment the row was last recomputed** (its content's most recent op, or a rebuild). One input to that predicate — a grant credential's `exp` — is wall-clock-relative and crosses **without emitting any operation**, so incremental maintenance has no event to react to: a row can continue to advertise `publicRead: true` after the grant that made it public has expired, until the next op dirties that content or a rebuild reruns the projection. This is deliberately tolerated because the index is a discovery hint, never an authorization input (see [Hints, Not Authority](#hints-not-authority)) — the content plane re-derives `hasPublicStandingAuth` live on every read, where `exp` is always evaluated against the current clock. A relay MAY additionally re-sweep public rows near expiry to tighten the hint, but is not required to.
 
-### Identities (`GET /index/v0/identities?hasPublicProfile=&nameContains=&order=&after={did}&limit=N`)
+### Operations (`GET /index/v0/operations?kind=&chainId=&order=&after={cursor}&limit=N`)
+
+Enumerates the operations this relay holds as metadata-only recency rows. This is a non-authoritative browse ordering: `createdAt` is the author-claimed timestamp signed into the operation (`iat`, normalized to ISO 8601, for credentials), while `ingestedAt` is the relay-observed acceptance timestamp. Neither establishes a consensus clock.
+
+```json
+{
+  "operations": [
+    {
+      "cid": "bafyrei…",
+      "kind": "content-op",
+      "chainId": "a3n7r3nde8e4keeak92rr3aeztftvc2",
+      "createdAt": "2026-04-02T00:00:00.000Z",
+      "ingestedAt": "2026-04-02T00:00:01.123Z"
+    }
+  ],
+  "next": null
+}
+```
+
+Parameters: `kind` (optional exact match, one of `identity-op`, `content-op`, `artifact`, `countersign`, `revocation`, or `credential`; `400` otherwise), `chainId` (optional exact match against the operation-log routing identifier), `order` (`createdAt.desc` or `ingestedAt.desc`, default `ingestedAt.desc`), `after` (the opaque ordered cursor), and `limit` (default 100, max 1000). A signer filter is deliberately omitted: the reference stores do not retain operation signer DID as indexed metadata, and this browse route does not re-decode the corpus to manufacture one.
+
+Rows are browsing metadata, never proof: they contain no JWS, payload, title, or name. `chainId` has the same structural visibility already present in `/index/v0/content` and the proof-plane global log, including for non-public or deleted chains; it does not expose document bytes or projected display names.
+
+### Identities (`GET /index/v0/identities?did=&hasPublicProfile=&nameContains=&order=&after={did}&limit=N`)
 
 Enumerates identity chains, `did` ascending by default; `order=genesisAt.desc` / `order=headAt.desc` select time-ordered enumeration (recently arrived / recently active) per [Determinism and Coverage](#determinism-and-coverage).
 
@@ -696,9 +721,9 @@ Enumerates identity chains, `did` ascending by default; `order=genesisAt.desc` /
 | `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                                     |
 | `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker — including when `profile.publicRead` is `false` (a non-public profile never projects its name) |
 
-Parameters: `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `nameContains` (optional case-insensitive substring filter over projected `profile.name`; non-authoritative/amber; applied before keyset pagination), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `did` keyset cursor in the lexical default — returns rows with `did` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
+Parameters: `did` (optional exact DID match, returning zero or one row; composes with the remaining filters), `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `nameContains` (optional case-insensitive substring filter over projected `profile.name`; non-authoritative/amber; applied before keyset pagination), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `did` keyset cursor in the lexical default — returns rows with `did` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
 
-### Content Chains (`GET /index/v0/content?creator={did}&signer={did}&docSchema=&documentCID=&publicRead=&order=&after={contentId}&limit=N`)
+### Content Chains (`GET /index/v0/content?contentId=&creator={did}&signer={did}&docSchema=&documentCID=&publicRead=&isDeleted=&order=&after={contentId}&limit=N`)
 
 Enumerates content chains, `contentId` ascending by default; `order=genesisAt.desc` / `order=headAt.desc` select time-ordered enumeration per [Determinism and Coverage](#determinism-and-coverage). All filters are ANDed exact matches.
 
@@ -726,11 +751,13 @@ Enumerates content chains, `contentId` ascending by default; `order=genesisAt.de
 
 `title` is the [display-name registry](#well-known-projections) projection for content rows (row 2, `post/v1 → title`): `null` for any chain whose held head document is not an enumerated schema, on any circuit breaker (including a non-public chain — `publicRead: false` — whose title is never projected), or when bytes are not held — an honest unknown, never a guess.
 
-Parameters: `creator` (exact DID — the chain's genesis signer; `400` when malformed), `signer` (exact DID — keeps chains in which the DID signed at least one **accepted** operation, branch-inclusive: "has signed in this chain," not "signs the current head lineage"; operations on branches later deleted or abandoned still count — the log records that the signature happened; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `documentCID` (exact match against the projected `currentDocumentCID` — the reverse lookup "who published this document"), `publicRead` (boolean), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `contentId` keyset cursor in the lexical default — returns rows with `contentId` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, and its notion of _recent public posts_ is `order=headAt.desc&docSchema=<its post schema>&publicRead=true`, composed client-side.
+Parameters: `contentId` (optional exact match, returning zero or one row; composes with the remaining filters), `creator` (exact DID — the chain's genesis signer; `400` when malformed), `signer` (exact DID — keeps chains in which the DID signed at least one **accepted** operation, branch-inclusive: "has signed in this chain," not "signs the current head lineage"; operations on branches later deleted or abandoned still count — the log records that the signature happened; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `documentCID` (exact match against the projected `currentDocumentCID` — the reverse lookup "who published this document"), `publicRead` (boolean), `isDeleted` (boolean exact match against terminal deletion state), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `contentId` keyset cursor in the lexical default — returns rows with `contentId` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, and its notion of _recent public posts_ is `order=headAt.desc&docSchema=<its post schema>&publicRead=true`, composed client-side.
+
+Post-class content chains are not tombstoned from this structural index when their subject is deleted. Concealment belongs to the credential/blob plane, so a deleted subject's chain metadata — identifiers, operation CIDs, and timestamps — remains enumerable. Consumers that do not want deleted rows use `isDeleted=false`; absent `isDeleted` preserves the complete metadata enumeration.
 
 `signer` is an **actor-axis verification outcome**, deliberately raw: the creator matches their own chains (the creator signs genesis), and "contributed to but did not create" is client-composed as `signer=X` minus `creator=X`. It is proof-tier — the DID's key actually signed accepted operations, revealing nothing not already derivable from the public per-chain log — and it is never an authorship or credit claim: `credits` and similar payload fields are assertion-tier and are not index concepts.
 
-### Countersignatures by Witness (`GET /index/v0/countersignatures?witness={did}&after={cid}&limit=N`)
+### Countersignatures by Witness (`GET /index/v0/countersignatures?witness={did}&relation=&order=&after={cid}&limit=N`)
 
 The reverse of the proof plane's by-target route: every countersignature this relay has ingested **signed by** the given witness DID, ordered by countersignature CID ascending.
 
@@ -749,9 +776,9 @@ The reverse of the proof plane's by-target route: every countersignature this re
 }
 ```
 
-`witness` is required (`400` when missing or malformed); `after` is a countersignature-`cid` keyset cursor (returns rows with `cid` strictly greater), `limit` defaults to 100 and maxes at 1000. `relation` is the countersign's open-namespace tag, `null` when omitted by the signer. Each entry carries the full JWS — self-proving, same posture as the issuer revocations feed: the caller re-verifies the token rather than trusting the row.
+`witness` is required (`400` when missing or malformed); `relation` is an optional exact match against the countersign's opaque open-namespace tag; `order` optionally selects `createdAt.desc` or `ingestedAt.desc`; `after` is a countersignature-`cid` keyset cursor in lexical mode or an opaque token in ordered mode; `limit` defaults to 100 and maxes at 1000. The row's `relation` is `null` when omitted by the signer. Each entry carries the full JWS — self-proving, same posture as the issuer revocations feed: the caller re-verifies the token rather than trusting the row.
 
-### Credentials (`GET /index/v0/credentials?issuer={did}&resource=&after={cid}&limit=N`)
+### Credentials (`GET /index/v0/credentials?issuer={did}&resource=&action=&after={cid}&limit=N`)
 
 Enumerates the relay's held public credentials, `cid` ascending.
 
@@ -761,6 +788,7 @@ Enumerates the relay's held public credentials, `cid` ascending.
     {
       "cid": "bafyrei…",
       "issuerDID": "did:dfos:hd34z9a4tf6h62864nh4f7at6hr36r4",
+      "aud": "*",
       "att": [{ "resource": "chain:a3n7r3nde8e4keeak92rr3aeztftvc2", "action": "read" }],
       "exp": 1775088000,
       "jwsToken": "eyJhbGciOiJFZERTQSIs…"
@@ -770,7 +798,7 @@ Enumerates the relay's held public credentials, `cid` ascending.
 }
 ```
 
-Parameters: `issuer` (optional exact DID — `400` when malformed), `resource` (optional exact match against an `att[].resource`; when the requested resource starts with `chain:`, the `chain:*` wildcard bucket is always unioned in because a `chain:*` grant may authorize the named chain), `after` (a credential-`cid` keyset cursor — returns rows with `cid` strictly greater), `limit` (default 100, max 1000). Filters are ANDed.
+Parameters: `issuer` (optional exact DID — `400` when malformed), `resource` (optional exact match against an `att[].resource`; when the requested resource starts with `chain:`, the `chain:*` wildcard bucket is always unioned in because a `chain:*` grant may authorize the named chain), `action` (optional exact match against an `att[].action`, with the same candidate-match posture as `resource`), `after` (a credential-`cid` keyset cursor — returns rows with `cid` strictly greater), `limit` (default 100, max 1000). Filters are ANDed. Rows project the verified public audience (`aud`, necessarily `"*"`) and unix expiry (`exp`); expired rows remain enumerable and clients may filter them locally.
 
 Only public credentials (`aud: "*"`) are ever held by the relay. Targeted bearer credentials never enter relay storage, so they are neither enumerable nor leakable here.
 

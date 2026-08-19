@@ -843,6 +843,31 @@ func TestIndexCountersignaturesByWitness(t *testing.T) {
 		t.Fatalf("relations = %v", relations)
 	}
 
+	status, related, _ := getIndexJSONBody(t, handler, "/index/v0/countersignatures?witness="+url.QueryEscape(witness.did)+"&relation=endorses")
+	if status != 200 || len(related["countersignatures"].([]any)) != 1 || related["countersignatures"].([]any)[0].(map[string]any)["relation"] != "endorses" {
+		t.Fatalf("related countersignatures = %v status=%d", related, status)
+	}
+	status, ordered1, _ := getIndexJSONBody(t, handler, "/index/v0/countersignatures?witness="+url.QueryEscape(witness.did)+"&order=createdAt.desc&limit=1")
+	if status != 200 || len(ordered1["countersignatures"].([]any)) != 1 || ordered1["next"] == nil {
+		t.Fatalf("ordered countersignatures page1 = %v status=%d", ordered1, status)
+	}
+	orderedRow := ordered1["countersignatures"].([]any)[0].(map[string]any)
+	if _, leaked := orderedRow["createdAt"]; leaked {
+		t.Fatalf("ordered countersignature leaked createdAt: %v", orderedRow)
+	}
+	status, ordered2, _ := getIndexJSONBody(t, handler, "/index/v0/countersignatures?witness="+url.QueryEscape(witness.did)+"&order=createdAt.desc&after="+url.QueryEscape(ordered1["next"].(string))+"&limit=1")
+	if status != 200 || len(ordered2["countersignatures"].([]any)) != 1 || ordered2["countersignatures"].([]any)[0].(map[string]any)["cid"] == orderedRow["cid"] {
+		t.Fatalf("ordered countersignatures page2 = %v status=%d", ordered2, status)
+	}
+	status, badOrder, _ := getIndexJSONBody(t, handler, "/index/v0/countersignatures?witness="+url.QueryEscape(witness.did)+"&order=bogus")
+	if status != 400 || badOrder["error"] != "invalid order" {
+		t.Fatalf("bad countersignature order = %v status=%d", badOrder, status)
+	}
+	status, badCursor, _ := getIndexJSONBody(t, handler, "/index/v0/countersignatures?witness="+url.QueryEscape(witness.did)+"&order=createdAt.desc&after=not-a-cursor")
+	if status != 400 || badCursor["error"] != "invalid cursor" {
+		t.Fatalf("bad countersignature cursor = %v status=%d", badCursor, status)
+	}
+
 	status, missing, _ := getIndexJSONBody(t, handler, "/index/v0/countersignatures")
 	if status != 400 || missing["error"] != "invalid DID" {
 		t.Fatalf("missing witness = %v status=%d", missing, status)
@@ -850,6 +875,122 @@ func TestIndexCountersignaturesByWitness(t *testing.T) {
 	status, malformed, _ := getIndexJSONBody(t, handler, "/index/v0/countersignatures?witness=did:dfos:tooshort")
 	if status != 400 || malformed["error"] != "invalid DID" {
 		t.Fatalf("malformed witness = %v status=%d", malformed, status)
+	}
+}
+
+func TestIndexPointLookupsDeletedFilterAndBooleanValidation(t *testing.T) {
+	r, _ := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	content := createIndexedContent(t, r, NewMemoryStore(), creator, map[string]any{"$schema": "example/point"}, false)
+
+	status, identities, _ := getIndexJSONBody(t, handler, "/index/v0/identities?did="+url.QueryEscape(creator.did))
+	if status != 200 || len(identities["identities"].([]any)) != 1 || identities["identities"].([]any)[0].(map[string]any)["did"] != creator.did {
+		t.Fatalf("identity point lookup = %v status=%d", identities, status)
+	}
+	status, contents, _ := getIndexJSONBody(t, handler, "/index/v0/content?contentId="+url.QueryEscape(content.contentID)+"&creator="+url.QueryEscape(creator.did))
+	if status != 200 || len(contents["content"].([]any)) != 1 || contents["content"].([]any)[0].(map[string]any)["contentId"] != content.contentID {
+		t.Fatalf("content point lookup = %v status=%d", contents, status)
+	}
+
+	deleteToken, _, err := dfos.SignContentDelete(creator.did, content.operationCID, creator.did+"#"+creator.auth.keyID, "", creator.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := r.Ingest([]string{deleteToken})[0]; result.Status != "new" {
+		t.Fatalf("delete content: %+v", result)
+	}
+	status, deleted, _ := getIndexJSONBody(t, handler, "/index/v0/content?isDeleted=true")
+	if status != 200 || !contentBodyHasID(deleted, content.contentID) {
+		t.Fatalf("deleted content filter = %v status=%d", deleted, status)
+	}
+	status, active, _ := getIndexJSONBody(t, handler, "/index/v0/content?isDeleted=false")
+	if status != 200 || contentBodyHasID(active, content.contentID) {
+		t.Fatalf("active content filter = %v status=%d", active, status)
+	}
+
+	for _, path := range []string{
+		"/index/v0/identities?hasPublicProfile",
+		"/index/v0/identities?hasPublicProfile=banana",
+		"/index/v0/content?publicRead",
+		"/index/v0/content?publicRead=banana",
+		"/index/v0/content?isDeleted",
+		"/index/v0/content?isDeleted=banana",
+	} {
+		status, body, _ := getIndexJSONBody(t, handler, path)
+		if status != 400 || body["error"] != "invalid boolean" {
+			t.Fatalf("invalid boolean %s = %v status=%d", path, body, status)
+		}
+	}
+}
+
+func TestIndexOperationsRecencyFiltersAndCursor(t *testing.T) {
+	r, _ := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	content := createIndexedContent(t, r, NewMemoryStore(), creator, map[string]any{"$schema": "example/operations"}, false)
+
+	status, filtered, _ := getIndexJSONBody(t, handler, "/index/v0/operations?kind=content-op&chainId="+url.QueryEscape(content.contentID))
+	rows := filtered["operations"].([]any)
+	if status != 200 || len(rows) != 1 {
+		t.Fatalf("filtered operations = %v status=%d", filtered, status)
+	}
+	row := rows[0].(map[string]any)
+	if row["cid"] != content.operationCID || row["kind"] != "content-op" || row["chainId"] != content.contentID || row["createdAt"] == nil || row["ingestedAt"] == nil {
+		t.Fatalf("operation row = %v", row)
+	}
+	if _, leaked := row["jwsToken"]; leaked {
+		t.Fatalf("operation row leaked proof: %v", row)
+	}
+
+	status, first, _ := getIndexJSONBody(t, handler, "/index/v0/operations?order=createdAt.desc&limit=1")
+	if status != 200 || len(first["operations"].([]any)) != 1 || first["next"] == nil {
+		t.Fatalf("operations page1 = %v status=%d", first, status)
+	}
+	status, second, _ := getIndexJSONBody(t, handler, "/index/v0/operations?order=createdAt.desc&after="+url.QueryEscape(first["next"].(string))+"&limit=1")
+	if status != 200 || len(second["operations"].([]any)) != 1 || second["operations"].([]any)[0].(map[string]any)["cid"] == first["operations"].([]any)[0].(map[string]any)["cid"] {
+		t.Fatalf("operations page2 = %v status=%d", second, status)
+	}
+	for _, test := range []struct{ path, want string }{
+		{"/index/v0/operations?kind=bogus", "invalid kind"},
+		{"/index/v0/operations?order=bogus", "invalid order"},
+		{"/index/v0/operations?after=not-a-cursor", "invalid cursor"},
+	} {
+		status, body, _ := getIndexJSONBody(t, handler, test.path)
+		if status != 400 || body["error"] != test.want {
+			t.Fatalf("%s = %v status=%d", test.path, body, status)
+		}
+	}
+}
+
+func TestIndexCredentialActionAudienceAndExpiry(t *testing.T) {
+	r, _ := indexRelay(t)
+	handler := r.Handler()
+	issuer := ingestIdentity(t, r)
+	credential, err := dfos.CreateCredential(issuer.did, "*", issuer.did+"#"+issuer.auth.keyID, "chain:*", "write", time.Hour, issuer.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := r.Ingest([]string{credential})[0]; result.Status != "new" {
+		t.Fatalf("credential ingest: %+v", result)
+	}
+	status, body, _ := getIndexJSONBody(t, handler, "/index/v0/credentials?action=write")
+	rows := body["credentials"].([]any)
+	if status != 200 || len(rows) != 1 {
+		t.Fatalf("credential action filter = %v status=%d", body, status)
+	}
+	row := rows[0].(map[string]any)
+	if row["issuerDID"] != issuer.did || row["aud"] != "*" || row["exp"] == nil {
+		t.Fatalf("credential row = %v", row)
+	}
+	status, missing, _ := getIndexJSONBody(t, handler, "/index/v0/credentials?action=read")
+	if status != 200 || len(missing["credentials"].([]any)) != 0 {
+		t.Fatalf("credential no-match = %v status=%d", missing, status)
+	}
+	status, operations, _ := getIndexJSONBody(t, handler, "/index/v0/operations?kind=credential&chainId="+url.QueryEscape(issuer.did))
+	opRows := operations["operations"].([]any)
+	if status != 200 || len(opRows) != 1 || !strings.HasPrefix(opRows[0].(map[string]any)["createdAt"].(string), "20") {
+		t.Fatalf("credential operation createdAt = %v status=%d", operations, status)
 	}
 }
 
@@ -1311,9 +1452,50 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 	if len(csRows) != 1 || csRows[0].(map[string]any)["cid"] != csCID {
 		t.Fatalf("rebuilt countersign rows = %v, want cid %s", csBody, csCID)
 	}
+	_, orderedCSBody, _ := getIndexJSONBody(t, handler2, "/index/v0/countersignatures?witness="+url.QueryEscape(witness.did)+"&order=ingestedAt.desc&limit=100")
+	if len(orderedCSBody["countersignatures"].([]any)) != 1 {
+		t.Fatalf("rebuilt ordered countersign rows = %v", orderedCSBody)
+	}
+	_, operationBody, _ := getIndexJSONBody(t, handler2, "/index/v0/operations?kind=countersign&chainId="+url.QueryEscape(content.operationCID))
+	operationRows := operationBody["operations"].([]any)
+	if len(operationRows) != 1 || operationRows[0].(map[string]any)["cid"] != csCID {
+		t.Fatalf("sqlite operation index rows = %v, want cid %s", operationBody, csCID)
+	}
+	_, credentialBody, _ := getIndexJSONBody(t, handler2, "/index/v0/credentials?action=read")
+	credentialRows := credentialBody["credentials"].([]any)
+	if len(credentialRows) == 0 || credentialRows[0].(map[string]any)["aud"] != "*" {
+		t.Fatalf("sqlite credential action/aud rows = %v", credentialBody)
+	}
 	// identity rows rebuilt
 	if indexIdentityRowByDID(t, handler2, author.did) == nil {
 		t.Fatal("author identity row missing after rebuild")
+	}
+}
+
+func TestSQLiteIndexPointAndDeletedFilters(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "point-deleted.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	active := false
+	deleted := true
+	for _, row := range []indexContentRow{
+		{ContentID: "active", GenesisCID: "g", HeadCID: "h", CreatorDID: "did:dfos:creator", IsDeleted: active},
+		{ContentID: "deleted", GenesisCID: "g", HeadCID: "h", CreatorDID: "did:dfos:creator", IsDeleted: deleted},
+	} {
+		if err := store.PutIndexContentRow(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	contentID := "deleted"
+	rows, err := store.QueryIndexContent(IndexContentQuery{ContentID: &contentID, IsDeleted: &deleted, Limit: 100})
+	if err != nil || len(rows) != 1 || rows[0].ContentID != contentID {
+		t.Fatalf("sqlite contentId/isDeleted filter = %v err=%v", rows, err)
+	}
+	rows, err = store.QueryIndexContent(IndexContentQuery{IsDeleted: &active, Limit: 100})
+	if err != nil || len(rows) != 1 || rows[0].ContentID != "active" {
+		t.Fatalf("sqlite active filter = %v err=%v", rows, err)
 	}
 }
 

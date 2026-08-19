@@ -38,7 +38,11 @@
 */
 
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import { contentIndexRow, identityIndexRow, type IndexCountersignatureRow } from './index-routes';
+import {
+  contentIndexRow,
+  identityIndexRow,
+  type IndexCountersignatureQueryRow,
+} from './index-routes';
 import type { IngestionResult, RelayStore, StoredPublicCredential } from './types';
 
 /**
@@ -62,7 +66,7 @@ const ENUMERATE_ALL_LIMIT = Number.MAX_SAFE_INTEGER;
 export interface IndexDirtySet {
   identityDIDs: Set<string>;
   contentIds: Set<string>;
-  countersigns: (IndexCountersignatureRow & { witnessDID: string })[];
+  countersigns: (IndexCountersignatureQueryRow & { witnessDID: string })[];
   allContent: boolean;
   allPublicContent: boolean;
 }
@@ -220,7 +224,16 @@ export const collectIndexDirtyAfterOp = async (
         const cid = typeof decoded?.header.cid === 'string' ? decoded.header.cid : result.cid;
         const relation = typeof payload?.['relation'] === 'string' ? payload['relation'] : null;
         const witnessDID = typeof payload?.['did'] === 'string' ? payload['did'] : '';
-        dirty.countersigns.push({ cid, targetCID: result.chainId, relation, jwsToken, witnessDID });
+        const createdAt = typeof payload?.['createdAt'] === 'string' ? payload['createdAt'] : '';
+        dirty.countersigns.push({
+          cid,
+          targetCID: result.chainId,
+          relation,
+          jwsToken,
+          witnessDID,
+          createdAt,
+          ingestedAt: new Date().toISOString(),
+        });
         break;
       }
     }

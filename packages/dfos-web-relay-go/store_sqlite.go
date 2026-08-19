@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS countersignatures (
 	operation_cid TEXT NOT NULL,
 	jws_token TEXT NOT NULL,
 	witness_did TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	ingested_at TEXT NOT NULL,
 	UNIQUE(operation_cid, witness_did)
 );
 
@@ -50,7 +52,9 @@ CREATE TABLE IF NOT EXISTS operation_log (
 	cid TEXT NOT NULL,
 	jws_token TEXT NOT NULL,
 	kind TEXT NOT NULL,
-	chain_id TEXT NOT NULL
+	chain_id TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	ingested_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS blobs (
@@ -174,7 +178,9 @@ CREATE TABLE IF NOT EXISTS index_countersign (
 	witness_did TEXT NOT NULL,
 	target_cid TEXT NOT NULL,
 	relation TEXT,
-	jws_token TEXT NOT NULL
+	jws_token TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	ingested_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_index_countersign_witness ON index_countersign(witness_did, cid);
 
@@ -318,6 +324,40 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		readDB.Close()
 		return nil, err
 	}
+	for _, column := range []struct{ table, name string }{
+		{"operation_log", "created_at"},
+		{"operation_log", "ingested_at"},
+		{"countersignatures", "created_at"},
+		{"countersignatures", "ingested_at"},
+		{"index_countersign", "created_at"},
+		{"index_countersign", "ingested_at"},
+	} {
+		if err := ensureColumn(writeDB, column.table, column.name, "TEXT"); err != nil {
+			writeDB.Close()
+			readDB.Close()
+			return nil, err
+		}
+	}
+	if err := backfillIndexTimestamps(writeDB); err != nil {
+		writeDB.Close()
+		readDB.Close()
+		return nil, err
+	}
+	for _, statement := range []string{
+		"CREATE INDEX IF NOT EXISTS idx_operation_log_created ON operation_log(created_at, cid)",
+		"CREATE INDEX IF NOT EXISTS idx_operation_log_ingested ON operation_log(ingested_at, cid)",
+		"CREATE INDEX IF NOT EXISTS idx_operation_log_kind ON operation_log(kind, ingested_at, cid)",
+		"CREATE INDEX IF NOT EXISTS idx_operation_log_chain ON operation_log(chain_id, ingested_at, cid)",
+		"CREATE INDEX IF NOT EXISTS idx_index_countersign_created ON index_countersign(witness_did, created_at, cid)",
+		"CREATE INDEX IF NOT EXISTS idx_index_countersign_ingested ON index_countersign(witness_did, ingested_at, cid)",
+		"CREATE INDEX IF NOT EXISTS idx_index_countersign_relation ON index_countersign(witness_did, relation, cid)",
+	} {
+		if _, err := writeDB.Exec(statement); err != nil {
+			writeDB.Close()
+			readDB.Close()
+			return nil, err
+		}
+	}
 	// The CREATE TABLE above is a no-op on an existing database, so a relay
 	// upgrading in place needs the column added. Pre-existing rows come back NULL
 	// and resolve lazily from their stored token on read (see
@@ -329,6 +369,104 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	}
 
 	return &SQLiteStore{db: writeDB, readDB: readDB}, nil
+}
+
+// backfillIndexTimestamps upgrades pre-index-recency databases. Author time is
+// recovered from the already-accepted JWS; relay time comes from raw_ops, whose
+// created_at records first receipt. If an old deployment pruned that raw row,
+// upgrade time is the only honest relay-local fallback available.
+func backfillIndexTimestamps(db *sql.DB) error {
+	type operationBackfill struct {
+		seq        int64
+		cid        string
+		jwsToken   string
+		createdAt  sql.NullString
+		ingestedAt sql.NullString
+	}
+	rows, err := db.Query("SELECT seq, cid, jws_token, created_at, ingested_at FROM operation_log WHERE created_at IS NULL OR ingested_at IS NULL")
+	if err != nil {
+		return err
+	}
+	operations := []operationBackfill{}
+	for rows.Next() {
+		var row operationBackfill
+		if err := rows.Scan(&row.seq, &row.cid, &row.jwsToken, &row.createdAt, &row.ingestedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		operations = append(operations, row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, row := range operations {
+		createdAt := row.createdAt.String
+		if !row.createdAt.Valid {
+			createdAt = operationCreatedAt(row.jwsToken)
+		}
+		ingestedAt := row.ingestedAt.String
+		if !row.ingestedAt.Valid {
+			ingestedAt = rawOpIngestedAt(db, row.cid)
+		}
+		if _, err := db.Exec("UPDATE operation_log SET created_at = ?, ingested_at = ? WHERE seq = ?", createdAt, ingestedAt, row.seq); err != nil {
+			return err
+		}
+	}
+
+	type countersignBackfill struct {
+		rowID      int64
+		jwsToken   string
+		createdAt  sql.NullString
+		ingestedAt sql.NullString
+	}
+	rows, err = db.Query("SELECT rowid, jws_token, created_at, ingested_at FROM countersignatures WHERE created_at IS NULL OR ingested_at IS NULL")
+	if err != nil {
+		return err
+	}
+	countersigns := []countersignBackfill{}
+	for rows.Next() {
+		var row countersignBackfill
+		if err := rows.Scan(&row.rowID, &row.jwsToken, &row.createdAt, &row.ingestedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		countersigns = append(countersigns, row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, row := range countersigns {
+		createdAt := row.createdAt.String
+		cid := ""
+		if header, payload, err := dfos.DecodeJWSUnsafe(row.jwsToken); err == nil {
+			if header != nil {
+				cid = header.CID
+			}
+			if !row.createdAt.Valid && payload != nil {
+				createdAt, _ = payload["createdAt"].(string)
+			}
+		}
+		ingestedAt := row.ingestedAt.String
+		if !row.ingestedAt.Valid {
+			ingestedAt = rawOpIngestedAt(db, cid)
+		}
+		if _, err := db.Exec("UPDATE countersignatures SET created_at = ?, ingested_at = ? WHERE rowid = ?", createdAt, ingestedAt, row.rowID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rawOpIngestedAt(db *sql.DB, cid string) string {
+	var raw string
+	if cid != "" && db.QueryRow("SELECT created_at FROM raw_ops WHERE cid = ?", cid).Scan(&raw) == nil {
+		for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05"} {
+			if parsed, err := time.Parse(layout, raw); err == nil {
+				return parsed.UTC().Format("2006-01-02T15:04:05.000Z")
+			}
+		}
+	}
+	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
 func ensureColumn(db *sql.DB, table, column, columnType string) error {
@@ -768,7 +906,7 @@ func (s *SQLiteStore) GetCountersignatures(operationCID string) ([]string, error
 func (s *SQLiteStore) AddCountersignature(operationCID string, jwsToken string) error {
 	// extract witness DID from kid header for dedup
 	witnessDID := ""
-	header, _, err := dfos.DecodeJWSUnsafe(jwsToken)
+	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err == nil && header != nil {
 		kid := header.Kid
 		if idx := strings.Index(kid, "#"); idx >= 0 {
@@ -777,11 +915,16 @@ func (s *SQLiteStore) AddCountersignature(operationCID string, jwsToken string) 
 			witnessDID = kid
 		}
 	}
+	createdAt := ""
+	if payload != nil {
+		createdAt, _ = payload["createdAt"].(string)
+	}
+	ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 
 	// INSERT OR IGNORE deduplicates by (operation_cid, witness_did)
 	_, err = s.writerDB().Exec(
-		"INSERT OR IGNORE INTO countersignatures (operation_cid, jws_token, witness_did) VALUES (?, ?, ?)",
-		operationCID, jwsToken, witnessDID,
+		"INSERT OR IGNORE INTO countersignatures (operation_cid, jws_token, witness_did, created_at, ingested_at) VALUES (?, ?, ?, ?, ?)",
+		operationCID, jwsToken, witnessDID, createdAt, ingestedAt,
 	)
 	return err
 }
@@ -789,7 +932,7 @@ func (s *SQLiteStore) AddCountersignature(operationCID string, jwsToken string) 
 // ListCountersignatures enumerates every stored countersignature (all
 // witnesses), sorted by CID. Used ONLY by the index-projection rebuild path.
 func (s *SQLiteStore) ListCountersignatures() ([]StoredCountersignature, error) {
-	rows, err := s.readerDB().Query("SELECT operation_cid, jws_token FROM countersignatures")
+	rows, err := s.readerDB().Query("SELECT operation_cid, jws_token, created_at, ingested_at FROM countersignatures")
 	if err != nil {
 		return nil, err
 	}
@@ -797,14 +940,16 @@ func (s *SQLiteStore) ListCountersignatures() ([]StoredCountersignature, error) 
 
 	result := []StoredCountersignature{}
 	for rows.Next() {
-		var targetCID, token string
-		if err := rows.Scan(&targetCID, &token); err != nil {
+		var targetCID, token, createdAt, ingestedAt string
+		if err := rows.Scan(&targetCID, &token, &createdAt, &ingestedAt); err != nil {
 			return nil, err
 		}
 		row := countersignatureFromToken(targetCID, token)
 		if row == nil {
 			continue
 		}
+		row.CreatedAt = createdAt
+		row.IngestedAt = ingestedAt
 		result = append(result, *row)
 	}
 	if err := rows.Err(); err != nil {
@@ -946,9 +1091,10 @@ func (s *SQLiteStore) PutIndexContentSigner(contentID string, did string) error 
 
 func (s *SQLiteStore) PutIndexCountersignatureRow(row storedIndexCountersignature) error {
 	_, err := s.writerDB().Exec(
-		`INSERT OR REPLACE INTO index_countersign (cid, witness_did, target_cid, relation, jws_token)
-		 VALUES (?, ?, ?, ?, ?)`,
-		row.CID, row.WitnessDID, row.TargetCID, nullStr(row.Relation), row.JWSToken,
+		`INSERT OR REPLACE INTO index_countersign
+		 (cid, witness_did, target_cid, relation, jws_token, created_at, ingested_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		row.CID, row.WitnessDID, row.TargetCID, nullStr(row.Relation), row.JWSToken, row.CreatedAt, row.IngestedAt,
 	)
 	return err
 }
@@ -956,6 +1102,10 @@ func (s *SQLiteStore) PutIndexCountersignatureRow(row storedIndexCountersignatur
 func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentityRow, error) {
 	where := []string{}
 	args := []any{}
+	if q.DID != "" {
+		where = append(where, "did = ?")
+		args = append(args, q.DID)
+	}
 	if q.HasPublicProfile != nil {
 		where = append(where, "has_public_profile = ?")
 		args = append(args, boolToInt(*q.HasPublicProfile))
@@ -1012,6 +1162,10 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error) {
 	where := []string{}
 	args := []any{}
+	if q.ContentID != nil {
+		where = append(where, "content_id = ?")
+		args = append(args, *q.ContentID)
+	}
 	if q.Creator != "" {
 		where = append(where, "creator_did = ?")
 		args = append(args, q.Creator)
@@ -1031,6 +1185,10 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 	if q.PublicRead != nil {
 		where = append(where, "public_read = ?")
 		args = append(args, boolToInt(*q.PublicRead))
+	}
+	if q.IsDeleted != nil {
+		where = append(where, "is_deleted = ?")
+		args = append(args, boolToInt(*q.IsDeleted))
 	}
 	if q.Order == "" && q.After != "" {
 		where = append(where, "content_id > ?")
@@ -1074,13 +1232,31 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 }
 
 func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error) {
-	query := "SELECT cid, target_cid, relation, jws_token FROM index_countersign WHERE witness_did = ?"
+	query := "SELECT cid, target_cid, relation, jws_token, created_at, ingested_at FROM index_countersign WHERE witness_did = ?"
 	args := []any{q.Witness}
-	if q.After != "" {
+	if q.Relation != nil {
+		query += " AND relation = ?"
+		args = append(args, *q.Relation)
+	}
+	if q.Order == "" && q.After != "" {
 		query += " AND cid > ?"
 		args = append(args, q.After)
 	}
-	query += " ORDER BY cid LIMIT ?"
+	if q.Order != "" && q.OrderedAfter != nil {
+		column := "ingested_at"
+		if q.Order == "createdAt.desc" {
+			column = "created_at"
+		}
+		query += " AND (" + column + " < ? OR (" + column + " = ? AND cid > ?))"
+		args = append(args, q.OrderedAfter.Timestamp, q.OrderedAfter.Timestamp, q.OrderedAfter.Key)
+	}
+	if q.Order == "createdAt.desc" {
+		query += " ORDER BY created_at DESC, cid ASC LIMIT ?"
+	} else if q.Order == "ingestedAt.desc" {
+		query += " ORDER BY ingested_at DESC, cid ASC LIMIT ?"
+	} else {
+		query += " ORDER BY cid LIMIT ?"
+	}
 	args = append(args, q.Limit)
 
 	rows, err := s.readerDB().Query(query, args...)
@@ -1092,7 +1268,7 @@ func (s *SQLiteStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 	for rows.Next() {
 		var row indexCountersignatureRow
 		var relation sql.NullString
-		if err := rows.Scan(&row.CID, &row.TargetCID, &relation, &row.JWSToken); err != nil {
+		if err := rows.Scan(&row.CID, &row.TargetCID, &relation, &row.JWSToken, &row.CreatedAt, &row.IngestedAt); err != nil {
 			return nil, err
 		}
 		if relation.Valid {
@@ -1127,6 +1303,13 @@ func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 			args = append(args, *q.Resource)
 		}
 	}
+	if q.Action != nil {
+		where = append(where, `EXISTS (
+			SELECT 1 FROM json_each(public_credentials.att) je
+			WHERE json_extract(je.value, '$.action') = ?
+		)`)
+		args = append(args, *q.Action)
+	}
 	if q.After != "" {
 		where = append(where, "cid > ?")
 		args = append(args, q.After)
@@ -1150,7 +1333,53 @@ func (s *SQLiteStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 		if err := rows.Scan(&row.CID, &row.IssuerDID, &attJSON, &row.Exp, &row.JWSToken); err != nil {
 			return nil, err
 		}
+		row.Aud = "*"
 		if err := json.Unmarshal([]byte(attJSON), &row.Att); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperationRow, error) {
+	where := []string{}
+	args := []any{}
+	if q.Kind != "" {
+		where = append(where, "kind = ?")
+		args = append(args, q.Kind)
+	}
+	if q.ChainID != nil {
+		where = append(where, "chain_id = ?")
+		args = append(args, *q.ChainID)
+	}
+	if q.OrderedAfter != nil {
+		column := "ingested_at"
+		if q.Order == "createdAt.desc" {
+			column = "created_at"
+		}
+		where = append(where, "("+column+" < ? OR ("+column+" = ? AND cid > ?))")
+		args = append(args, q.OrderedAfter.Timestamp, q.OrderedAfter.Timestamp, q.OrderedAfter.Key)
+	}
+	query := "SELECT cid, kind, chain_id, created_at, ingested_at FROM operation_log"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	if q.Order == "createdAt.desc" {
+		query += " ORDER BY created_at DESC, cid ASC LIMIT ?"
+	} else {
+		query += " ORDER BY ingested_at DESC, cid ASC LIMIT ?"
+	}
+	args = append(args, q.Limit)
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []indexOperationRow{}
+	for rows.Next() {
+		var row indexOperationRow
+		if err := rows.Scan(&row.CID, &row.Kind, &row.ChainID, &row.CreatedAt, &row.IngestedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, row)
@@ -1232,9 +1461,11 @@ func (s *SQLiteStore) ClearIndexProjection() error {
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) AppendToLog(entry LogEntry) error {
+	createdAt := operationCreatedAt(entry.JWSToken)
+	ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	_, err := s.writerDB().Exec(
-		"INSERT INTO operation_log (cid, jws_token, kind, chain_id) VALUES (?, ?, ?, ?)",
-		entry.CID, entry.JWSToken, entry.Kind, entry.ChainID,
+		"INSERT INTO operation_log (cid, jws_token, kind, chain_id, created_at, ingested_at) VALUES (?, ?, ?, ?, ?, ?)",
+		entry.CID, entry.JWSToken, entry.Kind, entry.ChainID, createdAt, ingestedAt,
 	)
 	return err
 }

@@ -317,6 +317,8 @@ describe('index v0', () => {
       '/index/v0/identities',
       '/index/v0/content',
       `/index/v0/countersignatures?witness=${relayDID}`,
+      '/index/v0/credentials',
+      '/index/v0/operations',
     ]) {
       const res = await disabled.app.request(`http://localhost${path}`);
       expect(res.status).toBe(501);
@@ -386,6 +388,19 @@ describe('index v0', () => {
     expect(nonPublicProfiles.identities.map((row: { did: string }) => row.did)).toContain(
       unprofiled.did,
     );
+
+    const exact = await json(
+      await req(
+        `/index/v0/identities?did=${encodeURIComponent(subject.did)}&hasPublicProfile=true`,
+      ),
+    );
+    expect(exact.identities).toHaveLength(1);
+    expect(exact.identities[0].did).toBe(subject.did);
+    const missingDID = `did:dfos:${'2'.repeat(31)}`;
+    const missing = await json(
+      await req(`/index/v0/identities?did=${encodeURIComponent(missingDID)}`),
+    );
+    expect(missing.identities).toHaveLength(0);
 
     const page1 = await json(await req('/index/v0/identities?limit=2'));
     expect(page1.identities).toHaveLength(2);
@@ -605,6 +620,53 @@ describe('index v0', () => {
 
     const malformed = await req('/index/v0/content?creator=did:dfos:tooshort');
     expect(malformed.status).toBe(400);
+
+    const exact = await json(
+      await req(
+        `/index/v0/content?contentId=${encodeURIComponent(
+          publicContent.contentId,
+        )}&creator=${encodeURIComponent(creator.did)}`,
+      ),
+    );
+    expect(exact.content).toHaveLength(1);
+    expect(exact.content[0].contentId).toBe(publicContent.contentId);
+
+    const deleteOp: ContentOperation = {
+      version: 1,
+      type: 'delete',
+      did: creator.did,
+      previousOperationCID: privateContent.operationCID,
+      createdAt: ts(20),
+    };
+    const { jwsToken: deleteToken } = await signContentOperation({
+      operation: deleteOp,
+      signer: creator.authKey.signer,
+      kid: `${creator.did}#${creator.authKey.keyId}`,
+    });
+    expect((await json(await postOps([deleteToken]))).results[0].status).toBe('new');
+    const deleted = await json(await req('/index/v0/content?isDeleted=true'));
+    expect(deleted.content.map((row: { contentId: string }) => row.contentId)).toContain(
+      privateContent.contentId,
+    );
+    const active = await json(await req('/index/v0/content?isDeleted=false'));
+    expect(active.content.map((row: { contentId: string }) => row.contentId)).not.toContain(
+      privateContent.contentId,
+    );
+  });
+
+  it('rejects every present unparseable boolean query parameter', async () => {
+    for (const path of [
+      '/index/v0/identities?hasPublicProfile',
+      '/index/v0/identities?hasPublicProfile=banana',
+      '/index/v0/content?publicRead',
+      '/index/v0/content?publicRead=banana',
+      '/index/v0/content?isDeleted',
+      '/index/v0/content?isDeleted=banana',
+    ]) {
+      const res = await req(path);
+      expect(res.status, path).toBe(400);
+      expect(await json(res), path).toEqual({ error: 'invalid boolean' });
+    }
   });
 
   it('projects post titles with circuit breakers and late blob recompute', async () => {
@@ -936,8 +998,121 @@ describe('index v0', () => {
       witness.did,
     ]);
 
+    const related = await json(
+      await req(
+        `/index/v0/countersignatures?witness=${encodeURIComponent(witness.did)}&relation=endorses`,
+      ),
+    );
+    expect(related.countersignatures).toHaveLength(1);
+    expect(related.countersignatures[0].relation).toBe('endorses');
+
+    const ordered1 = await json(
+      await req(
+        `/index/v0/countersignatures?witness=${encodeURIComponent(
+          witness.did,
+        )}&order=createdAt.desc&limit=1`,
+      ),
+    );
+    expect(ordered1.countersignatures).toHaveLength(1);
+    expect(ordered1.next).toEqual(expect.any(String));
+    expect(ordered1.countersignatures[0]).not.toHaveProperty('createdAt');
+    expect(ordered1.countersignatures[0]).not.toHaveProperty('ingestedAt');
+    const ordered2 = await json(
+      await req(
+        `/index/v0/countersignatures?witness=${encodeURIComponent(
+          witness.did,
+        )}&order=createdAt.desc&after=${encodeURIComponent(ordered1.next)}&limit=1`,
+      ),
+    );
+    expect(ordered2.countersignatures).toHaveLength(1);
+    expect(ordered2.countersignatures[0].cid).not.toBe(ordered1.countersignatures[0].cid);
+
+    expect(
+      (
+        await req(
+          `/index/v0/countersignatures?witness=${encodeURIComponent(witness.did)}&order=bogus`,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await req(
+          `/index/v0/countersignatures?witness=${encodeURIComponent(
+            witness.did,
+          )}&order=createdAt.desc&after=not-a-cursor`,
+        )
+      ).status,
+    ).toBe(400);
+
     expect((await req('/index/v0/countersignatures')).status).toBe(400);
     expect((await req('/index/v0/countersignatures?witness=did:dfos:tooshort')).status).toBe(400);
+  });
+
+  it('indexes operations as metadata-only recency rows with filters and opaque cursors', async () => {
+    const creator = await createIdentity();
+    const content = await createContent(creator, { $schema: 'example/op-index' }, 10);
+
+    const filtered = await json(
+      await req(
+        `/index/v0/operations?kind=content-op&chainId=${encodeURIComponent(content.contentId)}`,
+      ),
+    );
+    expect(filtered.operations).toHaveLength(1);
+    expect(filtered.operations[0]).toEqual({
+      cid: content.operationCID,
+      kind: 'content-op',
+      chainId: content.contentId,
+      createdAt: expect.any(String),
+      ingestedAt: expect.any(String),
+    });
+    expect(filtered.operations[0]).not.toHaveProperty('jwsToken');
+    expect(filtered.operations[0]).not.toHaveProperty('payload');
+
+    const first = await json(await req('/index/v0/operations?order=createdAt.desc&limit=1'));
+    expect(first.operations).toHaveLength(1);
+    expect(first.next).toEqual(expect.any(String));
+    const second = await json(
+      await req(
+        `/index/v0/operations?order=createdAt.desc&after=${encodeURIComponent(first.next)}&limit=1`,
+      ),
+    );
+    expect(second.operations).toHaveLength(1);
+    expect(second.operations[0].cid).not.toBe(first.operations[0].cid);
+
+    expect((await req('/index/v0/operations?kind=bogus')).status).toBe(400);
+    expect((await req('/index/v0/operations?order=bogus')).status).toBe(400);
+    expect((await req('/index/v0/operations?after=not-a-cursor')).status).toBe(400);
+  });
+
+  it('enriches and filters the public credential index', async () => {
+    const issuer = await createIdentity();
+    const now = Math.floor(Date.now() / 1000);
+    const credential = await createDFOSCredential({
+      issuerDID: issuer.did,
+      audienceDID: '*',
+      att: [{ resource: 'chain:*', action: 'write' }],
+      exp: now + 3600,
+      signer: issuer.authKey.signer,
+      keyId: issuer.authKey.keyId,
+      iat: now,
+    });
+    expect((await json(await postOps([credential]))).results[0].status).toBe('new');
+
+    const body = await json(await req('/index/v0/credentials?action=write'));
+    expect(body.credentials).toHaveLength(1);
+    expect(body.credentials[0]).toMatchObject({
+      issuerDID: issuer.did,
+      aud: '*',
+      exp: now + 3600,
+      att: [{ resource: 'chain:*', action: 'write' }],
+    });
+    const noMatch = await json(await req('/index/v0/credentials?action=read'));
+    expect(noMatch.credentials).toEqual([]);
+    const operations = await json(
+      await req(`/index/v0/operations?kind=credential&chainId=${encodeURIComponent(issuer.did)}`),
+    );
+    expect(operations.operations).toHaveLength(1);
+    expect(operations.operations[0].createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   // ---------------------------------------------------------------------------

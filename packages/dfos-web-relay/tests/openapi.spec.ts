@@ -110,6 +110,7 @@ describe('openapi', () => {
       ['/index/v0/content', 'get'],
       ['/index/v0/countersignatures', 'get'],
       ['/index/v0/credentials', 'get'],
+      ['/index/v0/operations', 'get'],
       ['/signing/v0/requests', 'get'],
     ] as const;
 

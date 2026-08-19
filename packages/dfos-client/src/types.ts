@@ -218,6 +218,9 @@ export interface IndexCapabilities {
  */
 export type IndexOrder = 'genesisAt.desc' | 'headAt.desc';
 
+/** Recency ordering for operation-derived index rows. */
+export type IndexRecencyOrder = 'createdAt.desc' | 'ingestedAt.desc';
+
 /**
  * The `profile/v1 → name` well-known projection on an identity row. ATTRIBUTION
  * TIER by construction: the `anchor` is controller-signed (strong), but `name`
@@ -290,6 +293,7 @@ export interface IndexCountersignaturesPage {
 export interface IndexCredentialRow {
   cid: string;
   issuerDID: string;
+  aud: '*';
   att: Attenuation[];
   exp: number;
   jwsToken: string;
@@ -364,6 +368,7 @@ export interface Client {
   capabilities(options?: CallOptions): Promise<IndexCapabilities>;
   indexIdentities(
     params?: {
+      did?: string;
       hasPublicProfile?: boolean;
       nameContains?: string;
       order?: IndexOrder;
@@ -374,11 +379,13 @@ export interface Client {
   ): Promise<IndexIdentitiesPage>;
   indexContent(
     params?: {
+      contentId?: string;
       creator?: string;
       signer?: string;
       docSchema?: string;
       documentCID?: string;
       publicRead?: boolean;
+      isDeleted?: boolean;
       order?: IndexOrder;
       after?: string;
       limit?: number;
@@ -387,11 +394,17 @@ export interface Client {
   ): Promise<IndexContentPage>;
   indexCountersignatures(
     witness: string,
-    params?: { after?: string; limit?: number },
+    params?: { relation?: string; order?: IndexRecencyOrder; after?: string; limit?: number },
     options?: CallOptions,
   ): Promise<IndexCountersignaturesPage>;
   indexCredentials(
-    params?: { issuer?: string; resource?: string; after?: string; limit?: number },
+    params?: {
+      issuer?: string;
+      resource?: string;
+      action?: string;
+      after?: string;
+      limit?: number;
+    },
     options?: CallOptions,
   ): Promise<IndexCredentialsPage>;
 }

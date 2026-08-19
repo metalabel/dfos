@@ -1,7 +1,9 @@
 package relay
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -56,5 +58,39 @@ func TestMatchesResourceActionCanonicalization(t *testing.T) {
 					tt.att, tt.resource, tt.action, got, tt.wantMatch)
 			}
 		})
+	}
+}
+
+func TestCredentialAccessRejectsScopedAudienceWithoutRequester(t *testing.T) {
+	store := NewMemoryStore()
+	issuer := createTestIdentity(t)
+	if result := IngestOperations([]string{issuer.token}, store)[0]; result.Status != "new" {
+		t.Fatalf("issuer ingest: %+v", result)
+	}
+	audience := "did:dfos:" + strings.Repeat("2", 31)
+	credential, err := dfos.CreateCredential(
+		issuer.did,
+		audience,
+		issuer.did+"#"+issuer.auth.keyID,
+		"chain:content",
+		"read",
+		time.Hour,
+		issuer.auth.priv,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = verifyCredentialForAccess(
+		credential,
+		CreateKeyResolver(store),
+		"chain:content",
+		"read",
+		issuer.did,
+		"",
+		store,
+		true,
+	)
+	if err == nil || !strings.Contains(err.Error(), "audience") {
+		t.Fatalf("empty requester accepted aud-specific credential: %v", err)
 	}
 }

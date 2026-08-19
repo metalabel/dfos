@@ -56,6 +56,7 @@ type MemoryStore struct {
 	indexContentRows     map[string]indexContentRow             // keyed by contentId
 	indexContentSigners  map[string]map[string]struct{}         // contentId → signer DID set
 	indexCountersignRows map[string]storedIndexCountersignature // keyed by cid (carry witness_did)
+	indexOperationRows   map[string]indexOperationRow           // keyed by operation cid
 }
 
 type rawOpEntry struct {
@@ -81,6 +82,7 @@ func NewMemoryStore() *MemoryStore {
 		indexContentRows:     make(map[string]indexContentRow),
 		indexContentSigners:  make(map[string]map[string]struct{}),
 		indexCountersignRows: make(map[string]storedIndexCountersignature),
+		indexOperationRows:   make(map[string]indexOperationRow),
 	}
 }
 
@@ -425,6 +427,9 @@ func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 	defer s.mu.RUnlock()
 	rows := make([]indexIdentityRow, 0, len(s.indexIdentityRows))
 	for _, row := range s.indexIdentityRows {
+		if q.DID != "" && row.DID != q.DID {
+			continue
+		}
 		if q.HasPublicProfile != nil {
 			isPublic := row.Profile != nil && row.Profile.PublicRead
 			if isPublic != *q.HasPublicProfile {
@@ -456,6 +461,9 @@ func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 	defer s.mu.RUnlock()
 	rows := make([]indexContentRow, 0, len(s.indexContentRows))
 	for _, row := range s.indexContentRows {
+		if q.ContentID != nil && row.ContentID != *q.ContentID {
+			continue
+		}
 		if q.Creator != "" && row.CreatorDID != q.Creator {
 			continue
 		}
@@ -475,6 +483,9 @@ func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 			continue
 		}
 		if q.PublicRead != nil && row.PublicRead != *q.PublicRead {
+			continue
+		}
+		if q.IsDeleted != nil && row.IsDeleted != *q.IsDeleted {
 			continue
 		}
 		rows = append(rows, row)
@@ -498,14 +509,27 @@ func (s *MemoryStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) 
 		if row.WitnessDID != q.Witness {
 			continue
 		}
+		if q.Relation != nil && (row.Relation == nil || *row.Relation != *q.Relation) {
+			continue
+		}
 		// Strip the witness_did column — the wire row never carries it (the witness
 		// is echoed at the response top level).
 		rows = append(rows, indexCountersignatureRow{
-			CID:       row.CID,
-			TargetCID: row.TargetCID,
-			Relation:  row.Relation,
-			JWSToken:  row.JWSToken,
+			CID:        row.CID,
+			TargetCID:  row.TargetCID,
+			Relation:   row.Relation,
+			JWSToken:   row.JWSToken,
+			CreatedAt:  row.CreatedAt,
+			IngestedAt: row.IngestedAt,
 		})
+	}
+	if q.Order != "" {
+		return pageOrderedIndexRows(rows, func(row indexCountersignatureRow) string { return row.CID }, func(row indexCountersignatureRow) string {
+			if q.Order == "createdAt.desc" {
+				return row.CreatedAt
+			}
+			return row.IngestedAt
+		}, q.OrderedAfter, q.Limit), nil
 	}
 	return pageIndexRows(rows, func(row indexCountersignatureRow) string { return row.CID }, q.After, q.Limit), nil
 }
@@ -534,15 +558,49 @@ func (s *MemoryStore) QueryIndexCredentials(q IndexCredentialQuery) ([]indexCred
 				continue
 			}
 		}
+		if q.Action != nil {
+			found := false
+			for _, att := range cred.Att {
+				if att.Action == *q.Action {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
 		rows = append(rows, indexCredentialRow{
 			CID:       cred.CID,
 			IssuerDID: cred.IssuerDID,
+			Aud:       "*",
 			Att:       cred.Att,
 			Exp:       cred.Exp,
 			JWSToken:  cred.JWSToken,
 		})
 	}
 	return pageIndexRows(rows, func(row indexCredentialRow) string { return row.CID }, q.After, q.Limit), nil
+}
+
+func (s *MemoryStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperationRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows := []indexOperationRow{}
+	for _, row := range s.indexOperationRows {
+		if q.Kind != "" && row.Kind != q.Kind {
+			continue
+		}
+		if q.ChainID != nil && row.ChainID != *q.ChainID {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return pageOrderedIndexRows(rows, func(row indexOperationRow) string { return row.CID }, func(row indexOperationRow) string {
+		if q.Order == "createdAt.desc" {
+			return row.CreatedAt
+		}
+		return row.IngestedAt
+	}, q.OrderedAfter, q.Limit), nil
 }
 
 func (s *MemoryStore) PutIndexIdentityRow(row indexIdentityRow) error {
@@ -606,6 +664,10 @@ func (s *MemoryStore) AppendToLog(entry LogEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.operationLog = append(s.operationLog, entry)
+	s.indexOperationRows[entry.CID] = indexOperationRow{
+		CID: entry.CID, Kind: entry.Kind, ChainID: entry.ChainID, CreatedAt: operationCreatedAt(entry.JWSToken),
+		IngestedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
 	return nil
 }
 

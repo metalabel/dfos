@@ -11,11 +11,13 @@ import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 import { base64urlDecode, base64urlEncode } from '@metalabel/dfos-protocol/crypto';
 import type {
   IndexContentRow,
-  IndexCountersignatureRow,
+  IndexCountersignatureQueryRow,
   IndexCredentialRow,
   IndexIdentityRow,
+  IndexOperationRow,
   IndexOrder,
   IndexOrderedCursor,
+  IndexRecencyOrder,
 } from './index-routes';
 
 /**
@@ -481,10 +483,12 @@ export interface RelayStore {
   /**
    * Page identity projection rows ascending by DID, `did > after`, length <=
    * limit. `hasPublicProfile` (≡ profile != null && profile.publicRead) filters
-   * to identities that expose a public profile; `nameContains` filters by
-   * case-insensitive substring over projected `profile.name`.
+   * to identities that expose a public profile; `did` is an exact point lookup;
+   * `nameContains` filters by case-insensitive substring over projected
+   * `profile.name`.
    */
   queryIndexIdentities(q: {
+    did?: string;
     hasPublicProfile?: boolean;
     nameContains?: string;
     after?: string;
@@ -494,14 +498,17 @@ export interface RelayStore {
   }): Promise<IndexIdentityRow[]>;
   /**
    * Page content projection rows ascending by contentId, `contentId > after`,
-   * length <= limit, filtered by any provided creator / docSchema / publicRead.
+   * length <= limit, filtered by any provided point ID, actor, document,
+   * visibility, or deletion predicate.
    */
   queryIndexContent(q: {
+    contentId?: string;
     creator?: string;
     signer?: string;
     docSchema?: string;
     documentCID?: string;
     publicRead?: boolean;
+    isDeleted?: boolean;
     after?: string;
     orderedAfter?: IndexOrderedCursor;
     order?: IndexOrder;
@@ -514,20 +521,33 @@ export interface RelayStore {
    */
   queryIndexCountersignatures(q: {
     witness: string;
+    relation?: string;
     after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexRecencyOrder;
     limit: number;
-  }): Promise<IndexCountersignatureRow[]>;
+  }): Promise<IndexCountersignatureQueryRow[]>;
   /**
    * Page held public credentials ascending by cid, `cid > after`, length <=
-   * limit, filtered by issuer and/or resource exact match. For chain resources,
-   * the `chain:*` bucket is unioned as an amber discovery hint.
+   * limit, filtered by issuer, resource, and/or action exact match. For chain
+   * resources, the `chain:*` bucket is unioned as an amber discovery hint.
    */
   queryIndexCredentials(q: {
     issuer?: string;
     resource?: string;
+    action?: string;
     after?: string;
     limit: number;
   }): Promise<IndexCredentialRow[]>;
+
+  /** Page relay-held operations in non-authoritative recency order. */
+  queryIndexOperations(q: {
+    kind?: OperationKind;
+    chainId?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order: IndexRecencyOrder;
+    limit: number;
+  }): Promise<IndexOperationRow[]>;
 
   /** Upsert an identity projection row by DID. */
   putIndexIdentityRow(row: IndexIdentityRow): Promise<void>;
@@ -540,7 +560,7 @@ export interface RelayStore {
    * stored (never echoed in the row body) so witness-scoped queries stay O(page).
    */
   putIndexCountersignatureRow(
-    row: IndexCountersignatureRow & { witnessDID: string },
+    row: IndexCountersignatureQueryRow & { witnessDID: string },
   ): Promise<void>;
 
   /**
