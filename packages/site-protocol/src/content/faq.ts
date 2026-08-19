@@ -10,9 +10,9 @@ export const faqs: FaqEntry[] = [
   {
     question: 'What is the DFOS Protocol?',
     answer:
-      'An open protocol for cryptographic identity and verifiable content. Ed25519 signed chains establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
+      'An open protocol for cryptographic identity and verifiable content. Ed25519 signed chains establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Identity chains are strictly linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
     answerHtml:
-      'An open protocol for cryptographic identity and verifiable content. <a href="/spec">Ed25519 signed chains</a> establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
+      'An open protocol for cryptographic identity and verifiable content. <a href="/spec">Ed25519 signed chains</a> establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Identity chains are strictly linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
   },
   {
     question: 'What problem does it solve?',
@@ -27,9 +27,9 @@ export const faqs: FaqEntry[] = [
   {
     question: 'How do chains handle forks and conflicts?',
     answer:
-      'Chains are DAGs, not linear sequences. Forks are valid — two operations referencing the same predecessor both get accepted. All implementations converge to the same head via a deterministic rule: highest createdAt timestamp among tips, with lexicographic CID as tiebreaker. Given the same set of operations, any relay computes the same head regardless of ingestion order. This is convergence without consensus — no coordination protocol, no leader election, no global ordering.',
+      'It depends on the chain kind — forks are permitted exactly where a merge function exists. Content chains are DAGs: forks are valid, both branches get accepted, and all implementations converge to the same head via a deterministic rule — highest createdAt timestamp among tips, with lexicographic CID as tiebreaker. Given the same set of operations, any relay computes the same head regardless of ingestion order. This is convergence without consensus — no coordination protocol, no leader election, no global ordering. Identity chains are strictly linear: key state has no merge function, so a conflicting extension is refused rather than arbitrated, and the identity’s services-listed home relay is the order authority for its chain.',
     answerHtml:
-      'Chains are DAGs, not linear sequences. Forks are valid — two operations referencing the same predecessor both get accepted. All implementations converge to the same head via a deterministic rule: highest <code>createdAt</code> timestamp among tips, with lexicographic CID as tiebreaker. Given the same set of operations, any relay computes the same head regardless of ingestion order. This is convergence without consensus — no coordination protocol, no leader election, no global ordering.',
+      'It depends on the chain kind — forks are permitted exactly where a merge function exists. Content chains are DAGs: forks are valid, both branches get accepted, and all implementations converge to the same head via a deterministic rule — highest <code>createdAt</code> timestamp among tips, with lexicographic CID as tiebreaker. Given the same set of operations, any relay computes the same head regardless of ingestion order. This is convergence without consensus — no coordination protocol, no leader election, no global ordering. Identity chains are strictly linear: key state has no merge function, so a conflicting extension is refused rather than arbitrated, and the identity’s services-listed home relay is the order authority for its chain.',
   },
   {
     question: 'How does the relay network work?',
@@ -53,7 +53,7 @@ export const faqs: FaqEntry[] = [
   {
     question: 'How is this different from blockchain-based identity?',
     answer:
-      'Blockchain identity systems anchor trust in a shared ledger — you need to sync with or query the chain to verify identity. The DFOS Protocol anchors trust in cryptographic signatures alone. There is no consensus layer, no gas fees, no chain state to maintain. Verification is a pure function: public key + signed chain = valid or invalid. Forks converge deterministically without coordination. This makes it simpler, faster, and fully transport-agnostic.',
+      'Blockchain identity systems anchor trust in a shared ledger — you need to sync with or query the chain to verify identity. The DFOS Protocol anchors trust in cryptographic signatures alone. There is no consensus layer, no gas fees, no chain state to maintain. Verification is a pure function: public key + signed chain = valid or invalid. Content-chain forks converge deterministically without coordination. This makes it simpler, faster, and fully transport-agnostic.',
   },
   {
     question: 'How does this compare to AT Protocol (Bluesky)?',

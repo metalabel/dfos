@@ -110,9 +110,10 @@ A relay ingests, sequences, and serves. It implements:
 - **Ingestion** — single `POST /proof/v1/operations` endpoint, `typ`-based classification,
   dependency sort, per-type verification, store-then-verify convergence (WEB-RELAY.md
   "Operation Ingestion" / "Convergence", `specs/WEB-RELAY.md`, `specs/WEB-RELAY.md`).
-- **Sequencing & fork handling** — fork acceptance, deterministic head selection,
-  ingestion statuses, deletion semantics (WEB-RELAY.md "Fork Acceptance" / "Ingestion
-  Statuses" / "Deletion Semantics", `specs/WEB-RELAY.md`, `specs/WEB-RELAY.md`,
+- **Sequencing & fork handling** — content-chain fork acceptance and deterministic head
+  selection, identity-chain linearity (permanent refusal of conflicting extensions),
+  ingestion statuses, deletion + restore semantics (WEB-RELAY.md "Fork Acceptance" /
+  "Identity Linearity and Order Authority" / "Ingestion Statuses" / "Deletion Semantics",
   `specs/WEB-RELAY.md`).
 - **Capability / feature flags + 501 semantics** — the well-known response advertises
   capabilities; unsupported optional features return **501 Not Implemented** (not 404)
@@ -194,8 +195,9 @@ the five `protocol-verify` suites all run the same primitive set (TypeScript 73,
 Rust 19, Python 63, Swift 18); the deep stateful chain-tier coverage lives separately in
 the TypeScript reference suite (`dfos-protocol/tests`, 246) and the Go library suite.
 **Chain linking,
-fork/head-selection, delete-terminality, and credential expiry/delegation are exercised
-in the TypeScript and Go suites, not in all five languages.** A claim of full chain-tier
+content fork/head-selection, identity linearity, delete/restore semantics, and credential
+expiry/delegation are exercised in the TypeScript and Go suites, not in all five
+languages.** A claim of full chain-tier
 conformance rests on the TS + Go corpora; the five-language suite proves the cryptographic
 core is unambiguous across languages.
 
@@ -203,7 +205,8 @@ core is unambiguous across languages.
 
 - **`packages/relay-conformance`** — a Go integration suite that runs against **any live
   relay endpoint** over HTTP. It exercises the relay-tier MUST set (ingestion, sequencing,
-  fork acceptance, head convergence, capability flags, 501 semantics, deletion semantics)
+  content-fork acceptance, head convergence, identity linearity + restore, capability
+  flags, 501 semantics, deletion semantics)
   against the running service rather than the library. Capability-gated variants self-skip
   unless the relay advertises the matching flag: the content-disabled suite (501 on every
   content route when `capabilities.content: false`), the write-disabled suite

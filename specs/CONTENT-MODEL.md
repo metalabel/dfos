@@ -285,7 +285,7 @@ So the two readings coexist on the same wire format: a register chain reads its 
 
 ### Delete-terminality
 
-The fold assumes a **live** chain. If the **selected head branch is delete-terminal** — the highest-ranked tip is a `delete` — the chain is deleted, resolution reports it as such, and **the fold is moot**: a consumer checks `isDeleted` (from chain verification) first and does not fold a deleted chain. (A `delete` on a _non-head_ branch is just another superseded operation and does not delete the chain — see [Undeletion](https://protocol.dfos.com/web-relay).)
+The fold assumes a **live** chain. If the **selected head branch is delete-terminal** — the highest-ranked tip is a `delete` — the chain is deleted, resolution reports it as such, and **the fold is moot**: a consumer checks `isDeleted` (from chain verification) first and does not fold a deleted chain. (A `delete` on a _non-head_ branch is just another superseded operation and does not delete the chain — see [Fork Acceptance](https://protocol.dfos.com/web-relay#fork-acceptance). Content-chain fork semantics — the fork-DAG, branch-inclusive logs, head selection, and this per-branch delete rule — are deliberately unchanged by the identity-linearity amendment, which touches only identity chains.)
 
 ### Library
 

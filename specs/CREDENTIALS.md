@@ -437,11 +437,13 @@ A verifier that cannot ask the as-of question (no revocation source, or a source
 
 Net effect: a revoked delegate can at most mint operations dated inside the window in which it was **already legitimately authorized**, and only at relays that have not yet received the revocation. It gains no authority it did not already have, and no window it was not already inside.
 
-#### Identity Deletion Is Absolute
+#### Identity Deletion Is Absolute (While It Stands)
 
-Identity deletion is the deliberate exception. Deleting an identity invalidates the credentials it issued **retroactively**: a credential from a deleted issuer authorizes nothing, on any surface, at any point in history, and verification of committed history rejects operations that relied on it. There is no as-of basis for deletion and none is intended.
+Identity deletion is the deliberate exception. While an identity is deleted, the credentials it issued are invalidated **retroactively**: a credential from a deleted issuer authorizes nothing, on any surface, at any point in history, and verification of committed history rejects operations that relied on it. There is no as-of basis for deletion and none is intended.
 
 The asymmetry is deliberate. Revocation withdraws **one grant** and leaves the record that grant authorized standing — which is what makes it a routine, low-stakes operation an issuer can perform freely. Deletion withdraws **the authority itself**, the strongest statement an identity can make about its own history; a deleted identity whose credentials still authorized reachable operations would make deletion cosmetic.
+
+Deletion is absolute, not permanent: it is the identity chain's **deleted state**, and the controller may leave that state via an explicit `restore` operation (PROTOCOL.md "Terminal States and Special Operations"; WEB-RELAY.md "Deletion Semantics"). While restored (active), the identity's previously-issued, unrevoked credentials are honored again — deletion suspends the issuer's authority; **revocation remains the permanent, per-grant kill** and survives any number of delete/restore transitions.
 
 ---
 
