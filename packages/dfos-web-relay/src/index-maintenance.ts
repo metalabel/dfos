@@ -41,6 +41,7 @@ import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import {
   artifactIndexRow,
   contentIndexRow,
+  creditIndexRows,
   identityIndexRow,
   type IndexArtifactRow,
   type IndexCountersignatureQueryRow,
@@ -101,6 +102,7 @@ export const recomputeContentRow = async (contentId: string, store: RelayStore):
   const chain = await store.getContentChain(contentId);
   if (!chain) return;
   await store.putIndexContentRow(await contentIndexRow(chain, store));
+  await store.putIndexCreditRows(contentId, await creditIndexRows(chain, store));
   const anchoredDIDs = await store.getIndexIdentityDIDsByProfileAnchor(contentId);
   for (const did of anchoredDIDs) await recomputeIdentityRow(did, store);
 };

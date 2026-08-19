@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,7 +32,8 @@ const (
 	//
 	// v4: persist countersignature created/ingested clocks for ordered queries.
 	// v5: add standalone artifact projection rows.
-	IndexProjectionVersion = 5
+	// v6: add public-head credit projection rows.
+	IndexProjectionVersion = 6
 )
 
 var (
@@ -79,6 +81,24 @@ type indexContentRow struct {
 type indexContentPage struct {
 	Content []indexContentRow `json:"content"`
 	Next    *string           `json:"next"`
+}
+
+type indexCreditRow struct {
+	ContentID string  `json:"contentId"`
+	DID       string  `json:"did"`
+	Role      *string `json:"role"`
+	Position  int     `json:"position"`
+	HasClaim  bool    `json:"hasClaim"`
+}
+
+type indexCreditPage struct {
+	Credits []indexCreditRow `json:"credits"`
+	Next    *string          `json:"next"`
+}
+
+type indexCreditCursor struct {
+	ContentID string
+	Position  int
 }
 
 type indexCountersignatureRow struct {
@@ -289,6 +309,54 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 		}
 		return row.HeadAt, row.ContentID
 	})})
+}
+
+func (r *Relay) handleIndexCredits(w http.ResponseWriter, req *http.Request) {
+	if !r.indexEnabled {
+		writeError(w, 501, "index not available")
+		return
+	}
+
+	query := req.URL.Query()
+	var did *string
+	if value, present := firstQueryValue(query, "did"); present {
+		if !isValidDfosDid(value) {
+			writeError(w, 400, "invalid DID")
+			return
+		}
+		did = &value
+	}
+	var contentID *string
+	if value, present := firstQueryValue(query, "contentId"); present {
+		contentID = &value
+	}
+	var role *string
+	if value, present := firstQueryValue(query, "role"); present {
+		role = &value
+	}
+	var after *indexCreditCursor
+	if raw := query.Get("after"); raw != "" {
+		cursor, ok := decodeIndexCreditCursor(raw)
+		if !ok {
+			writeError(w, 400, "invalid cursor")
+			return
+		}
+		after = cursor
+	}
+	limit := parseLimit(req, 100, 1000)
+	rows, err := r.readStore.QueryIndexCredits(IndexCreditQuery{
+		DID: did, ContentID: contentID, Role: role, After: after, Limit: limit,
+	})
+	if storeErr(w, err) {
+		return
+	}
+	var next *string
+	if len(rows) == limit && len(rows) > 0 {
+		last := rows[len(rows)-1]
+		cursor := encodeIndexCreditCursor(last.ContentID, last.Position)
+		next = &cursor
+	}
+	writeJSON(w, 200, indexCreditPage{Credits: rows, Next: next})
 }
 
 func (r *Relay) handleIndexArtifacts(w http.ResponseWriter, req *http.Request) {
@@ -521,11 +589,10 @@ func identityIndexRow(chain StoredIdentityChain, store Store) indexIdentityRow {
 }
 
 func contentIndexRow(chain StoredContentChain, store Store) indexContentRow {
-	doc, docSchema := headDocumentProjection(chain, store)
+	doc, docSchema, publicRead := contentProjectionSources(chain, store)
 	// Confidentiality is enforced at the application layer by whoever serves: a
 	// non-public document MUST NOT project its extracted display-name field onto
 	// the anonymous index surface. Compute publicRead first and gate title on it.
-	publicRead := hasPublicStandingAuth(chain.ContentID, "read", store)
 	var title *string
 	if publicRead && docSchema != nil && *docSchema == postSchema && doc != nil {
 		if value, ok := doc["title"].(string); ok && value != "" {
@@ -546,6 +613,38 @@ func contentIndexRow(chain StoredContentChain, store Store) indexContentRow {
 		DocSchema:          docSchema,
 		Title:              title,
 	}
+}
+
+// creditIndexRows builds one content chain's complete public-head credit set.
+func creditIndexRows(chain StoredContentChain, store Store) []indexCreditRow {
+	doc, docSchema, publicRead := contentProjectionSources(chain, store)
+	if chain.State.IsDeleted || !publicRead || docSchema == nil || *docSchema != postSchema || doc == nil {
+		return []indexCreditRow{}
+	}
+	credits, ok := doc["credits"].([]any)
+	if !ok {
+		return []indexCreditRow{}
+	}
+	rows := []indexCreditRow{}
+	for position, raw := range credits {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		did, ok := entry["did"].(string)
+		if !ok {
+			continue
+		}
+		var role *string
+		if value, ok := entry["role"].(string); ok {
+			role = &value
+		}
+		_, hasClaim := entry["claim"].(string)
+		rows = append(rows, indexCreditRow{
+			ContentID: chain.ContentID, DID: did, Role: role, Position: position, HasClaim: hasClaim,
+		})
+	}
+	return rows
 }
 
 // redactNonPublicIdentityRow strips the extracted display-name field from a
@@ -679,6 +778,11 @@ func headDocumentProjection(chain StoredContentChain, store Store) (map[string]a
 	return doc, &schemaValue
 }
 
+func contentProjectionSources(chain StoredContentChain, store Store) (map[string]any, *string, bool) {
+	doc, docSchema := headDocumentProjection(chain, store)
+	return doc, docSchema, hasPublicStandingAuth(chain.ContentID, "read", store)
+}
+
 func parseBooleanQuery(query map[string][]string, key string) (*bool, bool) {
 	raw, present := firstQueryValue(query, key)
 	if !present {
@@ -736,6 +840,9 @@ func decodeIndexOrderedCursor(raw string) (*indexOrderedCursor, bool) {
 	if err != nil {
 		return nil, false
 	}
+	if base64.RawURLEncoding.EncodeToString(decoded) != raw {
+		return nil, false
+	}
 	parts := strings.Split(string(decoded), "~")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return nil, false
@@ -744,6 +851,26 @@ func decodeIndexOrderedCursor(raw string) (*indexOrderedCursor, bool) {
 		return nil, false
 	}
 	return &indexOrderedCursor{Timestamp: parts[0], Key: parts[1]}, true
+}
+
+func encodeIndexCreditCursor(contentID string, position int) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(contentID + "~" + strconv.Itoa(position)))
+}
+
+func decodeIndexCreditCursor(raw string) (*indexCreditCursor, bool) {
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, false
+	}
+	parts := strings.Split(string(decoded), "~")
+	if len(parts) != 2 || !contentIDRe.MatchString(parts[0]) || parts[1] == "" {
+		return nil, false
+	}
+	position, err := strconv.Atoi(parts[1])
+	if err != nil || position < 0 || strconv.Itoa(position) != parts[1] {
+		return nil, false
+	}
+	return &indexCreditCursor{ContentID: parts[0], Position: position}, true
 }
 
 func createdAtOf(log []string) string {

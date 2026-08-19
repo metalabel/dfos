@@ -623,7 +623,7 @@ The invariant has a semantic reading that bounds the query vocabulary itself:
 
 > **The index knows who acted, when, and what things call themselves. Nothing else.**
 
-Every index field and filter is an instance of one of three axes — **actor** (creator, signer, witness, issuer), **clock** (`genesisAt` / `headAt` / operation or artifact `createdAt` / relay `ingestedAt`), or **name** (the [display-name registry](#well-known-projections)). Artifacts occupy the actor and clock axes: their JWS signing DID and signed/observed timestamps make standalone documents enumerable without interpreting their content. A query that cannot be phrased under these axes is not an index feature: it is a client-composed filter over them, a client-side fold over verified bytes, or `/search` (deferred, on its own clock).
+Every index field and filter is an instance of one of three axes — **actor** (creator, signer, witness, issuer), **clock** (`genesisAt` / `headAt` / operation or artifact `createdAt` / relay `ingestedAt`), or **name** (the [display-name registry](#well-known-projections)). Artifacts occupy the actor and clock axes: their JWS signing DID and signed/observed timestamps make standalone documents enumerable without interpreting their content. The [credit projection](#credit-projection) is the one enumerated **assertion-tier** entry on the actor axis: who a _public_ head document says made it, projected under its own rule below and never conflated with the proof-tier actor filters. A query that cannot be phrased under these axes is not an index feature: it is a client-composed filter over them, a client-side fold over verified bytes, or `/search` (deferred, on its own clock).
 
 Concretely, the index may serve:
 
@@ -634,7 +634,7 @@ What the index MUST NOT do: interpret document payloads, join across application
 
 ### Well-Known Projections
 
-The **display-name registry** is the sole exception to payload opacity, enumerated here rather than left to implementations. Its rule: **one display-name field per enumerated `$schema` — the index may know what a thing calls itself, never what it says.** A registry row names an exact `$schema`, the single payload field that schema uses as its display name, and the index surface where the projection appears. Nothing else is ever extracted — no descriptions, bodies, summaries, credits, or payload timestamps; what a document _says_ is client-fold or `/search` territory, never an index axis.
+The **display-name registry** is the sole exception to payload opacity, enumerated here rather than left to implementations. Its rule: **one display-name field per enumerated `$schema` — the index may know what a thing calls itself, never what it says.** A registry row names an exact `$schema`, the single payload field that schema uses as its display name, and the index surface where the projection appears. Nothing else is ever extracted — no descriptions, bodies, summaries, or payload timestamps; what a document _says_ is client-fold or `/search` territory, never an index axis. The single structured exception is the [credit projection](#credit-projection) below — its own enumerated rule with the same circuit-breaker posture, sanctioned by [CREDITS.md](https://protocol.dfos.com/credits)'s relay-awareness design pass.
 
 | #   | Projection          | Definition                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | --- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -649,6 +649,16 @@ Every registry row carries the same structural **circuit breakers** — every es
 - **A chain that is not publicly readable** — the projected `publicRead` is `false` — never surfaces its extracted display-name field: the projected value is `null`. Confidentiality of the underlying documents is enforced at the application layer by whoever serves them (see [PROTOCOL.md](https://protocol.dfos.com/spec)); the index MUST NOT project a non-public document's extracted fields onto its anonymous surface. Only the extracted display-name value is withheld — the structural `anchor` / `publicRead` / `docSchema` fields (a declared label matched as an opaque string, never document content) still project.
 
 Extracted values are **attribution-tier claims**: the value is whatever the signed head document says (row 1 is additionally reached through a controller-signed anchor). Clients verify by fetching the chain and re-hashing the served bytes to the committed `documentCID`. Additions to this table require an amendment to this spec — one display-name field per schema, and a relay MUST NOT ship extraction rules that are not listed here.
+
+### Credit Projection
+
+The second and only other payload extraction, with its own rule: **the index may know who a public document says made it.** For a content chain whose current head document bytes the relay holds, whose decoded document declares `$schema: "https://schemas.dfos.com/post/v1"`, and whose `credits` is an array: each entry with a string `did` projects one row onto the [credits family](#credits-get-indexv0creditsdidcontentidroleaftercursorlimitn) carrying `(contentId, did, role, position, hasClaim)` — `role` is the entry's string `role` or `null`, `position` is the entry's array index (`0` is the primary author), and `hasClaim` is whether the entry carries a string `claim`. Nothing else in the entry is projected: `name` is a rendering convenience whose authoritative surface is the credited DID's own profile projection, and the `claim` token itself stays inside the document bytes.
+
+The projection is governed by three normative rules on top of the registry's circuit breakers (which all apply — unlisted schemas, malformed entries, and unheld bytes project nothing):
+
+- **Public-only, structurally.** Credit rows exist only while the chain's projected `publicRead` is `true` and the chain is not deleted. This is a strictly harder line than the display-name null-out: a non-public chain has **zero** credit rows — there is no redacted variant, and the family MUST NOT be usable to probe non-public content ([CREDITS.md](https://protocol.dfos.com/credits) — attribution must be no more public than the content it attributes).
+- **Head-only, full-replace.** Every recompute derives the content's complete row set from the current head document and **replaces** the previous set. A revision that drops a credited entry drops its row; a head whose new document bytes are not yet held clears the set (rows reappear when the bytes land) — the family never serves a previous head's credits.
+- **Assertion-tier, unverified.** Rows restate what the signed head document asserts. The relay never verifies a credit claim: `hasClaim` is byte-presence, not validity — the four verification states remain a client fold over the fetched document per [CREDITS.md](https://protocol.dfos.com/credits). Relays remain credit-claim-unaware as verifiers; this projection makes them aware of credits only as public-document structure.
 
 ### Determinism and Coverage
 
@@ -778,7 +788,7 @@ When `titleContains` is present, the query is implicitly restricted server-side 
 
 Post-class content chains are not tombstoned from this structural index when their subject is deleted. Concealment belongs to the credential/blob plane, so a deleted subject's chain metadata — identifiers, operation CIDs, and timestamps — remains enumerable. Consumers that do not want deleted rows use `isDeleted=false`; absent `isDeleted` preserves the complete metadata enumeration.
 
-`signer` is an **actor-axis verification outcome**, deliberately raw: the creator matches their own chains (the creator signs genesis), and "contributed to but did not create" is client-composed as `signer=X` minus `creator=X`. It is proof-tier — the DID's key actually signed accepted operations, revealing nothing not already derivable from the public per-chain log — and it is never an authorship or credit claim: `credits` and similar payload fields are assertion-tier and are not index concepts.
+`signer` is an **actor-axis verification outcome**, deliberately raw: the creator matches their own chains (the creator signs genesis), and "contributed to but did not create" is client-composed as `signer=X` minus `creator=X`. It is proof-tier — the DID's key actually signed accepted operations, revealing nothing not already derivable from the public per-chain log — and it is never an authorship or credit claim: `credits` is assertion-tier and never enters this filter. Its sanctioned surface is the separately-declared [credits family](#credits-get-indexv0creditsdidcontentidroleaftercursorlimitn), public head documents only.
 
 ### Countersignatures by Witness (`GET /index/v0/countersignatures?witness={did}&relation=&order=&after={cid}&limit=N`)
 
@@ -826,6 +836,29 @@ Parameters: `issuer` (optional exact DID — `400` when malformed), `resource` (
 Only public credentials (`aud: "*"`) are ever held by the relay. Targeted bearer credentials never enter relay storage, so they are neither enumerable nor leakable here.
 
 This route is amber and relay-asserted: `resource=chain:Y` returns a superset of candidates (exact `chain:Y` plus any `chain:*`). Each entry carries the full JWS — self-proving, same posture as the issuer revocations feed. The caller folds each token against the proof plane (delegation roots at Y's creator, revocation, expiry) before treating it as authorization; the relay makes no authorization claim in this index row.
+
+### Credits (`GET /index/v0/credits?did=&contentId=&role=&after={cursor}&limit=N`)
+
+Enumerates the [credit projection](#credit-projection)'s rows: who _public_ head documents say made them. This is the sanctioned person-to-public-works lookup — `did=X` answers "which publicly readable documents credit X," the query [CREDITS.md](https://protocol.dfos.com/credits) refuses to serve for anything less than public content.
+
+```json
+{
+  "credits": [
+    {
+      "contentId": "a3n7r3nde8e4keeak92rr3aeztftvc2",
+      "did": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr",
+      "role": "photography",
+      "position": 1,
+      "hasClaim": true
+    }
+  ],
+  "next": null
+}
+```
+
+Parameters: `did` (optional exact match against the credited entry's `did`), `contentId` (optional exact match, returning that chain's current public credit set in `position` order), `role` (optional exact opaque-string match; entries without a role match only its absence — there is no substring or vocabulary matching), `after` / `limit` per the shared envelope. Filters are ANDed. Enumeration order is `(contentId ascending, position ascending)`; because the natural key is composite, `after` and `next` are **opaque cursor tokens** in every mode (the ordered-mode rule of the shared envelope, applied always) — a client resumes by passing `next` back verbatim. Rows for one content may be replaced wholesale between pages (a head revision recomputes the set); as with `headAt.desc`, an in-flight enumeration never duplicates a row but MAY miss one that changed while paginating — completeness for a single chain is `contentId=` on a fresh page, or the document itself.
+
+Every row is amber and assertion-tier: it restates the current public head document, carries no claim token, and makes no validity claim (`hasClaim` is byte-presence). A consumer that needs the proof tier fetches the chain, re-hashes the head document, and runs the CREDITS.md verification algorithm over the embedded entry — the row's only job is to say which documents are worth fetching. Join `contentId` against [`/index/v0/content`](#content-chains-get-indexv0contentcontentidcreatordidsignerdiddocschemadocumentcidpublicreadisdeletedtitlecontainsorderaftercontentidlimitn) for titles, schemas, and clocks, and `did` against [`/index/v0/identities`](#identities-get-indexv0identitiesdidhaspublicprofilenamecontainsorderafterdidlimitn) for profiles.
 
 ### Deferred from v0
 

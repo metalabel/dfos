@@ -256,11 +256,21 @@ A given `(contentId, did, role)` triple SHOULD be signed **once** and the result
 
 **Relays are not credit-claim aware; claims travel inside document bytes.**
 
-A relay never sees a credit claim as a claim. It sees document blobs, which it stores and serves as opaque bytes, and it applies exactly the access control it already applies to those bytes. There is no credit-claim ingest path, no gossip, no `(contentId, did, role)` index, and no query surface. The verifier is the consumer that reads the document.
+A relay never sees a credit claim as a claim. It sees document blobs, which it stores and serves as opaque bytes, and it applies exactly the access control it already applies to those bytes. There is no credit-claim ingest path and no gossip; as a **verifier** of claims the relay does not exist, and the verifier is always the consumer that reads the document.
 
 This follows directly from the doctrine above: a gossiped or relay-indexed claim is a public claim, and attribution must be no more public than the content it attributes.
 
-**Adding relay awareness requires a spec change, not an implementation.** A relay operator who indexes claims out of the blobs it stores has not added a feature — they have built the enumeration surface this design exists to avoid, and they have done it unilaterally, for content whose access rules they were supposed to be enforcing. Any future credit-claim relay surface needs a design pass in this spec first, covering at minimum: what it reveals about gated content, how it interacts with the document gateway's authorization, and whether the index is per-relay policy or protocol-normative.
+**Adding relay awareness requires a spec change, not an implementation.** A relay operator who indexes claims out of the blobs it stores has not added a feature — they have built the enumeration surface this design exists to avoid, and they have done it unilaterally, for content whose access rules they were supposed to be enforcing. Any credit-claim relay surface needs a design pass in this spec first, covering at minimum: what it reveals about gated content, how it interacts with the document gateway's authorization, and whether the index is per-relay policy or protocol-normative.
+
+### Design pass: the public-snapshot credits index
+
+Exactly one such surface has passed that review: [WEB-RELAY.md](https://protocol.dfos.com/web-relay)'s **credit projection** and its `/index/v0/credits` family — a `(contentId, did, role)` index derived **exclusively from the current head documents of publicly readable content**. Its answers to the three questions above, recorded here as the conditions of the sanction:
+
+- **What it reveals about gated content: nothing.** Rows derive solely from head-document bytes any anonymous reader can already fetch. A non-public chain has **zero** rows — no redacted variant, no probe surface. The events that take content dark (revocation, deletion, a de-crediting revision) are themselves operations, and each recompute **replaces the chain's full row set from the current head**, so rows for darkened or re-credited content are stripped rather than stranded. The enumeration this section exists to avoid — attribution more public than its content — cannot occur, because row lifetime is a strict subset of public lifetime.
+- **How it interacts with the document gateway's authorization: it doesn't.** Index rows are discovery hints, never authorization inputs; the gateway re-derives read access live on every fetch. The projection reads the same standing public-read predicate the relay already maintains and grants nothing.
+- **Per-relay policy or protocol-normative: per-relay index surface, on the index's own `0.x` clock.** The claim primitive, its verification algorithm, and this section's doctrine are unchanged; a relay without the index family serves credits exactly as before — inside document bytes. The projection is assertion-tier and claim-unaware: rows restate what a public document's `credits[]` says (`hasClaim` records byte-presence of a claim token, never validity), and verification of the four states remains the consumer's fold over the fetched document.
+
+Any surface beyond this one — gated-content awareness in any form, claim validity in a row, protocol-normative claim indexing — reopens the design pass.
 
 ---
 

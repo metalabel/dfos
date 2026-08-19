@@ -18,6 +18,8 @@ import type {
   IndexContentRow,
   IndexCountersignatureQueryRow,
   IndexCredentialRow,
+  IndexCreditCursor,
+  IndexCreditRow,
   IndexIdentityRow,
   IndexOperationRow,
   IndexOrder,
@@ -161,6 +163,8 @@ export class MemoryRelayStore implements RelayStore {
   private indexIdentityRows = new Map<string, IndexIdentityRow>();
   /** Content projection rows keyed by contentId. */
   private indexContentRows = new Map<string, IndexContentRow>();
+  /** Public-head credit projection rows grouped by contentId. */
+  private indexCreditRows = new Map<string, IndexCreditRow[]>();
   /** Accepted content-operation signer sets keyed by contentId. */
   private indexContentSigners = new Map<string, Set<string>>();
   /** Countersignature projection rows keyed by cid (carry witnessDID column). */
@@ -470,6 +474,30 @@ export class MemoryRelayStore implements RelayStore {
     return pageRows(rows, (row) => row.contentId, q.after, q.limit);
   }
 
+  async queryIndexCredits(q: {
+    did?: string;
+    contentId?: string;
+    role?: string;
+    after?: IndexCreditCursor;
+    limit: number;
+  }): Promise<IndexCreditRow[]> {
+    const rows = [...this.indexCreditRows.values()]
+      .flat()
+      .filter(
+        (row) =>
+          (q.did === undefined || row.did === q.did) &&
+          (q.contentId === undefined || row.contentId === q.contentId) &&
+          (q.role === undefined || row.role === q.role) &&
+          (q.after === undefined ||
+            row.contentId > q.after.contentId ||
+            (row.contentId === q.after.contentId && row.position > q.after.position)),
+      );
+    rows.sort((a, b) =>
+      a.contentId < b.contentId ? -1 : a.contentId > b.contentId ? 1 : a.position - b.position,
+    );
+    return rows.slice(0, q.limit);
+  }
+
   async queryIndexArtifacts(q: {
     cid?: string;
     signer?: string;
@@ -569,6 +597,10 @@ export class MemoryRelayStore implements RelayStore {
 
   async putIndexContentRow(row: IndexContentRow): Promise<void> {
     this.indexContentRows.set(row.contentId, row);
+  }
+
+  async putIndexCreditRows(contentId: string, rows: IndexCreditRow[]): Promise<void> {
+    this.indexCreditRows.set(contentId, [...rows]);
   }
 
   async putIndexArtifactRow(row: IndexArtifactRow): Promise<void> {

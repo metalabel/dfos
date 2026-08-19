@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,22 @@ func createIndexedContent(t *testing.T, r *Relay, store *MemoryStore, id testIde
 		}
 	}
 	return testContent{contentID: contentID, operationCID: opCID, documentCID: documentCID, document: document}
+}
+
+func updateIndexedContent(t *testing.T, r *Relay, id testIdentity, contentID, previousCID string, document map[string]any) testContent {
+	t.Helper()
+	documentCID, _, err := dfos.DocumentCID(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, operationCID, err := dfos.SignContentUpdate(id.did, previousCID, documentCID, id.did+"#"+id.auth.keyID, id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{token}); res[0].Status != "new" {
+		t.Fatalf("ingest content update: %+v", res[0])
+	}
+	return testContent{contentID: contentID, operationCID: operationCID, documentCID: documentCID, document: document}
 }
 
 func mintPublicReadGrant(t *testing.T, id testIdentity, resource string) (string, string) {
@@ -346,6 +363,7 @@ func TestIndexCapabilityAndDisabledRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/index/v0/identities",
 		"/index/v0/content",
+		"/index/v0/credits",
 		"/index/v0/countersignatures?witness=" + url.QueryEscape(r.DID()),
 		"/index/v0/artifacts",
 	} {
@@ -353,6 +371,197 @@ func TestIndexCapabilityAndDisabledRoutes(t *testing.T) {
 		if status != 501 || body["error"] != "index not available" {
 			t.Fatalf("%s => status %d body %v, want 501 index not available", path, status, body)
 		}
+	}
+}
+
+func TestIndexCreditsGoDarkOnRevocationAndDeletion(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	credited := ingestIdentity(t, r)
+	document := map[string]any{
+		"$schema": testPostSchema,
+		"title":   "public work",
+		"credits": []any{map[string]any{"did": credited.did, "name": "never projected", "role": "writing", "claim": ""}},
+	}
+
+	revoked := createIndexedContent(t, r, store, creator, document, true)
+	credentialCID := addPublicRead(t, r, creator, revoked.contentID)
+	status, body, _ := getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(revoked.contentID))
+	rows := body["credits"].([]any)
+	if status != 200 || len(rows) != 1 {
+		t.Fatalf("public credits = %v status=%d", body, status)
+	}
+	row := rows[0].(map[string]any)
+	if !reflect.DeepEqual(row, map[string]any{
+		"contentId": revoked.contentID,
+		"did":       credited.did,
+		"role":      "writing",
+		"position":  float64(0),
+		"hasClaim":  true,
+	}) {
+		t.Fatalf("credit row = %v", row)
+	}
+
+	revokeGrant(t, r, creator, credentialCID)
+	_, body, _ = getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(revoked.contentID))
+	if len(body["credits"].([]any)) != 0 {
+		t.Fatalf("revoked credits stuck = %v", body)
+	}
+
+	deleted := createIndexedContent(t, r, store, creator, document, true)
+	addPublicRead(t, r, creator, deleted.contentID)
+	_, body, _ = getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(deleted.contentID))
+	if len(body["credits"].([]any)) != 1 {
+		t.Fatalf("pre-delete credits = %v", body)
+	}
+	deleteToken, _, err := dfos.SignContentDelete(creator.did, deleted.operationCID, creator.did+"#"+creator.auth.keyID, "", creator.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{deleteToken}); res[0].Status != "new" {
+		t.Fatalf("delete content: %+v", res[0])
+	}
+	_, body, _ = getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(deleted.contentID))
+	if len(body["credits"].([]any)) != 0 {
+		t.Fatalf("deleted credits stuck = %v", body)
+	}
+}
+
+func TestIndexCreditsAlwaysReplaceFromHeldHead(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	dropped := ingestIdentity(t, r)
+	remaining := ingestIdentity(t, r)
+	initial := map[string]any{
+		"$schema": testPostSchema,
+		"credits": []any{
+			map[string]any{"did": dropped.did, "role": "writing"},
+			map[string]any{"did": remaining.did, "role": "editing"},
+		},
+	}
+	content := createIndexedContent(t, r, store, creator, initial, true)
+	addPublicRead(t, r, creator, content.contentID)
+
+	next := map[string]any{
+		"$schema": testPostSchema,
+		"credits": []any{map[string]any{"did": remaining.did, "role": "photography", "claim": "opaque"}},
+	}
+	update := updateIndexedContent(t, r, creator, content.contentID, content.operationCID, next)
+	_, body, _ := getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(content.contentID))
+	if len(body["credits"].([]any)) != 0 {
+		t.Fatalf("unheld new head retained old credits = %v", body)
+	}
+	uploadBlobViaRoute(t, r, creator, update)
+	_, body, _ = getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(content.contentID))
+	rows := body["credits"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("replacement credits = %v", body)
+	}
+	row := rows[0].(map[string]any)
+	if row["did"] != remaining.did || row["role"] != "photography" || row["position"] != float64(0) || row["hasClaim"] != true {
+		t.Fatalf("replacement row = %v", row)
+	}
+	if row["did"] == dropped.did {
+		t.Fatalf("dropped DID stuck in row = %v", row)
+	}
+}
+
+func TestIndexCreditsLateBlobGrantFiltersAndOpaqueCursor(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	shared := ingestIdentity(t, r)
+	other := ingestIdentity(t, r)
+	docA := map[string]any{
+		"$schema": testPostSchema,
+		"credits": []any{
+			map[string]any{"did": shared.did, "role": "writing"},
+			map[string]any{"did": 42, "role": "malformed"},
+			map[string]any{"did": other.did},
+		},
+	}
+	docB := map[string]any{
+		"$schema": testPostSchema,
+		"credits": []any{
+			map[string]any{"did": other.did, "role": "writing"},
+			map[string]any{"did": shared.did, "role": "editing"},
+		},
+	}
+	a := createIndexedContent(t, r, store, creator, docA, false)
+	addPublicRead(t, r, creator, a.contentID)
+	_, body, _ := getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(a.contentID))
+	if len(body["credits"].([]any)) != 0 {
+		t.Fatalf("unheld blob projected credits = %v", body)
+	}
+	uploadBlobViaRoute(t, r, creator, a)
+	_, body, _ = getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(a.contentID))
+	if len(body["credits"].([]any)) != 2 {
+		t.Fatalf("late blob credits = %v", body)
+	}
+	if body["credits"].([]any)[0].(map[string]any)["position"] != float64(0) || body["credits"].([]any)[1].(map[string]any)["position"] != float64(2) {
+		t.Fatalf("malformed credit was not skipped positionally: %v", body)
+	}
+
+	b := createIndexedContent(t, r, store, creator, docB, true)
+	_, body, _ = getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(b.contentID))
+	if len(body["credits"].([]any)) != 0 {
+		t.Fatalf("private held credits = %v", body)
+	}
+	addPublicRead(t, r, creator, b.contentID)
+
+	_, byDID, _ := getIndexJSONBody(t, handler, "/index/v0/credits?did="+url.QueryEscape(shared.did))
+	if len(byDID["credits"].([]any)) != 2 {
+		t.Fatalf("did filter = %v", byDID)
+	}
+	_, byRole, _ := getIndexJSONBody(t, handler, "/index/v0/credits?role=writing")
+	if len(byRole["credits"].([]any)) != 2 {
+		t.Fatalf("role filter = %v", byRole)
+	}
+	for _, raw := range byRole["credits"].([]any) {
+		if raw.(map[string]any)["role"] != "writing" {
+			t.Fatalf("role filter returned %v", raw)
+		}
+	}
+	_, anded, _ := getIndexJSONBody(t, handler, "/index/v0/credits?did="+url.QueryEscape(shared.did)+"&contentId="+url.QueryEscape(b.contentID)+"&role=editing")
+	if len(anded["credits"].([]any)) != 1 {
+		t.Fatalf("anded filters = %v", anded)
+	}
+
+	_, all, _ := getIndexJSONBody(t, handler, "/index/v0/credits?limit=1000")
+	expected := all["credits"].([]any)
+	walked := []any{}
+	after := ""
+	for pages := 0; ; pages++ {
+		if pages > 10 {
+			t.Fatal("credit cursor walk exceeded 10 pages")
+		}
+		path := "/index/v0/credits?limit=1"
+		if after != "" {
+			path += "&after=" + url.QueryEscape(after)
+		}
+		status, page, _ := getIndexJSONBody(t, handler, path)
+		if status != 200 {
+			t.Fatalf("credit page status=%d body=%v", status, page)
+		}
+		walked = append(walked, page["credits"].([]any)...)
+		next, _ := page["next"].(string)
+		if next == "" {
+			break
+		}
+		row := page["credits"].([]any)[0].(map[string]any)
+		if strings.Contains(next, row["contentId"].(string)) || next == row["contentId"].(string)+"~"+strconv.Itoa(int(row["position"].(float64))) {
+			t.Fatalf("credit cursor is transparent: %q", next)
+		}
+		after = next
+	}
+	if !reflect.DeepEqual(walked, expected) {
+		t.Fatalf("credit cursor walk = %v, want %v", walked, expected)
+	}
+	status, invalid, _ := getIndexJSONBody(t, handler, "/index/v0/credits?after=not-a-cursor")
+	if status != 400 || invalid["error"] != "invalid cursor" {
+		t.Fatalf("invalid credit cursor = %v status=%d", invalid, status)
 	}
 }
 
@@ -1518,7 +1727,11 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 
 	author := ingestIdentity(t, r)
 	witness := ingestIdentity(t, r)
-	content := createIndexedContent(t, r, NewMemoryStore(), author, map[string]any{"$schema": testPostSchema, "title": "seed"}, false)
+	content := createIndexedContent(t, r, NewMemoryStore(), author, map[string]any{
+		"$schema": testPostSchema,
+		"title":   "seed",
+		"credits": []any{map[string]any{"did": witness.did, "role": "editing", "claim": "opaque"}},
+	}, false)
 	uploadBlobViaRoute(t, r, author, content)
 	addPublicRead(t, r, author, content.contentID) // title projects only when public
 	witnessKid := witness.did + "#" + witness.auth.keyID
@@ -1545,6 +1758,10 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 	// projection currently populated
 	if indexContentRowByID(t, handler, content.contentID) == nil {
 		t.Fatal("seed content row missing before rebuild")
+	}
+	_, creditBody, _ := getIndexJSONBody(t, handler, "/index/v0/credits?contentId="+url.QueryEscape(content.contentID))
+	if len(creditBody["credits"].([]any)) != 1 {
+		t.Fatalf("seed credit row missing before rebuild: %v", creditBody)
 	}
 
 	// Simulate a stale projection: wipe the rows and reset the stamped version, as
@@ -1579,6 +1796,11 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 	row := indexContentRowByID(t, handler2, content.contentID)
 	if row == nil || row["docSchema"] != testPostSchema || row["title"] != "seed" {
 		t.Fatalf("rebuilt content row = %v", row)
+	}
+	_, creditBody, _ = getIndexJSONBody(t, handler2, "/index/v0/credits?contentId="+url.QueryEscape(content.contentID))
+	creditRows := creditBody["credits"].([]any)
+	if len(creditRows) != 1 || creditRows[0].(map[string]any)["did"] != witness.did || creditRows[0].(map[string]any)["role"] != "editing" {
+		t.Fatalf("rebuilt credit rows = %v", creditBody)
 	}
 	_, signerBody, _ := getIndexJSONBody(t, handler2, "/index/v0/content?signer="+url.QueryEscape(author.did)+"&limit=1000")
 	if !contentBodyHasID(signerBody, content.contentID) {

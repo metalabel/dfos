@@ -443,6 +443,8 @@ type Store interface {
 	// contentId > After, length <= Limit, filtered by any provided
 	// point ID / actor / document / visibility / deletion predicates.
 	QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error)
+	// QueryIndexCredits pages public-head credit rows by their composite key.
+	QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, error)
 	QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifactRow, error)
 	// QueryIndexCountersignatures pages countersignature projection rows for one
 	// witness ascending by cid, cid > After, length <= Limit. Reflects the
@@ -459,6 +461,8 @@ type Store interface {
 	PutIndexIdentityRow(row indexIdentityRow) error
 	// PutIndexContentRow upserts a content projection row by contentId.
 	PutIndexContentRow(row indexContentRow) error
+	// PutIndexCreditRows replaces one chain's complete public-head credit set.
+	PutIndexCreditRows(contentID string, rows []indexCreditRow) error
 	PutIndexArtifactRow(row indexArtifactRow) error
 	// PutIndexContentSigner adds one accepted content-operation signer to a
 	// chain's signer set. The set is branch-inclusive and includes genesis.
@@ -507,6 +511,14 @@ type IndexContentQuery struct {
 	OrderedAfter  *indexOrderedCursor
 	Order         string
 	Limit         int
+}
+
+type IndexCreditQuery struct {
+	DID       *string
+	ContentID *string
+	Role      *string
+	After     *indexCreditCursor
+	Limit     int
 }
 
 type IndexArtifactQuery struct {

@@ -105,6 +105,9 @@ func recomputeContentRow(contentID string, store Store) error {
 	if err := store.PutIndexContentRow(contentIndexRow(*chain, store)); err != nil {
 		return err
 	}
+	if err := store.PutIndexCreditRows(contentID, creditIndexRows(*chain, store)); err != nil {
+		return err
+	}
 	anchoredDIDs, err := store.GetIndexIdentityDIDsByProfileAnchor(contentID)
 	if err != nil {
 		return err
@@ -412,6 +415,9 @@ func rebuildIndexProjectionRows(store Store, rebuildable RebuildableIndexStore, 
 	}
 	for i, chain := range contents {
 		if err := store.PutIndexContentRow(contentIndexRow(chain, store)); err != nil {
+			return err
+		}
+		if err := store.PutIndexCreditRows(chain.ContentID, creditIndexRows(chain, store)); err != nil {
 			return err
 		}
 		for _, token := range chain.Log {

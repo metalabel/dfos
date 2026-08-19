@@ -121,10 +121,13 @@ A relay ingests, sequences, and serves. It implements:
   tests in both reference relays; no disabled-mode live serve variant exists yet (the
   conformance suite's disabled tests self-skip unless a relay advertises `false`).
 - **Index (`/index/v0`)** (if served) — the optional, non-authoritative identity,
-  content, countersignature, and credential projections; actor/name/public-read filters;
-  deterministic ordering; and complete keyset/ordered-cursor walks live in the relay
-  tier on the index family's own `0.x` clock (WEB-RELAY.md "Index (v0)",
-  `specs/WEB-RELAY.md`). A relay advertising `capabilities.index: false` returns **501
+  content, countersignature, credential, and credit projections; actor/name/public-read
+  filters; deterministic ordering; and complete keyset/ordered-cursor walks live in the
+  relay tier on the index family's own `0.x` clock (WEB-RELAY.md "Index (v0)",
+  `specs/WEB-RELAY.md`). The credits family additionally carries the credit projection's
+  public-only / head-only / full-replace rules — rows exist only for publicly readable,
+  non-deleted chains with held head bytes, and a chain's row set always restates the
+  current head document or is empty. A relay advertising `capabilities.index: false` returns **501
   Not Implemented** from every `/index/v0/*` route while adjacent proof/content surfaces
   remain available. Given the same accepted operations and held blobs, parity means the
   reference relays serve byte-identical canonicalized-JSON rows, ordering, filters, and

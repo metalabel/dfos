@@ -931,6 +931,89 @@ paths:
         '501':
           $ref: '#/components/responses/NotImplemented'
 
+  /index/v0/credits:
+    get:
+      operationId: indexCredits
+      summary: Credits asserted by public head documents (non-authoritative index)
+      description: |
+        Enumerates who publicly readable post/v1 head documents say made them.
+        Rows are assertion-tier discovery hints derived only from held current-head
+        bytes; non-public, deleted, malformed, unheld, and non-post documents have
+        zero rows. Claim tokens and names are never projected, and hasClaim records
+        only string byte-presence. Rows are ordered by contentId then position.
+      tags: [Index]
+      parameters:
+        - name: did
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact credited DID match; malformed DIDs return 400
+        - name: contentId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact content-chain identifier match
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact opaque role match; null-role rows match no role filter
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Opaque composite cursor from a prior page's next
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Public-head credit page (possibly empty)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credits, next]
+                properties:
+                  credits:
+                    type: array
+                    items:
+                      type: object
+                      required: [contentId, did, role, position, hasClaim]
+                      properties:
+                        contentId:
+                          type: string
+                        did:
+                          type: string
+                        role:
+                          type: string
+                          nullable: true
+                        position:
+                          type: integer
+                          minimum: 0
+                        hasClaim:
+                          type: boolean
+                  next:
+                    type: string
+                    nullable: true
+                    description: Opaque cursor for the next page, or null when the page was not full
+        '400':
+          description: Malformed DID or cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
   /index/v0/countersignatures:
     get:
       operationId: indexCountersignaturesByWitness

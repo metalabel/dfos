@@ -65,6 +65,19 @@ export interface IndexContentRow {
   title: string | null;
 }
 
+export interface IndexCreditRow {
+  contentId: string;
+  did: string;
+  role: string | null;
+  position: number;
+  hasClaim: boolean;
+}
+
+export interface IndexCreditCursor {
+  contentId: string;
+  position: number;
+}
+
 export interface IndexCountersignatureRow {
   cid: string;
   targetCID: string;
@@ -141,6 +154,27 @@ export const decodeIndexOrderedCursor = (raw: string): IndexOrderedCursor | null
   }
 };
 
+export const encodeIndexCreditCursor = (contentId: string, position: number): string =>
+  Buffer.from(`${contentId}~${position}`, 'utf8').toString('base64url');
+
+export const decodeIndexCreditCursor = (raw: string): IndexCreditCursor | null => {
+  try {
+    const bytes = Buffer.from(raw, 'base64url');
+    if (bytes.toString('base64url') !== raw) return null;
+    const decoded = bytes.toString('utf8');
+    const sep = decoded.indexOf('~');
+    if (sep <= 0 || sep !== decoded.lastIndexOf('~') || sep === decoded.length - 1) return null;
+    const contentId = decoded.slice(0, sep);
+    const positionRaw = decoded.slice(sep + 1);
+    if (!CONTENT_ID_RE.test(contentId) || !/^(0|[1-9]\d*)$/.test(positionRaw)) return null;
+    const position = Number(positionRaw);
+    if (!Number.isSafeInteger(position)) return null;
+    return { contentId, position };
+  } catch {
+    return null;
+  }
+};
+
 export const identityIndexRow = async (
   chain: StoredIdentityChain,
   store: RelayStore,
@@ -161,11 +195,10 @@ export const contentIndexRow = async (
   chain: StoredContentChain,
   store: RelayStore,
 ): Promise<IndexContentRow> => {
-  const { doc, docSchema } = await headDocumentProjection(chain, store);
+  const { doc, docSchema, publicRead } = await contentProjectionSources(chain, store);
   // Confidentiality is enforced at the application layer by whoever serves: a
   // non-public document MUST NOT project its extracted display-name field onto
   // the anonymous index surface. Compute publicRead first and gate title on it.
-  const publicRead = await hasPublicStandingAuth(chain.contentId, 'read', store);
   const title =
     publicRead &&
     docSchema === POST_SCHEMA &&
@@ -188,6 +221,33 @@ export const contentIndexRow = async (
     docSchema,
     title,
   };
+};
+
+/** Complete public-head credit projection for one content chain. */
+export const creditIndexRows = async (
+  chain: StoredContentChain,
+  store: RelayStore,
+): Promise<IndexCreditRow[]> => {
+  const { doc, docSchema, publicRead } = await contentProjectionSources(chain, store);
+  if (chain.state.isDeleted || !publicRead || docSchema !== POST_SCHEMA || !doc) return [];
+  const credits = doc['credits'];
+  if (!Array.isArray(credits)) return [];
+
+  const rows: IndexCreditRow[] = [];
+  for (let position = 0; position < credits.length; position++) {
+    const entry = credits[position];
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const credit = entry as Record<string, unknown>;
+    if (typeof credit['did'] !== 'string') continue;
+    rows.push({
+      contentId: chain.contentId,
+      did: credit['did'],
+      role: typeof credit['role'] === 'string' ? credit['role'] : null,
+      position,
+      hasClaim: typeof credit['claim'] === 'string',
+    });
+  }
+  return rows;
 };
 
 /**
@@ -305,6 +365,19 @@ const headDocumentProjection = async (
   } catch {
     return { doc: null, docSchema: null };
   }
+};
+
+const contentProjectionSources = async (
+  chain: StoredContentChain,
+  store: RelayStore,
+): Promise<{
+  doc: Record<string, unknown> | null;
+  docSchema: string | null;
+  publicRead: boolean;
+}> => {
+  const { doc, docSchema } = await headDocumentProjection(chain, store);
+  const publicRead = await hasPublicStandingAuth(chain.contentId, 'read', store);
+  return { doc, docSchema, publicRead };
 };
 
 const createdAtOf = (jwsToken: string | undefined): string => {

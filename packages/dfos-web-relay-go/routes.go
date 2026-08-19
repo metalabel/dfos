@@ -72,6 +72,7 @@ func newRouter(r *Relay) http.Handler {
 	// relay-held current state. Byte twin of the TS routes in relay.ts.
 	mux.HandleFunc("GET "+indexBasePath+"/identities", r.handleIndexIdentities)
 	mux.HandleFunc("GET "+indexBasePath+"/content", r.handleIndexContent)
+	mux.HandleFunc("GET "+indexBasePath+"/credits", r.handleIndexCredits)
 	mux.HandleFunc("GET "+indexBasePath+"/countersignatures", r.handleIndexCountersignatures)
 	mux.HandleFunc("GET "+indexBasePath+"/credentials", r.handleIndexCredentials)
 	mux.HandleFunc("GET "+indexBasePath+"/operations", r.handleIndexOperations)

@@ -30,7 +30,9 @@ import { bootstrapRelayIdentity } from './bootstrap';
 import { isValidDfosDid, resolveDidDocument } from './did-document';
 import { maintainIndexAfterBlob } from './index-maintenance';
 import {
+  decodeIndexCreditCursor,
   decodeIndexOrderedCursor,
+  encodeIndexCreditCursor,
   encodeIndexOrderedCursor,
   INDEX_BASE_PATH,
   parseBooleanQuery,
@@ -715,6 +717,33 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         : null;
 
     return c.json({ content: rows, next });
+  });
+
+  app.get(`${INDEX_BASE_PATH}/credits`, async (c) => {
+    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+
+    const did = c.req.query('did');
+    if (did !== undefined && !isValidDfosDid(did)) {
+      return c.json({ error: 'invalid DID' }, 400);
+    }
+    const contentId = c.req.query('contentId');
+    const rolePresent = c.req.queries('role') !== undefined;
+    const role = c.req.query('role');
+    const afterRaw = c.req.query('after');
+    const after = afterRaw ? decodeIndexCreditCursor(afterRaw) : undefined;
+    if (afterRaw && !after) return c.json({ error: 'invalid cursor' }, 400);
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+    const rows = await store.queryIndexCredits({
+      ...(did !== undefined ? { did } : {}),
+      ...(contentId !== undefined ? { contentId } : {}),
+      ...(rolePresent ? { role: role ?? '' } : {}),
+      ...(after ? { after } : {}),
+      limit,
+    });
+    const last = rows[rows.length - 1];
+    const next =
+      rows.length === limit && last ? encodeIndexCreditCursor(last.contentId, last.position) : null;
+    return c.json({ credits: rows, next });
   });
 
   app.get(`${INDEX_BASE_PATH}/artifacts`, async (c) => {
