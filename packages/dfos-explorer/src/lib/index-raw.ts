@@ -17,12 +17,26 @@
   (the forward log walk, the local corpus) instead of quietly showing nothing.
   This is the same reasoning `indexCredentials` encodes as `throwOnDecline`.
 
+  THE THROW SAYS WHICH KIND OF FAILURE IT WAS. Only an every-relay 404/501 is a
+  verdict about the ROUTE; a network throw, a 5xx, a timeout, or a 400 from a
+  rejected cursor is transient and carries no such claim. The rejection is tagged
+  ROUTE_ABSENT in the first case only, so a caller can permanently prefer another
+  source where the route genuinely is not served, while a bad page or a
+  hand-edited cursor stays retryable in place instead of hiding a working feed
+  for the rest of the session.
+
   Rows are relay-asserted browsing metadata like every other index row: no JWS,
   no payload, no display-name projection. Open one to verify it.
 
 */
 
-import { PAGE, useIndexPageStack, type IndexPage } from './index-light';
+import {
+  PAGE,
+  ROUTE_ABSENT,
+  routeAbsentFromStatuses,
+  useIndexPageStack,
+  type IndexPage,
+} from './index-light';
 import { getRelays } from './relays';
 
 const INDEX_BASE_PATH = '/index/v0';
@@ -66,12 +80,17 @@ const setParam = (url: URL, key: string, value: string | number | undefined): vo
  * (404/501 = the relay predates this route, 400 = bad request, a network throw)
  * fails over to the next relay; when every candidate declines this THROWS — see
  * the header note on why an empty page would be a lie here.
+ *
+ * The per-relay statuses are kept (0 = network throw / abort) so the rejection
+ * can carry the DURABLE route-absent verdict when — and only when — every relay
+ * said 404/501.
  */
 const fetchIndexPage = async <T>(
   route: string,
   params: Record<string, string | number | undefined>,
   relays: string[],
 ): Promise<T> => {
+  const statuses: number[] = [];
   for (const relay of relays) {
     try {
       const url = new URL(`${INDEX_BASE_PATH}/${route}`, relay);
@@ -80,13 +99,20 @@ const fetchIndexPage = async <T>(
         mode: 'cors',
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        statuses.push(res.status);
+        continue;
+      }
       return (await res.json()) as T;
     } catch {
+      statuses.push(0); // unreachable / aborted — no claim about the route
       continue;
     }
   }
-  throw new Error(`no relay served /index/v0/${route}`);
+  throw new Error(
+    `no relay served /index/v0/${route}`,
+    routeAbsentFromStatuses(statuses) ? { cause: ROUTE_ABSENT } : undefined,
+  );
 };
 
 // -----------------------------------------------------------------------------

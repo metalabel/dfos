@@ -196,6 +196,11 @@ export interface IndexPage<T> {
    *  Consumers use it to fall back to the local corpus / show an honest error
    *  instead of a false "the index returned nothing". */
   error: boolean;
+  /** the load failed DURABLY — every configured relay answered 404/501 for this
+   *  route, so a retry cannot help and a caller may prefer another source for the
+   *  session. A TRANSIENT failure (unreachable, 5xx, a rejected cursor) reports
+   *  `error` without this and stays retryable in place. See ROUTE_ABSENT. */
+  routeAbsent: boolean;
   /** the cursor that produced this page ('' = the first page) — the deep-link key. */
   cursor: string;
   /** the relay issued a `next` — a further page exists. */
@@ -245,6 +250,50 @@ export const indexListState = (loading: boolean, error: boolean, count: number):
 };
 
 /**
+ * {@link indexListState} with the CAPABILITY PROBE folded in. A list is only
+ * enabled once `capabilities.index` has settled, and a disabled pager holds
+ * `loading: false` — so a surface that reads the raw state while `indexed` is
+ * still null settles on `empty` and announces "the relay returned no rows"
+ * before a single request has gone out. While the probe is in flight nothing has
+ * been asked, and the honest render is LOADING. Pure, unit-tested.
+ */
+export const indexListStateFor = (
+  indexed: boolean | null,
+  loading: boolean,
+  error: boolean,
+  count: number,
+): IndexListState => indexListState(loading || indexed === null, error, count);
+
+// -----------------------------------------------------------------------------
+// FAILURE DURABILITY — "the route isn't there" vs "that didn't work just now"
+//
+// An index sub-route newer than the `capabilities.index` flag can fail two ways,
+// and treating them alike is a real bug in both directions. Every relay
+// answering 404/501 is DURABLE: the route is not served, retrying changes
+// nothing, and a caller may prefer another source for the rest of the session. A
+// network throw, a 5xx, a timeout, or a 400 from a rejected cursor is TRANSIENT
+// and says nothing about whether the route exists — latching on one of those
+// would let a single bad page (or a hand-edited cursor) hide a working feed.
+// -----------------------------------------------------------------------------
+
+/** `cause` marker on a rejection meaning every relay answered "no such route". */
+export const ROUTE_ABSENT = 'dfos:index-route-absent';
+
+/** Whether a rejection carried the durable route-absent verdict. */
+export const isRouteAbsent = (error: unknown): boolean =>
+  error instanceof Error && error.cause === ROUTE_ABSENT;
+
+/**
+ * Whether per-relay outcomes amount to the durable verdict: EVERY relay answered
+ * 404 or 501. A 0 (network throw / abort), a 5xx, or a 400 anywhere in the set
+ * makes the whole failure transient — one relay being unreachable is not evidence
+ * about what the others serve. An empty set is no verdict: nothing was asked.
+ * Pure, unit-tested.
+ */
+export const routeAbsentFromStatuses = (statuses: number[]): boolean =>
+  statuses.length > 0 && statuses.every((status) => status === 404 || status === 501);
+
+/**
  * Whether a credential surface should read from the live relay index or fall back to
  * the local fold. `capabilities.index` is a SINGLE flag — it does not imply the
  * `/index/v0/credentials` sub-route exists (a relay can advertise index yet predate
@@ -285,6 +334,7 @@ export const useIndexPageStack = <T>(
   const [loading, setLoading] = useState(false);
   const [next, setNext] = useState<string>('');
   const [error, setError] = useState(false);
+  const [routeAbsent, setRouteAbsent] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
   const runRef = useRef(0);
   const busyRef = useRef(false);
@@ -333,6 +383,7 @@ export const useIndexPageStack = <T>(
       setRows([]);
       setNext('');
       setError(false);
+      setRouteAbsent(false);
       return;
     }
     const run = ++runRef.current;
@@ -343,12 +394,16 @@ export const useIndexPageStack = <T>(
       .then((page) => {
         if (run !== runRef.current) return; // superseded by a page change/unmount
         setError(false); // reachable — a genuinely-empty page is NOT an error
+        setRouteAbsent(false);
         setRows(page.items);
         setNext(page.next ?? '');
       })
-      .catch(() => {
+      .catch((e: unknown) => {
         if (run !== runRef.current) return;
         setError(true);
+        // only the every-relay-404/501 verdict is durable; everything else stays
+        // retryable in place rather than condemning the route (see ROUTE_ABSENT)
+        setRouteAbsent(isRouteAbsent(e));
         setRows([]);
         setNext('');
       })
@@ -372,6 +427,7 @@ export const useIndexPageStack = <T>(
     rows,
     loading,
     error,
+    routeAbsent,
     cursor,
     hasNext: !!next,
     hasPrev: stack.length > 1,

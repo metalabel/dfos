@@ -243,13 +243,23 @@ const OperationsPanel = (props: {
   assertedOps: number;
   indexed: boolean | null;
 }) => {
+  // ONE CURSOR PARAM PER SOURCE. The three feeds speak different cursor
+  // vocabularies — an opaque ordered token, a log CID, a local `createdAt|cid`
+  // key — and a single shared param hands one source's position to another the
+  // moment the source changes, including the AUTOMATIC change below, where the
+  // reader never touched a control and would just land on an invalid-cursor
+  // error. `ops` stays the forward log walk's (deep links minted before the index
+  // feed existed still resolve); the index feed carries its own.
   const [cursor, setCursor] = useHashParam('ops');
+  const [indexCursor, setIndexCursor] = useHashParam('iops');
   const [srcParam, setSrcParam] = useHashParam('src');
   // `/index/v0/operations` is NEWER than the `capabilities.index` flag, so its
-  // absence can only be discovered by asking. A route that declined on every
-  // relay is latched here for the session: without the latch, the source decision
-  // and the pager's error would oscillate (disabling a pager clears its error,
-  // which would re-select the index, which would fail again).
+  // absence can only be discovered by asking. ONLY the durable verdict latches —
+  // every relay answering 404/501, i.e. the route is genuinely not served. A
+  // transient failure (unreachable, 5xx, a rejected cursor) leaves the index
+  // selected and retryable in place: latching on one of those would let a single
+  // bad page hide a working feed for the rest of the session. The durable latch
+  // also can't oscillate, since it never clears.
   const [indexFailed, setIndexFailed] = useState(false);
 
   // The gate on the LOCAL source is the sync CURSOR, not the op count. Opening any
@@ -268,22 +278,21 @@ const OperationsPanel = (props: {
   const localOps = props.obs?.ops ?? 0;
   const partial = props.assertedOps > 0 && localOps < props.assertedOps;
 
-  const index = useIndexLog(ready && source === 'index', 'ingestedAt.desc', cursor, setCursor);
+  const index = useIndexLog(
+    ready && source === 'index',
+    'ingestedAt.desc',
+    indexCursor,
+    setIndexCursor,
+  );
   const relay = useRelayLog(ready && source === 'relay', cursor, setCursor);
   const local = useLocalLog(ready && source === 'local');
   const feed = source === 'index' ? index : source === 'local' ? local : relay;
 
   useEffect(() => {
-    if (index.error) setIndexFailed(true);
-  }, [index.error]);
+    if (index.routeAbsent) setIndexFailed(true);
+  }, [index.routeAbsent]);
 
-  // the three sources speak different cursor vocabularies (an opaque ordered
-  // token, a log CID, a local key), so a source switch re-enters from the top
-  // rather than handing one source's position to another.
-  const pick = (src: string): void => {
-    setSrcParam(src);
-    setCursor('');
-  };
+  const pick = (src: string): void => setSrcParam(src);
 
   return (
     <Panel

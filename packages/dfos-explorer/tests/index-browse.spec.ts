@@ -4,7 +4,11 @@ import {
   indexBrowseMode,
   indexCredSource,
   indexListState,
+  indexListStateFor,
+  isRouteAbsent,
   iter2FromProbeStatus,
+  ROUTE_ABSENT,
+  routeAbsentFromStatuses,
 } from '../src/lib/index-light';
 
 describe('indexBrowseMode — enumeration source decision', () => {
@@ -43,6 +47,61 @@ describe('indexListState — list render state (rows > error > loading > empty)'
 
   it('settled + empty → empty', () => {
     expect(indexListState(false, false, 0)).toBe('empty');
+  });
+});
+
+describe('indexListStateFor — a pending capability probe is LOADING, never empty', () => {
+  it('indexed === null reads loading even though the disabled pager is not loading', () => {
+    // the exact false-empty this exists to prevent: nothing has been asked yet,
+    // so "the relay returned no rows" would be a claim about a request that
+    // never went out
+    expect(indexListStateFor(null, false, false, 0)).toBe('loading');
+  });
+
+  it('once the probe settles it is the plain list state again', () => {
+    expect(indexListStateFor(true, false, false, 0)).toBe('empty');
+    expect(indexListStateFor(false, false, false, 0)).toBe('empty');
+    expect(indexListStateFor(true, true, false, 0)).toBe('loading');
+  });
+
+  it('rows and errors still outrank a pending probe', () => {
+    expect(indexListStateFor(null, false, false, 3)).toBe('rows');
+    expect(indexListStateFor(null, false, true, 0)).toBe('error');
+  });
+});
+
+describe('routeAbsentFromStatuses — durable route-absence vs a transient failure', () => {
+  it('every relay answering 404/501 is the durable verdict', () => {
+    expect(routeAbsentFromStatuses([404])).toBe(true);
+    expect(routeAbsentFromStatuses([501])).toBe(true);
+    expect(routeAbsentFromStatuses([404, 501, 404])).toBe(true);
+  });
+
+  it('one unreachable relay makes the whole failure transient', () => {
+    // a relay we could not reach says NOTHING about what it serves — condemning
+    // the route on that basis would hide a working feed for the session
+    expect(routeAbsentFromStatuses([0])).toBe(false);
+    expect(routeAbsentFromStatuses([404, 0])).toBe(false);
+  });
+
+  it('a 5xx or a rejected cursor (400) is transient, not a verdict about the route', () => {
+    expect(routeAbsentFromStatuses([500])).toBe(false);
+    expect(routeAbsentFromStatuses([400])).toBe(false);
+    expect(routeAbsentFromStatuses([404, 400])).toBe(false);
+  });
+
+  it('an empty set is no verdict — nothing was asked', () => {
+    expect(routeAbsentFromStatuses([])).toBe(false);
+  });
+});
+
+describe('isRouteAbsent — reading the verdict off a rejection', () => {
+  it('recognizes the tagged rejection and nothing else', () => {
+    expect(isRouteAbsent(new Error('gone', { cause: ROUTE_ABSENT }))).toBe(true);
+    expect(isRouteAbsent(new Error('gone'))).toBe(false);
+    expect(isRouteAbsent(new Error('gone', { cause: 'something else' }))).toBe(false);
+    expect(isRouteAbsent('not an error')).toBe(false);
+    expect(isRouteAbsent(null)).toBe(false);
   });
 });
 

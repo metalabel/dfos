@@ -25,7 +25,7 @@ import { DidChip } from '../components/did-chip';
 import { Pager, Panel, Pill, Term } from '../components/ui';
 import { fmtAge, fmtCount, schemaLabel } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { indexListState, useIndexCapable } from '../lib/index-light';
+import { indexListStateFor, useIndexCapable } from '../lib/index-light';
 import { useIndexArtifacts, type IndexArtifactRow, type IndexRecency } from '../lib/index-raw';
 import { useHashParam } from '../router';
 
@@ -63,7 +63,11 @@ export const BrowseArtifacts = () => {
   const order: IndexRecency =
     orderParam === 'ingestedAt.desc' ? 'ingestedAt.desc' : 'createdAt.desc';
   const page = useIndexArtifacts(indexed === true, { order, cursor, onCursor: setCursor });
-  const state = indexListState(page.loading, page.error, page.rows.length);
+  // the list stays disabled until the capability probe settles, and a disabled
+  // pager holds `loading: false` — so the raw state would read `empty` and claim
+  // the relay returned no artifacts before anything had been asked. Pending is
+  // loading.
+  const state = indexListStateFor(indexed, page.loading, page.error, page.rows.length);
 
   const pick = (value: string): void => {
     setOrderParam(value);
@@ -125,11 +129,21 @@ export const BrowseArtifacts = () => {
 
       {state === 'error' ? (
         <div class="ck-note">
-          couldn’t reach the relay index for artifacts — the configured relays either declined the
-          route or serve an index that predates it.{' '}
-          <button onClick={page.retry} disabled={page.loading}>
-            {page.loading ? 'retrying…' : 'retry'}
-          </button>
+          {page.routeAbsent ? (
+            <>
+              every configured relay answered <b>no such route</b> — their index predates{' '}
+              <code>/index/v0/artifacts</code>, so there is nothing here to enumerate yet. Retrying
+              won’t change that; add a relay whose index serves the route on the{' '}
+              <a href="#/relays">relays</a> page.
+            </>
+          ) : (
+            <>couldn’t reach the relay index for artifacts just now. </>
+          )}
+          {page.routeAbsent ? null : (
+            <button onClick={page.retry} disabled={page.loading}>
+              {page.loading ? 'retrying…' : 'retry'}
+            </button>
+          )}
         </div>
       ) : state === 'loading' ? (
         <span class="muted">

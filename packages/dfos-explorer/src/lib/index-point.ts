@@ -28,11 +28,22 @@
   requested from several rows resolves once. Nothing persists — these are hints
   with no integrity binding, and a stale hint is worse than a second fetch.
 
+  THE CACHE IS SCOPED TO THE RELAY SET, which a bare id would not be. Unlike a
+  verified profile — bound to its chain by math, and therefore true no matter who
+  served it — every row here is RELAY-ASSERTED, so an answer from one set says
+  nothing about another. The cached NULL is the sharper edge: "no row came back"
+  is exactly what a relay predating these filters produces, and remembering it
+  under a bare id would mean that adding a capable relay never re-resolves
+  anything. Folding the set into the key makes a relay switch re-ask by
+  construction (the key changes, so the hook's effect re-runs), and the maps are
+  cleared on the same event to keep them from accumulating dead sets.
+
 */
 
 import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
 import { useEffect, useState } from 'preact/hooks';
 import { getClient } from './client';
+import { getRelays, subscribeRelays } from './relays';
 
 /** In-flight point lookups at once — the same politeness budget did-profiles
  *  and doc-label give their row hydrators. */
@@ -75,13 +86,32 @@ export const projectedTitle = (row: IndexContentRow | null): string =>
 // resolver — module cache + waiter/pump, the did-profiles.ts idiom
 // -----------------------------------------------------------------------------
 
-/** One cache per family; the value is the matched row, or null once resolved to
- *  "nothing came back for this key". */
+/** One cache per family, keyed by `${relaySet}|${family}:${id}` — see the header
+ *  note on why a bare id would be wrong. The value is the matched row, or null
+ *  once resolved to "nothing came back for this key, on these relays". */
 const identityCache = new Map<string, IndexIdentityRow | null>();
 const contentCache = new Map<string, IndexContentRow | null>();
 const waiters = new Map<string, Set<() => void>>();
 const queue: { key: string; run: () => Promise<void> }[] = [];
 let active = 0;
+
+/** The configured relay set, as a cache-scoping key. */
+const relaySetKey = (): string => getRelays().join('|');
+
+// A relay change invalidates every hint in flight and at rest. The keys already
+// carry the set, so this is purely about not accumulating dead ones; the hooks
+// re-ask because their key changed, not because of this.
+subscribeRelays(() => {
+  identityCache.clear();
+  contentCache.clear();
+});
+
+/** Track the relay set so a change re-keys (and so re-runs) every point lookup. */
+const useRelaySetKey = (): string => {
+  const [key, setKey] = useState(relaySetKey);
+  useEffect(() => subscribeRelays(() => setKey(relaySetKey())), []);
+  return key;
+};
 
 const notify = (key: string): void => {
   for (const fn of waiters.get(key) ?? []) fn();
@@ -105,20 +135,20 @@ const enqueue = (key: string, run: () => Promise<void>): void => {
   pump();
 };
 
-const resolveIdentity = async (did: string): Promise<void> => {
+const resolveIdentity = async (key: string, did: string): Promise<void> => {
   try {
     const page = await getClient().indexIdentities({ did, limit: 1 });
-    identityCache.set(did, rowForDid(page.identities, did));
+    identityCache.set(key, rowForDid(page.identities, did));
   } catch {
     // unreachable / declined — NOT a verdict. Leave the cache empty so a later
     // mount retries rather than remembering a network blip as "no row".
   }
 };
 
-const resolveContent = async (contentId: string): Promise<void> => {
+const resolveContent = async (key: string, contentId: string): Promise<void> => {
   try {
     const page = await getClient().indexContent({ contentId, limit: 1 });
-    contentCache.set(contentId, rowForContentId(page.content, contentId));
+    contentCache.set(key, rowForContentId(page.content, contentId));
   } catch {
     // see resolveIdentity — a failed fetch records nothing.
   }
@@ -129,25 +159,25 @@ const useCachedRow = <T>(
   id: string,
   need: boolean,
   key: string,
-  run: () => Promise<void>,
+  run: (key: string) => Promise<void>,
 ): T | null => {
-  const [row, setRow] = useState<T | null>(() => cache.get(id) ?? null);
+  const [row, setRow] = useState<T | null>(() => cache.get(key) ?? null);
   useEffect(() => {
     if (!need || !id) return;
-    const read = (): void => setRow(cache.get(id) ?? null);
+    const read = (): void => setRow(cache.get(key) ?? null);
     read();
-    if (cache.has(id)) return;
+    if (cache.has(key)) return;
     let set = waiters.get(key);
     if (!set) {
       set = new Set();
       waiters.set(key, set);
     }
     set.add(read);
-    enqueue(key, run);
+    enqueue(key, () => run(key));
     return () => {
       set.delete(read);
     };
-    // cache/run are stable per (family, id), which `key` names
+    // cache/run are stable per (relay set, family, id), which `key` names
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, need]);
   return row;
@@ -156,14 +186,16 @@ const useCachedRow = <T>(
 /**
  * The relay index's row for one DID, hydrating in place. `need` gates the fetch
  * so a surface that already has the answer never asks. Returns null until (and
- * unless) a key-matched row lands.
+ * unless) a key-matched row lands, and re-asks when the relay set changes.
  */
-export const useIndexIdentityRow = (did: string, need = true): IndexIdentityRow | null =>
-  useCachedRow(identityCache, did, need, `identity:${did}`, () => resolveIdentity(did));
+export const useIndexIdentityRow = (did: string, need = true): IndexIdentityRow | null => {
+  const key = `${useRelaySetKey()}|identity:${did}`;
+  return useCachedRow(identityCache, did, need, key, (k) => resolveIdentity(k, did));
+};
 
 /** The relay index's row for one contentId. Same contract as
  *  {@link useIndexIdentityRow}. */
-export const useIndexContentRow = (contentId: string, need = true): IndexContentRow | null =>
-  useCachedRow(contentCache, contentId, need, `content:${contentId}`, () =>
-    resolveContent(contentId),
-  );
+export const useIndexContentRow = (contentId: string, need = true): IndexContentRow | null => {
+  const key = `${useRelaySetKey()}|content:${contentId}`;
+  return useCachedRow(contentCache, contentId, need, key, (k) => resolveContent(k, contentId));
+};
