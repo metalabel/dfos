@@ -52,6 +52,26 @@ describe('identity verify-forward', () => {
     expect(second.value).toEqual(full);
   });
 
+  it('folds delete then restore forward and returns an active identity', async () => {
+    const id = await buildIdentity({ restore: true });
+    const data: Record<string, RelayData> = {
+      [RELAY]: { identities: { [id.did]: [...id.genesisLog] } },
+    };
+    const client = createClient({
+      relays: [RELAY],
+      store: memoryStore(),
+      peerClient: fakePeerClient(data),
+    });
+    await client.identity(id.did);
+    data[RELAY]!.identities![id.did] = [...id.log];
+
+    const restored = await client.identity(id.did);
+    expect(restored.value.isDeleted).toBe(false);
+    expect(restored.value).toEqual(
+      await verifyIdentityChain({ didPrefix: 'did:dfos', log: id.log }),
+    );
+  });
+
   it('a full relay log exactly matching the cache leaves the tip unverified', async () => {
     const id = await buildIdentity();
     const data: Record<string, RelayData> = {

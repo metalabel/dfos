@@ -8,6 +8,7 @@ import {
   signIdentityOperation,
   verifyContentChain,
   verifyIdentityChain,
+  verifyIdentityExtensionFromTrustedState,
 } from '../src/chain';
 import type {
   ContentOperation,
@@ -209,6 +210,212 @@ describe('identity chain', () => {
     });
     expect(result.isDeleted).toBe(true);
     expect(result.did).toBe(gen.identity.did);
+  });
+
+  it('should rotate, delete, restore, and permit a subsequent update', async () => {
+    const gen = await createGenesis();
+    const rotated = makeKey();
+    const final = makeKey();
+    const update: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: gen.operationCID,
+      authKeys: [rotated.key],
+      assertKeys: [rotated.key],
+      controllerKeys: [rotated.key],
+      createdAt: ts(1),
+    };
+    const signedUpdate = await signIdentityOperation({
+      operation: update,
+      signer: gen.signer,
+      keyId: gen.keyId,
+      identityDID: gen.identity.did,
+    });
+    const del: IdentityOperation = {
+      version: 1,
+      type: 'delete',
+      previousOperationCID: signedUpdate.operationCID,
+      createdAt: ts(2),
+    };
+    const signedDelete = await signIdentityOperation({
+      operation: del,
+      signer: rotated.signer,
+      keyId: rotated.keyId,
+      identityDID: gen.identity.did,
+    });
+    const restore: IdentityOperation = {
+      version: 1,
+      type: 'restore',
+      previousOperationCID: signedDelete.operationCID,
+      createdAt: ts(3),
+    };
+    const signedRestore = await signIdentityOperation({
+      operation: restore,
+      signer: rotated.signer,
+      keyId: rotated.keyId,
+      identityDID: gen.identity.did,
+    });
+    const deleted = await verifyIdentityChain({
+      didPrefix: 'did:dfos',
+      log: [gen.jwsToken, signedUpdate.jwsToken, signedDelete.jwsToken],
+    });
+    const restoredExtension = await verifyIdentityExtensionFromTrustedState({
+      currentState: deleted,
+      headCID: signedDelete.operationCID,
+      lastCreatedAt: del.createdAt,
+      newOp: signedRestore.jwsToken,
+    });
+    expect(restoredExtension.state.isDeleted).toBe(false);
+    expect(restoredExtension.state.controllerKeys).toEqual([rotated.key]);
+    const finalUpdate: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: signedRestore.operationCID,
+      authKeys: [final.key],
+      assertKeys: [final.key],
+      controllerKeys: [final.key],
+      createdAt: ts(4),
+    };
+    const signedFinal = await signIdentityOperation({
+      operation: finalUpdate,
+      signer: rotated.signer,
+      keyId: rotated.keyId,
+      identityDID: gen.identity.did,
+    });
+
+    const restored = await verifyIdentityChain({
+      didPrefix: 'did:dfos',
+      log: [gen.jwsToken, signedUpdate.jwsToken, signedDelete.jwsToken, signedRestore.jwsToken],
+    });
+    expect(restored.isDeleted).toBe(false);
+    expect(restored.controllerKeys).toEqual([rotated.key]);
+
+    const result = await verifyIdentityChain({
+      didPrefix: 'did:dfos',
+      log: [
+        gen.jwsToken,
+        signedUpdate.jwsToken,
+        signedDelete.jwsToken,
+        signedRestore.jwsToken,
+        signedFinal.jwsToken,
+      ],
+    });
+    expect(result.controllerKeys).toEqual([final.key]);
+  });
+
+  it('should reject restore except immediately after delete', async () => {
+    const gen = await createGenesis();
+    const restoreAfterCreate: IdentityOperation = {
+      version: 1,
+      type: 'restore',
+      previousOperationCID: gen.operationCID,
+      createdAt: ts(1),
+    };
+    const signedAfterCreate = await signIdentityOperation({
+      operation: restoreAfterCreate,
+      signer: gen.signer,
+      keyId: gen.keyId,
+      identityDID: gen.identity.did,
+    });
+    await expect(
+      verifyIdentityChain({
+        didPrefix: 'did:dfos',
+        log: [gen.jwsToken, signedAfterCreate.jwsToken],
+      }),
+    ).rejects.toThrow(/restore must immediately follow delete/);
+
+    const del: IdentityOperation = {
+      version: 1,
+      type: 'delete',
+      previousOperationCID: gen.operationCID,
+      createdAt: ts(1),
+    };
+    const signedDelete = await signIdentityOperation({
+      operation: del,
+      signer: gen.signer,
+      keyId: gen.keyId,
+      identityDID: gen.identity.did,
+    });
+    const restore: IdentityOperation = {
+      version: 1,
+      type: 'restore',
+      previousOperationCID: signedDelete.operationCID,
+      createdAt: ts(2),
+    };
+    const signedRestore = await signIdentityOperation({
+      operation: restore,
+      signer: gen.signer,
+      keyId: gen.keyId,
+      identityDID: gen.identity.did,
+    });
+    const secondRestore: IdentityOperation = {
+      ...restore,
+      previousOperationCID: signedRestore.operationCID,
+      createdAt: ts(3),
+    };
+    const signedSecond = await signIdentityOperation({
+      operation: secondRestore,
+      signer: gen.signer,
+      keyId: gen.keyId,
+      identityDID: gen.identity.did,
+    });
+    await expect(
+      verifyIdentityChain({
+        didPrefix: 'did:dfos',
+        log: [gen.jwsToken, signedDelete.jwsToken, signedRestore.jwsToken, signedSecond.jwsToken],
+      }),
+    ).rejects.toThrow(/restore must immediately follow delete/);
+  });
+
+  it('should reject restore signed by a controller rotated out before delete', async () => {
+    const gen = await createGenesis();
+    const rotated = makeKey();
+    const update: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: gen.operationCID,
+      authKeys: [rotated.key],
+      assertKeys: [rotated.key],
+      controllerKeys: [rotated.key],
+      createdAt: ts(1),
+    };
+    const signedUpdate = await signIdentityOperation({
+      operation: update,
+      signer: gen.signer,
+      keyId: gen.keyId,
+      identityDID: gen.identity.did,
+    });
+    const del: IdentityOperation = {
+      version: 1,
+      type: 'delete',
+      previousOperationCID: signedUpdate.operationCID,
+      createdAt: ts(2),
+    };
+    const signedDelete = await signIdentityOperation({
+      operation: del,
+      signer: rotated.signer,
+      keyId: rotated.keyId,
+      identityDID: gen.identity.did,
+    });
+    const restore: IdentityOperation = {
+      version: 1,
+      type: 'restore',
+      previousOperationCID: signedDelete.operationCID,
+      createdAt: ts(3),
+    };
+    const signedRestore = await signIdentityOperation({
+      operation: restore,
+      signer: gen.signer,
+      keyId: gen.keyId,
+      identityDID: gen.identity.did,
+    });
+
+    await expect(
+      verifyIdentityChain({
+        didPrefix: 'did:dfos',
+        log: [gen.jwsToken, signedUpdate.jwsToken, signedDelete.jwsToken, signedRestore.jwsToken],
+      }),
+    ).rejects.toThrow(/unknown key/);
   });
 
   // --- CID consistency ---

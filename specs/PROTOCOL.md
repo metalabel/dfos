@@ -979,6 +979,88 @@ bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei
 
 Post-rotation: DID unchanged (`did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`), controller rotated to `key_ez9a874tckr3dv933d3ckdn7z6zrct8`.
 
+### Identity Chain: Delete + Restore
+
+Delete Operation:
+
+```json
+{
+  "version": 1,
+  "type": "delete",
+  "previousOperationCID": "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei",
+  "createdAt": "2026-03-07T00:02:00.000Z"
+}
+```
+
+Delete JWS Header:
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:identity-op",
+  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
+  "cid": "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi"
+}
+```
+
+Delete JWS Signature (hex):
+
+```
+d340f2eea78aec8d210b73f5caf1112c920d04b362115f4b846f015dd50c20618b4ecc6e31cba19f762abaaf7a4906bc9b397e073b730f92ccc41a21619c5002
+```
+
+Delete JWS Token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljbDNhMnQ2dmh6NXZndnM1b2pkdzV3Y3dnb3ozdGF4cXF3ZXhwYnBsdG0yZ2gzcTQyenlpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmZ1aDYzdXYzM2kyaTVlb29lM2JvaXQycnV5amVodWJzcnllbXV1ejZtcnRsZWoyNnJlaSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.00Dy7qeK7I0hC3P1yvERLJINBLNiEV9LhG8BXdUMIGGLTsxuMcuhn3Yquq96SQa8mzl-BztzD5LMxBohYZxQAg
+```
+
+Delete Operation CID:
+
+```
+bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi
+```
+
+Restore Operation:
+
+```json
+{
+  "version": 1,
+  "type": "restore",
+  "previousOperationCID": "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi",
+  "createdAt": "2026-03-07T00:03:00.000Z"
+}
+```
+
+Restore JWS Header:
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:identity-op",
+  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
+  "cid": "bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba"
+}
+```
+
+Restore JWS Signature (hex):
+
+```
+9552998f7e081a6c9ffb4527ed310b48f3f78b9ee058c7bc8f9778774ea016787caf88697f9ff5547314af0c24b7b0859d671de148b809d7973ca4bc8e921e02
+```
+
+Restore JWS Token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlleWF2dWU2dnh6dDYzdWxrcXB3ZXRmd3F2Znpka2VxNnQzcTNnd3JqbnFnaG1panJneWJhIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWNsM2EydDZ2aHo1dmd2czVvamR3NXdjd2dvejN0YXhxcXdleHBicGx0bTJnaDNxNDJ6eWkiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.lVKZj34IGmyf-0Un7TELSPP3i57gWMe8j5d4d06gFnh8r4hpf5_1VHMUrwwkt7CFnWcd4Ui4CdeXPKS8jpIeAg
+```
+
+Restore Operation CID:
+
+```
+bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba
+```
+
 ### Content Chain: Document + Create
 
 Document (flat content object):
@@ -1204,9 +1286,9 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 | Language   | Tests | Source                                                                                                   |
 | ---------- | ----- | -------------------------------------------------------------------------------------------------------- |
-| TypeScript | 246   | [`dfos-protocol/tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)       |
-| TypeScript | 73    | [`protocol-verify/ts/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/ts)         |
-| Go         | 19    | [`protocol-verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/go)         |
-| Rust       | 19    | [`protocol-verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/rust)     |
-| Python     | 63    | [`protocol-verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/python) |
-| Swift      | 18    | [`protocol-verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/swift)   |
+| TypeScript | 402   | [`dfos-protocol/tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)       |
+| TypeScript | 81    | [`protocol-verify/ts/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/ts)         |
+| Go         | 20    | [`protocol-verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/go)         |
+| Rust       | 20    | [`protocol-verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/rust)     |
+| Python     | 82    | [`protocol-verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/python) |
+| Swift      | 19    | [`protocol-verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/swift)   |

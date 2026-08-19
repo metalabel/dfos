@@ -31,6 +31,7 @@ var dependencyFailureSubstrings = []string{
 }
 
 const noncurrentSigningKeyError = "signing key is not in the identity's current state"
+const identityConflictingExtensionError = "identity chains are linear: conflicting extension refused"
 
 type admissionMode int
 
@@ -393,59 +394,12 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 		return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
 	}
 
-	// fork path — check if previousCID exists in chain ops
+	// Unknown parents are retryable dependencies. A known non-head parent
+	// already has a committed child and is a permanent conflict.
 	if previousCID == "" || !chainLogContainsCID(chain.Log, previousCID) {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in identity chain", DependencyMissing: true}
 	}
-
-	forkState, err := store.GetIdentityStateAtCID(did, previousCID)
-	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: ForkPointStateErrorPrefix + fmt.Sprintf("%v", err), DependencyMissing: true}
-	}
-	if forkState == nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in identity chain", DependencyMissing: true}
-	}
-
-	extResult, err := dfos.VerifyIdentityExtension(forkState.State, previousCID, forkState.LastCreatedAt, jwsToken)
-	if err != nil {
-		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error()}
-	}
-
-	updatedLog := append(append([]string{}, chain.Log...), jwsToken)
-	head := selectDeterministicHead(updatedLog)
-
-	headState := chain.State
-	headLastCreatedAt := chain.LastCreatedAt
-	headCID := chain.HeadCID
-
-	if head.cid == cid {
-		headState = extResult.State
-		headLastCreatedAt = extResult.LastCreatedAt
-		headCID = cid
-	} else {
-		headCID = head.cid
-		headLastCreatedAt = head.createdAt
-	}
-
-	updated := StoredIdentityChain{
-		DID:           chain.DID,
-		Log:           updatedLog,
-		HeadCID:       headCID,
-		LastCreatedAt: headLastCreatedAt,
-		State:         headState,
-	}
-	if perr := persistError(cid, store.PutIdentityChain(updated)); perr != nil {
-		return *perr
-	}
-	if perr := persistError(cid, store.PutOperation(StoredOperation{CID: cid, JWSToken: jwsToken, ChainType: "identity", ChainID: did})); perr != nil {
-		return *perr
-	}
-	if logEnabled {
-		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})); perr != nil {
-			return *perr
-		}
-	}
-	return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
+	return IngestionResult{CID: cid, Status: "rejected", Error: identityConflictingExtensionError}
 }
 
 func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissionMode) IngestionResult {

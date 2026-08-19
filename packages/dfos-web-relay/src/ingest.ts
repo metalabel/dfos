@@ -10,10 +10,9 @@
   are processed before content chains that reference them, then verifies
   and stores each operation incrementally.
 
-  Fork policy: forks are accepted. If an extension's parentCID exists
-  anywhere in the chain (not just at head), the fork is accepted and the
-  head is recomputed via deterministic selection (highest createdAt, then
-  lexicographic highest CID).
+  Fork policy: content forks are accepted and deterministically selected.
+  Identity chains are linear: once a parent has a committed child, every
+  competing extension is permanently refused.
 
 */
 
@@ -60,6 +59,8 @@ import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityCha
  * for the human-readable error and keeps the two twins byte-identical.
  */
 export const FORK_POINT_STATE_ERROR_PREFIX = 'failed to compute state at fork point: ';
+export const IDENTITY_CONFLICTING_EXTENSION_ERROR =
+  'identity chains are linear: conflicting extension refused';
 
 /**
  * Substrings that mark a verify-time failure as a missing-dependency (key not
@@ -524,7 +525,8 @@ const ingestIdentityOp = async (
     return { cid, status: 'new', kind: 'identity-op', chainId: did };
   }
 
-  // fork path — check if previousCID exists in chain operations
+  // An unknown parent is a retryable dependency. A known non-head parent
+  // already has a committed child and is therefore a permanent conflict.
   if (!previousCID || !chainLogContainsCID(chain.log, previousCID)) {
     return {
       cid,
@@ -533,62 +535,7 @@ const ingestIdentityOp = async (
       dependencyMissing: true,
     };
   }
-
-  // load state at fork point and verify extension against it
-  const forkState = await store.getIdentityStateAtCID(did, previousCID);
-  if (!forkState) {
-    return {
-      cid,
-      status: 'rejected',
-      error: `${FORK_POINT_STATE_ERROR_PREFIX}${previousCID}`,
-      dependencyMissing: true,
-    };
-  }
-
-  let extResult;
-  try {
-    extResult = await verifyIdentityExtensionFromTrustedState({
-      currentState: forkState.state,
-      headCID: previousCID,
-      lastCreatedAt: forkState.lastCreatedAt,
-      newOp: jwsToken,
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'verification failed';
-    return { cid, status: 'rejected', error: message };
-  }
-
-  // add to log and recompute head
-  const updatedLog = [...chain.log, jwsToken];
-  const head = selectDeterministicHead(updatedLog);
-
-  let headState = chain.state;
-  let headLastCreatedAt = chain.lastCreatedAt;
-  let headCID = chain.headCID;
-
-  if (head.cid === cid) {
-    // the new fork extension became the head
-    headState = extResult.state;
-    headLastCreatedAt = extResult.createdAt;
-    headCID = cid;
-  } else {
-    headCID = head.cid;
-    headLastCreatedAt = head.createdAt;
-  }
-
-  const updated: StoredIdentityChain = {
-    did: chain.did,
-    log: updatedLog,
-    headCID,
-    lastCreatedAt: headLastCreatedAt,
-    state: headState,
-  };
-  await store.putIdentityChain(updated);
-  await store.putOperation({ cid, jwsToken, chainType: 'identity', chainId: did });
-  if (logEnabled) {
-    await store.appendToLog({ cid, jwsToken, kind: 'identity-op', chainId: did });
-  }
-  return { cid, status: 'new', kind: 'identity-op', chainId: did };
+  return { cid, status: 'rejected', error: IDENTITY_CONFLICTING_EXTENSION_ERROR };
 };
 
 const ingestContentOp = async (

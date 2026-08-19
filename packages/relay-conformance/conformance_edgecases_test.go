@@ -573,20 +573,15 @@ func TestDelegatedWriteFromDeletedCreator(t *testing.T) {
 }
 
 // ===================================================================
-// identity undeletion via fork
+// identity linearity + restore
 // ===================================================================
 
-// TestIdentityUndeletionViaFork verifies that a fork from before a delete
-// operation can "undelete" an identity when the fork has a later createdAt.
-// Both the delete and the fork extend from genesis, creating two DAG tips.
-// The deterministic head selector picks the tip with the highest createdAt.
-func TestIdentityUndeletionViaFork(t *testing.T) {
+func TestIdentityConflictingExtensionAndRestore(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 
-	// delete the identity (extends from genesis)
 	ctrlKid := id.did + "#" + id.controller.keyID
-	delToken, _, err := dfos.SignIdentityDelete(id.genCID, ctrlKid, id.controller.priv)
+	delToken, delCID, err := dfos.SignIdentityDelete(id.genCID, ctrlKid, id.controller.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,17 +595,13 @@ func TestIdentityUndeletionViaFork(t *testing.T) {
 	}
 	getJSON(t, base+"/proof/v1/identities/"+id.did, &chainDel)
 	if !chainDel.State.IsDeleted {
-		t.Fatal("identity should be deleted before fork")
+		t.Fatal("identity should be deleted before restore")
 	}
 
-	// small delay so the fork update gets a later createdAt
-	time.Sleep(50 * time.Millisecond)
-
-	// fork: submit an update that also extends from genesis (same previousCID)
-	// with a later createdAt, this should win deterministic head selection
+	// A second child of genesis conflicts permanently, whatever its timestamp.
 	newAuth := newKeypair()
-	forkToken, _, err := dfos.SignIdentityUpdate(
-		id.genCID, // fork from genesis, not from delete
+	conflictToken, _, err := dfos.SignIdentityUpdate(
+		id.genCID,
 		[]dfos.MultikeyPublicKey{id.controller.mk},
 		[]dfos.MultikeyPublicKey{newAuth.mk},
 		[]dfos.MultikeyPublicKey{},
@@ -621,31 +612,97 @@ func TestIdentityUndeletionViaFork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := postOperations(t, base, []string{forkToken})
-	body := readBody(t, res)
-	var forkResult struct {
-		Results []struct {
-			Status string `json:"status"`
-			Error  string `json:"error"`
-		} `json:"results"`
-	}
-	json.Unmarshal(body, &forkResult)
-	if len(forkResult.Results) == 0 || forkResult.Results[0].Status == "rejected" {
-		errMsg := ""
-		if len(forkResult.Results) > 0 {
-			errMsg = forkResult.Results[0].Error
+	assertConflict := func() {
+		res := postOperations(t, base, []string{conflictToken})
+		body := readBody(t, res)
+		var result struct {
+			Results []struct {
+				Status string `json:"status"`
+				Error  string `json:"error"`
+			} `json:"results"`
 		}
-		t.Fatalf("expected fork to be accepted: %s", errMsg)
+		json.Unmarshal(body, &result)
+		if len(result.Results) != 1 || result.Results[0].Status != "rejected" || result.Results[0].Error != "identity chains are linear: conflicting extension refused" {
+			t.Fatalf("conflicting extension: %+v", result.Results)
+		}
 	}
+	assertConflict()
+	assertConflict()
 
-	// the identity should now be NOT deleted — the fork branch won
+	// Restore is the one valid successor of delete.
+	time.Sleep(2 * time.Millisecond)
+	restoreToken, restoreCID, err := dfos.SignIdentityRestore(delCID, ctrlKid, id.controller.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, e := postStatus(t, base, restoreToken); st != "new" {
+		t.Fatalf("restore should be accepted, got %q (%s)", st, e)
+	}
 	var chainPost struct {
-		State struct {
+		HeadCID string `json:"headCID"`
+		State   struct {
 			IsDeleted bool `json:"isDeleted"`
 		} `json:"state"`
 	}
 	getJSON(t, base+"/proof/v1/identities/"+id.did, &chainPost)
-	if chainPost.State.IsDeleted {
-		t.Fatal("identity should be undeleted after fork with later createdAt")
+	if chainPost.State.IsDeleted || chainPost.HeadCID != restoreCID {
+		t.Fatalf("identity was not restored linearly: %+v", chainPost)
+	}
+
+	artifact, _, err := dfos.SignArtifact(id.did, map[string]any{"$schema": "test/v1", "title": "after restore"}, id.did+"#"+id.auth.keyID, id.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, e := postStatus(t, base, artifact); st != "new" {
+		t.Fatalf("artifact after restore should be accepted, got %q (%s)", st, e)
+	}
+}
+
+func TestIdentityRestoreInvalidPositions(t *testing.T) {
+	base := relayURL(t)
+	id := createIdentity(t, base)
+	oldKid := id.did + "#" + id.controller.keyID
+
+	time.Sleep(2 * time.Millisecond)
+	restoreAfterCreate, _, err := dfos.SignIdentityRestore(id.genCID, oldKid, id.controller.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := postStatus(t, base, restoreAfterCreate); st != "rejected" {
+		t.Fatalf("restore after create should be rejected, got %q", st)
+	}
+
+	rotated := newKeypair()
+	time.Sleep(2 * time.Millisecond)
+	update, updateCID, err := dfos.SignIdentityUpdate(
+		id.genCID,
+		[]dfos.MultikeyPublicKey{rotated.mk},
+		[]dfos.MultikeyPublicKey{id.auth.mk},
+		[]dfos.MultikeyPublicKey{},
+		oldKid,
+		id.controller.priv,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, e := postStatus(t, base, update); st != "new" {
+		t.Fatalf("rotation should be accepted, got %q (%s)", st, e)
+	}
+	time.Sleep(2 * time.Millisecond)
+	newKid := id.did + "#" + rotated.keyID
+	del, delCID, err := dfos.SignIdentityDelete(updateCID, newKid, rotated.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, e := postStatus(t, base, del); st != "new" {
+		t.Fatalf("delete should be accepted, got %q (%s)", st, e)
+	}
+	time.Sleep(2 * time.Millisecond)
+	oldKeyRestore, _, err := dfos.SignIdentityRestore(delCID, oldKid, id.controller.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := postStatus(t, base, oldKeyRestore); st != "rejected" {
+		t.Fatalf("restore signed by rotated-out controller should be rejected, got %q", st)
 	}
 }

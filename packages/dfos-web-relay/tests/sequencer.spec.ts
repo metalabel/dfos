@@ -13,10 +13,9 @@ import {
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { FORK_POINT_STATE_ERROR_PREFIX, ingestOperations } from '../src/ingest';
+import { IDENTITY_CONFLICTING_EXTENSION_ERROR, ingestOperations } from '../src/ingest';
 import { isDependencyFailure, sequenceOps } from '../src/sequencer';
 import { MemoryRelayStore } from '../src/store';
-import type { RelayStore } from '../src/types';
 
 /*
 
@@ -28,8 +27,9 @@ import type { RelayStore } from '../src/types';
 
   (1) drive REAL operations through `ingestOperations` and assert the structured
       flag (replacing the old vacuous hand-built-string test);
-  (2) assert the shared FORK_POINT_STATE_ERROR_PREFIX constant is what the
-      producer actually emits (kills string drift / the #56 colon mismatch);
+  (2) assert the shared IDENTITY_CONFLICTING_EXTENSION_ERROR constant is what
+      the producer actually emits, on the direct and peer paths alike (kills
+      string drift with the Go twin's literal);
   (3) assert CID-less durability: a bad-signature genesis op becomes durably
       rejected (carries a CID, dependencyMissing=false) instead of being
       re-verified every tick forever;
@@ -263,27 +263,15 @@ describe('dependency convergence', () => {
 });
 
 // ---------------------------------------------------------------------------
-// (2) fork-point state-failure → dependencyMissing, via shared constant
+// (2) identity conflicts → permanent rejection on direct and peer paths
 // ---------------------------------------------------------------------------
-
-/** Wrap a store, forcing fork-point state computation to fail (snapshot-replay gap). */
-const withBrokenForkState = (inner: RelayStore): RelayStore =>
-  new Proxy(inner, {
-    get(target, prop, receiver) {
-      if (prop === 'getIdentityStateAtCID' || prop === 'getContentStateAtCID') {
-        return async () => null;
-      }
-      return Reflect.get(target, prop, receiver);
-    },
-  });
-
-describe('fork-point state failure', () => {
-  it('classifies a fork-point state failure as dependencyMissing using the shared prefix', async () => {
+describe('identity linearity', () => {
+  it('permanently rejects a conflicting direct extension with the named error', async () => {
     const base = new MemoryRelayStore();
     const identity = await createIdentity();
     await ingestOperations([identity.jwsToken], base);
 
-    // build two competing identity updates off the same previous (a fork)
+    // build two competing identity updates off the same previous
     const newKeyA = makeKey();
     const updateA: IdentityOperation = {
       version: 1,
@@ -302,7 +290,7 @@ describe('fork-point state failure', () => {
     });
     await ingestOperations([tokenA], base);
 
-    // a second update off the SAME previous → fork path → loads fork state
+    // a second update off the SAME previous conflicts with the committed child
     const newKeyB = makeKey();
     const updateB: IdentityOperation = {
       version: 1,
@@ -320,18 +308,54 @@ describe('fork-point state failure', () => {
       identityDID: identity.did,
     });
 
-    // drive the fork op through a store whose fork-state computation fails
-    const broken = withBrokenForkState(base);
-    const [res] = await ingestOperations([tokenB], broken);
+    const [res] = await ingestOperations([tokenB], base);
     expect(res!.status).toBe('rejected');
-    expect(res!.dependencyMissing).toBe(true);
+    expect(res!.dependencyMissing).toBeFalsy();
     expect(res!.cid).not.toBe('');
-    // the producer emits the SHARED constant — byte-identity guards string drift
-    expect(res!.error!.startsWith(FORK_POINT_STATE_ERROR_PREFIX)).toBe(true);
+    expect(res!.error).toBe(IDENTITY_CONFLICTING_EXTENSION_ERROR);
   });
 
-  it('the shared fork-point prefix matches the Go twin literal byte-for-byte', () => {
-    // Go: ForkPointStateErrorPrefix in sequencer.go
-    expect(FORK_POINT_STATE_ERROR_PREFIX).toBe('failed to compute state at fork point: ');
+  it('durably rejects a conflicting peer extension instead of retrying it', async () => {
+    const store = new MemoryRelayStore();
+    const identity = await createIdentity();
+    await ingestOperations([identity.jwsToken], store);
+
+    const signChild = async (offset: number) => {
+      const key = makeKey();
+      return signIdentityOperation({
+        operation: {
+          version: 1,
+          type: 'update',
+          previousOperationCID: identity.operationCID,
+          authKeys: [key.key],
+          assertKeys: [],
+          controllerKeys: [identity.controller.key],
+          createdAt: ts(offset),
+        },
+        signer: identity.controller.signer,
+        keyId: identity.controller.keyId,
+        identityDID: identity.did,
+      });
+    };
+    await ingestOperations([(await signChild(2)).jwsToken], store);
+    const conflict = await signChild(3);
+    await store.putRawOp(conflict.operationCID, conflict.jwsToken, 'peer');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const first = await sequenceOps(store);
+      expect(first.result.rejected).toBe(1);
+      expect(first.result.pending).toBe(0);
+      expect(await store.countUnsequenced()).toBe(0);
+      const second = await sequenceOps(store);
+      expect(second.result).toEqual({ sequenced: 0, rejected: 0, pending: 0 });
+      expect(
+        warn.mock.calls.some(([line]) =>
+          String(line).includes(IDENTITY_CONFLICTING_EXTENSION_ERROR),
+        ),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

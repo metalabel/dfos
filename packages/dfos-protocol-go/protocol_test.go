@@ -833,6 +833,27 @@ func TestSignIdentityDelete(t *testing.T) {
 	}
 }
 
+func TestSignIdentityRestore(t *testing.T) {
+	priv1, pub1 := refKey1()
+	kid := "key_r9ev34fvc23z999veaaft83nn29zvhe"
+	mk := NewMultikeyPublicKey(kid, pub1)
+	_, did, genCID, err := SignIdentityCreate([]MultikeyPublicKey{mk}, nil, nil, kid, priv1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, opCID, err := SignIdentityRestore(genCID, did+"#"+kid, priv1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, payload, err := VerifyJWS(token, pub1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header.CID != opCID || payload["type"] != "restore" || payload["previousOperationCID"] != genCID {
+		t.Fatalf("restore payload/header mismatch: header=%+v payload=%+v", header, payload)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 22. SignContentDelete — terminal delete operation
 // ---------------------------------------------------------------------------

@@ -82,6 +82,16 @@ interface ReferenceArtifacts {
   updateCID: string;
   updateSignatureHex: string;
   updateHeader: Record<string, unknown>;
+  deleteOp: IdentityOperation;
+  deleteJws: string;
+  deleteCID: string;
+  deleteSignatureHex: string;
+  deleteHeader: Record<string, unknown>;
+  restoreOp: IdentityOperation;
+  restoreJws: string;
+  restoreCID: string;
+  restoreSignatureHex: string;
+  restoreHeader: Record<string, unknown>;
   // content chain
   documentCID: string;
   contentCreateOp: ContentOperation;
@@ -178,9 +188,46 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
   });
 
   // ----------------------------------------------------------------
-  // Content chain: document + create
+  // Identity chain: delete + restore
   // ----------------------------------------------------------------
   const signer2 = async (msg: Uint8Array) => signPayloadEd25519(msg, keypair2.privateKey);
+  const deleteOp: IdentityOperation = {
+    version: 1,
+    type: 'delete',
+    previousOperationCID: updateCID,
+    createdAt: '2026-03-07T00:02:00.000Z',
+  };
+  const { jwsToken: deleteJws, operationCID: deleteCID } = await signIdentityOperation({
+    operation: deleteOp,
+    signer: signer2,
+    keyId: keyId2,
+    identityDID: did,
+  });
+  const delParts = decodeParts(deleteJws);
+  const restoreOp: IdentityOperation = {
+    version: 1,
+    type: 'restore',
+    previousOperationCID: deleteCID,
+    createdAt: '2026-03-07T00:03:00.000Z',
+  };
+  const { jwsToken: restoreJws, operationCID: restoreCID } = await signIdentityOperation({
+    operation: restoreOp,
+    signer: signer2,
+    keyId: keyId2,
+    identityDID: did,
+  });
+  const resParts = decodeParts(restoreJws);
+  const restoredIdentity = await verifyIdentityChain({
+    didPrefix: 'did:dfos',
+    log: [genesisJws, updateJws, deleteJws, restoreJws],
+  });
+  if (restoredIdentity.isDeleted || restoredIdentity.controllerKeys[0]?.id !== keyId2) {
+    throw new Error('delete + restore reference chain did not retain the rotated key state');
+  }
+
+  // ----------------------------------------------------------------
+  // Content chain: document + create
+  // ----------------------------------------------------------------
   const kid2 = `${identity2.did}#${keyId2}`;
 
   const document = {
@@ -292,6 +339,16 @@ async function generateReferenceArtifacts(): Promise<ReferenceArtifacts> {
     updateCID,
     updateSignatureHex: updParts.signatureHex,
     updateHeader: updParts.header,
+    deleteOp,
+    deleteJws,
+    deleteCID,
+    deleteSignatureHex: delParts.signatureHex,
+    deleteHeader: delParts.header,
+    restoreOp,
+    restoreJws,
+    restoreCID,
+    restoreSignatureHex: resParts.signatureHex,
+    restoreHeader: resParts.header,
     documentCID,
     contentCreateOp: createContentOp,
     contentCreateJws,
@@ -376,6 +433,26 @@ describe('protocol reference artifacts', () => {
     console.log(a.updateJws);
     console.log('\nOperation CID:', a.updateCID);
 
+    DIV('STEP 4B: Identity Chain — Delete + Restore');
+    console.log('--- Delete Operation ---');
+    console.log(JSON.stringify(a.deleteOp, null, 2));
+    console.log('\n--- Delete JWS Header ---');
+    console.log(JSON.stringify(a.deleteHeader, null, 2));
+    console.log('\n--- Delete JWS Signature (hex) ---');
+    console.log(a.deleteSignatureHex);
+    console.log('\n--- Delete JWS Compact Token ---');
+    console.log(a.deleteJws);
+    console.log('\nDelete operation CID:', a.deleteCID);
+    console.log('\n--- Restore Operation ---');
+    console.log(JSON.stringify(a.restoreOp, null, 2));
+    console.log('\n--- Restore JWS Header ---');
+    console.log(JSON.stringify(a.restoreHeader, null, 2));
+    console.log('\n--- Restore JWS Signature (hex) ---');
+    console.log(a.restoreSignatureHex);
+    console.log('\n--- Restore JWS Compact Token ---');
+    console.log(a.restoreJws);
+    console.log('\nRestore operation CID:', a.restoreCID);
+
     DIV('STEP 5: Content Chain — Document + Create');
     console.log('Document CID:', a.documentCID);
     console.log('\n--- Content Create JWS Header ---');
@@ -406,6 +483,8 @@ describe('protocol reference artifacts', () => {
     console.log('  Key 2 (rotated): ', a.keyId2, '→', a.multikey2);
     console.log('  [0] create  CID: ', a.genesisCID);
     console.log('  [1] update  CID: ', a.updateCID);
+    console.log('  [2] delete  CID: ', a.deleteCID);
+    console.log('  [3] restore CID: ', a.restoreCID);
     console.log('\nCONTENT CHAIN');
     console.log('  Content ID:       ', a.contentId);
     console.log('  Genesis CID:     ', a.contentGenesisCID);
@@ -473,6 +552,12 @@ describe('protocol reference artifacts', () => {
     expectInSpec('rotation JWS', a.updateJws);
     expectInSpec('rotation CID', a.updateCID);
     expectInSpec('rotation signature (hex)', a.updateSignatureHex);
+    expectInSpec('delete JWS', a.deleteJws);
+    expectInSpec('delete CID', a.deleteCID);
+    expectInSpec('delete signature (hex)', a.deleteSignatureHex);
+    expectInSpec('restore JWS', a.restoreJws);
+    expectInSpec('restore CID', a.restoreCID);
+    expectInSpec('restore signature (hex)', a.restoreSignatureHex);
 
     expect(a.genesisCID).toBe('bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne');
     expect(a.updateCID).toBe('bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei');
@@ -519,6 +604,13 @@ describe('protocol reference artifacts', () => {
     expect(rotationFixture.expected.did).toBe(a.did);
     expect(rotationFixture.expected.controllerKeys[0].id).toBe(a.keyId2);
     expect(rotationFixture.expected.controllerKeys[0].publicKeyMultibase).toBe(a.multikey2);
+
+    // identity-restore.json extends the published rotation vector additively.
+    const restoreFixture = readExample('identity-restore.json');
+    expect(restoreFixture.chain).toEqual([a.genesisJws, a.updateJws, a.deleteJws, a.restoreJws]);
+    expect(restoreFixture.expected.did).toBe(a.did);
+    expect(restoreFixture.expected.isDeleted).toBe(false);
+    expect(restoreFixture.expected.controllerKeys[0].id).toBe(a.keyId2);
 
     // content-lifecycle.json: chain = [create, update], expected pins content state.
     const contentFixture = readExample('content-lifecycle.json');

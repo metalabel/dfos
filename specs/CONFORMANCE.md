@@ -191,9 +191,9 @@ each suite actually exercises.
 (key, multikey, CID, DID, document CID, credential structure, number-encoding
 determinism — the sections in `packages/protocol-verify/README.md`). They do **not**
 all exercise the stateful chain semantics. Per the cross-language table in PROTOCOL.md,
-the five `protocol-verify` suites all run the same primitive set (TypeScript 73, Go 19,
-Rust 19, Python 63, Swift 18); the deep stateful chain-tier coverage lives separately in
-the TypeScript reference suite (`dfos-protocol/tests`, 246) and the Go library suite.
+the five `protocol-verify` suites all run the same primitive set (TypeScript 81, Go 20,
+Rust 20, Python 82, Swift 19); the deep stateful chain-tier coverage lives separately in
+the TypeScript reference suite (`dfos-protocol/tests`, 402) and the Go library suite.
 **Chain linking,
 content fork/head-selection, identity linearity, delete/restore semantics, and credential
 expiry/delegation are exercised in the TypeScript and Go suites, not in all five
