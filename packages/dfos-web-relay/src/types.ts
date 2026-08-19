@@ -10,6 +10,7 @@ import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-pro
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 import { base64urlDecode, base64urlEncode } from '@metalabel/dfos-protocol/crypto';
 import type {
+  IndexArtifactRow,
   IndexContentRow,
   IndexCountersignatureQueryRow,
   IndexCredentialRow,
@@ -509,11 +510,22 @@ export interface RelayStore {
     documentCID?: string;
     publicRead?: boolean;
     isDeleted?: boolean;
+    titleContains?: string;
     after?: string;
     orderedAfter?: IndexOrderedCursor;
     order?: IndexOrder;
     limit: number;
   }): Promise<IndexContentRow[]>;
+  /** Page standalone artifact projections by CID or recency order. */
+  queryIndexArtifacts(q: {
+    cid?: string;
+    signer?: string;
+    docSchema?: string;
+    after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexRecencyOrder;
+    limit: number;
+  }): Promise<IndexArtifactRow[]>;
   /**
    * Page countersignature projection rows for one witness ascending by cid,
    * `cid > after`, length <= limit. Reflects the store's ACCEPTED countersign
@@ -553,6 +565,8 @@ export interface RelayStore {
   putIndexIdentityRow(row: IndexIdentityRow): Promise<void>;
   /** Upsert a content projection row by contentId. */
   putIndexContentRow(row: IndexContentRow): Promise<void>;
+  /** Upsert a standalone artifact projection row by CID. */
+  putIndexArtifactRow(row: IndexArtifactRow): Promise<void>;
   /** Add one accepted content-operation signer to a chain's signer set. */
   putIndexContentSigner(contentId: string, did: string): Promise<void>;
   /**

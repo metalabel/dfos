@@ -30,6 +30,7 @@ export {
   type IndexCredentialRow,
   type IndexIdentityRow,
   type IndexOperationRow,
+  type IndexArtifactRow,
   type IndexRecencyOrder,
   type IndexProfile,
 } from './index-routes';

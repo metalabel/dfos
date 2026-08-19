@@ -828,6 +828,14 @@ paths:
           schema:
             type: boolean
           description: Exact match against terminal deletion state
+        - name: titleContains
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Case-insensitive substring match over projected title. Implicitly
+            restricts to publicRead=true; combining with publicRead=false is 400.
         - name: order
           in: query
           required: false
@@ -1186,6 +1194,93 @@ paths:
                     description: Opaque cursor for the next page, or null when caught up
         '400':
           description: Invalid kind, order, or cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /index/v0/artifacts:
+    get:
+      operationId: indexArtifacts
+      summary: Enumerate standalone signed artifacts (non-authoritative index)
+      description: |
+        Metadata-only enumeration of verified standalone artifacts. The inline
+        document bytes are held in the stored JWS, so docSchema coverage does
+        not depend on a separate blob. Rows never include the artifact payload.
+      tags: [Index]
+      parameters:
+        - name: cid
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact artifact CID match (zero or one row)
+        - name: signer
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact signing DID from the artifact JWS kid
+        - name: docSchema
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact opaque match on the inline document $schema
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [createdAt.desc, ingestedAt.desc]
+          description: Optional recency ordering; absent means lexical CID order
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CID keyset cursor in lexical mode or opaque cursor in ordered mode
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Artifact index page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifacts, next]
+                properties:
+                  artifacts:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, signerDID, createdAt, ingestedAt, docSchema]
+                      properties:
+                        cid:
+                          type: string
+                        signerDID:
+                          type: string
+                        createdAt:
+                          type: string
+                        ingestedAt:
+                          type: string
+                        docSchema:
+                          type: string
+                          nullable: true
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page, or null when caught up
+        '400':
+          description: Invalid signer DID, order, or cursor
           content:
             application/json:
               schema:

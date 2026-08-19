@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS operations (
 	cid TEXT PRIMARY KEY,
 	jws_token TEXT NOT NULL,
 	chain_type TEXT NOT NULL,
-	chain_id TEXT NOT NULL
+	chain_id TEXT NOT NULL,
+	ingested_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS identity_chains (
@@ -165,6 +166,18 @@ CREATE INDEX IF NOT EXISTS idx_index_content_schema ON index_content(doc_schema,
 CREATE INDEX IF NOT EXISTS idx_index_content_doccid ON index_content(current_document_cid);
 CREATE INDEX IF NOT EXISTS idx_index_content_genesis ON index_content(genesis_at, content_id);
 CREATE INDEX IF NOT EXISTS idx_index_content_head ON index_content(head_at, content_id);
+
+CREATE TABLE IF NOT EXISTS index_artifact (
+	cid TEXT PRIMARY KEY,
+	signer_did TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	ingested_at TEXT NOT NULL,
+	doc_schema TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_index_artifact_signer ON index_artifact(signer_did, cid);
+CREATE INDEX IF NOT EXISTS idx_index_artifact_schema ON index_artifact(doc_schema, cid);
+CREATE INDEX IF NOT EXISTS idx_index_artifact_created ON index_artifact(created_at, cid);
+CREATE INDEX IF NOT EXISTS idx_index_artifact_ingested ON index_artifact(ingested_at, cid);
 
 CREATE TABLE IF NOT EXISTS content_signers (
 	content_id TEXT NOT NULL,
@@ -325,6 +338,7 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		return nil, err
 	}
 	for _, column := range []struct{ table, name string }{
+		{"operations", "ingested_at"},
 		{"operation_log", "created_at"},
 		{"operation_log", "ingested_at"},
 		{"countersignatures", "created_at"},
@@ -337,6 +351,16 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 			readDB.Close()
 			return nil, err
 		}
+	}
+	if _, err := writeDB.Exec(
+		`UPDATE operations SET ingested_at = COALESCE(
+			(SELECT ingested_at FROM operation_log WHERE operation_log.cid = operations.cid LIMIT 1), ?
+		) WHERE ingested_at IS NULL OR ingested_at = ''`,
+		time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+	); err != nil {
+		writeDB.Close()
+		readDB.Close()
+		return nil, err
 	}
 	if err := backfillIndexTimestamps(writeDB); err != nil {
 		writeDB.Close()
@@ -686,9 +710,9 @@ func (s *SQLiteStore) DeclineSignRequest(cid string, now time.Time) (SigningPutR
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) GetOperation(cid string) (*StoredOperation, error) {
-	row := s.readerDB().QueryRow("SELECT cid, jws_token, chain_type, chain_id FROM operations WHERE cid = ?", cid)
+	row := s.readerDB().QueryRow("SELECT cid, jws_token, chain_type, chain_id, ingested_at FROM operations WHERE cid = ?", cid)
 	var op StoredOperation
-	err := row.Scan(&op.CID, &op.JWSToken, &op.ChainType, &op.ChainID)
+	err := row.Scan(&op.CID, &op.JWSToken, &op.ChainType, &op.ChainID, &op.IngestedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -699,11 +723,31 @@ func (s *SQLiteStore) GetOperation(cid string) (*StoredOperation, error) {
 }
 
 func (s *SQLiteStore) PutOperation(op StoredOperation) error {
+	if op.IngestedAt == "" {
+		op.IngestedAt = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	}
 	_, err := s.writerDB().Exec(
-		"INSERT OR REPLACE INTO operations (cid, jws_token, chain_type, chain_id) VALUES (?, ?, ?, ?)",
-		op.CID, op.JWSToken, op.ChainType, op.ChainID,
+		"INSERT OR REPLACE INTO operations (cid, jws_token, chain_type, chain_id, ingested_at) VALUES (?, ?, ?, ?, ?)",
+		op.CID, op.JWSToken, op.ChainType, op.ChainID, op.IngestedAt,
 	)
 	return err
+}
+
+func (s *SQLiteStore) ListArtifactOperations() ([]StoredOperation, error) {
+	rows, err := s.readerDB().Query("SELECT cid, jws_token, chain_type, chain_id, ingested_at FROM operations WHERE chain_type = 'artifact' ORDER BY cid")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []StoredOperation{}
+	for rows.Next() {
+		var op StoredOperation
+		if err := rows.Scan(&op.CID, &op.JWSToken, &op.ChainType, &op.ChainID, &op.IngestedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, op)
+	}
+	return result, rows.Err()
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,6 +1125,15 @@ func (s *SQLiteStore) PutIndexContentRow(row indexContentRow) error {
 	return err
 }
 
+func (s *SQLiteStore) PutIndexArtifactRow(row indexArtifactRow) error {
+	_, err := s.writerDB().Exec(
+		`INSERT OR REPLACE INTO index_artifact
+		 (cid, signer_did, created_at, ingested_at, doc_schema) VALUES (?, ?, ?, ?, ?)`,
+		row.CID, row.SignerDID, row.CreatedAt, row.IngestedAt, nullStr(row.DocSchema),
+	)
+	return err
+}
+
 func (s *SQLiteStore) PutIndexContentSigner(contentID string, did string) error {
 	_, err := s.writerDB().Exec(
 		"INSERT OR IGNORE INTO content_signers (content_id, did) VALUES (?, ?)",
@@ -1190,6 +1243,10 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		where = append(where, "is_deleted = ?")
 		args = append(args, boolToInt(*q.IsDeleted))
 	}
+	if q.TitleContains != "" {
+		where = append(where, "public_read = 1 AND title IS NOT NULL AND instr(lower(title), lower(?)) > 0")
+		args = append(args, q.TitleContains)
+	}
 	if q.Order == "" && q.After != "" {
 		where = append(where, "content_id > ?")
 		args = append(args, q.After)
@@ -1225,6 +1282,66 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		row, err := scanIndexContentRow(rows)
 		if err != nil {
 			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifactRow, error) {
+	where := []string{}
+	args := []any{}
+	if q.CID != nil {
+		where = append(where, "cid = ?")
+		args = append(args, *q.CID)
+	}
+	if q.Signer != "" {
+		where = append(where, "signer_did = ?")
+		args = append(args, q.Signer)
+	}
+	if q.DocSchema != nil {
+		where = append(where, "doc_schema = ?")
+		args = append(args, *q.DocSchema)
+	}
+	if q.Order == "" && q.After != "" {
+		where = append(where, "cid > ?")
+		args = append(args, q.After)
+	}
+	if q.Order != "" && q.OrderedAfter != nil {
+		column := "ingested_at"
+		if q.Order == "createdAt.desc" {
+			column = "created_at"
+		}
+		where = append(where, "("+column+" < ? OR ("+column+" = ? AND cid > ?))")
+		args = append(args, q.OrderedAfter.Timestamp, q.OrderedAfter.Timestamp, q.OrderedAfter.Key)
+	}
+	query := "SELECT cid, signer_did, created_at, ingested_at, doc_schema FROM index_artifact"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	if q.Order == "createdAt.desc" {
+		query += " ORDER BY created_at DESC, cid ASC LIMIT ?"
+	} else if q.Order == "ingestedAt.desc" {
+		query += " ORDER BY ingested_at DESC, cid ASC LIMIT ?"
+	} else {
+		query += " ORDER BY cid LIMIT ?"
+	}
+	args = append(args, q.Limit)
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []indexArtifactRow{}
+	for rows.Next() {
+		var row indexArtifactRow
+		var docSchema sql.NullString
+		if err := rows.Scan(&row.CID, &row.SignerDID, &row.CreatedAt, &row.IngestedAt, &docSchema); err != nil {
+			return nil, err
+		}
+		if docSchema.Valid {
+			value := docSchema.String
+			row.DocSchema = &value
 		}
 		result = append(result, row)
 	}
@@ -1448,7 +1565,7 @@ func (s *SQLiteStore) SetIndexProjectionVersion(v int) error {
 }
 
 func (s *SQLiteStore) ClearIndexProjection() error {
-	for _, table := range []string{"index_identity", "index_content", "content_signers", "index_countersign"} {
+	for _, table := range []string{"index_identity", "index_content", "content_signers", "index_countersign", "index_artifact"} {
 		if _, err := s.writerDB().Exec("DELETE FROM " + table); err != nil {
 			return err
 		}

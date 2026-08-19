@@ -347,10 +347,100 @@ func TestIndexCapabilityAndDisabledRoutes(t *testing.T) {
 		"/index/v0/identities",
 		"/index/v0/content",
 		"/index/v0/countersignatures?witness=" + url.QueryEscape(r.DID()),
+		"/index/v0/artifacts",
 	} {
 		status, body, _ = getIndexJSONBody(t, disabledHandler, path)
 		if status != 501 || body["error"] != "index not available" {
 			t.Fatalf("%s => status %d body %v, want 501 index not available", path, status, body)
+		}
+	}
+}
+
+func TestIndexArtifactsProjectionFiltersAndOrderedPagination(t *testing.T) {
+	r, _ := indexRelay(t)
+	handler := r.Handler()
+	signer := ingestIdentity(t, r)
+	other := ingestIdentity(t, r)
+
+	sign := func(id testIdentity, schema string, value int) string {
+		t.Helper()
+		token, cid, err := dfos.SignArtifact(
+			id.did,
+			map[string]any{"$schema": schema, "value": value},
+			id.did+"#"+id.auth.keyID,
+			id.auth.priv,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result := r.Ingest([]string{token}); result[0].Status != "new" {
+			t.Fatalf("ingest artifact: %+v", result[0])
+		}
+		return cid
+	}
+	first := sign(signer, "example/artifact-a", 1)
+	second := sign(signer, "example/artifact-b", 2)
+	third := sign(signer, "example/artifact-a", 3)
+	sign(other, "example/artifact-a", 4)
+
+	status, body, _ := getIndexJSONBody(t, handler, "/index/v0/artifacts?signer="+url.QueryEscape(signer.did))
+	rows := body["artifacts"].([]any)
+	if status != 200 || len(rows) != 3 {
+		t.Fatalf("artifacts by signer = %v status=%d", body, status)
+	}
+	got := []string{}
+	for _, raw := range rows {
+		row := raw.(map[string]any)
+		got = append(got, row["cid"].(string))
+		if row["signerDID"] != signer.did || row["createdAt"] == "" || row["ingestedAt"] == "" {
+			t.Fatalf("artifact row = %v", row)
+		}
+	}
+	want := []string{first, second, third}
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("artifact lexical order = %v, want %v", got, want)
+	}
+
+	_, bySchema, _ := getIndexJSONBody(t, handler, "/index/v0/artifacts?signer="+url.QueryEscape(signer.did)+"&docSchema="+url.QueryEscape("example/artifact-a"))
+	if len(bySchema["artifacts"].([]any)) != 2 {
+		t.Fatalf("artifacts by schema = %v", bySchema)
+	}
+	_, byCID, _ := getIndexJSONBody(t, handler, "/index/v0/artifacts?cid="+url.QueryEscape(second))
+	if cidRows := byCID["artifacts"].([]any); len(cidRows) != 1 || cidRows[0].(map[string]any)["docSchema"] != "example/artifact-b" {
+		t.Fatalf("artifact by cid = %v", byCID)
+	}
+
+	walked := []string{}
+	after := ""
+	for {
+		path := "/index/v0/artifacts?signer=" + url.QueryEscape(signer.did) + "&order=ingestedAt.desc&limit=1"
+		if after != "" {
+			path += "&after=" + url.QueryEscape(after)
+		}
+		status, page, _ := getIndexJSONBody(t, handler, path)
+		if status != 200 {
+			t.Fatalf("artifact ordered page = %v status=%d", page, status)
+		}
+		for _, raw := range page["artifacts"].([]any) {
+			walked = append(walked, raw.(map[string]any)["cid"].(string))
+		}
+		next, _ := page["next"].(string)
+		if next == "" {
+			break
+		}
+		after = next
+	}
+	sort.Strings(walked)
+	if !reflect.DeepEqual(walked, want) {
+		t.Fatalf("artifact ordered cursor walk = %v, want %v", walked, want)
+	}
+	for _, path := range []string{
+		"/index/v0/artifacts?order=bogus",
+		"/index/v0/artifacts?order=createdAt.desc&after=bogus",
+	} {
+		if status, _, _ := getIndexJSONBody(t, handler, path); status != 400 {
+			t.Fatalf("%s status = %d, want 400", path, status)
 		}
 	}
 }
@@ -598,6 +688,42 @@ func TestIndexContentTitleProjectionCircuitBreakersAndLateBlob(t *testing.T) {
 	uploadBlobViaRoute(t, r, creator, late)
 	if row := indexContentRowByID(t, handler, late.contentID); row["title"] != "late" {
 		t.Fatalf("late title row = %v", row)
+	}
+}
+
+func TestIndexContentTitleContainsPrivacyAndComposition(t *testing.T) {
+	r, store := indexRelay(t)
+	handler := r.Handler()
+	creator := ingestIdentity(t, r)
+	other := ingestIdentity(t, r)
+	publicMatch := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": "Solar Winds"}, false)
+	privateMatch := createIndexedContent(t, r, store, creator, map[string]any{"$schema": testPostSchema, "title": "Solar Secret"}, false)
+	wrongSchema := createIndexedContent(t, r, store, creator, map[string]any{"$schema": "example/note", "title": "Solar Note"}, false)
+	wrongCreator := createIndexedContent(t, r, store, other, map[string]any{"$schema": testPostSchema, "title": "Solar Other"}, false)
+	for _, pair := range []struct {
+		id      testIdentity
+		content testContent
+	}{
+		{creator, publicMatch}, {creator, privateMatch}, {creator, wrongSchema}, {other, wrongCreator},
+	} {
+		uploadBlobViaRoute(t, r, pair.id, pair.content)
+	}
+	addPublicRead(t, r, creator, publicMatch.contentID)
+	addPublicRead(t, r, creator, wrongSchema.contentID)
+	addPublicRead(t, r, other, wrongCreator.contentID)
+
+	path := "/index/v0/content?titleContains=SOLAR&docSchema=" + url.QueryEscape(testPostSchema) + "&creator=" + url.QueryEscape(creator.did)
+	status, body, _ := getIndexJSONBody(t, handler, path)
+	rows := body["content"].([]any)
+	if status != 200 || len(rows) != 1 || rows[0].(map[string]any)["contentId"] != publicMatch.contentID || rows[0].(map[string]any)["publicRead"] != true {
+		t.Fatalf("titleContains composed rows = %v status=%d", body, status)
+	}
+	if rows[0].(map[string]any)["contentId"] == privateMatch.contentID {
+		t.Fatal("titleContains exposed a non-public row")
+	}
+	status, invalid, _ := getIndexJSONBody(t, handler, "/index/v0/content?titleContains=solar&publicRead=false")
+	if status != 400 || invalid["error"] != "invalid filter combination" {
+		t.Fatalf("invalid filter combination = %v status=%d", invalid, status)
 	}
 }
 
@@ -1403,6 +1529,18 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 	if res := r.Ingest([]string{cs}); res[0].Status != "new" {
 		t.Fatalf("countersign: %+v", res[0])
 	}
+	artifactToken, artifactCID, err := dfos.SignArtifact(
+		author.did,
+		map[string]any{"$schema": "example/rebuild-artifact", "value": 1},
+		author.did+"#"+author.auth.keyID,
+		author.auth.priv,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.Ingest([]string{artifactToken}); res[0].Status != "new" {
+		t.Fatalf("artifact: %+v", res[0])
+	}
 
 	// projection currently populated
 	if indexContentRowByID(t, handler, content.contentID) == nil {
@@ -1455,6 +1593,11 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 	_, orderedCSBody, _ := getIndexJSONBody(t, handler2, "/index/v0/countersignatures?witness="+url.QueryEscape(witness.did)+"&order=ingestedAt.desc&limit=100")
 	if len(orderedCSBody["countersignatures"].([]any)) != 1 {
 		t.Fatalf("rebuilt ordered countersign rows = %v", orderedCSBody)
+	}
+	_, artifactBody, _ := getIndexJSONBody(t, handler2, "/index/v0/artifacts?cid="+url.QueryEscape(artifactCID))
+	artifactRows := artifactBody["artifacts"].([]any)
+	if len(artifactRows) != 1 || artifactRows[0].(map[string]any)["docSchema"] != "example/rebuild-artifact" {
+		t.Fatalf("rebuilt artifact rows = %v, want cid %s", artifactBody, artifactCID)
 	}
 	_, operationBody, _ := getIndexJSONBody(t, handler2, "/index/v0/operations?kind=countersign&chainId="+url.QueryEscape(content.operationCID))
 	operationRows := operationBody["operations"].([]any)

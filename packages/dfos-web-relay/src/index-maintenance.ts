@@ -39,8 +39,10 @@
 
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import {
+  artifactIndexRow,
   contentIndexRow,
   identityIndexRow,
+  type IndexArtifactRow,
   type IndexCountersignatureQueryRow,
 } from './index-routes';
 import type { IngestionResult, RelayStore, StoredPublicCredential } from './types';
@@ -67,6 +69,7 @@ export interface IndexDirtySet {
   identityDIDs: Set<string>;
   contentIds: Set<string>;
   countersigns: (IndexCountersignatureQueryRow & { witnessDID: string })[];
+  artifacts: IndexArtifactRow[];
   allContent: boolean;
   allPublicContent: boolean;
 }
@@ -76,6 +79,7 @@ export const createIndexDirtySet = (): IndexDirtySet => ({
   identityDIDs: new Set(),
   contentIds: new Set(),
   countersigns: [],
+  artifacts: [],
   allContent: false,
   allPublicContent: false,
 });
@@ -156,7 +160,7 @@ const contentIdsFromCredentialToken = (
  * Nothing is recomputed here — the batch flushes once via flushIndexMaintenance.
  *
  * Mapping (identical across all implementations):
- *  - identity-op / artifact for chain D → dirty identity row D; if the op left
+ *  - identity-op for chain D          → dirty identity row D; if the op left
  *                                         the identity DELETED, also mark all
  *                                         currently-public-read content dirty —
  *                                         a deleted identity is no longer a valid
@@ -175,6 +179,7 @@ const contentIdsFromCredentialToken = (
  *                                        (dedup returns 'duplicate', so a
  *                                        status:'new' countersign IS the accepted
  *                                        one — never a shadowed raw op)
+ *  - artifact                          → queue the standalone artifact row upsert
  */
 export const collectIndexDirtyAfterOp = async (
   result: IngestionResult,
@@ -186,13 +191,17 @@ export const collectIndexDirtyAfterOp = async (
   try {
     switch (result.kind) {
       case 'identity-op':
-      case 'artifact':
         if (result.chainId) {
           dirty.identityDIDs.add(result.chainId);
           const chain = await store.getIdentityChain(result.chainId);
           if (chain?.state.isDeleted) dirty.allPublicContent = true;
         }
         break;
+      case 'artifact': {
+        const row = artifactIndexRow(result.cid, jwsToken, new Date().toISOString());
+        if (row) dirty.artifacts.push(row);
+        break;
+      }
       case 'content-op':
         if (result.chainId) {
           dirty.contentIds.add(result.chainId);
@@ -269,6 +278,7 @@ export const flushIndexMaintenance = async (
     for (const contentId of dirty.contentIds) await recomputeContentRow(contentId, store);
     for (const did of dirty.identityDIDs) await recomputeIdentityRow(did, store);
     for (const row of dirty.countersigns) await store.putIndexCountersignatureRow(row);
+    for (const row of dirty.artifacts) await store.putIndexArtifactRow(row);
   } catch {
     // projection is a non-authoritative hint — never fail the write for it
   }

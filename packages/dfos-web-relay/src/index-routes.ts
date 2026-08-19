@@ -85,6 +85,14 @@ export interface IndexOperationRow {
   ingestedAt: string;
 }
 
+export interface IndexArtifactRow {
+  cid: string;
+  signerDID: string;
+  createdAt: string;
+  ingestedAt: string;
+  docSchema: string | null;
+}
+
 export interface IndexCredentialRow {
   cid: string;
   issuerDID: string;
@@ -208,6 +216,28 @@ export const countersignatureIndexRow = (
   relation: row.relation,
   jwsToken: row.jwsToken,
 });
+
+export const artifactIndexRow = (
+  cid: string,
+  jwsToken: string,
+  ingestedAt: string,
+): IndexArtifactRow | null => {
+  const decoded = decodeJwsUnsafe(jwsToken);
+  if (!decoded) return null;
+  const kid = typeof decoded.header.kid === 'string' ? decoded.header.kid : '';
+  const signerDID = kid.includes('#') ? kid.slice(0, kid.indexOf('#')) : kid;
+  const payload = decoded.payload as Record<string, unknown>;
+  const content = payload['content'];
+  const docSchema =
+    content !== null && typeof content === 'object' && !Array.isArray(content)
+      ? typeof (content as Record<string, unknown>)['$schema'] === 'string'
+        ? ((content as Record<string, unknown>)['$schema'] as string)
+        : null
+      : null;
+  const createdAt = typeof payload['createdAt'] === 'string' ? payload['createdAt'] : '';
+  if (!signerDID || !createdAt) return null;
+  return { cid, signerDID, createdAt, ingestedAt, docSchema };
+};
 
 const profileProjection = async (
   chain: StoredIdentityChain,
