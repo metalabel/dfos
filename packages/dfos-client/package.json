@@ -58,8 +58,8 @@
     "prepublishOnly": "pnpm build"
   },
   "peerDependencies": {
-    "@metalabel/dfos-protocol": "^0.27.0",
-    "@metalabel/dfos-web-relay": "^0.27.0"
+    "@metalabel/dfos-protocol": "^0.28.0",
+    "@metalabel/dfos-web-relay": "^0.28.0"
   },
   "devDependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
