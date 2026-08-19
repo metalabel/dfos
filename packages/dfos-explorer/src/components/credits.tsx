@@ -208,9 +208,18 @@ const VerifiedCredits = (props: { contentId: string; entries: readonly unknown[]
 // the AMBER tier — the relay's projection of the same list, one request
 // -----------------------------------------------------------------------------
 
-/** One projected credit. `position` 0 is the primary author (the entry array's
- *  order is the document's display order), and a claim is reported as PRESENT —
- *  never as valid, which the relay does not and must not know. */
+/**
+ * One projected credit. `position` 0 is the primary author (the entry array's
+ * order is the document's display order).
+ *
+ * THE BADGE REPORTS PRESENCE, NOT A VERDICT, and its wording has to carry that on
+ * its own — a reader sees the badge, not this comment. `hasClaim` is byte-presence
+ * of a claim token, which is equally true of a token whose signature fails, whose
+ * bind names a different role, or that was replayed from another chain: all three
+ * resolve INVALID under the fold. So the amber tier borrows none of the four
+ * verification words — not "claimed", and not "unclaimed" either, since both are
+ * verdicts the relay is in no position to reach. It says what is attached.
+ */
 const IndexCreditRowView = (props: { row: IndexCreditRow }) => {
   const { row } = props;
   return (
@@ -218,8 +227,8 @@ const IndexCreditRowView = (props: { row: IndexCreditRow }) => {
       state="pend"
       note={
         row.hasClaim
-          ? 'the head document carries a self-claim token for this entry — byte-presence, not a verdict; the fold below checks its signature and bind'
-          : 'the document signer asserts this credit; no claim token accompanies it'
+          ? 'the head document carries a claim token for this entry — byte-presence only; whether it verifies, and binds to this chain, DID, and role, is the fold’s answer'
+          : 'the document signer asserts this credit; the relay projects no claim token alongside it'
       }
     >
       <DidChip did={row.did} />
@@ -231,9 +240,9 @@ const IndexCreditRowView = (props: { row: IndexCreditRow }) => {
       )}
       {row.position === 0 ? <span class="lbl"> primary</span> : null}{' '}
       {row.hasClaim ? (
-        <Badge state="warn">self-claimed</Badge>
+        <Badge state="warn">claim attached</Badge>
       ) : (
-        <Badge state="neutral">unclaimed</Badge>
+        <Badge state="neutral">no claim</Badge>
       )}
     </Check>
   );
@@ -268,15 +277,53 @@ const IndexCredits = (props: { page: IndexPage<IndexCreditRow> }) => {
 // -----------------------------------------------------------------------------
 
 /**
- * The credits panel in whichever tier is actually available. `entries` is the
- * document's own `credits[]`, present only once the served bytes re-hashed to the
- * committed document CID on a verified chain (see the gate in views/content.tsx);
- * when it is null the relay's projection stands in, amber.
+ * The document's own `credits[]`, read from bytes the caller has already
+ * re-hashed to the committed document CID. TOTAL, and deliberately so: a
+ * document with no credits — the field absent, an empty array, or a decoded
+ * shape that cannot carry one — yields an EMPTY LIST, which is a verified fact
+ * ("this document credits nobody") and emphatically not the same as having no
+ * answer yet. Collapsing those two into one null is what let a relay projection
+ * outlive its own contradiction; see {@link creditsTier}. Pure, unit-tested.
+ */
+export const documentCredits = (parsed: unknown): readonly unknown[] => {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return [];
+  const credits = (parsed as Record<string, unknown>)['credits'];
+  return Array.isArray(credits) ? credits : [];
+};
+
+/** Which tier the credits panel should render. */
+export type CreditsTier = 'verified' | 'index' | 'none';
+
+/**
+ * The tier rule, and the whole trust ordering in one place: THE FOLD ALWAYS WINS.
  *
- * Renders NOTHING when neither tier has anything: an uncredited document, a relay
- * whose index predates the credits family, or a chain that is not publicly
- * readable (which by design has zero credit rows — attribution is never more
- * public than the content it attributes). Credits are enrichment, so their
+ * `entries` is null only while the fold has no answer — the bytes are not fetched,
+ * or not yet re-hashed to the committed CID on a verified chain. In exactly that
+ * window the relay's projection may stand in. Once `entries` is a list the fold
+ * has spoken, and an EMPTY list is a verdict, not a gap: this document credits
+ * nobody. It must retire the projection rather than leave it standing, or a stale
+ * relay — or a hostile one — keeps rendering credits on a chain whose verified
+ * current document has none, which is precisely the assertion the fold exists to
+ * overrule. Pure, unit-tested.
+ */
+export const creditsTier = (
+  entries: readonly unknown[] | null,
+  indexRowCount: number,
+): CreditsTier => {
+  if (entries !== null) return entries.length > 0 ? 'verified' : 'none';
+  return indexRowCount > 0 ? 'index' : 'none';
+};
+
+/**
+ * The credits panel in whichever tier is actually available — see
+ * {@link creditsTier} for the ordering. `entries` is the document's own
+ * `credits[]` once the served bytes re-hashed to the committed document CID on a
+ * verified chain (see the gate in views/content.tsx), and null until then.
+ *
+ * Renders NOTHING when no tier has anything: a document the fold proves credits
+ * nobody, a relay whose index predates the credits family, or a chain that is not
+ * publicly readable (which by design has zero credit rows — attribution is never
+ * more public than the content it attributes). Credits are enrichment, so their
  * absence is silent rather than an error panel.
  */
 export const Credits = (props: {
@@ -284,15 +331,16 @@ export const Credits = (props: {
   entries: readonly unknown[] | null;
   indexed: boolean | null;
 }) => {
-  // the amber prelude runs only while the verified tier is unavailable — once the
-  // fold has the bytes there is nothing a projection can add
+  // the amber prelude runs only while the fold has no answer — once it does,
+  // there is nothing a projection can add and it must not keep fetching
   const page = useIndexCredits(props.indexed === true && props.entries === null, {
     contentId: props.contentId,
   });
+  const tier = creditsTier(props.entries, page.rows.length);
 
-  if (props.entries !== null) {
-    return <VerifiedCredits contentId={props.contentId} entries={props.entries} />;
+  if (tier === 'verified') {
+    return <VerifiedCredits contentId={props.contentId} entries={props.entries ?? []} />;
   }
-  if (page.rows.length === 0) return null;
-  return <IndexCredits page={page} />;
+  if (tier === 'index') return <IndexCredits page={page} />;
+  return null;
 };

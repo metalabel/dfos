@@ -520,8 +520,9 @@ export const Identity = (props: { did: string }) => {
 // -----------------------------------------------------------------------------
 
 /** One credited work: the title if the relay projects one (amber), the role, and
- *  whether the document carries a self-claim token — byte-presence, not validity.
- *  Opening the work is where the claim is actually folded. */
+ *  whether a claim token is ATTACHED — byte-presence, which is equally true of a
+ *  token that fails to verify or binds to a different role. None of the four
+ *  verification words appear here; opening the work is where the fold happens. */
 const CreditedRow = (props: { row: IndexCreditRow }) => {
   const { row } = props;
   const title = projectedTitle(useIndexContentRow(row.contentId));
@@ -544,9 +545,9 @@ const CreditedRow = (props: { row: IndexCreditRow }) => {
       </td>
       <td>
         {row.hasClaim ? (
-          <Badge state="warn">self-claimed</Badge>
+          <Badge state="warn">claim attached</Badge>
         ) : (
-          <Badge state="neutral">unclaimed</Badge>
+          <Badge state="neutral">no claim</Badge>
         )}
       </td>
     </tr>
@@ -588,6 +589,10 @@ const CreditedOn = (props: { did: string; indexed: boolean | null }) => {
           <button onClick={page.retry} disabled={page.loading}>
             {page.loading ? 'retrying…' : 'retry'}
           </button>
+          {/* a stale or hand-edited `?cafter=` is REJECTED by the relay, and
+              retrying re-sends the same bad cursor forever — so a deep link that
+              has gone bad always offers a way back to the top. */}
+          {page.offFirst ? <button onClick={page.first}> start over</button> : null}
         </div>
       ) : state === 'loading' ? (
         <span class="muted">reading credited works…</span>

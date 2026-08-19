@@ -14,7 +14,7 @@ import type { Resolved, ResolvedContent } from '@metalabel/dfos-client';
 import { dagCborCanonicalEncode } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
-import { Credits } from '../components/credits';
+import { Credits, documentCredits } from '../components/credits';
 import { IndexPanel } from '../components/index-view';
 import { JsonView } from '../components/json-view';
 import { MediaPanel } from '../components/media';
@@ -277,6 +277,12 @@ export const Content = (props: { id: string }) => {
   // gate the avatar path uses (see SchemaPanels). Otherwise a relay could dress up
   // arbitrary bytes as attribution, and a claimed badge on bytes that were never
   // committed is worse than showing no credits at all.
+  //
+  // THE NULL HERE MEANS "NO ANSWER YET", AND ONLY THAT. Once the gate holds, the
+  // fold always yields a list — empty when this document credits nobody, which is
+  // a verdict the panel uses to retire the relay's projection rather than a gap it
+  // could fill. `derivedCid` is only ever set on the JSON-parse path, so a trusted
+  // doc always has `parsed` and the extraction is total.
   const docBytesTrusted = !!chain && !!doc?.derivedCid && doc.derivedCid === docCid;
   const credits = docBytesTrusted ? documentCredits(doc?.parsed) : null;
 
@@ -445,12 +451,6 @@ export const Content = (props: { id: string }) => {
       />
     </>
   );
-};
-
-const documentCredits = (parsed: unknown): readonly unknown[] | null => {
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-  const credits = (parsed as Record<string, unknown>)['credits'];
-  return Array.isArray(credits) && credits.length > 0 ? credits : null;
 };
 
 /** Schema-aware extras: index chains get the fold, profile avatars get media. */
