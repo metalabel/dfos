@@ -46,7 +46,7 @@ const Scalar = (props: { value: string | number | boolean | null }) => {
   if (v === null) return <span class="jv-null">null</span>;
   if (typeof v === 'boolean') return <span class="jv-bool">{String(v)}</span>;
   if (typeof v === 'number') return <span class="jv-num">{String(v)}</span>;
-  if (DID_RE.test(v)) return <DidLink did={v} />;
+  if (DID_RE.test(v)) return <DidLink did={v} plain />;
   if (CID_RE.test(v)) return <TruncId value={v} />;
   // real newlines: the whole point — an escaped `\n` run becomes a block.
   if (v.includes('\n')) return <pre class="jv-multiline">{v}</pre>;
