@@ -29,6 +29,8 @@ export {
   type IndexCountersignatureRow,
   type IndexCredentialRow,
   type IndexIdentityRow,
+  type IndexOperationRow,
+  type IndexRecencyOrder,
   type IndexProfile,
 } from './index-routes';
 export { MemoryRelayStore } from './store';

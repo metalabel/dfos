@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -27,7 +28,9 @@ const (
 	// the row's publicRead — a non-public document never projects its extracted
 	// field onto the anonymous index surface — so upgraded relays rebuild any rows
 	// a pre-gate builder persisted with a non-public name/title.
-	IndexProjectionVersion = 3
+	//
+	// v4: persist countersignature created/ingested clocks for ordered queries.
+	IndexProjectionVersion = 4
 )
 
 var (
@@ -78,10 +81,12 @@ type indexContentPage struct {
 }
 
 type indexCountersignatureRow struct {
-	CID       string  `json:"cid"`
-	TargetCID string  `json:"targetCID"`
-	Relation  *string `json:"relation"`
-	JWSToken  string  `json:"jwsToken"`
+	CID        string  `json:"cid"`
+	TargetCID  string  `json:"targetCID"`
+	Relation   *string `json:"relation"`
+	JWSToken   string  `json:"jwsToken"`
+	CreatedAt  string  `json:"-"`
+	IngestedAt string  `json:"-"`
 }
 
 type indexCountersignaturePage struct {
@@ -93,9 +98,23 @@ type indexCountersignaturePage struct {
 type indexCredentialRow struct {
 	CID       string            `json:"cid"`
 	IssuerDID string            `json:"issuerDID"`
+	Aud       string            `json:"aud"`
 	Att       []AttenuationPair `json:"att"`
 	Exp       int64             `json:"exp"`
 	JWSToken  string            `json:"jwsToken"`
+}
+
+type indexOperationRow struct {
+	CID        string `json:"cid"`
+	Kind       string `json:"kind"`
+	ChainID    string `json:"chainId"`
+	CreatedAt  string `json:"createdAt"`
+	IngestedAt string `json:"ingestedAt"`
+}
+
+type indexOperationPage struct {
+	Operations []indexOperationRow `json:"operations"`
+	Next       *string             `json:"next"`
 }
 
 type indexCredentialPage struct {
@@ -114,8 +133,18 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	hasPublicProfile := parseBooleanQuery(req.URL.Query().Get("hasPublicProfile"))
-	nameContains := req.URL.Query().Get("nameContains")
+	query := req.URL.Query()
+	hasPublicProfile, validBoolean := parseBooleanQuery(query, "hasPublicProfile")
+	if !validBoolean {
+		writeError(w, 400, "invalid boolean")
+		return
+	}
+	did := query.Get("did")
+	if _, present := firstQueryValue(query, "did"); present && !isValidDfosDid(did) {
+		writeError(w, 400, "invalid DID")
+		return
+	}
+	nameContains := query.Get("nameContains")
 	order, validOrder := parseIndexOrder(req.URL.Query().Get("order"))
 	if !validOrder {
 		writeError(w, 400, "invalid order")
@@ -132,6 +161,7 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 	}
 	limit := parseLimit(req, 100, 1000)
 	rows, err := r.readStore.QueryIndexIdentities(IndexIdentityQuery{
+		DID:              did,
 		HasPublicProfile: hasPublicProfile,
 		NameContains:     nameContains,
 		After:            req.URL.Query().Get("after"),
@@ -179,7 +209,20 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 	if value, ok := firstQueryValue(query, "documentCID"); ok {
 		documentCID = &value
 	}
-	publicRead := parseBooleanQuery(query.Get("publicRead"))
+	publicRead, validBoolean := parseBooleanQuery(query, "publicRead")
+	if !validBoolean {
+		writeError(w, 400, "invalid boolean")
+		return
+	}
+	isDeleted, validBoolean := parseBooleanQuery(query, "isDeleted")
+	if !validBoolean {
+		writeError(w, 400, "invalid boolean")
+		return
+	}
+	var contentID *string
+	if value, ok := firstQueryValue(query, "contentId"); ok {
+		contentID = &value
+	}
 	order, validOrder := parseIndexOrder(query.Get("order"))
 	if !validOrder {
 		writeError(w, 400, "invalid order")
@@ -197,11 +240,13 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 	limit := parseLimit(req, 100, 1000)
 
 	rows, err := r.readStore.QueryIndexContent(IndexContentQuery{
+		ContentID:    contentID,
 		Creator:      creator,
 		Signer:       signer,
 		DocSchema:    docSchema,
 		DocumentCID:  documentCID,
 		PublicRead:   publicRead,
+		IsDeleted:    isDeleted,
 		After:        query.Get("after"),
 		OrderedAfter: orderedAfter,
 		Order:        order,
@@ -228,22 +273,50 @@ func (r *Relay) handleIndexCountersignatures(w http.ResponseWriter, req *http.Re
 		return
 	}
 
-	witness := req.URL.Query().Get("witness")
+	query := req.URL.Query()
+	witness := query.Get("witness")
 	if witness == "" || !isValidDfosDid(witness) {
 		writeError(w, 400, "invalid DID")
 		return
 	}
 
+	var relation *string
+	if value, ok := firstQueryValue(query, "relation"); ok {
+		relation = &value
+	}
+	order, validOrder := parseIndexRecencyOrder(query.Get("order"), "")
+	if !validOrder {
+		writeError(w, 400, "invalid order")
+		return
+	}
+	var orderedAfter *indexOrderedCursor
+	if order != "" && query.Get("after") != "" {
+		cursor, ok := decodeIndexOrderedCursor(query.Get("after"))
+		if !ok {
+			writeError(w, 400, "invalid cursor")
+			return
+		}
+		orderedAfter = cursor
+	}
 	limit := parseLimit(req, 100, 1000)
 	rows, err := r.readStore.QueryIndexCountersignatures(IndexCountersignatureQuery{
-		Witness: witness,
-		After:   req.URL.Query().Get("after"),
-		Limit:   limit,
+		Witness:      witness,
+		Relation:     relation,
+		After:        query.Get("after"),
+		OrderedAfter: orderedAfter,
+		Order:        order,
+		Limit:        limit,
 	})
 	if storeErr(w, err) {
 		return
 	}
-	writeJSON(w, 200, indexCountersignaturePage{Witness: witness, Countersignatures: rows, Next: nextCursor(len(rows), limit, func() string { return rows[len(rows)-1].CID })})
+	writeJSON(w, 200, indexCountersignaturePage{Witness: witness, Countersignatures: rows, Next: nextIndexCursor(len(rows), limit, order, func() (string, string) {
+		row := rows[len(rows)-1]
+		if order == "createdAt.desc" {
+			return row.CreatedAt, row.CID
+		}
+		return row.IngestedAt, row.CID
+	})})
 }
 
 func (r *Relay) handleIndexCredentials(w http.ResponseWriter, req *http.Request) {
@@ -263,10 +336,15 @@ func (r *Relay) handleIndexCredentials(w http.ResponseWriter, req *http.Request)
 	if value, ok := firstQueryValue(query, "resource"); ok {
 		resource = &value
 	}
+	var action *string
+	if value, ok := firstQueryValue(query, "action"); ok {
+		action = &value
+	}
 	limit := parseLimit(req, 100, 1000)
 	rows, err := r.readStore.QueryIndexCredentials(IndexCredentialQuery{
 		Issuer:   issuer,
 		Resource: resource,
+		Action:   action,
 		After:    query.Get("after"),
 		Limit:    limit,
 	})
@@ -274,6 +352,56 @@ func (r *Relay) handleIndexCredentials(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	writeJSON(w, 200, indexCredentialPage{Credentials: rows, Next: nextCursor(len(rows), limit, func() string { return rows[len(rows)-1].CID })})
+}
+
+func (r *Relay) handleIndexOperations(w http.ResponseWriter, req *http.Request) {
+	if !r.indexEnabled {
+		writeError(w, 501, "index not available")
+		return
+	}
+
+	query := req.URL.Query()
+	kind := query.Get("kind")
+	if _, present := firstQueryValue(query, "kind"); present && !isIndexOperationKind(kind) {
+		writeError(w, 400, "invalid kind")
+		return
+	}
+	var chainID *string
+	if value, ok := firstQueryValue(query, "chainId"); ok {
+		chainID = &value
+	}
+	order, validOrder := parseIndexRecencyOrder(query.Get("order"), "ingestedAt.desc")
+	if !validOrder {
+		writeError(w, 400, "invalid order")
+		return
+	}
+	var orderedAfter *indexOrderedCursor
+	if query.Get("after") != "" {
+		cursor, ok := decodeIndexOrderedCursor(query.Get("after"))
+		if !ok {
+			writeError(w, 400, "invalid cursor")
+			return
+		}
+		orderedAfter = cursor
+	}
+	limit := parseLimit(req, 100, 1000)
+	rows, err := r.readStore.QueryIndexOperations(IndexOperationQuery{
+		Kind:         kind,
+		ChainID:      chainID,
+		OrderedAfter: orderedAfter,
+		Order:        order,
+		Limit:        limit,
+	})
+	if storeErr(w, err) {
+		return
+	}
+	writeJSON(w, 200, indexOperationPage{Operations: rows, Next: nextIndexCursor(len(rows), limit, order, func() (string, string) {
+		row := rows[len(rows)-1]
+		if order == "createdAt.desc" {
+			return row.CreatedAt, row.CID
+		}
+		return row.IngestedAt, row.CID
+	})})
 }
 
 // nextCursor returns the keyset continuation cursor: the last row's key when the
@@ -455,16 +583,20 @@ func headDocumentProjection(chain StoredContentChain, store Store) (map[string]a
 	return doc, &schemaValue
 }
 
-func parseBooleanQuery(raw string) *bool {
+func parseBooleanQuery(query map[string][]string, key string) (*bool, bool) {
+	raw, present := firstQueryValue(query, key)
+	if !present {
+		return nil, true
+	}
 	switch raw {
 	case "true":
 		value := true
-		return &value
+		return &value, true
 	case "false":
 		value := false
-		return &value
+		return &value, true
 	default:
-		return nil
+		return nil, false
 	}
 }
 
@@ -476,6 +608,26 @@ func parseIndexOrder(raw string) (string, bool) {
 		return raw, true
 	default:
 		return "", false
+	}
+}
+
+func parseIndexRecencyOrder(raw, defaultOrder string) (string, bool) {
+	switch raw {
+	case "":
+		return defaultOrder, true
+	case "createdAt.desc", "ingestedAt.desc":
+		return raw, true
+	default:
+		return "", false
+	}
+}
+
+func isIndexOperationKind(kind string) bool {
+	switch kind {
+	case "identity-op", "content-op", "artifact", "countersign", "revocation", "credential":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -512,6 +664,25 @@ func createdAtOf(log []string) string {
 	return ""
 }
 
+// operationCreatedAt normalizes the operation's author clock to the index wire
+// timestamp. Protocol operations carry createdAt; credentials carry numeric iat.
+func operationCreatedAt(jwsToken string) string {
+	_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+	if err != nil || payload == nil {
+		return ""
+	}
+	if value, ok := payload["createdAt"].(string); ok {
+		return value
+	}
+	if value, ok := payload["iat"].(float64); ok {
+		return time.Unix(int64(value), 0).UTC().Format("2006-01-02T15:04:05.000Z")
+	}
+	if value, ok := payload["iat"].(int64); ok {
+		return time.Unix(value, 0).UTC().Format("2006-01-02T15:04:05.000Z")
+	}
+	return ""
+}
+
 func firstQueryValue(query map[string][]string, key string) (string, bool) {
 	values, ok := query[key]
 	if !ok {
@@ -543,11 +714,13 @@ func countersignatureFromToken(targetCID, jwsToken string) *StoredCountersignatu
 	if value, ok := payload["relation"].(string); ok {
 		relation = &value
 	}
+	createdAt, _ := payload["createdAt"].(string)
 	return &StoredCountersignature{
 		CID:        cid,
 		TargetCID:  targetCID,
 		WitnessDID: witnessDID,
 		Relation:   relation,
 		JWSToken:   jwsToken,
+		CreatedAt:  createdAt,
 	}
 }

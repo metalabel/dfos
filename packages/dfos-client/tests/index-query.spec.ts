@@ -45,7 +45,7 @@ const IDENTITY_ROW = {
 };
 
 describe('index (v0) client seam', () => {
-  it('fetches an identities page and passes hasPublicProfile/limit through', async () => {
+  it('fetches an identities page and passes did/hasPublicProfile/limit through', async () => {
     let seen: URL | undefined;
     const client = createClient({
       relays: [A],
@@ -58,28 +58,42 @@ describe('index (v0) client seam', () => {
         },
       }),
     });
-    const page = await client.indexIdentities({ hasPublicProfile: true, limit: 50 });
+    const page = await client.indexIdentities({
+      did: IDENTITY_ROW.did,
+      hasPublicProfile: true,
+      limit: 50,
+    });
     expect(page.identities).toHaveLength(1);
     expect(page.identities[0]?.profile?.name).toBe('asha');
     expect(page.next).toBeNull();
     expect(seen?.searchParams.get('hasPublicProfile')).toBe('true');
+    expect(seen?.searchParams.get('did')).toBe(IDENTITY_ROW.did);
     expect(seen?.searchParams.get('limit')).toBe('50');
   });
 
   it('fails over past a 501 relay to an index-capable one', async () => {
+    let seen: URL | undefined;
     const client = createClient({
       relays: [A, B],
       fetch: indexFetch({
         [A]: () => new Response('index not supported', { status: 501 }),
-        [B]: (path) =>
-          path === '/index/v0/content'
+        [B]: (path, url) => {
+          seen = url;
+          return path === '/index/v0/content'
             ? json({ content: [{ contentId: 'c1' }], next: 'c1' })
-            : new Response('nope', { status: 404 }),
+            : new Response('nope', { status: 404 });
+        },
       }),
     });
-    const page = await client.indexContent({ creator: 'did:dfos:x' });
+    const page = await client.indexContent({
+      contentId: 'c1',
+      creator: 'did:dfos:x',
+      isDeleted: false,
+    });
     expect(page.content).toHaveLength(1);
     expect(page.next).toBe('c1');
+    expect(seen?.searchParams.get('contentId')).toBe('c1');
+    expect(seen?.searchParams.get('isDeleted')).toBe('false');
   });
 
   it('returns an empty page when every relay declines (501 / unreachable)', async () => {
@@ -104,18 +118,32 @@ describe('index (v0) client seam', () => {
           seen = url;
           return path === '/index/v0/credentials'
             ? json({
-                credentials: [{ cid: 'cr1', issuerDID: 'did:dfos:x', att: [], jwsToken: 't' }],
+                credentials: [
+                  {
+                    cid: 'cr1',
+                    issuerDID: 'did:dfos:x',
+                    aud: '*',
+                    att: [],
+                    exp: 1,
+                    jwsToken: 't',
+                  },
+                ],
                 next: null,
               })
             : new Response('nope', { status: 404 });
         },
       }),
     });
-    const page = await client.indexCredentials({ issuer: 'did:dfos:x', resource: 'chain:c1' });
+    const page = await client.indexCredentials({
+      issuer: 'did:dfos:x',
+      resource: 'chain:c1',
+      action: 'read',
+    });
     expect(page.credentials).toHaveLength(1);
     expect(seen?.pathname).toBe('/index/v0/credentials');
     expect(seen?.searchParams.get('issuer')).toBe('did:dfos:x');
     expect(seen?.searchParams.get('resource')).toBe('chain:c1');
+    expect(seen?.searchParams.get('action')).toBe('read');
   });
 
   it('credentials returns a genuine 200-empty page normally (no throw)', async () => {
@@ -157,10 +185,16 @@ describe('index (v0) client seam', () => {
         },
       }),
     });
-    const page = await client.indexCountersignatures('did:dfos:w', { limit: 10 });
+    const page = await client.indexCountersignatures('did:dfos:w', {
+      relation: 'endorses',
+      order: 'createdAt.desc',
+      limit: 10,
+    });
     expect(page.witness).toBe('did:dfos:w');
     expect(seen?.pathname).toBe('/index/v0/countersignatures');
     expect(seen?.searchParams.get('witness')).toBe('did:dfos:w');
+    expect(seen?.searchParams.get('relation')).toBe('endorses');
+    expect(seen?.searchParams.get('order')).toBe('createdAt.desc');
     expect(seen?.searchParams.get('limit')).toBe('10');
   });
 

@@ -34,6 +34,7 @@ export type {
   IndexIdentityProfile,
   IndexIdentityRow,
   IndexOrder,
+  IndexRecencyOrder,
   LogOp,
   Provenance,
   RelayHealth,

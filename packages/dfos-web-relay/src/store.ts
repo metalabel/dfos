@@ -15,11 +15,13 @@ import {
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
   IndexContentRow,
-  IndexCountersignatureRow,
+  IndexCountersignatureQueryRow,
   IndexCredentialRow,
   IndexIdentityRow,
+  IndexOperationRow,
   IndexOrder,
   IndexOrderedCursor,
+  IndexRecencyOrder,
 } from './index-routes';
 import { createKeyResolver } from './ingest';
 import { decodeSigningCursor, encodeSigningCursor } from './types';
@@ -161,8 +163,10 @@ export class MemoryRelayStore implements RelayStore {
   /** Countersignature projection rows keyed by cid (carry witnessDID column). */
   private indexCountersignatureRows = new Map<
     string,
-    IndexCountersignatureRow & { witnessDID: string }
+    IndexCountersignatureQueryRow & { witnessDID: string }
   >();
+  /** Relay-observed operation-log rows keyed by operation CID. */
+  private indexOperationRows = new Map<string, IndexOperationRow>();
 
   async pruneExpiredSignRequests(now: number): Promise<void> {
     for (const [cid, request] of this.signRequests) {
@@ -375,6 +379,7 @@ export class MemoryRelayStore implements RelayStore {
   // --- index (v0) materialized projection ---
 
   async queryIndexIdentities(q: {
+    did?: string;
     hasPublicProfile?: boolean;
     nameContains?: string;
     after?: string;
@@ -383,6 +388,7 @@ export class MemoryRelayStore implements RelayStore {
     limit: number;
   }): Promise<IndexIdentityRow[]> {
     const rows = [...this.indexIdentityRows.values()].filter((row) => {
+      if (q.did !== undefined && row.did !== q.did) return false;
       if (q.hasPublicProfile !== undefined) {
         const isPublic = row.profile !== null && row.profile.publicRead;
         if (isPublic !== q.hasPublicProfile) return false;
@@ -413,17 +419,20 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async queryIndexContent(q: {
+    contentId?: string;
     creator?: string;
     signer?: string;
     docSchema?: string;
     documentCID?: string;
     publicRead?: boolean;
+    isDeleted?: boolean;
     after?: string;
     orderedAfter?: IndexOrderedCursor;
     order?: IndexOrder;
     limit: number;
   }): Promise<IndexContentRow[]> {
     const rows = [...this.indexContentRows.values()].filter((row) => {
+      if (q.contentId !== undefined && row.contentId !== q.contentId) return false;
       if (q.creator !== undefined && row.creatorDID !== q.creator) return false;
       if (q.signer !== undefined && !this.indexContentSigners.get(row.contentId)?.has(q.signer)) {
         return false;
@@ -431,6 +440,7 @@ export class MemoryRelayStore implements RelayStore {
       if (q.docSchema !== undefined && row.docSchema !== q.docSchema) return false;
       if (q.documentCID !== undefined && row.currentDocumentCID !== q.documentCID) return false;
       if (q.publicRead !== undefined && row.publicRead !== q.publicRead) return false;
+      if (q.isDeleted !== undefined && row.isDeleted !== q.isDeleted) return false;
       return true;
     });
     if (q.order) {
@@ -447,21 +457,35 @@ export class MemoryRelayStore implements RelayStore {
 
   async queryIndexCountersignatures(q: {
     witness: string;
+    relation?: string;
     after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexRecencyOrder;
     limit: number;
-  }): Promise<IndexCountersignatureRow[]> {
+  }): Promise<IndexCountersignatureQueryRow[]> {
     const rows = [...this.indexCountersignatureRows.values()].filter(
-      (row) => row.witnessDID === q.witness,
+      (row) =>
+        row.witnessDID === q.witness && (q.relation === undefined || row.relation === q.relation),
     );
     // Strip the witnessDID column — the wire row never carries it (the witness
     // is echoed at the response top level).
     const wire = rows.map(({ witnessDID: _witnessDID, ...row }) => row);
+    if (q.order) {
+      return pageOrderedRows(
+        wire,
+        (row) => row.cid,
+        (row) => row[q.order === 'createdAt.desc' ? 'createdAt' : 'ingestedAt'],
+        q.orderedAfter,
+        q.limit,
+      );
+    }
     return pageRows(wire, (row) => row.cid, q.after, q.limit);
   }
 
   async queryIndexCredentials(q: {
     issuer?: string;
     resource?: string;
+    action?: string;
     after?: string;
     limit: number;
   }): Promise<IndexCredentialRow[]> {
@@ -475,11 +499,15 @@ export class MemoryRelayStore implements RelayStore {
               entry.resource === q.resource || (isChainRequest && entry.resource === 'chain:*'),
           );
         }
+        if (q.action !== undefined && !cred.att.some((entry) => entry.action === q.action)) {
+          return false;
+        }
         return true;
       })
       .map((cred) => ({
         cid: cred.cid,
         issuerDID: cred.issuerDID,
+        aud: '*' as const,
         // Project att down to {resource, action} only. The Attenuation schema is a
         // looseObject, so a credential MAY carry extra att keys — but the Go relay
         // rebuilds att as a fixed {resource, action} pair at ingest, so emitting
@@ -508,9 +536,30 @@ export class MemoryRelayStore implements RelayStore {
   }
 
   async putIndexCountersignatureRow(
-    row: IndexCountersignatureRow & { witnessDID: string },
+    row: IndexCountersignatureQueryRow & { witnessDID: string },
   ): Promise<void> {
     this.indexCountersignatureRows.set(row.cid, row);
+  }
+
+  async queryIndexOperations(q: {
+    kind?: import('./types').OperationKind;
+    chainId?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order: IndexRecencyOrder;
+    limit: number;
+  }): Promise<IndexOperationRow[]> {
+    const rows = [...this.indexOperationRows.values()].filter(
+      (row) =>
+        (q.kind === undefined || row.kind === q.kind) &&
+        (q.chainId === undefined || row.chainId === q.chainId),
+    );
+    return pageOrderedRows(
+      rows,
+      (row) => row.cid,
+      (row) => row[q.order === 'createdAt.desc' ? 'createdAt' : 'ingestedAt'],
+      q.orderedAfter,
+      q.limit,
+    );
   }
 
   async getIndexIdentityDIDsByProfileAnchor(contentId: string): Promise<string[]> {
@@ -566,6 +615,22 @@ export class MemoryRelayStore implements RelayStore {
 
   async appendToLog(entry: LogEntry): Promise<void> {
     this.operationLog.push(entry);
+    const payload = decodeJwsUnsafe(entry.jwsToken)?.payload;
+    const authoredAt = payload?.createdAt;
+    const issuedAt = payload?.iat;
+    const createdAt =
+      typeof authoredAt === 'string'
+        ? authoredAt
+        : typeof issuedAt === 'number' && Number.isFinite(issuedAt)
+          ? new Date(issuedAt * 1000).toISOString()
+          : '';
+    this.indexOperationRows.set(entry.cid, {
+      cid: entry.cid,
+      kind: entry.kind,
+      chainId: entry.chainId,
+      createdAt,
+      ingestedAt: new Date().toISOString(),
+    });
   }
 
   async readLog(params: {

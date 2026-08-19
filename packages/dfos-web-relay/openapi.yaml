@@ -656,6 +656,12 @@ paths:
         absent) return 501.
       tags: [Index]
       parameters:
+        - name: did
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact DID match (zero or one row)
         - name: hasPublicProfile
           in: query
           required: false
@@ -671,6 +677,13 @@ paths:
           schema:
             type: string
           description: Case-insensitive substring filter over the projected profile name. Non-authoritative (index hint).
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [genesisAt.desc, headAt.desc]
+          description: Optional author-time ordering; ordered cursors are opaque
         - name: after
           in: query
           required: false
@@ -771,12 +784,24 @@ paths:
         folding. Relays without the capability return 501.
       tags: [Index]
       parameters:
+        - name: contentId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact contentId match (zero or one row)
         - name: creator
           in: query
           required: false
           schema:
             type: string
           description: 'Exact match on the chain creator (genesis signer) DID'
+        - name: signer
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact DID match against accepted operation signers in the chain
         - name: docSchema
           in: query
           required: false
@@ -791,6 +816,25 @@ paths:
           schema:
             type: boolean
           description: Filter on the standing public-read grant fold
+        - name: documentCID
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact match against currentDocumentCID
+        - name: isDeleted
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Exact match against terminal deletion state
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [genesisAt.desc, headAt.desc]
+          description: Optional author-time ordering; ordered cursors are opaque
         - name: after
           in: query
           required: false
@@ -830,6 +874,7 @@ paths:
                           currentDocumentCID,
                           publicRead,
                           docSchema,
+                          title,
                         ]
                       properties:
                         contentId:
@@ -861,6 +906,10 @@ paths:
                           description: >-
                             $schema declared by the held head document; null when
                             bytes are not held or not decodable
+                        title:
+                          type: string
+                          nullable: true
+                          description: The public post/v1 display-name projection, null on any circuit breaker
                   next:
                     type: string
                     nullable: true
@@ -893,6 +942,19 @@ paths:
           schema:
             type: string
           description: 'Witness DID (canonical 31-char did:dfos)'
+        - name: relation
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact opaque relation match
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [createdAt.desc, ingestedAt.desc]
+          description: Optional recency ordering; ordered cursors are opaque
         - name: after
           in: query
           required: false
@@ -977,6 +1039,12 @@ paths:
           schema:
             type: string
           description: 'Exact match against an att[].resource. For a chain resource the chain:* wildcard bucket is unioned in.'
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'Exact match against an att[].action'
         - name: after
           in: query
           required: false
@@ -1003,12 +1071,15 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [cid, issuerDID, att, exp, jwsToken]
+                      required: [cid, issuerDID, aud, att, exp, jwsToken]
                       properties:
                         cid:
                           type: string
                         issuerDID:
                           type: string
+                        aud:
+                          type: string
+                          enum: ['*']
                         att:
                           type: array
                           items:
@@ -1031,6 +1102,90 @@ paths:
                     description: Cursor for the next page (pass as `after`), or null when the page was not full
         '400':
           description: Malformed issuer DID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /index/v0/operations:
+    get:
+      operationId: indexOperations
+      summary: Relay-held operation recency feed (non-authoritative index)
+      description: |
+        Metadata-only browse ordering over accepted operations. createdAt is
+        author-claimed (credential iat normalized to ISO 8601); ingestedAt is
+        relay-observed. Rows never include JWS tokens or payloads. The reference
+        stores do not retain indexed signer metadata, so signer is deliberately
+        not a filter.
+      tags: [Index]
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [identity-op, content-op, artifact, countersign, revocation, credential]
+          description: Exact operation-kind match
+        - name: chainId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact operation-log routing identifier match
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [createdAt.desc, ingestedAt.desc]
+            default: ingestedAt.desc
+          description: Recency ordering
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Opaque ordered cursor from a prior page's next
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Operation index page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operations, next]
+                properties:
+                  operations:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, kind, chainId, createdAt, ingestedAt]
+                      properties:
+                        cid:
+                          type: string
+                        kind:
+                          type: string
+                        chainId:
+                          type: string
+                        createdAt:
+                          type: string
+                        ingestedAt:
+                          type: string
+                  next:
+                    type: string
+                    nullable: true
+                    description: Opaque cursor for the next page, or null when caught up
+        '400':
+          description: Invalid kind, order, or cursor
           content:
             application/json:
               schema:

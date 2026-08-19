@@ -12,6 +12,7 @@ import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { hasPublicStandingAuth } from './auth';
 import type {
+  OperationKind,
   RelayStore,
   StoredContentChain,
   StoredCountersignature,
@@ -25,6 +26,7 @@ const PROFILE_SCHEMA = 'https://schemas.dfos.com/profile/v1';
 const POST_SCHEMA = 'https://schemas.dfos.com/post/v1';
 
 export type IndexOrder = 'genesisAt.desc' | 'headAt.desc';
+export type IndexRecencyOrder = 'createdAt.desc' | 'ingestedAt.desc';
 
 export interface IndexOrderedCursor {
   timestamp: string;
@@ -70,23 +72,47 @@ export interface IndexCountersignatureRow {
   jwsToken: string;
 }
 
+export interface IndexCountersignatureQueryRow extends IndexCountersignatureRow {
+  createdAt: string;
+  ingestedAt: string;
+}
+
+export interface IndexOperationRow {
+  cid: string;
+  kind: OperationKind;
+  chainId: string;
+  createdAt: string;
+  ingestedAt: string;
+}
+
 export interface IndexCredentialRow {
   cid: string;
   issuerDID: string;
+  aud: '*';
   att: Attenuation[];
   exp: number;
   jwsToken: string;
 }
 
-export const parseBooleanQuery = (raw: string | undefined): boolean | undefined => {
+export const parseBooleanQuery = (raw: string | undefined): boolean | undefined | null => {
+  if (raw === undefined) return undefined;
   if (raw === 'true') return true;
   if (raw === 'false') return false;
-  return undefined;
+  return null;
 };
 
 export const parseIndexOrder = (raw: string | undefined): IndexOrder | undefined | null => {
   if (raw === undefined || raw === '') return undefined;
   if (raw === 'genesisAt.desc' || raw === 'headAt.desc') return raw;
+  return null;
+};
+
+export const parseIndexRecencyOrder = (
+  raw: string | undefined,
+  defaultOrder?: IndexRecencyOrder,
+): IndexRecencyOrder | undefined | null => {
+  if (raw === undefined || raw === '') return defaultOrder;
+  if (raw === 'createdAt.desc' || raw === 'ingestedAt.desc') return raw;
   return null;
 };
 

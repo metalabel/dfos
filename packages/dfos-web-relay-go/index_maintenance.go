@@ -45,6 +45,7 @@ package relay
 import (
 	"log/slog"
 	"strings"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -265,6 +266,7 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 		}
 		var relation *string
 		var witnessDID string
+		var createdAt string
 		if payload != nil {
 			if value, ok := payload["relation"].(string); ok {
 				relation = &value
@@ -272,6 +274,7 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 			if value, ok := payload["did"].(string); ok {
 				witnessDID = value
 			}
+			createdAt, _ = payload["createdAt"].(string)
 		}
 		dirty.countersigns = append(dirty.countersigns, storedIndexCountersignature{
 			CID:        cid,
@@ -279,6 +282,8 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 			Relation:   relation,
 			JWSToken:   jwsToken,
 			WitnessDID: witnessDID,
+			CreatedAt:  createdAt,
+			IngestedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		})
 	}
 }
@@ -422,6 +427,8 @@ func rebuildIndexProjectionRows(store Store, rebuildable RebuildableIndexStore, 
 			Relation:   cs.Relation,
 			JWSToken:   cs.JWSToken,
 			WitnessDID: cs.WitnessDID,
+			CreatedAt:  cs.CreatedAt,
+			IngestedAt: cs.IngestedAt,
 		}); err != nil {
 			return err
 		}
