@@ -70,6 +70,7 @@ const idxRow = (
 ): IndexCredentialRow => ({
   cid,
   issuerDID: 'did:dfos:issuer',
+  aud: '*',
   att,
   exp,
   jwsToken: `${b64url({ typ: 'did:dfos:credential' })}.${b64url({ aud, att, exp })}.sig`,
