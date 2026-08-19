@@ -145,7 +145,7 @@ A claim is not published on its own. It rides in the `claim` field of a `credits
 
 Both the claim payload and this entry shape are published as [`credit-claim/v1`](https://schemas.dfos.com/credit-claim/v1).
 
-> **Note on `post/v1`.** This shape renames the credit entry's earlier `label` field to `role` and adds `name` and `claim`. That is a breaking change to `post/v1` made **in place**, inside the pre-adoption window described in the [content model](https://protocol.dfos.com/content-model) — the third such amendment, and made on the same terms as the first two. `role` remains OPTIONAL: an unroled credit is still a legal credit, and only claim-bearing entries need one.
+> **Note on `post/v1`.** The credit entry's role field is named `role` — unambiguously, because `role` is a component of the claim's byte-exact bind. `role` is OPTIONAL: an unroled credit is still a legal credit, and only claim-bearing entries need one.
 
 ---
 
@@ -299,11 +299,11 @@ Publicly co-signing a public work is a countersign. Claiming a credit on a work 
 
 ### Versus delegated writes
 
-The [content model](https://protocol.dfos.com/content-model) previously described a **claim operation** — a credited DID receiving a write credential and appending a no-op `update` that re-commits the head `documentCID` — as the way to upgrade a credit from assertion to proof. Credit claims replace that pattern for attribution, and the reframing is worth stating plainly, because the delegated-write machinery is not going anywhere.
+A design worth rejecting explicitly: upgrading a credit from assertion to proof via a **claim operation** — the credited DID receiving a write credential and appending a no-op `update` that re-commits the head `documentCID`. The comparison is worth stating plainly, because the delegated-write machinery is load-bearing in its own right.
 
-**Delegated writes are the general multi-writer mechanism.** A credential authorizing a non-creator DID to append to a chain is how DFOS supports more than one writer on one chain: collaborative documents, an editor with commit rights, a device writing on behalf of its owner, a service maintaining an index. That is a genuine and load-bearing capability, and it is unchanged.
+**Delegated writes are the general multi-writer mechanism.** A credential authorizing a non-creator DID to append to a chain is how DFOS supports more than one writer on one chain: collaborative documents, an editor with commit rights, a device writing on behalf of its owner, a service maintaining an index. That is a genuine capability, and credit claims do not touch it.
 
-It was simply the wrong instrument for attribution. Using a write to say "I am the photographer" means: issuing the claimant a **write credential** (real authority over the chain, granted only so a signature could be produced), appending an **operation** to the chain (permanent proof-plane residue, publicly visible, for content that may be gated), and getting a signature that binds to the **chain and a document state** rather than to a role — a claim operation cannot say which credit it is claiming. Three costs, none of which attribution needed, and the crucial one is that middle one: the operation is public even when the content is not.
+It is simply the wrong instrument for attribution. Using a write to say "I am the photographer" means: issuing the claimant a **write credential** (real authority over the chain, granted only so a signature could be produced), appending an **operation** to the chain (permanent proof-plane residue, publicly visible, for content that may be gated), and getting a signature that binds to the **chain and a document state** rather than to a role — a claim operation cannot say which credit it is claiming. Three costs, none of which attribution needs, and the crucial one is the middle one: the operation is public even when the content is not.
 
 A credit claim grants no authority, appends no operation, and names the role. It is the smaller object, and the smaller object is the right one.
 

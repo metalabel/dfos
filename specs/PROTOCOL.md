@@ -87,9 +87,7 @@ CID uses [dag-cbor canonical encoding](https://ipld.io/specs/codecs/dag-cbor/spe
 
 A valid chain is a sequence of operations rooted at a genesis. Each operation (after genesis) links to a predecessor via `previousOperationCID`. The chain provides structural ordering independent of timestamps. The two chain kinds differ in exactly one structural rule — whether that sequence may branch:
 
-> **Pre-adoption amendment (2026-08): identity-chain linearity + `restore`.** Earlier revisions of this document declared forks valid on both chain kinds and described identity undeletion as forking around a `delete`. This revision makes identity chains **strictly linear** and replaces undeletion-via-fork with the explicit **`restore`** operation — a breaking change to the prose made **in place**, inside the same pre-adoption window used by the content-model amendments (see [CONTENT-MODEL.md](https://protocol.dfos.com/content-model), "Pre-adoption amendments"). The terms are honest: no shipped verifier ever implemented an identity fork-fold — `verifyIdentityChain` in every reference implementation has rejected forked identity logs since the first release, so the prose described a capability no code had; no forked identity chain exists in any known corpus; and the frozen deterministic reference vectors contain zero identity-fork coverage, so **no published vector is invalidated** (the delete → restore reference chain below is additive). Fork-arbitrated identity authority was also incoherent on its own terms: head selection is a convergence rule, not a merge function — over key state it can only arbitrate between competing timelines, and an authority record whose current keys can be outbid by a signer-chosen timestamp is not an authority record. Content-chain fork semantics are deliberately unchanged. The window closes at third-party adoption: from that point this surface evolves only additively.
-
-**Identity chains are strictly linear.** Each identity operation has at most one child. Two identity operations sharing the same `previousOperationCID` are a **conflicting extension**, and a verifier MUST reject any identity log that contains one. There is no identity-chain head selection — the head is the last operation of the single timeline, and identity state is the state that timeline folds to. The doctrine: forks are permitted exactly where a deterministic merge function exists. Content state has merge semantics (head selection for register schemas, the canonical fold for accumulating schemas — see [CONTENT-MODEL.md](https://protocol.dfos.com/content-model)); identity key state has no merge function, only arbitration, so an identity chain gets an order authority instead of a DAG (see [WEB-RELAY.md → Identity Linearity and Order Authority](https://protocol.dfos.com/web-relay#identity-linearity-and-order-authority)).
+**Identity chains are strictly linear.** Each identity operation has at most one child. Two identity operations sharing the same `previousOperationCID` are a **conflicting extension**, and a verifier MUST reject any identity log that contains one. There is no identity-chain head selection — the head is the last operation of the single timeline, and identity state is the state that timeline folds to. The doctrine: forks are permitted exactly where a deterministic merge function exists. Content state has merge semantics (head selection for register schemas, the canonical fold for accumulating schemas — see [CONTENT-MODEL.md](https://protocol.dfos.com/content-model)); identity key state has no merge function, only arbitration — head selection could only arbitrate between competing key timelines, and an authority record whose current keys can be outbid by a signer-chosen timestamp is not an authority record. An identity chain therefore gets an order authority instead of a DAG (see [WEB-RELAY.md → Identity Linearity and Order Authority](https://protocol.dfos.com/web-relay#identity-linearity-and-order-authority)).
 
 **Content-chain forks are valid.** A valid content chain is a **directed acyclic graph (DAG)** of operations. Two content operations referencing the same `previousOperationCID` constitute a fork — both branches are accepted. The chain log stores all branches. A **deterministic head selection** rule ensures convergence across implementations given the same set of operations:
 
@@ -420,8 +418,8 @@ which it is valid:
   key, which is total authority over the identity anyway.
 
 A protocol-level **irreversible** deletion (a true seal no controller key can
-reopen) is deliberately not part of this revision; if it ships, it ships as a
-future additive operation.
+reopen) is deliberately not part of this specification; if it ships, it ships
+as a future additive operation.
 
 ### Content Operations
 
@@ -768,7 +766,8 @@ handful of values carry conventional social meaning (`endorses`, `coauthors`,
 `witnessed`, `holds`, `received`), but the namespace is unbounded: recognized
 values inform clients, unrecognized values MUST be preserved and ignored
 (MUST-ignore-unknown). The field is optional, so a bare witness attestation (no
-relation) encodes identically to one before this revision (CID-neutral). When
+relation) encodes identically to one that never carried the field
+(CID-neutral). When
 present, `relation` is part of the canonical payload and therefore changes the
 countersignature's CID.
 
