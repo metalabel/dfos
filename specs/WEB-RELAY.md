@@ -397,13 +397,13 @@ Returns log entries starting after the given CID cursor.
 }
 ```
 
-| Field                | Type         | Description                                                                                                                                                                           |
-| -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `entries[].cid`      | string       | Operation CID                                                                                                                                                                         |
-| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync                                                                                                                    |
-| `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `artifact`, `countersign`, `revocation`, `credential`                                                                                    |
-| `entries[].chainId`  | string       | DID (`identity-op`, `artifact`, `credential`, and `revocation` — all keyed to the issuer/signer DID), contentId (`content-op`), or targetCID (`countersign`)                          |
-| `next`               | string\|null | CID to pass as `after` for the next page — the shared list envelope's resume field. `null` when the page was not full (caught up)                                                     |
+| Field                | Type         | Description                                                                                                                                                  |
+| -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `entries[].cid`      | string       | Operation CID                                                                                                                                                |
+| `entries[].jwsToken` | string       | The full compact JWS token — makes the log self-contained for sync                                                                                           |
+| `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `artifact`, `countersign`, `revocation`, `credential`                                                           |
+| `entries[].chainId`  | string       | DID (`identity-op`, `artifact`, `credential`, and `revocation` — all keyed to the issuer/signer DID), contentId (`content-op`), or targetCID (`countersign`) |
+| `next`               | string\|null | CID to pass as `after` for the next page — the shared list envelope's resume field. `null` when the page was not full (caught up)                            |
 
 Parameters:
 
