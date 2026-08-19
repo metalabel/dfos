@@ -54,7 +54,7 @@ func TestIdentifierWidthConformance(t *testing.T) {
 			url += "&after=" + cursor
 		}
 		var logResp struct {
-			logCursorFields
+			logPaginationFields
 			Entries []struct {
 				CID     string `json:"cid"`
 				Kind    string `json:"kind"`
@@ -87,7 +87,7 @@ func TestIdentifierWidthConformance(t *testing.T) {
 					e.ChainID, e.Kind, len(idPart), canonical, len(idPart))
 			}
 		}
-		next := assertLogCursorAlias(t, logResp.logCursorFields)
+		next := assertLogPaginationFields(t, logResp.logPaginationFields)
 		if next == nil {
 			break
 		}

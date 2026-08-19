@@ -393,8 +393,7 @@ Returns log entries starting after the given CID cursor.
       "chainId": "did:dfos:..."
     }
   ],
-  "next": "bafy...",
-  "cursor": "bafy..."
+  "next": "bafy..."
 }
 ```
 
@@ -405,7 +404,6 @@ Returns log entries starting after the given CID cursor.
 | `entries[].kind`     | string       | Operation kind: `identity-op`, `content-op`, `artifact`, `countersign`, `revocation`, `credential`                                                                                    |
 | `entries[].chainId`  | string       | DID (`identity-op`, `artifact`, `credential`, and `revocation` — all keyed to the issuer/signer DID), contentId (`content-op`), or targetCID (`countersign`)                          |
 | `next`               | string\|null | CID to pass as `after` for the next page — the shared list envelope's resume field. `null` when the page was not full (caught up)                                                     |
-| `cursor`             | string\|null | **Deprecated alias of `next`** — identical value, emitted for one release window for pre-rename consumers. Readers prefer `next`, falling back to `cursor`; removed at the next minor |
 
 Parameters:
 
@@ -423,7 +421,7 @@ Identity and content chains expose their own log views with the same cursor-base
 - `GET /proof/v1/identities/:did/log?after={cid}&limit=N`
 - `GET /proof/v1/content/:contentId/log?after={cid}&limit=N`
 
-Same pagination envelope and rules as the global log — `after` + `limit` in, `next` (plus the deprecated `cursor` alias, one release window) out, unknown cursor **400**. Per-chain log entries include `{ cid, jwsToken }` — the chain-specific subset of the global log entry shape. Returns operations belonging to that chain in chain order. The 400-on-unknown-cursor rule carries a correctness payoff here: a client paging a chain whose head switched branches under it (fork + head selection) is told its cursor is off the served branch and restarts, instead of being silently told it is caught up on a branch that is no longer the head.
+Same pagination envelope and rules as the global log — `after` + `limit` in, `next` out, unknown cursor **400**. Per-chain log entries include `{ cid, jwsToken }` — the chain-specific subset of the global log entry shape. Returns operations belonging to that chain in chain order. The 400-on-unknown-cursor rule carries a correctness payoff here: a client paging a chain whose head switched branches under it (fork + head selection) is told its cursor is off the served branch and restarts, instead of being silently told it is caught up on a branch that is no longer the head.
 
 ---
 

@@ -56,7 +56,7 @@ func TestServedCorpusIdentityResolvesCanonically(t *testing.T) {
 func firstServedIdentityDID(t *testing.T, base string) string {
 	t.Helper()
 	var body struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			Kind    string `json:"kind"`
 			ChainID string `json:"chainId"`
@@ -66,7 +66,7 @@ func firstServedIdentityDID(t *testing.T, base string) string {
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /proof/v1/log: status %d", resp.StatusCode)
 	}
-	assertLogCursorAlias(t, body.logCursorFields)
+	assertLogPaginationFields(t, body.logPaginationFields)
 	for _, e := range body.Entries {
 		if e.Kind == "identity-op" && e.ChainID != "" {
 			return e.ChainID

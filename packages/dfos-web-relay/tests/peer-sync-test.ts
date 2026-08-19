@@ -35,10 +35,10 @@ let cursor: string | undefined;
 while (true) {
   const url = cursor ? `/proof/v1/log?after=${cursor}&limit=1000` : '/proof/v1/log?limit=1000';
   const res = await relay.app.request(url);
-  const data = (await res.json()) as { entries: { cid: string }[]; cursor: string | null };
+  const data = (await res.json()) as { entries: { cid: string }[]; next: string | null };
   total += data.entries.length;
-  if (!data.cursor) break;
-  cursor = data.cursor;
+  if (!data.next) break;
+  cursor = data.next;
 }
 console.log(`  Operations synced: ${total}`);
 

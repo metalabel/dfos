@@ -467,8 +467,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const page = entries.slice(startIdx, startIdx + limit);
     const next = page.length === limit ? page[page.length - 1]!.cid : null;
 
-    // `cursor` is a deprecated alias of `next`, emitted for one release window.
-    return c.json({ entries: page, next, cursor: next });
+    return c.json({ entries: page, next });
   });
 
   app.get(`${PROOF_BASE_PATH}/identities/:did{.+}`, async (c) => {
@@ -758,8 +757,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const page = entries.slice(startIdx, startIdx + limit);
     const next = page.length === limit ? page[page.length - 1]!.cid : null;
 
-    // `cursor` is a deprecated alias of `next`, emitted for one release window.
-    return c.json({ entries: page, next, cursor: next });
+    return c.json({ entries: page, next });
   });
 
   /** Get a content chain by content ID */
@@ -836,8 +834,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const result = await store.readLog(afterParam ? { after: afterParam, limit } : { limit });
     // null = relay-local cursor this log never issued (or another relay's) → 400.
     if (!result) return c.json({ error: 'invalid cursor' }, 400);
-    // `cursor` is a deprecated alias of `next`, emitted for one release window.
-    return c.json({ entries: result.entries, next: result.next, cursor: result.next });
+    return c.json({ entries: result.entries, next: result.next });
   });
 
   // -------------------------------------------------------------------------

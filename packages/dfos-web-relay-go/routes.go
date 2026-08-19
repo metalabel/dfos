@@ -447,11 +447,9 @@ func (r *Relay) handleIdentityLog(w http.ResponseWriter, req *http.Request) {
 		next = &n
 	}
 
-	// `cursor` is a deprecated alias of `next`, emitted for one release window.
 	writeJSON(w, 200, map[string]any{
 		"entries": page,
 		"next":    next,
-		"cursor":  next,
 	})
 }
 
@@ -549,11 +547,9 @@ func (r *Relay) handleContentLog(w http.ResponseWriter, req *http.Request) {
 		next = &n
 	}
 
-	// `cursor` is a deprecated alias of `next`, emitted for one release window.
 	writeJSON(w, 200, map[string]any{
 		"entries": page,
 		"next":    next,
-		"cursor":  next,
 	})
 }
 
@@ -668,11 +664,9 @@ func (r *Relay) handleGetLog(w http.ResponseWriter, req *http.Request) {
 		nextPtr = &next
 	}
 
-	// `cursor` is a deprecated alias of `next`, emitted for one release window.
 	writeJSON(w, 200, map[string]any{
 		"entries": entries,
 		"next":    nextPtr,
-		"cursor":  nextPtr,
 	})
 }
 

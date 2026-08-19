@@ -2816,8 +2816,7 @@ describe('web relay', () => {
       const body1 = await json(res1);
       expect(body1.entries).toHaveLength(2);
       expect(body1.next).not.toBeNull();
-      // deprecated alias mirrors `next` for one release window
-      expect(body1.cursor).toBe(body1.next);
+      expect(body1).not.toHaveProperty('cursor');
 
       // final partial page: caught up → `next` null (shared envelope contract);
       // a puller persists its position from the last entry's cid instead
@@ -2940,13 +2939,15 @@ describe('web relay', () => {
       const res1 = await req(`/proof/v1/content/${contentId}/log?limit=2`);
       const body1 = await json(res1);
       expect(body1.entries).toHaveLength(2);
-      expect(body1.cursor).not.toBeNull();
+      expect(body1.next).not.toBeNull();
+      expect(body1).not.toHaveProperty('cursor');
 
       // read remainder
-      const res2 = await req(`/proof/v1/content/${contentId}/log?after=${body1.cursor}`);
+      const res2 = await req(`/proof/v1/content/${contentId}/log?after=${body1.next}`);
       const body2 = await json(res2);
       expect(body2.entries).toHaveLength(1);
-      expect(body2.cursor).toBeNull();
+      expect(body2.next).toBeNull();
+      expect(body2).not.toHaveProperty('cursor');
     });
 
     it('should return 404 for unknown content log', async () => {
