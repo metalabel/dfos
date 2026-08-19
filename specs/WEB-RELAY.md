@@ -77,7 +77,7 @@ Every route family answers failures with one body shape — `{ "error": "<prose>
 
 Cursor-paginated list routes add one rule: **an unrecognized or undecodable cursor is a 400, never a silently empty page.** The precise behavior splits three ways, and each route names which it has:
 
-- **Relay-local positional routes** — the ingestion-ordered logs (global and per-chain) — answer an `after` the relay never issued with **400**: cursors there are meaningful only against the relay that issued them, and a client that receives the 400 restarts its walk from the beginning (ingestion is idempotent; for a per-chain log the 400 is also how a fork/head-switch mid-walk surfaces).
+- **Relay-local positional routes** — the ingestion-ordered logs (global and per-chain) — answer an `after` the relay never issued with **400**: cursors there are meaningful only against the relay that issued them, and a client that receives the 400 restarts its walk from the beginning (ingestion is idempotent; for a per-chain content log the 400 is also how a fork/head-switch mid-walk surfaces).
 - **Transparent keyset routes** — countersignature reads and the `/index/v0/*` lexical default — resume strictly past `after` whether or not it names a present row, so even a foreign cursor is safe and never errors.
 - **Opaque-token routes** — `/index/v0/*` ordered mode, the signing poll — resume strictly past the encoded composite key when the token decodes, and answer an **undecodable** token with **400** (a decodable token whose row has since expired or changed resumes at the next key, keyset-style).
 
@@ -137,15 +137,27 @@ This is relay-level machinery — the protocol library verifies chain integrity,
 
 ### Fork Acceptance
 
-Forks are accepted. If an incoming operation's `previousOperationCID` references any operation in the chain (not just the current head), the relay verifies the extension against the chain state at that fork point and accepts it. The chain log accumulates all branches.
+**Content chains fork; identity chains do not.** This section is the content-chain rule; the identity-chain rule is [Identity Linearity and Order Authority](#identity-linearity-and-order-authority) below.
+
+Content-chain forks are accepted. If an incoming content operation's `previousOperationCID` references any operation in the chain (not just the current head), the relay verifies the extension against the chain state at that fork point and accepts it. The chain log accumulates all branches.
 
 **Deterministic head selection**: after accepting a fork, the relay recomputes the head — highest `createdAt` among tips, lexicographic highest CID as tiebreaker. This is deterministic across relays given the same set of operations, regardless of ingestion order. As forks propagate via peering, all relays converge to the same head.
 
-**State at fork point**: to verify a fork extension, the relay computes chain state at the parent CID. The Store interface abstracts this via `getIdentityStateAtCID` / `getContentStateAtCID` — implementations choose the strategy (full replay, snapshot-backed, etc.).
+**State at fork point**: to verify a fork extension, the relay computes chain state at the parent CID. The Store interface abstracts this via `getContentStateAtCID` — implementations choose the strategy (full replay, snapshot-backed, etc.).
 
-**Undeletion**: falls naturally from the fork model. An identity holder can fork from before a delete with a higher `createdAt`. The fork becomes the head. The delete remains visible in the log (auditable, gossiped) but is on a non-head branch.
+**Content-chain deletes stay per-branch**: a content `delete` seals its own branch, forks rooted at a pre-delete operation remain valid, and head selection may make a non-deleted branch the head (PROTOCOL.md "Terminal States"). Identity undeletion is **not** a fork behavior — it is the explicit `restore` operation on the linear identity chain (see [Deletion Semantics](#deletion-semantics)).
 
-**Future timestamp guard**: Identity and content operations with a `createdAt` more than 24 hours in the future are rejected. Since head selection favors the highest timestamp, a far-future `createdAt` would permanently dominate head selection — a temporal denial-of-service. The 24-hour window accommodates clock drift while preventing abuse.
+**Future timestamp guard**: Identity and content operations with a `createdAt` more than 24 hours in the future are rejected. Since head selection favors the highest timestamp, a far-future `createdAt` would permanently dominate content-chain head selection — a temporal denial-of-service. The 24-hour window accommodates clock drift while preventing abuse. (Identity chains select no head, but the same bound applies to their operations — one admission rule, no per-kind exception.)
+
+### Identity Linearity and Order Authority
+
+Identity chains are strictly linear (PROTOCOL.md "Chain Validity"). The relay enforces this at ingest:
+
+**Conflicting extension → permanent rejection.** An incoming identity operation whose `previousOperationCID` references an operation that already has a committed child is refused with the named error `identity chains are linear: conflicting extension refused`. This is a **permanent rejection**, not a dependency failure: it is not buffered, not retried, and never admitted later — first-seen wins locally, whatever the competing operation's `createdAt` claims. The rule holds on every path an identity operation arrives by — direct submission, gossip, sync, and read-through. A peer-log identity operation that conflicts with a locally-committed extension is refused identically: committed identity order is never auctioned or re-arbitrated. (Historical admission of committed logs is otherwise unchanged — see [Key Resolution](#key-resolution).)
+
+**The home relay is the order authority.** The subject's services-listed relay — its `DfosRelay` entry (PROTOCOL.md "Services") — is the **order authority** for its identity chain: identity writes go to the home relay, the home relay's committed log is the chain's canonical order, and peers replicate that order. First-seen is each relay's local admission mechanism; the home relay's committed log is the convergence rule between relays. Multi-relay support is unchanged where it matters: identity chains still replicate everywhere via peering — what is single-writer is **ordering**, not read availability. What this closes is exactly the pathological case: an identity concurrently extended through multiple writers with the same controller key, settled by timestamp auction.
+
+**The availability trade, stated honestly.** An identity write attempted while the home relay is unreachable is **at-risk-until-retry**: it is not arbitrated into the chain later by timestamp — it either lands at the home relay on retry or it does not exist. Identity writes are rare (key rotations, service changes, deletion); trading their write availability during a home-relay outage for a non-auctionable authority record is deliberate.
 
 ### Ingestion Statuses
 
@@ -165,13 +177,17 @@ Duplicate countersignatures (same witness DID, same target CID) MUST be deduplic
 
 Deletion means the identity stops being an active participant. Historical operations remain verifiable — keys persist in state for signature verification — but no new acts flow from a deleted identity.
 
+**The one exception, stated once for every gate below:** a **`restore`** identity operation in exactly the successor-of-delete position (`previousOperationCID` = the delete's CID, signed by a controller key of the deleted head state — PROTOCOL.md "Identity Operations") is the single operation a deleted identity's chain accepts. A valid restore returns the identity to active: resolution reports `deactivated: false`, and every deleted-identity gate below reopens for operations that follow it. No other operation, of any kind, passes any of these gates while the identity is deleted.
+
 Specifically:
 
-- **Identity operations after deletion (linear extension)**: Rejected. A `delete` seals the head against forward (linear) extension — appending a new operation from the deleted head is refused. This is the _linear_ path only: a current controller MAY still fork from a pre-delete operation with a higher `createdAt` to supersede the delete (see _Fork Acceptance → Undeletion_ above), in which case the resolved head reports `deactivated: false`. The `delete` remains permanently in the log on a non-head branch.
+- **Identity operations after deletion**: Rejected, except a valid `restore` as the immediate linear successor of the `delete`. Anything else appended after a delete — including a `restore` anywhere but that position, or a `restore` signed by a key not in the deleted head state — is permanently rejected. The `delete`, and any `restore`, remain permanently in the linear log.
 - **Content operations after deletion**: Rejected. Both paths are checked: (a) the signer's identity is deleted — no operations from that DID are accepted, and (b) the content chain's creator identity is deleted — the chain is sealed regardless of who signs.
 - **Artifacts from deleted identities**: Rejected. A deleted identity MUST NOT publish new artifacts.
-- **Credentials from deleted issuers**: Rejected. Identity deletion revokes all authority, including outstanding DFOS credentials issued by the deleted identity. Credentials that were valid at time of issuance cease to be honored once the issuer is deleted.
+- **Credentials from deleted issuers**: Rejected. Identity deletion suspends all authority, including outstanding DFOS credentials issued by the deleted identity. Credentials that were valid at time of issuance cease to be honored while the issuer is deleted.
 - **Countersignatures from deleted witnesses**: Rejected. A deleted identity MUST NOT publish new countersignatures. Countersignatures on operations by deleted authors are still accepted — deletion of the target's author does not prevent other identities from attesting.
+
+**Restore resurrects, revocation terminates.** Deletion is a suspension of authority, reversible by `restore`; revocation is permanent. After a valid restore, credentials issued by the identity **before the delete are honored again** (they were never revoked — their issuer was suspended), the identity's chains accept operations again, and artifacts and countersignatures flow again. A credential the issuer actually revoked stays revoked forever, restore or not. This is byte-identical to what undeletion previously implied — no new semantic surface, only an explicit operation where a fork used to be.
 
 Self-countersignatures — where the witness DID matches the target's author DID — are rejected at the relay level. A countersignature's semantic is "a distinct witness attests." The protocol-level verifier is stateless and does not enforce this; the relay resolves the target's author and rejects self-attestation.
 
@@ -421,7 +437,7 @@ Identity and content chains expose their own log views with the same cursor-base
 - `GET /proof/v1/identities/:did/log?after={cid}&limit=N`
 - `GET /proof/v1/content/:contentId/log?after={cid}&limit=N`
 
-Same pagination envelope and rules as the global log — `after` + `limit` in, `next` out, unknown cursor **400**. Per-chain log entries include `{ cid, jwsToken }` — the chain-specific subset of the global log entry shape. Returns operations belonging to that chain in chain order. The 400-on-unknown-cursor rule carries a correctness payoff here: a client paging a chain whose head switched branches under it (fork + head selection) is told its cursor is off the served branch and restarts, instead of being silently told it is caught up on a branch that is no longer the head.
+Same pagination envelope and rules as the global log — `after` + `limit` in, `next` out, unknown cursor **400**. Per-chain log entries include `{ cid, jwsToken }` — the chain-specific subset of the global log entry shape. Returns operations belonging to that chain in chain order. The 400-on-unknown-cursor rule carries a correctness payoff here: a client paging a content chain whose head switched branches under it (fork + head selection) is told its cursor is off the served branch and restarts, instead of being silently told it is caught up on a branch that is no longer the head. (An identity chain is linear, so its per-chain cursor can only advance.)
 
 ---
 
@@ -539,7 +555,7 @@ Revocation artifacts (`typ: did:dfos:revocation`) are ingested via `POST /proof/
 
 Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for the revocation payload format. A relay MAY additionally expose a read over the revocation index it keeps for this enforcement — see [Revocation Status](#revocation-status-v1).
 
-**Ingest asks freshness; re-verification asks validity.** Points 2–4 are all **acceptance** decisions, answered from what the relay currently knows: a relay MUST refuse a new operation authorized by a credential it already holds a revocation for, **whatever that operation's `createdAt` claims** — otherwise backdating would buy a revoked delegate an indefinite write window. Re-verifying operations the relay has **already committed** is the other question, and it is answered **as of each operation's own `createdAt`** per CREDENTIALS.md ["Acceptance vs Validity"](https://protocol.dfos.com/credentials#acceptance-vs-validity-normative). Concretely, a relay replaying a chain's history (for example to compute the state at a fork point) MUST NOT reject an operation because a credential in its history was revoked **later** — that operation was authorized when it was signed, and rejecting it would make a legitimate fork unextendable. The two rules coexist without tension: acceptance is local and timely, and the ingest verdict never enters the replicated log; historical validity is deterministic and therefore identical on every relay, forever.
+**Ingest asks freshness; re-verification asks validity.** Points 2–4 are all **acceptance** decisions, answered from what the relay currently knows: a relay MUST refuse a new operation authorized by a credential it already holds a revocation for, **whatever that operation's `createdAt` claims** — otherwise backdating would buy a revoked delegate an indefinite write window. Re-verifying operations the relay has **already committed** is the other question, and it is answered **as of each operation's own `createdAt`** per CREDENTIALS.md ["Acceptance vs Validity"](https://protocol.dfos.com/credentials#acceptance-vs-validity-normative). Concretely, a relay replaying a chain's history (for example to compute content-chain state at a fork point, or to re-verify a synced log) MUST NOT reject an operation because a credential in its history was revoked **later** — that operation was authorized when it was signed, and rejecting it would make legitimately committed history fail re-verification. The two rules coexist without tension: acceptance is local and timely, and the ingest verdict never enters the replicated log; historical validity is deterministic and therefore identical on every relay, forever.
 
 ### Content Following
 
@@ -742,15 +758,15 @@ Enumerates identity chains, `did` ascending by default; `order=genesisAt.desc` /
 }
 ```
 
-| Field                  | Type           | Description                                                                                                                                                       |
-| ---------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `opCount`              | number         | Operations stored for this chain, branch-inclusive (log length, not head-branch length)                                                                           |
-| `genesisAt` / `headAt` | string         | Author-claimed `createdAt` of the genesis and current head operations                                                                                             |
-| `profile`              | object \| null | The [well-known projection](#well-known-projections), or `null` when the identity declares no profile-labeled content-chain anchor                                |
-| `profile.anchor`       | string         | The anchored contentId — the client's verification pointer                                                                                                        |
-| `profile.publicRead`   | boolean        | Whether a standing public-read grant currently authorizes anonymous read of the anchored chain, per this relay's fold — a hint, never an access decision          |
-| `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                                     |
-| `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker — including when `profile.publicRead` is `false` (a non-public profile never projects its name) |
+| Field                  | Type           | Description                                                                                                                                                                                  |
+| ---------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opCount`              | number         | Operations stored for this chain — identity chains are strictly linear, so this is the linear operation count (content-chain `opCount` in the content family below remains branch-inclusive) |
+| `genesisAt` / `headAt` | string         | Author-claimed `createdAt` of the genesis and current head operations                                                                                                                        |
+| `profile`              | object \| null | The [well-known projection](#well-known-projections), or `null` when the identity declares no profile-labeled content-chain anchor                                                           |
+| `profile.anchor`       | string         | The anchored contentId — the client's verification pointer                                                                                                                                   |
+| `profile.publicRead`   | boolean        | Whether a standing public-read grant currently authorizes anonymous read of the anchored chain, per this relay's fold — a hint, never an access decision                                     |
+| `profile.docSchema`    | string \| null | `$schema` declared by the held head document; `null` when bytes are not held or not decodable                                                                                                |
+| `profile.name`         | string \| null | Extracted per the projection table; `null` on any circuit breaker — including when `profile.publicRead` is `false` (a non-public profile never projects its name)                            |
 
 Parameters: `did` (optional exact DID match, returning zero or one row; composes with the remaining filters), `hasPublicProfile` (optional boolean filter on the predicate "`profile` is non-null AND `profile.publicRead` is true" — `true` keeps only rows where it holds, `false` keeps only rows where it does not, absent applies no filter), `nameContains` (optional case-insensitive substring filter over projected `profile.name`; non-authoritative/amber; applied before keyset pagination), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `did` keyset cursor in the lexical default — returns rows with `did` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). Multiple profile-labeled anchors resolve deterministically to the one with the lexicographically smallest service `id`.
 
@@ -780,7 +796,7 @@ Enumerates content chains, `contentId` ascending by default; `order=genesisAt.de
 }
 ```
 
-`title` is the [display-name registry](#well-known-projections) projection for content rows (row 2, `post/v1 → title`): `null` for any chain whose held head document is not an enumerated schema, on any circuit breaker (including a non-public chain — `publicRead: false` — whose title is never projected), or when bytes are not held — an honest unknown, never a guess.
+`title` is the [display-name registry](#well-known-projections) projection for content rows (row 2, `post/v1 → title`): `null` for any chain whose held head document is not an enumerated schema, on any circuit breaker (including a non-public chain — `publicRead: false` — whose title is never projected), or when bytes are not held — an honest unknown, never a guess. Content-chain `opCount` is **branch-inclusive** — log length across all branches, not head-branch length.
 
 Parameters: `contentId` (optional exact match, returning zero or one row; composes with the remaining filters), `creator` (exact DID — the chain's genesis signer; `400` when malformed), `signer` (exact DID — keeps chains in which the DID signed at least one **accepted** operation, branch-inclusive: "has signed in this chain," not "signs the current head lineage"; operations on branches later deleted or abandoned still count — the log records that the signature happened; `400` when malformed), `docSchema` (exact opaque string match against held head bytes — a lower bound, per coverage above), `documentCID` (exact match against the projected `currentDocumentCID` — the reverse lookup "who published this document"), `publicRead` (boolean), `isDeleted` (boolean exact match against terminal deletion state), `titleContains` (optional case-insensitive substring filter over projected `title`; non-authoritative/amber; applied before keyset pagination), `order` (optional time ordering — `genesisAt.desc` or `headAt.desc`; `400` on any other value), `after` (a `contentId` keyset cursor in the lexical default — returns rows with `contentId` strictly greater — or an opaque token in ordered mode), `limit` (default 100, max 1000). This is the reverse lookup "what content does DID X own" plus the composition surface for application-level queries — e.g. a client's notion of _public posts by X_ is `creator=X&docSchema=<its post schema>&publicRead=true`, and its notion of _recent public posts_ is `order=headAt.desc&docSchema=<its post schema>&publicRead=true`, composed client-side.
 
@@ -878,7 +894,7 @@ The relay uses two key resolution strategies:
 
 - **Current-state resolver** — auth tokens. A rotated-out key cannot mint an auth token, preventing stale-key auth.
 - **Historical resolver** — identity and content chain re-verification, artifacts, revocations, and countersignatures **once committed**. These are historical facts whose signing key may since have rotated out, so re-verifying them must resolve against every key that ever appeared in the chain's head lineage; re-verifying them under current state would break sync of honest operations after any rotation. Their invalidation mechanism is revocation or deletion, not key rotation.
-- **Historical resolution governs re-verification and peer sync, not first admission.** The same acceptance/re-verification split already stated for credential revocation above — _ingest asks freshness; re-verification asks validity_ — applies to signing keys. A relay accepting a **new** artifact, countersignature, or content-chain operation submitted directly to it resolves the signer against the identity's **current state**: an operation freshly signed by a rotated-out key is refused at the door, whatever its `createdAt` claims — otherwise rotation would leave a compromised key an indefinite authoring window. Rotation ends a key's authoring window, including for operations composed before the rotation but never submitted; the honest remedy is re-signing with a current key. Once an operation is **committed** — accepted by this relay, or ingested from a peer's committed log — it is a historical fact and re-verifies historically, forever; the admission verdict never enters the replicated log, so cross-relay convergence is untouched. Peer-log ingestion deliberately inherits the **peer's** admission discipline: choosing peers is a trust decision, and a relay that peers with a lax admitter accepts that admitter's door policy for the history it replays. Identity-chain extension admission itself is unchanged by this rule — its signer requirement is the per-branch controller rule in the core protocol's Chain Validity section. **Credentials and credit claims are untouched**: their historical resolution is a MUST in their own specs, and revocation — not rotation — is their invalidation mechanism.
+- **Historical resolution governs re-verification and peer sync, not first admission.** The same acceptance/re-verification split already stated for credential revocation above — _ingest asks freshness; re-verification asks validity_ — applies to signing keys. A relay accepting a **new** artifact, countersignature, or content-chain operation submitted directly to it resolves the signer against the identity's **current state**: an operation freshly signed by a rotated-out key is refused at the door, whatever its `createdAt` claims — otherwise rotation would leave a compromised key an indefinite authoring window. Rotation ends a key's authoring window, including for operations composed before the rotation but never submitted; the honest remedy is re-signing with a current key. Once an operation is **committed** — accepted by this relay, or ingested from a peer's committed log — it is a historical fact and re-verifies historically, forever; the admission verdict never enters the replicated log, so cross-relay convergence is untouched. Peer-log ingestion deliberately inherits the **peer's** admission discipline: choosing peers is a trust decision, and a relay that peers with a lax admitter accepts that admitter's door policy for the history it replays. Identity-chain extension admission itself is unchanged by this rule — its signer requirement is the prior-state controller rule in the core protocol's Chain Validity section. **Credentials and credit claims are untouched**: their historical resolution is a MUST in their own specs, and revocation — not rotation — is their invalidation mechanism.
 - **Credentials are the exception to the auth grouping.** Although a credential proves authorization, it uses the **historical** resolver and survives key rotation — a credential signed before a rotation remains valid afterward. Revocation (not key rotation) is the invalidation mechanism for credentials. See [CREDENTIALS.md](https://protocol.dfos.com/credentials).
 
 ---
@@ -914,7 +930,7 @@ interface RelayStore {
     limit: number;
   }): Promise<{ entries: LogEntry[]; next: string | null } | null>;
 
-  // chain state at arbitrary CID (fork verification)
+  // chain state at arbitrary CID (content fork verification; identity historical state)
   getIdentityStateAtCID(
     did: string,
     cid: string,
@@ -930,7 +946,7 @@ interface RelayStore {
 }
 ```
 
-The `getIdentityStateAtCID` / `getContentStateAtCID` methods compute materialized chain state at an arbitrary operation CID. Used by fork verification — the ingestion pipeline needs state at the fork point to verify signer authority and timestamp ordering. Implementations decide how: `MemoryStore` replays from genesis, `SQLiteStore` can use snapshot tables.
+The `getIdentityStateAtCID` / `getContentStateAtCID` methods compute materialized chain state at an arbitrary operation CID. Content-fork verification is the driving use — the ingestion pipeline needs state at the fork point to verify signer authority and timestamp ordering (identity chains are linear, so identity ingestion extends only the trusted head state; the identity variant serves historical state queries). Implementations decide how: `MemoryStore` replays from genesis, `SQLiteStore` can use snapshot tables.
 
 The package includes `MemoryRelayStore` for development and testing. Production deployments would implement the interface over Postgres, SQLite, D1, or any durable store.
 
@@ -1049,7 +1065,7 @@ interface PeerClient {
 }
 ```
 
-Each method corresponds to a peering behavior: `getIdentityLog` / `getContentLog` support read-through, `getOperationLog` supports sync-in, and `submitOperations` supports gossip-out. A `PeerLogEntry` is `{ cid: string; jwsToken: string }`. The per-chain log methods surface a mid-walk 400 the same distinguishable way (`'invalid-cursor'`): a fork whose head switches while a read-through walk is in flight invalidates the walk's cursor, and the correct response is one restart of that walk from the beginning — not silently treating the chain as fully fetched.
+Each method corresponds to a peering behavior: `getIdentityLog` / `getContentLog` support read-through, `getOperationLog` supports sync-in, and `submitOperations` supports gossip-out. A `PeerLogEntry` is `{ cid: string; jwsToken: string }`. The per-chain log methods surface a mid-walk 400 the same distinguishable way (`'invalid-cursor'`): a content-chain fork whose head switches while a read-through walk is in flight invalidates the walk's cursor, and the correct response is one restart of that walk from the beginning — not silently treating the chain as fully fetched.
 
 **Sync discipline (normative for pullers).** A puller persists only peer-supplied `next` values — never a cursor fabricated from an entry CID (a peer whose cursor format is not a bare CID would 400 it). On `next: null` (caught up) it retains its last persisted cursor and cheaply re-fetches the final partial page next cycle; a peer whose whole log fits in one page is therefore re-read each cycle — a deliberate, bounded cost (one page, dedup-idempotent) accepted in exchange for never fabricating. On `'invalid-cursor'` it resets: at most **once per peer per sync cycle** (a second rejection in the same cycle aborts the cycle for that peer rather than looping), and the reset is persisted only after a from-scratch fetch succeeds — so one spurious 400 from an intermediary cannot destroy a real high-water mark.
 
@@ -1057,7 +1073,7 @@ Each method corresponds to a peering behavior: `getIdentityLog` / `getContentLog
 
 ## Convergence
 
-The protocol guarantees: given the same set of operations, any relay computes the same deterministic head state. Peering (gossip, read-through, sync) replicates operations across relays. But operations may arrive before their causal dependencies — a content extension before its identity chain, a fork before the branch it forks from. A relay MUST eventually process any structurally valid operation whose causal dependencies have been processed. This is the convergence contract.
+The protocol guarantees: given the same set of operations, any relay computes the same deterministic head state. Peering (gossip, read-through, sync) replicates operations across relays. But operations may arrive before their causal dependencies — a content extension before its identity chain, a content fork before the branch it forks from. A relay MUST eventually process any structurally valid operation whose causal dependencies have been processed. This is the convergence contract.
 
 ### Causal Dependencies
 
@@ -1083,7 +1099,7 @@ A relay MUST NOT discard a structurally well-formed operation because its depend
 2. **Verify**: attempt full verification against current state. Three outcomes:
    - **Sequenced** — verification succeeded, operation committed to chain state and global log
    - **Dependency failure** — a causal dependency is missing, operation remains in the buffer
-   - **Permanent rejection** — structurally invalid, bad signature, deleted identity, etc. — will never succeed regardless of what state arrives
+   - **Permanent rejection** — structurally invalid, bad signature, deleted identity, a conflicting extension of a committed identity operation, etc. — will never succeed regardless of what state arrives
 
 3. **Sequence loop**: after each ingestion batch, re-attempt all buffered operations in dependency order until no further progress is made (fixed-point). This ensures cross-batch dependencies resolve immediately — when batch B provides the identity that batch A's content operation was waiting for, the sequencer resolves it within B's response cycle.
 
@@ -1094,9 +1110,9 @@ A rejection is a dependency failure if and only if it is caused by missing state
 - Previous operation not yet in store (`previousOperationCID` unknown)
 - Identity chain not yet available (key resolution fails)
 - Content chain not yet created (genesis not arrived)
-- Fork state cannot be computed (ancestor in branch path not yet available)
+- Content-chain fork state cannot be computed (ancestor in branch path not yet available)
 
-All other rejections are permanent. Permanent rejections MUST NOT be retried.
+All other rejections are permanent. Permanent rejections MUST NOT be retried. In particular, an identity operation refused as a conflicting extension is a **permanent** rejection — the identity chain is linear, and no state that arrives later can make a second child of a committed parent valid.
 
 ### Serialization
 
@@ -1110,7 +1126,7 @@ Given a fully connected peer mesh where every relay syncs from every other relay
 - After one sequencer pass, every operation whose full dependency chain exists locally is sequenced
 - Deterministic head selection ensures all relays agree on the canonical head
 
-In practice, the dependency depth for fork operations is 1 (each op depends on its immediate predecessor). Convergence is typically achieved in a single sync + sequence cycle.
+In practice, the dependency depth for chain operations is 1 (each op depends on its immediate predecessor). Convergence is typically achieved in a single sync + sequence cycle.
 
 ### Storage Interface (Convergence)
 
@@ -1132,9 +1148,9 @@ resetSequencer(): Promise<void>;
 
 - **Peer discovery**: Static configuration only — no dynamic discovery
 - **SSE/realtime push**: Polling `GET /proof/v1/log` for now, SSE in the future
-- **Fork visibility API**: Dedicated endpoint to list tips/branches
+- **Fork visibility API**: Dedicated endpoint to list a content chain's tips/branches
 - **Search**: fuzzy/tokenized name queries — deliberately excluded from the [index](#index-v0) contract; would ship as its own explicitly-unstable family
-- **Branch termination op**: Protocol-level operation to explicitly kill fork branches
+- **Branch termination op**: Protocol-level operation to explicitly kill content-chain fork branches
 - **Rate limiting / anti-spam**: Operational concern, not protocol concern
 - **Blob size limits**: No enforcement yet — production deployments should add limits at the middleware layer
 - **Artifact `$schema` registry**: Schema names are free-form strings for now — no formal registry or validation beyond structural checks

@@ -39,6 +39,7 @@ describe('example fixtures', () => {
       'credential-write.json',
       'identity-delete.json',
       'identity-genesis.json',
+      'identity-restore.json',
       'identity-rotation.json',
       'identity-services.json',
     ]);

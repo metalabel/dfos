@@ -85,9 +85,13 @@ CID uses [dag-cbor canonical encoding](https://ipld.io/specs/codecs/dag-cbor/spe
 
 ### Chain Validity
 
-A valid chain is a **directed acyclic graph (DAG)** of operations rooted at a genesis. Each operation (after genesis) links to a predecessor via `previousOperationCID`. The chain provides structural ordering independent of timestamps.
+A valid chain is a sequence of operations rooted at a genesis. Each operation (after genesis) links to a predecessor via `previousOperationCID`. The chain provides structural ordering independent of timestamps. The two chain kinds differ in exactly one structural rule — whether that sequence may branch:
 
-**Forks are valid.** Two operations referencing the same `previousOperationCID` constitute a fork — both branches are accepted. The chain log stores all branches. A **deterministic head selection** rule ensures convergence across implementations given the same set of operations:
+> **Pre-adoption amendment (2026-08): identity-chain linearity + `restore`.** Earlier revisions of this document declared forks valid on both chain kinds and described identity undeletion as forking around a `delete`. This revision makes identity chains **strictly linear** and replaces undeletion-via-fork with the explicit **`restore`** operation — a breaking change to the prose made **in place**, inside the same pre-adoption window used by the content-model amendments (see [CONTENT-MODEL.md](https://protocol.dfos.com/content-model), "Pre-adoption amendments"). The terms are honest: no shipped verifier ever implemented an identity fork-fold — `verifyIdentityChain` in every reference implementation has rejected forked identity logs since the first release, so the prose described a capability no code had; no forked identity chain exists in any known corpus; and the frozen deterministic reference vectors contain zero identity-fork coverage, so **no published vector is invalidated** (the delete → restore reference chain below is additive). Fork-arbitrated identity authority was also incoherent on its own terms: head selection is a convergence rule, not a merge function — over key state it can only arbitrate between competing timelines, and an authority record whose current keys can be outbid by a signer-chosen timestamp is not an authority record. Content-chain fork semantics are deliberately unchanged. The window closes at third-party adoption: from that point this surface evolves only additively.
+
+**Identity chains are strictly linear.** Each identity operation has at most one child. Two identity operations sharing the same `previousOperationCID` are a **conflicting extension**, and a verifier MUST reject any identity log that contains one. There is no identity-chain head selection — the head is the last operation of the single timeline, and identity state is the state that timeline folds to. The doctrine: forks are permitted exactly where a deterministic merge function exists. Content state has merge semantics (head selection for register schemas, the canonical fold for accumulating schemas — see [CONTENT-MODEL.md](https://protocol.dfos.com/content-model)); identity key state has no merge function, only arbitration, so an identity chain gets an order authority instead of a DAG (see [WEB-RELAY.md → Identity Linearity and Order Authority](https://protocol.dfos.com/web-relay#identity-linearity-and-order-authority)).
+
+**Content-chain forks are valid.** A valid content chain is a **directed acyclic graph (DAG)** of operations. Two content operations referencing the same `previousOperationCID` constitute a fork — both branches are accepted. The chain log stores all branches. A **deterministic head selection** rule ensures convergence across implementations given the same set of operations:
 
 1. Find all **tips** — operations with no children.
 2. Select the tip with the **highest `createdAt`** string (descending order).
@@ -95,9 +99,9 @@ A valid chain is a **directed acyclic graph (DAG)** of operations rooted at a ge
 
 **Comparison basis (normative).** Both ordering comparisons — `createdAt` for timestamp ordering and head selection, and the CID for the head-selection tiebreak — MUST be performed as a byte-wise (Unicode code-point) comparison of the raw strings, equivalent to comparing the UTF-8 byte sequences left to right. An implementation MUST NOT parse `createdAt` to an epoch, a floating-point value, or a broken-down time before comparing, and MUST NOT apply any locale-aware or collation-aware comparison (e.g. ICU collation, JavaScript `String.prototype.localeCompare`) to either field. This is sound, not merely convenient: `createdAt` is the fixed-width grammar `YYYY-MM-DDTHH:MM:SS.sssZ` (see Timestamp Grammar) — UTC, a literal `Z`, exactly three fraction digits, zero-padded throughout — so byte-wise order is identical to chronological order; and a CID is a base32-lower multibase string (`b`-prefixed, ASCII `[a-z2-7]`), so code-point order is identical to byte order. Locale collation has no determinism contract across engines or locales and would let two conforming relays select different heads from the same operation set; parsing-to-number discards sub-millisecond byte identity and admits format-dependent drift. The reference implementations use the relational string operators directly (TypeScript `a < b`/`a > b` on the UTF-16 code units, which for this ASCII grammar equals byte order; Go string comparison, which is byte-wise) and are byte-for-byte equivalent on this input domain.
 
-This is deterministic: any implementation with the same operations computes the same head, regardless of ingestion order. Semantic interpretation of forks (concurrency glitch, intentional recovery, etc.) is application-defined — the protocol stores the DAG, clients interpret it.
+This is deterministic: any implementation with the same operations computes the same head, regardless of ingestion order. Semantic interpretation of content-chain forks (concurrency glitch, intentional recovery, etc.) is application-defined — the protocol stores the DAG, clients interpret it.
 
-**Timestamp ordering**: `createdAt` MUST be strictly greater than the `createdAt` of the parent operation (the operation referenced by `previousOperationCID`). This is enforced per-branch, not globally — a fork branch's timestamps are validated against its own parent, not the other branch's operations.
+**Timestamp ordering**: `createdAt` MUST be strictly greater than the `createdAt` of the parent operation (the operation referenced by `previousOperationCID`). On an identity chain this is plain successor ordering — each operation's `createdAt` exceeds its predecessor's along the single timeline. On a content chain it is enforced per-branch, not globally — a fork branch's timestamps are validated against its own parent, not the other branch's operations.
 
 **Future timestamp bound**: Relays, and any component that performs deterministic head selection, MUST reject identity and content operations with a `createdAt` more than 24 hours in the future relative to the verifier's clock. Since deterministic head selection favors the highest `createdAt`, a far-future timestamp would otherwise permanently dominate head selection — this guard prevents temporal denial-of-service. Bare linear chain verification (`verifyIdentityChain` / `verifyContentChain`) does not select a head and does not enforce this bound; it validates only that each operation's `createdAt` is strictly greater than its parent's (below). The reference relays enforce the 24-hour bound at ingest.
 
@@ -129,7 +133,9 @@ Content chain verification requires a **valid EdDSA signature** and delegates ke
 
 ### Terminal States and Special Operations
 
-**`delete` is the only terminal state.** No valid operations may follow a delete. An implementation MUST reject any operation after a delete. This is enforced per-branch: a delete seals further linear extension of its own branch, but forks rooted at a pre-delete operation remain valid, and deterministic head selection may make a non-deleted branch the head — see the `did:dfos` DID Method specification, Deactivation. Delete prevents future operations but does NOT remove data — the complete chain remains intact for verification. Data removal is an application concern.
+**Content chains: `delete` is the terminal state.** No valid content operations may follow a delete. This is enforced per-branch: a delete seals further linear extension of its own branch, but forks rooted at a pre-delete operation remain valid, and deterministic head selection may make a non-deleted branch the head. Delete prevents future operations but does NOT remove data — the complete chain remains intact for verification. Data removal is an application concern.
+
+**Identity chains: `active ⇄ deleted`, every transition an explicit signed operation.** A `delete` moves the identity to the deleted state and seals the chain against every operation except one: a **`restore`** operation MAY follow the `delete` as its immediate linear successor, returning the identity to the active state (see [Identity Operations](#identity-operations) for the validity rules, and the `did:dfos` DID Method specification, Deactivation). An implementation MUST reject any other operation after a delete. Both transitions are ordinary operations in the one linear timeline: the `delete` and any `restore` are permanent, auditable facts of the log, never removed. As with content chains, deletion removes no data — the complete chain remains intact for verification.
 
 **Controller key requirement:** `update` operations on identity chains MUST include at least one controller key. If decommissioning is intended, `delete` is the correct terminal operation.
 
@@ -263,7 +269,7 @@ The value MUST be a real calendar instant: the month/day combination MUST be val
 
 A verifier MUST reject any operation whose `createdAt` does not match this grammar. This applies on the read/verify path, not only at write time.
 
-This grammar is load-bearing for ordering. Per-branch timestamp ordering (Chain Validity → **Timestamp ordering**) and deterministic head selection (Chain Validity, step 2 — "highest `createdAt`") are implemented as a **lexicographic string comparison** of the `createdAt` field. Because the grammar is fixed-width and zero-padded, lexicographic byte order is identical to chronological order, so the comparison is correct without parsing. An implementation that accepted a looser grammar — variable fractional-second width, an offset form, a space separator, etc. — would compare strings whose lexicographic order no longer tracks time, forking ordering and head selection from conforming implementations. The grammar is therefore a validity rule, not a formatting suggestion.
+This grammar is load-bearing for ordering. Timestamp ordering (Chain Validity → **Timestamp ordering** — successor ordering on identity chains, per-branch on content chains) and deterministic head selection (Chain Validity, step 2 — "highest `createdAt`") are implemented as a **lexicographic string comparison** of the `createdAt` field. Because the grammar is fixed-width and zero-padded, lexicographic byte order is identical to chronological order, so the comparison is correct without parsing. An implementation that accepted a looser grammar — variable fractional-second width, an offset form, a space separator, etc. — would compare strings whose lexicographic order no longer tracks time, forking ordering and head selection from conforming implementations. The grammar is therefore a validity rule, not a formatting suggestion.
 
 > The reference implementations gate this identically: the TypeScript library validates `createdAt` with `z.iso.datetime({ offset: false, precision: 3 })` and the Go library with `time.Parse("2006-01-02T15:04:05.000Z", …)` on the verify path. Both are exercised against a shared 22-case accept/reject vector set asserted verdict-for-verdict across the two implementations.
 
@@ -377,9 +383,14 @@ DID:    did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr
   services?: ServiceEntry[],              // full-state — REPLACES the prior set
   createdAt: string }
 
-// Permanent destruction
+// Deactivation — moves the identity to the deleted state
 { version: 1, type: "delete",
   previousOperationCID: string,
+  createdAt: string }
+
+// Undeletion — only valid as the immediate successor of a delete
+{ version: 1, type: "restore",
+  previousOperationCID: string,          // MUST be the CID of a delete operation
   createdAt: string }
 ```
 
@@ -387,6 +398,30 @@ The optional `services` array is full-state discovery vocabulary projected into
 verified identity state — see [Services](#services). Omitting it encodes
 identically to a service-less operation (CID-neutral); an `update` carrying it
 REPLACES the entire prior set; a `delete` carries the last set unchanged.
+
+**`restore` validity (normative).** `restore` is the one operation that may
+follow a `delete`, and the successor-of-delete position is the only position in
+which it is valid:
+
+- Its `previousOperationCID` MUST reference a `delete` operation. A `restore`
+  anywhere else in the chain — after a `create`, `update`, or another `restore` —
+  is invalid.
+- It MUST be signed by a **controller key of the deleted head state** — the key
+  state produced by the `delete` it restores (a `delete` carries the last key
+  sets unchanged). A key rotated out before the delete is not in that state and
+  grants nothing.
+- Its effect is exactly to clear the deleted state: the identity returns to
+  active with the keys and services as of the delete, **verbatim**. `restore`
+  carries no key sets or services of its own — state changes happen via
+  subsequent ordinary `update` operations.
+- Its `createdAt` follows the ordinary rule: strictly greater than its parent's.
+  There is no rate limit or once-only rule — a subsequent `delete` may itself be
+  followed by another `restore`; every transition requires a current controller
+  key, which is total authority over the identity anyway.
+
+A protocol-level **irreversible** deletion (a true seal no controller key can
+reopen) is deliberately not part of this revision; if it ships, it ships as a
+future additive operation.
 
 ### Content Operations
 
@@ -441,11 +476,11 @@ token = signingInput + "." + base64url(signature)
 
 ### kid Rules
 
-| Context                   | kid format  | Example                               |
-| ------------------------- | ----------- | ------------------------------------- |
-| Identity create (genesis) | Bare key ID | `key_r9ev34fvc23z999veaaft83nn29zvhe` |
-| Identity update/delete    | DID URL     | See below                             |
-| All content ops           | DID URL     | See below                             |
+| Context                        | kid format  | Example                               |
+| ------------------------------ | ----------- | ------------------------------------- |
+| Identity create (genesis)      | Bare key ID | `key_r9ev34fvc23z999veaaft83nn29zvhe` |
+| Identity update/delete/restore | DID URL     | See below                             |
+| All content ops                | DID URL     | See below                             |
 
 DID URL examples:
 
@@ -508,7 +543,7 @@ The protected header MUST NOT contain a `crit` member. DFOS emits no critical he
 
 ### 3. No header-key-trust
 
-The verifier MUST NOT read key material from the protected header. The signing key is resolved exclusively from `kid` against the signer's identity chain (current state). **Current state is the state at the chain's selected head** — the key sets declared by the operation that deterministic head selection (see Chain Validity) names as the head — never a union across branches or across history: a key that appears only in superseded operations, or only on a non-head branch, is not current. (Families that verify under historical rather than current-state resolution say so explicitly in their own specs.) A protected header that carries an embedded public key — specifically a `jwk` or `x5c` member — MUST be rejected. (DFOS emits neither; the resolved key from `kid` is the only trusted key material.) A header-supplied key is never trusted, even if it happens to match the resolved key.
+The verifier MUST NOT read key material from the protected header. The signing key is resolved exclusively from `kid` against the signer's identity chain (current state). **Current state is the state at the chain's head** — the key state after the last operation of the strictly linear identity chain (see Chain Validity) — never a union across history: a key that appears only in superseded operations is not current. (Families that verify under historical rather than current-state resolution say so explicitly in their own specs.) A protected header that carries an embedded public key — specifically a `jwk` or `x5c` member — MUST be rejected. (DFOS emits neither; the resolved key from `kid` is the only trusted key material.) A header-supplied key is never trusted, even if it happens to match the resolved key.
 
 ### 4. Canonical signature scalar (`S < L`)
 
@@ -573,9 +608,9 @@ projected into verified identity state. It answers "given a DID, where do I
 reach this identity, and what stable content does it publish?" Services are not a
 standalone primitive: they live inside identity operations, inherit the chain's
 signer rules (only a current controller key may change them), and inherit the
-chain's equivocation resolution (services are a pure projection of the winning
-head, so a forked log resolves to exactly one services set via the same
-deterministic head selection used for keys).
+chain's linearity (services are a pure projection of the head state — the last
+operation of the strictly linear identity chain — so a log resolves to exactly
+one services set, the same way it resolves to exactly one key state).
 
 ### Service Entry
 
@@ -770,12 +805,12 @@ Every signature check below is performed under the [Signature Verification Profi
    - The controller keys declared in the genesis payload are trusted because the identity does not exist before this operation. There is no prior state to verify against.
    - The signing key (resolved from `kid`) MUST be one of the controller keys declared in this same operation. The genesis simultaneously introduces and authorizes its own keys.
    - Derive the operation CID via dag-cbor canonical encoding. Verify `header.cid` matches the derived CID. Derive the DID from the CID.
-3. For each subsequent op: verify `previousOperationCID` matches previous op's derived CID. Verify `createdAt` is strictly greater than the parent operation's `createdAt` (MUST — see Chain Validity).
-4. Verify the chain is not in a terminal state (deleted) before applying any operation.
+3. For each subsequent op: verify `previousOperationCID` matches previous op's derived CID — the log is strictly linear, so each operation extends exactly the one before it; a log containing a conflicting extension (two operations sharing a parent) MUST be rejected. Verify `createdAt` is strictly greater than the parent operation's `createdAt` (MUST — see Chain Validity).
+4. If the state before this operation is deleted, the only valid operation is a `restore` whose `previousOperationCID` is the delete's CID; any other operation MUST be rejected. A `restore` whose parent is not a `delete` MUST be rejected wherever it appears.
 5. Resolve `kid` — genesis uses bare key ID, non-genesis uses DID URL (extract DID, verify it matches the derived DID; extract key ID).
-6. Find controller key matching key ID **in the current state** (i.e., the state after all preceding operations). Decode multikey → raw Ed25519 public key.
+6. Find controller key matching key ID **in the current state** (i.e., the state after all preceding operations — for a `restore`, this is the deleted head state produced by the `delete`, which carries the last key sets unchanged). Decode multikey → raw Ed25519 public key.
 7. Verify EdDSA JWS signature over the signing input bytes.
-8. Apply state change: `create` initializes key state, `update` replaces key state (must have at least one controller key), `delete` marks terminal.
+8. Apply state change: `create` initializes key state, `update` replaces key state (must have at least one controller key), `delete` marks the state deleted (key sets and services carried unchanged), `restore` clears the deleted state (keys and services as of the delete, verbatim).
 
 ### Content Chain
 
@@ -943,6 +978,88 @@ bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei
 ```
 
 Post-rotation: DID unchanged (`did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr`), controller rotated to `key_ez9a874tckr3dv933d3ckdn7z6zrct8`.
+
+### Identity Chain: Delete + Restore
+
+Delete Operation:
+
+```json
+{
+  "version": 1,
+  "type": "delete",
+  "previousOperationCID": "bafyreibfuh63uv33i2i5eooe3boit2ruyjehubsryemuuz6mrtlej26rei",
+  "createdAt": "2026-03-07T00:02:00.000Z"
+}
+```
+
+Delete JWS Header:
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:identity-op",
+  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
+  "cid": "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi"
+}
+```
+
+Delete JWS Signature (hex):
+
+```
+d340f2eea78aec8d210b73f5caf1112c920d04b362115f4b846f015dd50c20618b4ecc6e31cba19f762abaaf7a4906bc9b397e073b730f92ccc41a21619c5002
+```
+
+Delete JWS Token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWljbDNhMnQ2dmh6NXZndnM1b2pkdzV3Y3dnb3ozdGF4cXF3ZXhwYnBsdG0yZ2gzcTQyenlpIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoiZGVsZXRlIiwicHJldmlvdXNPcGVyYXRpb25DSUQiOiJiYWZ5cmVpYmZ1aDYzdXYzM2kyaTVlb29lM2JvaXQycnV5amVodWJzcnllbXV1ejZtcnRsZWoyNnJlaSIsImNyZWF0ZWRBdCI6IjIwMjYtMDMtMDdUMDA6MDI6MDAuMDAwWiJ9.00Dy7qeK7I0hC3P1yvERLJINBLNiEV9LhG8BXdUMIGGLTsxuMcuhn3Yquq96SQa8mzl-BztzD5LMxBohYZxQAg
+```
+
+Delete Operation CID:
+
+```
+bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi
+```
+
+Restore Operation:
+
+```json
+{
+  "version": 1,
+  "type": "restore",
+  "previousOperationCID": "bafyreicl3a2t6vhz5vgvs5ojdw5wcwgoz3taxqqwexpbpltm2gh3q42zyi",
+  "createdAt": "2026-03-07T00:03:00.000Z"
+}
+```
+
+Restore JWS Header:
+
+```json
+{
+  "alg": "EdDSA",
+  "typ": "did:dfos:identity-op",
+  "kid": "did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr#key_ez9a874tckr3dv933d3ckdn7z6zrct8",
+  "cid": "bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba"
+}
+```
+
+Restore JWS Signature (hex):
+
+```
+9552998f7e081a6c9ffb4527ed310b48f3f78b9ee058c7bc8f9778774ea016787caf88697f9ff5547314af0c24b7b0859d671de148b809d7973ca4bc8e921e02
+```
+
+Restore JWS Token:
+
+```
+eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIiwia2lkIjoiZGlkOmRmb3M6Y25ubmZ0OWY4YTJybjkzOGQ2bmt6MzhyODQ3djJrciNrZXlfZXo5YTg3NHRja3IzZHY5MzNkM2NrZG43ejZ6cmN0OCIsImNpZCI6ImJhZnlyZWlleWF2dWU2dnh6dDYzdWxrcXB3ZXRmd3F2Znpka2VxNnQzcTNnd3JqbnFnaG1panJneWJhIn0.eyJ2ZXJzaW9uIjoxLCJ0eXBlIjoicmVzdG9yZSIsInByZXZpb3VzT3BlcmF0aW9uQ0lEIjoiYmFmeXJlaWNsM2EydDZ2aHo1dmd2czVvamR3NXdjd2dvejN0YXhxcXdleHBicGx0bTJnaDNxNDJ6eWkiLCJjcmVhdGVkQXQiOiIyMDI2LTAzLTA3VDAwOjAzOjAwLjAwMFoifQ.lVKZj34IGmyf-0Un7TELSPP3i57gWMe8j5d4d06gFnh8r4hpf5_1VHMUrwwkt7CFnWcd4Ui4CdeXPKS8jpIeAg
+```
+
+Restore Operation CID:
+
+```
+bafyreieyavue6vxzt63ulkqpwetfwqvfzdkeq6t3q3gwrjnqghmijrgyba
+```
 
 ### Content Chain: Document + Create
 
@@ -1169,9 +1286,9 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 
 | Language   | Tests | Source                                                                                                   |
 | ---------- | ----- | -------------------------------------------------------------------------------------------------------- |
-| TypeScript | 246   | [`dfos-protocol/tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)       |
-| TypeScript | 73    | [`protocol-verify/ts/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/ts)         |
-| Go         | 19    | [`protocol-verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/go)         |
-| Rust       | 19    | [`protocol-verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/rust)     |
-| Python     | 63    | [`protocol-verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/python) |
-| Swift      | 18    | [`protocol-verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/swift)   |
+| TypeScript | 402   | [`dfos-protocol/tests/`](https://github.com/metalabel/dfos/tree/main/packages/dfos-protocol/tests)       |
+| TypeScript | 81    | [`protocol-verify/ts/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/ts)         |
+| Go         | 20    | [`protocol-verify/go/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/go)         |
+| Rust       | 20    | [`protocol-verify/rust/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/rust)     |
+| Python     | 82    | [`protocol-verify/python/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/python) |
+| Swift      | 19    | [`protocol-verify/swift/`](https://github.com/metalabel/dfos/tree/main/packages/protocol-verify/swift)   |

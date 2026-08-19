@@ -72,8 +72,11 @@ export interface BuiltIdentity {
   headCID: string;
 }
 
-/** Build an identity: genesis, optionally extended with an auth-key rotation update. */
-export const buildIdentity = async (opts?: { rotate?: boolean }): Promise<BuiltIdentity> => {
+/** Build an identity with optional rotation and delete→restore extensions. */
+export const buildIdentity = async (opts?: {
+  rotate?: boolean;
+  restore?: boolean;
+}): Promise<BuiltIdentity> => {
   const k = makeKey();
   const genesis: IdentityOperation = {
     version: 1,
@@ -111,6 +114,33 @@ export const buildIdentity = async (opts?: { rotate?: boolean }): Promise<BuiltI
     });
     log.push(u.jwsToken);
     headCID = u.operationCID;
+  }
+
+  if (opts?.restore) {
+    const del = await signIdentityOperation({
+      operation: {
+        version: 1,
+        type: 'delete',
+        previousOperationCID: headCID,
+        createdAt: ts(-4),
+      },
+      signer: k.signer,
+      keyId: k.keyId,
+      identityDID: did,
+    });
+    const restore = await signIdentityOperation({
+      operation: {
+        version: 1,
+        type: 'restore',
+        previousOperationCID: del.operationCID,
+        createdAt: ts(-3),
+      },
+      signer: k.signer,
+      keyId: k.keyId,
+      identityDID: did,
+    });
+    log.push(del.jwsToken, restore.jwsToken);
+    headCID = restore.operationCID;
   }
 
   return {

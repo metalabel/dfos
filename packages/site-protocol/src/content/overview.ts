@@ -35,14 +35,14 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 ## What It Isn't
 
 - **Not a social protocol.** No federation model, no feeds, no application semantics. The protocol operates on keys and document hashes. [Application semantics](https://protocol.dfos.com/content-model) are a separate concern, free to evolve without protocol changes.
-- **Not a blockchain.** No consensus layer, no gas fees, no chain state to sync. Forks are valid. Convergence is deterministic without coordination — highest \`createdAt\` timestamp among tips, with lexicographic CID as tiebreaker.
+- **Not a blockchain.** No consensus layer, no gas fees, no chain state to sync. Content-chain forks are valid, and convergence is deterministic without coordination — highest \`createdAt\` timestamp among tips, with lexicographic CID as tiebreaker.
 - **Not an encryption system.** Privacy comes from separation, not obscurity. The proof surface is fully public. The content surface is governed by application-layer access control. The protocol doesn't encrypt anything.
 - **Not coupled to the DFOS platform.** [DFOS](https://dfos.com) is one implementation. Any system implementing the same chain primitives produces interoperable, cross-verifiable proofs.
 
 ## Design Principles
 
 - **Self-certifying.** Identity derives from cryptographic operations. The DID is a deterministic hash of the genesis operation. No external authority needed.
-- **DAG-native.** Chains are directed acyclic graphs. Forks are valid. Convergence is deterministic without consensus. Given the same set of operations, any relay computes the same head regardless of ingestion order.
+- **Forks exactly where a merge exists.** Content chains are directed acyclic graphs — forks are valid, and convergence is deterministic without consensus: given the same set of operations, any relay computes the same head regardless of ingestion order. Identity chains are strictly linear — key state has no merge function, so conflicting extensions are refused, never arbitrated.
 - **Transport-agnostic.** No privileged registry, blockchain, or API. A proof obtained from an API, a USB drive, or a peer-to-peer exchange verifies the same way.
 - **Offline-first.** Verification requires no network. The chain carries everything needed.
 - **Protocol-only.** Signed chains, CID derivation, [DID resolution](https://protocol.dfos.com/did-method), credentials, countersignatures. Application semantics are a [separate concern](https://protocol.dfos.com/content-model).

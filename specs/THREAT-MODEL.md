@@ -187,31 +187,36 @@ parameter. See PROTOCOL.md "ID Alphabet" (`specs/PROTOCOL.md`) and DID-METHOD.md
 
 ---
 
-## Head Selection Is Convergent, Not Canonical
+## Head Selection Is Convergent, Not Canonical — and Content-Only
 
 Deterministic head selection — highest `createdAt`, lexicographic-highest-CID tiebreak —
-guarantees that any implementation with the same set of operations computes the same head,
-regardless of ingestion order (PROTOCOL.md "Chain Validity", `specs/PROTOCOL.md`;
-WEB-RELAY.md "Fork Acceptance", `specs/WEB-RELAY.md`). That is its entire job:
-**convergence across implementations.**
+applies to **content chains** and guarantees that any implementation with the same set of
+operations computes the same head, regardless of ingestion order (PROTOCOL.md "Chain
+Validity", `specs/PROTOCOL.md`; WEB-RELAY.md "Fork Acceptance", `specs/WEB-RELAY.md`).
+That is its entire job: **convergence across implementations.**
 
 It is **not** a canonical-truth or causal-ordering mechanism. `createdAt` is signer-asserted
 and bounded only by the relay-enforced +24h future bound (PROTOCOL.md "Future timestamp
 bound", `specs/PROTOCOL.md`; WEB-RELAY.md "Future timestamp guard", `specs/WEB-RELAY.md`).
-Any **once-current** key holder can therefore **bid** the head by forking from an ancestor
-where its key was live and choosing a `createdAt` up to 24 hours ahead — forks are valid,
-and the highest timestamp wins. (Current-state **admission** for non-identity operations
-narrows what a rotated-out key can freshly author — WEB-RELAY.md "Key Resolution" — but
-the identity-chain fork auction itself is a v1 property; tightening it to strict linearity
-is a proposed v1.1 change, not a v1 rule.) Undeletion falls directly
-out of this: a controller can fork from before a delete with a higher `createdAt` and make
-the non-deleted branch the head (WEB-RELAY.md "Undeletion", `specs/WEB-RELAY.md`;
-DID-METHOD.md §5.4, `specs/DID-METHOD.md`).
-
 Head selection answers "which tip do all honest verifiers agree on?" — not "which tip is
-true?" or "which happened first?". Semantic interpretation of forks (concurrency glitch,
-intentional recovery, equivocation) is application-defined (PROTOCOL.md "Chain Validity",
-`specs/PROTOCOL.md`; DID-METHOD.md §6.3 "Equivocation", `specs/DID-METHOD.md`).
+true?" or "which happened first?". Semantic interpretation of content-chain forks
+(concurrency glitch, intentional recovery) is application-defined (PROTOCOL.md "Chain
+Validity", `specs/PROTOCOL.md`).
+
+**Identity chains are outside this mechanism entirely.** Identity chains are strictly
+linear (PROTOCOL.md "Chain Validity", `specs/PROTOCOL.md`): a conflicting extension is
+invalid, the head is the last operation of the single timeline, and there is no timestamp
+competition to win. The former identity-chain **fork auction** — any once-current key
+bidding the head by forking from an ancestor where it was live with a `createdAt` up to
+24 hours ahead — is closed by the pre-adoption linearity amendment; forks are now permitted
+exactly where a merge function exists, and key state has none. Undeletion is the explicit
+`restore` operation, signed by a controller key of the deleted head state (WEB-RELAY.md
+"Deletion Semantics", `specs/WEB-RELAY.md`; DID-METHOD.md §5.5, `specs/DID-METHOD.md`).
+Ordering authority for an identity chain is its services-listed home relay — single-writer
+ordering with multi-relay read replication, arbitration rather than merge (WEB-RELAY.md
+"Identity Linearity and Order Authority", `specs/WEB-RELAY.md`); equivocation by the
+holder is detectable and invalid rather than head-selected (DID-METHOD.md §6.3,
+`specs/DID-METHOD.md`).
 
 ---
 
@@ -219,13 +224,28 @@ intentional recovery, equivocation) is application-defined (PROTOCOL.md "Chain V
 
 These are known and deliberately accepted for v1.
 
-- **Rotation is not revocation, and the identity fork auction stands (v1).** Rotating a key
-  ends its authoring window for freshly admitted operations, but committed facts it signed
-  re-verify forever (their invalidation is revocation or deletion), and a once-current key
-  can still extend the identity chain itself by forking from an ancestor where it was live —
-  the timestamp auction above. Strict identity-chain linearity, which would close the
-  auction and retire undeletion-via-fork, is a proposed **v1.1** change under discussion;
-  v1 accepts the auction, bounded by the +24h future-timestamp guard and host admission.
+- **Rotation is not revocation.** Rotating a key ends its authoring window for freshly
+  admitted operations, but committed facts it signed re-verify forever — their invalidation
+  mechanism is revocation or deletion, never rotation (WEB-RELAY.md "Key Resolution",
+  `specs/WEB-RELAY.md`). The identity-chain fork auction that once accompanied this — a
+  once-current key re-bidding the head by forking from an ancestor where it was live — is
+  **closed**: identity chains are strictly linear per the pre-adoption linearity amendment
+  (PROTOCOL.md "Chain Validity", `specs/PROTOCOL.md`), so a rotated-out key has no path
+  back into the chain at all.
+- **Delete is not a substitute for rotation.** `restore` requires only a controller key of
+  the **deleted head state** (PROTOCOL.md "Identity Operations", `specs/PROTOCOL.md`). A
+  thief holding a still-current controller key can therefore restore a deleted identity —
+  and then rotate the legitimate holder out. The remedy for key compromise is **rotate
+  first, then delete** if desired: deleting while a compromised key is still current
+  leaves the chain reopenable by exactly that key. (A key rotated out _before_ the delete
+  is not in the deleted state and cannot restore.)
+- **Home-relay write availability (single-writer identity ordering).** The subject's
+  services-listed relay is the order authority for its identity chain; peers replicate
+  its committed order and refuse conflicting extensions (WEB-RELAY.md "Identity Linearity
+  and Order Authority", `specs/WEB-RELAY.md`). An identity write attempted during a
+  home-relay outage is at-risk-until-retry — never arbitrated in later by timestamp. This
+  is the deliberate trade for a non-auctionable authority record: identity writes are rare,
+  reads replicate everywhere, and arbitration beats auction for key state.
 
 - **No end-to-end encryption.** Content confidentiality is an application-layer concern;
   the relay operator can read stored blobs (README.md, `README.md`; PROTOCOL.md

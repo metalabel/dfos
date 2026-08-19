@@ -162,15 +162,10 @@ const contentIdsFromCredentialToken = (
  * Nothing is recomputed here — the batch flushes once via flushIndexMaintenance.
  *
  * Mapping (identical across all implementations):
- *  - identity-op for chain D          → dirty identity row D; if the op left
- *                                         the identity DELETED, also mark all
- *                                         currently-public-read content dirty —
- *                                         a deleted identity is no longer a valid
- *                                         credential issuer / delegation hop, so
- *                                         any content whose public-read authority
- *                                         routes through D flips true→false
- *                                         (deletion is terminal, so public-read
- *                                         content is the complete affected superset)
+ *  - identity delete/restore for D    → dirty identity row D; delete sweeps the
+ *                                        currently-public subset, while restore
+ *                                        sweeps all content because suspended
+ *                                        rows are no longer in that subset
  *  - content-op for chain C            → dirty content row C (+ anchored identities)
  *  - credential grant                  → dirty the att-named content rows, or all
  *                                        content rows on a `chain:*` grant
@@ -195,8 +190,9 @@ export const collectIndexDirtyAfterOp = async (
       case 'identity-op':
         if (result.chainId) {
           dirty.identityDIDs.add(result.chainId);
-          const chain = await store.getIdentityChain(result.chainId);
-          if (chain?.state.isDeleted) dirty.allPublicContent = true;
+          const opType = decodeJwsUnsafe(jwsToken)?.payload.type;
+          if (opType === 'delete') dirty.allPublicContent = true;
+          if (opType === 'restore') dirty.allContent = true;
         }
         break;
       case 'artifact': {

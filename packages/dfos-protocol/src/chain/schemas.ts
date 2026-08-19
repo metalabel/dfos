@@ -204,10 +204,18 @@ const IdentityUpdate = z.looseObject({
   createdAt: Iso8601,
 });
 
-/** Identity chain: delete — permanently destroy identity */
+/** Identity chain: delete — deactivate identity */
 const IdentityDelete = z.looseObject({
   version: z.literal(1),
   type: z.literal('delete'),
+  previousOperationCID: CIDString,
+  createdAt: Iso8601,
+});
+
+/** Identity chain: restore — reactivate immediately after delete */
+const IdentityRestore = z.looseObject({
+  version: z.literal(1),
+  type: z.literal('restore'),
   previousOperationCID: CIDString,
   createdAt: Iso8601,
 });
@@ -216,6 +224,7 @@ export const IdentityOperation = z.discriminatedUnion('type', [
   IdentityCreate,
   IdentityUpdate,
   IdentityDelete,
+  IdentityRestore,
 ]);
 export type IdentityOperation = z.infer<typeof IdentityOperation>;
 

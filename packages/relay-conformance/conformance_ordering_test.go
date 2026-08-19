@@ -8,13 +8,8 @@ import (
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
-// Timestamp ordering + deterministic head selection. Two convergence-critical
-// MUSTs (PROTOCOL.md Chain Validity) that the existing fork tests do not pin:
-//   - createdAt MUST be strictly greater than the parent operation's createdAt,
-//     enforced PER-BRANCH (a fork is validated against its own parent, not the
-//     sibling tip).
-//   - head selection breaks an equal-createdAt tie by the lexicographically
-//     highest CID — identically across implementations.
+// Identity timestamp ordering and strict linearity. createdAt MUST be strictly
+// greater than the one parent, and the head is the last committed linear op.
 //
 // Exercising these requires controlling createdAt, which the wall-clock public
 // signers do not expose. We therefore build the identity-update operation
@@ -107,56 +102,33 @@ func TestIdentityRejectsNonIncreasingTimestamp(t *testing.T) {
 	}
 }
 
-func TestIdentityTimestampOrderingIsPerBranch(t *testing.T) {
+func TestIdentityTimestampOrderingIsLinear(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
-	now := time.Now().UTC()
-
-	// a fork off genesis at a later time.
-	hi, hiCID := signIdentityUpdateAt(t, id, id.genCID, now.Add(10*time.Second).Format(tsLayout),
-		[]dfos.ServiceEntry{relaySvc("hi", "https://hi.example.com")})
-	if st, e := postStatus(t, base, hi); st != "new" {
-		t.Fatalf("hi branch should be accepted, got %q (%s)", st, e)
+	parentAt := time.Now().UTC().Add(5 * time.Second).Format(tsLayout)
+	parent, parentCID := signIdentityUpdateAt(t, id, id.genCID, parentAt, nil)
+	if st, e := postStatus(t, base, parent); st != "new" {
+		t.Fatalf("parent update should be accepted, got %q (%s)", st, e)
 	}
-
-	// a second fork off the SAME genesis, EARLIER than the hi sibling but still
-	// strictly later than the shared parent. Ordering is per-branch — validated
-	// against its own parent, not the sibling's later timestamp — so it must be
-	// accepted despite createdAt < hi. (Global enforcement would wrongly reject.)
-	lo, loCID := signIdentityUpdateAt(t, id, id.genCID, now.Add(2*time.Second).Format(tsLayout),
-		[]dfos.ServiceEntry{relaySvc("lo", "https://lo.example.com")})
-	if st, e := postStatus(t, base, lo); st != "new" {
-		t.Fatalf("lo branch (earlier than sibling, later than parent) should be accepted per-branch, got %q (%s)", st, e)
-	}
-	if hiCID == loCID {
-		t.Fatal("hi and lo forks unexpectedly share a CID")
+	child, _ := signIdentityUpdateAt(t, id, parentCID, parentAt, nil)
+	if st, _ := postStatus(t, base, child); st != "rejected" {
+		t.Fatalf("identity child with createdAt <= parent should be rejected, got %q", st)
 	}
 }
 
-func TestIdentityHeadSelectionCIDTiebreak(t *testing.T) {
+func TestIdentityHeadIsLastLinearOperation(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 
-	// identical createdAt on both forks forces the CID tiebreak.
-	teq := time.Now().UTC().Add(5 * time.Second).Format(tsLayout)
-	tokA, cidA := signIdentityUpdateAt(t, id, id.genCID, teq,
+	tokA, cidA := signIdentityUpdateAt(t, id, id.genCID, time.Now().UTC().Add(5*time.Second).Format(tsLayout),
 		[]dfos.ServiceEntry{relaySvc("a", "https://a.example.com")})
-	tokB, cidB := signIdentityUpdateAt(t, id, id.genCID, teq,
+	tokB, _ := signIdentityUpdateAt(t, id, id.genCID, time.Now().UTC().Add(6*time.Second).Format(tsLayout),
 		[]dfos.ServiceEntry{relaySvc("b", "https://b.example.com")})
-	if cidA == cidB {
-		t.Fatal("constructed forks have equal CIDs; cannot exercise the tiebreak")
-	}
 	if st, e := postStatus(t, base, tokA); st != "new" {
-		t.Fatalf("fork A should be accepted, got %q (%s)", st, e)
+		t.Fatalf("linear update should be accepted, got %q (%s)", st, e)
 	}
-	if st, e := postStatus(t, base, tokB); st != "new" {
-		t.Fatalf("fork B should be accepted, got %q (%s)", st, e)
-	}
-
-	// expected head = lexicographically-highest CID (createdAt DESC, then CID DESC).
-	winner, marker := cidA, "a"
-	if cidB > cidA {
-		winner, marker = cidB, "b"
+	if st, e := postStatus(t, base, tokB); st != "rejected" || e != "identity chains are linear: conflicting extension refused" {
+		t.Fatalf("conflicting extension = %q (%s), want named permanent rejection", st, e)
 	}
 
 	var resp struct {
@@ -168,10 +140,10 @@ func TestIdentityHeadSelectionCIDTiebreak(t *testing.T) {
 	if r := getJSON(t, base+"/proof/v1/identities/"+id.did, &resp); r.StatusCode != 200 {
 		t.Fatalf("GET /identities/%s: status %d", id.did, r.StatusCode)
 	}
-	if resp.HeadCID != winner {
-		t.Fatalf("head = %q, want lexicographically-highest CID %q (A=%q B=%q)", resp.HeadCID, winner, cidA, cidB)
+	if resp.HeadCID != cidA {
+		t.Fatalf("head = %q, want last committed linear CID %q", resp.HeadCID, cidA)
 	}
-	if findSvc(resp.State.Services, marker) == nil {
-		t.Fatalf("head state does not reflect winning branch %q: %+v", marker, resp.State.Services)
+	if findSvc(resp.State.Services, "a") == nil {
+		t.Fatalf("conflicting extension changed head state: %+v", resp.State.Services)
 	}
 }

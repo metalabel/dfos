@@ -1627,7 +1627,7 @@ describe('index v0', () => {
     expect(new Set(recomputed)).toEqual(new Set([contentA.contentId, contentB.contentId]));
   });
 
-  it('flips publicRead false when the identity that granted it is deleted (issuer no longer a valid credential hop)', async () => {
+  it('suspends a public-read credential on delete and honors it again after restore', async () => {
     // Creator self-issues a public-read grant on its own content, anchors its
     // profile there, then deletes its own identity. hasPublicStandingAuth
     // re-verifies the grant's issuer live and rejects a deleted identity, so the
@@ -1653,7 +1653,7 @@ describe('index v0', () => {
       previousOperationCID: update.operationCID,
       createdAt: ts(4),
     };
-    const { jwsToken: deleteToken } = await signIdentityOperation({
+    const { jwsToken: deleteToken, operationCID: deleteCID } = await signIdentityOperation({
       operation: deleteOp,
       signer: creator.controller.signer,
       keyId: creator.controller.keyId,
@@ -1672,6 +1672,24 @@ describe('index v0', () => {
         (row: { contentId: string }) => row.contentId,
       ),
     ).not.toContain(content.contentId);
+
+    const restoreOp: IdentityOperation = {
+      version: 1,
+      type: 'restore',
+      previousOperationCID: deleteCID,
+      createdAt: ts(5),
+    };
+    const { jwsToken: restoreToken } = await signIdentityOperation({
+      operation: restoreOp,
+      signer: creator.controller.signer,
+      keyId: creator.controller.keyId,
+      identityDID: creator.did,
+    });
+    expect((await postOps([restoreToken])).status).toBe(200);
+    expect((await contentRow(content.contentId)).publicRead).toBe(true);
+    const restoredRow = await identityRow(creator.did);
+    expect(restoredRow.isDeleted).toBe(false);
+    expect(restoredRow.profile.publicRead).toBe(true);
   });
 
   it('reflects the ACCEPTED (deduped) countersign set in the projection, not raw ops', async () => {

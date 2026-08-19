@@ -33,7 +33,7 @@ For full protocol details including cryptographic primitives, chain mechanics, a
 - **Self-certifying** — The DID is a deterministic derivation of the genesis content. No external authority is needed to verify the binding between identifier and chain.
 - **Transport-agnostic** — Resolution requires obtaining and verifying a chain, not querying a specific endpoint. Any system that stores and serves identity chains is a valid source.
 - **Key rotation** — Identity chains support full key rotation via signed update operations. Keys can be added, removed, and replaced without changing the DID.
-- **Deactivation** — Identities can be deactivated via a signed delete operation. The `delete` record is permanent, but deactivation itself is reversible only by the controller via fork (see §5.4).
+- **Deactivation** — Identities can be deactivated via a signed delete operation. The `delete` record is permanent, but deactivation itself is reversible only by the controller, via an explicit signed `restore` operation (see §5.5).
 - **Minimal** — The method defines identifiers and verification. It deliberately does not define discovery, gossip, or consensus mechanisms.
 
 ---
@@ -92,7 +92,7 @@ See the [DFOS Protocol Specification](https://protocol.dfos.com/spec) for the co
 
 ## 4. DID Document
 
-A resolved `did:dfos` DID Document is constructed from the current state of the identity chain — specifically, the key sets declared in the most recent non-terminal operation.
+A resolved `did:dfos` DID Document is constructed from the current state of the identity chain — the key state after the chain's last operation.
 
 ### 4.1 DID Document Structure
 
@@ -141,7 +141,7 @@ Each key in the identity chain state becomes a `verificationMethod` entry. The `
 
 ### 4.4 Key Rotation
 
-When an identity chain includes `update` operations that change the key sets, the DID Document reflects the **current state** — the key sets declared by the **selected head operation** (deterministic head selection over the stored log; see the core protocol's Chain Validity rules), never a union across branches or historical operations. Previous keys are not included in the resolved DID Document. Historical key states can be recovered by walking the chain.
+When an identity chain includes `update` operations that change the key sets, the DID Document reflects the **current state** — the key state after the **last operation** of the strictly linear identity chain (see the core protocol's Chain Validity rules), never a union across historical operations. Previous keys are not included in the resolved DID Document. Historical key states can be recovered by walking the chain.
 
 ### 4.5 Services
 
@@ -222,17 +222,17 @@ Given a DID `did:dfos:<id>`:
    e. For each operation, verify the JWS EdDSA signature against the appropriate key (controller key from current chain state).
    f. Verify `previousOperationCID` linkage, `createdAt` ordering, and `header.cid` consistency.
    g. See the [DFOS Protocol Specification](https://protocol.dfos.com/spec) for complete verification rules.
-3. **Construct** the DID Document from the terminal chain state using the mapping in [Section 4.2](#42-verification-method-mapping).
+3. **Construct** the DID Document from the current chain state using the mapping in [Section 4.2](#42-verification-method-mapping).
 
 #### 5.2.2 Resolution Metadata
 
-| Property         | Value                                                        |
-| ---------------- | ------------------------------------------------------------ |
-| `contentType`    | `application/did+ld+json`                                    |
-| `created`        | `createdAt` from the genesis operation                       |
-| `updated`        | `createdAt` from the most recent operation                   |
-| `deactivated`    | `true` if the chain's terminal operation is `type: "delete"` |
-| `operationCount` | Number of operations in the chain                            |
+| Property         | Value                                                    |
+| ---------------- | -------------------------------------------------------- |
+| `contentType`    | `application/did+ld+json`                                |
+| `created`        | `createdAt` from the genesis operation                   |
+| `updated`        | `createdAt` from the most recent operation               |
+| `deactivated`    | `true` if the chain's last operation is `type: "delete"` |
+| `operationCount` | Number of operations in the chain                        |
 
 #### 5.2.3 Self-Certification
 
@@ -274,11 +274,21 @@ After deactivation:
 
 - The resolved head reports the identity as deactivated. Resolution MUST return a DID Document with `deactivated: true` in the resolution metadata, and the DID Document SHOULD contain an empty set of verification methods, as the identity no longer has active keys.
 - The `delete` operation is a **permanent, auditable fact** in the chain log — it is gossiped and retained like any other operation and never removed.
-- **Linear** extension is sealed: appending a new operation from the deleted head is rejected.
+- The chain is sealed against every operation except one: a `restore` in the immediate successor position (Section 5.5). Appending any other operation from the deleted head is rejected.
 
-Deactivation is **reversible by the controller, and only by the controller**. Because the web relay accepts forks (see WEB-RELAY.md, _Fork Acceptance_), a current controller MAY supersede a delete by forking from a pre-delete operation with a higher `createdAt`; deterministic head selection then makes the non-deleted branch the head and resolution reports `deactivated: false`. The original `delete` remains permanently in the log on a non-head branch.
+### 5.5 Restore (Undelete)
 
-This is a deliberate consequence of the fork-convergence model: a controller cannot permanently brick an identity it controls by a mistaken delete, while **no external party can ever reactivate (or extend) an identity** — every operation, `delete` and undelete alike, must be signed by a current controller key (Section 6.3). Treating deactivation as a true protocol-level seal against the holder's own forks — and the adversarial cases that motivate it — is out of scope for this revision and deferred to future work.
+Restoring a deactivated `did:dfos` DID means appending a signed `restore` operation immediately after the `delete`.
+
+1. Construct a restore operation payload with `type: "restore"` and `previousOperationCID` set to the CID of the `delete` operation. The payload carries nothing else beyond `version` and `createdAt`.
+2. Sign the operation using a **controller key of the deleted head state** — the key state produced by the `delete`, which carries the last key sets unchanged. A key rotated out before the delete is not in that state and cannot restore. The `kid` is a DID URL.
+3. Append the signed JWS token to the chain.
+
+A valid `restore` clears the deactivated state: resolution reports `deactivated: false`, and the DID Document reflects the keys and services **as of the delete, verbatim**. Key or service changes happen via subsequent ordinary `update` operations. `restore` is valid **only** in the successor-of-delete position; anywhere else it is rejected (see the core protocol's `restore` validity rules).
+
+Deactivation is therefore **reversible by the controller, and only by the controller**: a controller cannot permanently brick an identity it controls by a mistaken delete, while **no external party can ever reactivate (or extend) an identity** — every operation, `delete` and `restore` alike, must be signed by a current controller key. Both the `delete` and the `restore` remain permanently in the single linear log — the full deactivation history is auditable. (This section replaces the earlier undeletion-via-fork mechanism; see the pre-adoption amendment note in the core protocol's Chain Validity section.) Treating deactivation as a true protocol-level seal that no controller key can reopen — and the adversarial cases that motivate it — remains out of scope for this revision and deferred to a future additive operation.
+
+Note the security corollary: because `restore` needs only a controller key of the deleted state, **deleting an identity is not a substitute for rotating out a compromised key** — a thief holding a still-current controller key can restore and then rotate out the owner. Rotate first, then delete (see THREAT-MODEL.md).
 
 ---
 
@@ -303,9 +313,9 @@ Because each role set holds up to 256 keys and any one current key in a set can 
 
 ### 6.3 Equivocation
 
-Because `did:dfos` has no global consensus layer, an identity holder could theoretically sign two different operations at the same chain position (same `previousOperationCID`, different payloads). This creates a **fork** — two valid chain branches.
+Because `did:dfos` has no global consensus layer, an identity holder could sign two different operations at the same chain position (same `previousOperationCID`, different payloads). Identity chains are **strictly linear** (see the core protocol's Chain Validity rules), so this is not a fork — it is a **conflicting extension**, and at most one of the two operations can belong to the chain.
 
-Equivocation is **detectable**: a verifier who encounters two valid operations sharing a `previousOperationCID` can identify the conflict. Resolution policy for equivocation (reject both branches, prefer one, flag for human review) is an application-level concern and is deliberately outside the scope of this method specification.
+Equivocation is **detectable and invalid**: a verifier that encounters two operations sharing a `previousOperationCID` in an identity log MUST reject that log — a forked identity log is never valid. Which of two competing extensions becomes part of the chain is an ordering question, answered by the chain's order authority: relays refuse a conflicting extension of an operation that already has a committed child, and the subject's services-listed home relay's committed order is the convergence rule (see WEB-RELAY.md, _Identity Linearity and Order Authority_).
 
 In practice, equivocation requires the identity holder to act against themselves — no external party can extend an identity chain, since all operations must be signed by a current controller key.
 

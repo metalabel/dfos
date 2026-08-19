@@ -264,7 +264,7 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		if v, ok := payload["version"].(int64); !ok || v != 1 {
 			return nil, fmt.Errorf("log[%d]: invalid or missing version", idx)
 		}
-		if opType != "create" && opType != "update" && opType != "delete" {
+		if opType != "create" && opType != "update" && opType != "delete" && opType != "restore" {
 			return nil, fmt.Errorf("log[%d]: invalid operation type", idx)
 		}
 		if err := validateCreatedAt(createdAt); err != nil {
@@ -274,9 +274,13 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 			return nil, fmt.Errorf("log[%d]: invalid typ: %s", idx, header.Typ)
 		}
 
-		// terminal state
-		if isDeleted {
+		// A deleted identity admits exactly restore. Since nothing else may
+		// follow delete, isDeleted proves the immediate parent was delete.
+		if isDeleted && opType != "restore" {
 			return nil, fmt.Errorf("log[%d]: cannot modify a deleted identity", idx)
+		}
+		if !isDeleted && opType == "restore" {
+			return nil, fmt.Errorf("log[%d]: restore must immediately follow delete", idx)
 		}
 
 		// type sequence
@@ -325,7 +329,7 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 		}
 
 		// chain integrity for non-genesis
-		if opType == "update" || opType == "delete" {
+		if opType != "create" {
 			prevCID := payloadString(payload, "previousOperationCID")
 			if prevCID != previousCID {
 				return nil, fmt.Errorf("log[%d]: previousCID is incorrect", idx)
@@ -448,6 +452,8 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 			services = opServices
 		case "delete":
 			isDeleted = true
+		case "restore":
+			isDeleted = false
 		}
 	}
 
@@ -473,10 +479,6 @@ func VerifyIdentityChain(log []string) (*VerifiedIdentityResult, error) {
 // already-verified identity state. O(1) — one signature verification,
 // one state transition.
 func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt, newOp string) (*VerifiedIdentityResult, error) {
-	if currentState.IsDeleted {
-		return nil, fmt.Errorf("cannot extend a deleted identity")
-	}
-
 	header, payload, err := DecodeJWSUnsafe(newOp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode JWS")
@@ -494,8 +496,14 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 	if opType == "create" {
 		return nil, fmt.Errorf("extension cannot be a create operation")
 	}
-	if opType != "update" && opType != "delete" {
+	if opType != "update" && opType != "delete" && opType != "restore" {
 		return nil, fmt.Errorf("invalid operation type")
+	}
+	if currentState.IsDeleted && opType != "restore" {
+		return nil, fmt.Errorf("cannot extend a deleted identity")
+	}
+	if !currentState.IsDeleted && opType == "restore" {
+		return nil, fmt.Errorf("restore must immediately follow delete")
 	}
 	if err := validateCreatedAt(createdAt); err != nil {
 		return nil, err
@@ -605,11 +613,11 @@ func VerifyIdentityExtension(currentState IdentityState, headCID, lastCreatedAt,
 		}, nil
 	}
 
-	// delete — carry the last services state
+	// delete/restore carry the last key and services state verbatim.
 	return &VerifiedIdentityResult{
 		State: IdentityState{
 			DID:            currentState.DID,
-			IsDeleted:      true,
+			IsDeleted:      opType == "delete",
 			AuthKeys:       currentState.AuthKeys,
 			AssertKeys:     currentState.AssertKeys,
 			ControllerKeys: currentState.ControllerKeys,

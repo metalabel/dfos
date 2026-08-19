@@ -98,8 +98,15 @@ export const verifyIdentityChain = async (input: {
       throw new Error(`log[${idx}]: invalid typ: ${decoded.header.typ}`);
     }
 
-    // terminal state checks
-    if (state.isDeleted) throw new Error(`log[${idx}]: cannot modify a deleted identity`);
+    // A deleted identity admits exactly one operation: restore. Conversely,
+    // restore is invalid in every active position. Since nothing else may
+    // follow delete, isDeleted also proves the immediate parent was delete.
+    if (state.isDeleted && op.type !== 'restore') {
+      throw new Error(`log[${idx}]: cannot modify a deleted identity`);
+    }
+    if (!state.isDeleted && op.type === 'restore') {
+      throw new Error(`log[${idx}]: restore must immediately follow delete`);
+    }
 
     // genesis must be create
     if (idx === 0 && op.type !== 'create') {
@@ -121,7 +128,7 @@ export const verifyIdentityChain = async (input: {
     }
 
     // chain integrity for non-genesis ops
-    if (op.type === 'update' || op.type === 'delete') {
+    if (op.type !== 'create') {
       if (op.previousOperationCID !== state.previousOperationCID) {
         throw new Error(`log[${idx}]: previousCID is incorrect`);
       }
@@ -246,6 +253,9 @@ export const verifyIdentityChain = async (input: {
       case 'delete':
         state.isDeleted = true;
         break;
+      case 'restore':
+        state.isDeleted = false;
+        break;
     }
   }
 
@@ -294,10 +304,6 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
 }> => {
   const { currentState, headCID, lastCreatedAt, newOp } = input;
 
-  if (currentState.isDeleted) {
-    throw new Error('cannot extend a deleted identity');
-  }
-
   // decode JWS
   const decoded = decodeJwsUnsafe(newOp);
   if (!decoded) throw new Error('failed to decode JWS');
@@ -310,12 +316,21 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
   }
   const op = result.data;
 
+  // isDeleted proves that the trusted head is a delete: no other operation is
+  // admitted after deletion. Restore is invalid against every active head.
+  if (currentState.isDeleted && op.type !== 'restore') {
+    throw new Error('cannot extend a deleted identity');
+  }
+  if (!currentState.isDeleted && op.type === 'restore') {
+    throw new Error('restore must immediately follow delete');
+  }
+
   // verify typ
   if (decoded.header.typ !== 'did:dfos:identity-op') {
     throw new Error(`invalid typ: ${decoded.header.typ}`);
   }
 
-  // extensions must be update or delete
+  // extensions must not be create
   if (op.type === 'create') {
     throw new Error('extension cannot be a create operation');
   }
@@ -377,17 +392,19 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
   }
 
   // compute new state
-  const newState: VerifiedIdentity =
-    op.type === 'update'
-      ? {
+  const newState: VerifiedIdentity = (() => {
+    switch (op.type) {
+      case 'update':
+        return {
           did: currentState.did,
           isDeleted: false,
           authKeys: op.authKeys,
           assertKeys: op.assertKeys,
           controllerKeys: op.controllerKeys,
           services: op.services ?? [],
-        }
-      : {
+        };
+      case 'delete':
+        return {
           did: currentState.did,
           isDeleted: true,
           authKeys: currentState.authKeys,
@@ -395,6 +412,17 @@ export const verifyIdentityExtensionFromTrustedState = async (input: {
           controllerKeys: currentState.controllerKeys,
           services: currentState.services,
         };
+      case 'restore':
+        return {
+          did: currentState.did,
+          isDeleted: false,
+          authKeys: currentState.authKeys,
+          assertKeys: currentState.assertKeys,
+          controllerKeys: currentState.controllerKeys,
+          services: currentState.services,
+        };
+    }
+  })();
 
   return { state: newState, operationCID, createdAt: op.createdAt };
 };

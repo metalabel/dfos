@@ -98,7 +98,7 @@ func TestAuthenticateRequestValidatesDIDAndLoadsChainOnce(t *testing.T) {
 	}
 }
 
-func TestAuthenticateRequestRestoredByUndeleteFork(t *testing.T) {
+func TestAuthenticateRequestRestoredByRestore(t *testing.T) {
 	store := NewMemoryStore()
 	r, err := NewRelay(RelayOptions{Store: store})
 	if err != nil {
@@ -157,22 +157,23 @@ func TestAuthenticateRequestRestoredByUndeleteFork(t *testing.T) {
 		t.Fatal("deleted identity authenticated")
 	}
 
-	undeleteFork := signIdentityOp(map[string]any{
-		"version": int64(1), "type": "update",
-		"previousOperationCID": id.opCID,
-		"authKeys":             []dfos.MultikeyPublicKey{id.auth.mk},
-		"assertKeys":           []dfos.MultikeyPublicKey{},
-		"controllerKeys":       []dfos.MultikeyPublicKey{id.controller.mk},
+	deleteHeader, _, err := dfos.DecodeJWSUnsafe(deleteToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore := signIdentityOp(map[string]any{
+		"version": int64(1), "type": "restore",
+		"previousOperationCID": deleteHeader.CID,
 		"createdAt":            genesisAt.Add(2 * time.Second).UTC().Format("2006-01-02T15:04:05.000Z"),
 	})
-	if result := IngestOperations([]string{undeleteFork}, store); result[0].Status != "new" {
-		t.Fatalf("undelete fork: %+v", result[0])
+	if result := IngestOperations([]string{restore}, store); result[0].Status != "new" {
+		t.Fatalf("restore: %+v", result[0])
 	}
 	chain, err := store.GetIdentityChain(id.did)
 	if err != nil || chain == nil || chain.State.IsDeleted {
-		t.Fatalf("undelete fork did not restore projected head: chain=%+v err=%v", chain, err)
+		t.Fatalf("restore did not reactivate identity: chain=%+v err=%v", chain, err)
 	}
 	if auth := AuthenticateRequest(mint(), r.did, store, time.Hour); auth == nil {
-		t.Fatal("undeleted identity did not authenticate with a fresh token")
+		t.Fatal("restored identity did not authenticate with a fresh token")
 	}
 }

@@ -199,12 +199,9 @@ func contentIdsFromCredentialToken(jwsToken string) (wildcard bool, contentIds [
 // via flushIndexMaintenance.
 //
 // Mapping (identical across all implementations):
-//   - identity-op for chain D          → dirty identity row D; if the op left
-//     the identity DELETED, also mark all currently-public-read content dirty — a
-//     deleted identity is no longer a valid credential issuer / delegation hop,
-//     so any content whose public-read authority routes through D flips
-//     true→false (deletion is terminal, so public-read content is the complete
-//     affected superset)
+//   - identity delete/restore for D    → dirty identity row D; delete sweeps the
+//     currently-public subset, while restore sweeps all content because suspended
+//     rows are no longer in that subset
 //   - content-op for chain C             → dirty content row C (+ anchored identities)
 //   - credential grant                   → dirty the att-named content rows, or
 //     all content rows on a chain:* grant
@@ -227,8 +224,14 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 	case "identity-op":
 		if result.ChainID != "" {
 			dirty.identityDIDs[result.ChainID] = struct{}{}
-			if chain, err := store.GetIdentityChain(result.ChainID); err == nil && chain != nil && chain.State.IsDeleted {
-				dirty.allPublicContent = true
+			_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+			if err == nil && payload != nil {
+				if payload["type"] == "delete" {
+					dirty.allPublicContent = true
+				}
+				if payload["type"] == "restore" {
+					dirty.allContent = true
+				}
 			}
 		}
 	case "artifact":

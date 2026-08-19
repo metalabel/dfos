@@ -100,6 +100,26 @@ func testSignIdentityDelete(t *testing.T, did, keyID string, priv ed25519.Privat
 	return token, cidStr
 }
 
+func testSignIdentityRestore(t *testing.T, did, keyID string, priv ed25519.PrivateKey, previousCID, createdAt string) (jws, cid string) {
+	t.Helper()
+	payload := map[string]any{
+		"version":              int64(1),
+		"type":                 "restore",
+		"previousOperationCID": previousCID,
+		"createdAt":            createdAt,
+	}
+	_, _, cidStr, err := DagCborCID(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := JWSHeader{Alg: "EdDSA", Typ: "did:dfos:identity-op", Kid: did + "#" + keyID, CID: cidStr}
+	token, err := CreateJWS(header, payload, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token, cidStr
+}
+
 func testSignContentGenesis(t *testing.T, signerDID, documentCID, kid string, priv ed25519.PrivateKey, createdAt string) (jws, contentID, cid string) {
 	t.Helper()
 	payload := map[string]any{
@@ -249,6 +269,43 @@ func TestVerifyIdentityChain_GenesisAndDelete(t *testing.T) {
 	}
 	if !result.State.IsDeleted {
 		t.Error("expected deleted")
+	}
+}
+
+func TestVerifyIdentityChain_RotateDeleteRestoreUpdate(t *testing.T) {
+	oldPriv, _, oldKey, oldID := testKeys(t)
+	newPriv, _, newKey, newID := testKeys(t)
+	finalPriv, _, finalKey, finalID := testKeys(t)
+	_ = finalPriv
+	_ = finalID
+	gen, did, genCID := testSignIdentityGenesis(t, []MultikeyPublicKey{oldKey}, []MultikeyPublicKey{oldKey}, nil, oldID, oldPriv, "2026-03-07T00:00:00.000Z")
+	update, updateCID := testSignIdentityUpdate(t, did, []MultikeyPublicKey{newKey}, []MultikeyPublicKey{newKey}, nil, oldID, oldPriv, genCID, "2026-03-07T00:01:00.000Z")
+	del, delCID := testSignIdentityDelete(t, did, newID, newPriv, updateCID, "2026-03-07T00:02:00.000Z")
+	restore, restoreCID := testSignIdentityRestore(t, did, newID, newPriv, delCID, "2026-03-07T00:03:00.000Z")
+	final, _ := testSignIdentityUpdate(t, did, []MultikeyPublicKey{finalKey}, nil, nil, newID, newPriv, restoreCID, "2026-03-07T00:04:00.000Z")
+
+	restored, err := VerifyIdentityChain([]string{gen, update, del, restore})
+	if err != nil || restored.State.IsDeleted || len(restored.State.ControllerKeys) != 1 || restored.State.ControllerKeys[0].ID != newID {
+		t.Fatalf("restored state: %+v err=%v", restored, err)
+	}
+	if _, err := VerifyIdentityChain([]string{gen, update, del, restore, final}); err != nil {
+		t.Fatalf("update after restore: %v", err)
+	}
+}
+
+func TestVerifyIdentityChain_RejectsInvalidRestorePositionsAndSigner(t *testing.T) {
+	oldPriv, _, oldKey, oldID := testKeys(t)
+	newPriv, _, newKey, newID := testKeys(t)
+	gen, did, genCID := testSignIdentityGenesis(t, []MultikeyPublicKey{oldKey}, nil, nil, oldID, oldPriv, "2026-03-07T00:00:00.000Z")
+	restoreAfterCreate, _ := testSignIdentityRestore(t, did, oldID, oldPriv, genCID, "2026-03-07T00:01:00.000Z")
+	if _, err := VerifyIdentityChain([]string{gen, restoreAfterCreate}); err == nil {
+		t.Fatal("restore after create accepted")
+	}
+	update, updateCID := testSignIdentityUpdate(t, did, []MultikeyPublicKey{newKey}, nil, nil, oldID, oldPriv, genCID, "2026-03-07T00:01:00.000Z")
+	del, delCID := testSignIdentityDelete(t, did, newID, newPriv, updateCID, "2026-03-07T00:02:00.000Z")
+	oldKeyRestore, _ := testSignIdentityRestore(t, did, oldID, oldPriv, delCID, "2026-03-07T00:03:00.000Z")
+	if _, err := VerifyIdentityChain([]string{gen, update, del, oldKeyRestore}); err == nil || !strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("rotated-out restore err=%v", err)
 	}
 }
 
@@ -419,6 +476,21 @@ func TestVerifyIdentityExtension_Delete(t *testing.T) {
 	}
 	if !extResult.State.IsDeleted {
 		t.Error("expected deleted")
+	}
+}
+
+func TestVerifyIdentityExtension_Restore(t *testing.T) {
+	priv, _, mk, keyID := testKeys(t)
+	gen, did, genCID := testSignIdentityGenesis(t, []MultikeyPublicKey{mk}, nil, nil, keyID, priv, "2026-03-07T00:00:00.000Z")
+	del, delCID := testSignIdentityDelete(t, did, keyID, priv, genCID, "2026-03-07T00:01:00.000Z")
+	deleted, err := VerifyIdentityChain([]string{gen, del})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore, _ := testSignIdentityRestore(t, did, keyID, priv, delCID, "2026-03-07T00:02:00.000Z")
+	restored, err := VerifyIdentityExtension(deleted.State, deleted.HeadCID, deleted.LastCreatedAt, restore)
+	if err != nil || restored.State.IsDeleted || restored.State.ControllerKeys[0].ID != keyID {
+		t.Fatalf("restore extension: %+v err=%v", restored, err)
 	}
 }
 

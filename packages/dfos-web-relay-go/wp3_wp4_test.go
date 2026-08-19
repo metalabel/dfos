@@ -221,9 +221,9 @@ func TestWritePathAcceptsWildcardAudInline(t *testing.T) {
 	}
 }
 
-// TestWritePathRejectsDeletedIssuer verifies a credential from a deleted issuer
-// no longer authorizes a write (Go now matches TS).
-func TestWritePathRejectsDeletedIssuer(t *testing.T) {
+// TestWritePathCredentialSuspendedThenRestored verifies deletion suspends an
+// existing credential and restore honors it again without reissuance.
+func TestWritePathCredentialSuspendedThenRestored(t *testing.T) {
 	store := NewMemoryStore()
 	creator := createTestIdentity(t)
 	delegate := createTestIdentity(t)
@@ -238,7 +238,7 @@ func TestWritePathRejectsDeletedIssuer(t *testing.T) {
 
 	// delete the creator (issuer) identity — signed by the controller key
 	controllerKid := creator.did + "#" + creator.controller.keyID
-	delToken, _, err := dfos.SignIdentityDelete(creator.opCID, controllerKid, creator.controller.priv)
+	delToken, delCID, err := dfos.SignIdentityDelete(creator.opCID, controllerKid, creator.controller.priv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,6 +251,20 @@ func TestWritePathRejectsDeletedIssuer(t *testing.T) {
 	r := IngestOperations([]string{w}, store)
 	if r[0].Status != "rejected" {
 		t.Fatalf("expected write authorized by deleted issuer to be REJECTED, got %s", r[0].Status)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	restoreToken, _, err := dfos.SignIdentityRestore(delCID, controllerKid, creator.controller.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := IngestOperations([]string{restoreToken}, store); rr[0].Status != "new" {
+		t.Fatalf("expected identity restore to be accepted, got %s (%s)", rr[0].Status, rr[0].Error)
+	}
+	doc = newDocCID(t, "afterrestore")
+	w, _ = signDelegatedUpdate(t, delegate, contentOpCID, doc, credential)
+	if r = IngestOperations([]string{w}, store); r[0].Status != "new" {
+		t.Fatalf("expected pre-delete credential to authorize after restore, got %s (%s)", r[0].Status, r[0].Error)
 	}
 }
 

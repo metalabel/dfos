@@ -1501,7 +1501,7 @@ describe('web relay', () => {
   // ---------------------------------------------------------------------------
 
   describe('identity delete', () => {
-    it('restores authentication when a later fork undeletes the projected head', async () => {
+    it('restores authentication after an explicit restore operation', async () => {
       const identity = await createIdentity();
       const content = await createContentOp(identity);
       const initial = await json(await postOps([identity.jwsToken, content.jwsToken]));
@@ -1525,7 +1525,7 @@ describe('web relay', () => {
         previousOperationCID: identity.operationCID,
         createdAt: ts(2),
       };
-      const { jwsToken: deleteToken } = await signIdentityOperation({
+      const { jwsToken: deleteToken, operationCID: deleteCID } = await signIdentityOperation({
         operation: deleteOp,
         signer: identity.controller.signer,
         keyId: identity.controller.keyId,
@@ -1534,26 +1534,36 @@ describe('web relay', () => {
       expect((await json(await postOps([deleteToken]))).results[0].status).toBe('new');
       expect(await authenticatedReadStatus()).toBe(401);
 
-      const undeleteFork: IdentityOperation = {
+      const restore: IdentityOperation = {
         version: 1,
-        type: 'update',
-        previousOperationCID: identity.operationCID,
-        authKeys: [identity.authKey.key],
-        assertKeys: [],
-        controllerKeys: [identity.controller.key],
+        type: 'restore',
+        previousOperationCID: deleteCID,
         createdAt: ts(3),
       };
-      const { jwsToken: undeleteToken } = await signIdentityOperation({
-        operation: undeleteFork,
+      const { jwsToken: restoreToken } = await signIdentityOperation({
+        operation: restore,
         signer: identity.controller.signer,
         keyId: identity.controller.keyId,
         identityDID: identity.did,
       });
-      expect((await json(await postOps([undeleteToken]))).results[0].status).toBe('new');
+      expect((await json(await postOps([restoreToken]))).results[0].status).toBe('new');
 
       const chain = await store.getIdentityChain(identity.did);
       expect(chain?.state.isDeleted).toBe(false);
       expect(await authenticatedReadStatus()).toBe(404);
+
+      const { jwsToken: artifactToken } = await signArtifact({
+        payload: {
+          version: 1,
+          type: 'artifact',
+          did: identity.did,
+          content: { $schema: 'test/v1', title: 'after restore' },
+          createdAt: ts(4),
+        },
+        signer: identity.authKey.signer,
+        kid: `${identity.did}#${identity.authKey.keyId}`,
+      });
+      expect((await json(await postOps([artifactToken]))).results[0].status).toBe('new');
     });
 
     it('should accept identity delete and set isDeleted', async () => {

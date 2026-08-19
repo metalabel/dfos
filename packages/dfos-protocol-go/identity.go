@@ -140,7 +140,7 @@ func SignIdentityUpdateWithServices(previousCID string, controllerKeys, authKeys
 	return jwsToken, cidStr, nil
 }
 
-// SignIdentityDelete signs an identity delete operation (permanent destruction).
+// SignIdentityDelete signs an identity delete operation (deactivation).
 // The signer must use a current controller key.
 func SignIdentityDelete(previousCID, kid string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
 	now := protocolTimestamp()
@@ -148,6 +148,38 @@ func SignIdentityDelete(previousCID, kid string, privateKey ed25519.PrivateKey) 
 	payload := map[string]any{
 		"version":              1,
 		"type":                 "delete",
+		"previousOperationCID": previousCID,
+		"createdAt":            now.Format("2006-01-02T15:04:05.000Z"),
+	}
+
+	_, _, cidStr, err := DagCborCID(payload)
+	if err != nil {
+		return "", "", err
+	}
+
+	header := JWSHeader{
+		Alg: "EdDSA",
+		Typ: "did:dfos:identity-op",
+		Kid: kid,
+		CID: cidStr,
+	}
+
+	jwsToken, err = CreateJWS(header, payload, privateKey)
+	if err != nil {
+		return "", "", err
+	}
+
+	return jwsToken, cidStr, nil
+}
+
+// SignIdentityRestore signs an identity restore operation. It is valid only as
+// the immediate successor of delete and must use a deleted-state controller key.
+func SignIdentityRestore(previousCID, kid string, privateKey ed25519.PrivateKey) (jwsToken string, operationCID string, err error) {
+	now := protocolTimestamp()
+
+	payload := map[string]any{
+		"version":              1,
+		"type":                 "restore",
 		"previousOperationCID": previousCID,
 		"createdAt":            now.Format("2006-01-02T15:04:05.000Z"),
 	}
