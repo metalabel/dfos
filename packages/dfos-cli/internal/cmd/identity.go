@@ -30,6 +30,7 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityAddKeyCmd())
 	cmd.AddCommand(newIdentityDevicePubkeyCmd())
 	cmd.AddCommand(newIdentityDeleteCmd())
+	cmd.AddCommand(newIdentityRestoreCmd())
 	cmd.AddCommand(newIdentityPublishCmd())
 	cmd.AddCommand(newIdentityFetchCmd())
 	cmd.AddCommand(newIdentityRemoveCmd())
@@ -597,7 +598,7 @@ func newIdentityDeleteCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "delete [name|did]",
-		Short: "Permanently delete an identity (sign delete operation)",
+		Short: "Delete an identity (sign delete operation)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			lr, err := getRelay()
@@ -673,7 +674,119 @@ func newIdentityDeleteCmd() *cobra.Command {
 				fmt.Printf("Identity deleted:\n")
 				fmt.Printf("  DID:            %s\n", chain.DID)
 				fmt.Printf("  Operation CID:  %s\n", opCID)
-				fmt.Printf("  This identity can no longer sign operations.\n")
+				fmt.Printf("  This identity can no longer sign operations. 'dfos identity restore' undoes this.\n")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
+	return cmd
+}
+
+func newIdentityRestoreCmd() *cobra.Command {
+	var peerName string
+
+	cmd := &cobra.Command{
+		Use:   "restore [name|did]",
+		Short: "Restore a deleted identity (sign restore operation)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			var chain *relay.StoredIdentityChain
+			var identityArg string
+			if len(args) > 0 {
+				identityArg = args[0]
+				did, err := resolveIdentityDID(identityArg)
+				if err != nil {
+					return err
+				}
+				chain, _ = lr.Relay.GetIdentity(did)
+				if chain == nil {
+					return fmt.Errorf("identity '%s' not found", identityArg)
+				}
+			} else {
+				// requireIdentity() rejects deleted identities — correct for every
+				// other signing command, but restore is the ONE operation whose
+				// subject is necessarily deleted. Same resolution, minus that gate.
+				ctx, err := resolveCtx()
+				if err != nil {
+					return err
+				}
+				if ctx.IdentityName == "" {
+					return fmt.Errorf("no identity configured. Use --identity or 'dfos identity create'")
+				}
+				identityArg = ctx.IdentityName
+				if ctx.IdentityDID == "" {
+					return fmt.Errorf("identity '%s' not found in config", ctx.IdentityName)
+				}
+				chain, err = lr.Relay.GetIdentity(ctx.IdentityDID)
+				if err != nil {
+					return err
+				}
+				if chain == nil {
+					return fmt.Errorf("identity '%s' (%s) not found in local relay", ctx.IdentityName, ctx.IdentityDID)
+				}
+			}
+
+			if !chain.State.IsDeleted {
+				return fmt.Errorf("identity '%s' is not deleted", identityArg)
+			}
+
+			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			if err != nil {
+				return err
+			}
+			controllerPriv, err := keys.GetPrivateKey(kid)
+			if err != nil {
+				return fmt.Errorf("controller key not in keychain: %w", err)
+			}
+
+			lastToken := chain.Log[len(chain.Log)-1]
+			h, _, err := protocol.DecodeJWSUnsafe(lastToken)
+			if err != nil {
+				return fmt.Errorf("decode last operation: %w", err)
+			}
+
+			jwsToken, opCID, err := protocol.SignIdentityRestore(h.CID, kid, controllerPriv)
+			if err != nil {
+				return fmt.Errorf("sign restore: %w", err)
+			}
+
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
+			}
+
+			// push to peer
+			rn := peerName
+			if rn == "" {
+				rn = peerFlag
+			}
+			if rn != "" {
+				c, _, err := getPeerClient(rn)
+				if err != nil {
+					return err
+				}
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
+				if err != nil {
+					return fmt.Errorf("submit: %w", err)
+				}
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
+				}
+			}
+
+			if jsonFlag {
+				outputJSON(map[string]any{"did": chain.DID, "operationCID": opCID, "restored": true})
+			} else {
+				fmt.Printf("Identity restored:\n")
+				fmt.Printf("  DID:            %s\n", chain.DID)
+				fmt.Printf("  Operation CID:  %s\n", opCID)
+				fmt.Printf("  Keys and services are restored to their state as of the delete.\n")
 			}
 			return nil
 		},

@@ -465,7 +465,8 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `identity update`               | Rotate keys / set services (`--service`)                 |
 | `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey              |
 | `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)                     |
-| `POST` | `identity delete`               | Permanently delete identity                              |
+| `POST` | `identity delete`               | Delete identity (restorable)                             |
+| `POST` | `identity restore`              | Restore a deleted identity                               |
 | `POST` | `identity publish [name\|did]`  | Submit identity chain to a relay                         |
 | `GET`  | `identity fetch <did\|name>`    | Download identity chain from relay                       |
 | `GET`  | `identity log <name\|did>`      | Show identity operation history                          |
