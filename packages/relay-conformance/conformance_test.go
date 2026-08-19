@@ -20,24 +20,20 @@ import (
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
-// logCursorFields captures both names emitted during the proof-log deprecation
-// window. RawMessage distinguishes an explicitly present null from an absent
-// field, which lets the suite require both fields on every log response.
-type logCursorFields struct {
+// logPaginationFields captures the current field and the removed alias.
+// RawMessage distinguishes an explicitly present null from an absent field.
+type logPaginationFields struct {
 	Next   json.RawMessage `json:"next"`
 	Cursor json.RawMessage `json:"cursor"`
 }
 
-func assertLogCursorAlias(t *testing.T, fields logCursorFields) *string {
+func assertLogPaginationFields(t *testing.T, fields logPaginationFields) *string {
 	t.Helper()
 	if fields.Next == nil {
 		t.Fatal("log response missing next field")
 	}
-	if fields.Cursor == nil {
-		t.Fatal("log response missing deprecated cursor alias")
-	}
-	if !bytes.Equal(fields.Next, fields.Cursor) {
-		t.Fatalf("log cursor alias mismatch: next=%s cursor=%s", fields.Next, fields.Cursor)
+	if fields.Cursor != nil {
+		t.Fatalf("log response contains removed cursor alias: %s", fields.Cursor)
 	}
 	var next *string
 	if err := json.Unmarshal(fields.Next, &next); err != nil {
@@ -643,7 +639,7 @@ func TestContentForkDAGLog(t *testing.T) {
 
 	// chain log should contain all 3 ops (genesis + 2 fork branches)
 	var logResp struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
@@ -653,7 +649,7 @@ func TestContentForkDAGLog(t *testing.T) {
 	if logRes.StatusCode != 200 {
 		t.Fatalf("log: expected 200, got %d", logRes.StatusCode)
 	}
-	assertLogCursorAlias(t, logResp.logCursorFields)
+	assertLogPaginationFields(t, logResp.logPaginationFields)
 	if len(logResp.Entries) != 3 {
 		t.Fatalf("expected 3 log entries (genesis + 2 forks), got %d", len(logResp.Entries))
 	}
@@ -1634,7 +1630,7 @@ func TestIdentityLogPagination(t *testing.T) {
 
 	// 1. Full log (no params) — should have 3 entries, next null (< default limit)
 	var fullLog struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
@@ -1647,13 +1643,13 @@ func TestIdentityLogPagination(t *testing.T) {
 	if len(fullLog.Entries) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(fullLog.Entries))
 	}
-	if next := assertLogCursorAlias(t, fullLog.logCursorFields); next != nil {
+	if next := assertLogPaginationFields(t, fullLog.logPaginationFields); next != nil {
 		t.Fatalf("expected nil next on last page, got %s", *next)
 	}
 
 	// 2. Paginate with limit=1 — first page has 1 entry + next
 	var page1 struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
@@ -1662,14 +1658,14 @@ func TestIdentityLogPagination(t *testing.T) {
 	if len(page1.Entries) != 1 {
 		t.Fatalf("page1: expected 1 entry, got %d", len(page1.Entries))
 	}
-	page1Next := assertLogCursorAlias(t, page1.logCursorFields)
+	page1Next := assertLogPaginationFields(t, page1.logPaginationFields)
 	if page1Next == nil {
 		t.Fatal("page1: expected next")
 	}
 
 	// 3. Second page via next
 	var page2 struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
@@ -1678,14 +1674,14 @@ func TestIdentityLogPagination(t *testing.T) {
 	if len(page2.Entries) != 1 {
 		t.Fatalf("page2: expected 1 entry, got %d", len(page2.Entries))
 	}
-	page2Next := assertLogCursorAlias(t, page2.logCursorFields)
+	page2Next := assertLogPaginationFields(t, page2.logPaginationFields)
 	if page2Next == nil {
 		t.Fatal("page2: expected next")
 	}
 
 	// 4. Third (final) page
 	var page3 struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
@@ -1694,19 +1690,19 @@ func TestIdentityLogPagination(t *testing.T) {
 	if len(page3.Entries) != 1 {
 		t.Fatalf("page3: expected 1 entry, got %d", len(page3.Entries))
 	}
-	page3Next := assertLogCursorAlias(t, page3.logCursorFields)
+	page3Next := assertLogPaginationFields(t, page3.logPaginationFields)
 	if page3Next == nil {
 		t.Fatal("page3: full page must emit next")
 	}
 	var page4 struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct{} `json:"entries"`
 	}
 	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?after=%s&limit=1", base, id.did, *page3Next), &page4)
 	if len(page4.Entries) != 0 {
 		t.Fatalf("page after final: expected 0 entries, got %d", len(page4.Entries))
 	}
-	if next := assertLogCursorAlias(t, page4.logCursorFields); next != nil {
+	if next := assertLogPaginationFields(t, page4.logPaginationFields); next != nil {
 		t.Fatalf("empty page: expected nil next, got %s", *next)
 	}
 
@@ -1718,14 +1714,14 @@ func TestIdentityLogPagination(t *testing.T) {
 
 	// 6. Exact page boundary — limit=3 returns all entries and a non-nil next
 	var exactPage struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct{} `json:"entries"`
 	}
 	getJSON(t, fmt.Sprintf("%s/proof/v1/identities/%s/log?limit=3", base, id.did), &exactPage)
 	if len(exactPage.Entries) != 3 {
 		t.Fatalf("exact boundary: expected 3 entries, got %d", len(exactPage.Entries))
 	}
-	if next := assertLogCursorAlias(t, exactPage.logCursorFields); next == nil {
+	if next := assertLogPaginationFields(t, exactPage.logPaginationFields); next == nil {
 		t.Fatal("exact boundary: full page must emit next")
 	}
 }
@@ -1742,7 +1738,7 @@ func TestGlobalLogPagination(t *testing.T) {
 
 	// paginate with limit=1
 	var page1 struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
@@ -1754,14 +1750,14 @@ func TestGlobalLogPagination(t *testing.T) {
 	if len(page1.Entries) != 1 {
 		t.Fatalf("page1: expected 1 entry, got %d", len(page1.Entries))
 	}
-	page1Next := assertLogCursorAlias(t, page1.logCursorFields)
+	page1Next := assertLogPaginationFields(t, page1.logPaginationFields)
 	if page1Next == nil {
 		t.Fatal("page1: expected next")
 	}
 
 	// follow next to page 2
 	var page2 struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
@@ -1778,18 +1774,18 @@ func TestGlobalLogPagination(t *testing.T) {
 
 	// 3. Drain all remaining pages — global log may have relay bootstrap entries
 	//    beyond our 3 identities. Verify pagination terminates correctly.
-	cursor := assertLogCursorAlias(t, page2.logCursorFields)
+	cursor := assertLogPaginationFields(t, page2.logPaginationFields)
 	totalEntries := 2                         // already consumed 2 entries from page1 + page2
 	for cursor != nil && totalEntries < 100 { // safety bound
 		var page struct {
-			logCursorFields
+			logPaginationFields
 			Entries []struct {
 				CID string `json:"cid"`
 			} `json:"entries"`
 		}
 		getJSON(t, fmt.Sprintf("%s/proof/v1/log?after=%s&limit=1", base, *cursor), &page)
 		totalEntries += len(page.Entries)
-		next := assertLogCursorAlias(t, page.logCursorFields)
+		next := assertLogPaginationFields(t, page.logPaginationFields)
 		if len(page.Entries) == 0 {
 			if next != nil {
 				t.Fatal("empty page should have nil next")

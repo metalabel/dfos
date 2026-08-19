@@ -149,13 +149,13 @@ func logEntryCount(t *testing.T, base string) int {
 	t.Helper()
 	_, body := getBody(t, base+"/proof/v1/log?limit=1000")
 	var parsed struct {
-		logCursorFields
+		logPaginationFields
 		Entries []json.RawMessage `json:"entries"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return -1
 	}
-	assertLogCursorAlias(t, parsed.logCursorFields)
+	assertLogPaginationFields(t, parsed.logPaginationFields)
 	return len(parsed.Entries)
 }
 
@@ -227,15 +227,15 @@ func TestDualRelayParity(t *testing.T) {
 				t.Fatalf("expected 200 on %s, got %d (TS body: %s)", route, tsStatus, tsBody)
 			}
 			if routeIndex < 3 {
-				var tsLog, goLog logCursorFields
+				var tsLog, goLog logPaginationFields
 				if err := json.Unmarshal(tsBody, &tsLog); err != nil {
 					t.Fatalf("parse TS log envelope: %v", err)
 				}
 				if err := json.Unmarshal(goBody, &goLog); err != nil {
 					t.Fatalf("parse Go log envelope: %v", err)
 				}
-				assertLogCursorAlias(t, tsLog)
-				assertLogCursorAlias(t, goLog)
+				assertLogPaginationFields(t, tsLog)
+				assertLogPaginationFields(t, goLog)
 			}
 
 			tsCanon := canonicalize(t, tsBody)

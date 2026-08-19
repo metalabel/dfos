@@ -68,14 +68,14 @@ type wdLogEntry struct {
 func wdGetLog(t *testing.T, url string) []wdLogEntry {
 	t.Helper()
 	var body struct {
-		logCursorFields
+		logPaginationFields
 		Entries []wdLogEntry `json:"entries"`
 	}
 	resp := getJSON(t, url, &body)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET %s: status %d", url, resp.StatusCode)
 	}
-	assertLogCursorAlias(t, body.logCursorFields)
+	assertLogPaginationFields(t, body.logPaginationFields)
 	return body.Entries
 }
 

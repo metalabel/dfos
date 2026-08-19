@@ -249,7 +249,7 @@ func TestLogGlobal(t *testing.T) {
 
 	// fetch global log
 	var logResp struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
@@ -261,7 +261,7 @@ func TestLogGlobal(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /log: status %d", resp.StatusCode)
 	}
-	assertLogCursorAlias(t, logResp.logCursorFields)
+	assertLogPaginationFields(t, logResp.logPaginationFields)
 
 	if len(logResp.Entries) < 2 {
 		t.Fatalf("expected at least 2 log entries (relay bootstrap ops), got %d", len(logResp.Entries))
@@ -292,7 +292,7 @@ func TestLogPagination(t *testing.T) {
 
 	// fetch with limit=2
 	var page1 struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
@@ -305,14 +305,14 @@ func TestLogPagination(t *testing.T) {
 	if len(page1.Entries) != 2 {
 		t.Fatalf("expected 2 entries on page 1, got %d", len(page1.Entries))
 	}
-	next := assertLogCursorAlias(t, page1.logCursorFields)
+	next := assertLogPaginationFields(t, page1.logPaginationFields)
 	if next == nil {
 		t.Fatal("expected non-nil next on page 1")
 	}
 
 	// fetch page 2
 	var page2 struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID string `json:"cid"`
 		} `json:"entries"`
@@ -321,7 +321,7 @@ func TestLogPagination(t *testing.T) {
 	if resp2.StatusCode != 200 {
 		t.Fatalf("GET /log page 2: status %d", resp2.StatusCode)
 	}
-	assertLogCursorAlias(t, page2.logCursorFields)
+	assertLogPaginationFields(t, page2.logPaginationFields)
 
 	if len(page2.Entries) < 1 {
 		t.Fatal("expected at least 1 entry on page 2")
@@ -338,7 +338,7 @@ func TestLogPerIdentity(t *testing.T) {
 	id := createIdentity(t, base)
 
 	var logResp struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
@@ -348,7 +348,7 @@ func TestLogPerIdentity(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /identities/%s/log: status %d", id.did, resp.StatusCode)
 	}
-	assertLogCursorAlias(t, logResp.logCursorFields)
+	assertLogPaginationFields(t, logResp.logPaginationFields)
 
 	if len(logResp.Entries) != 1 {
 		t.Fatalf("expected 1 identity log entry (genesis), got %d", len(logResp.Entries))
@@ -368,7 +368,7 @@ func TestLogPerContent(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	var logResp struct {
-		logCursorFields
+		logPaginationFields
 		Entries []struct {
 			CID      string `json:"cid"`
 			JWSToken string `json:"jwsToken"`
@@ -378,7 +378,7 @@ func TestLogPerContent(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /content/%s/log: status %d", cc.contentID, resp.StatusCode)
 	}
-	assertLogCursorAlias(t, logResp.logCursorFields)
+	assertLogPaginationFields(t, logResp.logPaginationFields)
 
 	if len(logResp.Entries) != 1 {
 		t.Fatalf("expected 1 content log entry (genesis), got %d", len(logResp.Entries))
@@ -433,7 +433,7 @@ func TestLogContainsAllKinds(t *testing.T) {
 			url += "&after=" + cursor
 		}
 		var logResp struct {
-			logCursorFields
+			logPaginationFields
 			Entries []struct {
 				CID  string `json:"cid"`
 				Kind string `json:"kind"`
@@ -443,7 +443,7 @@ func TestLogContainsAllKinds(t *testing.T) {
 		for _, e := range logResp.Entries {
 			kinds[e.Kind] = true
 		}
-		next := assertLogCursorAlias(t, logResp.logCursorFields)
+		next := assertLogPaginationFields(t, logResp.logPaginationFields)
 		if next == nil {
 			break
 		}
