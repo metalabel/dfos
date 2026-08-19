@@ -508,7 +508,7 @@ The protected header MUST NOT contain a `crit` member. DFOS emits no critical he
 
 ### 3. No header-key-trust
 
-The verifier MUST NOT read key material from the protected header. The signing key is resolved exclusively from `kid` against the signer's identity chain (current state). A protected header that carries an embedded public key — specifically a `jwk` or `x5c` member — MUST be rejected. (DFOS emits neither; the resolved key from `kid` is the only trusted key material.) A header-supplied key is never trusted, even if it happens to match the resolved key.
+The verifier MUST NOT read key material from the protected header. The signing key is resolved exclusively from `kid` against the signer's identity chain (current state). **Current state is the state at the chain's selected head** — the key sets declared by the operation that deterministic head selection (see Chain Validity) names as the head — never a union across branches or across history: a key that appears only in superseded operations, or only on a non-head branch, is not current. (Families that verify under historical rather than current-state resolution say so explicitly in their own specs.) A protected header that carries an embedded public key — specifically a `jwk` or `x5c` member — MUST be rejected. (DFOS emits neither; the resolved key from `kid` is the only trusted key material.) A header-supplied key is never trusted, even if it happens to match the resolved key.
 
 ### 4. Canonical signature scalar (`S < L`)
 

@@ -62,6 +62,7 @@ type MemoryStore struct {
 
 type rawOpEntry struct {
 	jwsToken string
+	origin   OpOrigin
 	status   string // "pending", "sequenced", "rejected"
 }
 
@@ -944,22 +945,26 @@ func (s *MemoryStore) SetPeerCursor(peerURL string, cursor string) error {
 	return nil
 }
 
-func (s *MemoryStore) PutRawOp(cid string, jwsToken string) error {
+func (s *MemoryStore) PutRawOp(cid string, jwsToken string, origins ...OpOrigin) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	origin := OpOriginDirect
+	if len(origins) > 0 && origins[0] == OpOriginPeer {
+		origin = OpOriginPeer
+	}
 	if _, exists := s.rawOps[cid]; !exists {
-		s.rawOps[cid] = rawOpEntry{jwsToken: jwsToken, status: "pending"}
+		s.rawOps[cid] = rawOpEntry{jwsToken: jwsToken, origin: origin, status: "pending"}
 	}
 	return nil
 }
 
-func (s *MemoryStore) GetUnsequencedOps(limit int) ([]string, error) {
+func (s *MemoryStore) GetUnsequencedOps(limit int) ([]PendingOp, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out []string
+	var out []PendingOp
 	for _, entry := range s.rawOps {
 		if entry.status == "pending" {
-			out = append(out, entry.jwsToken)
+			out = append(out, PendingOp{JWSToken: entry.jwsToken, Origin: entry.origin})
 			if len(out) >= limit {
 				break
 			}

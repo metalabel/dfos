@@ -98,8 +98,9 @@ type IdentityDeletedChecker func(did string) (bool, error)
 // the relay boundary. All are nil-safe — when a callback is nil the
 // corresponding check is skipped (the protocol layer stays store-agnostic).
 type contentVerifyOpts struct {
-	isRevoked RevocationChecker
-	isDeleted IdentityDeletedChecker
+	isRevoked            RevocationChecker
+	isDeleted            IdentityDeletedChecker
+	credentialResolveKey KeyResolver
 }
 
 // ContentVerifyOption configures optional content-chain WRITE-path checks.
@@ -115,6 +116,13 @@ func WithRevocationChecker(fn RevocationChecker) ContentVerifyOption {
 // content write path.
 func WithIdentityDeletedChecker(fn IdentityDeletedChecker) ContentVerifyOption {
 	return func(o *contentVerifyOpts) { o.isDeleted = fn }
+}
+
+// WithCredentialKeyResolver separates credential-history verification from
+// operation-signature admission. When omitted, credentials use the operation
+// resolver for backward compatibility.
+func WithCredentialKeyResolver(fn KeyResolver) ContentVerifyOption {
+	return func(o *contentVerifyOpts) { o.credentialResolveKey = fn }
 }
 
 // protocolTimeFormat is declared in timestamp.go
@@ -649,7 +657,11 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 		}
 	}
 
-	creatorPubKey, err := resolveKey(vcKid)
+	credentialResolveKey := opts.credentialResolveKey
+	if credentialResolveKey == nil {
+		credentialResolveKey = resolveKey
+	}
+	creatorPubKey, err := credentialResolveKey(vcKid)
 	if err != nil {
 		return fmt.Errorf("cannot resolve creator key for authorization verification")
 	}
@@ -704,7 +716,7 @@ func verifyContentAuthorization(authorization, opDID, creatorDID, contentID, cre
 	if err != nil {
 		return fmt.Errorf("credential prf invalid: %v", err)
 	}
-	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, resolveKey, creatorDID, opts.isRevoked, opts.isDeleted, opTimeUnix, 0); err != nil {
+	if err := verifyDelegationChain(authorization, vc, childAtt, childPrf, credentialResolveKey, creatorDID, opts.isRevoked, opts.isDeleted, opTimeUnix, 0); err != nil {
 		return err
 	}
 

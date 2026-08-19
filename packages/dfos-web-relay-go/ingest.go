@@ -30,6 +30,15 @@ var dependencyFailureSubstrings = []string{
 	"content chain not found:",
 }
 
+const noncurrentSigningKeyError = "signing key is not in the identity's current state"
+
+type admissionMode int
+
+const (
+	currentAdmission admissionMode = iota
+	historicalAdmission
+)
+
 // isKeyResolutionFailure reports whether a thrown verification error indicates a
 // missing dependency (retryable) rather than a permanent rejection.
 func isKeyResolutionFailure(msg string) bool {
@@ -235,7 +244,8 @@ func CreateKeyResolver(store Store) dfos.KeyResolver {
 }
 
 // CreateCurrentKeyResolver returns a KeyResolver that only resolves
-// current-state keys. Used for live auth — rotated-out keys are rejected.
+// current-state keys. Used for live auth and first admission — rotated-out keys
+// are rejected but remain resolvable for committed history.
 func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 	return func(kid string) (ed25519.PublicKey, error) {
 		hashIdx := strings.Index(kid, "#")
@@ -256,6 +266,9 @@ func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 		if identity == nil {
 			return nil, fmt.Errorf("unknown identity: %s", did)
 		}
+		if identity.State.IsDeleted {
+			return nil, fmt.Errorf("signing identity is deleted")
+		}
 
 		allKeys := make([]dfos.MultikeyPublicKey, 0, len(identity.State.AuthKeys)+len(identity.State.AssertKeys)+len(identity.State.ControllerKeys))
 		allKeys = append(allKeys, identity.State.AuthKeys...)
@@ -267,8 +280,15 @@ func CreateCurrentKeyResolver(store Store) dfos.KeyResolver {
 			}
 		}
 
-		return nil, fmt.Errorf("unknown key %s on identity %s", keyID, did)
+		return nil, fmt.Errorf("%s", noncurrentSigningKeyError)
 	}
+}
+
+func admissionKeyResolver(store Store, mode admissionMode) dfos.KeyResolver {
+	if mode == historicalAdmission {
+		return CreateKeyResolver(store)
+	}
+	return CreateCurrentKeyResolver(store)
 }
 
 // ---------------------------------------------------------------------------
@@ -428,7 +448,7 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 	return IngestionResult{CID: cid, Status: "new", Kind: "identity-op", ChainID: did}
 }
 
-func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionResult {
+func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissionMode) IngestionResult {
 	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || header == nil {
 		return IngestionResult{Status: "rejected", Error: "failed to decode JWS"}
@@ -462,7 +482,8 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 		}
 	}
 
-	resolveKey := CreateKeyResolver(store)
+	resolveKey := admissionKeyResolver(store, mode)
+	resolveCredentialKey := CreateKeyResolver(store)
 	// WRITE-path hardening callbacks (mirror the relay READ path / the TS twin):
 	// revoked credentials and deleted issuers/parents no longer authorize writes.
 	//
@@ -491,7 +512,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 	isGenesis := opType == "create"
 
 	if isGenesis {
-		result, err := dfos.VerifyContentChain([]string{jwsToken}, resolveKey, true, isRevoked, isDeleted)
+		result, err := dfos.VerifyContentChain([]string{jwsToken}, resolveKey, true, isRevoked, isDeleted, dfos.WithCredentialKeyResolver(resolveCredentialKey))
 		if err != nil {
 			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 		}
@@ -544,7 +565,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 
 	if chain.State.HeadCID == previousCID {
 		// linear extension (fast path)
-		extResult, err := dfos.VerifyContentExtension(chain.State, chain.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted)
+		extResult, err := dfos.VerifyContentExtension(chain.State, chain.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted, dfos.WithCredentialKeyResolver(resolveCredentialKey))
 		if err != nil {
 			return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 		}
@@ -582,7 +603,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 		return IngestionResult{CID: cid, Status: "rejected", Error: "unknown previous operation in content chain", DependencyMissing: true}
 	}
 
-	extResult, err := dfos.VerifyContentExtension(forkState.State, forkState.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted)
+	extResult, err := dfos.VerifyContentExtension(forkState.State, forkState.LastCreatedAt, jwsToken, resolveKey, true, isRevoked, isDeleted, dfos.WithCredentialKeyResolver(resolveCredentialKey))
 	if err != nil {
 		return IngestionResult{CID: cid, Status: "rejected", Error: err.Error(), DependencyMissing: isKeyResolutionFailure(err.Error())}
 	}
@@ -619,8 +640,8 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool) IngestionRes
 	return IngestionResult{CID: cid, Status: "new", Kind: "content-op", ChainID: chain.ContentID}
 }
 
-func ingestCountersign(jwsToken string, store Store, logEnabled bool) IngestionResult {
-	resolveKey := CreateKeyResolver(store)
+func ingestCountersign(jwsToken string, store Store, logEnabled bool, mode admissionMode) IngestionResult {
+	resolveKey := admissionKeyResolver(store, mode)
 
 	result, err := dfos.VerifyCountersignature(jwsToken, resolveKey)
 	if err != nil {
@@ -695,8 +716,8 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool) IngestionR
 	return IngestionResult{CID: cid, Status: "new", Kind: "countersign", ChainID: targetCID}
 }
 
-func ingestArtifact(jwsToken string, store Store, logEnabled bool) IngestionResult {
-	resolveKey := CreateKeyResolver(store)
+func ingestArtifact(jwsToken string, store Store, logEnabled bool, mode admissionMode) IngestionResult {
+	resolveKey := admissionKeyResolver(store, mode)
 
 	result, err := dfos.VerifyArtifact(jwsToken, resolveKey)
 	if err != nil {
@@ -1081,7 +1102,8 @@ func topologicalSortBucket(ops []classifiedOp) []classifiedOp {
 // ---------------------------------------------------------------------------
 
 type ingestConfig struct {
-	logEnabled bool
+	logEnabled    bool
+	admissionMode admissionMode
 }
 
 // IngestOption configures ingestion behavior.
@@ -1092,10 +1114,17 @@ func WithLogDisabled() IngestOption {
 	return func(c *ingestConfig) { c.logEnabled = false }
 }
 
+// WithHistoricalAdmission verifies artifacts, countersignatures, and content
+// operations as committed peer history. Direct submissions must use the default
+// current-state admission mode.
+func WithHistoricalAdmission() IngestOption {
+	return func(c *ingestConfig) { c.admissionMode = historicalAdmission }
+}
+
 // IngestOperations classifies, dependency-sorts, and processes a batch of JWS
 // tokens. Returns results in the original submission order.
 func IngestOperations(tokens []string, store Store, opts ...IngestOption) []IngestionResult {
-	cfg := ingestConfig{logEnabled: true}
+	cfg := ingestConfig{logEnabled: true, admissionMode: currentAdmission}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -1135,11 +1164,11 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 			case "identity-op":
 				result = ingestIdentityOp(op.jwsToken, store, cfg.logEnabled)
 			case "content-op":
-				result = ingestContentOp(op.jwsToken, store, cfg.logEnabled)
+				result = ingestContentOp(op.jwsToken, store, cfg.logEnabled, cfg.admissionMode)
 			case "countersign":
-				result = ingestCountersign(op.jwsToken, store, cfg.logEnabled)
+				result = ingestCountersign(op.jwsToken, store, cfg.logEnabled, cfg.admissionMode)
 			case "artifact":
-				result = ingestArtifact(op.jwsToken, store, cfg.logEnabled)
+				result = ingestArtifact(op.jwsToken, store, cfg.logEnabled, cfg.admissionMode)
 			case "revocation":
 				result = ingestRevocation(op.jwsToken, store, cfg.logEnabled)
 			case "credential":
@@ -1177,7 +1206,7 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 			case "identity-op":
 				result = ingestIdentityOp(tokens[p.index], store, cfg.logEnabled)
 			case "content-op":
-				result = ingestContentOp(tokens[p.index], store, cfg.logEnabled)
+				result = ingestContentOp(tokens[p.index], store, cfg.logEnabled, cfg.admissionMode)
 			default:
 				continue
 			}

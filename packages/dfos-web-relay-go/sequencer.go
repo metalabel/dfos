@@ -34,12 +34,33 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 
 	prevPending := -1
 	for {
-		tokens, err := r.store.GetUnsequencedOps(10000)
-		if err != nil || len(tokens) == 0 {
+		pendingOps, err := r.store.GetUnsequencedOps(10000)
+		if err != nil || len(pendingOps) == 0 {
 			break
 		}
 
-		results := IngestOperations(tokens, r.store, opts...)
+		results := make([]IngestionResult, len(pendingOps))
+		for _, origin := range []OpOrigin{OpOriginDirect, OpOriginPeer} {
+			var tokens []string
+			var indexes []int
+			for i, op := range pendingOps {
+				if op.Origin == origin {
+					tokens = append(tokens, op.JWSToken)
+					indexes = append(indexes, i)
+				}
+			}
+			if len(tokens) == 0 {
+				continue
+			}
+			partitionOpts := append([]IngestOption{}, opts...)
+			if origin == OpOriginPeer {
+				partitionOpts = append(partitionOpts, WithHistoricalAdmission())
+			}
+			partitionResults := IngestOperations(tokens, r.store, partitionOpts...)
+			for i, result := range partitionResults {
+				results[indexes[i]] = result
+			}
+		}
 
 		progress := false
 		var sequencedCIDs []string
@@ -60,14 +81,14 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 			//     payload mints a fresh row).
 			// rawCID=="" means the token was undecodable, so PutRawOp was skipped
 			// and there is genuinely nothing to drain — skip it.
-			rawCID := computeOpCID(tokens[i])
+			rawCID := computeOpCID(pendingOps[i].JWSToken)
 			if rawCID == "" {
 				continue
 			}
 			switch {
 			case res.Status == "new":
 				sequencedCIDs = append(sequencedCIDs, rawCID)
-				newOps = append(newOps, tokens[i])
+				newOps = append(newOps, pendingOps[i].JWSToken)
 				result.Sequenced++
 				progress = true
 				r.markContentFollowDirty(res)

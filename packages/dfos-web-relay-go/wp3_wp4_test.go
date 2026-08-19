@@ -266,12 +266,12 @@ type putRawOpFaultStore struct {
 	calls      int
 }
 
-func (f *putRawOpFaultStore) PutRawOp(cid, jwsToken string) error {
+func (f *putRawOpFaultStore) PutRawOp(cid, jwsToken string, origin ...OpOrigin) error {
 	f.calls++
 	if f.failOnCall != 0 && f.calls == f.failOnCall {
 		return fmt.Errorf("injected raw-op write failure")
 	}
-	return f.MemoryStore.PutRawOp(cid, jwsToken)
+	return f.MemoryStore.PutRawOp(cid, jwsToken, origin...)
 }
 
 // syncPageClient serves a fixed set of ops over multiple sync cycles. It tracks

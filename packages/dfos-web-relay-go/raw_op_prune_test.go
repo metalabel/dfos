@@ -7,7 +7,7 @@ import (
 
 // rawOpPruneStore is the slice of the store surface the R4 prune test exercises.
 type rawOpPruneStore interface {
-	PutRawOp(cid, jwsToken string) error
+	PutRawOp(cid, jwsToken string, origin ...OpOrigin) error
 	MarkOpRejected(cid, reason string) error
 	CountUnsequenced() (int, error)
 }

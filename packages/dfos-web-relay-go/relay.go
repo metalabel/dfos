@@ -181,7 +181,7 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	for i, token := range tokens {
 		rawCIDs[i] = computeOpCID(token)
 		if rawCIDs[i] != "" {
-			r.store.PutRawOp(rawCIDs[i], token)
+			r.store.PutRawOp(rawCIDs[i], token, OpOriginDirect)
 		}
 	}
 
@@ -415,7 +415,7 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 				)
 				continue
 			}
-			if err := r.store.PutRawOp(cid, e.JWSToken); err != nil {
+			if err := r.store.PutRawOp(cid, e.JWSToken, OpOriginPeer); err != nil {
 				// Durability discipline (mirrors Ingest's "never advance past
 				// unpersisted work"): on a transient store failure, do NOT
 				// advance the cursor — otherwise the next cycle resumes AFTER

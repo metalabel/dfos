@@ -88,6 +88,10 @@ const isKeyResolutionFailure = (message: string): boolean =>
 const isCredentialDependencyFailure = (message: string): boolean =>
   message.includes('issuer identity not found:') || message.includes(' not found on identity ');
 
+export type AdmissionMode = 'current' | 'historical';
+
+export const NONCURRENT_SIGNING_KEY_ERROR = "signing key is not in the identity's current state";
+
 /**
  * Derive the operation CID from a JWS token by re-encoding the decoded payload.
  * Returns the empty string for an undecodable token. Used at verify-failure
@@ -369,9 +373,9 @@ export const createHistoricalIdentityResolver = (store: RelayStore) => async (di
 /**
  * Create a key resolver that only resolves current-state keys.
  *
- * Used for live authentication (auth tokens, credentials) where rotated-out
- * keys must NOT be accepted. After a key rotation, the old key should no
- * longer authenticate new requests.
+ * Used for live authentication and first admission, where rotated-out keys
+ * must NOT be accepted. After a key rotation, the old key can still verify
+ * committed history through createKeyResolver, but cannot author a fresh op.
  */
 export const createCurrentKeyResolver =
   (store: RelayStore) =>
@@ -384,6 +388,7 @@ export const createCurrentKeyResolver =
 
     const identity = await store.getIdentityChain(did);
     if (!identity) throw new Error(`unknown identity: ${did}`);
+    if (identity.state.isDeleted) throw new Error('signing identity is deleted');
 
     const currentKeys = [
       ...identity.state.authKeys,
@@ -393,8 +398,11 @@ export const createCurrentKeyResolver =
     const currentKey = currentKeys.find((k) => k.id === keyId);
     if (currentKey) return decodeMultikey(currentKey.publicKeyMultibase).keyBytes;
 
-    throw new Error(`unknown key ${keyId} on identity ${did}`);
+    throw new Error(NONCURRENT_SIGNING_KEY_ERROR);
   };
+
+const createAdmissionKeyResolver = (store: RelayStore, mode: AdmissionMode) =>
+  mode === 'historical' ? createKeyResolver(store) : createCurrentKeyResolver(store);
 
 // -----------------------------------------------------------------------------
 // individual verifiers
@@ -587,6 +595,7 @@ const ingestContentOp = async (
   jwsToken: string,
   store: RelayStore,
   logEnabled: boolean,
+  admissionMode: AdmissionMode,
 ): Promise<IngestionResult> => {
   const decoded = decodeJwsUnsafe(jwsToken);
   if (!decoded) return { cid: '', status: 'rejected', error: 'failed to decode JWS' };
@@ -623,7 +632,7 @@ const ingestContentOp = async (
     }
   }
 
-  const resolveKey = createKeyResolver(store);
+  const resolveKey = createAdmissionKeyResolver(store, admissionMode);
   const resolveIdentity = createHistoricalIdentityResolver(store);
   // Thread revocation onto the WRITE path so revoked credentials (leaf AND
   // parents) no longer authorize writes. The read path already does this
@@ -847,8 +856,9 @@ const ingestCountersign = async (
   jwsToken: string,
   store: RelayStore,
   logEnabled: boolean,
+  admissionMode: AdmissionMode,
 ): Promise<IngestionResult> => {
-  const resolveKey = createKeyResolver(store);
+  const resolveKey = createAdmissionKeyResolver(store, admissionMode);
 
   let verified: VerifiedCountersignature;
   try {
@@ -935,8 +945,9 @@ const ingestArtifact = async (
   jwsToken: string,
   store: RelayStore,
   logEnabled: boolean,
+  admissionMode: AdmissionMode,
 ): Promise<IngestionResult> => {
-  const resolveKey = createKeyResolver(store);
+  const resolveKey = createAdmissionKeyResolver(store, admissionMode);
 
   let verified;
   try {
@@ -1281,9 +1292,10 @@ const selectDeterministicHead = (log: string[]): { cid: string; createdAt: strin
 export const ingestOperations = async (
   tokens: string[],
   store: RelayStore,
-  options?: { logEnabled?: boolean },
+  options?: { logEnabled?: boolean; admissionMode?: AdmissionMode },
 ): Promise<IngestionResult[]> => {
   const logEnabled = options?.logEnabled !== false;
+  const admissionMode = options?.admissionMode ?? 'current';
 
   // classify all tokens, preserving submission order
   const classified = tokens.map((token, i) => ({ ...classify(token), originalIndex: i }));
@@ -1312,13 +1324,13 @@ export const ingestOperations = async (
           result = await ingestIdentityOp(op.jwsToken, store, logEnabled);
           break;
         case 'content-op':
-          result = await ingestContentOp(op.jwsToken, store, logEnabled);
+          result = await ingestContentOp(op.jwsToken, store, logEnabled, admissionMode);
           break;
         case 'countersign':
-          result = await ingestCountersign(op.jwsToken, store, logEnabled);
+          result = await ingestCountersign(op.jwsToken, store, logEnabled, admissionMode);
           break;
         case 'artifact':
-          result = await ingestArtifact(op.jwsToken, store, logEnabled);
+          result = await ingestArtifact(op.jwsToken, store, logEnabled, admissionMode);
           break;
         case 'revocation':
           result = await ingestRevocation(op.jwsToken, store, logEnabled);

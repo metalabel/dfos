@@ -300,6 +300,21 @@ type IngestionResult struct {
 	DependencyMissing bool `json:"dependencyMissing,omitempty"`
 }
 
+// OpOrigin records whether a raw operation first arrived directly or through
+// committed peer-log ingestion. It is durable admission provenance.
+type OpOrigin string
+
+const (
+	OpOriginDirect OpOrigin = "direct"
+	OpOriginPeer   OpOrigin = "peer"
+)
+
+// PendingOp is one unsequenced raw operation with its durable provenance.
+type PendingOp struct {
+	JWSToken string
+	Origin   OpOrigin
+}
+
 // SigningStore is the optional ephemeral signing-mailbox courier store.
 type SigningStore interface {
 	PruneExpiredSignRequests(now time.Time) error
@@ -353,8 +368,8 @@ type Store interface {
 	SetPeerCursor(peerURL string, cursor string) error
 
 	// raw ops — content-addressed store for all received operations
-	PutRawOp(cid string, jwsToken string) error
-	GetUnsequencedOps(limit int) ([]string, error) // returns JWS tokens where status = 'pending'
+	PutRawOp(cid string, jwsToken string, origin ...OpOrigin) error
+	GetUnsequencedOps(limit int) ([]PendingOp, error) // returns JWS tokens + origins where status = 'pending'
 	MarkOpsSequenced(cids []string) error
 	MarkOpRejected(cid string, reason string) error
 	CountUnsequenced() (int, error)
