@@ -34,6 +34,13 @@ operations carry their own authentication (WEB-RELAY.md "Proof Plane", `specs/WE
 Everything below the crypto core is cryptographically verified. Nothing above it needs
 to be trusted to verify a proof.
 
+One property is deliberately **not** carried by the crypto core alone: **currency**. A
+signature proves who signed and that the bytes are intact — forever, from anywhere. Whether
+a key is _still_ the signer's current key, or a head is _still_ the chain's current head, is
+a statement about the freshest state a resolver has seen, and freshness is served, not
+proven. Authenticity is trustless; currency is host-mediated — see _Authority currency_
+below.
+
 ### Content plane — honest-host, undisclosed-by-default
 
 The protocol commits to content _hashes_, not plaintext — it does not encrypt
@@ -48,6 +55,25 @@ gated by an auth token plus (for non-creators) a read credential (WEB-RELAY.md
 
 The security posture of a document is therefore the security posture of the relay
 operator that holds it.
+
+### Authority currency — honest-host arbitrated
+
+The same honest-host split that governs content confidentiality governs **how current an
+identity's authority is**. An identity chain's proofs verify trustlessly, but its _current
+state_ — which keys are live, whether it is deleted — is resolved from whatever log the
+chosen relay serves, as fresh as that relay's ingestion (SIWD.md "Staleness caveat",
+`specs/SIWD.md`). The subject's own `services` relay list is the designated trust anchor:
+resolving a subject through the relays it lists yields the currency the subject stands
+behind, and running your own relay makes your authority fully self-sovereign — the
+"own your data" escape hatch is structural, not aspirational.
+
+Hosts enforce currency at the door: first admission of a new operation resolves its signer
+against **current state** (WEB-RELAY.md "Key Resolution", `specs/WEB-RELAY.md`), so a
+rotated-out key's authoring window ends at rotation, while committed history re-verifies
+historically forever. Peer-log ingestion inherits the peer's admission discipline —
+choosing peers is a trust decision, which is the model working as intended: this protocol
+is **selectively trusting** (you pick your hosts and peers, and can be your own), not a
+Byzantine-consensus network, and its guarantees are stated accordingly.
 
 ### Signing mailbox — ephemeral courier state outside both planes
 
@@ -172,8 +198,12 @@ WEB-RELAY.md "Fork Acceptance", `specs/WEB-RELAY.md`). That is its entire job:
 It is **not** a canonical-truth or causal-ordering mechanism. `createdAt` is signer-asserted
 and bounded only by the relay-enforced +24h future bound (PROTOCOL.md "Future timestamp
 bound", `specs/PROTOCOL.md`; WEB-RELAY.md "Future timestamp guard", `specs/WEB-RELAY.md`).
-Any current-key holder can therefore **bid** the head by choosing a `createdAt` up to 24
-hours ahead — forks are valid, and the highest timestamp wins. Undeletion falls directly
+Any **once-current** key holder can therefore **bid** the head by forking from an ancestor
+where its key was live and choosing a `createdAt` up to 24 hours ahead — forks are valid,
+and the highest timestamp wins. (Current-state **admission** for non-identity operations
+narrows what a rotated-out key can freshly author — WEB-RELAY.md "Key Resolution" — but
+the identity-chain fork auction itself is a v1 property; tightening it to strict linearity
+is a proposed v1.1 change, not a v1 rule.) Undeletion falls directly
 out of this: a controller can fork from before a delete with a higher `createdAt` and make
 the non-deleted branch the head (WEB-RELAY.md "Undeletion", `specs/WEB-RELAY.md`;
 DID-METHOD.md §5.4, `specs/DID-METHOD.md`).
@@ -188,6 +218,14 @@ intentional recovery, equivocation) is application-defined (PROTOCOL.md "Chain V
 ## Explicitly-Accepted Residual Risks (v1)
 
 These are known and deliberately accepted for v1.
+
+- **Rotation is not revocation, and the identity fork auction stands (v1).** Rotating a key
+  ends its authoring window for freshly admitted operations, but committed facts it signed
+  re-verify forever (their invalidation is revocation or deletion), and a once-current key
+  can still extend the identity chain itself by forking from an ancestor where it was live —
+  the timestamp auction above. Strict identity-chain linearity, which would close the
+  auction and retire undeletion-via-fork, is a proposed **v1.1** change under discussion;
+  v1 accepts the auction, bounded by the +24h future-timestamp guard and host admission.
 
 - **No end-to-end encryption.** Content confidentiality is an application-layer concern;
   the relay operator can read stored blobs (README.md, `README.md`; PROTOCOL.md

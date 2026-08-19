@@ -141,7 +141,7 @@ Each key in the identity chain state becomes a `verificationMethod` entry. The `
 
 ### 4.4 Key Rotation
 
-When an identity chain includes `update` operations that change the key sets, the DID Document reflects the **current state** — the key sets from the most recent operation. Previous keys are not included in the resolved DID Document. Historical key states can be recovered by walking the chain.
+When an identity chain includes `update` operations that change the key sets, the DID Document reflects the **current state** — the key sets declared by the **selected head operation** (deterministic head selection over the stored log; see the core protocol's Chain Validity rules), never a union across branches or historical operations. Previous keys are not included in the resolved DID Document. Historical key states can be recovered by walking the chain.
 
 ### 4.5 Services
 
