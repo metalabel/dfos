@@ -387,11 +387,7 @@ export const Identity = (props: { did: string }) => {
           </div>
           <div class="k">status</div>
           <div class="v">
-            {'isDeleted' in state && state.isDeleted ? (
-              <span class="err">deleted</span>
-            ) : (
-              'active'
-            )}
+            {'isDeleted' in state && state.isDeleted ? <span class="err">deleted</span> : 'active'}
           </div>
         </div>
         {verified ? <ProvenanceLine provenance={verified.provenance} /> : null}
