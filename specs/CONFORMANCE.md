@@ -120,6 +120,15 @@ A relay ingests, sequences, and serves. It implements:
   `specs/WEB-RELAY.md`). The `revocations` gate is currently proven by in-package unit
   tests in both reference relays; no disabled-mode live serve variant exists yet (the
   conformance suite's disabled tests self-skip unless a relay advertises `false`).
+- **Index (`/index/v0`)** (if served) — the optional, non-authoritative identity,
+  content, countersignature, and credential projections; actor/name/public-read filters;
+  deterministic ordering; and complete keyset/ordered-cursor walks live in the relay
+  tier on the index family's own `0.x` clock (WEB-RELAY.md "Index (v0)",
+  `specs/WEB-RELAY.md`). A relay advertising `capabilities.index: false` returns **501
+  Not Implemented** from every `/index/v0/*` route while adjacent proof/content surfaces
+  remain available. Given the same accepted operations and held blobs, parity means the
+  reference relays serve byte-identical canonicalized-JSON rows, ordering, filters, and
+  cursor pages.
 - **List-route pagination envelope** — `limit` (default 100, max 1000, clamp above max) +
   `after` + `next`, with the per-route cursor behavior (relay-local 400 / transparent
   keyset / opaque token) as specified per route, and — during the deprecation window
@@ -196,10 +205,13 @@ core is unambiguous across languages.
   unless the relay advertises the matching flag: the content-disabled suite (501 on every
   content route when `capabilities.content: false`), the write-disabled suite
   (`scripts/run-write-disabled.sh` — recompute-from-log read-only conformance when
-  `capabilities.write: false`), and the signing pair — enabled-behavior tests that run
-  only when `capabilities.signing: true` (`scripts/run-signing.sh`), and a disabled suite
-  asserting 501 on every `/signing/v0/*` route when the flag is `false` or absent
-  (SIGNING.md).
+  `capabilities.write: false`), the index-disabled suite
+  (`scripts/run-index-disabled.sh` — 501 on every `/index/v0/*` route with adjacent
+  surfaces unaffected), and the signing pair — enabled-behavior tests that run only when
+  `capabilities.signing: true` (`scripts/run-signing.sh`), and a disabled suite asserting
+  501 on every `/signing/v0/*` route when the flag is `false` or absent (SIGNING.md). The
+  dual-relay parity harness (`scripts/run-parity.sh`) additionally compares index filter,
+  ordered-query, and full multi-page cursor responses over the same fixture.
 - **Content following** is inherently a **two-relay** behavior (a follower materializing an
   origin's bytes), so it is exercised in the Go relay library's race-tested in-package suite
   rather than the single-endpoint conformance corpus. An origin and an eager follower are
