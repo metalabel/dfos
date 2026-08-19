@@ -89,11 +89,13 @@ describe('index (v0) client seam', () => {
       contentId: 'c1',
       creator: 'did:dfos:x',
       isDeleted: false,
+      titleContains: 'solar',
     });
     expect(page.content).toHaveLength(1);
     expect(page.next).toBe('c1');
     expect(seen?.searchParams.get('contentId')).toBe('c1');
     expect(seen?.searchParams.get('isDeleted')).toBe('false');
+    expect(seen?.searchParams.get('titleContains')).toBe('solar');
   });
 
   it('returns an empty page when every relay declines (501 / unreachable)', async () => {

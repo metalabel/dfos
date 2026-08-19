@@ -143,10 +143,11 @@ type StoredContentChain struct {
 
 // StoredOperation is a single stored operation with its chain metadata.
 type StoredOperation struct {
-	CID       string `json:"cid"`
-	JWSToken  string `json:"jwsToken"`
-	ChainType string `json:"chainType"`
-	ChainID   string `json:"chainId"`
+	CID        string `json:"cid"`
+	JWSToken   string `json:"jwsToken"`
+	ChainType  string `json:"chainType"`
+	ChainID    string `json:"chainId"`
+	IngestedAt string `json:"ingestedAt"`
 }
 
 // StoredRevocation represents a revocation in the store.
@@ -404,6 +405,7 @@ type Store interface {
 	// listing — enumerate all chains in the store
 	ListIdentityChains() ([]StoredIdentityChain, error)
 	ListContentChains() ([]StoredContentChain, error)
+	ListArtifactOperations() ([]StoredOperation, error)
 
 	// --- index (v0) materialized projection ---
 	//
@@ -426,6 +428,7 @@ type Store interface {
 	// contentId > After, length <= Limit, filtered by any provided
 	// point ID / actor / document / visibility / deletion predicates.
 	QueryIndexContent(q IndexContentQuery) ([]indexContentRow, error)
+	QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifactRow, error)
 	// QueryIndexCountersignatures pages countersignature projection rows for one
 	// witness ascending by cid, cid > After, length <= Limit. Reflects the
 	// store's ACCEPTED countersign set (deduped one-per-witness-per-target).
@@ -441,6 +444,7 @@ type Store interface {
 	PutIndexIdentityRow(row indexIdentityRow) error
 	// PutIndexContentRow upserts a content projection row by contentId.
 	PutIndexContentRow(row indexContentRow) error
+	PutIndexArtifactRow(row indexArtifactRow) error
 	// PutIndexContentSigner adds one accepted content-operation signer to a
 	// chain's signer set. The set is branch-inclusive and includes genesis.
 	PutIndexContentSigner(contentID string, did string) error
@@ -476,13 +480,24 @@ type IndexIdentityQuery struct {
 
 // IndexContentQuery is the keyset-paged filter for content projection rows.
 type IndexContentQuery struct {
-	ContentID    *string // nil = no filter
-	Creator      string  // "" = no filter
-	Signer       string  // "" = no filter
-	DocSchema    *string // nil = no filter
-	DocumentCID  *string // nil = no filter
-	PublicRead   *bool   // nil = no filter
-	IsDeleted    *bool   // nil = no filter
+	ContentID     *string // nil = no filter
+	Creator       string  // "" = no filter
+	Signer        string  // "" = no filter
+	DocSchema     *string // nil = no filter
+	DocumentCID   *string // nil = no filter
+	PublicRead    *bool   // nil = no filter
+	IsDeleted     *bool   // nil = no filter
+	TitleContains string  // "" = no filter
+	After         string
+	OrderedAfter  *indexOrderedCursor
+	Order         string
+	Limit         int
+}
+
+type IndexArtifactQuery struct {
+	CID          *string
+	Signer       string
+	DocSchema    *string
 	After        string
 	OrderedAfter *indexOrderedCursor
 	Order        string

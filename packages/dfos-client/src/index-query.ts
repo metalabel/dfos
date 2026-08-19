@@ -120,6 +120,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
       documentCID?: string;
       publicRead?: boolean;
       isDeleted?: boolean;
+      titleContains?: string;
       order?: IndexOrder;
       after?: string;
       limit?: number;
@@ -138,6 +139,7 @@ export const createIndexQueries = (relays: string[], fetchImpl: typeof fetch) =>
         setParam(url, 'documentCID', params?.documentCID);
         setParam(url, 'publicRead', params?.publicRead);
         setParam(url, 'isDeleted', params?.isDeleted);
+        setParam(url, 'titleContains', params?.titleContains);
         setParam(url, 'order', params?.order);
         setParam(url, 'after', params?.after);
         setParam(url, 'limit', params?.limit);

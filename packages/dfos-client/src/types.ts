@@ -386,6 +386,7 @@ export interface Client {
       documentCID?: string;
       publicRead?: boolean;
       isDeleted?: boolean;
+      titleContains?: string;
       order?: IndexOrder;
       after?: string;
       limit?: number;

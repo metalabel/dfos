@@ -75,6 +75,7 @@ func newRouter(r *Relay) http.Handler {
 	mux.HandleFunc("GET "+indexBasePath+"/countersignatures", r.handleIndexCountersignatures)
 	mux.HandleFunc("GET "+indexBasePath+"/credentials", r.handleIndexCredentials)
 	mux.HandleFunc("GET "+indexBasePath+"/operations", r.handleIndexOperations)
+	mux.HandleFunc("GET "+indexBasePath+"/artifacts", r.handleIndexArtifacts)
 
 	// document gateway — optional, 0.x (its own version clock); routes stay at root
 	// under /content/{id} until DocumentGateway 0.2 keys on documentCID. The proof

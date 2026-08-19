@@ -1,5 +1,6 @@
 import {
   encodeEd25519Multikey,
+  signArtifact,
   signContentOperation,
   signCountersignature,
   signIdentityOperation,
@@ -98,6 +99,27 @@ describe('index v0', () => {
     const res = await postOps([identity.jwsToken]);
     expect(res.status).toBe(200);
     return identity;
+  };
+
+  const createArtifact = async (
+    identity: TestIdentity,
+    content: Record<string, unknown> & { $schema: string },
+    offset = 1,
+  ) => {
+    const { jwsToken, artifactCID } = await signArtifact({
+      payload: {
+        version: 1,
+        type: 'artifact',
+        did: identity.did,
+        content,
+        createdAt: ts(offset),
+      },
+      signer: identity.authKey.signer,
+      kid: `${identity.did}#${identity.authKey.keyId}`,
+    });
+    const res = await postOps([jwsToken]);
+    expect(res.status).toBe(200);
+    return { jwsToken, artifactCID };
   };
 
   const updateServices = async (identity: TestIdentity, services: ServiceEntry[]) => {
@@ -319,10 +341,60 @@ describe('index v0', () => {
       `/index/v0/countersignatures?witness=${relayDID}`,
       '/index/v0/credentials',
       '/index/v0/operations',
+      '/index/v0/artifacts',
     ]) {
       const res = await disabled.app.request(`http://localhost${path}`);
       expect(res.status).toBe(501);
     }
+  });
+
+  it('projects and queries standalone artifacts with lexical and ordered cursors', async () => {
+    const signer = await createIdentity();
+    const other = await createIdentity();
+    const first = await createArtifact(signer, { $schema: 'example/artifact-a', value: 1 }, 1);
+    const second = await createArtifact(signer, { $schema: 'example/artifact-b', value: 2 }, 3);
+    const third = await createArtifact(signer, { $schema: 'example/artifact-a', value: 3 }, 2);
+    await createArtifact(other, { $schema: 'example/artifact-a', value: 4 }, 4);
+
+    const bySigner = await json(
+      await req(`/index/v0/artifacts?signer=${encodeURIComponent(signer.did)}`),
+    );
+    expect(bySigner.artifacts.map((row: { cid: string }) => row.cid)).toEqual(
+      [first.artifactCID, second.artifactCID, third.artifactCID].sort(),
+    );
+    expect(bySigner.artifacts[0]).toMatchObject({
+      signerDID: signer.did,
+      createdAt: expect.any(String),
+      ingestedAt: expect.any(String),
+    });
+
+    const bySchema = await json(
+      await req(
+        `/index/v0/artifacts?signer=${encodeURIComponent(signer.did)}&docSchema=${encodeURIComponent('example/artifact-a')}`,
+      ),
+    );
+    expect(bySchema.artifacts).toHaveLength(2);
+    const byCID = await json(
+      await req(`/index/v0/artifacts?cid=${encodeURIComponent(second.artifactCID)}`),
+    );
+    expect(byCID.artifacts).toEqual([
+      expect.objectContaining({ cid: second.artifactCID, docSchema: 'example/artifact-b' }),
+    ]);
+
+    const walked: string[] = [];
+    let after: string | null = null;
+    do {
+      const page = await json(
+        await req(
+          `/index/v0/artifacts?signer=${encodeURIComponent(signer.did)}&order=createdAt.desc&limit=1${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+        ),
+      );
+      walked.push(...page.artifacts.map((row: { cid: string }) => row.cid));
+      after = page.next;
+    } while (after);
+    expect(walked).toEqual([second.artifactCID, third.artifactCID, first.artifactCID]);
+    expect((await req('/index/v0/artifacts?order=bogus')).status).toBe(400);
+    expect((await req('/index/v0/artifacts?order=createdAt.desc&after=bogus')).status).toBe(400);
   });
 
   it('enumerates identities with profile projection, filters, pagination, and deleted rows', async () => {
@@ -695,6 +767,52 @@ describe('index v0', () => {
 
     await uploadBlob(creator, late.contentId, late.operationCID, late.document);
     expect((await contentRow(late.contentId)).title).toBe('late');
+  });
+
+  it('filters public content by titleContains without exposing non-public titles', async () => {
+    const creator = await createIdentity();
+    const other = await createIdentity();
+    const publicMatch = await createContent(creator, {
+      $schema: POST_SCHEMA,
+      title: 'Solar Winds',
+    });
+    const privateMatch = await createContent(creator, {
+      $schema: POST_SCHEMA,
+      title: 'Solar Secret',
+    });
+    const wrongSchema = await createContent(creator, {
+      $schema: 'example/note',
+      title: 'Solar Note',
+    });
+    const wrongCreator = await createContent(other, { $schema: POST_SCHEMA, title: 'Solar Other' });
+    for (const [identity, content] of [
+      [creator, publicMatch],
+      [creator, privateMatch],
+      [creator, wrongSchema],
+      [other, wrongCreator],
+    ] as const) {
+      await uploadBlob(identity, content.contentId, content.operationCID, content.document);
+    }
+    for (const [identity, content] of [
+      [creator, publicMatch],
+      [creator, wrongSchema],
+      [other, wrongCreator],
+    ] as const) {
+      await addPublicReadGrant(identity, content.contentId);
+    }
+
+    const path = `/index/v0/content?titleContains=SOLAR&docSchema=${encodeURIComponent(POST_SCHEMA)}&creator=${encodeURIComponent(creator.did)}`;
+    const body = await json(await req(path));
+    expect(body.content.map((row: { contentId: string }) => row.contentId)).toEqual([
+      publicMatch.contentId,
+    ]);
+    expect(body.content.every((row: { publicRead: boolean }) => row.publicRead)).toBe(true);
+    expect(body.content.map((row: { contentId: string }) => row.contentId)).not.toContain(
+      privateMatch.contentId,
+    );
+    const invalid = await req('/index/v0/content?titleContains=solar&publicRead=false');
+    expect(invalid.status).toBe(400);
+    expect(await json(invalid)).toEqual({ error: 'invalid filter combination' });
   });
 
   it('orders identity and content pages by time with opaque cursors', async () => {

@@ -30,7 +30,8 @@ const (
 	// a pre-gate builder persisted with a non-public name/title.
 	//
 	// v4: persist countersignature created/ingested clocks for ordered queries.
-	IndexProjectionVersion = 4
+	// v5: add standalone artifact projection rows.
+	IndexProjectionVersion = 5
 )
 
 var (
@@ -115,6 +116,19 @@ type indexOperationRow struct {
 type indexOperationPage struct {
 	Operations []indexOperationRow `json:"operations"`
 	Next       *string             `json:"next"`
+}
+
+type indexArtifactRow struct {
+	CID        string  `json:"cid"`
+	SignerDID  string  `json:"signerDID"`
+	CreatedAt  string  `json:"createdAt"`
+	IngestedAt string  `json:"ingestedAt"`
+	DocSchema  *string `json:"docSchema"`
+}
+
+type indexArtifactPage struct {
+	Artifacts []indexArtifactRow `json:"artifacts"`
+	Next      *string            `json:"next"`
 }
 
 type indexCredentialPage struct {
@@ -214,6 +228,15 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 		writeError(w, 400, "invalid boolean")
 		return
 	}
+	titleContains, titleContainsPresent := firstQueryValue(query, "titleContains")
+	if titleContainsPresent && publicRead != nil && !*publicRead {
+		writeError(w, 400, "invalid filter combination")
+		return
+	}
+	if titleContainsPresent {
+		value := true
+		publicRead = &value
+	}
 	isDeleted, validBoolean := parseBooleanQuery(query, "isDeleted")
 	if !validBoolean {
 		writeError(w, 400, "invalid boolean")
@@ -240,17 +263,18 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 	limit := parseLimit(req, 100, 1000)
 
 	rows, err := r.readStore.QueryIndexContent(IndexContentQuery{
-		ContentID:    contentID,
-		Creator:      creator,
-		Signer:       signer,
-		DocSchema:    docSchema,
-		DocumentCID:  documentCID,
-		PublicRead:   publicRead,
-		IsDeleted:    isDeleted,
-		After:        query.Get("after"),
-		OrderedAfter: orderedAfter,
-		Order:        order,
-		Limit:        limit,
+		ContentID:     contentID,
+		Creator:       creator,
+		Signer:        signer,
+		DocSchema:     docSchema,
+		DocumentCID:   documentCID,
+		PublicRead:    publicRead,
+		IsDeleted:     isDeleted,
+		TitleContains: titleContains,
+		After:         query.Get("after"),
+		OrderedAfter:  orderedAfter,
+		Order:         order,
+		Limit:         limit,
 	})
 	if storeErr(w, err) {
 		return
@@ -264,6 +288,56 @@ func (r *Relay) handleIndexContent(w http.ResponseWriter, req *http.Request) {
 			return row.GenesisAt, row.ContentID
 		}
 		return row.HeadAt, row.ContentID
+	})})
+}
+
+func (r *Relay) handleIndexArtifacts(w http.ResponseWriter, req *http.Request) {
+	if !r.indexEnabled {
+		writeError(w, 501, "index not available")
+		return
+	}
+	query := req.URL.Query()
+	signer := query.Get("signer")
+	if _, present := firstQueryValue(query, "signer"); present && !isValidDfosDid(signer) {
+		writeError(w, 400, "invalid DID")
+		return
+	}
+	var cid *string
+	if value, ok := firstQueryValue(query, "cid"); ok {
+		cid = &value
+	}
+	var docSchema *string
+	if value, ok := firstQueryValue(query, "docSchema"); ok {
+		docSchema = &value
+	}
+	order, validOrder := parseIndexRecencyOrder(query.Get("order"), "")
+	if !validOrder {
+		writeError(w, 400, "invalid order")
+		return
+	}
+	var orderedAfter *indexOrderedCursor
+	if order != "" && query.Get("after") != "" {
+		cursor, ok := decodeIndexOrderedCursor(query.Get("after"))
+		if !ok {
+			writeError(w, 400, "invalid cursor")
+			return
+		}
+		orderedAfter = cursor
+	}
+	limit := parseLimit(req, 100, 1000)
+	rows, err := r.readStore.QueryIndexArtifacts(IndexArtifactQuery{
+		CID: cid, Signer: signer, DocSchema: docSchema, After: query.Get("after"),
+		OrderedAfter: orderedAfter, Order: order, Limit: limit,
+	})
+	if storeErr(w, err) {
+		return
+	}
+	writeJSON(w, 200, indexArtifactPage{Artifacts: rows, Next: nextIndexCursor(len(rows), limit, order, func() (string, string) {
+		row := rows[len(rows)-1]
+		if order == "createdAt.desc" {
+			return row.CreatedAt, row.CID
+		}
+		return row.IngestedAt, row.CID
 	})})
 }
 
@@ -504,6 +578,28 @@ func countersignatureIndexRow(row StoredCountersignature) indexCountersignatureR
 		Relation:  row.Relation,
 		JWSToken:  row.JWSToken,
 	}
+}
+
+func artifactIndexRow(cid, jwsToken, ingestedAt string) *indexArtifactRow {
+	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+	if err != nil || header == nil || payload == nil {
+		return nil
+	}
+	signerDID := header.Kid
+	if index := strings.Index(signerDID, "#"); index >= 0 {
+		signerDID = signerDID[:index]
+	}
+	createdAt, _ := payload["createdAt"].(string)
+	if signerDID == "" || createdAt == "" {
+		return nil
+	}
+	var docSchema *string
+	if content, ok := payload["content"].(map[string]any); ok {
+		if value, ok := content["$schema"].(string); ok {
+			docSchema = &value
+		}
+	}
+	return &indexArtifactRow{CID: cid, SignerDID: signerDID, CreatedAt: createdAt, IngestedAt: ingestedAt, DocSchema: docSchema}
 }
 
 func profileProjection(chain StoredIdentityChain, store Store) *indexProfile {

@@ -666,8 +666,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const docSchema = c.req.query('docSchema');
     const documentCID = c.req.query('documentCID');
     const contentId = c.req.query('contentId');
+    const titleContainsPresent = c.req.queries('titleContains') !== undefined;
+    const titleContains = c.req.query('titleContains');
     const publicRead = parseBooleanQuery(c.req.query('publicRead'));
     if (publicRead === null) return c.json({ error: 'invalid boolean' }, 400);
+    if (titleContainsPresent && publicRead === false) {
+      return c.json({ error: 'invalid filter combination' }, 400);
+    }
     const isDeleted = parseBooleanQuery(c.req.query('isDeleted'));
     if (isDeleted === null) return c.json({ error: 'invalid boolean' }, 400);
     const order = parseIndexOrder(c.req.query('order'));
@@ -683,8 +688,13 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         ...(signer ? { signer } : {}),
         ...(docSchema !== undefined ? { docSchema } : {}),
         ...(documentCID !== undefined ? { documentCID } : {}),
-        ...(publicRead !== undefined ? { publicRead } : {}),
+        ...(titleContainsPresent
+          ? { publicRead: true }
+          : publicRead !== undefined
+            ? { publicRead }
+            : {}),
         ...(isDeleted !== undefined ? { isDeleted } : {}),
+        ...(titleContains ? { titleContains } : {}),
         ...(order ? { order } : {}),
         ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
         limit,
@@ -701,6 +711,41 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         : null;
 
     return c.json({ content: rows, next });
+  });
+
+  app.get(`${INDEX_BASE_PATH}/artifacts`, async (c) => {
+    if (!indexEnabled) return c.json({ error: 'index not available' }, 501);
+
+    const signer = c.req.query('signer');
+    if (signer !== undefined && !isValidDfosDid(signer)) {
+      return c.json({ error: 'invalid DID' }, 400);
+    }
+    const cid = c.req.query('cid');
+    const docSchema = c.req.query('docSchema');
+    const order = parseIndexRecencyOrder(c.req.query('order'));
+    if (order === null) return c.json({ error: 'invalid order' }, 400);
+    const after = c.req.query('after');
+    const orderedAfter = order && after ? decodeIndexOrderedCursor(after) : undefined;
+    if (order && after && !orderedAfter) return c.json({ error: 'invalid cursor' }, 400);
+    const limit = parseLimit(c.req.query('limit'), 100, 1000);
+    const rows = await store.queryIndexArtifacts({
+      ...(cid !== undefined ? { cid } : {}),
+      ...(signer !== undefined ? { signer } : {}),
+      ...(docSchema !== undefined ? { docSchema } : {}),
+      ...(order ? { order } : {}),
+      ...(order ? (orderedAfter ? { orderedAfter } : {}) : after ? { after } : {}),
+      limit,
+    });
+    const next =
+      rows.length === limit
+        ? order
+          ? encodeIndexOrderedCursor(
+              rows[rows.length - 1]![order === 'createdAt.desc' ? 'createdAt' : 'ingestedAt'],
+              rows[rows.length - 1]!.cid,
+            )
+          : rows[rows.length - 1]!.cid
+        : null;
+    return c.json({ artifacts: rows, next });
   });
 
   app.get(`${INDEX_BASE_PATH}/countersignatures`, async (c) => {

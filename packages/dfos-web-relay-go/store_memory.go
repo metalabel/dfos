@@ -57,6 +57,7 @@ type MemoryStore struct {
 	indexContentSigners  map[string]map[string]struct{}         // contentId → signer DID set
 	indexCountersignRows map[string]storedIndexCountersignature // keyed by cid (carry witness_did)
 	indexOperationRows   map[string]indexOperationRow           // keyed by operation cid
+	indexArtifactRows    map[string]indexArtifactRow            // keyed by artifact cid
 }
 
 type rawOpEntry struct {
@@ -83,6 +84,7 @@ func NewMemoryStore() *MemoryStore {
 		indexContentSigners:  make(map[string]map[string]struct{}),
 		indexCountersignRows: make(map[string]storedIndexCountersignature),
 		indexOperationRows:   make(map[string]indexOperationRow),
+		indexArtifactRows:    make(map[string]indexArtifactRow),
 	}
 }
 
@@ -232,8 +234,24 @@ func (s *MemoryStore) GetOperation(cid string) (*StoredOperation, error) {
 func (s *MemoryStore) PutOperation(op StoredOperation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if op.IngestedAt == "" {
+		op.IngestedAt = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	}
 	s.operations[op.CID] = op
 	return nil
+}
+
+func (s *MemoryStore) ListArtifactOperations() ([]StoredOperation, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows := []StoredOperation{}
+	for _, op := range s.operations {
+		if op.ChainType == "artifact" {
+			rows = append(rows, op)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].CID < rows[j].CID })
+	return rows, nil
 }
 
 func (s *MemoryStore) GetIdentityChain(did string) (*StoredIdentityChain, error) {
@@ -488,6 +506,11 @@ func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		if q.IsDeleted != nil && row.IsDeleted != *q.IsDeleted {
 			continue
 		}
+		if q.TitleContains != "" {
+			if !row.PublicRead || row.Title == nil || !strings.Contains(strings.ToLower(*row.Title), strings.ToLower(q.TitleContains)) {
+				continue
+			}
+		}
 		rows = append(rows, row)
 	}
 	if q.Order != "" {
@@ -499,6 +522,33 @@ func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		}, q.OrderedAfter, q.Limit), nil
 	}
 	return pageIndexRows(rows, func(row indexContentRow) string { return row.ContentID }, q.After, q.Limit), nil
+}
+
+func (s *MemoryStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifactRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows := []indexArtifactRow{}
+	for _, row := range s.indexArtifactRows {
+		if q.CID != nil && row.CID != *q.CID {
+			continue
+		}
+		if q.Signer != "" && row.SignerDID != q.Signer {
+			continue
+		}
+		if q.DocSchema != nil && (row.DocSchema == nil || *row.DocSchema != *q.DocSchema) {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	if q.Order != "" {
+		return pageOrderedIndexRows(rows, func(row indexArtifactRow) string { return row.CID }, func(row indexArtifactRow) string {
+			if q.Order == "createdAt.desc" {
+				return row.CreatedAt
+			}
+			return row.IngestedAt
+		}, q.OrderedAfter, q.Limit), nil
+	}
+	return pageIndexRows(rows, func(row indexArtifactRow) string { return row.CID }, q.After, q.Limit), nil
 }
 
 func (s *MemoryStore) QueryIndexCountersignatures(q IndexCountersignatureQuery) ([]indexCountersignatureRow, error) {
@@ -614,6 +664,13 @@ func (s *MemoryStore) PutIndexContentRow(row indexContentRow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexContentRows[row.ContentID] = row
+	return nil
+}
+
+func (s *MemoryStore) PutIndexArtifactRow(row indexArtifactRow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.indexArtifactRows[row.CID] = row
 	return nil
 }
 

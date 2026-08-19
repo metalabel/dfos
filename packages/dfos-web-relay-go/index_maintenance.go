@@ -69,6 +69,7 @@ type indexDirtySet struct {
 	identityDIDs     map[string]struct{}
 	contentIDs       map[string]struct{}
 	countersigns     []storedIndexCountersignature
+	artifacts        []indexArtifactRow
 	allContent       bool
 	allPublicContent bool
 }
@@ -195,7 +196,7 @@ func contentIdsFromCredentialToken(jwsToken string) (wildcard bool, contentIds [
 // via flushIndexMaintenance.
 //
 // Mapping (identical across all implementations):
-//   - identity-op / artifact for chain D → dirty identity row D; if the op left
+//   - identity-op for chain D          → dirty identity row D; if the op left
 //     the identity DELETED, also mark all currently-public-read content dirty — a
 //     deleted identity is no longer a valid credential issuer / delegation hop,
 //     so any content whose public-read authority routes through D flips
@@ -209,6 +210,7 @@ func contentIdsFromCredentialToken(jwsToken string) (wildcard bool, contentIds [
 //   - countersign                        → queue the accepted countersign row
 //     upsert (dedup returns status "duplicate", so a status:"new" countersign IS
 //     the accepted one — never a shadowed raw op)
+//   - artifact                          → queue the standalone artifact row upsert
 //
 // Non-authoritative: swallows its own errors and recovers panics so it never
 // fails the write.
@@ -219,12 +221,20 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 	defer func() { _ = recover() }()
 
 	switch result.Kind {
-	case "identity-op", "artifact":
+	case "identity-op":
 		if result.ChainID != "" {
 			dirty.identityDIDs[result.ChainID] = struct{}{}
 			if chain, err := store.GetIdentityChain(result.ChainID); err == nil && chain != nil && chain.State.IsDeleted {
 				dirty.allPublicContent = true
 			}
+		}
+	case "artifact":
+		ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+		if op, err := store.GetOperation(result.CID); err == nil && op != nil && op.IngestedAt != "" {
+			ingestedAt = op.IngestedAt
+		}
+		if row := artifactIndexRow(result.CID, jwsToken, ingestedAt); row != nil {
+			dirty.artifacts = append(dirty.artifacts, *row)
 		}
 	case "content-op":
 		if result.ChainID != "" {
@@ -320,6 +330,9 @@ func flushIndexMaintenance(dirty *indexDirtySet, store Store) {
 	}
 	for _, row := range dirty.countersigns {
 		_ = store.PutIndexCountersignatureRow(row)
+	}
+	for _, row := range dirty.artifacts {
+		_ = store.PutIndexArtifactRow(row)
 	}
 }
 
@@ -422,6 +435,18 @@ func rebuildIndexProjectionRows(store Store, rebuildable RebuildableIndexStore, 
 	countersigns, err := store.ListCountersignatures()
 	if err != nil {
 		return err
+	}
+
+	artifacts, err := store.ListArtifactOperations()
+	if err != nil {
+		return err
+	}
+	for _, op := range artifacts {
+		if row := artifactIndexRow(op.CID, op.JWSToken, op.IngestedAt); row != nil {
+			if err := store.PutIndexArtifactRow(*row); err != nil {
+				return err
+			}
+		}
 	}
 	for _, cs := range countersigns {
 		if err := store.PutIndexCountersignatureRow(storedIndexCountersignature{

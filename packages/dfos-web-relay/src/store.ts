@@ -14,6 +14,7 @@ import {
 } from '@metalabel/dfos-protocol/chain';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type {
+  IndexArtifactRow,
   IndexContentRow,
   IndexCountersignatureQueryRow,
   IndexCredentialRow,
@@ -167,6 +168,8 @@ export class MemoryRelayStore implements RelayStore {
   >();
   /** Relay-observed operation-log rows keyed by operation CID. */
   private indexOperationRows = new Map<string, IndexOperationRow>();
+  /** Standalone artifact projection rows keyed by artifact cid. */
+  private indexArtifactRows = new Map<string, IndexArtifactRow>();
 
   async pruneExpiredSignRequests(now: number): Promise<void> {
     for (const [cid, request] of this.signRequests) {
@@ -426,6 +429,7 @@ export class MemoryRelayStore implements RelayStore {
     documentCID?: string;
     publicRead?: boolean;
     isDeleted?: boolean;
+    titleContains?: string;
     after?: string;
     orderedAfter?: IndexOrderedCursor;
     order?: IndexOrder;
@@ -441,6 +445,15 @@ export class MemoryRelayStore implements RelayStore {
       if (q.documentCID !== undefined && row.currentDocumentCID !== q.documentCID) return false;
       if (q.publicRead !== undefined && row.publicRead !== q.publicRead) return false;
       if (q.isDeleted !== undefined && row.isDeleted !== q.isDeleted) return false;
+      if (q.titleContains !== undefined) {
+        if (
+          !row.publicRead ||
+          row.title === null ||
+          !row.title.toLowerCase().includes(q.titleContains.toLowerCase())
+        ) {
+          return false;
+        }
+      }
       return true;
     });
     if (q.order) {
@@ -453,6 +466,33 @@ export class MemoryRelayStore implements RelayStore {
       );
     }
     return pageRows(rows, (row) => row.contentId, q.after, q.limit);
+  }
+
+  async queryIndexArtifacts(q: {
+    cid?: string;
+    signer?: string;
+    docSchema?: string;
+    after?: string;
+    orderedAfter?: IndexOrderedCursor;
+    order?: IndexRecencyOrder;
+    limit: number;
+  }): Promise<IndexArtifactRow[]> {
+    const rows = [...this.indexArtifactRows.values()].filter(
+      (row) =>
+        (q.cid === undefined || row.cid === q.cid) &&
+        (q.signer === undefined || row.signerDID === q.signer) &&
+        (q.docSchema === undefined || row.docSchema === q.docSchema),
+    );
+    if (q.order) {
+      return pageOrderedRows(
+        rows,
+        (row) => row.cid,
+        (row) => row[q.order === 'createdAt.desc' ? 'createdAt' : 'ingestedAt'],
+        q.orderedAfter,
+        q.limit,
+      );
+    }
+    return pageRows(rows, (row) => row.cid, q.after, q.limit);
   }
 
   async queryIndexCountersignatures(q: {
@@ -527,6 +567,10 @@ export class MemoryRelayStore implements RelayStore {
 
   async putIndexContentRow(row: IndexContentRow): Promise<void> {
     this.indexContentRows.set(row.contentId, row);
+  }
+
+  async putIndexArtifactRow(row: IndexArtifactRow): Promise<void> {
+    this.indexArtifactRows.set(row.cid, row);
   }
 
   async putIndexContentSigner(contentId: string, did: string): Promise<void> {
