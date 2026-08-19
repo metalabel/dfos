@@ -29,14 +29,22 @@ import (
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
+type FixtureBlob struct {
+	ContentID    string          `json:"contentId"`
+	OperationCID string          `json:"operationCid"`
+	Body         json.RawMessage `json:"body"`
+}
+
 // Fixture is the on-disk shape shared by the TS serve script, the Go serve
 // binary, and the parity test.
 type Fixture struct {
-	RelayDID        string   `json:"relayDid"`
-	RelayProfileJWS string   `json:"relayProfileJws"`
-	RelayContentID  string   `json:"relayContentId"` // unused placeholder for symmetry
-	BootstrapOps    []string `json:"bootstrapOps"`   // relay genesis + profile, replayed
-	Ops             []string `json:"ops"`            // fixed user op set
+	RelayDID        string        `json:"relayDid"`
+	RelayProfileJWS string        `json:"relayProfileJws"`
+	RelayContentID  string        `json:"relayContentId"` // unused placeholder for symmetry
+	BootstrapOps    []string      `json:"bootstrapOps"`   // relay genesis + profile, replayed
+	Ops             []string      `json:"ops"`            // fixed user op set
+	Blobs           []FixtureBlob `json:"blobs"`          // held document bytes uploaded to both twins
+	QueryAuthKeyID  string        `json:"queryAuthKeyId"`
 	// QueryDIDs / QueryContentIDs let the test hit per-chain log routes.
 	QueryDID         string `json:"queryDid"`
 	QueryContentID   string `json:"queryContentId"`
@@ -44,8 +52,10 @@ type Fixture struct {
 	// QueryServiceDID resolves to an identity carrying a DfosRelay + ContentAnchor
 	// services set; QueryDeletedDID resolves to a deactivated (create+delete)
 	// identity. Both drive the universal-resolver parity cases.
-	QueryServiceDID string `json:"queryServiceDid"`
-	QueryDeletedDID string `json:"queryDeletedDid"`
+	QueryServiceDID  string `json:"queryServiceDid"`
+	QueryDeletedDID  string `json:"queryDeletedDid"`
+	QueryProfileDID  string `json:"queryProfileDid"`
+	QueryProfileName string `json:"queryProfileName"`
 	// QueryRevokedCredentialCID is the CID of a credential issued AND revoked by
 	// QueryRevocationIssuerDID (user B). Both drive the revocation-status parity
 	// cases (/revocations/v1).
@@ -297,6 +307,19 @@ func main() {
 	}
 	artifact, _ := signJWS("did:dfos:artifact", aKid, artPayload, aPriv)
 
+	// --- public profile content owned by A ---
+	// User C anchors this chain as its profile below. The blob is included in the
+	// fixture and uploaded identically to both twins so nameContains and
+	// hasPublicProfile parity exercise positive rows, not empty-result symmetry.
+	const profileName = "Parity Profile"
+	profileDoc := map[string]any{
+		"$schema": "https://schemas.dfos.com/profile/v1",
+		"name":    profileName,
+	}
+	profileDocCID := docCID(profileDoc)
+	profileCreate, profileContentID, profileOperationCID := contentCreate(aDID, profileDocCID, aKid, pinnedTimeAt(3), aPriv)
+	profileBody := must(json.Marshal(profileDoc))
+
 	// --- public credential (aud:*) by A ---
 	cred, _ := publicCredential(aDID, aKid, aPriv)
 
@@ -313,13 +336,13 @@ func main() {
 	bCountersign, _ := countersign(bDID, cCreateCID, bKid, pinnedTimeAt(4), bPriv)
 
 	// --- user C (seed 4): genesis WITH a services set (DfosRelay + ContentAnchor) ---
-	// The ContentAnchor points at A's 31-char content chain id, which satisfies the
-	// contentId anchor shape validated at ingest.
+	// The ContentAnchor points at A's public profile chain, which satisfies the
+	// contentId anchor shape validated at ingest and yields a named profile row.
 	cPriv, cPub := seededKey(4)
 	cKeyID := "key_userC00000000000000000000000"
 	cServices := []any{
 		map[string]any{"id": "svc_relay", "type": "DfosRelay", "endpoint": "https://relay.example"},
-		map[string]any{"id": "svc_anchor", "type": "ContentAnchor", "label": "pinned", "anchor": contentID},
+		map[string]any{"id": "svc_anchor", "type": "ContentAnchor", "label": "profile", "anchor": profileContentID},
 	}
 	cGenesis, cDID, _ := identityCreateWithServices(cPriv, cPub, cKeyID, cServices)
 
@@ -342,6 +365,7 @@ func main() {
 			bGenesis,
 			cCreate,
 			cUpdate,
+			profileCreate,
 			artifact,
 			cred,
 			bCred,
@@ -351,11 +375,19 @@ func main() {
 			dGenesis,
 			dDelete,
 		},
+		Blobs: []FixtureBlob{{
+			ContentID:    profileContentID,
+			OperationCID: profileOperationCID,
+			Body:         profileBody,
+		}},
+		QueryAuthKeyID:            aKeyID,
 		QueryDID:                  aDID,
 		QueryContentID:            contentID,
 		QueryDocumentCID:          doc2,
 		QueryServiceDID:           cDID,
 		QueryDeletedDID:           dDID,
+		QueryProfileDID:           cDID,
+		QueryProfileName:          profileName,
 		QueryRevokedCredentialCID: bCredCID,
 		QueryRevocationIssuerDID:  bDID,
 		QueryCountersignedCID:     cCreateCID,

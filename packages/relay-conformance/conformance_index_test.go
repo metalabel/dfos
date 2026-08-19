@@ -331,6 +331,56 @@ func TestIndexContentPublicReadFilter(t *testing.T) {
 	_ = privateBody.Next
 }
 
+// TestIndexContentPublicReadClearsSynchronouslyOnRevocation pins the eager
+// dirty-row maintenance contract: ingesting a grant revocation immediately
+// recomputes the affected content row before the POST returns.
+func TestIndexContentPublicReadClearsSynchronouslyOnRevocation(t *testing.T) {
+	base := relayURL(t)
+	requireIndexCapability(t, base)
+	creator := createIdentity(t, base)
+	cc := createContent(t, base, creator)
+
+	kid := creator.did + "#" + creator.auth.keyID
+	credToken := createPublicCredential(t, creator.did, kid, "read", cc.contentID, 5*time.Minute, creator.auth.priv)
+	credCID := postPublicCredential(t, base, credToken)
+
+	publicReadForChain := func() bool {
+		var body struct {
+			Content []struct {
+				ContentID  string `json:"contentId"`
+				PublicRead bool   `json:"publicRead"`
+			} `json:"content"`
+		}
+		resp := getJSON(t, base+"/index/v0/content?creator="+url.QueryEscape(creator.did)+"&limit=1000", &body)
+		skipIndex501(t, resp.StatusCode)
+		if resp.StatusCode != 200 {
+			t.Fatalf("content index: status %d, body: %s", resp.StatusCode, readBody(t, resp))
+		}
+		for _, row := range body.Content {
+			if row.ContentID == cc.contentID {
+				return row.PublicRead
+			}
+		}
+		t.Fatalf("content index did not include chain %s", cc.contentID)
+		return false
+	}
+
+	if !publicReadForChain() {
+		t.Fatal("content row reported publicRead false before grant revocation")
+	}
+
+	revToken, _ := createRevocation(t, creator.did, credCID, creator.auth)
+	revRes := postOperations(t, base, []string{revToken})
+	if revRes.StatusCode != 200 {
+		t.Fatalf("submit standing-grant revocation: status %d, body: %s", revRes.StatusCode, readBody(t, revRes))
+	}
+	revRes.Body.Close()
+
+	if publicReadForChain() {
+		t.Fatal("content row reported publicRead true after grant revocation ingest; expected synchronous dirty-row maintenance")
+	}
+}
+
 // A spec-valid credential MAY carry att keys beyond {resource, action} — the
 // Attenuation schema is a loose object. The index att projection must be exactly
 // {resource, action} on BOTH relays (the Go relay drops extras when it rebuilds

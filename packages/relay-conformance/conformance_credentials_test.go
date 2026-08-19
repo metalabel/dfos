@@ -1007,6 +1007,165 @@ func TestPublicStandingAuthAnonymousRead(t *testing.T) {
 	}
 }
 
+// TestAnonymousBlobReadDeniedWithoutStandingGrant pins the baseline anonymous
+// behavior: a content chain that has never had a public grant is private.
+func TestAnonymousBlobReadDeniedWithoutStandingGrant(t *testing.T) {
+	base := relayURL(t)
+	creator := createIdentity(t, base)
+	cc := createContent(t, base, creator)
+
+	blobData, _ := json.Marshal(cc.document)
+	upload := putBlob(t, base, cc.contentID, cc.genCID, authToken(t, base, creator), blobData)
+	if upload.StatusCode != 200 {
+		t.Fatalf("upload blob: status %d, body: %s", upload.StatusCode, readBody(t, upload))
+	}
+	upload.Body.Close()
+
+	resp, err := http.Get(fmt.Sprintf("%s/content/%s/blob", base, cc.contentID))
+	if err != nil {
+		t.Fatalf("anonymous GET blob: %v", err)
+	}
+	body := readBody(t, resp)
+	if resp.StatusCode != 401 {
+		t.Fatalf("anonymous read with no standing grant: expected 401, got %d, body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestExpiredStandingAuthorizationDeniesAnonymousRead proves that a standing
+// grant is re-verified against the current clock on every anonymous read. The
+// grant is ingested while valid, positively exercised, then allowed to expire.
+func TestExpiredStandingAuthorizationDeniesAnonymousRead(t *testing.T) {
+	base := relayURL(t)
+	creator := createIdentity(t, base)
+	cc := createContent(t, base, creator)
+
+	blobData, _ := json.Marshal(cc.document)
+	upload := putBlob(t, base, cc.contentID, cc.genCID, authToken(t, base, creator), blobData)
+	if upload.StatusCode != 200 {
+		t.Fatalf("upload blob: status %d, body: %s", upload.StatusCode, readBody(t, upload))
+	}
+	upload.Body.Close()
+
+	kid := creator.did + "#" + creator.auth.keyID
+	exp := time.Now().Unix() + 3
+	att := []map[string]string{{"resource": "chain:" + cc.contentID, "action": "read"}}
+	credToken := createCustomCredential(t, creator.did, "*", kid, att, []string{}, exp, creator.auth.priv)
+	credRes := postOperations(t, base, []string{credToken})
+	if credRes.StatusCode != 200 {
+		t.Fatalf("submit short-lived public credential: status %d, body: %s", credRes.StatusCode, readBody(t, credRes))
+	}
+	credRes.Body.Close()
+
+	anonURL := fmt.Sprintf("%s/content/%s/blob", base, cc.contentID)
+	before, err := http.Get(anonURL)
+	if err != nil {
+		t.Fatalf("anonymous GET blob before expiry: %v", err)
+	}
+	beforeBody := readBody(t, before)
+	if before.StatusCode != 200 {
+		t.Fatalf("short-lived standing grant positive control: status %d, body: %s", before.StatusCode, beforeBody)
+	}
+
+	for time.Now().Unix() <= exp {
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	after, err := http.Get(anonURL)
+	if err != nil {
+		t.Fatalf("anonymous GET blob after expiry: %v", err)
+	}
+	afterBody := readBody(t, after)
+	if after.StatusCode != 401 && after.StatusCode != 403 {
+		t.Fatalf("anonymous read after standing-grant expiry: expected 401 or 403, got %d, body: %s", after.StatusCode, afterBody)
+	}
+}
+
+// TestNonCreatorRootedStandingAuthorizationDeniesAnonymousRead mirrors the
+// per-request delegation-root negative on the stored aud:"*" path.
+func TestNonCreatorRootedStandingAuthorizationDeniesAnonymousRead(t *testing.T) {
+	base := relayURL(t)
+	creator := createIdentity(t, base)
+	cc := createContent(t, base, creator)
+
+	blobData, _ := json.Marshal(cc.document)
+	upload := putBlob(t, base, cc.contentID, cc.genCID, authToken(t, base, creator), blobData)
+	if upload.StatusCode != 200 {
+		t.Fatalf("upload blob: status %d, body: %s", upload.StatusCode, readBody(t, upload))
+	}
+	upload.Body.Close()
+
+	nonCreator := createIdentity(t, base)
+	nonCreatorKid := nonCreator.did + "#" + nonCreator.auth.keyID
+	credToken := createPublicCredential(t, nonCreator.did, nonCreatorKid, "read", cc.contentID, 5*time.Minute, nonCreator.auth.priv)
+	credRes := postOperations(t, base, []string{credToken})
+	if credRes.StatusCode != 200 {
+		t.Fatalf("submit non-creator public credential: status %d, body: %s", credRes.StatusCode, readBody(t, credRes))
+	}
+	credRes.Body.Close()
+
+	resp, err := http.Get(fmt.Sprintf("%s/content/%s/blob", base, cc.contentID))
+	if err != nil {
+		t.Fatalf("anonymous GET blob with non-creator grant: %v", err)
+	}
+	body := readBody(t, resp)
+	if resp.StatusCode != 401 && resp.StatusCode != 403 {
+		t.Fatalf("anonymous read with non-creator-rooted standing grant: expected 401 or 403, got %d, body: %s", resp.StatusCode, body)
+	}
+}
+
+// TestDeletedIssuerStandingAuthorizationDeniesAnonymousRead closes the stored
+// public-grant counterpart to TestCredentialFromDeletedIssuer.
+func TestDeletedIssuerStandingAuthorizationDeniesAnonymousRead(t *testing.T) {
+	base := relayURL(t)
+	creator := createIdentity(t, base)
+	cc := createContent(t, base, creator)
+
+	blobData, _ := json.Marshal(cc.document)
+	upload := putBlob(t, base, cc.contentID, cc.genCID, authToken(t, base, creator), blobData)
+	if upload.StatusCode != 200 {
+		t.Fatalf("upload blob: status %d, body: %s", upload.StatusCode, readBody(t, upload))
+	}
+	upload.Body.Close()
+
+	kid := creator.did + "#" + creator.auth.keyID
+	credToken := createPublicCredential(t, creator.did, kid, "read", cc.contentID, 5*time.Minute, creator.auth.priv)
+	credRes := postOperations(t, base, []string{credToken})
+	if credRes.StatusCode != 200 {
+		t.Fatalf("submit public credential: status %d, body: %s", credRes.StatusCode, readBody(t, credRes))
+	}
+	credRes.Body.Close()
+
+	anonURL := fmt.Sprintf("%s/content/%s/blob", base, cc.contentID)
+	before, err := http.Get(anonURL)
+	if err != nil {
+		t.Fatalf("anonymous GET blob before issuer deletion: %v", err)
+	}
+	beforeBody := readBody(t, before)
+	if before.StatusCode != 200 {
+		t.Fatalf("standing grant positive control before issuer deletion: status %d, body: %s", before.StatusCode, beforeBody)
+	}
+
+	controllerKid := creator.did + "#" + creator.controller.keyID
+	deleteToken, _, err := dfos.SignIdentityDelete(creator.genCID, controllerKid, creator.controller.priv)
+	if err != nil {
+		t.Fatalf("SignIdentityDelete: %v", err)
+	}
+	deleteRes := postOperations(t, base, []string{deleteToken})
+	if deleteRes.StatusCode != 200 {
+		t.Fatalf("delete standing-grant issuer: status %d, body: %s", deleteRes.StatusCode, readBody(t, deleteRes))
+	}
+	deleteRes.Body.Close()
+
+	after, err := http.Get(anonURL)
+	if err != nil {
+		t.Fatalf("anonymous GET blob after issuer deletion: %v", err)
+	}
+	afterBody := readBody(t, after)
+	if after.StatusCode != 401 && after.StatusCode != 403 {
+		t.Fatalf("anonymous read after standing-grant issuer deletion: expected 401 or 403, got %d, body: %s", after.StatusCode, afterBody)
+	}
+}
+
 // ===================================================================
 // revoked standing authorization denies read (symmetry coverage)
 // ===================================================================

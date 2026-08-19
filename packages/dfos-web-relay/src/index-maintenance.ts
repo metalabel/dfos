@@ -258,10 +258,15 @@ export const flushIndexMaintenance = async (
   try {
     if (dirty.allContent) {
       await recomputeAllContentRows(store);
-    } else {
-      if (dirty.allPublicContent) await recomputePublicReadContentRows(store);
-      for (const contentId of dirty.contentIds) await recomputeContentRow(contentId, store);
+    } else if (dirty.allPublicContent) {
+      await recomputePublicReadContentRows(store);
     }
+    // The per-id set ALWAYS runs: the sweeps above enumerate the materialized
+    // projection, so a content chain born in this very batch is invisible to
+    // them — only its per-id entry can create the row. Dropping the set inside
+    // the wildcard branch silently lost every chain co-batched with a chain:*
+    // credential (peer sync and the sequencer batch up to 10k ops).
+    for (const contentId of dirty.contentIds) await recomputeContentRow(contentId, store);
     for (const did of dirty.identityDIDs) await recomputeIdentityRow(did, store);
     for (const row of dirty.countersigns) await store.putIndexCountersignatureRow(row);
   } catch {

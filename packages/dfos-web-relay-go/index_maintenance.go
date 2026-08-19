@@ -304,13 +304,16 @@ func flushIndexMaintenance(dirty *indexDirtySet, store Store) {
 
 	if dirty.allContent {
 		_ = recomputeAllContentRows(store)
-	} else {
-		if dirty.allPublicContent {
-			_ = recomputePublicReadContentRows(store)
-		}
-		for contentID := range dirty.contentIDs {
-			_ = recomputeContentRow(contentID, store)
-		}
+	} else if dirty.allPublicContent {
+		_ = recomputePublicReadContentRows(store)
+	}
+	// The per-id set ALWAYS runs: the sweeps above enumerate the materialized
+	// projection, so a content chain born in this very batch is invisible to
+	// them — only its per-id entry can create the row. Dropping the set inside
+	// the wildcard branch silently lost every chain co-batched with a chain:*
+	// credential (peer sync and the sequencer batch up to 10k ops).
+	for contentID := range dirty.contentIDs {
+		_ = recomputeContentRow(contentID, store)
 	}
 	for did := range dirty.identityDIDs {
 		_ = recomputeIdentityRow(did, store)

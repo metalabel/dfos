@@ -2,14 +2,18 @@ package conformance
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"testing"
 	"time"
+
+	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
 // ===========================================================================
@@ -31,19 +35,29 @@ import (
 // TS_RELAY_URL, GO_RELAY_URL, and PARITY_FIXTURE.
 // ===========================================================================
 
+type parityFixtureBlob struct {
+	ContentID    string          `json:"contentId"`
+	OperationCID string          `json:"operationCid"`
+	Body         json.RawMessage `json:"body"`
+}
+
 type parityFixture struct {
-	RelayDID                  string   `json:"relayDid"`
-	RelayProfileJWS           string   `json:"relayProfileJws"`
-	BootstrapOps              []string `json:"bootstrapOps"`
-	Ops                       []string `json:"ops"`
-	QueryDID                  string   `json:"queryDid"`
-	QueryContentID            string   `json:"queryContentId"`
-	QueryDocumentCID          string   `json:"queryDocumentCid"`
-	QueryServiceDID           string   `json:"queryServiceDid"`
-	QueryDeletedDID           string   `json:"queryDeletedDid"`
-	QueryRevokedCredentialCID string   `json:"queryRevokedCredentialCid"`
-	QueryRevocationIssuerDID  string   `json:"queryRevocationIssuerDid"`
-	QueryCountersignedCID     string   `json:"queryCountersignedCid"`
+	RelayDID                  string              `json:"relayDid"`
+	RelayProfileJWS           string              `json:"relayProfileJws"`
+	BootstrapOps              []string            `json:"bootstrapOps"`
+	Ops                       []string            `json:"ops"`
+	Blobs                     []parityFixtureBlob `json:"blobs"`
+	QueryAuthKeyID            string              `json:"queryAuthKeyId"`
+	QueryDID                  string              `json:"queryDid"`
+	QueryContentID            string              `json:"queryContentId"`
+	QueryDocumentCID          string              `json:"queryDocumentCid"`
+	QueryServiceDID           string              `json:"queryServiceDid"`
+	QueryDeletedDID           string              `json:"queryDeletedDid"`
+	QueryProfileDID           string              `json:"queryProfileDid"`
+	QueryProfileName          string              `json:"queryProfileName"`
+	QueryRevokedCredentialCID string              `json:"queryRevokedCredentialCid"`
+	QueryRevocationIssuerDID  string              `json:"queryRevocationIssuerDid"`
+	QueryCountersignedCID     string              `json:"queryCountersignedCid"`
 }
 
 func loadParityEnv(t *testing.T) (tsURL, goURL string, fix parityFixture) {
@@ -143,6 +157,80 @@ func postOps(t *testing.T, base string, ops []string) {
 	}
 }
 
+func putParityBlobs(t *testing.T, base string, fix parityFixture, authToken string) {
+	t.Helper()
+	for _, blob := range fix.Blobs {
+		u := fmt.Sprintf("%s/content/%s/blob/%s", base, blob.ContentID, blob.OperationCID)
+		req, err := http.NewRequest(http.MethodPut, u, bytes.NewReader(blob.Body))
+		if err != nil {
+			t.Fatalf("build PUT %s: %v", u, err)
+		}
+		req.Header.Set("authorization", "Bearer "+authToken)
+		req.Header.Set("content-type", "application/octet-stream")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT %s: %v", u, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("PUT %s: status %d, body: %s", u, resp.StatusCode, body)
+		}
+	}
+}
+
+// compareIndexCursorWalk follows an ordered content cursor to exhaustion on
+// both relays and compares every page. Requiring two non-empty pages proves
+// parity of cursor generation/resumption, not merely parity of the first page.
+func compareIndexCursorWalk(t *testing.T, tsURL, goURL, routeBase string) {
+	t.Helper()
+	after := ""
+	nonEmptyPages := 0
+	finished := false
+	for pageNumber := 1; pageNumber <= 20; pageNumber++ {
+		route := routeBase
+		if after != "" {
+			route += "&after=" + url.QueryEscape(after)
+		}
+		tsStatus, tsBody := getBody(t, tsURL+route)
+		goStatus, goBody := getBody(t, goURL+route)
+		if tsStatus != http.StatusOK || goStatus != http.StatusOK {
+			t.Fatalf("ordered cursor page %d on %s: TS=%d body=%s; Go=%d body=%s", pageNumber, route, tsStatus, tsBody, goStatus, goBody)
+		}
+		tsCanon := canonicalize(t, tsBody)
+		goCanon := canonicalize(t, goBody)
+		if tsCanon != goCanon {
+			t.Fatalf("PARITY MISMATCH on ordered cursor page %d (%s)\n%s\n--- TS (canonical) ---\n%s\n--- Go (canonical) ---\n%s",
+				pageNumber, route, prettyDiff(tsCanon, goCanon), tsCanon, goCanon)
+		}
+
+		var page struct {
+			Content []json.RawMessage `json:"content"`
+			Next    *string           `json:"next"`
+		}
+		if err := json.Unmarshal(tsBody, &page); err != nil {
+			t.Fatalf("parse ordered cursor page %d: %v", pageNumber, err)
+		}
+		if len(page.Content) > 0 {
+			nonEmptyPages++
+		}
+		if page.Next == nil {
+			finished = true
+			break
+		}
+		if *page.Next == "" {
+			t.Fatalf("ordered cursor page %d returned an empty next token", pageNumber)
+		}
+		after = *page.Next
+	}
+	if !finished {
+		t.Fatal("ordered cursor parity walk exceeded 20 pages")
+	}
+	if nonEmptyPages < 2 {
+		t.Fatalf("ordered cursor parity walk had %d non-empty pages, want at least 2", nonEmptyPages)
+	}
+}
+
 // logEntryCount polls GET /log and returns the number of entries. Used to wait
 // for the Go relay's ticker-driven sequencer to drain before comparing.
 func logEntryCount(t *testing.T, base string) int {
@@ -203,6 +291,30 @@ func TestDualRelayParity(t *testing.T) {
 	drainUntilStable(t, tsURL, wantEntries)
 	drainUntilStable(t, goURL, wantEntries)
 
+	// Hold the same fixture bytes on both relays. This makes the profile/name
+	// index filters positive parity cases while keeping the operation fixture
+	// byte-pinned.
+	seed := bytes.Repeat([]byte{2}, ed25519.SeedSize)
+	queryPrivateKey := ed25519.NewKeyFromSeed(seed)
+	queryAuthToken, err := dfos.CreateAuthToken(
+		fix.QueryDID,
+		fix.RelayDID,
+		fix.QueryDID+"#"+fix.QueryAuthKeyID,
+		time.Hour,
+		queryPrivateKey,
+	)
+	if err != nil {
+		t.Fatalf("create parity fixture auth token: %v", err)
+	}
+	putParityBlobs(t, tsURL, fix, queryAuthToken)
+	putParityBlobs(t, goURL, fix, queryAuthToken)
+
+	orderedContentRoute := "/index/v0/content?order=genesisAt.desc&limit=1000"
+	signerRoute := "/index/v0/content?signer=" + url.QueryEscape(fix.QueryDID) + "&limit=1000"
+	nameRoute := "/index/v0/identities?nameContains=" + url.QueryEscape(fix.QueryProfileName) + "&limit=1000"
+	publicProfileRoute := "/index/v0/identities?hasPublicProfile=true&limit=1000"
+	publicReadRoute := "/index/v0/content?publicRead=true&limit=1000"
+
 	routes := []string{
 		"/proof/v1/log?limit=1000",
 		"/proof/v1/identities/" + fix.QueryDID + "/log?limit=1000",
@@ -210,9 +322,48 @@ func TestDualRelayParity(t *testing.T) {
 		"/.well-known/dfos-relay",
 		"/index/v0/identities?limit=1000",
 		"/index/v0/content?limit=1000",
+		orderedContentRoute,
+		signerRoute,
+		nameRoute,
+		publicProfileRoute,
+		publicReadRoute,
 		"/index/v0/content?documentCID=" + fix.QueryDocumentCID + "&limit=1000",
 		"/index/v0/countersignatures?witness=" + fix.QueryRevocationIssuerDID + "&limit=1000",
 		"/index/v0/credentials?resource=chain:*&limit=1000",
+	}
+	// REGRESSION GUARD (index fan-out fix): the content-row expectations below currently FAIL
+	// on BOTH twins, and the failure is a real shared relay defect, not a harness
+	// artifact. The fixture posts its ops as ONE batch. That batch contains user
+	// A's `chain:*` credential, which sets `allContent` on the batch dirty set; the
+	// flush then takes the `allContent` branch and DISCARDS the per-id
+	// `contentIds` collected from the content-ops in the same batch:
+	//
+	//   TS: packages/dfos-web-relay/src/index-maintenance.ts:246-251
+	//   Go: packages/dfos-web-relay-go/index_maintenance.go:300-309
+	//
+	// The `allContent` sweep enumerates the MATERIALIZED PROJECTION
+	// (queryIndexContent → index_content / s.indexContentRows), not the
+	// authoritative chain table, so on a relay whose content rows have never been
+	// written it enumerates nothing and writes nothing. Any batch that carries a
+	// `chain:*` grant alongside brand-new content ops therefore leaves those
+	// content rows PERMANENTLY absent from /index/v0/content — nothing recovers
+	// them, including a later blob upload (maintainIndexAfterBlob also reads the
+	// projection: store.ts:524). The sibling `allPublicContent` branch already
+	// unions the per-id set for exactly this reason; `allContent` does not.
+	//
+	// Repro: post the fixture ops split into two batches (content ops first,
+	// credentials second) and the rows appear; post them as one batch and they
+	// never do.
+	//
+	// Do NOT weaken these assertions to make the gate green — they are correct and
+	// the relay is wrong. They pass once the flush unions `contentIds` into the
+	// `allContent` branch.
+	expectedRows := map[string]string{
+		orderedContentRoute: fix.QueryContentID,
+		signerRoute:         fix.QueryContentID,
+		nameRoute:           fix.QueryProfileDID,
+		publicProfileRoute:  fix.QueryProfileDID,
+		publicReadRoute:     fix.QueryContentID,
 	}
 
 	for routeIndex, route := range routes {
@@ -225,6 +376,11 @@ func TestDualRelayParity(t *testing.T) {
 			}
 			if tsStatus != 200 {
 				t.Fatalf("expected 200 on %s, got %d (TS body: %s)", route, tsStatus, tsBody)
+			}
+			if expected, ok := expectedRows[route]; ok {
+				if !bytes.Contains(tsBody, []byte(expected)) || !bytes.Contains(goBody, []byte(expected)) {
+					t.Fatalf("positive parity fixture row %s absent on %s (TS body: %s; Go body: %s)", expected, route, tsBody, goBody)
+				}
 			}
 			if routeIndex < 3 {
 				var tsLog, goLog logPaginationFields
@@ -246,6 +402,16 @@ func TestDualRelayParity(t *testing.T) {
 			}
 		})
 	}
+
+	// REGRESSION GUARD (index fan-out fix): also currently fails — the walk requires >= 2
+	// non-empty pages, and the same missing content rows described above make
+	// every page empty. Same root cause, same fix.
+	compareIndexCursorWalk(
+		t,
+		tsURL,
+		goURL,
+		"/index/v0/content?order=genesisAt.desc&signer="+url.QueryEscape(fix.QueryDID)+"&limit=1",
+	)
 
 	for name, base := range map[string]string{"ts": tsURL, "go": goURL} {
 		t.Run(name+" global log unknown cursor", func(t *testing.T) {
