@@ -104,14 +104,12 @@ export const decideIter2 = (statuses: number[]): boolean => {
   return false;
 };
 
-/** One relay's probe status — the `order=` value is deliberately invalid, so an
- *  iteration-2 relay answers 400 and an older one 200. Network/abort → 0. */
-const probeRelayStatus = async (base: string): Promise<number> => {
+/** One relay's status for a probe path. Network/abort → 0 (indeterminate). */
+const probeRelayStatus = async (base: string, path: string): Promise<number> => {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
   try {
-    const url = new URL(`/index/v0/identities?order=${PROBE_ORDER}&limit=1`, base);
-    return (await fetch(url.toString(), { signal: ctrl.signal })).status;
+    return (await fetch(new URL(path, base).toString(), { signal: ctrl.signal })).status;
   } catch {
     return 0; // unreachable / aborted — indeterminate
   } finally {
@@ -119,32 +117,29 @@ const probeRelayStatus = async (base: string): Promise<number> => {
   }
 };
 
-// probe once per relay set, shared across every mount for the session (a relay
-// switch re-navigates, and the set key changes anyway, so this never goes stale)
-const iter2Cache = new Map<string, Promise<boolean>>();
+// probe once per (feature, relay set), shared across every mount for the session
+// (a relay switch re-navigates, and the set key changes anyway, so this never
+// goes stale)
+const probeCache = new Map<string, Promise<boolean>>();
 
-const probeIter2Support = (relays: string[]): Promise<boolean> => {
-  const key = relays.join('|');
-  let cached = iter2Cache.get(key);
+const probeSupport = (feature: string, path: string, relays: string[]): Promise<boolean> => {
+  const key = `${feature}|${relays.join('|')}`;
+  let cached = probeCache.get(key);
   if (!cached) {
-    cached = Promise.all(relays.map(probeRelayStatus)).then(decideIter2);
-    iter2Cache.set(key, cached);
+    cached = Promise.all(relays.map((base) => probeRelayStatus(base, path))).then(decideIter2);
+    probeCache.set(key, cached);
   }
   return cached;
 };
 
-/**
- * Whether the serving relay supports index iteration 2 (`order=` + `signer=`).
- * `null` while the probe is in flight — callers hold the DEGRADED (pre-iteration-2)
- * view until it settles, so an older relay never flashes ordered/signer rows the
- * gate would then have to retract — then a stable boolean. Same module-cached,
- * once-per-session idiom as {@link useIndexCapable}.
- */
-export const useIndexIter2 = (): boolean | null => {
+/** The shared "probe once, hold the degraded view until it settles" hook behind
+ *  both feature gates below. `null` while in flight; a rejection reads as
+ *  unsupported, which is always the safe direction. */
+const useProbe = (feature: string, path: string): boolean | null => {
   const [supported, setSupported] = useState<boolean | null>(null);
   useEffect(() => {
     let dead = false;
-    void probeIter2Support(getRelays())
+    void probeSupport(feature, path, getRelays())
       .then((v) => {
         if (!dead) setSupported(v);
       })
@@ -154,9 +149,43 @@ export const useIndexIter2 = (): boolean | null => {
     return () => {
       dead = true;
     };
-  }, []);
+  }, [feature, path]);
   return supported;
 };
+
+/**
+ * Whether the serving relay supports index iteration 2 (`order=` + `signer=`).
+ * `null` while the probe is in flight — callers hold the DEGRADED (pre-iteration-2)
+ * view until it settles, so an older relay never flashes ordered/signer rows the
+ * gate would then have to retract — then a stable boolean. Same module-cached,
+ * once-per-session idiom as {@link useIndexCapable}.
+ */
+export const useIndexIter2 = (): boolean | null =>
+  useProbe('iter2', `/index/v0/identities?order=${PROBE_ORDER}&limit=1`);
+
+// -----------------------------------------------------------------------------
+// TITLE-SEARCH FEATURE DETECTION — does the SERVING relay honour `titleContains=`?
+//
+// Same failure shape as `order=`, and worse in consequence: a relay predating the
+// filter IGNORES it and returns an UNFILTERED page of content chains, which a
+// search surface would then present as "chains whose title matches". Every row of
+// that page is a fabricated hit.
+//
+// The spec gives a clean separator. `titleContains` is implicitly public-only, so
+// combining it with `publicRead=false` is a REQUIRED 400 ("invalid filter
+// combination") on a relay that implements it — while a relay that ignores the
+// param sees a plain `publicRead=false` query and answers 200. One probe, same
+// 400-validates / 200-ignores verdict the `order=` probe reads, so it shares the
+// pure deciders above.
+// -----------------------------------------------------------------------------
+
+/**
+ * Whether the serving relay honours `titleContains=` on the content index.
+ * `null` while the probe is in flight — a search surface says "checking" rather
+ * than running a query whose results it could not stand behind.
+ */
+export const useIndexTitleSearch = (): boolean | null =>
+  useProbe('titleContains', '/index/v0/content?titleContains=__dfos_probe__&publicRead=false');
 
 export interface IndexPage<T> {
   /** the rows of the CURRENT page only — paging replaces them, never appends. */
@@ -396,10 +425,15 @@ export const useIndexIdentities = (
   );
 
 /** Page the content index (optionally public-read-only), optionally narrowed to a
- *  single `$schema` and/or a `creator` / `signer` DID server-side, in the lexical
- *  default or a time `order`. Every filter bumps the resetKey, so changing one
- *  re-enters the enumeration and the shown page always reflects the live query. In
- *  ordered mode the relay's `next` is an opaque token, passed back verbatim. */
+ *  single `$schema` and/or a `creator` / `signer` DID server-side, or to a
+ *  `titleContains` substring over projected titles, in the lexical default or a
+ *  time `order`. Every filter bumps the resetKey, so changing one re-enters the
+ *  enumeration and the shown page always reflects the live query. In ordered mode
+ *  the relay's `next` is an opaque token, passed back verbatim.
+ *
+ *  `titleContains` is public-only by construction (the relay restricts the query
+ *  to `publicRead=true` rows and 400s an explicit `publicRead=false`), and it must
+ *  only be passed to a relay that honours it — see {@link useIndexTitleSearch}. */
 export const useIndexContent = (
   enabled: boolean,
   publicOnly: boolean,
@@ -407,6 +441,7 @@ export const useIndexContent = (
     docSchema?: string;
     creator?: string;
     signer?: string;
+    titleContains?: string;
     order?: IndexOrder;
     cursor?: string;
     onCursor?: (cursor: string) => void;
@@ -414,7 +449,7 @@ export const useIndexContent = (
 ): IndexPage<IndexContentRow> =>
   useIndexPageStack(
     enabled,
-    `content:${publicOnly}:${opts?.docSchema ?? ''}:${opts?.creator ?? ''}:${opts?.signer ?? ''}:${opts?.order ?? ''}`,
+    `content:${publicOnly}:${opts?.docSchema ?? ''}:${opts?.creator ?? ''}:${opts?.signer ?? ''}:${opts?.titleContains ?? ''}:${opts?.order ?? ''}`,
     opts?.cursor ?? '',
     opts?.onCursor,
     (after) =>
@@ -424,6 +459,7 @@ export const useIndexContent = (
           ...(opts?.docSchema ? { docSchema: opts.docSchema } : {}),
           ...(opts?.creator ? { creator: opts.creator } : {}),
           ...(opts?.signer ? { signer: opts.signer } : {}),
+          ...(opts?.titleContains ? { titleContains: opts.titleContains } : {}),
           ...(opts?.order ? { order: opts.order } : {}),
           ...(after ? { after } : {}),
           limit: PAGE,

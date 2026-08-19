@@ -26,8 +26,15 @@ describe('parseRoute — query is not part of the path', () => {
     expect(parseRoute('#/did/did:dfos:abc?x=1')).toEqual({ view: 'did', id: 'did:dfos:abc' });
   });
 
-  it('the retired artifacts route is no longer a view', () => {
-    expect(parseRoute('#/artifacts')).toEqual({ view: 'home' });
+  it('artifacts routes again — the browse surface returned with /index/v0/artifacts', () => {
+    expect(parseRoute('#/artifacts')).toEqual({ view: 'artifacts' });
+    expect(parseRoute('#/artifacts?order=ingestedAt.desc&after=bafy1')).toEqual({
+      view: 'artifacts',
+    });
+  });
+
+  it('an unknown route still falls back to home', () => {
+    expect(parseRoute('#/nope')).toEqual({ view: 'home' });
   });
 });
 

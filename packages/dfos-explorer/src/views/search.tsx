@@ -2,28 +2,45 @@
 
   SEARCH — one box, grouped results, no invented capabilities
 
-  The relay index offers exactly one search: a case-insensitive substring over
-  PROJECTED PUBLIC PROFILE NAMES (`nameContains`, applied server-side before
-  pagination). That is the identities group, and it is real.
+  The relay index serves exactly two searches, both case-insensitive substrings
+  over the display-name registry's projections, both applied SERVER-SIDE before
+  pagination: `nameContains` over public profile names (the identities group) and
+  `titleContains` over public content titles (the content group). Those are the
+  index's stated search ceiling, and this page goes no further.
 
-  There is NO title search over content — the index projects a post's title but
-  offers no query on it. So the content group does not exist as a search: it
-  offers the direct resolve, which is the honest capability, and says so. The
-  alternative — filtering whichever rows happened to be loaded and calling the
-  result "search" — would be the exact dishonesty the rest of this explorer
-  refuses, and no amount of UI polish makes an unbounded corpus searchable from
-  one page of it.
+  `titleContains` is NEWER than the `capabilities.index` flag, and a relay that
+  predates it does not error — it IGNORES the parameter and returns an ordinary
+  unfiltered page of content chains. Rendering that as "chains whose title
+  matches" would make every row a fabricated hit, which is the exact dishonesty
+  this page has always refused (as would filtering a page of already-loaded rows
+  client-side and calling it search — no amount of UI polish makes an unbounded
+  corpus searchable from one page of it). So the group is gated on a probe, and
+  where the relay does not honour the filter it says so and offers the direct
+  resolve instead, exactly as it did before the filter existed.
 
 */
 
-import type { IndexIdentityRow } from '@metalabel/dfos-client';
+import type { IndexContentRow, IndexIdentityRow } from '@metalabel/dfos-client';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { IndexLightNote, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
+import { DidChip } from '../components/did-chip';
+import {
+  DocName,
+  IndexLightNote,
+  useVerifyOnVisible,
+  VerifyBadge,
+} from '../components/index-light';
 import { Pager, Panel, Term } from '../components/ui';
-import { fmtCount, short } from '../lib/format';
+import { useIndexRowLabel } from '../lib/doc-label';
+import { fmtAge, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { useIndexCapable, useIndexIdentities } from '../lib/index-light';
+import {
+  useIndexCapable,
+  useIndexContent,
+  useIndexIdentities,
+  useIndexTitleSearch,
+} from '../lib/index-light';
 import { dispatchInput, routeFor } from '../lib/resolve-input';
+import { useVerifyStatus } from '../lib/verify-queue';
 import { useHashParam } from '../router';
 
 /** Debounce a rapidly-changing value so it settles into one server-side query. */
@@ -54,10 +71,45 @@ const IdentityHit = (props: { row: IndexIdentityRow }) => {
   );
 };
 
+/** One content hit: the projected title (attributed), its type, creator, and a
+ *  live verify badge — the same row vocabulary the document browser uses, so a
+ *  title reached by search reads identically to one reached by browsing. */
+const ContentHit = (props: { row: IndexContentRow }) => {
+  const { row } = props;
+  const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
+  const rec = useVerifyStatus('content', row.contentId);
+  const label = useIndexRowLabel(row, rec.status === 'attributed');
+  return (
+    <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
+      <td>
+        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
+        {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
+      </td>
+      <td>
+        {row.docSchema ? (
+          <span class="k-role">{schemaLabel(row.docSchema)}</span>
+        ) : (
+          <span class="muted">untyped</span>
+        )}
+      </td>
+      <td onClick={(e) => e.stopPropagation()}>
+        <DidChip did={row.creatorDID} />
+      </td>
+      <td class="n">{fmtAge(row.headAt)}</td>
+    </tr>
+  );
+};
+
 export const Search = () => {
   const indexed = useIndexCapable();
+  // does the serving relay honour `titleContains=`? null while the probe is in
+  // flight — the content group holds rather than running a query it could not
+  // stand behind. See the header note.
+  const titleSearch = useIndexTitleSearch();
   const [q, setQ] = useHashParam('q');
   const [cursor, setCursor] = useHashParam('after');
+  // the two groups page independently, so they carry separate positions
+  const [docCursor, setDocCursor] = useHashParam('dafter');
   const [draft, setDraft] = useState(q);
   const needle = useDebounced(draft.trim(), 250);
   // the last value THIS view wrote into `q`, so its own write echoing back through
@@ -90,6 +142,14 @@ export const Search = () => {
     onCursor: setCursor,
   });
 
+  // public-only by construction: the relay restricts a `titleContains` query to
+  // publicRead rows server-side, and never projects a non-public chain's title.
+  const docs = useIndexContent(
+    indexed === true && titleSearch === true && needle.length > 0,
+    true,
+    { titleContains: needle, cursor: docCursor, onCursor: setDocCursor },
+  );
+
   const direct = dispatchInput(needle);
 
   return (
@@ -99,14 +159,15 @@ export const Search = () => {
         right={<span class="lbl">{needle ? `“${needle}”` : 'nothing entered'}</span>}
         orient={
           <>
-            The relay index searches <b>public profile names</b> and nothing else. Identifiers
-            resolve directly. Both are shown below for whatever you typed.
+            The relay index searches <b>public profile names</b> and <b>public content titles</b> —
+            substrings over what things call themselves, and nothing else. Identifiers resolve
+            directly. All of it is shown below for whatever you typed.
           </>
         }
       >
         <div class="bar">
           <input
-            placeholder="a name, or a did:dfos:… / contentId / operation CID"
+            placeholder="a name or title, or a did:dfos:… / contentId / operation CID"
             style={{ flex: 1 }}
             value={draft}
             autocomplete="off"
@@ -198,14 +259,88 @@ export const Search = () => {
         )}
       </Panel>
 
-      <Panel title="content" right={<span class="lbl">no index search exists</span>}>
-        <div class="ck-note">
-          The relay’s <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> projects a document’s
-          title but serves <b>no query over it</b> — so there is nothing here to search, and this
-          page will not fake one by filtering a page of already-loaded rows. To reach a document:
-          paste its <b>contentId</b> (31 characters) or an operation <b>CID</b> (<code>baf…</code>)
-          above, or <a href="#/documents">browse public documents</a>.
-        </div>
+      <Panel
+        title={
+          <>
+            content{' '}
+            {needle && titleSearch === true && !docs.loading ? (
+              <span class="lbl">{fmtCount(docs.rows.length)} on this page</span>
+            ) : null}
+          </>
+        }
+        accent={docs.rows.length > 0 ? 'warn' : undefined}
+        right={
+          <span class="lbl">
+            {titleSearch === true
+              ? 'server-side title search · from relay index'
+              : 'no index title search'}
+          </span>
+        }
+      >
+        {indexed === null || titleSearch === null ? (
+          <span class="muted">checking relay capabilities…</span>
+        ) : indexed === false || titleSearch === false ? (
+          <div class="ck-note">
+            The relay’s <Term word="index" def={GLOSSARY['indexLight'] ?? ''} /> projects a
+            document’s title, but these relays serve <b>no query over it</b> — so there is nothing
+            here to search, and this page will not fake one by filtering a page of already-loaded
+            rows. To reach a document: paste its <b>contentId</b> (31 characters) or an operation{' '}
+            <b>CID</b> (<code>baf…</code>) above, or{' '}
+            <a href="#/documents">browse public documents</a>.
+          </div>
+        ) : !needle ? (
+          <span class="muted">type a title above.</span>
+        ) : docs.error ? (
+          <div class="ck-note">
+            couldn’t reach the relay index.{' '}
+            <button onClick={docs.retry} disabled={docs.loading}>
+              {docs.loading ? 'retrying…' : 'retry'}
+            </button>
+          </div>
+        ) : docs.rows.length === 0 ? (
+          <span class="muted">
+            {docs.loading
+              ? `searching the relay index for “${needle}”…`
+              : `no public content in the relay index has a title matching “${needle}”.`}
+          </span>
+        ) : (
+          <>
+            <div class="ck-note" style={{ marginBottom: 8 }}>
+              A relay-asserted case-insensitive substring over projected titles (<b>amber</b>,
+              verified as each row folds). The query is <b>public-only by construction</b> — a
+              non-public chain never projects a title, so one can never be reached this way.
+              Completeness is never proven.
+            </div>
+            <div class="index-rows">
+              <table>
+                <thead>
+                  <tr>
+                    <th>name / title</th>
+                    <th>type</th>
+                    <th>creator</th>
+                    <th>updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {docs.rows.map((row) => (
+                    <ContentHit key={row.contentId} row={row} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pager
+              count={docs.rows.length}
+              noun="matches"
+              loading={docs.loading}
+              hasNext={docs.hasNext}
+              hasPrev={docs.hasPrev}
+              offFirst={docs.offFirst}
+              onFirst={docs.first}
+              onPrev={docs.prev}
+              onNext={docs.next}
+            />
+          </>
+        )}
       </Panel>
     </>
   );
