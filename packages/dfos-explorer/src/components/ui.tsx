@@ -10,6 +10,7 @@
 
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
+import { useDidProfile } from '../lib/did-profiles';
 import { copyToClipboard, short } from '../lib/format';
 import type { RevocationStatus } from '../lib/revocations';
 
@@ -179,11 +180,37 @@ export const Pager = (props: {
 // links
 // -----------------------------------------------------------------------------
 
-export const DidLink = (props: { did: string; full?: boolean }) => (
-  <a href={`#/did/${props.did}`} title={props.did}>
-    {props.full ? props.did : short(props.did, 14, 6)}
-  </a>
-);
+/** A DID, linked — and resolved JIT to its PUBLIC profile name wherever one
+ *  exists (lib/did-profiles.ts): the relay index's projection renders first in
+ *  the amber `.attr` tier, replaced by the chain-verified name in plain ink.
+ *  `plain` opts out for byte-accurate surfaces (json-view); `full` keeps the
+ *  literal DID visible next to the name on detail surfaces. */
+export const DidLink = (props: { did: string; full?: boolean; plain?: boolean }) => {
+  const { profile, tier } = useDidProfile(props.did, !props.plain);
+  if (props.plain || !profile) {
+    return (
+      <a href={`#/did/${props.did}`} title={props.did}>
+        {props.full ? props.did : short(props.did, 14, 6)}
+      </a>
+    );
+  }
+
+  const title =
+    tier === 'verified'
+      ? `${props.did} — public profile, verified in your tab`
+      : `${props.did} — name projected by the relay index (attributed); verifying…`;
+  return (
+    <a href={`#/did/${props.did}`} title={title}>
+      <span class={tier === 'verified' ? 'did-name' : 'attr'}>{profile.name}</span>
+      {props.full ? (
+        <>
+          {' '}
+          <span class="muted">{props.did}</span>
+        </>
+      ) : null}
+    </a>
+  );
+};
 
 export const ContentLink = (props: { id: string; full?: boolean }) => (
   <a href={`#/content/${props.id}`} title={props.id}>
