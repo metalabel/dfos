@@ -144,8 +144,8 @@ type backstopStubStore struct {
 	token string
 }
 
-func (s *backstopStubStore) GetUnsequencedOps(limit int) ([]string, error) {
-	return []string{s.token}, nil
+func (s *backstopStubStore) GetUnsequencedOps(limit int) ([]PendingOp, error) {
+	return []PendingOp{{JWSToken: s.token, Origin: OpOriginDirect}}, nil
 }
 func (s *backstopStubStore) MarkOpsSequenced(cids []string) error    { return nil }
 func (s *backstopStubStore) MarkOpRejected(cid, reason string) error { return nil }

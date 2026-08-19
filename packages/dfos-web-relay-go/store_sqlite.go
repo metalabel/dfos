@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS relay_meta (
 CREATE TABLE IF NOT EXISTS raw_ops (
 	cid TEXT PRIMARY KEY,
 	jws_token TEXT NOT NULL,
+	origin TEXT NOT NULL DEFAULT 'direct',
 	status TEXT NOT NULL DEFAULT 'pending',
 	error TEXT,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -333,6 +334,11 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	if err := ensureColumn(writeDB, "index_content", "title", "TEXT"); err != nil {
+		writeDB.Close()
+		readDB.Close()
+		return nil, err
+	}
+	if err := ensureColumn(writeDB, "raw_ops", "origin", "TEXT NOT NULL DEFAULT 'direct'"); err != nil {
 		writeDB.Close()
 		readDB.Close()
 		return nil, err
@@ -1872,33 +1878,40 @@ func (s *SQLiteStore) SetMeta(key string, value []byte) error {
 
 // PutRawOp stores a JWS token in the content-addressed raw op store.
 // Idempotent — ignores duplicates.
-func (s *SQLiteStore) PutRawOp(cid string, jwsToken string) error {
+func (s *SQLiteStore) PutRawOp(cid string, jwsToken string, origins ...OpOrigin) error {
+	origin := OpOriginDirect
+	if len(origins) > 0 && origins[0] == OpOriginPeer {
+		origin = OpOriginPeer
+	}
 	_, err := s.writerDB().Exec(
-		"INSERT OR IGNORE INTO raw_ops (cid, jws_token) VALUES (?, ?)",
-		cid, jwsToken,
+		"INSERT OR IGNORE INTO raw_ops (cid, jws_token, origin) VALUES (?, ?, ?)",
+		cid, jwsToken, origin,
 	)
 	return err
 }
 
 // GetUnsequencedOps returns JWS tokens for ops that haven't been sequenced yet.
-func (s *SQLiteStore) GetUnsequencedOps(limit int) ([]string, error) {
+func (s *SQLiteStore) GetUnsequencedOps(limit int) ([]PendingOp, error) {
 	rows, err := s.readerDB().Query(
-		"SELECT jws_token FROM raw_ops WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
+		"SELECT jws_token, origin FROM raw_ops WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
 		limit,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var tokens []string
+	var pending []PendingOp
 	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
+		var op PendingOp
+		if err := rows.Scan(&op.JWSToken, &op.Origin); err != nil {
 			return nil, err
 		}
-		tokens = append(tokens, t)
+		if op.Origin != OpOriginPeer {
+			op.Origin = OpOriginDirect
+		}
+		pending = append(pending, op)
 	}
-	return tokens, rows.Err()
+	return pending, rows.Err()
 }
 
 // MarkOpsSequenced marks the given CIDs as successfully sequenced. Propagates

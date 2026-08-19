@@ -39,7 +39,7 @@ import {
   redactNonPublicContentRow,
   redactNonPublicIdentityRow,
 } from './index-routes';
-import { ingestOperations } from './ingest';
+import { ingestOperations, type AdmissionMode } from './ingest';
 import {
   credentialRevocationStatus,
   issuerRevocationList,
@@ -254,15 +254,16 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   };
 
   // ingest wrapper: store raw → process → mark results → sequence pending → gossip
-  const ingestWithGossip = async (tokens: string[]) => {
+  const ingestWithGossip = async (tokens: string[], admissionMode: AdmissionMode = 'current') => {
+    const origin = admissionMode === 'historical' ? 'peer' : 'direct';
     // store raw ops first — they can never be lost
     for (const token of tokens) {
       const cid = await computeOpCID(token);
-      if (cid) await store.putRawOp(cid, token);
+      if (cid) await store.putRawOp(cid, token, origin);
     }
 
     // process batch
-    const results = await ingestOperations(tokens, store, { logEnabled });
+    const results = await ingestOperations(tokens, store, { logEnabled, admissionMode });
 
     // mark results in raw store
     const newOps: string[] = [];
@@ -306,7 +307,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       }
       if (!page) return false;
       if (page.entries.length === 0) return true;
-      await ingestWithGossip(page.entries.map((entry) => entry.jwsToken));
+      await ingestWithGossip(
+        page.entries.map((entry) => entry.jwsToken),
+        'historical',
+      );
       if (!page.next) return true;
       after = page.next;
     }
@@ -1100,7 +1104,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
           if (resetPending) await store.setPeerCursor(peer.url, page.next ?? '');
           break;
         }
-        await ingestWithGossip(page.entries.map((e) => e.jwsToken));
+        await ingestWithGossip(
+          page.entries.map((e) => e.jwsToken),
+          'historical',
+        );
         fetched += page.entries.length;
         if (resetPending) {
           // Only a successful from-scratch page proves that the old cursor was

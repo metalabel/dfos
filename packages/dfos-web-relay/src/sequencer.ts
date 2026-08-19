@@ -55,10 +55,25 @@ export const sequenceOps = async (
   const result: SequenceResult = { sequenced: 0, rejected: 0, pending: 0 };
 
   for (;;) {
-    const tokens = await store.getUnsequencedOps(10000);
-    if (tokens.length === 0) break;
+    const pendingOps = await store.getUnsequencedOps(10000);
+    if (pendingOps.length === 0) break;
 
-    const results = await ingestOperations(tokens, store);
+    const indexedResults: Array<{ index: number; result: IngestionResult }> = [];
+    for (const origin of ['direct', 'peer'] as const) {
+      const partition = pendingOps
+        .map((op, index) => ({ op, index }))
+        .filter(({ op }) => op.origin === origin);
+      if (partition.length === 0) continue;
+      const partitionResults = await ingestOperations(
+        partition.map(({ op }) => op.jwsToken),
+        store,
+        { admissionMode: origin === 'peer' ? 'historical' : 'current' },
+      );
+      for (let i = 0; i < partition.length; i++) {
+        indexedResults.push({ index: partition[i]!.index, result: partitionResults[i]! });
+      }
+    }
+    const results = indexedResults.sort((a, b) => a.index - b.index).map(({ result }) => result);
 
     let progress = false;
     const sequencedCIDs: string[] = [];
@@ -69,7 +84,7 @@ export const sequenceOps = async (
 
       if (res.status === 'new') {
         sequencedCIDs.push(res.cid);
-        newOps.push(tokens[i]!);
+        newOps.push(pendingOps[i]!.jwsToken);
         result.sequenced++;
         progress = true;
       } else if (res.status === 'duplicate') {

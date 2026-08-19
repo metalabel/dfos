@@ -29,6 +29,8 @@ import { decodeSigningCursor, encodeSigningCursor } from './types';
 import type {
   BlobKey,
   LogEntry,
+  OpOrigin,
+  PendingOp,
   RelayStats,
   RelayStore,
   StoredContentChain,
@@ -857,20 +859,20 @@ export class MemoryRelayStore implements RelayStore {
 
   private rawOps = new Map<
     string,
-    { jwsToken: string; status: 'pending' | 'sequenced' | 'rejected' }
+    { jwsToken: string; origin: OpOrigin; status: 'pending' | 'sequenced' | 'rejected' }
   >();
 
-  async putRawOp(cid: string, jwsToken: string): Promise<void> {
+  async putRawOp(cid: string, jwsToken: string, origin: OpOrigin = 'direct'): Promise<void> {
     if (!this.rawOps.has(cid)) {
-      this.rawOps.set(cid, { jwsToken, status: 'pending' });
+      this.rawOps.set(cid, { jwsToken, origin, status: 'pending' });
     }
   }
 
-  async getUnsequencedOps(limit: number): Promise<string[]> {
-    const out: string[] = [];
+  async getUnsequencedOps(limit: number): Promise<PendingOp[]> {
+    const out: PendingOp[] = [];
     for (const entry of this.rawOps.values()) {
       if (entry.status === 'pending') {
-        out.push(entry.jwsToken);
+        out.push({ jwsToken: entry.jwsToken, origin: entry.origin });
         if (out.length >= limit) break;
       }
     }

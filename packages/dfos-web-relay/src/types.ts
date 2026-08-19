@@ -259,6 +259,13 @@ export interface StoredCountersignature {
   jwsToken: string;
 }
 
+export type OpOrigin = 'direct' | 'peer';
+
+export interface PendingOp {
+  jwsToken: string;
+  origin: OpOrigin;
+}
+
 /** Ephemeral courier state for one sign request. */
 export interface StoredSignRequest {
   cid: string;
@@ -610,10 +617,10 @@ export interface RelayStore {
 
   // --- raw ops (content-addressed store for all received operations) ---
 
-  /** Store a raw JWS token by CID — idempotent, ignores duplicates */
-  putRawOp(cid: string, jwsToken: string): Promise<void>;
-  /** Return JWS tokens for unsequenced (pending) ops */
-  getUnsequencedOps(limit: number): Promise<string[]>;
+  /** Store a raw JWS token by CID and durable origin — absent origin defaults to direct */
+  putRawOp(cid: string, jwsToken: string, origin?: OpOrigin): Promise<void>;
+  /** Return JWS tokens and durable origins for unsequenced (pending) ops */
+  getUnsequencedOps(limit: number): Promise<PendingOp[]>;
   /** Mark ops as successfully sequenced */
   markOpsSequenced(cids: string[]): Promise<void>;
   /** Mark an op as permanently rejected */
