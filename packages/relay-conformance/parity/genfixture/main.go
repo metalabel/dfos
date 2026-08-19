@@ -294,8 +294,18 @@ func main() {
 	// --- content chain owned by A: create + update (strictly increasing createdAt) ---
 	doc1 := docCID(map[string]any{"type": "post", "title": "first", "body": "hello"})
 	cCreate, contentID, cCreateCID := contentCreate(aDID, doc1, aKid, pinnedTimeAt(1), aPriv)
-	doc2 := docCID(map[string]any{"type": "post", "title": "second", "body": "world"})
-	cUpdate, _ := contentUpdate(aDID, cCreateCID, doc2, aKid, pinnedTimeAt(2), aPriv)
+	contentDoc := map[string]any{
+		"$schema": "https://schemas.dfos.com/post/v1",
+		"title":   "second",
+		"body":    "world",
+		"credits": []any{
+			map[string]any{"did": aDID, "role": "writing"},
+			map[string]any{"did": bDID, "role": "editing", "claim": "opaque", "name": "never projected"},
+		},
+	}
+	doc2 := docCID(contentDoc)
+	cUpdate, cUpdateCID := contentUpdate(aDID, cCreateCID, doc2, aKid, pinnedTimeAt(2), aPriv)
+	contentBody := must(json.Marshal(contentDoc))
 
 	// --- artifact by A ---
 	artPayload := map[string]any{
@@ -375,11 +385,10 @@ func main() {
 			dGenesis,
 			dDelete,
 		},
-		Blobs: []FixtureBlob{{
-			ContentID:    profileContentID,
-			OperationCID: profileOperationCID,
-			Body:         profileBody,
-		}},
+		Blobs: []FixtureBlob{
+			{ContentID: contentID, OperationCID: cUpdateCID, Body: contentBody},
+			{ContentID: profileContentID, OperationCID: profileOperationCID, Body: profileBody},
+		},
 		QueryAuthKeyID:            aKeyID,
 		QueryDID:                  aDID,
 		QueryContentID:            contentID,

@@ -51,6 +51,7 @@ func TestIndexDisabledRoutes501(t *testing.T) {
 	for _, route := range []string{
 		"/index/v0/identities?limit=1",
 		"/index/v0/content?limit=1",
+		"/index/v0/credits?limit=1",
 		"/index/v0/countersignatures?witness=" + did + "&limit=1",
 		"/index/v0/credentials?issuer=" + did + "&limit=1",
 	} {

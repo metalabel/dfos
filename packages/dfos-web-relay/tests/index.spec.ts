@@ -338,6 +338,7 @@ describe('index v0', () => {
     for (const path of [
       '/index/v0/identities',
       '/index/v0/content',
+      '/index/v0/credits',
       `/index/v0/countersignatures?witness=${relayDID}`,
       '/index/v0/credentials',
       '/index/v0/operations',
@@ -346,6 +347,199 @@ describe('index v0', () => {
       const res = await disabled.app.request(`http://localhost${path}`);
       expect(res.status).toBe(501);
     }
+  });
+
+  it('strips public credit rows when the grant is revoked or the content chain is deleted', async () => {
+    const creator = await createIdentity();
+    const credited = await createIdentity();
+    const document = {
+      $schema: POST_SCHEMA,
+      title: 'public work',
+      credits: [{ did: credited.did, name: 'never projected', role: 'writing', claim: '' }],
+    };
+
+    const revoked = await createContent(creator, document);
+    await uploadBlob(creator, revoked.contentId, revoked.operationCID, document);
+    const credentialCID = await grantPublicRead(creator, revoked.contentId);
+    const publicRows = await json(
+      await req(`/index/v0/credits?contentId=${encodeURIComponent(revoked.contentId)}`),
+    );
+    expect(publicRows).toEqual({
+      credits: [
+        {
+          contentId: revoked.contentId,
+          did: credited.did,
+          role: 'writing',
+          position: 0,
+          hasClaim: true,
+        },
+      ],
+      next: null,
+    });
+
+    await revokeGrant(creator, credentialCID);
+    expect(
+      (
+        await json(
+          await req(`/index/v0/credits?contentId=${encodeURIComponent(revoked.contentId)}`),
+        )
+      ).credits,
+    ).toEqual([]);
+
+    const deleted = await createContent(creator, document, 3);
+    await uploadBlob(creator, deleted.contentId, deleted.operationCID, document);
+    await grantPublicRead(creator, deleted.contentId);
+    expect(
+      (
+        await json(
+          await req(`/index/v0/credits?contentId=${encodeURIComponent(deleted.contentId)}`),
+        )
+      ).credits,
+    ).toHaveLength(1);
+    const deleteOp: ContentOperation = {
+      version: 1,
+      type: 'delete',
+      did: creator.did,
+      previousOperationCID: deleted.operationCID,
+      createdAt: ts(4),
+    };
+    const { jwsToken } = await signContentOperation({
+      operation: deleteOp,
+      signer: creator.authKey.signer,
+      kid: `${creator.did}#${creator.authKey.keyId}`,
+    });
+    expect((await json(await postOps([jwsToken]))).results[0].status).toBe('new');
+    expect(
+      (
+        await json(
+          await req(`/index/v0/credits?contentId=${encodeURIComponent(deleted.contentId)}`),
+        )
+      ).credits,
+    ).toEqual([]);
+  });
+
+  it('fully replaces credit rows from only the current held head', async () => {
+    const creator = await createIdentity();
+    const dropped = await createIdentity();
+    const remaining = await createIdentity();
+    const initialDocument = {
+      $schema: POST_SCHEMA,
+      credits: [
+        { did: dropped.did, role: 'writing' },
+        { did: remaining.did, role: 'editing' },
+      ],
+    };
+    const content = await createContent(creator, initialDocument);
+    await uploadBlob(creator, content.contentId, content.operationCID, initialDocument);
+    await grantPublicRead(creator, content.contentId);
+
+    const nextDocument = {
+      $schema: POST_SCHEMA,
+      credits: [{ did: remaining.did, role: 'photography', claim: 'opaque' }],
+    };
+    const update = await updateContent(creator, content.operationCID, nextDocument, 3);
+
+    // The new head is not held yet: old-head rows clear immediately.
+    const beforeBlob = await json(
+      await req(`/index/v0/credits?contentId=${encodeURIComponent(content.contentId)}`),
+    );
+    expect(beforeBlob.credits).toEqual([]);
+
+    await uploadBlob(creator, content.contentId, update.operationCID, nextDocument);
+    const afterBlob = await json(
+      await req(`/index/v0/credits?contentId=${encodeURIComponent(content.contentId)}`),
+    );
+    expect(afterBlob.credits).toEqual([
+      {
+        contentId: content.contentId,
+        did: remaining.did,
+        role: 'photography',
+        position: 0,
+        hasClaim: true,
+      },
+    ]);
+    expect(afterBlob.credits.some((row: { did: string }) => row.did === dropped.did)).toBe(false);
+  });
+
+  it('projects credits on late blob/public grant and filters with an opaque composite cursor', async () => {
+    const creator = await createIdentity();
+    const shared = await createIdentity();
+    const other = await createIdentity();
+    const docA = {
+      $schema: POST_SCHEMA,
+      credits: [
+        { did: shared.did, role: 'writing' },
+        { did: 42, role: 'malformed' },
+        { did: other.did },
+      ],
+    };
+    const docB = {
+      $schema: POST_SCHEMA,
+      credits: [
+        { did: other.did, role: 'writing' },
+        { did: shared.did, role: 'editing' },
+      ],
+    };
+    const a = await createContent(creator, docA, 1);
+    await grantPublicRead(creator, a.contentId);
+    expect(
+      (await json(await req(`/index/v0/credits?contentId=${encodeURIComponent(a.contentId)}`)))
+        .credits,
+    ).toEqual([]);
+    await uploadBlob(creator, a.contentId, a.operationCID, docA);
+    expect(
+      (await json(await req(`/index/v0/credits?contentId=${encodeURIComponent(a.contentId)}`)))
+        .credits,
+    ).toHaveLength(2);
+    expect(
+      (
+        await json(await req(`/index/v0/credits?contentId=${encodeURIComponent(a.contentId)}`))
+      ).credits.map((row: { position: number }) => row.position),
+    ).toEqual([0, 2]);
+
+    const b = await createContent(creator, docB, 2);
+    await uploadBlob(creator, b.contentId, b.operationCID, docB);
+    expect(
+      (await json(await req(`/index/v0/credits?contentId=${encodeURIComponent(b.contentId)}`)))
+        .credits,
+    ).toEqual([]);
+    await grantPublicRead(creator, b.contentId);
+
+    const byDID = await json(await req(`/index/v0/credits?did=${encodeURIComponent(shared.did)}`));
+    expect(byDID.credits.map((row: { contentId: string }) => row.contentId)).toEqual(
+      [a.contentId, b.contentId].sort(),
+    );
+    const byRole = await json(await req('/index/v0/credits?role=writing'));
+    expect(byRole.credits).toHaveLength(2);
+    expect(byRole.credits.every((row: { role: string }) => row.role === 'writing')).toBe(true);
+    expect(byRole.credits.some((row: { role: string | null }) => row.role === null)).toBe(false);
+    const anded = await json(
+      await req(
+        `/index/v0/credits?did=${encodeURIComponent(shared.did)}&contentId=${encodeURIComponent(b.contentId)}&role=editing`,
+      ),
+    );
+    expect(anded.credits).toEqual([
+      expect.objectContaining({ contentId: b.contentId, did: shared.did, role: 'editing' }),
+    ]);
+
+    const expected = (await json(await req('/index/v0/credits?limit=1000'))).credits;
+    const walked: unknown[] = [];
+    let after: string | null = null;
+    do {
+      const page = await json(
+        await req(`/index/v0/credits?limit=1${after ? `&after=${encodeURIComponent(after)}` : ''}`),
+      );
+      walked.push(...page.credits);
+      if (page.next !== null) {
+        expect(page.next).not.toContain(page.credits[0].contentId);
+        expect(page.next).not.toBe(`${page.credits[0].contentId}~${page.credits[0].position}`);
+      }
+      after = page.next;
+    } while (after);
+    expect(walked).toEqual(expected);
+    const invalid = await req('/index/v0/credits?after=not-a-cursor');
+    expect(invalid.status).toBe(400);
+    expect(await json(invalid)).toEqual({ error: 'invalid cursor' });
   });
 
   it('projects and queries standalone artifacts with lexical and ordered cursors', async () => {

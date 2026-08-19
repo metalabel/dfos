@@ -108,6 +108,7 @@ describe('openapi', () => {
       ['/revocations/v1/issuer/{did}', 'get'],
       ['/index/v0/identities', 'get'],
       ['/index/v0/content', 'get'],
+      ['/index/v0/credits', 'get'],
       ['/index/v0/countersignatures', 'get'],
       ['/index/v0/credentials', 'get'],
       ['/index/v0/operations', 'get'],

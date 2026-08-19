@@ -168,6 +168,17 @@ CREATE INDEX IF NOT EXISTS idx_index_content_doccid ON index_content(current_doc
 CREATE INDEX IF NOT EXISTS idx_index_content_genesis ON index_content(genesis_at, content_id);
 CREATE INDEX IF NOT EXISTS idx_index_content_head ON index_content(head_at, content_id);
 
+CREATE TABLE IF NOT EXISTS index_credit (
+	content_id TEXT NOT NULL,
+	position INTEGER NOT NULL,
+	did TEXT NOT NULL,
+	role TEXT,
+	has_claim INTEGER NOT NULL,
+	PRIMARY KEY (content_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_index_credit_did ON index_credit(did, content_id, position);
+CREATE INDEX IF NOT EXISTS idx_index_credit_role ON index_credit(role, content_id, position);
+
 CREATE TABLE IF NOT EXISTS index_artifact (
 	cid TEXT PRIMARY KEY,
 	signer_did TEXT NOT NULL,
@@ -1131,6 +1142,37 @@ func (s *SQLiteStore) PutIndexContentRow(row indexContentRow) error {
 	return err
 }
 
+func putIndexCreditRows(db dbConn, contentID string, rows []indexCreditRow) error {
+	if _, err := db.Exec("DELETE FROM index_credit WHERE content_id = ?", contentID); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if _, err := db.Exec(
+			`INSERT INTO index_credit (content_id, position, did, role, has_claim)
+			 VALUES (?, ?, ?, ?, ?)`,
+			contentID, row.Position, row.DID, nullStr(row.Role), boolToInt(row.HasClaim),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) PutIndexCreditRows(contentID string, rows []indexCreditRow) error {
+	if s.tx != nil {
+		return putIndexCreditRows(s.tx, contentID, rows)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := putIndexCreditRows(tx, contentID, rows); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *SQLiteStore) PutIndexArtifactRow(row indexArtifactRow) error {
 	_, err := s.writerDB().Exec(
 		`INSERT OR REPLACE INTO index_artifact
@@ -1289,6 +1331,54 @@ func (s *SQLiteStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 		if err != nil {
 			return nil, err
 		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *SQLiteStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, error) {
+	where := []string{}
+	args := []any{}
+	if q.DID != nil {
+		where = append(where, "did = ?")
+		args = append(args, *q.DID)
+	}
+	if q.ContentID != nil {
+		where = append(where, "content_id = ?")
+		args = append(args, *q.ContentID)
+	}
+	if q.Role != nil {
+		where = append(where, "role = ?")
+		args = append(args, *q.Role)
+	}
+	if q.After != nil {
+		where = append(where, "(content_id > ? OR (content_id = ? AND position > ?))")
+		args = append(args, q.After.ContentID, q.After.ContentID, q.After.Position)
+	}
+	query := "SELECT content_id, did, role, position, has_claim FROM index_credit"
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY content_id ASC, position ASC LIMIT ?"
+	args = append(args, q.Limit)
+	rows, err := s.readerDB().Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []indexCreditRow{}
+	for rows.Next() {
+		var row indexCreditRow
+		var role sql.NullString
+		var hasClaim int
+		if err := rows.Scan(&row.ContentID, &row.DID, &role, &row.Position, &hasClaim); err != nil {
+			return nil, err
+		}
+		if role.Valid {
+			value := role.String
+			row.Role = &value
+		}
+		row.HasClaim = hasClaim != 0
 		result = append(result, row)
 	}
 	return result, rows.Err()
@@ -1571,7 +1661,7 @@ func (s *SQLiteStore) SetIndexProjectionVersion(v int) error {
 }
 
 func (s *SQLiteStore) ClearIndexProjection() error {
-	for _, table := range []string{"index_identity", "index_content", "content_signers", "index_countersign", "index_artifact"} {
+	for _, table := range []string{"index_identity", "index_content", "index_credit", "content_signers", "index_countersign", "index_artifact"} {
 		if _, err := s.writerDB().Exec("DELETE FROM " + table); err != nil {
 			return err
 		}

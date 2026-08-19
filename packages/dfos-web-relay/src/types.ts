@@ -14,6 +14,8 @@ import type {
   IndexContentRow,
   IndexCountersignatureQueryRow,
   IndexCredentialRow,
+  IndexCreditCursor,
+  IndexCreditRow,
   IndexIdentityRow,
   IndexOperationRow,
   IndexOrder,
@@ -523,6 +525,14 @@ export interface RelayStore {
     order?: IndexOrder;
     limit: number;
   }): Promise<IndexContentRow[]>;
+  /** Page public-head credit rows by the opaque (contentId, position) cursor. */
+  queryIndexCredits(q: {
+    did?: string;
+    contentId?: string;
+    role?: string;
+    after?: IndexCreditCursor;
+    limit: number;
+  }): Promise<IndexCreditRow[]>;
   /** Page standalone artifact projections by CID or recency order. */
   queryIndexArtifacts(q: {
     cid?: string;
@@ -572,6 +582,8 @@ export interface RelayStore {
   putIndexIdentityRow(row: IndexIdentityRow): Promise<void>;
   /** Upsert a content projection row by contentId. */
   putIndexContentRow(row: IndexContentRow): Promise<void>;
+  /** Replace one content chain's complete public-head credit row set. */
+  putIndexCreditRows(contentId: string, rows: IndexCreditRow[]): Promise<void>;
   /** Upsert a standalone artifact projection row by CID. */
   putIndexArtifactRow(row: IndexArtifactRow): Promise<void>;
   /** Add one accepted content-operation signer to a chain's signer set. */

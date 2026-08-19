@@ -54,6 +54,7 @@ type MemoryStore struct {
 	// --- index (v0) materialized projection rows ---
 	indexIdentityRows    map[string]indexIdentityRow            // keyed by DID
 	indexContentRows     map[string]indexContentRow             // keyed by contentId
+	indexCreditRows      map[string][]indexCreditRow            // grouped by contentId
 	indexContentSigners  map[string]map[string]struct{}         // contentId → signer DID set
 	indexCountersignRows map[string]storedIndexCountersignature // keyed by cid (carry witness_did)
 	indexOperationRows   map[string]indexOperationRow           // keyed by operation cid
@@ -82,6 +83,7 @@ func NewMemoryStore() *MemoryStore {
 
 		indexIdentityRows:    make(map[string]indexIdentityRow),
 		indexContentRows:     make(map[string]indexContentRow),
+		indexCreditRows:      make(map[string][]indexCreditRow),
 		indexContentSigners:  make(map[string]map[string]struct{}),
 		indexCountersignRows: make(map[string]storedIndexCountersignature),
 		indexOperationRows:   make(map[string]indexOperationRow),
@@ -525,6 +527,40 @@ func (s *MemoryStore) QueryIndexContent(q IndexContentQuery) ([]indexContentRow,
 	return pageIndexRows(rows, func(row indexContentRow) string { return row.ContentID }, q.After, q.Limit), nil
 }
 
+func (s *MemoryStore) QueryIndexCredits(q IndexCreditQuery) ([]indexCreditRow, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rows := []indexCreditRow{}
+	for _, contentRows := range s.indexCreditRows {
+		for _, row := range contentRows {
+			if q.DID != nil && row.DID != *q.DID {
+				continue
+			}
+			if q.ContentID != nil && row.ContentID != *q.ContentID {
+				continue
+			}
+			if q.Role != nil && (row.Role == nil || *row.Role != *q.Role) {
+				continue
+			}
+			if q.After != nil && (row.ContentID < q.After.ContentID ||
+				(row.ContentID == q.After.ContentID && row.Position <= q.After.Position)) {
+				continue
+			}
+			rows = append(rows, row)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].ContentID != rows[j].ContentID {
+			return rows[i].ContentID < rows[j].ContentID
+		}
+		return rows[i].Position < rows[j].Position
+	})
+	if len(rows) > q.Limit {
+		rows = rows[:q.Limit]
+	}
+	return rows, nil
+}
+
 func (s *MemoryStore) QueryIndexArtifacts(q IndexArtifactQuery) ([]indexArtifactRow, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -665,6 +701,18 @@ func (s *MemoryStore) PutIndexContentRow(row indexContentRow) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexContentRows[row.ContentID] = row
+	return nil
+}
+
+func (s *MemoryStore) PutIndexCreditRows(contentID string, rows []indexCreditRow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	replacement := make([]indexCreditRow, len(rows))
+	copy(replacement, rows)
+	for i := range replacement {
+		replacement[i].ContentID = contentID
+	}
+	s.indexCreditRows[contentID] = replacement
 	return nil
 }
 

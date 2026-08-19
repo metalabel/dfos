@@ -314,6 +314,8 @@ func TestDualRelayParity(t *testing.T) {
 	nameRoute := "/index/v0/identities?nameContains=" + url.QueryEscape(fix.QueryProfileName) + "&limit=1000"
 	publicProfileRoute := "/index/v0/identities?hasPublicProfile=true&limit=1000"
 	publicReadRoute := "/index/v0/content?publicRead=true&limit=1000"
+	creditsRoute := "/index/v0/credits?contentId=" + url.QueryEscape(fix.QueryContentID) + "&limit=1000"
+	creditsDIDRoute := "/index/v0/credits?did=" + url.QueryEscape(fix.QueryRevocationIssuerDID) + "&limit=1000"
 
 	routes := []string{
 		"/proof/v1/log?limit=1000",
@@ -327,6 +329,8 @@ func TestDualRelayParity(t *testing.T) {
 		nameRoute,
 		publicProfileRoute,
 		publicReadRoute,
+		creditsRoute,
+		creditsDIDRoute,
 		"/index/v0/content?documentCID=" + fix.QueryDocumentCID + "&limit=1000",
 		"/index/v0/countersignatures?witness=" + fix.QueryRevocationIssuerDID + "&limit=1000",
 		"/index/v0/credentials?resource=chain:*&limit=1000",
@@ -364,6 +368,8 @@ func TestDualRelayParity(t *testing.T) {
 		nameRoute:           fix.QueryProfileDID,
 		publicProfileRoute:  fix.QueryProfileDID,
 		publicReadRoute:     fix.QueryContentID,
+		creditsRoute:        fix.QueryRevocationIssuerDID,
+		creditsDIDRoute:     fix.QueryContentID,
 	}
 
 	for routeIndex, route := range routes {
