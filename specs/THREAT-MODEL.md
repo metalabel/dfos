@@ -206,10 +206,9 @@ Validity", `specs/PROTOCOL.md`).
 **Identity chains are outside this mechanism entirely.** Identity chains are strictly
 linear (PROTOCOL.md "Chain Validity", `specs/PROTOCOL.md`): a conflicting extension is
 invalid, the head is the last operation of the single timeline, and there is no timestamp
-competition to win. The former identity-chain **fork auction** — any once-current key
-bidding the head by forking from an ancestor where it was live with a `createdAt` up to
-24 hours ahead — is closed by the pre-adoption linearity amendment; forks are now permitted
-exactly where a merge function exists, and key state has none. Undeletion is the explicit
+competition to win — no once-current key can bid the head from an ancestor, whatever its
+`createdAt` claims. Forks are permitted exactly where a merge function exists, and key
+state has none. Undeletion is the explicit
 `restore` operation, signed by a controller key of the deleted head state (WEB-RELAY.md
 "Deletion Semantics", `specs/WEB-RELAY.md`; DID-METHOD.md §5.5, `specs/DID-METHOD.md`).
 Ordering authority for an identity chain is its services-listed home relay — single-writer
@@ -227,11 +226,9 @@ These are known and deliberately accepted for v1.
 - **Rotation is not revocation.** Rotating a key ends its authoring window for freshly
   admitted operations, but committed facts it signed re-verify forever — their invalidation
   mechanism is revocation or deletion, never rotation (WEB-RELAY.md "Key Resolution",
-  `specs/WEB-RELAY.md`). The identity-chain fork auction that once accompanied this — a
-  once-current key re-bidding the head by forking from an ancestor where it was live — is
-  **closed**: identity chains are strictly linear per the pre-adoption linearity amendment
-  (PROTOCOL.md "Chain Validity", `specs/PROTOCOL.md`), so a rotated-out key has no path
-  back into the chain at all.
+  `specs/WEB-RELAY.md`). The chain itself is not at risk: identity chains are strictly
+  linear (PROTOCOL.md "Chain Validity", `specs/PROTOCOL.md`), so a rotated-out key has no
+  path back into the chain — there is no ancestor to fork from and no timestamp to bid.
 - **Delete is not a substitute for rotation.** `restore` requires only a controller key of
   the **deleted head state** (PROTOCOL.md "Identity Operations", `specs/PROTOCOL.md`). A
   thief holding a still-current controller key can therefore restore a deleted identity —

@@ -2,7 +2,7 @@
 
 Cryptographic identity verification for third-party applications — an Ed25519 challenge-response artifact, deliverable by a hosted web redirect or by a [sign-request](https://protocol.dfos.com/signing) mailbox. One artifact, two couriers, identical verification. Verification is pure crypto — no DFOS server in the loop after issuance.
 
-> **SIWD version 0.1.** Sign In With DFOS is an **optional authentication seam on its own `0.x` clock, independent of the Protocol v1 freeze** — it is **not part of the frozen protocol surface**. SIWD builds _on top of_ the frozen primitives (the identity chain, the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile), and [DFOS Credentials](https://protocol.dfos.com/credentials)) and may reference them, but the frozen protocol never depends on SIWD. This revision recasts SIWD as a **registered signing family**: the challenge proof is a `payloadTyp` under [SIGNING](https://protocol.dfos.com/signing), the web-redirect flow is one courier profile, and the sign-request mailbox is the other. The earlier localhost-CLI "sovereign path" is **removed** — its role is served by the mailbox profile. The challenge schema and verification rules below are protocol-normative for any SIWD verifier; the hosted endpoint and its custody model are **reference-implementation** details of a hosting platform, not normative requirements. Reference helpers live in [`@metalabel/dfos-client/siwd`](https://protocol.dfos.com) and `dfos-protocol-go`. Discuss in the [DFOS](https://nce.dfos.com) space.
+> **SIWD version 0.1.** Sign In With DFOS is an **optional authentication seam on its own `0.x` clock, independent of the Protocol v1 freeze** — it is **not part of the frozen protocol surface**. SIWD builds _on top of_ the frozen primitives (the identity chain, the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile), and [DFOS Credentials](https://protocol.dfos.com/credentials)) and may reference them, but the frozen protocol never depends on SIWD. SIWD is a **registered signing family**: the challenge proof is a `payloadTyp` under [SIGNING](https://protocol.dfos.com/signing), the web-redirect flow is one courier profile, and the sign-request mailbox is the other — self-custodied signing rides the mailbox. The challenge schema and verification rules below are protocol-normative for any SIWD verifier; the hosted endpoint and its custody model are **reference-implementation** details of a hosting platform, not normative requirements. Reference helpers live in [`@metalabel/dfos-client/siwd`](https://protocol.dfos.com) and `dfos-protocol-go`. Discuss in the [DFOS](https://nce.dfos.com) space.
 
 ---
 
@@ -47,7 +47,7 @@ The challenge is a JSON object:
 | `statement` | No       | Human-readable description shown to the user at consent. Requester-controlled text — see [Rendering the statement](#rendering-the-statement). |
 | `did`       | No       | If provided, binds the challenge to a specific DID. A signer MUST refuse to sign if its own DID does not match.                               |
 
-**Timestamps are whole-second.** Producers MUST normalize `timestamp` to the `.000Z` form (floor, never round) — the same normalization the sign-request envelope family applies. A strict signer validating this family rejects a sub-second timestamp as a schema violation. This removes the one canonicalization ambiguity that previously separated SIWD from the rest of the envelope family.
+**Timestamps are whole-second.** Producers MUST normalize `timestamp` to the `.000Z` form (floor, never round) — the same normalization the sign-request envelope family applies. A strict signer validating this family rejects a sub-second timestamp as a schema violation, so SIWD carries no canonicalization ambiguity the rest of the envelope family does not.
 
 The challenge is signed as a JWS using a key from the user's identity chain with `alg: "EdDSA"`. The JWS protected header MUST set `typ: "did:dfos:siwd"` — verifiers MUST reject any other `typ`. This follows the protocol's convention of typ-scoped envelopes (`did:dfos:identity-op`, `did:dfos:credential`, …) and is what lets a typ-routing verifier tell a SIWD proof apart from every other DFOS token; without the gate, a JWS signed for one purpose could be presented as another. The JWS `kid` header contains the DID URL of the signing key (`did:dfos:<id>#<keyId>`), following the same convention as identity and content chain operations.
 
@@ -84,7 +84,7 @@ https://dfos.com/authorize?
 | `scope`        | Yes                               | A single requested scope (one scope per authorization request)                         |
 | `client_did`   | When `scope` returns a credential | The third party's own DFOS DID — the `aud` any returned credential is issued to        |
 
-`client_did` closes a gap in the earlier revision, which promised credentials issued to "the third-party app's DID" while carrying no parameter that named it. The host MUST display `client_did` (or an identity resolved from it) alongside `domain` on the consent screen; the credential's audience binding is to the DID the user consented to, and `domain` remains the phishing-relevant binding (see [Security](#security-considerations)).
+`client_did` is what makes a credential-returning scope well-posed: the credential is issued to a named DID, not to an unnamed "the app." The host MUST display `client_did` (or an identity resolved from it) alongside `domain` on the consent screen; the credential's audience binding is to the DID the user consented to, and `domain` remains the phishing-relevant binding (see [Security](#security-considerations)).
 
 ### 2. Consent
 
@@ -108,7 +108,7 @@ If a credential was requested via `scope`, it is included as an additional param
   &credential=<DFOS credential JWS>
 ```
 
-> **Removed: the localhost sovereign path.** Earlier revisions specified a second redirect target (`http://localhost:8420/authorize`) where a local CLI signed. It was synchronous, port-squatting, and browser-to-localhost — the worst properties of both worlds. Self-custodied signing is now profile B: the same CLI holds the same key and polls a mailbox instead of listening on a port. The `localSigningEnabled` / `localSigningPort` settings and the `GET /health` preflight are gone with it.
+> **Why there is no localhost redirect target.** A browser-to-localhost signing hop (a CLI listening on a local port for the redirect) would be synchronous, port-squatting, and browser-to-localhost — the worst properties of both worlds. Self-custodied signing is deliberately profile B instead: the CLI holds the key and polls a mailbox, never a port.
 
 ---
 

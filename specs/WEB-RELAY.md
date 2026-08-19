@@ -4,7 +4,7 @@ An HTTP relay for the DFOS protocol — receives, verifies, stores, and serves i
 
 The **proof plane** (`/proof/v1/*`) is **frozen with Protocol v1** — see the [core protocol status](https://protocol.dfos.com/spec). The relay's other surfaces — ingestion ergonomics, peering, and the content plane — are reference-implementation behavior on their own clock, not frozen. Discuss in the [DFOS](https://nce.dfos.com) space.
 
-> **Wire stability.** The non-frozen relay surfaces — well-known, countersignature reads, `/revocations/v1`, and the content plane — went through one deliberate pre-adoption breaking amendment to close the window on breaking changes. Countersignature reads now use one route, `/revocations/v1` is frozen at v1 with a bounded issuer feed, the redundant documents route is removed, and every list route uses one `limit` + `after` + `next` cursor paradigm. Breaking once now, while there are no external adopters, protects future adopters from integrating against transient shapes.
+> **Wire stability.** The non-frozen relay surfaces hold one uniform shape: countersignature reads use a single route, `/revocations/v1` is frozen at v1 with a bounded issuer feed, and every list route uses the same `limit` + `after` + `next` cursor paradigm. Adopters integrate against one pagination contract, never per-route variants.
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-web-relay) · [npm](https://www.npmjs.com/package/@metalabel/dfos-web-relay) · [Protocol](https://protocol.dfos.com)
 
@@ -187,7 +187,7 @@ Specifically:
 - **Credentials from deleted issuers**: Rejected. Identity deletion suspends all authority, including outstanding DFOS credentials issued by the deleted identity. Credentials that were valid at time of issuance cease to be honored while the issuer is deleted.
 - **Countersignatures from deleted witnesses**: Rejected. A deleted identity MUST NOT publish new countersignatures. Countersignatures on operations by deleted authors are still accepted — deletion of the target's author does not prevent other identities from attesting.
 
-**Restore resurrects, revocation terminates.** Deletion is a suspension of authority, reversible by `restore`; revocation is permanent. After a valid restore, credentials issued by the identity **before the delete are honored again** (they were never revoked — their issuer was suspended), the identity's chains accept operations again, and artifacts and countersignatures flow again. A credential the issuer actually revoked stays revoked forever, restore or not. This is byte-identical to what undeletion previously implied — no new semantic surface, only an explicit operation where a fork used to be.
+**Restore resurrects, revocation terminates.** Deletion is a suspension of authority, reversible by `restore`; revocation is permanent. After a valid restore, credentials issued by the identity **before the delete are honored again** (they were never revoked — their issuer was suspended), the identity's chains accept operations again, and artifacts and countersignatures flow again. A credential the issuer actually revoked stays revoked forever, restore or not.
 
 Self-countersignatures — where the witness DID matches the target's author DID — are rejected at the relay level. A countersignature's semantic is "a distinct witness attests." The protocol-level verifier is stateless and does not enforce this; the relay resolves the target's author and rejects self-attestation.
 
@@ -526,7 +526,7 @@ The optional `:ref` parameter selects which operation's document to return:
 
 ### Enumerating a Chain's Documents
 
-The former relay-side list route was removed because it was only a relay-decoded convenience over state the client can re-derive verifiably. Fetch `GET /content/:contentId/blob` for the document at head, `GET /content/:contentId/blob/:ref` for the document any specific operation committed (immutable), and `GET /proof/v1/content/:contentId/log` to enumerate the chain's operations, each carrying its `documentCID`. This composition is strictly more verifiable: every blob is checked against its committed `documentCID`, and the op log is the frozen proof-plane enumeration.
+There is deliberately no relay-side document list route — it would only be a relay-decoded convenience over state the client can re-derive verifiably. Fetch `GET /content/:contentId/blob` for the document at head, `GET /content/:contentId/blob/:ref` for the document any specific operation committed (immutable), and `GET /proof/v1/content/:contentId/log` to enumerate the chain's operations, each carrying its `documentCID`. This composition is strictly more verifiable: every blob is checked against its committed `documentCID`, and the op log is the frozen proof-plane enumeration.
 
 ### Standing Authorization
 
