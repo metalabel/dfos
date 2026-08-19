@@ -302,11 +302,12 @@ dfos api POST /proof/v1/operations --body-file ops.json --auth
 
 ## Destructive operations & key survival
 
-**Destructive commands run immediately and irreversibly — no prompt, no undo.**
-`identity delete`, `content delete`, and key rotation sign and (with `--peer`)
-publish the moment you run them. A delete is the only terminal state for a chain:
-no further operations may follow it, though the existing log remains for
-verification. Double-check the target and `--peer` first.
+**Destructive commands run immediately — no prompt.** `identity delete`,
+`identity restore`, `content delete`, and key rotation sign and (with `--peer`)
+publish the moment you run them. Identity delete suspends signing and only
+`identity restore` may immediately follow it; content delete remains terminal.
+The existing log remains for verification. Double-check the target and `--peer`
+first.
 
 **Key loss is unrecoverable but survivable — set up redundancy in advance.** There
 is no seed phrase or recovery flow. Availability is a multi-key story: an identity

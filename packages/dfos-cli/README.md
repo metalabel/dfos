@@ -150,7 +150,8 @@ dfos content publish <id> --peer prod   # submit when ready
 | `identity publish`          | Submit to a relay                           |
 | `identity fetch`            | Download from a relay                       |
 | `identity update`           | Rotate keys / set services                  |
-| `identity delete`           | Permanently delete identity                 |
+| `identity delete`           | Delete identity (restorable)                |
+| `identity restore`          | Restore a deleted identity                  |
 | `identity log`              | Show operation history                      |
 | `identity remove`           | Drop a name from config (data stays)        |
 | `content create`            | Create content chain                        |
