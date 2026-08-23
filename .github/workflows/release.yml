@@ -80,6 +80,11 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Publish @metalabel/dfos-client
+        run: pnpm --filter @metalabel/dfos-client publish --no-git-checks --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   release-goreleaser:
     needs: [validate, test]
     runs-on: ubuntu-latest
