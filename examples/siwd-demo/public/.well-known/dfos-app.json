@@ -1,0 +1,5 @@
+{
+  "name": "SIWD Demo",
+  "client_did": "did:dfos:8zk83zez862n6ahnvt3h3e4kc4n2dke",
+  "redirect_uris": ["https://dfos-siwd-demo.vercel.app/"]
+}

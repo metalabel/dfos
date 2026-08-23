@@ -70,18 +70,17 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Publish @metalabel/dfos-protocol
-        run: pnpm --filter @metalabel/dfos-protocol publish --no-git-checks --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish @metalabel/dfos-web-relay
-        run: pnpm --filter @metalabel/dfos-web-relay publish --no-git-checks --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish @metalabel/dfos-client
-        run: pnpm --filter @metalabel/dfos-client publish --no-git-checks --access public --provenance
+      - name: Publish packages (skipping already-published versions)
+        run: |
+          for dir in dfos-protocol dfos-web-relay dfos-client; do
+            pkg=$(node -p "require('./packages/$dir/package.json').name")
+            ver=$(node -p "require('./packages/$dir/package.json').version")
+            if npm view "$pkg@$ver" version >/dev/null 2>&1; then
+              echo "$pkg@$ver already on npm — skipping"
+            else
+              pnpm --filter "$pkg" publish --no-git-checks --access public --provenance
+            fi
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
