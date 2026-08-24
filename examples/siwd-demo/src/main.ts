@@ -2,18 +2,29 @@
 
   Sign In With DFOS — demo relying party
 
-  The smallest possible SIWD client: one page, no server, no secrets, no session
-  backend. The load-bearing fact is that verification is PURE CLIENT-SIDE CRYPTO
-  against a public relay — `verifySiwd` resolves the signer's identity chain and
-  checks the signing key is a CURRENT authKey, so nothing here has to trust the
-  platform that ran the consent screen. The second: `expect` lives in
-  sessionStorage because the whole "session" is this tab — minted on the sign-in
-  click, consumed on the way back, never sent anywhere. See specs/SIWD.md
-  §Profile A.
+  The smallest possible SIWD client: one page, no secrets, no session store. The
+  load-bearing fact is that verification is CRYPTO AGAINST A PUBLIC RELAY —
+  `verifySiwd` resolves the signer's identity chain and checks the signing key is
+  a CURRENT authKey, so nothing here has to trust the platform that ran the
+  consent screen. See specs/SIWD.md §Profile A.
 
-  Three kit functions carry the whole flow: `createSiwdLoginRequest` mints and
-  builds the redirect, `readSiwdCallback` reads the return, `verifySiwd` decides
-  whether to believe it. Everything else in this file is DOM.
+  TWO SIGN-IN PATHS, which are the two tiers of the README's trust ladder:
+
+    client  — the nonce is minted in this tab and the JWS is verified in this
+              tab. `expect` rides through the redirect in sessionStorage,
+              because the whole "session" is this tab: minted on the click,
+              consumed on the way back, never sent anywhere.
+
+    backend — the nonce is minted by `api/nonce.ts` and held in an HttpOnly
+              cookie; the JWS is POSTed to `api/verify.ts` and verified in Node.
+              The browser is the party being authenticated, so it cannot also be
+              the party deciding it passed — which is the whole reason tier 2
+              exists the moment a backend grants anything.
+
+  Three kit functions carry both paths: `createSiwdLoginRequest` mints and builds
+  the redirect, `readSiwdCallback` reads the return, `verifySiwd` decides whether
+  to believe it. The only thing that changes between tiers is WHERE the last one
+  runs. Everything else in this file is DOM.
 
 */
 
@@ -40,7 +51,26 @@ const CLIENT_DID = 'did:dfos:8zk83zez862n6ahnvt3h3e4kc4n2dke';
 /** Where the source of the two files that ARE this flow lives. */
 const REPO = 'https://github.com/metalabel/dfos/blob/main';
 
-const EXPECT_KEY = 'siwd-demo-expect';
+const PENDING_KEY = 'siwd-demo-pending';
+
+/**
+ * The two tiers of the README's trust ladder, both wired up for real.
+ *
+ * `client` — the nonce is minted in this tab and the JWS is verified in this
+ * tab. Sound exactly when nothing is granted on the strength of the DID.
+ *
+ * `backend` — the nonce is minted by this demo's serverless function and kept
+ * in an HttpOnly cookie; the JWS is POSTed there and verified in Node. This is
+ * the shape any app with a real API behind it needs, because the browser is
+ * the party being authenticated and cannot also be the one deciding it passed.
+ */
+type SignInMode = 'client' | 'backend';
+
+/** What survives the redirect: which tier started it, and (tier 1) what to expect. */
+interface PendingSignIn {
+  mode: SignInMode;
+  expect: SiwdLoginRequest['expect'];
+}
 
 /**
  * Hosts that ride the platform's loopback tier (`npm run dev`). A local port
@@ -57,6 +87,33 @@ interface PublicProfile {
   displayName?: string | null;
   avatarUrl?: string | null;
   bio?: string | null;
+}
+
+/**
+ * A verified sign-in, from either tier — the shape the signed-in view and the
+ * receipts render. The backend tier deliberately returns less than the client
+ * tier holds: the nonce lived in a cookie this page could never read, and
+ * echoing it back would hand the browser the one value it was never allowed to
+ * choose.
+ */
+interface VerifiedSignIn {
+  mode: SignInMode;
+  did: string;
+  domain: string;
+  timestamp: string;
+  kid: string;
+  /** Tier 1 only — the nonce this tab minted and consumed. */
+  nonce?: string;
+  /** Tier 2 only — what the backend says about where a session would be minted. */
+  note?: string;
+}
+
+/** The success shape of `POST /api/verify`. */
+interface BackendVerifyResponse {
+  ok: boolean;
+  session?: { did: string; domain: string; timestamp: string; kid: string };
+  note?: string;
+  error?: string;
 }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -138,12 +195,47 @@ const whatHappensNext = (): HTMLElement => {
   return list;
 };
 
+/**
+ * Tier 2, offered quietly under the main path. Same redirect, same artifact —
+ * the difference is entirely in WHO mints the nonce and WHO verifies, which is
+ * the only difference that matters once a backend starts granting things.
+ */
+const backendOption = (): HTMLElement => {
+  const wrap = el('p', 'secondary-option');
+  const button = el('button', 'secondary', 'Sign in with backend verification');
+  button.addEventListener('click', () => {
+    void startSignIn('backend');
+  });
+
+  const caption = el('span', 'dim');
+  caption.textContent =
+    'Same flow, but the nonce comes from — and the signed challenge is verified ' +
+    'by — this demo’s serverless backend. Tier 2 of the trust ladder in the README.';
+
+  wrap.append(button, el('br'), caption);
+
+  if (LOOPBACK_HOSTS.has(location.hostname)) {
+    wrap.append(
+      el('br'),
+      el(
+        'span',
+        'dim',
+        'Locally this one needs `vercel dev` — the plain dev server serves the ' +
+          'static page only, so the functions are not running.',
+      ),
+    );
+  }
+  return wrap;
+};
+
 const renderSignedOut = (notice?: string): void => {
   const button = el('button', undefined, 'Sign in with DFOS');
-  button.addEventListener('click', signIn);
+  button.addEventListener('click', () => {
+    void startSignIn('client');
+  });
   const aside = el('p', 'dim');
   aside.append(
-    'This site has no server and no secrets — verification is pure client-side crypto against a public relay. ',
+    'This site has no secrets and no session store — the default path verifies entirely in your browser, against a public relay. ',
     link(
       'https://github.com/metalabel/dfos/tree/main/examples/siwd-demo',
       'This demo site is open source',
@@ -160,7 +252,7 @@ const renderSignedOut = (notice?: string): void => {
         'challenge in your browser against your public identity chain.',
     ),
     ...(notice !== undefined ? [el('p', 'notice', notice)] : []),
-    card(button, whatHappensNext()),
+    card(button, whatHappensNext(), backendOption()),
     aside,
   );
 };
@@ -210,23 +302,50 @@ const artifactReceipt = (jws: string): Node[] => {
 
 /**
  * One line per check `verifySiwd` ran. These are rendered FROM the verified
- * session — the checks already happened inside the kit, and re-running them
- * here would be theatre, not evidence.
+ * result — the checks already happened inside the kit, and re-running them here
+ * would be theatre, not evidence.
+ *
+ * The same six checks run in both tiers, because it is the same function. Only
+ * WHERE it ran, and where the nonce lived, differ.
  */
-const checklistReceipt = (session: SiwdSession): Node[] => {
-  const keyId = session.kid.slice(session.kid.indexOf('#') + 1);
+const checklistReceipt = (verified: VerifiedSignIn): Node[] => {
+  const backend = verified.mode === 'backend';
+  const keyId = verified.kid.slice(verified.kid.indexOf('#') + 1);
+
+  const nonceLine = backend
+    ? 'Nonce matches the one the backend minted — carried in an HttpOnly cookie this page could never read, and consumed server-side.'
+    : `Nonce matches the one this page minted, single use and now consumed: ${verified.nonce}`;
+
   const list = el('ul', 'checks');
   for (const line of [
     'Identity chain resolved from the relay and replayed to current state — fresh, not cached (a stale resolution fails closed).',
     `Signing key is a CURRENT authentication key of a non-deleted identity: ${keyId}`,
     'Signature valid under the DFOS JWS profile (EdDSA, canonical scalar, no embedded key).',
-    `Nonce matches the one this page minted, single use and now consumed: ${session.nonce}`,
-    `Domain binding: the signed domain is this site — ${session.domain}`,
-    `Timestamp inside the acceptance window: ${session.timestamp}`,
+    nonceLine,
+    `Domain binding: the signed domain is this site — ${verified.domain}`,
+    `Timestamp inside the acceptance window: ${verified.timestamp}`,
   ]) {
     list.append(el('li', undefined, line));
   }
-  return receiptSection('What was checked', list);
+
+  const body: Node[] = [list];
+  if (backend) {
+    if (verified.note !== undefined) body.push(el('p', 'dim', verified.note));
+  } else {
+    body.push(
+      el(
+        'p',
+        'dim',
+        'This same verification, run server-side instead: the second sign-in ' +
+          'button on the signed-out page.',
+      ),
+    );
+  }
+
+  return receiptSection(
+    backend ? 'What was checked — in Node, on the backend' : 'What was checked — in this tab',
+    ...body,
+  );
 };
 
 /** Every claim above, independently checkable by the reader. */
@@ -267,26 +386,30 @@ const sourceReceipt = (): Node[] =>
     ),
   );
 
-const receipts = (jws: string, session: SiwdSession): HTMLElement => {
+const receipts = (jws: string, verified: VerifiedSignIn): HTMLElement => {
   const details = el('details');
   details.append(
     el('summary', undefined, 'Show the receipts'),
     ...artifactReceipt(jws),
-    ...checklistReceipt(session),
-    ...lookItUpReceipt(session.did),
+    ...checklistReceipt(verified),
+    ...lookItUpReceipt(verified.did),
     ...sourceReceipt(),
   );
   return details;
 };
 
-const renderSignedIn = (session: SiwdSession, jws: string, profile: PublicProfile | null): void => {
+const renderSignedIn = (
+  verified: VerifiedSignIn,
+  jws: string,
+  profile: PublicProfile | null,
+): void => {
   const signOut = el('button', undefined, 'Sign out');
   signOut.addEventListener('click', () => {
     sessionStorage.clear();
     renderSignedOut();
   });
 
-  const did = session.did;
+  const did = verified.did;
   const body: Node[] = [];
 
   const avatar = httpsUrl(profile?.avatarUrl);
@@ -318,7 +441,7 @@ const renderSignedIn = (session: SiwdSession, jws: string, profile: PublicProfil
   }
 
   body.push(signOut);
-  render(el('h1', undefined, 'Signed in with DFOS'), card(...body), receipts(jws, session));
+  render(el('h1', undefined, 'Signed in with DFOS'), card(...body), receipts(jws, verified));
 };
 
 // -----------------------------------------------------------------------------
@@ -338,7 +461,36 @@ const EXPIRED_NOTICE =
 const isExpiredReason = (reason: string): boolean =>
   reason.includes('expired') || reason.includes('challenge has expired');
 
-const signIn = (): void => {
+/**
+ * Tier 2 step 1: ask the backend for a nonce. It also sets that nonce in an
+ * HttpOnly cookie — its own memory of what it issued — which this page can
+ * neither read nor forge, and which is why the verification it does later is
+ * worth anything.
+ */
+const mintBackendNonce = async (): Promise<string> => {
+  const response = await fetch('/api/nonce', { credentials: 'same-origin' });
+  if (!response.ok) throw new Error(`/api/nonce returned ${response.status}`);
+  const body = (await response.json()) as { nonce?: unknown };
+  if (typeof body.nonce !== 'string' || body.nonce === '') {
+    throw new Error('/api/nonce did not return a nonce');
+  }
+  return body.nonce;
+};
+
+const startSignIn = async (mode: SignInMode): Promise<void> => {
+  let nonce: string | undefined;
+  if (mode === 'backend') {
+    try {
+      nonce = await mintBackendNonce();
+    } catch (err) {
+      renderSignedOut(
+        `Could not reach the demo backend: ${errorMessage(err)}. ` +
+          'The backend path needs the deployed demo or `vercel dev`.',
+      );
+      return;
+    }
+  }
+
   const request: SiwdLoginRequest = createSiwdLoginRequest({
     authorizeUrl: AUTHORIZE_URL,
     domain: location.hostname,
@@ -349,11 +501,16 @@ const signIn = (): void => {
     // the kit drops this for a loopback redirect on its own; the demo only
     // decides whether it has a provable DID to assert at all
     ...(LOOPBACK_HOSTS.has(location.hostname) ? {} : { clientDid: CLIENT_DID }),
+    // tier 2: the challenge carries the nonce the BACKEND minted, so the
+    // signature comes back bound to a value only the backend ever chose
+    ...(nonce !== undefined ? { nonce } : {}),
   });
 
-  // `expect` is the one thing that must survive the redirect: domain + nonce
-  // (+ did when bound), which is exactly what `verifySiwd` takes back.
-  sessionStorage.setItem(EXPECT_KEY, JSON.stringify(request.expect));
+  // `expect` is the one thing tier 1 needs to survive the redirect: domain +
+  // nonce (+ did when bound), which is exactly what `verifySiwd` takes back.
+  // Tier 2 keeps it only for display — its verification uses the cookie.
+  const pending: PendingSignIn = { mode, expect: request.expect };
+  sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
   location.href = request.url;
 };
 
@@ -370,43 +527,95 @@ const verify = async (
   }
 };
 
+/**
+ * Tier 2 step 2: hand the artifact to the backend. The body carries the JWS and
+ * NOTHING else — no DID, no nonce. `credentials: 'same-origin'` is what lets
+ * the nonce cookie ride along, and it is the only way the backend learns what
+ * to expect.
+ */
+const verifyOnBackend = async (jws: string): Promise<VerifiedSignIn | string> => {
+  let response: Response;
+  try {
+    response = await fetch('/api/verify', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jws }),
+    });
+  } catch (err) {
+    return `could not reach the demo backend: ${errorMessage(err)}`;
+  }
+
+  let body: BackendVerifyResponse;
+  try {
+    body = (await response.json()) as BackendVerifyResponse;
+  } catch {
+    return `the backend returned an unreadable response (${response.status})`;
+  }
+
+  if (!response.ok || !body.ok || body.session === undefined) {
+    return body.error ?? `verification failed (${response.status})`;
+  }
+
+  return {
+    mode: 'backend',
+    ...body.session,
+    ...(body.note !== undefined ? { note: body.note } : {}),
+  };
+};
+
 const handleCallback = async (jws: string): Promise<void> => {
-  // the expectation is single-use: consumed here, pass or fail
-  const saved = sessionStorage.getItem(EXPECT_KEY);
-  sessionStorage.removeItem(EXPECT_KEY);
+  // the pending sign-in is single-use: consumed here, pass or fail
+  const saved = sessionStorage.getItem(PENDING_KEY);
+  sessionStorage.removeItem(PENDING_KEY);
   if (saved === null) {
     renderSignedOut('There is no pending sign-in in this tab — start over.');
     return;
   }
+  const pending = JSON.parse(saved) as PendingSignIn;
 
-  renderStatus('Verifying…');
-  const result = await verify(jws, JSON.parse(saved) as SiwdLoginRequest['expect']);
+  renderStatus(pending.mode === 'backend' ? 'Verifying on the backend…' : 'Verifying in this tab…');
+
+  if (pending.mode === 'backend') {
+    const verified = await verifyOnBackend(jws);
+    if (typeof verified === 'string') {
+      renderSignedOut(
+        isExpiredReason(verified) ? EXPIRED_NOTICE : `Verification failed: ${verified}`,
+      );
+      return;
+    }
+    await renderProfile(verified, jws);
+    return;
+  }
+
+  const result = await verify(jws, pending.expect);
   if (!result.ok || result.value === undefined) {
     const reason = result.error ?? 'unknown error';
     renderSignedOut(isExpiredReason(reason) ? EXPIRED_NOTICE : `Verification failed: ${reason}`);
     return;
   }
 
-  await renderProfile(result.value, jws);
+  const { did, domain, timestamp, kid, nonce } = result.value;
+  await renderProfile({ mode: 'client', did, domain, timestamp, kid, nonce }, jws);
 };
 
 /**
  * The DID here comes from the VERIFIED session. The callback's `?did=` param is
  * unauthenticated courier convenience and is deliberately never read.
  */
-const renderProfile = async (session: SiwdSession, jws: string): Promise<void> => {
+const renderProfile = async (verified: VerifiedSignIn, jws: string): Promise<void> => {
   renderStatus('Loading profile…');
 
   let response: Response;
   try {
-    response = await fetch(`${PUBLIC_API_URL}/users/${encodeURIComponent(session.did)}`);
+    response = await fetch(`${PUBLIC_API_URL}/users/${encodeURIComponent(verified.did)}`);
   } catch (err) {
     renderSignedOut(`Signed in, but the profile lookup failed: ${errorMessage(err)}`);
     return;
   }
 
   if (response.status === 404) {
-    renderSignedIn(session, jws, null);
+    renderSignedIn(verified, jws, null);
     return;
   }
   if (!response.ok) {
@@ -416,7 +625,7 @@ const renderProfile = async (session: SiwdSession, jws: string): Promise<void> =
 
   try {
     const profile = (await response.json()) as PublicProfile;
-    renderSignedIn(session, jws, profile);
+    renderSignedIn(verified, jws, profile);
   } catch (err) {
     renderSignedOut(`Signed in, but the profile response was unreadable: ${errorMessage(err)}`);
   }
