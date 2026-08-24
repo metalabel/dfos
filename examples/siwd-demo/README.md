@@ -3,30 +3,32 @@
 ## What this is
 
 The smallest possible Sign In With DFOS relying party: one static page, no
-secrets, no session backend, and no SDK beyond
+secrets, no backend, no session store, and no SDK beyond
 [`@metalabel/dfos-client`](https://www.npmjs.com/package/@metalabel/dfos-client)
 installed from npm like any third party would. Deployed at
 <https://dfos-siwd-demo.vercel.app>.
 
-It offers two sign-in paths, which are the two tiers of the
-[trust ladder](#verification-trust-ladder) below. The default one verifies
-entirely in your browser and touches no server at all. The second adds two tiny
-serverless functions so verification happens where a real app would grant a
-session — still no secrets, and still no server-side state: the only thing the
-backend remembers is a nonce, and it remembers it in a cookie.
+Verification runs **in your browser, against a public relay**. No DFOS platform
+server is contacted to check the signature: the only network hop is to a relay,
+and the relay is untrusted — the crypto is what convinces us. Three functions
+from `@metalabel/dfos-client/siwd` carry the whole flow, and everything else in
+`src/main.ts` is DOM.
+
+**The authorize request carries three params:** `challenge`, `redirect_uri`, and
+`scope=identity`. It does **not** send `client_did`, and that is deliberate. The
+platform learns who this app is by fetching `/.well-known/dfos-app.json` from the
+redirect's own origin — the served file _is_ the app identity, and the request
+param is only an optional assertion that has to agree with it. What `client_did`
+actually determines is the `aud` of a returned credential
+([SIWD.md §Client identity](../../specs/SIWD.md#client-identity-client_did)), and
+an identity-scope sign-in returns none. So an RP that only wants to know who you
+are gains nothing by sending one, and gains one more thing to keep in sync.
 
 ## How it works
 
-Three functions from `@metalabel/dfos-client/siwd` carry the whole flow —
-`createSiwdLoginRequest` mints and builds the redirect, `readSiwdCallback` reads
-the return, `verifySiwd` decides whether to believe it. Everything else in
-`src/main.ts` is DOM.
-
 1. **Mint and redirect.** The sign-in click calls `createSiwdLoginRequest`, which
    returns the `/authorize` URL to navigate to — carrying `challenge`,
-   `redirect_uri`, `scope=identity`, and `client_did` — plus an `expect` object.
-   It omits `client_did` by itself for a loopback redirect, because a local port
-   cannot prove one.
+   `redirect_uri`, and `scope=identity` — plus an `expect` object.
 2. **Persist `expect`.** `request.expect` is `{ domain, nonce }` (plus `did` when
    the challenge is bound to one): exactly what `verifySiwd` takes back, in one
    JSON-serializable value. The demo stores it in `sessionStorage` and rehydrates
@@ -43,9 +45,6 @@ the return, `verifySiwd` decides whether to believe it. Everything else in
    the signing key is a **current** `authKeys` entry of a non-deleted identity —
    plus the nonce, the domain, and the timestamp window. Only then does the page
    fetch that DID's public profile and render it.
-
-No DFOS platform server is contacted during verification: the only network hop
-is to a relay, and the relay is untrusted — the crypto is what convinces us.
 
 Sign in and open **"Show the receipts"** to see the decoded artifact, the list of
 checks that ran, and links to look the same chain up yourself.
@@ -66,8 +65,45 @@ Spec: [`specs/SIWD.md`](../../specs/SIWD.md) · <https://protocol.dfos.com/siwd>
 
 There is no developer portal and no client secret. Serving that file over https
 from the domain you control **is** the registration — domain control is the
-credential. The platform fetches it live at authorize time (the JIT tier), and
-`redirect_uris` is an **exact-match** allowlist, trailing slash included.
+credential. The platform fetches it live at authorize time (the JIT tier of
+[SIWD.md §Redirect URI validation](../../specs/SIWD.md#redirect-uri-validation-profile-a)),
+and `redirect_uris` is an **exact-match** allowlist, trailing slash included.
+`name` is rendered on the consent screen as the app's own claim about itself, and
+the consent screen says so — nothing in the protocol vouches for it; the domain
+is what the user is being asked to trust.
+
+`client_did` is optional at identity scope. Add one to name your app's own
+identity (mint it with `dfos identity create`); it becomes required only when
+credential-returning scopes arrive, because a credential has to be issued _to_
+someone.
+
+**The page checks its own registration at boot.** It fetches its
+`/.well-known/dfos-app.json` and looks for its exact redirect target in
+`redirect_uris`. If the file is missing, or the string is not in it, the page
+says so — naming the exact string and the exact file — before you click
+anything. The sign-in button stays live either way: the host's refusal is part of
+the lesson, and the notice just tells you why it is about to happen.
+
+## Fork it
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmetalabel%2Fdfos%2Ftree%2Fmain%2Fexamples%2Fsiwd-demo&project-name=dfos-siwd-demo&repository-name=dfos-siwd-demo)
+
+That clones this directory alone into your own repo and deploys it. Then make
+**one edit** — put your deployment's origin in `redirect_uris`, exactly, with the
+trailing slash:
+
+```json
+{ "redirect_uris": ["https://your-app.example.com/"] }
+```
+
+Commit, redeploy, done. If you forget, the page tells you: the boot self-check
+renders the exact string it needs to see. Update `name` too while you are there —
+it is what your users read at consent.
+
+Preview-deploy URLs are **not** in the allowlist, by design. Each preview gets a
+fresh hostname, and an allowlist that admitted arbitrary subdomains would be an
+open redirector wearing a JSON file. Sign-in works on the origins you listed;
+everywhere else the page says which string is missing.
 
 ## Run it locally
 
@@ -76,69 +112,63 @@ npm install
 npm run dev
 ```
 
-Sign-in works unchanged in dev without any well-known file: `http://localhost:5173/`
-is accepted as a redirect target for `scope=identity` under the loopback tier
-(the RFC 8252 posture — a loopback address cannot be hijacked by a remote
-attacker the way a registered https redirect can). One asymmetry: a local port
-cannot prove a client identity either, so the demo omits `client_did` on
-loopback hosts — the platform rejects one there by design.
+Sign-in works unchanged in dev with **no well-known file at all**:
+`http://localhost:5173/` is accepted as a redirect target for `scope=identity`
+under the loopback tier (the RFC 8252 posture — an application on the user's own
+machine holds no domain, so the binding a hosted redirect asserts is one no host
+could ever check; rather than refuse the case, the host consents to it under its
+own tier and says plainly what it is). The boot self-check knows this and skips
+itself on a loopback host.
 
-## Verification trust ladder
+## When your backend grants anything
 
-**Tier 1 — this demo.** Verification runs in the browser and the session is held
-in the tab. This is sound exactly when your backend grants **nothing** on the
-strength of the DID: a public client with no privileged API behind it, the same
-trust shape OAuth blesses for SPAs with PKCE.
+This demo verifies in the browser, which is sound for exactly one reason:
+**nothing is granted here.** There is no API behind it and no session to mint —
+the same trust shape OAuth blesses for SPAs with PKCE. The moment a backend
+grants something, verification has to move to where the granting happens.
 
-**Tier 2 — the moment a backend grants anything.** Verification moves server-side,
-and **this demo runs it**: the second sign-in button takes the tier-2 path through
-two serverless functions.
+Two rules make that non-negotiable, both from
+[SIWD.md §Security Considerations](../../specs/SIWD.md#security-considerations):
 
-- `GET /api/nonce` mints a nonce, returns it, and sets it in an `HttpOnly`
-  cookie — how the backend remembers what it issued across the redirect.
-- The page puts that nonce in the challenge (`createSiwdLoginRequest({ …, nonce })`)
-  and redirects as usual.
-- On return the page POSTs `{ jws }` to `POST /api/verify`. The body carries the
-  JWS and nothing else; the cookie rides along on its own.
-- The function reads the nonce **from the cookie, never from the body**, and runs
-  the same `verifySiwd` in Node.
+- **A bare DID is an address, not a proof.** An endpoint that accepts `{ did }`
+  from a client and believes it has authenticated nobody — anyone can type any
+  DID. Verification of the JWS MUST happen wherever the session is granted; if
+  the two are split across a trust boundary, carry the verdict across it, not the
+  identifier.
+- **The verifier MUST have minted the nonce it checks.** A verifier that reads
+  the expected nonce out of the request it is verifying is comparing a value
+  against itself. An attacker replaying a captured JWS supplies the nonce that
+  JWS already contains, and the comparison passes trivially.
 
-Two rules make this shape non-negotiable. **A bare DID is an address, not a
-proof**: an endpoint that accepts `{ did }` from a client and believes it has
-authenticated nobody, because anyone can type any DID. And **the presenter never
-chooses the expectation**: a verifier that reads the expected nonce out of the
-request it is verifying is comparing a value against itself.
-
-**What this demo does not do, and your app must.** The cookie is a carrier, not a
-replay defense: the nonce travels inside the signed challenge, so anyone holding
-a JWS can read it out of the payload and send it back in a `Cookie` header of
-their own — `HttpOnly` constrains browser scripts, not `curl`. Making a nonce
-single-use requires server-side consumption, which requires a store, which a
-zero-infrastructure demo does not have. The missing line is one atomic read:
+And a nonce is only a replay defense once it is **consumed atomically** — read
+and deleted in one operation, so two concurrent replays cannot both win. The kit
+takes that as a callback:
 
 ```js
-const fresh = await store.getdel(nonce); // Redis GETDEL, KV, a row — but atomic
-if (!fresh) return unauthorized('nonce already used');
+const result = await verifySiwd(client, jws, {
+  domain,
+  consumeNonce: (nonce) => store.getdel(nonce), // Redis GETDEL, KV, a deleted row — but atomic
+});
 ```
 
-[`specs/SIWD.md`](../../specs/SIWD.md) §Security Considerations makes that a
-**MUST** for third parties. Without it this demo accepts replay bounded only by
-the acceptance window, and says so at the call site rather than implying the
-cookie covers it. Production adds that store — and the session mint, which needs
-a signing secret this repo deliberately does not carry.
-
-Run the functions locally with `vercel dev`; the plain `npm run dev` static
-server exercises tier 1 only.
+`consumeNonce` ships in `@metalabel/dfos-client` ≥ 0.31. A non-atomic
+read-then-delete is not a substitute: it is a race with a login in it. Verify,
+consume, then mint **your own** session and discard the JWS — a signed challenge
+is a one-shot authentication proof, not a bearer token.
 
 ## Security notes
 
 - The `expect` object is removed from `sessionStorage` before verification runs,
   so this tab cannot reuse it pass or fail. That is tab hygiene, not a replay
-  defense — see the tier-2 note above for what a real one costs.
+  defense — a real one is server-side consumption, above.
 - The `?did=` callback param is **never trusted**. The DID rendered and looked
   up is the one inside the verified JWS.
-- Every string that reaches the DOM from the URL, the API, or the JWS is
-  untrusted text: it is set with `textContent`, never `innerHTML`.
+- The JWS is scrubbed out of the address bar with `history.replaceState` the
+  moment it is read, so it does not linger in history or in the referrer of
+  anything the page loads next.
+- Every string that reaches the DOM from the URL, the API, the JWS, or the
+  served well-known file is untrusted text: it is set with `textContent`, never
+  `innerHTML`.
 - A signed challenge is a **one-shot authentication proof, not a bearer token**.
   A real app establishes its own session after verification and discards the
   JWS; this demo has no session at all, which is why a refresh signs you out.
@@ -147,13 +177,12 @@ server exercises tier 1 only.
 
 All of them live at the top of `src/main.ts`:
 
-| Constant         | Value                                      |
-| ---------------- | ------------------------------------------ |
-| `AUTHORIZE_URL`  | `https://app.dfos.com/authorize`           |
-| `RELAY_URL`      | `https://relay.dfos.com`                   |
-| `PUBLIC_API_URL` | `https://api.dfos.com/v1`                  |
-| `EXPLORER_URL`   | `https://explore.dfos.com`                 |
-| `CLIENT_DID`     | `did:dfos:8zk83zez862n6ahnvt3h3e4kc4n2dke` |
+| Constant         | Value                            |
+| ---------------- | -------------------------------- |
+| `AUTHORIZE_URL`  | `https://app.dfos.com/authorize` |
+| `RELAY_URL`      | `https://relay.dfos.com`         |
+| `PUBLIC_API_URL` | `https://api.dfos.com/v1`        |
+| `EXPLORER_URL`   | `https://explore.dfos.com`       |
 
 (`EXPLORER_URL` is only used by the receipts panel, to hand you a second,
 independent verifier for the same chain.)

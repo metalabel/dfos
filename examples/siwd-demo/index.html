@@ -43,22 +43,18 @@
         font: inherit;
         padding: 0.6rem 1rem;
       }
-      /* The tier-2 path is offered, not pushed: same control, quieter weight. */
-      button.secondary {
-        background: transparent;
-        border: 1px solid #ddd;
-        color: #111;
-        font-size: 0.875rem;
-        padding: 0.45rem 0.8rem;
-      }
-      .secondary-option {
+      /* A quieter block under the main content of a card — separated, not boxed,
+         so the page stays one column of 28rem rather than a stack of frames. */
+      .section {
         border-top: 1px solid #eee;
         margin: 1.25rem 0 0;
         padding-top: 1rem;
       }
-      .secondary-option .dim {
-        display: inline-block;
-        margin-top: 0.5rem;
+      .section p {
+        margin: 0.5rem 0 0;
+      }
+      .section p:first-child {
+        margin-top: 0;
       }
       code {
         font-size: 0.8125rem;

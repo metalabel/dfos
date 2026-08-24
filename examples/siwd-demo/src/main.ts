@@ -2,40 +2,37 @@
 
   Sign In With DFOS — demo relying party
 
-  The smallest possible SIWD client: one page, no secrets, no session store. The
-  load-bearing fact is that verification is CRYPTO AGAINST A PUBLIC RELAY —
-  `verifySiwd` resolves the signer's identity chain and checks the signing key is
-  a CURRENT authKey, so nothing here has to trust the platform that ran the
-  consent screen. See specs/SIWD.md §Profile A.
+  The smallest possible SIWD client: one static page, no secrets, no session
+  store, no backend at all. The load-bearing fact is that verification is CRYPTO
+  AGAINST A PUBLIC RELAY — `verifySiwd` resolves the signer's identity chain and
+  checks the signing key is a CURRENT authKey, so nothing here has to trust the
+  platform that ran the consent screen. See specs/SIWD.md §Profile A.
 
-  TWO SIGN-IN PATHS, which are the two tiers of the README's trust ladder:
+  Three kit functions carry the whole flow: `createSiwdLoginRequest` mints and
+  builds the redirect, `readSiwdCallback` reads the return, `verifySiwd` decides
+  whether to believe it. Everything else in this file is DOM.
 
-    client  — the nonce is minted in this tab and the JWS is verified in this
-              tab. `expect` rides through the redirect in sessionStorage,
-              because the whole "session" is this tab: minted on the click,
-              consumed on the way back, never sent anywhere.
+  THE AUTHORIZE REQUEST CARRIES THREE PARAMS: `challenge`, `redirect_uri`, and
+  `scope=identity`. No `client_did` — the platform resolves who this app is by
+  fetching `/.well-known/dfos-app.json` from the redirect's own origin, so the
+  file is the app identity and the request param is only an optional assertion
+  that has to agree with it. What `client_did` actually determines is the `aud`
+  of a returned credential, and an identity-scope sign-in returns none.
 
-    backend — the nonce is minted by `api/nonce.ts` and held in an HttpOnly
-              cookie; the JWS is POSTed to `api/verify.ts` and verified in Node.
-              The browser is the party being authenticated, so it cannot also be
-              the party deciding it passed — which is the whole reason tier 2
-              exists the moment a backend grants anything.
-
-  Three kit functions carry both paths: `createSiwdLoginRequest` mints and builds
-  the redirect, `readSiwdCallback` reads the return, `verifySiwd` decides whether
-  to believe it. The only thing that changes between tiers is WHERE the last one
-  runs. Everything else in this file is DOM.
+  Which makes that served file the one thing a fork has to get right, so this
+  page CHECKS ITS OWN at boot and says what it found. A missing or unlisted
+  redirect is refused at the host, several seconds and one redirect away from
+  the mistake; the self-check moves that sentence back onto the page you are
+  standing on, before the click.
 
 */
 
 import { createClient } from '@metalabel/dfos-client';
-import type { VerifyResult } from '@metalabel/dfos-client';
 import {
   createSiwdLoginRequest,
   readSiwdCallback,
   verifySiwd,
   type SiwdLoginRequest,
-  type SiwdSession,
 } from '@metalabel/dfos-client/siwd';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 
@@ -45,54 +42,38 @@ const RELAY_URL = 'https://relay.dfos.com';
 const PUBLIC_API_URL = 'https://api.dfos.com/v1';
 const EXPLORER_URL = 'https://explore.dfos.com';
 
-/** This demo's own app identity — asserted in public/.well-known/dfos-app.json. */
-const CLIENT_DID = 'did:dfos:8zk83zez862n6ahnvt3h3e4kc4n2dke';
-
 /** Where the source of the two files that ARE this flow lives. */
 const REPO = 'https://github.com/metalabel/dfos/blob/main';
+
+/** This origin's own registration, served as a static file out of `public/`. */
+const WELL_KNOWN_PATH = '/.well-known/dfos-app.json';
 
 const PENDING_KEY = 'siwd-demo-pending';
 
 /**
- * The two tiers of the README's trust ladder, both wired up for real.
- *
- * `client` — the nonce is minted in this tab and the JWS is verified in this
- * tab. Sound exactly when nothing is granted on the strength of the DID.
- *
- * `backend` — the nonce is minted by this demo's serverless function and kept
- * in an HttpOnly cookie; the JWS is POSTed there and verified in Node. This is
- * the shape any app with a real API behind it needs, because the browser is
- * the party being authenticated and cannot also be the one deciding it passed.
+ * The exact redirect target, trailing slash included, because the host
+ * EXACT-MATCHES this string against the `redirect_uris` allowlist it fetches.
+ * It is also the string the boot self-check looks for, so the check and the
+ * request it is checking can never drift apart.
  */
-type SignInMode = 'client' | 'backend';
-
-/** What survives the redirect: which tier started it, and (tier 1) what to expect. */
-interface PendingSignIn {
-  mode: SignInMode;
-  expect: SiwdLoginRequest['expect'];
-}
+const REDIRECT_URI = `${location.origin}/`;
 
 /**
  * Hosts that ride the platform's loopback tier (`npm run dev`). A local port
- * cannot prove a client identity, so the platform REJECTS a `client_did` on a
- * loopback redirect. The kit applies this rule itself off the redirect URI —
- * the demo only decides whether it has a DID to offer in the first place.
+ * holds no domain, so there is nothing for a well-known file to vouch for and
+ * none is required: the platform consents to a loopback target under its own
+ * tier for `scope=identity`. The self-check below skips entirely on these.
  */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
 /**
  * `location.hostname` brackets an IPv6 literal — on `http://[::1]:5173/` it is
  * the string `[::1]`. The brackets are URL grammar, not part of the name, and
- * every verifier compares the signed `domain` EXACTLY:
- *
- *   - the platform requires the challenge domain to already be in bare form and
- *     compares it to the bracket-stripped redirect host, so `[::1]` is refused
- *     outright as non-canonical;
- *   - `api/verify.ts` strips brackets off the Host header, so it would expect
- *     `::1` while the browser had signed `[::1]`.
- *
- * Both mismatches vanish by signing the bare form. Only the IPv6 dev host is
- * affected — `localhost` and `127.0.0.1` are already bare.
+ * every verifier compares the signed `domain` EXACTLY: the platform requires
+ * the challenge domain to already be in bare form and compares it to the
+ * bracket-stripped redirect host, so `[::1]` is refused outright as
+ * non-canonical. Signing the bare form makes the mismatch vanish. Only the IPv6
+ * dev host is affected — `localhost` and `127.0.0.1` are already bare.
  */
 const bareHostname = (hostname: string): string =>
   hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
@@ -109,42 +90,107 @@ interface PublicProfile {
   bio?: string | null;
 }
 
-/**
- * A verified sign-in, from either tier — the shape the signed-in view and the
- * receipts render. The backend tier deliberately returns less than the client
- * tier holds: the nonce lived in a cookie this page could never read, and
- * echoing it back would hand the browser the one value it was never allowed to
- * choose.
- */
+/** A verified sign-in — what the signed-in view and the receipts render. */
 interface VerifiedSignIn {
-  mode: SignInMode;
   did: string;
   domain: string;
   timestamp: string;
   kid: string;
-  /** Tier 1 only — the nonce this tab minted and consumed. */
-  nonce?: string;
-  /** Tier 2 only — what the backend says about where a session would be minted. */
-  note?: string;
-}
-
-/** The success shape of `POST /api/verify`. */
-interface BackendVerifyResponse {
-  ok: boolean;
-  session?: { did: string; domain: string; timestamp: string; kid: string };
-  note?: string;
-  error?: string;
+  /** The nonce this tab minted and consumed. */
+  nonce: string;
 }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+// -----------------------------------------------------------------------------
+// registration self-check
+// -----------------------------------------------------------------------------
+
+/**
+ * What this origin's own `/.well-known/dfos-app.json` says about it:
+ *
+ *   loopback   — dev run; no file is needed and none is looked for.
+ *   registered — the file lists this page's exact redirect target.
+ *   unlisted   — the file is served but that exact string is not in it.
+ *   missing    — no file, no network, or nothing parseable.
+ *
+ * Only `registered` carries the file's own claims, because only then has the
+ * host got something it will actually stand behind at consent.
+ */
+interface Registration {
+  state: 'loopback' | 'registered' | 'unlisted' | 'missing';
+  name?: string;
+  clientDid?: string;
+}
+
+/**
+ * One same-origin fetch, best-effort: no retries and no spinner. Every failure
+ * mode collapses to `missing`, because from the host's side they are the same
+ * fact — this origin does not serve a registration it can check.
+ */
+const checkRegistration = async (): Promise<Registration> => {
+  if (LOOPBACK_HOSTS.has(SIGNING_DOMAIN)) return { state: 'loopback' };
+
+  let parsed: unknown;
+  try {
+    const response = await fetch(WELL_KNOWN_PATH);
+    if (!response.ok) return { state: 'missing' };
+    parsed = await response.json();
+  } catch {
+    return { state: 'missing' };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { state: 'missing' };
+  }
+
+  const raw = parsed as Record<string, unknown>;
+  const listed = Array.isArray(raw['redirect_uris'])
+    ? raw['redirect_uris'].filter((value): value is string => typeof value === 'string')
+    : [];
+  if (!listed.includes(REDIRECT_URI)) return { state: 'unlisted' };
+
+  return {
+    state: 'registered',
+    ...(typeof raw['name'] === 'string' ? { name: raw['name'] } : {}),
+    ...(typeof raw['client_did'] === 'string' ? { clientDid: raw['client_did'] } : {}),
+  };
+};
+
+/**
+ * The verdict, resolved once before anything renders. `null` is only the state
+ * before that one fetch settles, and no view runs that early — a page that
+ * failed the check has already said so and will not quietly try again.
+ */
+let registration: Registration | null = null;
+
+/** The one edit a fork needs, said before the click rather than after it. */
+const registrationNotice = (found: Registration): string | undefined => {
+  if (found.state === 'unlisted') {
+    return (
+      'This origin is not in its own redirect allowlist, so the host will refuse ' +
+      `the sign-in. Add this exact string — trailing slash included — to ` +
+      `redirect_uris in public/.well-known/dfos-app.json: ${REDIRECT_URI}`
+    );
+  }
+  if (found.state === 'missing') {
+    return (
+      'This origin serves no registration, so the host has nothing to validate ' +
+      'the redirect against and will refuse the sign-in. Add ' +
+      `public/.well-known/dfos-app.json with two members: name, and redirect_uris ` +
+      `containing this exact string: ${REDIRECT_URI}`
+    );
+  }
+  return undefined;
+};
 
 // -----------------------------------------------------------------------------
 // dom
 // -----------------------------------------------------------------------------
 
 /**
- * Every dynamic string in this demo came from the URL, the API, or the JWS —
- * all third-party text. It is set with `textContent`, never `innerHTML`.
+ * Every dynamic string in this demo came from the URL, the API, the JWS, or a
+ * served JSON file — all third-party text. It is set with `textContent`, never
+ * `innerHTML`.
  */
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -216,52 +262,90 @@ const whatHappensNext = (): HTMLElement => {
 };
 
 /**
- * Tier 2, offered quietly under the main path. Same redirect, same artifact —
- * the difference is entirely in WHO mints the nonce and WHO verifies, which is
- * the only difference that matters once a backend starts granting things.
+ * What registration IS, written once and rendered twice — under the sign-in
+ * button, and again in the receipts. There is no portal screenshot to show and
+ * no client secret to redact, which is the whole point: the registration is a
+ * file this origin serves, and the reader can open it from here.
  */
-const backendOption = (): HTMLElement => {
-  const wrap = el('p', 'secondary-option');
-  const button = el('button', 'secondary', 'Sign in with backend verification');
-  button.addEventListener('click', () => {
-    void startSignIn('backend');
-  });
-
-  const caption = el('span', 'dim');
-  caption.textContent =
-    'Same flow, but the nonce comes from — and the signed challenge is verified ' +
-    'by — this demo’s serverless backend. Tier 2 of the trust ladder in the README.';
-
-  wrap.append(button, el('br'), caption);
-
-  if (LOOPBACK_HOSTS.has(SIGNING_DOMAIN)) {
-    wrap.append(
-      el('br'),
+const registrationNote = (found: Registration): Node[] => {
+  if (found.state === 'loopback') {
+    return [
       el(
-        'span',
+        'p',
         'dim',
-        'Locally this one needs `vercel dev` — the plain dev server serves the ' +
-          'static page only, so the functions are not running.',
+        'This is a loopback host, so this page is registered nowhere and does not ' +
+          'need to be: http://localhost is an accepted redirect target for scope=identity ' +
+          'under the platform’s loopback tier — the RFC 8252 posture, where a local ' +
+          'port cannot be hijacked from off the machine and could not prove a domain ' +
+          'if it tried. Deployed to a domain, this app registers itself by serving ' +
+          'one JSON file.',
       ),
-    );
+    ];
   }
+
+  const body: Node[] = [
+    linkNote(
+      WELL_KNOWN_PATH,
+      WELL_KNOWN_PATH,
+      'This origin’s registration, live — the same file the host fetches.',
+    ),
+    el(
+      'p',
+      'dim',
+      'Serving that file over https from the domain you control IS the ' +
+        'registration: domain control is the credential, and there is no developer ' +
+        'portal and no client secret anywhere in this flow. The host fetches it at ' +
+        'authorize time and exact-matches redirect_uris against this page’s redirect ' +
+        'target, trailing slash included.',
+    ),
+  ];
+
+  if (found.name !== undefined) {
+    const line = el('p', 'dim');
+    line.append(
+      'Name shown at consent: ',
+      el('code', undefined, found.name),
+      ' — the app’s own claim about itself, which the consent screen renders as self-asserted.',
+    );
+    body.push(line);
+  }
+  if (found.clientDid !== undefined) {
+    const line = el('p', 'dim');
+    line.append(
+      'Declared client_did: ',
+      el('code', undefined, found.clientDid),
+      ' — optional at identity scope, and this page does not send it. The file is what names the app.',
+    );
+    body.push(line);
+  }
+
+  return body;
+};
+
+/** The registration note as a quieter block inside the sign-in card. */
+const registrationSection = (found: Registration): HTMLElement => {
+  const wrap = el('div', 'section');
+  wrap.append(...registrationNote(found));
   return wrap;
 };
 
 const renderSignedOut = (notice?: string): void => {
   const button = el('button', undefined, 'Sign in with DFOS');
-  button.addEventListener('click', () => {
-    void startSignIn('client');
-  });
+  button.addEventListener('click', startSignIn);
+
   const aside = el('p', 'dim');
   aside.append(
-    'This site has no secrets and no session store — the default path verifies entirely in your browser, against a public relay. ',
+    'This site has no secrets, no backend, and no session store — it verifies entirely in your browser, against a public relay. ',
     link(
       'https://github.com/metalabel/dfos/tree/main/examples/siwd-demo',
       'This demo site is open source',
     ),
     '.',
   );
+
+  const found = registration;
+  const warning = found === null ? undefined : registrationNotice(found);
+
   render(
     el('h1', undefined, 'Sign In With DFOS'),
     el(
@@ -272,7 +356,8 @@ const renderSignedOut = (notice?: string): void => {
         'challenge in your browser against your public identity chain.',
     ),
     ...(notice !== undefined ? [el('p', 'notice', notice)] : []),
-    card(button, whatHappensNext(), backendOption()),
+    ...(warning !== undefined ? [el('p', 'notice', warning)] : []),
+    card(button, whatHappensNext(), ...(found !== null ? [registrationSection(found)] : [])),
     aside,
   );
 };
@@ -324,47 +409,33 @@ const artifactReceipt = (jws: string): Node[] => {
  * One line per check `verifySiwd` ran. These are rendered FROM the verified
  * result — the checks already happened inside the kit, and re-running them here
  * would be theatre, not evidence.
- *
- * The same six checks run in both tiers, because it is the same function. Only
- * WHERE it ran, and where the nonce lived, differ.
  */
 const checklistReceipt = (verified: VerifiedSignIn): Node[] => {
-  const backend = verified.mode === 'backend';
   const keyId = verified.kid.slice(verified.kid.indexOf('#') + 1);
-
-  const nonceLine = backend
-    ? 'Nonce matches the one the backend minted, carried in an HttpOnly cookie this page never got to choose or read. Making that nonce single-use needs a server-side store, which this demo does not run — see the PRODUCTION note in api/verify.ts.'
-    : `Nonce matches the one this page minted, removed from this tab before verifying: ${verified.nonce}`;
 
   const list = el('ul', 'checks');
   for (const line of [
     'Identity chain resolved from the relay and replayed to current state — fresh, not cached (a stale resolution fails closed).',
     `Signing key is a CURRENT authentication key of a non-deleted identity: ${keyId}`,
     'Signature valid under the DFOS JWS profile (EdDSA, canonical scalar, no embedded key).',
-    nonceLine,
+    `Nonce matches the one this page minted, removed from this tab before verifying: ${verified.nonce}`,
     `Domain binding: the signed domain is this site — ${verified.domain}`,
     `Timestamp inside the acceptance window: ${verified.timestamp}`,
   ]) {
     list.append(el('li', undefined, line));
   }
 
-  const body: Node[] = [list];
-  if (backend) {
-    if (verified.note !== undefined) body.push(el('p', 'dim', verified.note));
-  } else {
-    body.push(
-      el(
-        'p',
-        'dim',
-        'This same verification, run server-side instead: the second sign-in ' +
-          'button on the signed-out page.',
-      ),
-    );
-  }
-
   return receiptSection(
-    backend ? 'What was checked — in Node, on the backend' : 'What was checked — in this tab',
-    ...body,
+    'What was checked — in this tab',
+    list,
+    el(
+      'p',
+      'dim',
+      'Verifying here is sound exactly because nothing is granted here. The moment ' +
+        'a backend grants something, this same function has to run where the grant ' +
+        'happens — and the nonce has to be consumed atomically there. See "When your ' +
+        'backend grants anything" in the README.',
+    ),
   );
 };
 
@@ -408,10 +479,14 @@ const sourceReceipt = (): Node[] =>
 
 const receipts = (jws: string, verified: VerifiedSignIn): HTMLElement => {
   const details = el('details');
+  const found = registration;
   details.append(
     el('summary', undefined, 'Show the receipts'),
     ...artifactReceipt(jws),
     ...checklistReceipt(verified),
+    ...(found !== null
+      ? receiptSection('How this app is registered', ...registrationNote(found))
+      : []),
     ...lookItUpReceipt(verified.did),
     ...sourceReceipt(),
   );
@@ -481,108 +556,20 @@ const EXPIRED_NOTICE =
 const isExpiredReason = (reason: string): boolean =>
   reason.includes('expired') || reason.includes('challenge has expired');
 
-/**
- * Tier 2 step 1: ask the backend for a nonce. It also sets that nonce in an
- * HttpOnly cookie, which is how it remembers what it issued across the
- * redirect. What that buys is real but narrow: this page did not get to CHOOSE
- * the value it will later be checked against. It is not a replay defense — see
- * the note in api/verify.ts for what would be.
- */
-const mintBackendNonce = async (): Promise<string> => {
-  const response = await fetch('/api/nonce', { credentials: 'same-origin' });
-  if (!response.ok) throw new Error(`/api/nonce returned ${response.status}`);
-  const body = (await response.json()) as { nonce?: unknown };
-  if (typeof body.nonce !== 'string' || body.nonce === '') {
-    throw new Error('/api/nonce did not return a nonce');
-  }
-  return body.nonce;
-};
-
-const startSignIn = async (mode: SignInMode): Promise<void> => {
-  let nonce: string | undefined;
-  if (mode === 'backend') {
-    try {
-      nonce = await mintBackendNonce();
-    } catch (err) {
-      renderSignedOut(
-        `Could not reach the demo backend: ${errorMessage(err)}. ` +
-          'The backend path needs the deployed demo or `vercel dev`.',
-      );
-      return;
-    }
-  }
-
+const startSignIn = (): void => {
   const request: SiwdLoginRequest = createSiwdLoginRequest({
     authorizeUrl: AUTHORIZE_URL,
     domain: SIGNING_DOMAIN,
-    // trailing slash: the platform exact-matches this against the well-known allowlist
-    redirectUri: `${location.origin}/`,
+    redirectUri: REDIRECT_URI,
     scope: 'identity',
     statement: 'Sign in to the SIWD demo',
-    // the kit drops this for a loopback redirect on its own; the demo only
-    // decides whether it has a provable DID to assert at all
-    ...(LOOPBACK_HOSTS.has(SIGNING_DOMAIN) ? {} : { clientDid: CLIENT_DID }),
-    // tier 2: the challenge carries the nonce the BACKEND minted, so the
-    // signature comes back bound to a value only the backend ever chose
-    ...(nonce !== undefined ? { nonce } : {}),
   });
 
-  // `expect` is the one thing tier 1 needs to survive the redirect: domain +
-  // nonce (+ did when bound), which is exactly what `verifySiwd` takes back.
-  // Tier 2 keeps it only for display — its verification uses the cookie.
-  const pending: PendingSignIn = { mode, expect: request.expect };
-  sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+  // `expect` is the one thing that has to survive the redirect: domain + nonce,
+  // which is exactly what `verifySiwd` takes back. The whole "session" is this
+  // tab — minted on the click, consumed on the way back, never sent anywhere.
+  sessionStorage.setItem(PENDING_KEY, JSON.stringify(request.expect));
   location.href = request.url;
-};
-
-/** Verification and the network hop to the relay share one error channel. */
-const verify = async (
-  jws: string,
-  expect: SiwdLoginRequest['expect'],
-): Promise<VerifyResult<SiwdSession>> => {
-  try {
-    const client = createClient({ relays: [RELAY_URL] });
-    return await verifySiwd(client, jws, expect);
-  } catch (err) {
-    return { ok: false, error: `could not reach ${RELAY_URL}: ${errorMessage(err)}` };
-  }
-};
-
-/**
- * Tier 2 step 2: hand the artifact to the backend. The body carries the JWS and
- * NOTHING else — no DID, no nonce. `credentials: 'same-origin'` is what lets
- * the nonce cookie ride along, and it is the only way the backend learns what
- * to expect.
- */
-const verifyOnBackend = async (jws: string): Promise<VerifiedSignIn | string> => {
-  let response: Response;
-  try {
-    response = await fetch('/api/verify', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jws }),
-    });
-  } catch (err) {
-    return `could not reach the demo backend: ${errorMessage(err)}`;
-  }
-
-  let body: BackendVerifyResponse;
-  try {
-    body = (await response.json()) as BackendVerifyResponse;
-  } catch {
-    return `the backend returned an unreadable response (${response.status})`;
-  }
-
-  if (!response.ok || !body.ok || body.session === undefined) {
-    return body.error ?? `verification failed (${response.status})`;
-  }
-
-  return {
-    mode: 'backend',
-    ...body.session,
-    ...(body.note !== undefined ? { note: body.note } : {}),
-  };
 };
 
 const handleCallback = async (jws: string): Promise<void> => {
@@ -594,23 +581,14 @@ const handleCallback = async (jws: string): Promise<void> => {
     renderSignedOut('There is no pending sign-in in this tab — start over.');
     return;
   }
-  const pending = JSON.parse(saved) as PendingSignIn;
+  const expect = JSON.parse(saved) as SiwdLoginRequest['expect'];
 
-  renderStatus(pending.mode === 'backend' ? 'Verifying on the backend…' : 'Verifying in this tab…');
+  renderStatus('Verifying in this tab…');
 
-  if (pending.mode === 'backend') {
-    const verified = await verifyOnBackend(jws);
-    if (typeof verified === 'string') {
-      renderSignedOut(
-        isExpiredReason(verified) ? EXPIRED_NOTICE : `Verification failed: ${verified}`,
-      );
-      return;
-    }
-    await renderProfile(verified, jws);
-    return;
-  }
-
-  const result = await verify(jws, pending.expect);
+  // `verifySiwd` is no-throw: the relay hop, the decode, and every check share
+  // one result channel, so its own error string is the honest one to show.
+  const client = createClient({ relays: [RELAY_URL] });
+  const result = await verifySiwd(client, jws, expect);
   if (!result.ok || result.value === undefined) {
     const reason = result.error ?? 'unknown error';
     renderSignedOut(isExpiredReason(reason) ? EXPIRED_NOTICE : `Verification failed: ${reason}`);
@@ -618,7 +596,7 @@ const handleCallback = async (jws: string): Promise<void> => {
   }
 
   const { did, domain, timestamp, kid, nonce } = result.value;
-  await renderProfile({ mode: 'client', did, domain, timestamp, kid, nonce }, jws);
+  await renderProfile({ did, domain, timestamp, kid, nonce }, jws);
 };
 
 /**
@@ -653,7 +631,7 @@ const renderProfile = async (verified: VerifiedSignIn, jws: string): Promise<voi
   }
 };
 
-const boot = (): void => {
+const boot = async (): Promise<void> => {
   const callback = readSiwdCallback(location.search);
 
   // get the JWS out of the address bar, history, and the referrer of anything
@@ -662,6 +640,10 @@ const boot = (): void => {
   if (callback.kind !== 'none') {
     history.replaceState(null, '', location.pathname);
   }
+
+  // settled before the first render, so no view has to handle a half-known
+  // registration and no view triggers a second fetch
+  registration = await checkRegistration();
 
   if (callback.kind === 'denied') {
     renderSignedOut(
@@ -672,10 +654,10 @@ const boot = (): void => {
     return;
   }
   if (callback.kind === 'success') {
-    void handleCallback(callback.jws);
+    await handleCallback(callback.jws);
     return;
   }
   renderSignedOut();
 };
 
-boot();
+void boot();
