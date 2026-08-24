@@ -1,5 +1,5 @@
 {
-  "//": "The server half. Separate from tsconfig.json because api/ runs in Node with no DOM, and \u2014 the part that bit us in production \u2014 it runs as REAL Node ESM: Vercel compiles each file without rewriting import specifiers, so a relative import without its .js extension resolves in every bundler and dies only when deployed. NodeNext resolution makes tsc enforce the deployed runtime's rules, which turns that runtime crash into a typecheck error. vite.config.ts is included because it imports the same handlers to serve them in dev.",
+  "//": "The server half. Separate from tsconfig.json because api/ runs in Node with no DOM, and runs as real Node ESM: Vercel compiles each file without rewriting import specifiers, so a relative import missing its .js extension resolves in every bundler and dies only when deployed. NodeNext resolution makes tsc enforce the deployed runtime's rules, turning that crash into a typecheck error. vite.config.ts is included because it imports the same handlers to serve them in dev.",
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",

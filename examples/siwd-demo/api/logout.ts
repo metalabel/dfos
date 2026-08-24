@@ -3,9 +3,9 @@
   Sign out — expire the session cookie.
 
   A POST rather than a GET, and origin-checked like the rest, because a sign-out
-  is a state change: a GET would be firable from any `<img>` on any page on the
-  internet. There is no server-side session to revoke — the cookie IS the
-  session — so expiring it is the whole operation.
+  is a state change and a GET would be firable from any `<img>` anywhere. There
+  is no server-side session to revoke — the cookie IS the session — so expiring
+  it is the whole operation.
 
 */
 

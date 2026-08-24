@@ -2,36 +2,28 @@
 
   Sign In With DFOS — demo relying party
 
-  A complete backend-verified login, small enough to read in one sitting. The
-  load-bearing fact is WHERE the verification happens: this page never decides
-  whether to believe a signed challenge. It hands the JWS to `/api/verify`,
-  which is where the session is granted, and renders whatever verdict comes
-  back. specs/SIWD.md is blunt about why — verification of the JWS MUST happen
-  wherever a session is granted, because a bare DID is an address, not a proof.
+  This page never decides whether to believe a signed challenge. It hands the
+  JWS to `/api/verify`, where the session is granted, and renders the answer.
+  specs/SIWD.md requires that: a bare DID is an address, not a proof, so the
+  JWS MUST be verified wherever a session is granted.
 
-  So the browser's half of the flow is now three moves and no trust:
+  The browser's half is three moves:
 
     1. ask `/api/login` where to go, and go there
     2. come back with a JWS and hand it to `/api/verify`
     3. render `/api/me`
 
-  The JWS still gets DECODED here, on the way through, because the decoded
-  artifact is the most legible thing in the whole protocol — but that panel is
-  labelled for exactly what it is. `decodeJwsUnsafe` does no verification and
-  says so in its name; a page that decoded a JWS and called that a login would
-  have authenticated nobody.
+  The JWS is also decoded here, for display. `decodeJwsUnsafe` does no
+  verification — the panel says so, and so does the name.
 
-  THE AUTHORIZE REQUEST CARRIES THREE PARAMS: `challenge`, `redirect_uri`, and
-  `scope=identity` — built server-side now, in `api/login.ts`. No `client_did`:
-  the platform resolves who this app is by fetching `/.well-known/dfos-app.json`
-  from the redirect's own origin, so the file is the app identity and the
-  request param is only an optional assertion that has to agree with it.
+  The authorize request carries `challenge`, `redirect_uri`, and
+  `scope=identity`, built server-side in `api/login.ts`. No `client_did`: the
+  platform learns who this app is by fetching `/.well-known/dfos-app.json` from
+  the redirect's own origin, so that file is the app identity.
 
-  Which makes that served file the one thing a fork has to get right, so this
-  page CHECKS ITS OWN at boot and says what it found. A missing or unlisted
-  redirect is refused at the host, several seconds and one redirect away from
-  the mistake; the self-check moves that sentence back onto the page you are
-  standing on, before the click.
+  That file is the one thing a fork has to get right, so this page checks its
+  own at boot and says what it found — on the page, before the click, instead
+  of one redirect later at the host.
 
 */
 
@@ -42,43 +34,39 @@ import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 const RELAY_URL = 'https://relay.dfos.com';
 const EXPLORER_URL = 'https://explore.dfos.com';
 
-/** Where the source of the files that ARE this flow lives. */
+/** Where the source of the files in this flow lives. */
 const REPO = 'https://github.com/metalabel/dfos/blob/main';
 
 /** This origin's own registration, served as a static file out of `public/`. */
 const WELL_KNOWN_PATH = '/.well-known/dfos-app.json';
 
-/** Bounded, so a stalled endpoint degrades to a rendered sentence, not a spinner. */
+/** Bounded, so a stalled endpoint shows a message rather than a spinner. */
 const API_TIMEOUT_MS = 3000;
 
 /** Verification is longer: the server makes a relay hop inside this call. */
 const VERIFY_TIMEOUT_MS = 15_000;
 
 /**
- * The exact redirect target, trailing slash included, because the host
- * EXACT-MATCHES this string against the `redirect_uris` allowlist it fetches.
- * `api/login.ts` derives the same string from the request's own origin, so the
- * string this page checks and the string the server sends agree by
- * construction rather than by two people remembering to edit both.
+ * The exact redirect target, trailing slash included: the host EXACT-MATCHES
+ * this string against the `redirect_uris` allowlist it fetches. `api/login.ts`
+ * derives the same string from the request's own origin, so the string this
+ * page checks and the string the server sends cannot drift apart.
  */
 const REDIRECT_URI = `${location.origin}/`;
 
 /**
- * Hosts that ride the platform's loopback tier (`npm run dev`). A local port
- * holds no domain, so there is nothing for a well-known file to vouch for and
- * none is required: the platform consents to a loopback target under its own
- * tier for `scope=identity`. The self-check below skips entirely on these.
+ * Hosts on the platform's loopback tier (`npm run dev`). A local port holds no
+ * domain, so no well-known file is required and the self-check below skips.
  */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
 /**
- * `location.hostname` brackets an IPv6 literal — on `http://[::1]:5173/` it is
+ * `location.hostname` brackets an IPv6 literal: on `http://[::1]:5173/` it is
  * the string `[::1]`. The brackets are URL grammar, not part of the name, and
- * every verifier compares the signed `domain` EXACTLY: the platform requires
- * the challenge domain to already be in bare form and compares it to the
- * bracket-stripped redirect host, so `[::1]` is refused outright as
- * non-canonical. Signing the bare form makes the mismatch vanish. Only the IPv6
- * dev host is affected — `localhost` and `127.0.0.1` are already bare.
+ * the platform compares the signed `domain` EXACTLY against the
+ * bracket-stripped redirect host — so `[::1]` would be refused as
+ * non-canonical. Only the IPv6 dev host is affected; `localhost` and
+ * `127.0.0.1` are already bare.
  */
 const bareHostname = (hostname: string): string =>
   hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
@@ -97,9 +85,8 @@ interface Session {
 }
 
 /**
- * True once any endpoint has admitted it is running on a per-instance secret.
- * Sticky for the life of the page, because the condition is a property of the
- * deployment rather than of one response.
+ * True once any endpoint has reported a per-instance secret. Sticky for the
+ * life of the page: it is a property of the deployment, not of one response.
  */
 let ephemeral = false;
 
@@ -114,12 +101,11 @@ interface ApiResult {
 
 /**
  * One shape for all four endpoints. `null` means the request never completed —
- * offline, aborted, a dev server that is not running — which is a different
- * fact from a refusal and is worth saying differently on the page.
+ * offline, aborted, dev server down — which is a different fact from a refusal
+ * and is said differently on the page.
  *
- * Cookies ride along without asking: every call here is same-origin, and
- * `fetch` sends same-origin credentials by default. That is the entire session
- * mechanism from the browser's side.
+ * Every call is same-origin and `fetch` sends same-origin credentials by
+ * default, so cookies ride along. That is the whole session mechanism here.
  */
 const call = async (
   path: string,
@@ -166,7 +152,7 @@ const sessionFrom = (result: ApiResult | null): Session | null => {
   return { did, kid, iat, exp };
 };
 
-/** The server's own words for a refusal, or an honest fallback. */
+/** The server's own words for a refusal, or a fallback. */
 const reasonFrom = (result: ApiResult, fallback: string): string =>
   typeof result.body['reason'] === 'string' ? result.body['reason'] : fallback;
 
@@ -182,8 +168,8 @@ const reasonFrom = (result: ApiResult, fallback: string): string =>
  *   unlisted   — the file is served but that exact string is not in it.
  *   missing    — no file, no network, or nothing parseable.
  *
- * Only `registered` carries the file's own claims, because only then has the
- * host got something it will actually stand behind at consent.
+ * Only `registered` carries the file's claims, since only then does the host
+ * have something it will stand behind at consent.
  */
 interface Registration {
   state: 'loopback' | 'registered' | 'unlisted' | 'missing';
@@ -193,12 +179,11 @@ interface Registration {
 
 /**
  * One same-origin fetch, best-effort: no retries and no spinner. Every failure
- * mode collapses to `missing`, because from the host's side they are the same
- * fact — this origin does not serve a registration it can check. BOUNDED,
+ * collapses to `missing` — from the host's side they are the same fact. Bounded
  * because boot awaits this before the first render and a browser fetch has no
- * timeout of its own: a stalled request (a misbehaving service worker, a
- * proxy) must degrade to `missing` rather than hold the whole page — and the
- * callback verification behind it — hostage.
+ * timeout of its own: a stalled request (a misbehaving service worker, a proxy)
+ * must degrade to `missing` rather than hold the page, and the callback
+ * verification behind it, hostage.
  */
 const checkRegistration = async (): Promise<Registration> => {
   if (LOOPBACK_HOSTS.has(SIGNING_DOMAIN)) return { state: 'loopback' };
@@ -229,9 +214,8 @@ const checkRegistration = async (): Promise<Registration> => {
 };
 
 /**
- * The verdict, resolved once before anything renders. `null` is only the state
- * before that one fetch settles, and no view runs that early — a page that
- * failed the check has already said so and will not quietly try again.
+ * The verdict, resolved once before anything renders. `null` only exists
+ * before that one fetch settles, and no view runs that early.
  */
 let registration: Registration | null = null;
 
@@ -246,10 +230,9 @@ const registrationNotice = (found: Registration): string | undefined => {
   }
   if (found.state === 'missing') {
     return (
-      'This origin serves no registration, so the host has nothing to validate ' +
-      'the redirect against and will refuse the sign-in. Add ' +
-      `public/.well-known/dfos-app.json with two members: name, and redirect_uris ` +
-      `containing this exact string: ${REDIRECT_URI}`
+      'This origin serves no registration, so the host will refuse the sign-in. ' +
+      `Add public/.well-known/dfos-app.json with two members: name, and ` +
+      `redirect_uris containing this exact string: ${REDIRECT_URI}`
     );
   }
   return undefined;
@@ -257,19 +240,18 @@ const registrationNotice = (found: Registration): string | undefined => {
 
 /** The other configuration a fork can forget — this one degrades rather than fails. */
 const EPHEMERAL_NOTICE =
-  'This server is running without SESSION_SECRET, so it signs its cookies with a ' +
-  'random key minted at startup — the dev-server-only fallback: sessions die ' +
-  'with the process. Deployed, the server refuses to sign in at all until the ' +
-  'variable is set. Set SESSION_SECRET to any long random string, 32+ characters.';
+  'No SESSION_SECRET is set, so this server signs cookies with a random key ' +
+  'minted at startup: sessions die with the process. The fallback is dev-server ' +
+  'only — deployed, sign-in refuses until the variable is set. Set ' +
+  'SESSION_SECRET to any long random string, 32+ characters.';
 
 // -----------------------------------------------------------------------------
 // dom
 // -----------------------------------------------------------------------------
 
 /**
- * Every dynamic string in this demo came from the URL, the API, the JWS, or a
- * served JSON file — all third-party text. It is set with `textContent`, never
- * `innerHTML`.
+ * Every dynamic string here comes from the URL, the API, the JWS, or a served
+ * JSON file — all untrusted text. Set with `textContent`, never `innerHTML`.
  */
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -330,10 +312,10 @@ const renderStatus = (text: string, ...extra: Node[]): void => {
 const whatHappensNext = (): HTMLElement => {
   const list = el('ol', 'steps');
   for (const step of [
-    'This page asks its own backend to start a sign-in; the server mints the challenge (domain + nonce + timestamp) and seals the nonce into an httpOnly cookie before answering with a URL.',
-    "You approve on your DFOS host's consent screen; your custodial key signs the challenge bytes server-side.",
-    'The browser returns here with the signed JWS and posts it straight to this site’s backend.',
-    'The server unseals the nonce it minted, verifies the JWS against your public identity chain on a relay, and mints a session cookie. This page renders the verdict.',
+    'This page asks its backend to start a sign-in. The server mints the challenge (domain, nonce, timestamp), seals the nonce into an httpOnly cookie, and answers with a URL.',
+    "You approve on your DFOS host's consent screen, where your custodial key signs the challenge bytes.",
+    'The browser returns here with the signed JWS and posts it to this site’s backend.',
+    'The server unseals the nonce it minted, verifies the JWS against your public identity chain on a relay, and mints a session cookie.',
   ]) {
     list.append(el('li', undefined, step));
   }
@@ -341,10 +323,9 @@ const whatHappensNext = (): HTMLElement => {
 };
 
 /**
- * What registration IS, written once and rendered twice — under the sign-in
- * button, and again in the receipts. There is no portal screenshot to show and
- * no client secret to redact, which is the whole point: the registration is a
- * file this origin serves, and the reader can open it from here.
+ * What registration is, written once and rendered twice — under the sign-in
+ * button, and again in the receipts. It is a file this origin serves, and the
+ * reader can open it from here.
  */
 const registrationNote = (found: Registration): Node[] => {
   if (found.state === 'loopback') {
@@ -352,12 +333,11 @@ const registrationNote = (found: Registration): Node[] => {
       el(
         'p',
         'dim',
-        'This is a loopback host, so this page is registered nowhere and does not ' +
-          'need to be: http://localhost is an accepted redirect target for scope=identity ' +
-          'under the platform’s loopback tier — the RFC 8252 posture, where a local ' +
-          'port cannot be hijacked from off the machine and could not prove a domain ' +
-          'if it tried. Deployed to a domain, this app registers itself by serving ' +
-          'one JSON file.',
+        'This is a loopback host, so the page is registered nowhere and does not ' +
+          'need to be: http://localhost is an accepted redirect target for ' +
+          'scope=identity under the platform’s loopback tier (the RFC 8252 posture ' +
+          '— a local port holds no domain to prove). Deployed to a domain, this app ' +
+          'registers itself by serving one JSON file.',
       ),
     ];
   }
@@ -372,10 +352,10 @@ const registrationNote = (found: Registration): Node[] => {
       'p',
       'dim',
       'Serving that file over https from the domain you control IS the ' +
-        'registration: domain control is the credential, and there is no developer ' +
-        'portal and no client secret anywhere in this flow. The host fetches it at ' +
-        'authorize time and exact-matches redirect_uris against this page’s redirect ' +
-        'target, trailing slash included.',
+        'registration: domain control is the credential. There is no developer ' +
+        'portal and no client secret. The host fetches the file at authorize time ' +
+        'and exact-matches redirect_uris against this page’s redirect target, ' +
+        'trailing slash included.',
     ),
   ];
 
@@ -384,7 +364,7 @@ const registrationNote = (found: Registration): Node[] => {
     line.append(
       'Name shown at consent: ',
       el('code', undefined, found.name),
-      ' — the app’s own claim about itself, which the consent screen renders as self-asserted.',
+      ' — the app’s own claim about itself, which the consent screen labels as self-asserted.',
     );
     body.push(line);
   }
@@ -393,7 +373,7 @@ const registrationNote = (found: Registration): Node[] => {
     line.append(
       'Declared client_did: ',
       el('code', undefined, found.clientDid),
-      ' — optional at identity scope, and this app does not send it. The file is what names the app.',
+      ' — optional at identity scope, and this app does not send it. The file names the app.',
     );
     body.push(line);
   }
@@ -414,7 +394,7 @@ const renderSignedOut = (notice?: string): void => {
 
   const aside = el('p', 'dim');
   aside.append(
-    'Verification runs on this site’s own backend, against a public relay — no DFOS ' +
+    'Verification runs on this site’s own backend, against a public relay. No DFOS ' +
       'platform server is asked whether to believe the signature. ',
     link(
       'https://github.com/metalabel/dfos/tree/main/examples/siwd-demo',
@@ -431,10 +411,9 @@ const renderSignedOut = (notice?: string): void => {
     el(
       'p',
       undefined,
-      'Sign in to this demo with your DFOS identity. You approve the sign-in on ' +
-        'your platform’s consent screen; this site’s backend then verifies the ' +
-        'signed challenge against your public identity chain before granting a ' +
-        'session.',
+      'Sign in to this demo with your DFOS identity. You approve on your platform’s ' +
+        'consent screen; this site’s backend verifies the signed challenge against ' +
+        'your public identity chain before granting a session.',
     ),
     ...notices(notice),
     ...(warning !== undefined ? [el('p', 'notice', warning)] : []),
@@ -453,12 +432,11 @@ const receiptSection = (heading: string, ...body: Node[]): Node[] => [
 ];
 
 /**
- * The signed artifact, decoded for reading — and DECODING IS NOT VERIFYING.
- * `decodeJwsUnsafe` is exactly what its name says: it parses base64url and
- * hands back whatever was in there, signature unchecked. Anyone can author
- * these bytes. What makes this particular one a sign-in is that `/api/verify`
- * resolved the signer's identity chain and matched the nonce it had sealed
- * away before the redirect — which happened on the server, not here.
+ * The signed artifact, decoded for reading. DECODING IS NOT VERIFYING:
+ * `decodeJwsUnsafe` parses base64url and hands back whatever was in there,
+ * signature unchecked, and anyone can author those bytes. What makes this one a
+ * sign-in is that `/api/verify` resolved the signer's identity chain and
+ * matched its own sealed nonce — on the server, not here.
  */
 const artifactReceipt = (jws: string): Node[] => {
   const decoded = decodeJwsUnsafe(jws);
@@ -476,37 +454,35 @@ const artifactReceipt = (jws: string): Node[] => {
     el(
       'p',
       'dim',
-      'The kid is a DID URL: it names WHICH key in the signer’s identity chain ' +
-        'produced this signature, which is what makes "is that key still current?" ' +
-        'a question with an answer.',
+      'The kid is a DID URL: it names which key in the signer’s identity chain ' +
+        'produced this signature, so "is that key still current?" has an answer.',
     ),
     el('p', 'dim', 'Payload'),
     el('pre', 'wrap', JSON.stringify(decoded.payload, null, 2)),
     el(
       'p',
       'dim',
-      'That payload IS the canonical challenge — byte for byte the bytes the ' +
-        'backend minted before the redirect, and byte for byte what the signature ' +
-        'covers. The nonce in it is the one the server had already sealed into an ' +
-        'httpOnly cookie under its own key.',
+      'That payload IS the canonical challenge: byte for byte what the backend ' +
+        'minted before the redirect, and what the signature covers. Its nonce is ' +
+        'the one the server had already sealed into an httpOnly cookie.',
     ),
   );
   return receiptSection('The signed artifact', ...body);
 };
 
 /**
- * One line per check the server ran before it minted the session. These are
- * rendered FROM the granted session — the checks happened in `api/verify.ts`,
- * and re-running them here would be theatre, not evidence.
+ * One line per check the server ran before it minted the session. Rendered
+ * FROM the granted session — the checks happened in `api/verify.ts`, and
+ * re-running them here would prove nothing.
  */
 const checklistReceipt = (session: Session): Node[] => {
   const keyId = session.kid.slice(session.kid.indexOf('#') + 1);
 
   const list = el('ul', 'checks');
   for (const line of [
-    'The expected nonce came out of the server’s own sealed cookie — never out of the callback, and never out of anything the presenter could author.',
-    'Identity chain resolved from the relay and replayed to current state — fresh, not cached (a stale resolution fails closed).',
-    `Signing key is a CURRENT authentication key of a non-deleted identity: ${keyId}`,
+    'The expected nonce came from the server’s own sealed cookie, not from the callback or anything else the presenter could author.',
+    'Identity chain resolved fresh from the relay and replayed to current state.',
+    `Signing key is a current authentication key of a non-deleted identity: ${keyId}`,
     'Signature valid under the DFOS JWS profile (EdDSA, canonical scalar, no embedded key).',
     `Domain binding: the signed domain is this site — ${SIGNING_DOMAIN}`,
     'Timestamp inside the acceptance window, checked against the server’s clock.',
@@ -521,12 +497,11 @@ const checklistReceipt = (session: Session): Node[] => {
     el(
       'p',
       'dim',
-      'This is the FLOW-BOUND replay discipline, and its guarantee is exactly this: ' +
-        'the signed challenge redeems only through the browser that started the ' +
-        'flow, inside the timestamp window. It is not global single-use, and it does ' +
-        'not need to be — success here grants a session with this browser and ' +
-        'nothing else. Grant anything portable and the discipline changes; see "The ' +
-        'two replay disciplines" in the README.',
+      'This is the FLOW-BOUND replay discipline. Its guarantee: the signed ' +
+        'challenge redeems only through the browser that started the flow, inside ' +
+        'the timestamp window. Not global single-use — success here grants a session ' +
+        'with this browser and nothing else. Grant anything portable and the ' +
+        'discipline changes; see "The two replay disciplines" in the README.',
     ),
   );
 };
@@ -545,7 +520,7 @@ const lookItUpReceipt = (did: string): Node[] =>
       // did:dfos identifier is fragment-safe as-is.
       `${EXPLORER_URL}/#/did/${did}`,
       'The same chain in the DFOS explorer',
-      'Re-verified in YOUR tab — the same trust move the backend just made.',
+      'Re-verified in your own tab — the same check the backend just made.',
     ),
   );
 
@@ -555,12 +530,12 @@ const sourceReceipt = (): Node[] =>
     linkNote(
       `${REPO}/examples/siwd-demo/api/verify.ts`,
       'examples/siwd-demo/api/verify.ts',
-      'The verifier: where the session is granted, and therefore where the checking happens.',
+      'The verifier: where the session is granted, and so where the checking happens.',
     ),
     linkNote(
       `${REPO}/examples/siwd-demo/api/_lib.ts`,
       'examples/siwd-demo/api/_lib.ts',
-      'The seal — what binds the nonce to this browser, and what that does and does not buy.',
+      'The seal that binds the nonce to this browser.',
     ),
     linkNote(
       `${REPO}/examples/siwd-demo/src/main.ts`,
@@ -607,13 +582,7 @@ const renderSignedIn = (session: Session, jws?: string): void => {
       who,
       key,
       el('p', 'dim', `Session expires ${new Date(session.exp * 1000).toLocaleString()}`),
-      el(
-        'p',
-        'dim',
-        'That is the server reading its own sealed session cookie back through ' +
-          '/api/me — not a verdict this page remembered. Reload and it is still ' +
-          'true; sign out and it is not.',
-      ),
+      el('p', 'dim', 'Read from the server’s sealed session cookie via /api/me.'),
       signOutButton,
     ),
     receipts(session, jws),
@@ -626,19 +595,18 @@ const renderSignedIn = (session: Session, jws?: string): void => {
 
 /**
  * A sign-in request is only valid for a few minutes at the host, so an expired
- * one is a NORMAL outcome (a tab left open, a slow consent). The remedy is
- * always the same: mint a fresh one. Say so rather than leaving the reader to
- * guess whether something is broken.
+ * one is a normal outcome (a tab left open, a slow consent) with one remedy:
+ * mint a fresh one. Say so, rather than leave the reader guessing.
  */
 const EXPIRED_NOTICE =
   'That sign-in request expired — they are only valid for a few minutes. ' +
   'Click sign in again; the second pass is quick since you are already logged in.';
 
 /**
- * Narrow on purpose. `verifySiwd` says `challenge expired` and the platform says
- * `challenge has expired`; a looser test on the bare word would also swallow
- * "no sign-in in flight (or it expired)", which is a different situation with a
- * different explanation — and the server already words that one for a reader.
+ * Narrow on purpose. `verifySiwd` says `challenge expired` and the platform
+ * says `challenge has expired`; matching the bare word would also swallow "no
+ * sign-in in flight (or it expired)", a different situation the server already
+ * words for a reader.
  */
 const isExpiredReason = (reason: string): boolean =>
   reason.includes('challenge expired') || reason.includes('challenge has expired');
@@ -647,8 +615,8 @@ const startSignIn = async (): Promise<void> => {
   renderStatus('Starting sign-in…');
 
   // The server mints the challenge, so the server's clock authors the
-  // timestamp — which is why a browser with a skewed clock no longer produces
-  // sign-ins that are born stale and refused on the way back.
+  // timestamp — a browser with a skewed clock no longer produces sign-ins that
+  // are born stale and refused on the way back.
   const result = await call('/api/login', { method: 'POST' });
   if (result === null) {
     renderSignedOut('Could not reach this site’s backend to start the sign-in.');
@@ -672,8 +640,7 @@ const signOut = async (): Promise<void> => {
 
 /**
  * The callback: decode for the reader, then let the server decide. The panel
- * goes up FIRST, so what is being verified is on screen while the verification
- * happens — and so the ordering on the page matches the ordering of trust.
+ * goes up first, so what is being verified is on screen while it happens.
  */
 const handleCallback = async (jws: string): Promise<void> => {
   const panel = el('details');
@@ -698,8 +665,8 @@ const handleCallback = async (jws: string): Promise<void> => {
     return;
   }
 
-  // Verified — now read the session back the same way every other page load
-  // does, so there is one signed-in view rendered from one source.
+  // Verified — read the session back the same way every other page load does,
+  // so there is one signed-in view rendered from one source.
   const session = sessionFrom(await call('/api/me'));
   if (session === null) {
     renderSignedOut(
@@ -715,8 +682,8 @@ const boot = async (): Promise<void> => {
   const callback = readSiwdCallback(location.search);
 
   // get the JWS out of the address bar, history, and the referrer of anything
-  // this page loads next. The kit deliberately does not do this for us:
-  // `history` is the environment's, not the library's.
+  // this page loads next. The kit deliberately leaves this to us: `history`
+  // belongs to the environment, not the library.
   if (callback.kind !== 'none') {
     history.replaceState(null, '', location.pathname);
   }
