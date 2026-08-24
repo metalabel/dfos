@@ -15,3 +15,31 @@ jobs:
   # workflow's conclusion via workflow_run.
   test-matrix:
     uses: ./.github/workflows/test-matrix.yml
+
+  # The examples are outside the pnpm workspace on purpose — each one is a
+  # standalone npm project consuming the PUBLISHED packages from the registry
+  # (at the versions pinned by its own lockfile), so this job also proves that
+  # released artifacts a third party would install actually build.
+  siwd-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: examples/siwd-demo
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
