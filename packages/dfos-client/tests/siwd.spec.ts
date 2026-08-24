@@ -261,6 +261,59 @@ describe('siwd login kit', () => {
     expect(paramsOf(request.url).get('redirect_uri')).toBe(redirectUri);
   });
 
+  /*
+    A loopback target is admitted for `scope=identity` only (specs/SIWD.md):
+    every richer scope returns a credential issued to a `client_did`, which is
+    the one param a loopback request cannot carry. Nothing to drop, so it fails
+    at build time rather than after a redirect into a guaranteed refusal.
+  */
+  it('throws on a non-identity scope over a loopback redirect', () => {
+    for (const redirectUri of [
+      'http://127.0.0.1:8976/cb',
+      'http://localhost:3000/',
+      'http://[::1]:8080/x',
+    ]) {
+      expect(() =>
+        createSiwdLoginRequest({
+          authorizeUrl: AUTHORIZE,
+          domain: 'localhost',
+          redirectUri,
+          scope: 'deposit',
+        }),
+      ).toThrow(/scope/);
+    }
+
+    // …and the admitted scope over the same targets is untouched
+    expect(() =>
+      createSiwdLoginRequest({
+        authorizeUrl: AUTHORIZE,
+        domain: 'localhost',
+        redirectUri: 'http://127.0.0.1:8976/cb',
+        scope: 'identity',
+      }),
+    ).not.toThrow();
+
+    // a public redirect carries a client_did, so every scope stays open to it
+    const hosted = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'deposit',
+      clientDid: 'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae',
+    });
+    expect(paramsOf(hosted.url).get('scope')).toBe('deposit');
+
+    // the lookalike is a public domain: it is entitled to a richer scope too
+    expect(() =>
+      createSiwdLoginRequest({
+        authorizeUrl: AUTHORIZE,
+        domain: '127.0.0.1.evil.example',
+        redirectUri: 'https://127.0.0.1.evil.example/',
+        scope: 'deposit',
+      }),
+    ).not.toThrow();
+  });
+
   it('keeps client_did for a loopback-LOOKALIKE hostname', () => {
     // `127.0.0.1.evil.example` is a public domain that merely reads as loopback.
     // Matching it would strip an assertion a real registered app is entitled to.
@@ -694,5 +747,170 @@ describe('verifySiwd', () => {
     });
     expect(opted.ok).toBe(true);
     expect(opted.unverifiable).toContain('tip');
+  });
+
+  /*
+    consumeNonce — the production nonce discipline. Consumption is stateful and
+    irreversible, so these pin the two things a caller cannot check for itself:
+    the consumer sees exactly the payload nonce, and it is reached only once
+    every other check has already passed.
+  */
+  const spyConsumer = (
+    answer: (nonce: string) => boolean | Promise<boolean>,
+  ): { fn: (nonce: string) => boolean | Promise<boolean>; calls: string[] } => {
+    const calls: string[] = [];
+    return {
+      fn: (nonce) => {
+        calls.push(nonce);
+        return answer(nonce);
+      },
+      calls,
+    };
+  };
+
+  it('consumes the presented nonce once, and refuses the replay that follows', async () => {
+    const id = await buildIdentity();
+    const challenge: SiwdChallenge = {
+      domain: '3p.com',
+      nonce: 'minted-1',
+      timestamp: siwdTs(0),
+    };
+    const jws = await signChallenge(id.kid, id.k.signer, challenge);
+    // the whole store: what this verifier minted and has not yet spent
+    const minted = new Set(['minted-1']);
+    const consumer = spyConsumer((nonce) => minted.delete(nonce));
+
+    const res = await verifySiwd(clientFor(id), jws, {
+      domain: '3p.com',
+      consumeNonce: consumer.fn,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.value?.nonce).toBe('minted-1');
+    expect(consumer.calls).toEqual(['minted-1']);
+
+    // the same artifact presented again finds the nonce already spent
+    const replay = await verifySiwd(clientFor(id), jws, {
+      domain: '3p.com',
+      consumeNonce: consumer.fn,
+    });
+    expect(replay.ok).toBe(false);
+    expect(replay.error).toMatch(/nonce/);
+    expect(consumer.calls).toEqual(['minted-1', 'minted-1']);
+  });
+
+  it('awaits an async consumer', async () => {
+    const id = await buildIdentity();
+    const challenge: SiwdChallenge = { domain: '3p.com', nonce: 'async-1', timestamp: siwdTs(0) };
+    const jws = await signChallenge(id.kid, id.k.signer, challenge);
+    const consumer = spyConsumer(async (nonce) => nonce === 'async-1');
+
+    const res = await verifySiwd(clientFor(id), jws, {
+      domain: '3p.com',
+      consumeNonce: consumer.fn,
+    });
+    expect(res.ok).toBe(true);
+    expect(consumer.calls).toEqual(['async-1']);
+
+    const stale = await verifySiwd(clientFor(id), jws, {
+      domain: '3p.com',
+      consumeNonce: async () => false,
+    });
+    expect(stale.ok).toBe(false);
+    expect(stale.error).toMatch(/nonce/);
+  });
+
+  it('fails closed when the consumer throws, carrying its message', async () => {
+    const id = await buildIdentity();
+    const challenge: SiwdChallenge = { domain: '3p.com', nonce: 'n', timestamp: siwdTs(0) };
+    const jws = await signChallenge(id.kid, id.k.signer, challenge);
+
+    const res = await verifySiwd(clientFor(id), jws, {
+      domain: '3p.com',
+      consumeNonce: () => {
+        throw new Error('nonce store unreachable');
+      },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('nonce store unreachable');
+  });
+
+  /*
+    A nonce is spent state, so an otherwise-invalid presentation must never
+    reach the consumer: the real user is still holding that nonce, and anyone
+    who could make the verifier spend it would have a denial of service on the
+    sign-in without producing a signature at all.
+  */
+  it('never reaches the consumer when an earlier check fails', async () => {
+    const id = await buildIdentity();
+    const stranger = makeKey();
+
+    // a signature the resolved current authKey does not verify
+    const forgedChallenge: SiwdChallenge = {
+      domain: '3p.com',
+      nonce: 'n',
+      timestamp: siwdTs(0),
+    };
+    const forged = await signChallenge(id.kid, stranger.signer, forgedChallenge);
+    const onForged = spyConsumer(() => true);
+    const forgedRes = await verifySiwd(clientFor(id), forged, {
+      domain: '3p.com',
+      consumeNonce: onForged.fn,
+    });
+    expect(forgedRes.ok).toBe(false);
+    expect(forgedRes.error).toMatch(/signature/);
+    expect(onForged.calls).toEqual([]);
+
+    // a perfectly signed challenge for someone else's domain
+    const wrongDomain = await signChallenge(id.kid, id.k.signer, {
+      domain: 'evil.com',
+      nonce: 'n',
+      timestamp: siwdTs(0),
+    });
+    const onDomain = spyConsumer(() => true);
+    const domainRes = await verifySiwd(clientFor(id), wrongDomain, {
+      domain: '3p.com',
+      consumeNonce: onDomain.fn,
+    });
+    expect(domainRes.ok).toBe(false);
+    expect(domainRes.error).toMatch(/domain/);
+    expect(onDomain.calls).toEqual([]);
+
+    // …and one that is simply too old
+    const expired = await signChallenge(id.kid, id.k.signer, {
+      domain: '3p.com',
+      nonce: 'n',
+      timestamp: siwdTs(-60),
+    });
+    const onExpired = spyConsumer(() => true);
+    const expiredRes = await verifySiwd(clientFor(id), expired, {
+      domain: '3p.com',
+      maxAgeSeconds: 300,
+      consumeNonce: onExpired.fn,
+    });
+    expect(expiredRes.ok).toBe(false);
+    expect(expiredRes.error).toMatch(/expired/);
+    expect(onExpired.calls).toEqual([]);
+  });
+
+  it('rejects an expectation carrying both nonce disciplines, or neither', async () => {
+    const id = await buildIdentity();
+    const challenge: SiwdChallenge = { domain: '3p.com', nonce: 'n', timestamp: siwdTs(0) };
+    const jws = await signChallenge(id.kid, id.k.signer, challenge);
+    const consumer = spyConsumer(() => true);
+
+    const both = await verifySiwd(clientFor(id), jws, {
+      domain: '3p.com',
+      nonce: 'n',
+      consumeNonce: consumer.fn,
+    });
+    expect(both.ok).toBe(false);
+    expect(both.error).toMatch(/exactly one/);
+
+    const neither = await verifySiwd(clientFor(id), jws, { domain: '3p.com' });
+    expect(neither.ok).toBe(false);
+    expect(neither.error).toMatch(/exactly one/);
+
+    // the configuration verdict lands before anything is decoded or spent
+    expect(consumer.calls).toEqual([]);
   });
 });
