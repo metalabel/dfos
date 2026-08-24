@@ -80,6 +80,26 @@ interface PendingSignIn {
  */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
+/**
+ * `location.hostname` brackets an IPv6 literal — on `http://[::1]:5173/` it is
+ * the string `[::1]`. The brackets are URL grammar, not part of the name, and
+ * every verifier compares the signed `domain` EXACTLY:
+ *
+ *   - the platform requires the challenge domain to already be in bare form and
+ *     compares it to the bracket-stripped redirect host, so `[::1]` is refused
+ *     outright as non-canonical;
+ *   - `api/verify.ts` strips brackets off the Host header, so it would expect
+ *     `::1` while the browser had signed `[::1]`.
+ *
+ * Both mismatches vanish by signing the bare form. Only the IPv6 dev host is
+ * affected — `localhost` and `127.0.0.1` are already bare.
+ */
+const bareHostname = (hostname: string): string =>
+  hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+
+/** The domain this page signs into challenges, and expects back in them. */
+const SIGNING_DOMAIN = bareHostname(location.hostname);
+
 /** The public profile shape we read; everything but the DID may be absent. */
 interface PublicProfile {
   did: string;
@@ -214,7 +234,7 @@ const backendOption = (): HTMLElement => {
 
   wrap.append(button, el('br'), caption);
 
-  if (LOOPBACK_HOSTS.has(location.hostname)) {
+  if (LOOPBACK_HOSTS.has(SIGNING_DOMAIN)) {
     wrap.append(
       el('br'),
       el(
@@ -313,8 +333,8 @@ const checklistReceipt = (verified: VerifiedSignIn): Node[] => {
   const keyId = verified.kid.slice(verified.kid.indexOf('#') + 1);
 
   const nonceLine = backend
-    ? 'Nonce matches the one the backend minted — carried in an HttpOnly cookie this page could never read, and consumed server-side.'
-    : `Nonce matches the one this page minted, single use and now consumed: ${verified.nonce}`;
+    ? 'Nonce matches the one the backend minted, carried in an HttpOnly cookie this page never got to choose or read. Making that nonce single-use needs a server-side store, which this demo does not run — see the PRODUCTION note in api/verify.ts.'
+    : `Nonce matches the one this page minted, removed from this tab before verifying: ${verified.nonce}`;
 
   const list = el('ul', 'checks');
   for (const line of [
@@ -463,9 +483,10 @@ const isExpiredReason = (reason: string): boolean =>
 
 /**
  * Tier 2 step 1: ask the backend for a nonce. It also sets that nonce in an
- * HttpOnly cookie — its own memory of what it issued — which this page can
- * neither read nor forge, and which is why the verification it does later is
- * worth anything.
+ * HttpOnly cookie, which is how it remembers what it issued across the
+ * redirect. What that buys is real but narrow: this page did not get to CHOOSE
+ * the value it will later be checked against. It is not a replay defense — see
+ * the note in api/verify.ts for what would be.
  */
 const mintBackendNonce = async (): Promise<string> => {
   const response = await fetch('/api/nonce', { credentials: 'same-origin' });
@@ -493,14 +514,14 @@ const startSignIn = async (mode: SignInMode): Promise<void> => {
 
   const request: SiwdLoginRequest = createSiwdLoginRequest({
     authorizeUrl: AUTHORIZE_URL,
-    domain: location.hostname,
+    domain: SIGNING_DOMAIN,
     // trailing slash: the platform exact-matches this against the well-known allowlist
     redirectUri: `${location.origin}/`,
     scope: 'identity',
     statement: 'Sign in to the SIWD demo',
     // the kit drops this for a loopback redirect on its own; the demo only
     // decides whether it has a provable DID to assert at all
-    ...(LOOPBACK_HOSTS.has(location.hostname) ? {} : { clientDid: CLIENT_DID }),
+    ...(LOOPBACK_HOSTS.has(SIGNING_DOMAIN) ? {} : { clientDid: CLIENT_DID }),
     // tier 2: the challenge carries the nonce the BACKEND minted, so the
     // signature comes back bound to a value only the backend ever chose
     ...(nonce !== undefined ? { nonce } : {}),
@@ -565,7 +586,8 @@ const verifyOnBackend = async (jws: string): Promise<VerifiedSignIn | string> =>
 };
 
 const handleCallback = async (jws: string): Promise<void> => {
-  // the pending sign-in is single-use: consumed here, pass or fail
+  // read and removed together, so a reload cannot re-run this callback against
+  // the same pending sign-in — tab hygiene, not a replay defense
   const saved = sessionStorage.getItem(PENDING_KEY);
   sessionStorage.removeItem(PENDING_KEY);
   if (saved === null) {
@@ -634,8 +656,9 @@ const renderProfile = async (verified: VerifiedSignIn, jws: string): Promise<voi
 const boot = (): void => {
   const callback = readSiwdCallback(location.search);
 
-  // single-use artifacts must not survive a refresh. The kit deliberately does
-  // not do this for us: `history` is the environment's, not the library's.
+  // get the JWS out of the address bar, history, and the referrer of anything
+  // this page loads next. The kit deliberately does not do this for us:
+  // `history` is the environment's, not the library's.
   if (callback.kind !== 'none') {
     history.replaceState(null, '', location.pathname);
   }

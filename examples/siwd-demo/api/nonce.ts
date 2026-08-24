@@ -5,12 +5,15 @@
   The whole reason this endpoint exists: the party presenting a signed challenge
   must never get to tell the verifier which nonce to expect. A verifier that
   accepts `{ jws, nonce }` from a client is comparing a value against itself and
-  has checked nothing. So the nonce is minted HERE and remembered HERE — in an
-  HttpOnly cookie, which is the verifier's own memory of what it issued. The
-  browser carries the value into the challenge; it never carries it back.
+  has checked nothing. So the nonce is minted HERE, and the cookie is how this
+  backend remembers what it minted across the redirect.
 
-  Zero server state: the cookie IS the state, so any instance can verify a
-  callback minted by any other instance. Nothing to share, nothing to expire.
+  The cookie is a CARRIER, not a replay defense — see the long note in verify.ts.
+  Real single-use consumption needs a store, which this demo does not run; what
+  it would look like is written out at the verify call.
+
+  Zero server state, which is what keeps the demo forkable: the cookie carries
+  it, so any instance can handle a callback that any other instance started.
 
 */
 
@@ -19,8 +22,10 @@ import { randomBytes } from 'node:crypto';
 const NONCE_COOKIE = 'siwd_nonce';
 
 /**
- * Matches the platform's own authorize window. A nonce that outlives the
- * challenge it was minted for is a replay window nobody is watching.
+ * Matched to the acceptance window `verify.ts` applies, so the cookie stops
+ * being useful at the same moment a challenge minted with it would be refused
+ * as stale. With a real nonce store this TTL and the store's expiry are the
+ * same number, set in both places for the same reason.
  */
 const NONCE_TTL_SECONDS = 300;
 
