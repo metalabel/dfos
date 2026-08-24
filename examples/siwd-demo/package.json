@@ -12,9 +12,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@metalabel/dfos-client": "^0.29.1",
-    "@metalabel/dfos-protocol": "^0.29.1",
-    "@metalabel/dfos-web-relay": "^0.29.1"
+    "@metalabel/dfos-client": "^0.30.0",
+    "@metalabel/dfos-protocol": "^0.30.0",
+    "@metalabel/dfos-web-relay": "^0.30.0"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
