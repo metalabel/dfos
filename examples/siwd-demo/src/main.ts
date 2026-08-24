@@ -2,22 +2,30 @@
 
   Sign In With DFOS — demo relying party
 
-  The smallest possible SIWD client: one static page, no secrets, no session
-  store, no backend at all. The load-bearing fact is that verification is CRYPTO
-  AGAINST A PUBLIC RELAY — `verifySiwd` resolves the signer's identity chain and
-  checks the signing key is a CURRENT authKey, so nothing here has to trust the
-  platform that ran the consent screen. See specs/SIWD.md §Profile A.
+  A complete backend-verified login, small enough to read in one sitting. The
+  load-bearing fact is WHERE the verification happens: this page never decides
+  whether to believe a signed challenge. It hands the JWS to `/api/verify`,
+  which is where the session is granted, and renders whatever verdict comes
+  back. specs/SIWD.md is blunt about why — verification of the JWS MUST happen
+  wherever a session is granted, because a bare DID is an address, not a proof.
 
-  Three kit functions carry the whole flow: `createSiwdLoginRequest` mints and
-  builds the redirect, `readSiwdCallback` reads the return, `verifySiwd` decides
-  whether to believe it. Everything else in this file is DOM.
+  So the browser's half of the flow is now three moves and no trust:
+
+    1. ask `/api/login` where to go, and go there
+    2. come back with a JWS and hand it to `/api/verify`
+    3. render `/api/me`
+
+  The JWS still gets DECODED here, on the way through, because the decoded
+  artifact is the most legible thing in the whole protocol — but that panel is
+  labelled for exactly what it is. `decodeJwsUnsafe` does no verification and
+  says so in its name; a page that decoded a JWS and called that a login would
+  have authenticated nobody.
 
   THE AUTHORIZE REQUEST CARRIES THREE PARAMS: `challenge`, `redirect_uri`, and
-  `scope=identity`. No `client_did` — the platform resolves who this app is by
-  fetching `/.well-known/dfos-app.json` from the redirect's own origin, so the
-  file is the app identity and the request param is only an optional assertion
-  that has to agree with it. What `client_did` actually determines is the `aud`
-  of a returned credential, and an identity-scope sign-in returns none.
+  `scope=identity` — built server-side now, in `api/login.ts`. No `client_did`:
+  the platform resolves who this app is by fetching `/.well-known/dfos-app.json`
+  from the redirect's own origin, so the file is the app identity and the
+  request param is only an optional assertion that has to agree with it.
 
   Which makes that served file the one thing a fork has to get right, so this
   page CHECKS ITS OWN at boot and says what it found. A missing or unlisted
@@ -27,34 +35,31 @@
 
 */
 
-import { createClient } from '@metalabel/dfos-client';
-import {
-  createSiwdLoginRequest,
-  readSiwdCallback,
-  verifySiwd,
-  type SiwdLoginRequest,
-} from '@metalabel/dfos-client/siwd';
+import { readSiwdCallback } from '@metalabel/dfos-client/siwd';
 import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 
-// deployment coordinates — edit these when forking the demo
-const AUTHORIZE_URL = 'https://app.dfos.com/authorize';
+// deployment coordinates — the backend's live in api/_lib.ts
 const RELAY_URL = 'https://relay.dfos.com';
-const PUBLIC_API_URL = 'https://api.dfos.com/v1';
 const EXPLORER_URL = 'https://explore.dfos.com';
 
-/** Where the source of the two files that ARE this flow lives. */
+/** Where the source of the files that ARE this flow lives. */
 const REPO = 'https://github.com/metalabel/dfos/blob/main';
 
 /** This origin's own registration, served as a static file out of `public/`. */
 const WELL_KNOWN_PATH = '/.well-known/dfos-app.json';
 
-const PENDING_KEY = 'siwd-demo-pending';
+/** Bounded, so a stalled endpoint degrades to a rendered sentence, not a spinner. */
+const API_TIMEOUT_MS = 3000;
+
+/** Verification is longer: the server makes a relay hop inside this call. */
+const VERIFY_TIMEOUT_MS = 15_000;
 
 /**
  * The exact redirect target, trailing slash included, because the host
  * EXACT-MATCHES this string against the `redirect_uris` allowlist it fetches.
- * It is also the string the boot self-check looks for, so the check and the
- * request it is checking can never drift apart.
+ * `api/login.ts` derives the same string from the request's own origin, so the
+ * string this page checks and the string the server sends agree by
+ * construction rather than by two people remembering to edit both.
  */
 const REDIRECT_URI = `${location.origin}/`;
 
@@ -78,29 +83,92 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 const bareHostname = (hostname: string): string =>
   hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
 
-/** The domain this page signs into challenges, and expects back in them. */
+/** The domain the backend signs into challenges, derived here the same way. */
 const SIGNING_DOMAIN = bareHostname(location.hostname);
 
-/** The public profile shape we read; everything but the DID may be absent. */
-interface PublicProfile {
+/** A verified sign-in, as the server reads it back out of its own cookie. */
+interface Session {
   did: string;
-  username?: string | null;
-  displayName?: string | null;
-  avatarUrl?: string | null;
-  bio?: string | null;
-}
-
-/** A verified sign-in — what the signed-in view and the receipts render. */
-interface VerifiedSignIn {
-  did: string;
-  domain: string;
-  timestamp: string;
+  /** The DID URL of the key that signed the challenge. */
   kid: string;
-  /** The nonce this tab minted and consumed. */
-  nonce: string;
+  /** Issued-at and expiry, unix seconds. */
+  iat: number;
+  exp: number;
 }
 
-const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+/**
+ * True once any endpoint has admitted it is running on a per-instance secret.
+ * Sticky for the life of the page, because the condition is a property of the
+ * deployment rather than of one response.
+ */
+let ephemeral = false;
+
+// -----------------------------------------------------------------------------
+// the backend
+// -----------------------------------------------------------------------------
+
+interface ApiResult {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+/**
+ * One shape for all four endpoints. `null` means the request never completed —
+ * offline, aborted, a dev server that is not running — which is a different
+ * fact from a refusal and is worth saying differently on the page.
+ *
+ * Cookies ride along without asking: every call here is same-origin, and
+ * `fetch` sends same-origin credentials by default. That is the entire session
+ * mechanism from the browser's side.
+ */
+const call = async (
+  path: string,
+  options: { method?: string; body?: unknown; timeoutMs?: number } = {},
+): Promise<ApiResult | null> => {
+  const { method = 'GET', body, timeoutMs = API_TIMEOUT_MS } = options;
+
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method,
+      signal: AbortSignal.timeout(timeoutMs),
+      ...(body !== undefined
+        ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+        : {}),
+    });
+  } catch {
+    return null;
+  }
+
+  let parsed: unknown = null;
+  if (response.status !== 204) {
+    try {
+      parsed = await response.json();
+    } catch {
+      parsed = null;
+    }
+  }
+  const jsonBody =
+    typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+
+  if (jsonBody['ephemeral'] === true) ephemeral = true;
+  return { status: response.status, body: jsonBody };
+};
+
+/** A 200 from `/api/me`, shape-checked — anything else is "nobody is signed in". */
+const sessionFrom = (result: ApiResult | null): Session | null => {
+  if (result === null || result.status !== 200) return null;
+  const { did, kid, iat, exp } = result.body;
+  if (typeof did !== 'string' || typeof kid !== 'string') return null;
+  if (typeof iat !== 'number' || typeof exp !== 'number') return null;
+  return { did, kid, iat, exp };
+};
+
+/** The server's own words for a refusal, or an honest fallback. */
+const reasonFrom = (result: ApiResult, fallback: string): string =>
+  typeof result.body['reason'] === 'string' ? result.body['reason'] : fallback;
 
 // -----------------------------------------------------------------------------
 // registration self-check
@@ -187,6 +255,13 @@ const registrationNotice = (found: Registration): string | undefined => {
   return undefined;
 };
 
+/** The other configuration a fork can forget — this one degrades rather than fails. */
+const EPHEMERAL_NOTICE =
+  'This server is running without SESSION_SECRET, so it signs its cookies with a ' +
+  'random key minted at startup — the dev-server-only fallback: sessions die ' +
+  'with the process. Deployed, the server refuses to sign in at all until the ' +
+  'variable is set. Set SESSION_SECRET to any long random string, 32+ characters.';
+
 // -----------------------------------------------------------------------------
 // dom
 // -----------------------------------------------------------------------------
@@ -232,33 +307,33 @@ const linkNote = (href: string, text: string, caption: string): HTMLElement => {
   return wrap;
 };
 
-/** Avatar URLs are third-party strings too — only ever load one over https. */
-const httpsUrl = (value: string | null | undefined): string | undefined => {
-  if (value === null || value === undefined || value === '') return undefined;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' ? url.toString() : undefined;
-  } catch {
-    return undefined;
-  }
-};
+/** The notices that belong above every view, in the order they matter. */
+const notices = (notice?: string): Node[] => [
+  ...(notice !== undefined ? [el('p', 'notice', notice)] : []),
+  ...(ephemeral ? [el('p', 'notice', EPHEMERAL_NOTICE)] : []),
+];
 
 // -----------------------------------------------------------------------------
 // views
 // -----------------------------------------------------------------------------
 
-const renderStatus = (text: string): void => {
-  render(el('h1', undefined, 'Sign In With DFOS'), card(el('p', 'dim', text)));
+const renderStatus = (text: string, ...extra: Node[]): void => {
+  render(
+    el('h1', undefined, 'Sign In With DFOS'),
+    ...notices(),
+    card(el('p', 'dim', text)),
+    ...extra,
+  );
 };
 
 /** The four steps this page is about to run, in the order it runs them. */
 const whatHappensNext = (): HTMLElement => {
   const list = el('ol', 'steps');
   for (const step of [
-    'This page mints a challenge (domain + nonce + timestamp) and redirects you to your DFOS host.',
-    "You approve on the host's consent screen; your custodial key signs the challenge bytes server-side.",
-    'The browser returns here with the signed JWS.',
-    'This page re-verifies everything client-side against your public identity chain on a relay — no server involved.',
+    'This page asks its own backend to start a sign-in; the server mints the challenge (domain + nonce + timestamp) and seals the nonce into an httpOnly cookie before answering with a URL.',
+    "You approve on your DFOS host's consent screen; your custodial key signs the challenge bytes server-side.",
+    'The browser returns here with the signed JWS and posts it straight to this site’s backend.',
+    'The server unseals the nonce it minted, verifies the JWS against your public identity chain on a relay, and mints a session cookie. This page renders the verdict.',
   ]) {
     list.append(el('li', undefined, step));
   }
@@ -318,7 +393,7 @@ const registrationNote = (found: Registration): Node[] => {
     line.append(
       'Declared client_did: ',
       el('code', undefined, found.clientDid),
-      ' — optional at identity scope, and this page does not send it. The file is what names the app.',
+      ' — optional at identity scope, and this app does not send it. The file is what names the app.',
     );
     body.push(line);
   }
@@ -335,11 +410,12 @@ const registrationSection = (found: Registration): HTMLElement => {
 
 const renderSignedOut = (notice?: string): void => {
   const button = el('button', undefined, 'Sign in with DFOS');
-  button.addEventListener('click', startSignIn);
+  button.addEventListener('click', () => void startSignIn());
 
   const aside = el('p', 'dim');
   aside.append(
-    'This site has no secrets, no backend, and no session store — it verifies entirely in your browser, against a public relay. ',
+    'Verification runs on this site’s own backend, against a public relay — no DFOS ' +
+      'platform server is asked whether to believe the signature. ',
     link(
       'https://github.com/metalabel/dfos/tree/main/examples/siwd-demo',
       'This demo site is open source',
@@ -356,10 +432,11 @@ const renderSignedOut = (notice?: string): void => {
       'p',
       undefined,
       'Sign in to this demo with your DFOS identity. You approve the sign-in on ' +
-        'your platform’s consent screen; this page then verifies the signed ' +
-        'challenge in your browser against your public identity chain.',
+        'your platform’s consent screen; this site’s backend then verifies the ' +
+        'signed challenge against your public identity chain before granting a ' +
+        'session.',
     ),
-    ...(notice !== undefined ? [el('p', 'notice', notice)] : []),
+    ...notices(notice),
     ...(warning !== undefined ? [el('p', 'notice', warning)] : []),
     card(button, whatHappensNext(), ...(found !== null ? [registrationSection(found)] : [])),
     aside,
@@ -376,13 +453,19 @@ const receiptSection = (heading: string, ...body: Node[]): Node[] => [
 ];
 
 /**
- * The signed artifact, decoded for reading. `decodeJwsUnsafe` is exactly what
- * its name says — it does NO verification. That already happened; this is the
- * same bytes shown back to you.
+ * The signed artifact, decoded for reading — and DECODING IS NOT VERIFYING.
+ * `decodeJwsUnsafe` is exactly what its name says: it parses base64url and
+ * hands back whatever was in there, signature unchecked. Anyone can author
+ * these bytes. What makes this particular one a sign-in is that `/api/verify`
+ * resolved the signer's identity chain and matched the nonce it had sealed
+ * away before the redirect — which happened on the server, not here.
  */
 const artifactReceipt = (jws: string): Node[] => {
   const decoded = decodeJwsUnsafe(jws);
-  const body: Node[] = [el('pre', 'wrap', jws)];
+  const body: Node[] = [
+    el('p', 'dim', 'Decoded in your browser for display only — the server does the verifying.'),
+    el('pre', 'wrap', jws),
+  ];
 
   if (decoded === null) return receiptSection('The signed artifact', ...body);
 
@@ -402,43 +485,48 @@ const artifactReceipt = (jws: string): Node[] => {
     el(
       'p',
       'dim',
-      'That payload IS the canonical challenge — byte for byte the bytes this ' +
-        'page minted before the redirect, and byte for byte what the signature covers.',
+      'That payload IS the canonical challenge — byte for byte the bytes the ' +
+        'backend minted before the redirect, and byte for byte what the signature ' +
+        'covers. The nonce in it is the one the server had already sealed into an ' +
+        'httpOnly cookie under its own key.',
     ),
   );
   return receiptSection('The signed artifact', ...body);
 };
 
 /**
- * One line per check `verifySiwd` ran. These are rendered FROM the verified
- * result — the checks already happened inside the kit, and re-running them here
- * would be theatre, not evidence.
+ * One line per check the server ran before it minted the session. These are
+ * rendered FROM the granted session — the checks happened in `api/verify.ts`,
+ * and re-running them here would be theatre, not evidence.
  */
-const checklistReceipt = (verified: VerifiedSignIn): Node[] => {
-  const keyId = verified.kid.slice(verified.kid.indexOf('#') + 1);
+const checklistReceipt = (session: Session): Node[] => {
+  const keyId = session.kid.slice(session.kid.indexOf('#') + 1);
 
   const list = el('ul', 'checks');
   for (const line of [
+    'The expected nonce came out of the server’s own sealed cookie — never out of the callback, and never out of anything the presenter could author.',
     'Identity chain resolved from the relay and replayed to current state — fresh, not cached (a stale resolution fails closed).',
     `Signing key is a CURRENT authentication key of a non-deleted identity: ${keyId}`,
     'Signature valid under the DFOS JWS profile (EdDSA, canonical scalar, no embedded key).',
-    `Nonce matches the one this page minted, removed from this tab before verifying: ${verified.nonce}`,
-    `Domain binding: the signed domain is this site — ${verified.domain}`,
-    `Timestamp inside the acceptance window: ${verified.timestamp}`,
+    `Domain binding: the signed domain is this site — ${SIGNING_DOMAIN}`,
+    'Timestamp inside the acceptance window, checked against the server’s clock.',
+    'Nonce checked LAST, after every other check passed — the spec’s step 6.',
   ]) {
     list.append(el('li', undefined, line));
   }
 
   return receiptSection(
-    'What was checked — in this tab',
+    'What the server checked, before it minted this session',
     list,
     el(
       'p',
       'dim',
-      'Verifying here is sound exactly because nothing is granted here. The moment ' +
-        'a backend grants something, this same function has to run where the grant ' +
-        'happens — and the nonce has to be consumed atomically there. See "When your ' +
-        'backend grants anything" in the README.',
+      'This is the FLOW-BOUND replay discipline, and its guarantee is exactly this: ' +
+        'the signed challenge redeems only through the browser that started the ' +
+        'flow, inside the timestamp window. It is not global single-use, and it does ' +
+        'not need to be — success here grants a session with this browser and ' +
+        'nothing else. Grant anything portable and the discipline changes; see "The ' +
+        'two replay disciplines" in the README.',
     ),
   );
 };
@@ -450,19 +538,14 @@ const lookItUpReceipt = (did: string): Node[] =>
     linkNote(
       `${RELAY_URL}/proof/v1/identities/${encodeURIComponent(did)}/log`,
       'The raw signed operation log',
-      'What this page verified — the relay’s claim, in full, before any replay.',
+      'What the backend verified — the relay’s claim, in full, before any replay.',
     ),
     linkNote(
       // NOT encoded: the explorer's hash router takes the DID literally, and a
       // did:dfos identifier is fragment-safe as-is.
       `${EXPLORER_URL}/#/did/${did}`,
       'The same chain in the DFOS explorer',
-      'Re-verified in YOUR tab — the same trust move this page just made.',
-    ),
-    linkNote(
-      `${PUBLIC_API_URL}/users/${encodeURIComponent(did)}`,
-      'The public profile lookup',
-      'What this page rendered below. A 404 means a verified identity with no public profile.',
+      'Re-verified in YOUR tab — the same trust move the backend just made.',
     ),
   );
 
@@ -470,77 +553,71 @@ const sourceReceipt = (): Node[] =>
   receiptSection(
     'Read the source',
     linkNote(
+      `${REPO}/examples/siwd-demo/api/verify.ts`,
+      'examples/siwd-demo/api/verify.ts',
+      'The verifier: where the session is granted, and therefore where the checking happens.',
+    ),
+    linkNote(
+      `${REPO}/examples/siwd-demo/api/_lib.ts`,
+      'examples/siwd-demo/api/_lib.ts',
+      'The seal — what binds the nonce to this browser, and what that does and does not buy.',
+    ),
+    linkNote(
       `${REPO}/examples/siwd-demo/src/main.ts`,
       'examples/siwd-demo/src/main.ts',
-      'This page: the relying party, DOM and all.',
+      'This page: three fetches and a lot of DOM.',
     ),
     linkNote(
       `${REPO}/packages/dfos-client/src/siwd.ts`,
       'packages/dfos-client/src/siwd.ts',
-      'The kit: mint, read, verify. The whole flow is those two files.',
+      'The kit: mint, read, verify.',
     ),
   );
 
-const receipts = (jws: string, verified: VerifiedSignIn): HTMLElement => {
+const receipts = (session: Session, jws?: string): HTMLElement => {
   const details = el('details');
   const found = registration;
   details.append(
     el('summary', undefined, 'Show the receipts'),
-    ...artifactReceipt(jws),
-    ...checklistReceipt(verified),
+    ...(jws !== undefined ? artifactReceipt(jws) : []),
+    ...checklistReceipt(session),
     ...(found !== null
       ? receiptSection('How this app is registered', ...registrationNote(found))
       : []),
-    ...lookItUpReceipt(verified.did),
+    ...lookItUpReceipt(session.did),
     ...sourceReceipt(),
   );
   return details;
 };
 
-const renderSignedIn = (
-  verified: VerifiedSignIn,
-  jws: string,
-  profile: PublicProfile | null,
-): void => {
-  const signOut = el('button', undefined, 'Sign out');
-  signOut.addEventListener('click', () => {
-    sessionStorage.clear();
-    renderSignedOut();
-  });
+const renderSignedIn = (session: Session, jws?: string): void => {
+  const signOutButton = el('button', undefined, 'Sign out');
+  signOutButton.addEventListener('click', () => void signOut());
 
-  const did = verified.did;
-  const body: Node[] = [];
+  const who = el('p');
+  who.append('Signed in as ', el('code', undefined, session.did));
 
-  const avatar = httpsUrl(profile?.avatarUrl);
-  if (avatar !== undefined) {
-    const image = el('img', 'avatar');
-    image.src = avatar;
-    image.alt = '';
-    body.push(image);
-  }
+  const key = el('p', 'dim');
+  key.append('Verified against signing key ', el('code', undefined, session.kid));
 
-  if (profile === null) {
-    const line = el('p');
-    line.append('Signed in as ', el('code', undefined, did));
-    body.push(line);
-    body.push(
+  render(
+    el('h1', undefined, 'Signed in with DFOS'),
+    ...notices(),
+    card(
+      who,
+      key,
+      el('p', 'dim', `Session expires ${new Date(session.exp * 1000).toLocaleString()}`),
       el(
         'p',
         'dim',
-        'This identity has no public profile — the sign-in is still cryptographically verified.',
+        'That is the server reading its own sealed session cookie back through ' +
+          '/api/me — not a verdict this page remembered. Reload and it is still ' +
+          'true; sign out and it is not.',
       ),
-    );
-  } else {
-    body.push(el('h2', undefined, profile.displayName || profile.username || did));
-    if (profile.username) body.push(el('p', 'dim', `@${profile.username}`));
-    if (profile.bio) body.push(el('p', undefined, profile.bio));
-    const didLine = el('p', 'dim');
-    didLine.append(el('code', undefined, did));
-    body.push(didLine);
-  }
-
-  body.push(signOut);
-  render(el('h1', undefined, 'Signed in with DFOS'), card(...body), receipts(jws, verified));
+      signOutButton,
+    ),
+    receipts(session, jws),
+  );
 };
 
 // -----------------------------------------------------------------------------
@@ -557,82 +634,81 @@ const EXPIRED_NOTICE =
   'That sign-in request expired — they are only valid for a few minutes. ' +
   'Click sign in again; the second pass is quick since you are already logged in.';
 
+/**
+ * Narrow on purpose. `verifySiwd` says `challenge expired` and the platform says
+ * `challenge has expired`; a looser test on the bare word would also swallow
+ * "no sign-in in flight (or it expired)", which is a different situation with a
+ * different explanation — and the server already words that one for a reader.
+ */
 const isExpiredReason = (reason: string): boolean =>
-  reason.includes('expired') || reason.includes('challenge has expired');
+  reason.includes('challenge expired') || reason.includes('challenge has expired');
 
-const startSignIn = (): void => {
-  const request: SiwdLoginRequest = createSiwdLoginRequest({
-    authorizeUrl: AUTHORIZE_URL,
-    domain: SIGNING_DOMAIN,
-    redirectUri: REDIRECT_URI,
-    scope: 'identity',
-    statement: 'Sign in to the SIWD demo',
-  });
+const startSignIn = async (): Promise<void> => {
+  renderStatus('Starting sign-in…');
 
-  // `expect` is the one thing that has to survive the redirect: domain + nonce,
-  // which is exactly what `verifySiwd` takes back. The whole "session" is this
-  // tab — minted on the click, consumed on the way back, never sent anywhere.
-  sessionStorage.setItem(PENDING_KEY, JSON.stringify(request.expect));
-  location.href = request.url;
+  // The server mints the challenge, so the server's clock authors the
+  // timestamp — which is why a browser with a skewed clock no longer produces
+  // sign-ins that are born stale and refused on the way back.
+  const result = await call('/api/login', { method: 'POST' });
+  if (result === null) {
+    renderSignedOut('Could not reach this site’s backend to start the sign-in.');
+    return;
+  }
+  const url = result.body['url'];
+  if (result.status !== 200 || typeof url !== 'string') {
+    renderSignedOut(`Could not start the sign-in: ${reasonFrom(result, `HTTP ${result.status}`)}`);
+    return;
+  }
+  location.assign(url);
 };
 
-const handleCallback = async (jws: string): Promise<void> => {
-  // read and removed together, so a reload cannot re-run this callback against
-  // the same pending sign-in — tab hygiene, not a replay defense
-  const saved = sessionStorage.getItem(PENDING_KEY);
-  sessionStorage.removeItem(PENDING_KEY);
-  if (saved === null) {
-    renderSignedOut('There is no pending sign-in in this tab — start over.');
-    return;
-  }
-  const expect = JSON.parse(saved) as SiwdLoginRequest['expect'];
-
-  renderStatus('Verifying in this tab…');
-
-  // `verifySiwd` is no-throw: the relay hop, the decode, and every check share
-  // one result channel, so its own error string is the honest one to show.
-  const client = createClient({ relays: [RELAY_URL] });
-  const result = await verifySiwd(client, jws, expect);
-  if (!result.ok || result.value === undefined) {
-    const reason = result.error ?? 'unknown error';
-    renderSignedOut(isExpiredReason(reason) ? EXPIRED_NOTICE : `Verification failed: ${reason}`);
-    return;
-  }
-
-  const { did, domain, timestamp, kid, nonce } = result.value;
-  await renderProfile({ did, domain, timestamp, kid, nonce }, jws);
+const signOut = async (): Promise<void> => {
+  renderStatus('Signing out…');
+  const result = await call('/api/logout', { method: 'POST' });
+  renderSignedOut(
+    result !== null && result.status === 204 ? undefined : 'Sign-out did not complete — reload.',
+  );
 };
 
 /**
- * The DID here comes from the VERIFIED session. The callback's `?did=` param is
- * unauthenticated courier convenience and is deliberately never read.
+ * The callback: decode for the reader, then let the server decide. The panel
+ * goes up FIRST, so what is being verified is on screen while the verification
+ * happens — and so the ordering on the page matches the ordering of trust.
  */
-const renderProfile = async (verified: VerifiedSignIn, jws: string): Promise<void> => {
-  renderStatus('Loading profile…');
+const handleCallback = async (jws: string): Promise<void> => {
+  const panel = el('details');
+  panel.open = true;
+  panel.append(el('summary', undefined, 'What just came back'), ...artifactReceipt(jws));
+  renderStatus('Verifying on the server…', panel);
 
-  let response: Response;
-  try {
-    response = await fetch(`${PUBLIC_API_URL}/users/${encodeURIComponent(verified.did)}`);
-  } catch (err) {
-    renderSignedOut(`Signed in, but the profile lookup failed: ${errorMessage(err)}`);
+  const result = await call('/api/verify', {
+    method: 'POST',
+    body: { jws },
+    timeoutMs: VERIFY_TIMEOUT_MS,
+  });
+  if (result === null) {
+    renderSignedOut('The verification request did not complete — the backend did not answer.');
+    return;
+  }
+  if (result.status !== 200 || result.body['ok'] !== true) {
+    const reason = reasonFrom(result, `the server answered HTTP ${result.status}`);
+    renderSignedOut(
+      isExpiredReason(reason) ? EXPIRED_NOTICE : `The server refused the sign-in: ${reason}`,
+    );
     return;
   }
 
-  if (response.status === 404) {
-    renderSignedIn(verified, jws, null);
+  // Verified — now read the session back the same way every other page load
+  // does, so there is one signed-in view rendered from one source.
+  const session = sessionFrom(await call('/api/me'));
+  if (session === null) {
+    renderSignedOut(
+      'The server verified the sign-in but the session did not come back — check that ' +
+        'cookies are not blocked for this site.',
+    );
     return;
   }
-  if (!response.ok) {
-    renderSignedOut(`Signed in, but the profile lookup returned ${response.status}.`);
-    return;
-  }
-
-  try {
-    const profile = (await response.json()) as PublicProfile;
-    renderSignedIn(verified, jws, profile);
-  } catch (err) {
-    renderSignedOut(`Signed in, but the profile response was unreadable: ${errorMessage(err)}`);
-  }
+  renderSignedIn(session, jws);
 };
 
 const boot = async (): Promise<void> => {
@@ -661,7 +737,21 @@ const boot = async (): Promise<void> => {
     await handleCallback(callback.jws);
     return;
   }
-  renderSignedOut();
+
+  const result = await call('/api/me');
+  if (result === null) {
+    renderSignedOut(
+      'This site’s backend did not answer, so there is no session to show. If you are ' +
+        'running it locally, check that `npm run dev` is up.',
+    );
+    return;
+  }
+  const session = sessionFrom(result);
+  if (session === null) {
+    renderSignedOut();
+    return;
+  }
+  renderSignedIn(session);
 };
 
 void boot();
