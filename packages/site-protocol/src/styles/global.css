@@ -1562,6 +1562,14 @@ a.card:hover {
   grid-template-columns: 1fr 1fr;
 }
 
+/* An odd item count leaves a trailing card alone in the left column; span it
+   across the row so the column rule does not hang against empty space. */
+.spec-links--quad .spec-link:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  padding-right: 0;
+  border-right: none;
+}
+
 /* ═══ Responsive ═══ */
 
 @media (max-width: 1100px) {

@@ -1,8 +1,8 @@
 # Contributing
 
 This repo is the canonical source for the DFOS protocol specs (`specs/`) and the
-published packages (`@metalabel/dfos-protocol`, `@metalabel/dfos-web-relay`, the Go
-twins, and the verification/conformance corpora). The frozen surfaces — Protocol v1,
+published packages (`@metalabel/dfos-protocol`, `@metalabel/dfos-web-relay`,
+`@metalabel/dfos-client`, the Go twins, and the verification/conformance corpora). The frozen surfaces — Protocol v1,
 the `/proof/v1` relay plane, the v1 credential machinery — change only by the rules in
 each spec's own status block: clarifications in place, additive capability beside them,
 breaks become a new major.

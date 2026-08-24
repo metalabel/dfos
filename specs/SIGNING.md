@@ -331,7 +331,7 @@ Every one of these moments presupposes a standing relationship, and that is the 
 
 ## Relationship to SIWD
 
-SIWD is this protocol's ancestor and is now its client: **`did:dfos:siwd` is a registered `payloadTyp`** ([SIWD.md](https://protocol.dfos.com/siwd)). The SIWD challenge schema, its canonical signing input, and its verification rules survived the absorption unchanged as the target spec; the web-redirect dance remains as SIWD's profile A (a good transport for a browser already standing at the platform's door); the mailbox is its profile B, replacing the old localhost-CLI sovereign path outright — the same job without a port, a health probe, or a same-machine constraint. Scope-to-credential issuance is untouched, and SIWD's `deposit` scope is the canonical issuance moment for the mailbox deposit credential this document requires.
+SIWD is this protocol's ancestor and is now its client: **`did:dfos:siwd` is a registered `payloadTyp`** ([SIWD.md](https://protocol.dfos.com/siwd)). The SIWD challenge schema, its canonical signing input, and its verification rules survived the absorption unchanged as the target spec; the web-redirect dance remains as SIWD's profile A (a good transport for a browser already standing at the platform's door); the mailbox is its profile B, the courier self-custodied signing rides — the same job without a port, a health probe, or a same-machine constraint. Scope-to-credential issuance is untouched, and SIWD's `deposit` scope is the canonical issuance moment for the mailbox deposit credential this document requires.
 
 ---
 

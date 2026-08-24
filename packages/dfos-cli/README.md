@@ -119,12 +119,12 @@ dfos --ctx bob@prod status     # per-command override
 Environment variables:
 
 ```
-DFOS_CONTEXT       Override active context
-DFOS_IDENTITY      Override identity name
-DFOS_RELAY         Override relay name
-DFOS_CONFIG        Config file path (default: ~/.dfos/config.toml)
-DFOS_NO_KEYCHAIN   Skip OS keychain; use file store ~/.dfos/keys/ (unencrypted, 0600)
-DFOS_DEBUG         Debug logging
+DFOS_CONTEXT          Override active context
+DFOS_IDENTITY         Override identity name
+DFOS_RELAY            Override relay name
+DFOS_CONFIG           Config file path (default: ~/.dfos/config.toml)
+DFOS_NO_KEYCHAIN      Skip OS keychain; use file store ~/.dfos/keys/ (unencrypted, 0600)
+DFOS_NO_UPDATE_CHECK  Disable automatic version update checks
 ```
 
 ## Local-First

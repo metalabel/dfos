@@ -138,7 +138,7 @@ The `prf` field contains an array of full JWS compact tokens — the complete pa
 - `prf: []` — root credential. The issuer is the original authority.
 - `prf: ["<parent JWS>"]` — delegated credential. The single parent credential proves the issuer was authorized.
 
-**Delegation is linear (single-parent).** A credential's `prf` MUST contain at most one entry. Verifiers MUST reject any credential whose `prf` has more than one element. (A prior union-of-authority model — attenuating the child against the _union_ of multiple parents while rooting the walk through only the first — allowed a self-issued secondary parent to contribute authority that was never rooted at the expected creator, an authority-escalation. Linear delegation removes the class entirely.)
+**Delegation is linear (single-parent).** A credential's `prf` MUST contain at most one entry. Verifiers MUST reject any credential whose `prf` has more than one element. (Attenuating a child against the _union_ of several parents while rooting the walk through only the first would let a self-issued secondary parent contribute authority never rooted at the expected creator — an authority escalation. Linear delegation removes the class by construction.)
 
 ### Verification Walk
 

@@ -263,7 +263,7 @@ The [Event Fold](#event-fold) interpretation says a chain's resolved state is th
 
 The canonical order is the [web relay's deterministic head-selection comparator](https://protocol.dfos.com/web-relay#fork-acceptance) generalized from "pick one tip" to "order the whole log."
 
-Head selection prefers, among the chain's tips (operations with no child), the operation with the **highest `createdAt`**, breaking ties by the **highest operation CID** — both compared **byte-wise** over the multibase CID string and the ASCII ISO-8601 timestamp (a code-point comparison, never locale collation, so every implementation agrees; see [Threat Model → Fork head selection](https://protocol.dfos.com/threat-model)).
+Head selection prefers, among the chain's tips (operations with no child), the operation with the **highest `createdAt`**, breaking ties by the **highest operation CID** — both compared **byte-wise** over the multibase CID string and the ASCII ISO-8601 timestamp (a code-point comparison, never locale collation, so every implementation agrees; see [Threat Model → Head Selection Is Convergent, Not Canonical](https://protocol.dfos.com/threat-model#head-selection-is-convergent-not-canonical--and-content-only)).
 
 The canonical linearization lays that same preference out in full, **ascending**, so the operation head selection would prefer sorts **last**:
 

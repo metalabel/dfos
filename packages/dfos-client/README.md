@@ -6,8 +6,6 @@ If verification logic appears in this package, that is the bug: every proof come
 
 ## Install
 
-> **Not yet published — pre-release.** This package is `private` until it ships with a stamped release; until then it is consumable only inside this workspace.
-
 ```bash
 npm install @metalabel/dfos-client @metalabel/dfos-protocol @metalabel/dfos-web-relay
 ```
@@ -78,10 +76,17 @@ import { indexedDbStore, memoryStore } from '@metalabel/dfos-client/store';
 ### `@metalabel/dfos-client/siwd`
 
 ```typescript
-import { createSiwdChallenge, siwdSigningInput, verifySiwd } from '@metalabel/dfos-client/siwd';
+import {
+  createSiwdLoginRequest,
+  readSiwdCallback,
+  siwdSigningInput,
+  verifySiwd,
+} from '@metalabel/dfos-client/siwd';
 ```
 
-Sign In With DFOS. `siwdSigningInput(challenge)` is the pure byte contract both the signer and the verifier share (see [SIWD.md](../../specs/SIWD.md)); `verifySiwd` is a no-throw verifier that accepts only a current `authKeys` entry of a non-deleted identity.
+Sign In With DFOS. The three verbs above are the relying-party login kit, in the order a login uses them: `createSiwdLoginRequest` mints the challenge and builds the `/authorize` URL to redirect to, `readSiwdCallback` parses what comes back, and `verifySiwd` verifies it — mint → redirect, read → verify. The `expect` object `createSiwdLoginRequest` returns (nonce, domain, and the DID when the challenge is bound to one) is what `verifySiwd` checks against, so the relying party MUST persist it across the redirect: a verifier that takes its expectation from the callback has implemented the check and none of the protection. See [`examples/siwd-demo`](../../examples/siwd-demo) for the reference consumer.
+
+`siwdSigningInput(challenge)` is the pure byte contract both the signer and the verifier share (see [SIWD.md](../../specs/SIWD.md)); `createSiwdChallenge` mints a challenge on its own for a caller building its own redirect; `verifySiwd` is a no-throw verifier that accepts only a current `authKeys` entry of a non-deleted identity.
 
 ## License
 

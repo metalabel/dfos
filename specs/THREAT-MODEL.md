@@ -7,7 +7,8 @@ does not introduce new protocol rules — it assembles the threat surface that i
 already specified, in prose, across [PROTOCOL.md](https://protocol.dfos.com/spec),
 [CREDENTIALS.md](https://protocol.dfos.com/credentials),
 [WEB-RELAY.md](https://protocol.dfos.com/web-relay),
-[DID-METHOD.md](https://protocol.dfos.com/did-method), and
+[DID-METHOD.md](https://protocol.dfos.com/did-method),
+[SIGNING.md](https://protocol.dfos.com/signing), and
 [SIWD.md](https://protocol.dfos.com/siwd), and links each claim back to its source.
 
 This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
@@ -101,7 +102,7 @@ If the fact of the attestation is itself sensitive, do not countersign.
 | Malicious/Byzantine relay   | Withhold, reorder, equivocate, censor, serve stale state, read stored content-plane blobs | Forge a chain or operation                                         | DID-METHOD.md §6.4 `specs/DID-METHOD.md`                |
 | Malicious peer              | Push invalid/spam operations to peers                                                     | Have invalid operations accepted (each peer re-verifies, no trust) | WEB-RELAY.md "Peering" `specs/WEB-RELAY.md`             |
 | Unauthenticated submitter   | POST arbitrary JWS to `/proof/v1/operations`; impose CPU + storage cost                   | Have malformed/unsigned ops accepted                               | WEB-RELAY.md "Operation Ingestion" `specs/WEB-RELAY.md` |
-| Compromised custody/KMS key | Full, indistinguishable impersonation of the user                                         | Be detected on-chain (signature is valid Ed25519)                  | SIWD.md "Managed Signing Path" `specs/SIWD.md`          |
+| Compromised custody/KMS key | Full, indistinguishable impersonation of the user                                         | Be detected on-chain (signature is valid Ed25519)                  | SIWD.md "The custodial signer agent" `specs/SIWD.md`    |
 | Lost key                    | —                                                                                         | — (1-of-N availability vs. total loss)                             | DID-METHOD.md §6.2 `specs/DID-METHOD.md`                |
 
 ### Malicious / Byzantine relay
@@ -132,20 +133,24 @@ A malicious peer can therefore only impose cost and noise, not corrupt state.
 `POST /proof/v1/operations` is unauthenticated (WEB-RELAY.md "Quick Start" route table,
 `specs/WEB-RELAY.md`); operations self-authenticate. An attacker can submit
 arbitrary JWS tokens, imposing CPU (verification) and storage (store-then-verify
-buffering, `specs/WEB-RELAY.md`) cost. Field-size ceilings bound per-operation
-abuse (PROTOCOL.md "Operation Field Limits", `specs/PROTOCOL.md`), but
-**protocol-layer rate limiting is explicitly deferred** to the deployment layer
-(WEB-RELAY.md "What's Deferred", `specs/WEB-RELAY.md`).
+buffering, `specs/WEB-RELAY.md`) cost. One aggregate 64 KiB operation-size cap plus
+a small set of cardinality caps bound per-operation abuse — there is deliberately no
+per-field string-length table (PROTOCOL.md "Operation Size and Cardinality Limits",
+`specs/PROTOCOL.md`) — but **protocol-layer rate limiting is explicitly deferred** to
+the deployment layer (WEB-RELAY.md "What's Deferred", `specs/WEB-RELAY.md`).
 
 ### Compromised custody / KMS key
 
-In the SIWD managed-signing path the platform holds the user's key material in a KMS
-and signs on their behalf (SIWD.md "Managed Signing Path", `specs/SIWD.md`). A
-compromise of that custody is **full impersonation** and is **indistinguishable on-chain**:
-the signature is a valid Ed25519 signature by a key declared in the identity chain, so
-it verifies identically to a sovereign signature (SIWD.md "Overview" / "Managed Signing
-Path", `specs/SIWD.md`, `specs/SIWD.md`). The sovereign path avoids this by never
-letting the platform touch the key (SIWD.md "Sovereign Signing Path", `specs/SIWD.md`).
+Where a hosting platform holds the user's key material and signs on their behalf — the
+custodial posture profile A works against today, and the custodial signer agent that
+polls a mailbox for a keyless subject under profile B (SIWD.md "Profile A — Web
+Redirect" / "The custodial signer agent", `specs/SIWD.md`) — a compromise of that
+custody is **full impersonation** and is **indistinguishable on-chain**: the signature
+is a valid Ed25519 signature by a key declared in the identity chain, so it verifies
+identically to a self-custodied one (SIWD.md "Overview", `specs/SIWD.md`). Self-custody
+avoids this by never letting the platform touch the key: the subject holds the key and
+polls the mailbox, so the signature is produced where the key lives (SIWD.md "Profile B
+— Sign-Request Mailbox", `specs/SIWD.md`).
 
 ### Lost key
 
@@ -179,11 +184,10 @@ genesis CID and the operation signatures are unaffected — this parameter bound
 how hard it is to find a _second_ chain that encodes to the same 31-character DID/content
 ID, or two chains that collide.
 
-This parameter (alphabet size × length) was **widened to 31 characters for v1** — the
-targeted second-preimage cost (≈ 2^131.6) now sits above the 128-bit floor, and the
-birthday-collision cost rises to ≈ 2^65.8. This is a settled decision for v1, not an open
-parameter. See PROTOCOL.md "ID Alphabet" (`specs/PROTOCOL.md`) and DID-METHOD.md §3.1
-(`specs/DID-METHOD.md`).
+This parameter (alphabet size × length) is settled for v1, not an open one: at this
+width the targeted second-preimage cost (≈ 2^131.6) sits above the 128-bit floor, and
+the birthday-collision cost of ≈ 2^65.8 is the accepted consequence. See PROTOCOL.md
+"ID Alphabet" (`specs/PROTOCOL.md`) and DID-METHOD.md §3.1 (`specs/DID-METHOD.md`).
 
 ---
 
@@ -260,11 +264,14 @@ These are known and deliberately accepted for v1.
   rely on short lifetime for invalidation (CREDENTIALS.md "Relationship to Auth Tokens",
   `specs/CREDENTIALS.md`; WEB-RELAY.md "Relay Identity", `specs/WEB-RELAY.md`).
   Within the same relay, a captured token is replayable until it expires.
-- **SIWD security controls live in the unimplemented third-party verifier.** Replay
-  prevention (nonce), redirect-URI allowlisting, challenge-DID binding, and timestamp
-  windows are obligations on the verifying third party, and SIWD has no reference
-  implementation in this repository yet (SIWD.md note, `specs/SIWD.md`; SIWD.md
-  "Security Considerations", `specs/SIWD.md`).
+- **SIWD security controls live in the relying party.** Replay prevention (nonce),
+  redirect-URI validation, challenge-DID binding, and timestamp windows are obligations
+  on the verifying third party — no relay and no signer can enforce them on its behalf.
+  The client library ships a conforming path (`createSiwdLoginRequest`,
+  `readSiwdCallback`, `verifySiwd` in
+  [`@metalabel/dfos-client/siwd`](https://protocol.dfos.com/siwd)); a relying party that
+  hand-rolls verification instead forfeits these controls silently, and nothing on the
+  wire reveals that it did (SIWD.md "Security Considerations", `specs/SIWD.md`).
 - **Cursor validation is a cheap membership signal over already-public sets.** The
   list routes' 400-on-unknown-cursor answers "does this relay hold X at this position"
   with one status code — information already derivable by paging the same public

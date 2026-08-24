@@ -70,11 +70,32 @@ export const faqs: FaqEntry[] = [
       'Every identity chain is also a DID. The DID (did:dfos:&lt;hash&gt;) is derived deterministically from the hash of the chain\'s genesis operation — making it self-certifying. Given the chain, anyone can verify that it belongs to the claimed DID without trusting the source. The <a href="/did-method">DID method specification</a> defines how did:dfos identifiers conform to the W3C DID standard.',
   },
   {
+    question: 'Can a third-party application log people in with their DFOS identity?',
+    answer:
+      "Yes — that is Sign In With DFOS. The application mints a challenge, a key from the user's identity chain signs it, and the application verifies the signature against the chain resolved from any relay. Verification is pure crypto: no DFOS server is in the loop after issuance, and the verifier learns nothing it did not ask for. One challenge artifact travels by either of two couriers — a hosted web redirect for a user who is present, or a sign-request mailbox the user's own signer polls asynchronously — and a verifier cannot tell which one delivered it.",
+    answerHtml:
+      'Yes — that is <a href="/siwd">Sign In With DFOS</a>. The application mints a challenge, a key from the user\'s identity chain signs it, and the application verifies the signature against the chain resolved from any relay. Verification is pure crypto: no DFOS server is in the loop after issuance, and the verifier learns nothing it did not ask for. One challenge artifact travels by either of two couriers — a hosted web redirect for a user who is present, or a <a href="/signing">sign-request mailbox</a> the user\'s own signer polls asynchronously — and a verifier cannot tell which one delivered it.',
+  },
+  {
     question: 'Is the protocol coupled to the DFOS platform?',
     answer:
       'No. The protocol is independent. DFOS (the platform) is one implementation, but any system that implements the same chain primitives produces interoperable, cross-verifiable proofs. An identity created on one system can sign content on another. The protocol is MIT-licensed open source.',
     answerHtml:
       'No. The protocol is independent. <a href="https://dfos.com">DFOS</a> (the platform) is one implementation, but any system that implements the same chain primitives produces interoperable, cross-verifiable proofs. An identity created on one system can sign content on another. The protocol is <a href="https://github.com/metalabel/dfos/blob/main/LICENSE">MIT-licensed</a> open source.',
+  },
+  {
+    question: 'How do I inspect a chain without installing anything?',
+    answer:
+      'explore.dfos.com is a chain explorer that runs entirely in the browser tab. It reads from relays but trusts none of them: every operation it displays is re-verified client-side — CIDs re-derived, signatures re-checked, the chain re-folded — so what you see is what your own browser proved, not what a relay asserted. The explorer is MIT-licensed and in this repository; it is deployed rather than published to npm.',
+    answerHtml:
+      '<a href="https://explore.dfos.com">explore.dfos.com</a> is a chain explorer that runs entirely in the browser tab. It reads from relays but trusts none of them: every operation it displays is re-verified client-side — CIDs re-derived, signatures re-checked, the chain re-folded — so what you see is what your own browser proved, not what a relay asserted. The explorer is <a href="https://github.com/metalabel/dfos/tree/main/packages/dfos-explorer">MIT-licensed and in this repository</a>; it is deployed rather than published to npm.',
+  },
+  {
+    question: 'What do I use to read and verify chains from my own application?',
+    answer:
+      '@metalabel/dfos-client, the high-level read client. The protocol library owns the crypto truth; the client owns the four things it refuses to do — fetch, resolve, verify-orchestration, and cache — across an untrusted set of relays. It holds no keys and never writes. Trust comes back as data rather than exceptions: every resolution reports what it could and could not prove, and tip freshness is never claimed as proven. Its /siwd subpath carries the relying-party login kit for Sign In With DFOS.',
+    answerHtml:
+      '<a href="https://www.npmjs.com/package/@metalabel/dfos-client">@metalabel/dfos-client</a>, the high-level read client. The protocol library owns the crypto truth; the client owns the four things it refuses to do — fetch, resolve, verify-orchestration, and cache — across an untrusted set of relays. It holds no keys and never writes. Trust comes back as data rather than exceptions: every resolution reports what it could and could not prove, and tip freshness is never claimed as proven. Its <code>/siwd</code> subpath carries the relying-party login kit for <a href="/siwd">Sign In With DFOS</a>.',
   },
   {
     question: 'Is this production-ready?',
