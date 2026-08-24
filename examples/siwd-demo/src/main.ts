@@ -91,20 +91,26 @@ const renderStatus = (text: string): void => {
 const renderSignedOut = (notice?: string): void => {
   const button = el('button', undefined, 'Sign in with DFOS');
   button.addEventListener('click', signIn);
+  const aside = el('p', 'dim');
+  const source = el('a', undefined, 'This demo site is open source');
+  source.href = 'https://github.com/metalabel/dfos/tree/main/examples/siwd-demo';
+  aside.append(
+    'This site has no server and no secrets — verification is pure client-side crypto against a public relay. ',
+    source,
+    '.',
+  );
   render(
     el('h1', undefined, 'Sign In With DFOS'),
     el(
       'p',
       undefined,
-      'Prove control of a DFOS identity to a third-party site — no password, no OAuth provider, no server.',
+      'Sign in to this demo with your DFOS identity. You approve the sign-in on ' +
+        'your platform’s consent screen; this page then verifies the signed ' +
+        'challenge in your browser against your public identity chain.',
     ),
     ...(notice !== undefined ? [el('p', 'notice', notice)] : []),
     card(button),
-    el(
-      'p',
-      'dim',
-      'The whole flow runs client-side in this tab, and every line of it is open source.',
-    ),
+    aside,
   );
 };
 
