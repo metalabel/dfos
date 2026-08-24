@@ -91,8 +91,8 @@ The `nonce`/`consumeNonce` pair on the expectation (supply exactly one) is the s
 **`expect.nonce` — flow-bound login.** For a backend granting only a browser session (`scope=identity`), source the expected nonce from state you bound to that browser at mint time — a server-side session, or the nonce sealed under your own key in an `httpOnly` cookie — and compare:
 
 ```typescript
-// mint: cookie = `${nonce}.${hmac(secret, nonce)}`, httpOnly, Max-Age ≤ your window
-// verify: unseal the cookie back to `nonce`, then
+// mint: cookie = `${nonce}.${hmacSha256(secret, nonce)}`, httpOnly, Max-Age ≤ your window
+// verify: unseal the cookie back to `nonce` (full-length tag, constant-time compare), then
 await verifySiwd(client, jws, { domain, nonce });
 ```
 
