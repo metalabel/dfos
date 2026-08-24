@@ -89,7 +89,10 @@ Sign In With DFOS. The three verbs above are the relying-party login kit, in the
 In production, spend the nonce instead of comparing it:
 
 ```typescript
-await verifySiwd(client, jws, { domain, consumeNonce: (nonce) => store.getdel(nonce) });
+await verifySiwd(client, jws, {
+  domain,
+  consumeNonce: async (nonce) => (await store.getdel(nonce)) !== null,
+});
 ```
 
 `consumeNonce` replaces `expect.nonce` (supply exactly one) and returns true iff **this** verifier minted the nonce and it was unspent — membership in verifier-minted state is what satisfies the spec's rule that the verifier MUST have minted the nonce it checks, and deleting it in the same operation is what makes it single-use. The atomicity is the caller's: a get-then-delete lets two concurrent replays both win, where a Redis `GETDEL` or a `DELETE … RETURNING` does not. It is called at most once, and only after every other check has passed, so an invalid presentation can never burn a nonce the user is still holding.
