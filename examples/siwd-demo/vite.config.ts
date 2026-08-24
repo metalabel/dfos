@@ -2,17 +2,15 @@
 
   `npm run dev` — the static page AND the four api routes, no vercel CLI.
 
-  Vercel's Node runtime is a thin thing: it hands a handler Node's own
-  `IncomingMessage` / `ServerResponse` pair with exactly two additions — a
-  pre-parsed JSON `body` on the request, and Express-style `status()` / `send()`
-  on the response (see `api/_types.ts`). Two additions is small enough to shim,
-  so this plugin mounts the SAME handler files as connect middleware on vite's
-  dev server and the whole login flow runs locally against the live platform
-  under the loopback tier.
+  Vercel's Node runtime adds exactly two things to Node's own
+  `IncomingMessage` / `ServerResponse` pair: a pre-parsed JSON `body` on the
+  request, and Express-style `status()` / `send()` on the response (see
+  `api/_types.ts`). Both are shimmed below, and this plugin mounts the SAME
+  handler files as connect middleware on vite's dev server, so the whole login
+  flow runs locally against the live platform under the loopback tier.
 
-  The point is that there is no second implementation to drift: `api/login.ts`
-  and friends are imported here, not reimplemented. If it works in dev it is
-  because the deployed code works.
+  `api/login.ts` and friends are imported here, not reimplemented, so there is
+  no second implementation to drift.
 
 */
 
@@ -56,7 +54,7 @@ const devApi = (): Plugin => ({
         const raw = await readBody(req);
         if (raw !== '') {
           // the runtime parses JSON and leaves anything else a string; the
-          // handlers accept both, so mirroring that here keeps them one path
+          // handlers accept both, so mirroring it here keeps them on one path
           try {
             request.body = JSON.parse(raw);
           } catch {
@@ -77,8 +75,8 @@ const devApi = (): Plugin => ({
         try {
           await handler(request, response);
         } catch (err) {
-          // a thrown handler is a bug, not a verdict — say so in the same JSON
-          // shape the routes use rather than hanging the request
+          // a thrown handler is a bug, not a verdict — report it in the same
+          // JSON shape the routes use rather than hang the request
           response.status(500).send(
             JSON.stringify({
               ok: false,

@@ -2,30 +2,27 @@
 
   The backend's shared parts: the seal, the cookies, and this request's origin.
 
-  THE SEAL IS THE REPLAY DEFENSE. specs/SIWD.md §Replay prevention admits two
+  The seal is the replay defense. specs/SIWD.md §Replay prevention admits two
   disciplines, and which one you owe is decided by WHAT SUCCESS GRANTS. This
-  demo grants exactly one thing — a session with the browser that is standing
-  here — so it runs the FLOW-BOUND discipline: at mint time the server binds the
-  nonce to the agent that started the flow, statelessly, by sealing it under a
-  key only this server holds and parking it in an httpOnly cookie that expires
-  with the acceptance window. At verification the server recovers its
-  expectation from that seal and nowhere else.
+  demo grants one thing — a session with the browser standing here — so it runs
+  the flow-bound discipline: at mint time the server seals the nonce under a key
+  only it holds and parks it in an httpOnly cookie that expires with the
+  acceptance window. At verification the expectation comes from that seal and
+  nowhere else.
 
-  A BARE COOKIE WOULD BE THE TRAP IN A COSTUME. Cookies are presenter-supplied
-  on every request: an attacker holding a captured JWS reads the nonce straight
-  out of the payload and sends it back in a Cookie header of their own —
-  `HttpOnly` constrains a browser's scripts, not curl. What makes this bind is
-  that the value carries an HMAC only this server's key can produce, so the
-  expectation is recoverable only from the server's own prior act of minting it.
+  A bare nonce cookie would not do. Cookies are presenter-supplied on every
+  request: an attacker holding a captured JWS reads the nonce out of the payload
+  and sends it back in a Cookie header of their own, since `HttpOnly` constrains
+  a browser's scripts and not curl. The HMAC is what binds — only this server's
+  key can produce it.
 
-  AND THE GUARANTEE IS EXACTLY THIS, no more: the artifact redeems only through
-  the channel that started the flow, inside the timestamp window. It is NOT
-  global single-use — a party holding both the artifact and the cookie jar can
-  redeem again within the window, and that is the accepted trade, because a
-  party holding the cookie jar already holds the session they would gain. The
-  moment success grants anything portable — a credential scope, a token
-  redeemable elsewhere, profile B — this discipline is no longer admissible and
-  `verifySiwd`'s `consumeNonce` is. The README says where that line is.
+  The guarantee, exactly: the artifact redeems only through the channel that
+  started the flow, inside the timestamp window. Not global single-use — a party
+  holding both the artifact and the cookie jar can redeem again within the
+  window, which is the accepted trade, since they already hold the session they
+  would gain. The moment success grants anything portable — a credential scope,
+  a token redeemable elsewhere, profile B — use `verifySiwd`'s `consumeNonce`
+  instead. The README says where that line is.
 
 */
 
@@ -50,8 +47,8 @@ export const SESSION_COOKIE = 'siwd_session';
 
 /**
  * Matched to `verifySiwd`'s default acceptance window: the cookie stops being
- * useful at the same moment a challenge minted alongside it would be refused as
- * stale, so there is exactly one expiry story rather than two that can disagree.
+ * useful at the same moment a challenge minted alongside it goes stale, so
+ * there is one expiry rather than two that can disagree.
  */
 export const FLIGHT_TTL_SECONDS = 300;
 
@@ -69,15 +66,13 @@ const MAX_BODY_BYTES = 16 * 1024;
  * Set `SESSION_SECRET` to any long random string (32+ characters) and sealed
  * values survive across instances and deploys.
  *
- * The fallback is DEV-ONLY, and that is load-bearing: on Vercel every file in
- * api/ deploys as its own function, which means its own module instance and
- * its own `randomBytes` — `/api/login` would seal with one key and
- * `/api/verify` would unseal with another, and every deployed sign-in would
- * die as "no sign-in in flight" while `npm run dev` (one process, one module
- * graph) worked perfectly. A fallback that only ever fails in production is a
- * trap, so deployed-without-a-secret is a loud, named misconfiguration
- * instead, and the per-process random key is reserved for the dev server
- * where a single process is guaranteed.
+ * The random fallback is DEV-ONLY, and that matters: on Vercel every file in
+ * api/ deploys as its own function with its own module instance and its own
+ * `randomBytes`, so `/api/login` would seal with one key and `/api/verify`
+ * would unseal with another. Every deployed sign-in would die as "no sign-in in
+ * flight" while `npm run dev` — one process, one module graph — worked fine. So
+ * deployed-without-a-secret is a named misconfiguration instead, and the random
+ * key is reserved for the dev server, where a single process is guaranteed.
  */
 const configured = process.env['SESSION_SECRET'];
 const ON_VERCEL = process.env['VERCEL'] !== undefined;
@@ -104,20 +99,19 @@ export const EPHEMERAL_SECRET =
   SECRET_ERROR === null && (configured === undefined || configured === '');
 
 /**
- * The tag is domain-separated by PURPOSE, so a sealed value of one class can
- * never be replayed as another: a session cookie presented as a flight cookie
- * fails its MAC even under the same key.
+ * The tag is domain-separated by PURPOSE, so a sealed value of one class cannot
+ * be replayed as another: a session cookie presented as a flight cookie fails
+ * its MAC even under the same key.
  */
 const mac = (purpose: string, body: string): string =>
   createHmac('sha256', SECRET).update(`${purpose}:${body}`).digest('base64url');
 
 /**
- * `value.exp.mac` — the expiry is INSIDE the sealed bytes, so it is the
- * verifier's clock that enforces it. A cookie's `Max-Age` is only the honest
- * browser's copy; a captured seal in a script's hands keeps whatever it was
- * given, and without this field it would stay recognizable forever. Every
- * segment is dot-free (base64url values, a decimal epoch), so the dots are
- * unambiguous separators and the whole thing is a legal cookie value.
+ * `value.exp.mac` — the expiry is INSIDE the sealed bytes, so the verifier's
+ * clock enforces it. A cookie's `Max-Age` is only the honest browser's copy;
+ * without this field a captured seal would stay valid forever. Every segment is
+ * dot-free (base64url values, a decimal epoch), so the dots are unambiguous
+ * separators and the whole thing is a legal cookie value.
  */
 export const seal = (purpose: string, value: string, ttlSeconds: number): string => {
   const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
@@ -127,9 +121,8 @@ export const seal = (purpose: string, value: string, ttlSeconds: number): string
 
 /**
  * The inverse, or `null` — for a missing cookie, a malformed one, a tag that
- * does not check out, or a seal past its own expiry. Callers get one falsy
- * answer for "this did not come from me (or no longer counts)", because from
- * the verifier's side those are the same fact.
+ * does not check out, or a seal past its own expiry. One answer for all four,
+ * because from the verifier's side they are the same fact.
  */
 export const unseal = (purpose: string, sealed: string | undefined): string | null => {
   if (sealed === undefined || sealed === '') return null;
@@ -139,8 +132,7 @@ export const unseal = (purpose: string, sealed: string | undefined): string | nu
   const body = sealed.slice(0, tagAt);
   const presented = Buffer.from(sealed.slice(tagAt + 1));
   const expected = Buffer.from(mac(purpose, body));
-  // `timingSafeEqual` throws on a length mismatch, so the guard is required
-  // before the comparison rather than merely polite.
+  // `timingSafeEqual` throws on a length mismatch, so this guard is required.
   if (presented.length !== expected.length) return null;
   if (!timingSafeEqual(presented, expected)) return null;
 
@@ -202,17 +194,17 @@ export interface RequestOrigin {
 }
 
 /**
- * Where this request thinks it arrived, derived rather than hardcoded so that a
- * fork on any domain works with no edit here — and so the domain the server
- * SIGNS into a challenge and the domain it CHECKS on the way back are the same
- * expression, which is the only way they cannot drift apart.
+ * Where this request thinks it arrived, derived rather than hardcoded so a fork
+ * on any domain works with no edit here — and so the domain the server SIGNS
+ * into a challenge and the domain it checks on the way back are one expression
+ * and cannot drift apart.
  *
  * The `Host` header is client-controllable in principle, and deriving from it
- * buys an attacker nothing: a forged host yields a self-consistent flow bound
- * to a domain whose well-known will not list the redirect, so the platform
- * refuses it — and anyone can construct that URL by hand anyway. What would be
- * dangerous is verifying a challenge for one domain against a cookie minted for
- * another, and a single derivation is what rules that out.
+ * buys an attacker nothing: a forged host yields a self-consistent flow bound to
+ * a domain whose well-known will not list the redirect, so the platform refuses
+ * it, and anyone can construct that URL by hand anyway. The dangerous case would
+ * be verifying a challenge for one domain against a cookie minted for another,
+ * which a single derivation rules out.
  */
 export const requestOrigin = (req: VercelRequest): RequestOrigin | null => {
   const host = (headerValue(req.headers['x-forwarded-host']) ?? headerValue(req.headers.host))
@@ -221,9 +213,9 @@ export const requestOrigin = (req: VercelRequest): RequestOrigin | null => {
   if (host === undefined || host === '') return null;
 
   // Parsed rather than string-sliced, so ports and IPv6 brackets are handled by
-  // the URL grammar itself: `URL.hostname` brackets an IPv6 literal, and every
-  // verifier compares the signed `domain` EXACTLY, so the challenge carries the
-  // bare form the platform will compare against the redirect's host.
+  // the URL grammar itself. `URL.hostname` brackets an IPv6 literal, and the
+  // signed `domain` is compared EXACTLY, so the challenge carries the bare form
+  // the platform will compare against the redirect's host.
   let parsed: URL;
   try {
     parsed = new URL(`https://${host}/`);
@@ -249,11 +241,11 @@ const forwardedProto = (req: VercelRequest): string | undefined => {
 
 /**
  * CSRF, the cheap way. Every endpoint here is same-origin by construction, so a
- * present `Origin` that is not ours is a cross-site request and gets nothing.
- * An ABSENT one is allowed through: browsers attach it to every POST, so its
- * absence means a non-browser caller (curl, the smoke test) — which cannot be
- * riding a victim's cookie jar, since there is no victim in the loop. A present
- * `null` is not that case and is refused like any other foreign origin.
+ * present `Origin` that is not ours is a cross-site request and gets nothing. An
+ * ABSENT one is allowed through: browsers attach it to every POST, so its
+ * absence means a non-browser caller (curl, the smoke test), which cannot be
+ * riding a victim's cookie jar. A present `null` is refused like any other
+ * foreign origin.
  */
 export const originAllowed = (req: VercelRequest, self: RequestOrigin): boolean => {
   const origin = headerValue(req.headers.origin);
@@ -275,12 +267,12 @@ export interface Session {
 
 /**
  * The session rides in the cookie itself: base64url JSON under the same seal.
- * Zero server state is what keeps the demo forkable — any instance can answer
- * for a session any other instance issued, given the same `SESSION_SECRET`.
+ * Zero server state, so any instance can answer for a session any other
+ * instance issued, given the same `SESSION_SECRET`.
  *
  * The nonce is deliberately NOT in here. It was the secret the flight cookie
- * held, and echoing it back would hand the presenter the one value they were
- * never supposed to choose.
+ * held, and echoing it back would hand the presenter the one value they must
+ * never choose.
  */
 export const encodeSession = (session: Session): string =>
   seal('session', Buffer.from(JSON.stringify(session)).toString('base64url'), SESSION_TTL_SECONDS);
@@ -288,7 +280,7 @@ export const encodeSession = (session: Session): string =>
 /** The session this request carries, or `null` — unsealed, parsed, unexpired. */
 export const readSession = (req: VercelRequest): Session | null => {
   // the seal enforces its own expiry; the checks below re-validate the fields
-  // INSIDE the sealed JSON, because an authenticated parser still parses
+  // INSIDE the sealed JSON, because authenticated bytes are still parsed bytes
   const value = unseal('session', readCookie(req, SESSION_COOKIE));
   if (value === null) return null;
 
@@ -320,11 +312,10 @@ export const readSession = (req: VercelRequest): Session | null => {
 // -----------------------------------------------------------------------------
 
 /**
- * `ephemeral` is stamped onto EVERY JSON body rather than onto the ones that
- * carry a session, because it is a property of the deployment and the page
- * renders a persistent notice from it. Reported on failures too, or the notice
- * would blink out the moment anything went wrong — which is exactly when a fork
- * that forgot `SESSION_SECRET` most needs to be reading it.
+ * `ephemeral` is stamped onto EVERY JSON body, not just the ones carrying a
+ * session, because it is a property of the deployment and the page renders a
+ * persistent notice from it. Reported on failures too: that is exactly when a
+ * fork that forgot `SESSION_SECRET` most needs to read it.
  */
 export const json = (
   res: VercelResponse,
@@ -353,14 +344,13 @@ export const methodNotAllowed = (res: VercelResponse, allow: string): void => {
 
 /**
  * The JWS out of a JSON body, or `null`. Vercel's Node runtime pre-parses a
- * JSON body onto `req.body`; the string branch covers a runtime that did not,
- * and the size cap is re-applied to whatever arrived on one path.
+ * JSON body onto `req.body`; the string branch covers a runtime that did not.
  */
 export const readJws = (req: VercelRequest): string | null => {
-  // `req.body` is a LAZY GETTER on Vercel's runtime and THROWS on malformed
-  // JSON with a JSON content-type — reading it bare would turn a bad body into
-  // a 500 instead of this function's `null`. The dev shim pre-parses and never
-  // throws; the catch is what keeps the two runtimes on one error path.
+  // `req.body` is a LAZY GETTER on Vercel's runtime and throws on malformed
+  // JSON sent with a JSON content-type, so reading it bare would turn a bad
+  // body into a 500 instead of this function's `null`. The dev shim pre-parses
+  // and never throws; the catch keeps both runtimes on one error path.
   let body: unknown;
   try {
     body = req.body;
