@@ -126,14 +126,18 @@ interface Registration {
 /**
  * One same-origin fetch, best-effort: no retries and no spinner. Every failure
  * mode collapses to `missing`, because from the host's side they are the same
- * fact — this origin does not serve a registration it can check.
+ * fact — this origin does not serve a registration it can check. BOUNDED,
+ * because boot awaits this before the first render and a browser fetch has no
+ * timeout of its own: a stalled request (a misbehaving service worker, a
+ * proxy) must degrade to `missing` rather than hold the whole page — and the
+ * callback verification behind it — hostage.
  */
 const checkRegistration = async (): Promise<Registration> => {
   if (LOOPBACK_HOSTS.has(SIGNING_DOMAIN)) return { state: 'loopback' };
 
   let parsed: unknown;
   try {
-    const response = await fetch(WELL_KNOWN_PATH);
+    const response = await fetch(WELL_KNOWN_PATH, { signal: AbortSignal.timeout(3000) });
     if (!response.ok) return { state: 'missing' };
     parsed = await response.json();
   } catch {
