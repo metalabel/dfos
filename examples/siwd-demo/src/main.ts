@@ -27,6 +27,13 @@ const CLIENT_DID = 'did:dfos:8zk83zez862n6ahnvt3h3e4kc4n2dke';
 
 const NONCE_KEY = 'siwd-demo-nonce';
 
+/**
+ * Hosts that ride the platform's loopback tier (`npm run dev`). A local port
+ * cannot prove a client identity, so the platform REJECTS a `client_did` on a
+ * loopback redirect — the demo only asserts its DID from its real domain.
+ */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
 /** The public profile shape we read; everything but the DID may be absent. */
 interface PublicProfile {
   did: string;
@@ -171,7 +178,9 @@ const signIn = (): void => {
   // trailing slash: the platform exact-matches this against the well-known allowlist
   url.searchParams.set('redirect_uri', `${location.origin}/`);
   url.searchParams.set('scope', 'identity');
-  url.searchParams.set('client_did', CLIENT_DID);
+  if (!LOOPBACK_HOSTS.has(location.hostname)) {
+    url.searchParams.set('client_did', CLIENT_DID);
+  }
   location.href = url.toString();
 };
 

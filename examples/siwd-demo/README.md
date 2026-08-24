@@ -55,7 +55,9 @@ npm run dev
 Sign-in works unchanged in dev without any well-known file: `http://localhost:5173/`
 is accepted as a redirect target for `scope=identity` under the loopback tier
 (the RFC 8252 posture — a loopback address cannot be hijacked by a remote
-attacker the way a registered https redirect can).
+attacker the way a registered https redirect can). One asymmetry: a local port
+cannot prove a client identity either, so the demo omits `client_did` on
+loopback hosts — the platform rejects one there by design.
 
 ## Security notes
 

@@ -17,9 +17,9 @@ jobs:
     uses: ./.github/workflows/test-matrix.yml
 
   # The examples are outside the pnpm workspace on purpose — each one is a
-  # standalone npm project consuming the PUBLISHED packages from the registry,
-  # so this job is also a live check that the released artifacts install and
-  # build for a third party.
+  # standalone npm project consuming the PUBLISHED packages from the registry
+  # (at the versions pinned by its own lockfile), so this job also proves that
+  # released artifacts a third party would install actually build.
   siwd-demo:
     runs-on: ubuntu-latest
     timeout-minutes: 10
