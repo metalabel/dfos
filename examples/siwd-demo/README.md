@@ -147,7 +147,8 @@ takes that as a callback:
 ```js
 const result = await verifySiwd(client, jws, {
   domain,
-  consumeNonce: (nonce) => store.getdel(nonce), // Redis GETDEL, KV, a deleted row — but atomic
+  // Redis GETDEL, KV, a deleted row — but atomic, and answering as a boolean
+  consumeNonce: async (nonce) => (await store.getdel(nonce)) !== null,
 });
 ```
 
