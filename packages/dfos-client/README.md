@@ -86,7 +86,19 @@ import {
 
 Sign In With DFOS. The three verbs above are the relying-party login kit, in the order a login uses them: `createSiwdLoginRequest` mints the challenge and builds the `/authorize` URL to redirect to, `readSiwdCallback` parses what comes back, and `verifySiwd` verifies it — mint → redirect, read → verify. The `expect` object `createSiwdLoginRequest` returns (nonce, domain, and the DID when the challenge is bound to one) is what `verifySiwd` checks against, so the relying party MUST persist it across the redirect: a verifier that takes its expectation from the callback has implemented the check and none of the protection. See [`examples/siwd-demo`](../../examples/siwd-demo) for the reference consumer.
 
-In production, spend the nonce instead of comparing it:
+The `nonce`/`consumeNonce` pair on the expectation (supply exactly one) is the spec's [two replay disciplines](../../specs/SIWD.md#replay-prevention), one field each:
+
+**`expect.nonce` — flow-bound login.** For a backend granting only a browser session (`scope=identity`), source the expected nonce from state you bound to that browser at mint time — a server-side session, or the nonce sealed under your own key in an `httpOnly` cookie — and compare:
+
+```typescript
+// mint: cookie = `${nonce}.${hmacSha256(secret, nonce)}`, httpOnly, Max-Age ≤ your window
+// verify: unseal the cookie back to `nonce` (full-length tag, constant-time compare), then
+await verifySiwd(client, jws, { domain, nonce });
+```
+
+The seal (or the session) is what makes this a defense at all: a _bare_ cookie value is presenter-supplied, and an attacker replaying a captured JWS can read the nonce out of the artifact and send it as the cookie. Never compare against anything the presenter could have authored.
+
+**`consumeNonce` — spend the nonce.** Required the moment success grants anything beyond a session with the presenting browser (a credential-returning scope, a portable token, a profile-B mailbox flow):
 
 ```typescript
 await verifySiwd(client, jws, {
@@ -95,7 +107,7 @@ await verifySiwd(client, jws, {
 });
 ```
 
-`consumeNonce` replaces `expect.nonce` (supply exactly one) and returns true iff **this** verifier minted the nonce and it was unspent — membership in verifier-minted state is what satisfies the spec's rule that the verifier MUST have minted the nonce it checks, and deleting it in the same operation is what makes it single-use. The atomicity is the caller's: a get-then-delete lets two concurrent replays both win, where a Redis `GETDEL` or a `DELETE … RETURNING` does not. It is called at most once, and only after every other check has passed, so an invalid presentation can never burn a nonce the user is still holding.
+`consumeNonce` returns true iff **this** verifier minted the nonce and it was unspent — membership in verifier-minted state is what satisfies the spec's rule that the verifier MUST have minted the nonce it checks, and deleting it in the same operation is what makes it single-use. The atomicity is the caller's: a get-then-delete lets two concurrent replays both win, where a Redis `GETDEL` or a `DELETE … RETURNING` does not. Under either discipline the nonce check runs at most once, and only after every other check has passed, so an invalid presentation can never burn a nonce the user is still holding.
 
 `createSiwdLoginRequest` throws rather than returning an error on the two things that are RP misconfiguration: an `authorizeUrl` or `redirectUri` that is not an absolute URL, and any scope other than `identity` over a loopback redirect (a local port holds no `client_did` for a credential to be issued to — see [SIWD.md](../../specs/SIWD.md)).
 
