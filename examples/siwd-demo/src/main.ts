@@ -234,12 +234,14 @@ const lookItUpReceipt = (did: string): Node[] =>
   receiptSection(
     'Look it up yourself',
     linkNote(
-      `${RELAY_URL}/proof/identities/${encodeURIComponent(did)}/log`,
+      `${RELAY_URL}/proof/v1/identities/${encodeURIComponent(did)}/log`,
       'The raw signed operation log',
       'What this page verified — the relay’s claim, in full, before any replay.',
     ),
     linkNote(
-      `${EXPLORER_URL}/#/did/${encodeURIComponent(did)}`,
+      // NOT encoded: the explorer's hash router takes the DID literally, and a
+      // did:dfos identifier is fragment-safe as-is.
+      `${EXPLORER_URL}/#/did/${did}`,
       'The same chain in the DFOS explorer',
       'Re-verified in YOUR tab — the same trust move this page just made.',
     ),
