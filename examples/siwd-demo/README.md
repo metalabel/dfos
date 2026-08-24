@@ -75,12 +75,12 @@ loopback hosts — the platform rejects one there by design.
 
 All four live at the top of `src/main.ts`:
 
-| Constant          | Value                                       |
-| ----------------- | ------------------------------------------- |
-| `AUTHORIZE_URL`   | `https://app.dfos.com/authorize`            |
-| `RELAY_URL`       | `https://relay.dfos.com`                    |
-| `PUBLIC_API_URL`  | `https://api.dfos.com/v1`                   |
-| `CLIENT_DID`      | `did:dfos:8zk83zez862n6ahnvt3h3e4kc4n2dke`  |
+| Constant         | Value                                      |
+| ---------------- | ------------------------------------------ |
+| `AUTHORIZE_URL`  | `https://app.dfos.com/authorize`           |
+| `RELAY_URL`      | `https://relay.dfos.com`                   |
+| `PUBLIC_API_URL` | `https://api.dfos.com/v1`                  |
+| `CLIENT_DID`     | `did:dfos:8zk83zez862n6ahnvt3h3e4kc4n2dke` |
 
 SIWD is on its own `0.x` clock, independent of the frozen protocol surface, so
 the hosted consent page URL may move before 1.0. When it does, it is one
