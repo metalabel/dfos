@@ -95,14 +95,13 @@ and **this demo runs it**: the second sign-in button takes the tier-2 path throu
 two serverless functions.
 
 - `GET /api/nonce` mints a nonce, returns it, and sets it in an `HttpOnly`
-  cookie — the verifier's own memory of what it issued.
+  cookie — how the backend remembers what it issued across the redirect.
 - The page puts that nonce in the challenge (`createSiwdLoginRequest({ …, nonce })`)
   and redirects as usual.
 - On return the page POSTs `{ jws }` to `POST /api/verify`. The body carries the
   JWS and nothing else; the cookie rides along on its own.
-- The function reads the nonce **from the cookie, never from the body**, runs the
-  same `verifySiwd` in Node, and **always clears the cookie** — single use,
-  whether verification passes or fails.
+- The function reads the nonce **from the cookie, never from the body**, and runs
+  the same `verifySiwd` in Node.
 
 Two rules make this shape non-negotiable. **A bare DID is an address, not a
 proof**: an endpoint that accepts `{ did }` from a client and believes it has
@@ -110,19 +109,32 @@ authenticated nobody, because anyone can type any DID. And **the presenter never
 chooses the expectation**: a verifier that reads the expected nonce out of the
 request it is verifying is comparing a value against itself.
 
-The one thing production adds is the session mint. Where this demo returns the
-verified session as JSON, your app sets its own session cookie and writes to
-whatever session store it already has. The demo stops short on purpose — a real
-session cookie needs a signing secret, and this repo stays zero-config
-fork-and-deploy.
+**What this demo does not do, and your app must.** The cookie is a carrier, not a
+replay defense: the nonce travels inside the signed challenge, so anyone holding
+a JWS can read it out of the payload and send it back in a `Cookie` header of
+their own — `HttpOnly` constrains browser scripts, not `curl`. Making a nonce
+single-use requires server-side consumption, which requires a store, which a
+zero-infrastructure demo does not have. The missing line is one atomic read:
+
+```js
+const fresh = await store.getdel(nonce); // Redis GETDEL, KV, a row — but atomic
+if (!fresh) return unauthorized('nonce already used');
+```
+
+[`specs/SIWD.md`](../../specs/SIWD.md) §Security Considerations makes that a
+**MUST** for third parties. Without it this demo accepts replay bounded only by
+the acceptance window, and says so at the call site rather than implying the
+cookie covers it. Production adds that store — and the session mint, which needs
+a signing secret this repo deliberately does not carry.
 
 Run the functions locally with `vercel dev`; the plain `npm run dev` static
 server exercises tier 1 only.
 
 ## Security notes
 
-- The `expect` object is **single-use** — read from `sessionStorage` and removed
-  before verification runs, so its nonce is consumed pass or fail.
+- The `expect` object is removed from `sessionStorage` before verification runs,
+  so this tab cannot reuse it pass or fail. That is tab hygiene, not a replay
+  defense — see the tier-2 note above for what a real one costs.
 - The `?did=` callback param is **never trusted**. The DID rendered and looked
   up is the one inside the verified JWS.
 - Every string that reaches the DOM from the URL, the API, or the JWS is

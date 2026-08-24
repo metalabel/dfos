@@ -4,21 +4,34 @@
 
   This is the endpoint that makes the trust ladder real. It runs the SAME
   `verifySiwd` the browser tier runs, in Node, where a session would actually be
-  granted. Three rules it does not bend:
+  granted. Two rules it does not bend:
 
   1. THE NONCE COMES FROM THE COOKIE, NEVER THE BODY. The request body carries
-     exactly one thing — the JWS. Reading an expected nonce from the presenter
-     would turn the replay guard into a self-comparison.
-  2. THE NONCE IS SINGLE USE, PASS OR FAIL. The clearing Set-Cookie is built
-     before anything else can go wrong and rides on every response below, so a
-     failed attempt burns the nonce exactly like a successful one.
-  3. A BARE DID IS NEVER ACCEPTED. There is no code path here that takes a DID
+     exactly one thing — the JWS. An endpoint that reads its expectation out of
+     the request it is checking has checked nothing.
+  2. A BARE DID IS NEVER ACCEPTED. There is no code path here that takes a DID
      and believes it. A DID is an address; anyone can type one. Only a signature
-     over a nonce this backend minted proves anybody is anybody.
+     over a challenge this backend's nonce went into proves anybody is anybody.
 
-  What it deliberately does NOT do: mint a session. That needs a signing secret,
-  which would break zero-config fork-and-deploy — and verification is the lesson
-  here. The response says where your own session mint belongs.
+  WHAT THE COOKIE IS, AND IS NOT. It is how this backend REMEMBERS, across the
+  redirect, which nonce it minted — a carrier for its own state, nothing more.
+  It is NOT a replay defense, and this file used to imply otherwise. The nonce
+  travels inside the signed challenge, so anyone holding a JWS can read it
+  straight out of the payload and, as a plain HTTP client, send it back in a
+  Cookie header of their own; `HttpOnly` constrains a browser's scripts, not
+  curl. Clearing the cookie on the way out is hygiene, not a control — a client
+  that ignores `Set-Cookie` is unaffected.
+
+  Real replay protection needs SERVER-SIDE SINGLE-USE CONSUMPTION, which is a
+  store, which a zero-infrastructure demo deliberately does not run. specs/SIWD.md
+  §Security Considerations is explicit that a third party MUST store the nonce
+  server-side and reject an artifact whose nonce was already consumed. This demo
+  does not do that, and so accepts replay bounded by the acceptance window. The
+  `PRODUCTION` block at the verify call names the missing line and where it goes.
+
+  It also does NOT mint a session: that needs a signing secret, which would break
+  zero-config fork-and-deploy. The response says where your own session mint
+  belongs.
 
 */
 
@@ -46,9 +59,10 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 const MAX_BODY_BYTES = 16 * 1024;
 
 /**
- * The nonce cookie, expired. Built once and attached to every response from the
- * moment the cookie is read, so there is no code path where a nonce survives an
- * attempt to use it.
+ * The nonce cookie, expired. Attached to every response so a browser does not
+ * carry a spent nonce into the next attempt — housekeeping for the honest
+ * client, NOT a security control: a caller that ignores `Set-Cookie` keeps
+ * whatever it had.
  */
 const CLEAR_NONCE_COOKIE = `${NONCE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/api; Max-Age=0`;
 
@@ -116,7 +130,9 @@ export default async function handler(request: Request): Promise<Response> {
     });
   }
 
-  // 2. From here on every response clears the cookie: single use, pass or fail.
+  // 2. From here on every response clears the cookie, so an honest browser does
+  //    not carry a spent nonce forward. See the header comment for why that is
+  //    hygiene rather than a replay defense.
 
   const domain = expectedDomain(request);
   if (domain === undefined) {
@@ -148,10 +164,41 @@ export default async function handler(request: Request): Promise<Response> {
 
   // 3. The same function the browser tier calls — same rules, same relay, now
   //    running where a grant would actually be made.
+  //
+  //    PRODUCTION: MAKE THE NONCE SINGLE-USE HERE. This is the one line a real
+  //    deployment adds and this demo cannot. Mint into a store at /api/nonce:
+  //
+  //      await store.set(nonce, '1', { EX: 300 });   // when you mint it
+  //
+  //    and atomically consume it here, BEFORE trusting the JWS:
+  //
+  //      const fresh = await store.getdel(nonce);    // Redis GETDEL, KV, a row
+  //      if (!fresh) return json(401, { ok: false, error: 'nonce already used' });
+  //
+  //    THAT is what stops a captured JWS from being replayed inside its window
+  //    — not the cookie. It has to be atomic (getdel, not get-then-delete) or
+  //    two simultaneous replays both win the check. specs/SIWD.md
+  //    §Security Considerations makes it a MUST for third parties; a demo with
+  //    no infrastructure is the one place it is honest to skip it and say so.
   const client = createClient({ relays: [RELAY_URL] });
   let result;
   try {
-    result = await verifySiwd(client, jws, { domain, nonce });
+    result = await verifySiwd(client, jws, {
+      domain,
+      nonce,
+      // The acceptance window is the ONLY replay bound this demo has, so it is
+      // worth being deliberate about — but it cannot simply be made small. It
+      // is measured from the challenge's own timestamp, minted before the
+      // redirect, so everything the user spends reading the consent screen is
+      // already inside it. A host may legitimately sign a challenge near the
+      // end of its own mint window; a window tight enough to feel strict here
+      // would reject people who merely read carefully before approving.
+      // SIWD.md's conventional ~5 minutes for this profile is that allowance,
+      // and it is what `verifySiwd` defaults to. Stated explicitly rather than
+      // inherited, because it is a security parameter and the reason it is not
+      // smaller is not obvious.
+      maxAgeSeconds: 300,
+    });
   } catch (err) {
     return json(502, {
       ok: false,
