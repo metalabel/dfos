@@ -218,6 +218,206 @@ export const decodeSiwdChallenge = (encoded: string): SiwdChallenge =>
   parseSiwdChallenge(base64urlDecode(encoded));
 
 // -----------------------------------------------------------------------------
+// profile A login kit
+// -----------------------------------------------------------------------------
+
+/**
+ * Hostnames that make a redirect a LOOPBACK redirect — a CLI or a desktop app
+ * listening on a local port. Exact matches only: `127.0.0.2` and
+ * `localhost.evil.example` are NOT loopback, and quietly treating them as such
+ * would strip a client DID from a request that was entitled to assert one.
+ */
+const SIWD_LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/**
+ * `URL.hostname` brackets an IPv6 literal because the brackets are URL grammar,
+ * not part of the name — so `[::1]` and `::1` are the same host.
+ */
+const bareHostname = (url: URL): string => {
+  const host = url.hostname.toLowerCase();
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+};
+
+const parseUrlOrThrow = (value: string, field: string): URL => {
+  try {
+    return new URL(value);
+  } catch {
+    throw new Error(`invalid SIWD login request: ${field} must be an absolute URL`);
+  }
+};
+
+export interface SiwdLoginRequestInput {
+  /** The host's authorize endpoint, e.g. `https://app.example.com/authorize`. */
+  authorizeUrl: string;
+  /** The RP's own domain — bound into the signed challenge as a bare hostname. */
+  domain: string;
+  /** Exact redirect target; must match the RP's registered or served allowlist. */
+  redirectUri: string;
+  /** Requested scope. `identity` is the only scope implemented today. */
+  scope: string;
+  /** Consent-screen prose. A host MAY decline to render it; see specs/SIWD.md. */
+  statement?: string;
+  /**
+   * Bind the challenge to ONE identity — "sign in as this DID, or not at all".
+   * Threaded into the signed bytes AND into `expect`, because binding a
+   * challenge without verifying the binding proves nothing: a host that ignored
+   * it would return a signature from whoever was logged in, and an RP checking
+   * only the signature would accept it.
+   */
+  did?: string;
+  /** The RP's own DID. Omitted from the URL automatically for loopback redirects. */
+  clientDid?: string;
+  /** Supply a nonce minted elsewhere (e.g. by your backend); default: minted here. */
+  nonce?: string;
+}
+
+export interface SiwdLoginRequest {
+  /** Navigate the browser here, or hand it to the user. */
+  url: string;
+  /**
+   * THE THING TO PERSIST ACROSS THE REDIRECT. One JSON-serializable object that
+   * satisfies `SiwdExpectations`, so the whole round trip is: store this before
+   * navigating, rehydrate it when the callback lands, and hand it straight to
+   * `verifySiwd(client, jws, saved)`. Nothing else has to survive the hop, and
+   * nothing has to be threaded to both ends by hand — which is the point, since
+   * a `domain` or `did` that drifts between mint and verify is a check that
+   * silently stops checking.
+   *
+   * SINGLE USE: consume the nonce on the way back, pass or fail.
+   *
+   * WHOEVER VERIFIES MUST HAVE MINTED. A verifier that accepts an expectation
+   * supplied by the party presenting the JWS is comparing a value against
+   * itself and has verified nothing — the replay guard binds only when the
+   * expectation comes from the verifier's own prior state (this object, held
+   * server-side or in the session that began the sign-in) or from an
+   * independent validation of it.
+   */
+  expect: Pick<SiwdExpectations, 'domain' | 'nonce' | 'did'>;
+  /** base64url canonical challenge bytes, exactly as embedded in `url`. */
+  challenge: string;
+  /** ISO whole-second mint timestamp, exactly as embedded in the signed bytes. */
+  timestamp: string;
+}
+
+/**
+ * Mint a challenge and build the `/authorize` URL to send the browser to — the
+ * OUTBOUND half of profile A. `readSiwdCallback` is the inbound half, and
+ * `verifySiwd` is what both compose around: mint → redirect, read → verify.
+ *
+ * The rule this function exists to own is the LOOPBACK OMISSION. Nothing can
+ * prove a client DID for an app on a local port — there is no domain serving a
+ * well-known and no registration to check — so a host REFUSES a `client_did`
+ * on a loopback redirect rather than displaying an identity it cannot stand
+ * behind. A CLI that passed its own DID would have the whole request rejected,
+ * not downgraded, so the param is dropped here instead of being forwarded into
+ * a guaranteed refusal.
+ *
+ * It also owns the WIRE PARAM NAMES (`challenge`, `redirect_uri`, `scope`,
+ * `client_did`) as their single source in this package. They are snake_case on
+ * the wire and camelCase everywhere else, which is exactly the kind of seam
+ * every hand-rolled RP re-implements and eventually gets wrong.
+ *
+ * PURE: no DOM, no storage, no navigation, no fetch — identical in a browser
+ * and in Node. Throws on an unparseable `authorizeUrl` or `redirectUri`,
+ * because those are mistakes in the RP's own configuration rather than runtime
+ * conditions a result type would help a caller recover from.
+ */
+export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginRequest => {
+  const authorizeUrl = parseUrlOrThrow(input.authorizeUrl, 'authorizeUrl');
+  const redirect = parseUrlOrThrow(input.redirectUri, 'redirectUri');
+
+  const { challenge, encoded, nonce } = createSiwdChallenge({
+    domain: input.domain,
+    ...(input.statement !== undefined ? { statement: input.statement } : {}),
+    ...(input.did !== undefined ? { did: input.did } : {}),
+    ...(input.nonce !== undefined ? { nonce: input.nonce } : {}),
+  });
+
+  // Built on a COPY of the parsed authorize URL so any query the host endpoint
+  // already carries survives instead of being clobbered by concatenation.
+  const url = new URL(authorizeUrl);
+  url.searchParams.set('challenge', encoded);
+  url.searchParams.set('redirect_uri', input.redirectUri);
+  url.searchParams.set('scope', input.scope);
+  if (input.clientDid !== undefined && !SIWD_LOOPBACK_HOSTS.has(bareHostname(redirect))) {
+    url.searchParams.set('client_did', input.clientDid);
+  }
+
+  return {
+    url: url.toString(),
+    expect: {
+      domain: input.domain,
+      nonce,
+      ...(input.did !== undefined ? { did: input.did } : {}),
+    },
+    challenge: encoded,
+    timestamp: challenge.timestamp,
+  };
+};
+
+/**
+ * What came back on the redirect. `none` means this was a plain page load, not
+ * a callback at all — the common case on an RP's own landing page.
+ */
+export type SiwdCallbackResult =
+  | { kind: 'success'; jws: string; did: string }
+  | { kind: 'denied'; error: string }
+  | { kind: 'none' };
+
+/** An empty value carries no more information than an absent one. */
+const callbackParam = (params: URLSearchParams, key: string): string | undefined => {
+  const value = params.get(key);
+  return value === null || value === '' ? undefined : value;
+};
+
+/**
+ * Accept the three things a caller actually has in hand: a full URL, a `URL`,
+ * or a bare query string — `location.search` is what a browser RP reaches for,
+ * and it is `''` on a plain page load, which must read as "no callback" rather
+ * than blow up on the most common path through the function.
+ */
+const callbackParams = (url: string | URL): URLSearchParams => {
+  if (typeof url !== 'string') return url.searchParams;
+  if (url === '' || url.startsWith('?')) return new URLSearchParams(url);
+  return parseUrlOrThrow(url, 'url').searchParams;
+};
+
+/**
+ * Read a profile-A callback — the INBOUND half of the pair. Pure parse: it
+ * decides only what kind of return this is, and hands `jws` to the caller for
+ * `verifySiwd`. NOTHING here is trusted; the `did` param is unauthenticated
+ * courier convenience, and the DID a caller should act on is the one
+ * `verifySiwd` returns from the signature.
+ *
+ * Takes an absolute URL string, a `URL`, or a bare `?…` query string (so
+ * `readSiwdCallback(location.search)` works, including when it is empty).
+ *
+ * SCRUB THE URL YOURSELF, IMMEDIATELY. A signed JWS is sitting in the query
+ * string, which means it is in the address bar, in `history`, in the referrer
+ * of anything the page loads next, and in any analytics that samples the
+ * location. This function cannot do the scrubbing for you — `history` is
+ * environment-owned and this package stays free of the DOM — so a browser RP
+ * should follow the read with a `history.replaceState` back to the bare path.
+ *
+ * A HALF-CALLBACK IS A FAILURE, NOT A NON-EVENT: `jws` without `did` (or the
+ * reverse) resolves to `denied` carrying a synthetic reason rather than `none`.
+ * Silently treating it as a plain page load would strand the user on a
+ * sign-in button with no explanation of why the last attempt vanished.
+ */
+export const readSiwdCallback = (url: string | URL): SiwdCallbackResult => {
+  const params = callbackParams(url);
+  const jws = callbackParam(params, 'jws');
+  const did = callbackParam(params, 'did');
+  const error = callbackParam(params, 'error');
+
+  if (jws !== undefined && did !== undefined) return { kind: 'success', jws, did };
+  if (error !== undefined) return { kind: 'denied', error };
+  if (jws !== undefined) return { kind: 'denied', error: 'malformed SIWD callback: missing did' };
+  if (did !== undefined) return { kind: 'denied', error: 'malformed SIWD callback: missing jws' };
+  return { kind: 'none' };
+};
+
+// -----------------------------------------------------------------------------
 // sign-request profile B
 // -----------------------------------------------------------------------------
 
