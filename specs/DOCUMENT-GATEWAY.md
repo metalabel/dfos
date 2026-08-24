@@ -94,7 +94,7 @@ There is no second code path, no "is it public?" branch that trusts a stored fla
 ### Two paths, one verifier
 
 - **Public path.** The reader presents no credential. The gateway derives the relevant public credentials (`aud: "*"`) covering the chain from the proof plane (see [Public-grant derivation](#public-grant-derivation)) and runs each through the unified verifier. A surviving public grant authorizes the read. The candidates may come from a materialized public-credential index, but that index is a **non-authoritative cache** — authority is the live re-verify, never the stored lookup.
-- **Delegated path.** The reader presents a DFOS credential in the `X-Credential` header. The gateway runs the same verifier over it. Unchanged in shape — it simply gains the same revocation check the public path runs.
+- **Delegated path.** The reader presents a DFOS credential in the `X-Credential` header. The gateway runs the same verifier over it, including the same per-link revocation check the public path runs.
 
 Both paths check revocation at **every link** of the delegation chain. There is no asymmetry: a revoked public grant and a revoked presented credential are denied identically. See [Revocation](#revocation).
 
@@ -110,7 +110,7 @@ A public grant may name `chain:<contentId>` (this chain) or `chain:*` (all of th
 
 ## Routes
 
-The gateway's route **surface** is unchanged from what the relay serves today; only the authorization _logic_ behind it changes. The 0.1 gateway adds **zero new gateway routes**.
+The gateway's route **surface** is exactly the relay's content-plane surface — the 0.1 gateway defines **zero routes of its own**.
 
 | Method | Path                                     | Purpose                                                     |
 | ------ | ---------------------------------------- | ----------------------------------------------------------- |
@@ -196,13 +196,13 @@ The cryptographic guarantees — integrity, authenticity, authorization — live
 
 ## Coupling: why tight is correct
 
-It is tempting to call the gateway "tightly coupled" to the proof plane and treat that as a smell. Three distinct couplings hide under that word; separating them shows the design kept the good one and killed the bad one:
+It is tempting to call the gateway "tightly coupled" to the proof plane and treat that as a smell. Three distinct couplings hide under that word; separating them shows which one the design keeps and which it refuses:
 
-1. **State coupling (replication)** — does it hold an _authoritative_ copy of proof-plane state? A standing-authorization table _trusted as authority_ does (→ invalidation, drift). The stateless gateway holds none: any materialized index it keeps is a re-verified, non-authoritative cache, not authority. ← _the coupling we killed._
+1. **State coupling (replication)** — does it hold an _authoritative_ copy of proof-plane state? A standing-authorization table _trusted as authority_ does (→ invalidation, drift). The stateless gateway holds none: any materialized index it keeps is a re-verified, non-authoritative cache, not authority. ← _the coupling the design refuses._
 2. **Read coupling (runtime dependency)** — does it talk to the proof plane per request? **Yes, unavoidably.** You cannot verify a signature without the issuer's mutable, revocable key. This is intrinsic and correct, not a defect.
 3. **Trust coupling** — does it believe the node's judgment or re-derive? **Minimal** — the node hands self-verifying data (signed ops, CIDs, credentials); the gateway decides; a lying node is caught by the verifier.
 
-You **cannot** decouple a verifier from the source of the keys it verifies against. Decoupling would mean either caching authority (→ state coupling, the bug we removed) or ignoring mutability (→ honoring rotated-out keys and revoked grants, a security hole). Tight _read_-coupling to live truth, with **zero** _authoritative_ state replicated, is exactly the shape that is always correct.
+You **cannot** decouple a verifier from the source of the keys it verifies against. Decoupling would mean either caching authority (→ state coupling, the shape this design refuses) or ignoring mutability (→ honoring rotated-out keys and revoked grants, a security hole). Tight _read_-coupling to live truth, with **zero** _authoritative_ state replicated, is exactly the shape that is always correct.
 
 ### Deployment locality
 

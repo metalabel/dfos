@@ -992,11 +992,13 @@ The returned `CreatedRelay` includes `app` (Hono), `did` (string), and `syncFrom
 | `GET`  | `/1.0/identifiers/:did`                     | meta        | none                                      |
 | `GET`  | `/revocations/v1/credential/:credentialCID` | revocations | none                                      |
 | `GET`  | `/revocations/v1/issuer/:did`               | revocations | none                                      |
+| `GET`  | `/index/v0/operations`                      | index       | none                                      |
 | `GET`  | `/index/v0/identities`                      | index       | none                                      |
 | `GET`  | `/index/v0/content`                         | index       | none                                      |
 | `GET`  | `/index/v0/artifacts`                       | index       | none                                      |
 | `GET`  | `/index/v0/countersignatures`               | index       | none                                      |
 | `GET`  | `/index/v0/credentials`                     | index       | none                                      |
+| `GET`  | `/index/v0/credits`                         | index       | none                                      |
 | `POST` | `/signing/v0/requests`                      | signing     | deposit credential (in body)              |
 | `GET`  | `/signing/v0/requests`                      | signing     | auth token                                |
 | `POST` | `/signing/v0/requests/:cid/response`        | signing     | none — validity is the auth               |

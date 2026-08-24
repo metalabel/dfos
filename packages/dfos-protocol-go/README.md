@@ -55,6 +55,8 @@ All protocol operations are covered:
 | `VerifyJWS`          | Verify an Ed25519 JWS token              |
 | `VerifyCredential`   | Verify a DFOS credential                 |
 | `VerifyRevocation`   | Verify a credential revocation           |
+| `VerifySignRequest`  | Verify a sign-request envelope           |
+| `SiwdSigningInput`   | Canonical SIWD challenge signing bytes   |
 | `DocumentCID`        | Canonical dag-cbor encode and CIDv1 hash |
 
 ## Tests

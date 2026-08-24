@@ -285,6 +285,30 @@ Fetched identities appear in `identity list` with `KEYS 0/N` — visible public 
 
 ---
 
+## Serve
+
+`dfos serve` exposes the embedded local relay over HTTP, turning the machine into a reachable node with peer sync, gossip, and read-through. Every flag has an environment-variable fallback for container deployment (except `--no-write`, which is deliberately explicit).
+
+```bash
+dfos serve --port 4444 --peers https://relay.example.com
+```
+
+| Flag               | Default            | Env              | Purpose                                                                 |
+| ------------------ | ------------------ | ---------------- | ----------------------------------------------------------------------- |
+| `--port`           | `4444`             | `PORT`           | Port to listen on                                                       |
+| `--db`             | `~/.dfos/relay.db` | `SQLITE_PATH`    | Database path                                                           |
+| `--name`           | `DFOS Relay`       | `RELAY_NAME`     | Relay profile name in the well-known                                    |
+| `--peers`          | —                  | `PEERS`          | Comma-separated peer URLs, or a JSON array                              |
+| `--sync-interval`  | `30s`              | `SYNC_INTERVAL`  | Peer sync interval                                                      |
+| `--resync`         | `false`            | `RESYNC=true`    | Reset peer cursors for a full re-sync on boot                           |
+| `--no-write`       | `false`            | —                | LITE pull-only node: reject `POST /operations`, sync from peers only    |
+| `--no-index`       | `false`            | `INDEX=false`    | Disable `/index/v0`: advertise `index: false` and return 501            |
+| `--content-follow` | `none`             | `CONTENT_FOLLOW` | Materialize granted public content blobs from peers (`none` \| `eager`) |
+
+`--no-write` is the pull-only posture: the node ingests exclusively through peer sync and refuses submissions outright, so its served state is entirely derived from relays it chose to follow.
+
+---
+
 ## Content Create
 
 Content creation accepts any JSON document. The CLI enforces one convention: documents should have a `$schema` field pointing to a content model schema.
@@ -449,7 +473,6 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `DFOS_CONFIG`          | Config file path (default: `~/.dfos/config.toml`) |
 | `DFOS_NO_KEYCHAIN`     | Skip OS keychain; use file store `~/.dfos/keys/`  |
 | `DFOS_NO_UPDATE_CHECK` | Disable automatic version update checks           |
-| `DFOS_DEBUG`           | Debug logging (HTTP traffic, key resolution)      |
 
 ---
 
@@ -477,6 +500,7 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `content create <file\|->`      | Create content chain                                     |
 | `POST` | `content update <id> <file\|->` | Update content chain (supports delegation)               |
 | `POST` | `content delete <id>`           | Permanently delete content chain                         |
+| `DEL`  | `content remove <id>`           | Explain that local content cannot be un-ingested         |
 | `POST` | `content publish <id>`          | Submit content chain + blob to a relay                   |
 | `GET`  | `content fetch <id>`            | Download content chain from relay                        |
 | `GET`  | `content list`                  | List locally stored content chains                       |

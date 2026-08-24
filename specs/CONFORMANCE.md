@@ -135,11 +135,8 @@ A relay ingests, sequences, and serves. It implements:
   cursor pages.
 - **List-route pagination envelope** — `limit` (default 100, max 1000, clamp above max) +
   `after` + `next`, with the per-route cursor behavior (relay-local 400 / transparent
-  keyset / opaque token) as specified per route, and — during the deprecation window
-  only — the log routes' `cursor` alias emitted equal to `next` (WEB-RELAY.md "Error
-  Responses" and each route's section, `specs/WEB-RELAY.md`). The conformance suite
-  asserts the alias for the window; that assertion is removed with the alias at the
-  next minor.
+  keyset / opaque token) as specified per route (WEB-RELAY.md "Error Responses" and each
+  route's section, `specs/WEB-RELAY.md`).
 
 **The content plane is OPTIONAL.** A compliant relay **always** serves the proof plane
 (`capabilities.proof: false` is not a valid value); when `capabilities.content: false`,

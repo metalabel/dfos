@@ -67,10 +67,13 @@ serve({ port: 4444 });
 | `POST` | `/signing/v0/requests/:cid/response`        | Submit a sign response (`signing` capability; 501 when disabled)     |
 | `GET`  | `/signing/v0/requests/:cid/response`        | Poll sign response status (`signing` capability; 501 when disabled)  |
 | `POST` | `/signing/v0/requests/:cid/decline`         | Decline a sign request (`signing` capability; 501 when disabled)     |
+| `GET`  | `/index/v0/operations`                      | Browse operation metadata rows by recency (`index` capability)       |
 | `GET`  | `/index/v0/identities`                      | Query materialized identity projections (`index` capability)         |
 | `GET`  | `/index/v0/content`                         | Query materialized content projections (`index` capability)          |
+| `GET`  | `/index/v0/artifacts`                       | Query standalone signed artifacts (`index` capability)               |
 | `GET`  | `/index/v0/countersignatures`               | Query countersignatures by witness (`index` capability)              |
 | `GET`  | `/index/v0/credentials`                     | Query credential projections (`index` capability)                    |
+| `GET`  | `/index/v0/credits`                         | Query credits on public head documents (`index` capability)          |
 | `PUT`  | `/content/:contentId/blob/:operationCID`    | Upload blob (auth required)                                          |
 | `GET`  | `/content/:contentId/blob`                  | Download blob at head (standing auth, or auth + credential)          |
 | `GET`  | `/content/:contentId/blob/:ref`             | Download blob at specific operation ref                              |
@@ -99,9 +102,12 @@ frozen v1 surface without touching the wire or the proof plane. See
 ingested a revocation for a credential —
 `{ credentialCID, revoked, revocation? }` — and
 `GET /revocations/v1/issuer/:did` lists every revocation ingested for an issuer,
-ordered by revocation `createdAt` ascending (tiebreak `credentialCID`) and
-cursor-paginated with the standard `limit`/`after` query params and a `next`
-cursor in the response. The family is a **frozen `v1` contract** at the relay
+sorted by `credentialCID` ascending and cursor-paginated with the standard
+`limit`/`after` query params and a `next` cursor in the response. The
+enumeration key is the cursor, so resumption is a strictly-greater keyset and a
+backdated `createdAt` can never be inserted behind a client's cursor;
+chronology is a client-side sort over the returned rows. The family is a
+**frozen `v1` contract** at the relay
 root on its own version clock; revocations still _enter_ through
 `POST /proof/v1/operations` as ordinary proof-plane operations.
 

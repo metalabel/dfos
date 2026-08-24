@@ -33,7 +33,7 @@ Tests covering:
 - Artifact ingestion and sequencer cross-batch dependency resolution
 - Revocation status routes (`/revocations/v1` — self-proving JWS answers, honest absence, malformed-param 400s, capability-gated, paginated issuer feed with `limit`/`after`/`next` cursor draining)
 - Signing mailbox (deposit authorization, subject polling, responses, declines, expiry, limits, and disabled-capability 501s)
-- Index queries (`/index/v0` — identity, content, countersignature, and credential projections with filters and pagination)
+- Index queries (`/index/v0` — operation, artifact, identity, content, countersignature, credential, and credit projections with filters and pagination, plus the disabled-capability 501s)
 
 ## Dependencies
 
@@ -41,16 +41,18 @@ The test suite depends on [`dfos-protocol-go`](../dfos-protocol-go) for protocol
 
 ## Scripts
 
-| Script                            | Description                                                               |
-| --------------------------------- | ------------------------------------------------------------------------- |
-| `scripts/parity-serve.ts`         | Start a TS relay with the pinned identity used by the parity harness      |
-| `scripts/run-conformance.sh`      | Start a TS relay on a random port, run the full suite, clean up           |
-| `scripts/run-parity.sh`           | Run dual-relay proof-plane parity against the TS and Go relays            |
-| `scripts/run-signing.sh`          | Run SIGNING 0.1 conformance against the TS and Go relays                  |
-| `scripts/run-write-disabled.sh`   | Run write-disabled conformance against the TS and Go relays               |
-| `scripts/serve-conformance.ts`    | Start a TS relay with `MemoryRelayStore` for testing                      |
-| `scripts/serve-signing.ts`        | Start a signing-enabled TS relay for conformance testing                  |
-| `scripts/serve-write-disabled.ts` | Start a seeded, write-disabled TS relay for read-only conformance testing |
+| Script                            | Description                                                                |
+| --------------------------------- | -------------------------------------------------------------------------- |
+| `scripts/parity-serve.ts`         | Start a TS relay with the pinned identity used by the parity harness       |
+| `scripts/run-conformance.sh`      | Start a TS relay on a random port, run the full suite, clean up            |
+| `scripts/run-index-disabled.sh`   | Run index-disabled conformance against the TS and Go relays                |
+| `scripts/run-parity.sh`           | Run dual-relay proof-plane parity against the TS and Go relays             |
+| `scripts/run-signing.sh`          | Run SIGNING 0.1 conformance against the TS and Go relays                   |
+| `scripts/run-write-disabled.sh`   | Run write-disabled conformance against the TS and Go relays                |
+| `scripts/serve-conformance.ts`    | Start a TS relay with `MemoryRelayStore` for testing                       |
+| `scripts/serve-index-disabled.ts` | Start a TS relay with the `/index/v0` family disabled (501 on every route) |
+| `scripts/serve-signing.ts`        | Start a signing-enabled TS relay for conformance testing                   |
+| `scripts/serve-write-disabled.ts` | Start a seeded, write-disabled TS relay for read-only conformance testing  |
 
 ## License
 
