@@ -37,6 +37,7 @@
 
 import { createClient } from '@metalabel/dfos-client';
 import { verifySiwd } from '@metalabel/dfos-client/siwd';
+import type { VercelRequest, VercelResponse } from './vercel';
 
 const NONCE_COOKIE = 'siwd_nonce';
 
@@ -66,15 +67,12 @@ const MAX_BODY_BYTES = 16 * 1024;
  */
 const CLEAR_NONCE_COOKIE = `${NONCE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/api; Max-Age=0`;
 
-const json = (status: number, body: unknown, clearNonce = true): Response =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store',
-      ...(clearNonce ? { 'Set-Cookie': CLEAR_NONCE_COOKIE } : {}),
-    },
-  });
+const json = (res: VercelResponse, status: number, body: unknown, clearNonce = true): void => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'no-store');
+  if (clearNonce) res.setHeader('Set-Cookie', CLEAR_NONCE_COOKIE);
+  res.status(status).send(JSON.stringify(body));
+};
 
 /** Hand-rolled on purpose: a cookie parser is four lines, not a dependency. */
 const readCookie = (header: string | null, name: string): string | undefined => {
@@ -86,6 +84,10 @@ const readCookie = (header: string | null, name: string): string | undefined => 
   }
   return undefined;
 };
+
+/** The first value of a possibly-repeated Node header. */
+const headerValue = (value: string | string[] | undefined): string | undefined =>
+  Array.isArray(value) ? value[0] : value;
 
 /** The hostname out of a Host header, brackets and port stripped. */
 const hostnameOf = (host: string): string => {
@@ -99,67 +101,74 @@ const hostnameOf = (host: string): string => {
 };
 
 /** The domain this request may verify for, or undefined if it is not ours. */
-const expectedDomain = (request: Request): string | undefined => {
-  const host = request.headers.get('host');
-  if (host === null) return undefined;
+const expectedDomain = (req: VercelRequest): string | undefined => {
+  const host = headerValue(req.headers.host);
+  if (host === undefined) return undefined;
   const hostname = hostnameOf(host);
   if (hostname === PRODUCTION_HOST || LOOPBACK_HOSTS.has(hostname)) return hostname;
   return undefined;
 };
 
-export default async function handler(request: Request): Promise<Response> {
-  if (request.method !== 'POST') {
-    return new Response(JSON.stringify({ ok: false, error: 'method not allowed' }), {
-      status: 405,
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-store',
-        Allow: 'POST',
-      },
-    });
+export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method !== 'POST') {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Allow', 'POST');
+    res.status(405).send(JSON.stringify({ ok: false, error: 'method not allowed' }));
+    return;
   }
 
   // 1. The nonce, from the cookie and nowhere else. No cookie means there is
   //    nothing to verify against — refuse BEFORE touching the JWS, so a caller
   //    cannot use this endpoint as a free signature oracle.
-  const nonce = readCookie(request.headers.get('cookie'), NONCE_COOKIE);
+  const nonce = readCookie(headerValue(req.headers.cookie) ?? null, NONCE_COOKIE);
   if (nonce === undefined || nonce === '') {
-    return json(400, {
+    json(res, 400, {
       ok: false,
       error: 'no nonce in flight — start at /api/nonce',
     });
+    return;
   }
 
   // 2. From here on every response clears the cookie, so an honest browser does
   //    not carry a spent nonce forward. See the header comment for why that is
   //    hygiene rather than a replay defense.
 
-  const domain = expectedDomain(request);
+  const domain = expectedDomain(req);
   if (domain === undefined) {
-    return json(400, {
+    json(res, 400, {
       ok: false,
       error: 'this deployment does not verify for that host',
     });
+    return;
   }
 
-  const declaredLength = Number(request.headers.get('content-length') ?? '0');
+  const declaredLength = Number(headerValue(req.headers['content-length']) ?? '0');
   if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
-    return json(413, { ok: false, error: 'request body too large' });
+    json(res, 413, { ok: false, error: 'request body too large' });
+    return;
   }
 
+  // Vercel's Node runtime pre-parses a JSON body into `req.body`; re-serialize
+  // to re-apply the size cap and the shape guard on one path, whatever arrived.
   let jws: string;
   try {
-    const raw = await request.text();
+    const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? '');
     if (raw.length > MAX_BODY_BYTES) {
-      return json(413, { ok: false, error: 'request body too large' });
+      json(res, 413, { ok: false, error: 'request body too large' });
+      return;
     }
-    const body = JSON.parse(raw) as { jws?: unknown };
-    if (typeof body.jws !== 'string' || body.jws === '') {
-      return json(400, { ok: false, error: 'body must be JSON with a `jws` string' });
+    const body = (typeof req.body === 'string' ? JSON.parse(req.body) : req.body) as {
+      jws?: unknown;
+    };
+    if (typeof body?.jws !== 'string' || body.jws === '') {
+      json(res, 400, { ok: false, error: 'body must be JSON with a `jws` string' });
+      return;
     }
     jws = body.jws;
   } catch {
-    return json(400, { ok: false, error: 'body must be JSON with a `jws` string' });
+    json(res, 400, { ok: false, error: 'body must be JSON with a `jws` string' });
+    return;
   }
 
   // 3. The same function the browser tier calls — same rules, same relay, now
@@ -200,14 +209,16 @@ export default async function handler(request: Request): Promise<Response> {
       maxAgeSeconds: 300,
     });
   } catch (err) {
-    return json(502, {
+    json(res, 502, {
       ok: false,
       error: `could not reach ${RELAY_URL}: ${err instanceof Error ? err.message : String(err)}`,
     });
+    return;
   }
 
   if (!result.ok || result.value === undefined) {
-    return json(401, { ok: false, error: result.error ?? 'verification failed' });
+    json(res, 401, { ok: false, error: result.error ?? 'verification failed' });
+    return;
   }
 
   // Only these four fields. The session also carries the nonce — which is the
@@ -215,7 +226,7 @@ export default async function handler(request: Request): Promise<Response> {
   // the very value they were never supposed to choose — and the requester's
   // `statement`, which this demo does not render anywhere.
   const { did, domain: signedDomain, timestamp, kid } = result.value;
-  return json(200, {
+  json(res, 200, {
     ok: true,
     session: { did, domain: signedDomain, timestamp, kid },
     note: 'verification ran server-side; a real app mints its session cookie here.',
