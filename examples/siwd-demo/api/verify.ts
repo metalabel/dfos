@@ -42,8 +42,8 @@ import {
   SESSION_TTL_SECONDS,
   setCookie,
   unseal,
-} from './_lib';
-import type { VercelRequest, VercelResponse } from './_types';
+} from './_lib.js';
+import type { VercelRequest, VercelResponse } from './_types.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== 'POST') {

@@ -30,7 +30,7 @@
 */
 
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import type { VercelRequest, VercelResponse } from './_types';
+import type { VercelRequest, VercelResponse } from './_types.js';
 
 // deployment coordinates — edit these when forking the demo
 export const AUTHORIZE_URL = 'https://app.dfos.com/authorize';
