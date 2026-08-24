@@ -21,8 +21,10 @@ import { createClient } from '../src/client';
 import {
   buildSiwdSignRequest,
   createSiwdChallenge,
+  createSiwdLoginRequest,
   decodeSiwdChallenge,
   parseSiwdChallenge,
+  readSiwdCallback,
   SIWD_JWS_TYP,
   siwdSigningInput,
   validateSiwdSignRequest,
@@ -152,6 +154,306 @@ describe('siwd byte contract', () => {
       timestamp: '2026-08-10T12:34:56.999Z',
     });
     expect(challenge.timestamp).toBe('2026-08-10T12:34:56.000Z');
+  });
+});
+
+describe('siwd login kit', () => {
+  const AUTHORIZE = 'https://app.example.com/authorize';
+
+  const paramsOf = (url: string): URLSearchParams => new URL(url).searchParams;
+
+  const clientFor = (id: Awaited<ReturnType<typeof buildIdentity>>) =>
+    createClient({
+      relays: [RELAY],
+      peerClient: fakePeerClient({ [RELAY]: { identities: { [id.did]: id.log } } }),
+    });
+
+  it('builds the authorize URL with all four wire params for a public RP', () => {
+    const request = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity',
+      statement: 'Sign in to 3P App',
+      clientDid: 'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae',
+    });
+    const params = paramsOf(request.url);
+
+    expect(new URL(request.url).origin + new URL(request.url).pathname).toBe(AUTHORIZE);
+    expect(params.get('challenge')).toBe(request.challenge);
+    expect(params.get('redirect_uri')).toBe('https://3p.com/callback');
+    expect(params.get('scope')).toBe('identity');
+    expect(params.get('client_did')).toBe('did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae');
+  });
+
+  it('preserves a query the authorize endpoint already carries', () => {
+    const request = createSiwdLoginRequest({
+      authorizeUrl: 'https://app.example.com/authorize?tenant=acme',
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity',
+    });
+    const params = paramsOf(request.url);
+
+    expect(params.get('tenant')).toBe('acme');
+    expect(params.get('challenge')).toBe(request.challenge);
+  });
+
+  it('embeds a challenge that decodes to the returned fields', () => {
+    const request = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity',
+      statement: 'Sign in to 3P App',
+    });
+
+    expect(decodeSiwdChallenge(request.challenge)).toEqual({
+      domain: '3p.com',
+      nonce: request.expect.nonce,
+      timestamp: request.timestamp,
+      statement: 'Sign in to 3P App',
+    });
+    expect(request.timestamp).toMatch(/\.000Z$/);
+  });
+
+  /*
+    `expect` is the whole persistence story: one JSON-serializable object that
+    IS a `SiwdExpectations`, so nothing has to be threaded to both ends of the
+    redirect by hand. A `domain` that drifts between mint and verify is a check
+    that silently stops checking.
+  */
+  it('returns an expect object that survives a JSON round trip intact', () => {
+    const request = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity',
+      nonce: 'persisted-nonce',
+    });
+
+    expect(request.expect).toEqual({ domain: '3p.com', nonce: 'persisted-nonce' });
+    expect(JSON.parse(JSON.stringify(request.expect))).toEqual(request.expect);
+    // absent `did` stays absent rather than serializing as an explicit undefined
+    expect('did' in request.expect).toBe(false);
+  });
+
+  /*
+    Nothing can prove a client DID for an app on a local port, so a host refuses
+    a `client_did` on a loopback redirect outright — the whole request, not just
+    the param. Dropping it here is what keeps a CLI's sign-in from being a
+    guaranteed rejection.
+  */
+  it.each([
+    ['ipv4 loopback with a port', 'http://127.0.0.1:8976/cb'],
+    ['localhost with a port', 'http://localhost:3000/'],
+    ['bracketed ipv6 loopback', 'http://[::1]:8080/x'],
+  ])('omits client_did for a %s redirect even when supplied', (_label, redirectUri) => {
+    const request = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: 'localhost',
+      redirectUri,
+      scope: 'identity',
+      clientDid: 'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae',
+    });
+
+    expect(paramsOf(request.url).get('client_did')).toBeNull();
+    expect(paramsOf(request.url).get('redirect_uri')).toBe(redirectUri);
+  });
+
+  it('keeps client_did for a loopback-LOOKALIKE hostname', () => {
+    // `127.0.0.1.evil.example` is a public domain that merely reads as loopback.
+    // Matching it would strip an assertion a real registered app is entitled to.
+    const request = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '127.0.0.1.evil.example',
+      redirectUri: 'https://127.0.0.1.evil.example/',
+      scope: 'identity',
+      clientDid: 'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae',
+    });
+
+    expect(paramsOf(request.url).get('client_did')).toBe(
+      'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae',
+    );
+  });
+
+  it('uses a supplied nonce verbatim, and mints one when omitted', () => {
+    const supplied = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity',
+      nonce: 'backend-minted-nonce',
+    });
+    expect(supplied.expect.nonce).toBe('backend-minted-nonce');
+    expect(decodeSiwdChallenge(supplied.challenge).nonce).toBe('backend-minted-nonce');
+
+    const minted = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity',
+    });
+    expect(minted.expect.nonce).toBeTruthy();
+    expect(minted.expect.nonce).not.toBe(supplied.expect.nonce);
+  });
+
+  it('throws on an unparseable authorizeUrl or redirectUri', () => {
+    expect(() =>
+      createSiwdLoginRequest({
+        authorizeUrl: '/authorize',
+        domain: '3p.com',
+        redirectUri: 'https://3p.com/callback',
+        scope: 'identity',
+      }),
+    ).toThrow(/authorizeUrl/);
+    expect(() =>
+      createSiwdLoginRequest({
+        authorizeUrl: AUTHORIZE,
+        domain: '3p.com',
+        redirectUri: 'not a url',
+        scope: 'identity',
+      }),
+    ).toThrow(/redirectUri/);
+  });
+
+  it('composes end to end: mint → sign → read → verify with the persisted expect', async () => {
+    const id = await buildIdentity();
+
+    const request = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity',
+      statement: 'Sign in to 3P App',
+    });
+
+    // the RP persists `expect` across the redirect, exactly as JSON
+    const saved = JSON.parse(JSON.stringify(request.expect));
+
+    // the host decodes the param it was sent and signs those exact bytes
+    const challenge = decodeSiwdChallenge(paramsOf(request.url).get('challenge') as string);
+    const jws = await signChallenge(id.kid, id.k.signer, challenge);
+
+    // …and the RP reads it back off the callback and verifies it
+    const callback = readSiwdCallback(
+      `https://3p.com/callback?jws=${encodeURIComponent(jws)}&did=${id.did}`,
+    );
+    expect(callback.kind).toBe('success');
+    if (callback.kind !== 'success') throw new Error('expected a success callback');
+
+    const res = await verifySiwd(clientFor(id), callback.jws, saved);
+    expect(res.ok).toBe(true);
+    expect(res.value?.did).toBe(id.did);
+    expect(res.value?.nonce).toBe(request.expect.nonce);
+    expect(res.value?.timestamp).toBe(request.timestamp);
+  });
+
+  it('round-trips a did-bound request, and rejects a signature from anyone else', async () => {
+    const bound = await buildIdentity();
+    const stranger = await buildIdentity();
+
+    const request = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: '3p.com',
+      redirectUri: 'https://3p.com/callback',
+      scope: 'identity',
+      did: bound.did,
+    });
+
+    // the binding lands in BOTH halves — the signed bytes and the expectation
+    const challenge = decodeSiwdChallenge(request.challenge);
+    expect(challenge.did).toBe(bound.did);
+    expect(request.expect.did).toBe(bound.did);
+
+    const jws = await signChallenge(bound.kid, bound.k.signer, challenge);
+    const res = await verifySiwd(clientFor(bound), jws, request.expect);
+    expect(res.ok).toBe(true);
+    expect(res.value?.did).toBe(bound.did);
+
+    // the whole point of the binding: a different identity signing the same
+    // challenge is refused, even though its signature is perfectly valid
+    const wrong = await signChallenge(stranger.kid, stranger.k.signer, challenge);
+    const rejected = await verifySiwd(clientFor(stranger), wrong, request.expect);
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error).toMatch(/did/);
+  });
+});
+
+describe('readSiwdCallback', () => {
+  it('reads a success callback', () => {
+    expect(readSiwdCallback('https://3p.com/cb?jws=abc.def.ghi&did=did:dfos:xyz')).toEqual({
+      kind: 'success',
+      jws: 'abc.def.ghi',
+      did: 'did:dfos:xyz',
+    });
+  });
+
+  it('reads a denial', () => {
+    expect(readSiwdCallback('https://3p.com/cb?error=access_denied')).toEqual({
+      kind: 'denied',
+      error: 'access_denied',
+    });
+  });
+
+  it('reads a bare page load as none', () => {
+    expect(readSiwdCallback('https://3p.com/cb')).toEqual({ kind: 'none' });
+    expect(readSiwdCallback('https://3p.com/cb?utm_source=x')).toEqual({ kind: 'none' });
+  });
+
+  it('reports a half-callback as denied rather than swallowing it', () => {
+    expect(readSiwdCallback('https://3p.com/cb?jws=abc.def.ghi')).toEqual({
+      kind: 'denied',
+      error: 'malformed SIWD callback: missing did',
+    });
+    expect(readSiwdCallback('https://3p.com/cb?did=did:dfos:xyz')).toEqual({
+      kind: 'denied',
+      error: 'malformed SIWD callback: missing jws',
+    });
+  });
+
+  it('treats an empty param value as absent', () => {
+    expect(readSiwdCallback('https://3p.com/cb?jws=&did=')).toEqual({ kind: 'none' });
+  });
+
+  it('prefers a complete success over a stray error param', () => {
+    expect(
+      readSiwdCallback('https://3p.com/cb?jws=abc.def.ghi&did=did:dfos:xyz&error=ignored'),
+    ).toEqual({ kind: 'success', jws: 'abc.def.ghi', did: 'did:dfos:xyz' });
+  });
+
+  it('accepts a URL object as well as a string', () => {
+    expect(readSiwdCallback(new URL('https://3p.com/cb?error=access_denied'))).toEqual({
+      kind: 'denied',
+      error: 'access_denied',
+    });
+  });
+
+  /*
+    `location.search` is what a browser RP has in hand, and it is `''` on a
+    plain page load — the single most common path through this function, which
+    must not throw.
+  */
+  it('accepts a bare query string, including the empty one', () => {
+    expect(readSiwdCallback('?jws=abc.def.ghi&did=did:dfos:xyz')).toEqual({
+      kind: 'success',
+      jws: 'abc.def.ghi',
+      did: 'did:dfos:xyz',
+    });
+    expect(readSiwdCallback('?error=access_denied')).toEqual({
+      kind: 'denied',
+      error: 'access_denied',
+    });
+    expect(readSiwdCallback('?jws=abc.def.ghi')).toEqual({
+      kind: 'denied',
+      error: 'malformed SIWD callback: missing did',
+    });
+    expect(readSiwdCallback('?utm_source=x')).toEqual({ kind: 'none' });
+    expect(readSiwdCallback('')).toEqual({ kind: 'none' });
+  });
+
+  it('still throws on a string that is neither a URL nor a query', () => {
+    expect(() => readSiwdCallback('not a url')).toThrow(/url/);
   });
 });
 
