@@ -19,11 +19,11 @@
 import { Buffer } from 'node:buffer';
 import type { IncomingMessage } from 'node:http';
 import { defineConfig, type Plugin } from 'vite';
-import type { VercelRequest, VercelResponse } from './api/_types';
-import login from './api/login';
-import logout from './api/logout';
-import me from './api/me';
-import verify from './api/verify';
+import type { VercelRequest, VercelResponse } from './api/_types.js';
+import login from './api/login.js';
+import logout from './api/logout.js';
+import me from './api/me.js';
+import verify from './api/verify.js';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => void | Promise<void>;
 

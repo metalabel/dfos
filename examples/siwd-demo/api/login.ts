@@ -34,8 +34,8 @@ import {
   SECRET_ERROR,
   setCookie,
   STATEMENT,
-} from './_lib';
-import type { VercelRequest, VercelResponse } from './_types';
+} from './_lib.js';
+import type { VercelRequest, VercelResponse } from './_types.js';
 
 export default function handler(req: VercelRequest, res: VercelResponse): void {
   if (req.method !== 'POST') {
