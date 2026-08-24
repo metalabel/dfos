@@ -3,10 +3,17 @@
 ## What this is
 
 The smallest possible Sign In With DFOS relying party: one static page, no
-server, no secrets, no session backend, and no SDK beyond
+secrets, no session backend, and no SDK beyond
 [`@metalabel/dfos-client`](https://www.npmjs.com/package/@metalabel/dfos-client)
 installed from npm like any third party would. Deployed at
 <https://dfos-siwd-demo.vercel.app>.
+
+It offers two sign-in paths, which are the two tiers of the
+[trust ladder](#verification-trust-ladder) below. The default one verifies
+entirely in your browser and touches no server at all. The second adds two tiny
+serverless functions so verification happens where a real app would grant a
+session — still no secrets, and still no server-side state: the only thing the
+backend remembers is a nonce, and it remembers it in a cookie.
 
 ## How it works
 
@@ -83,17 +90,34 @@ in the tab. This is sound exactly when your backend grants **nothing** on the
 strength of the DID: a public client with no privileged API behind it, the same
 trust shape OAuth blesses for SPAs with PKCE.
 
-**Tier 2 — the moment a backend grants anything.** Verification moves server-side.
-The backend mints the nonce and sets it in an HttpOnly cookie; the callback POSTs
-the JWS to the backend; the **same** `verifySiwd` runs in Node against the
-cookie's nonce; the backend mints its own session from the result. The rule that
-makes this necessary: **a bare DID is an address, not a proof.** An endpoint that
-accepts `{ did }` from a client and believes it has authenticated nobody — anyone
-can type any DID.
+**Tier 2 — the moment a backend grants anything.** Verification moves server-side,
+and **this demo runs it**: the second sign-in button takes the tier-2 path through
+two serverless functions.
 
-A runnable backend example is coming. Nothing in the kit has to change for it:
-`createSiwdLoginRequest`, `readSiwdCallback`, and `verifySiwd` are pure and
-already run unchanged in Node.
+- `GET /api/nonce` mints a nonce, returns it, and sets it in an `HttpOnly`
+  cookie — the verifier's own memory of what it issued.
+- The page puts that nonce in the challenge (`createSiwdLoginRequest({ …, nonce })`)
+  and redirects as usual.
+- On return the page POSTs `{ jws }` to `POST /api/verify`. The body carries the
+  JWS and nothing else; the cookie rides along on its own.
+- The function reads the nonce **from the cookie, never from the body**, runs the
+  same `verifySiwd` in Node, and **always clears the cookie** — single use,
+  whether verification passes or fails.
+
+Two rules make this shape non-negotiable. **A bare DID is an address, not a
+proof**: an endpoint that accepts `{ did }` from a client and believes it has
+authenticated nobody, because anyone can type any DID. And **the presenter never
+chooses the expectation**: a verifier that reads the expected nonce out of the
+request it is verifying is comparing a value against itself.
+
+The one thing production adds is the session mint. Where this demo returns the
+verified session as JSON, your app sets its own session cookie and writes to
+whatever session store it already has. The demo stops short on purpose — a real
+session cookie needs a signing secret, and this repo stays zero-config
+fork-and-deploy.
+
+Run the functions locally with `vercel dev`; the plain `npm run dev` static
+server exercises tier 1 only.
 
 ## Security notes
 
