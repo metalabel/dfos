@@ -2,17 +2,23 @@
 
 ## What this is
 
-The smallest possible Sign In With DFOS relying party: one static page, no
-secrets, no backend, no session store, and no SDK beyond
+A complete Sign In With DFOS login — challenge minted server-side, JWS verified
+server-side, session cookie granted server-side — small enough to read in one
+sitting. One static page, four serverless functions, no database, no SDK beyond
 [`@metalabel/dfos-client`](https://www.npmjs.com/package/@metalabel/dfos-client)
 installed from npm like any third party would. Deployed at
 <https://dfos-siwd-demo.vercel.app>.
 
-Verification runs **in your browser, against a public relay**. No DFOS platform
-server is contacted to check the signature: the only network hop is to a relay,
-and the relay is untrusted — the crypto is what convinces us. Three functions
-from `@metalabel/dfos-client/siwd` carry the whole flow, and everything else in
-`src/main.ts` is DOM.
+The load-bearing decision is **where verification happens**. It happens in
+`api/verify.ts`, because that is where the session is granted, and
+[SIWD.md §Security Considerations](../../specs/SIWD.md#a-did-is-an-address-not-a-proof)
+is blunt about the rule: a bare DID is an address, not a proof, and verification
+of the JWS MUST happen wherever a session is granted. The browser's half of this
+flow is three fetches and a lot of DOM.
+
+Verification itself contacts **no DFOS platform server**. The only network hop is
+to a public relay, to resolve the signer's identity chain to its current state —
+and the relay is untrusted; the crypto is what convinces us.
 
 **The authorize request carries three params:** `challenge`, `redirect_uri`, and
 `scope=identity`. It does **not** send `client_did`, and that is deliberate. The
@@ -26,30 +32,121 @@ are gains nothing by sending one, and gains one more thing to keep in sync.
 
 ## How it works
 
-1. **Mint and redirect.** The sign-in click calls `createSiwdLoginRequest`, which
-   returns the `/authorize` URL to navigate to — carrying `challenge`,
-   `redirect_uri`, and `scope=identity` — plus an `expect` object.
-2. **Persist `expect`.** `request.expect` is `{ domain, nonce }` (plus `did` when
-   the challenge is bound to one): exactly what `verifySiwd` takes back, in one
-   JSON-serializable value. The demo stores it in `sessionStorage` and rehydrates
-   it on the way back, so nothing has to be threaded to both ends of the redirect
-   by hand — a `domain` that drifts between mint and verify is a check that
-   silently stops checking.
-3. **Come back signed.** The platform authenticates the user, shows consent,
-   signs the canonical challenge bytes with a key from the user's identity
-   chain, and redirects back with `?jws=<signed challenge>&did=<did>`.
-   `readSiwdCallback(location.search)` sorts the return into success, denied, or
-   "not a callback at all".
-4. **Verify, then read.** `verifySiwd(client, jws, expect)` resolves the signer's
-   identity chain from a public relay, replays it to current state, and checks
-   the signing key is a **current** `authKeys` entry of a non-deleted identity —
-   plus the nonce, the domain, and the timestamp window. Only then does the page
-   fetch that DID's public profile and render it.
+| Endpoint       | What it does                                                                                                |
+| -------------- | ----------------------------------------------------------------------------------------------------------- |
+| `POST /login`  | Mints the challenge, seals the nonce into an `httpOnly` cookie, returns the `/authorize` URL to navigate to |
+| `POST /verify` | Unseals that nonce, runs `verifySiwd` against a relay, grants the session cookie                            |
+| `GET /me`      | Reads the session cookie back — the one source the signed-in view renders from                              |
+| `POST /logout` | Expires it                                                                                                  |
 
-Sign in and open **"Show the receipts"** to see the decoded artifact, the list of
-checks that ran, and links to look the same chain up yourself.
+1. **Mint and redirect.** The sign-in click posts to `/api/login`.
+   `createSiwdLoginRequest` returns the `/authorize` URL — carrying `challenge`,
+   `redirect_uri`, and `scope=identity` — plus the nonce it minted. The server
+   seals that nonce under its own key and sets it as `siwd_flight`, `httpOnly`,
+   `Max-Age=300`. Minting here also means **the server's clock authors the
+   timestamp**, which retires a whole failure mode: a browser whose clock is
+   minutes off used to produce challenges that were born stale and correctly
+   refused on the way back.
+2. **Come back signed.** The platform authenticates the user, shows consent,
+   signs the canonical challenge bytes with a key from the user's identity chain,
+   and redirects back with `?jws=<signed challenge>&did=<did>`.
+   `readSiwdCallback(location.search)` sorts the return into success, denied, or
+   "not a callback at all", and the page scrubs the JWS out of the address bar
+   immediately.
+3. **Verify where the grant happens.** The page posts `{ jws }` to `/api/verify`
+   and nothing else — no nonce, no DID. The server unseals `siwd_flight` back to
+   the nonce it minted, then `verifySiwd(client, jws, { domain, nonce })`
+   resolves the signer's identity chain from a public relay, replays it to
+   current state, and checks the signing key is a **current** `authKeys` entry of
+   a non-deleted identity — plus the domain, the timestamp window, and the nonce
+   last.
+4. **Grant.** The flight cookie is cleared in the same response that sets
+   `siwd_session` — the DID, the `kid`, and an expiry, sealed under the same key.
+   The JWS is discarded: a signed challenge is a one-shot authentication proof,
+   not a bearer token.
+
+The browser still **decodes** the returned JWS, and shows it — the decoded
+artifact is the most legible thing in the protocol. That panel is labelled for
+exactly what it is: `decodeJwsUnsafe` does no verification and says so in its
+name. Sign in and open **"Show the receipts"** for the decoded artifact, the list
+of checks the server ran, and links to look the same chain up yourself.
 
 Spec: [`specs/SIWD.md`](../../specs/SIWD.md) · <https://protocol.dfos.com/siwd>
+
+## The two replay disciplines
+
+SIWD admits two, and
+[which one you owe is decided by what success grants](../../specs/SIWD.md#replay-prevention).
+This demo grants exactly one thing — a session with the browser standing in
+front of it — so it runs the **flow-bound** discipline, and is the reference
+implementation of it.
+
+**What the sealed cookie is.** At mint time the server binds the nonce to the
+agent that started the flow, statelessly: the value is
+`nonce + "." + base64url(HMAC-SHA256(SESSION_SECRET, nonce))`, in an `httpOnly`
+cookie scoped to `/api` and expiring with the acceptance window. At verification
+the expectation is recovered from that seal and from nowhere else.
+
+**Why the seal and not just a cookie.** A _bare_ nonce cookie is the same trap in
+a costume. Cookies are presenter-supplied on every request: an attacker holding a
+captured JWS reads the nonce straight out of the payload and sends it back in a
+`Cookie` header of their own — `HttpOnly` constrains a browser's scripts, not
+`curl`. What makes this bind is that the value carries a tag only this server's
+key can produce, so the expectation is recoverable only from the server's own
+prior act of minting it.
+
+**What it guarantees, exactly.** _The artifact redeems only through the channel
+that initiated the flow, inside the timestamp window._ It is **not** global
+single-use: a party holding both the artifact and the cookie jar can redeem again
+within the window. That is the accepted trade for a session-only grant — a party
+holding the cookie jar already holds the session they would gain. This is the
+discipline the surrounding ecosystem applies to browser login: OpenID Connect's
+`state` and `nonce` verified against browser-carried session state, Sign in with
+Ethereum's session-bound nonce.
+
+**When you must switch.** The moment success yields anything beyond a session
+with the presenting browser — a credential-returning scope, a token or grant
+redeemable outside the originating channel, any of profile B (a mailbox flow has
+no presenting channel to bind) — flow-binding is no longer admissible and
+**consumed verification is REQUIRED**. Store each minted nonce server-side and
+consume it atomically:
+
+```js
+const result = await verifySiwd(client, jws, {
+  domain,
+  // Redis GETDEL, KV, a DELETE … RETURNING row — but atomic, and answering as a boolean
+  consumeNonce: async (nonce) => (await store.getdel(nonce)) !== null,
+});
+```
+
+That is a one-field change to this demo's `api/verify.ts` plus a store, because
+the kit runs the nonce check last under both disciplines — after signature, key
+currency, domain, and timestamp — so an invalid presentation never spends a nonce
+its legitimate holder is still carrying. A non-atomic read-then-delete is not a
+substitute: it is a race with a login in it. `consumeNonce` ships in
+`@metalabel/dfos-client` ≥ 0.31.
+
+**Either way, the expectation must be something only the verifier could have
+produced.** A nonce handed to the verifier by the party presenting the artifact —
+in a callback parameter, a request body, or an unsealed cookie — is not a replay
+defense at all.
+
+## `SESSION_SECRET`
+
+One environment variable, and it is the key both seals use. Set it to any long
+random string:
+
+```sh
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
+```
+
+**If it is unset the server does not throw** — it mints a random key per cold
+start and keeps running, because a fork-and-deploy demo that 500s on first load
+teaches nothing. What it loses is durability: every session dies with the
+instance that issued it, and a sign-in started on one instance cannot be
+completed on another. That degradation is visible rather than silent — every
+session-bearing response carries `ephemeral: true` and the page renders a notice
+saying so.
 
 ## Registration = a JSON file
 
@@ -84,13 +181,17 @@ says so — naming the exact string and the exact file — before you click
 anything. The sign-in button stays live either way: the host's refusal is part of
 the lesson, and the notice just tells you why it is about to happen.
 
+The server derives the same string from the request's own origin rather than
+hardcoding it, so the target the page checks and the target the server sends
+cannot drift apart.
+
 ## Fork it
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmetalabel%2Fdfos%2Ftree%2Fmain%2Fexamples%2Fsiwd-demo&project-name=dfos-siwd-demo&repository-name=dfos-siwd-demo)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmetalabel%2Fdfos%2Ftree%2Fmain%2Fexamples%2Fsiwd-demo&project-name=dfos-siwd-demo&repository-name=dfos-siwd-demo&env=SESSION_SECRET&envDescription=Signs%20login%20sessions%20-%20set%20to%20any%20long%20random%20string)
 
-That clones this directory alone into your own repo and deploys it. Then make
-**one edit** — put your deployment's origin in `redirect_uris`, exactly, with the
-trailing slash:
+That clones this directory alone into your own repo, prompts you for
+`SESSION_SECRET`, and deploys it. Then make **one edit** — put your deployment's
+origin in `redirect_uris`, exactly, with the trailing slash:
 
 ```json
 { "redirect_uris": ["https://your-app.example.com/"] }
@@ -112,83 +213,57 @@ npm install
 npm run dev
 ```
 
-Sign-in works unchanged in dev with **no well-known file at all**:
-`http://localhost:5173/` is accepted as a redirect target for `scope=identity`
-under the loopback tier (the RFC 8252 posture — an application on the user's own
-machine holds no domain, so the binding a hosted redirect asserts is one no host
-could ever check; rather than refuse the case, the host consents to it under its
-own tier and says plainly what it is). The boot self-check knows this and skips
-itself on a loopback host.
+The whole flow works locally, backend included and with **no well-known file at
+all**: `http://localhost:5173/` is accepted as a redirect target for
+`scope=identity` under the loopback tier (the RFC 8252 posture — an application
+on the user's own machine holds no domain, so the binding a hosted redirect
+asserts is one no host could ever check; rather than refuse the case, the host
+consents to it under its own tier and says plainly what it is). The boot
+self-check knows this and skips itself on a loopback host.
 
-## When your backend grants anything
-
-This demo verifies in the browser, which is sound for exactly one reason:
-**nothing is granted here.** There is no API behind it and no session to mint —
-the same trust shape OAuth blesses for SPAs with PKCE. The moment a backend
-grants something, verification has to move to where the granting happens.
-
-Two rules make that non-negotiable, both from
-[SIWD.md §Security Considerations](../../specs/SIWD.md#security-considerations):
-
-- **A bare DID is an address, not a proof.** An endpoint that accepts `{ did }`
-  from a client and believes it has authenticated nobody — anyone can type any
-  DID. Verification of the JWS MUST happen wherever the session is granted; if
-  the two are split across a trust boundary, carry the verdict across it, not the
-  identifier.
-- **The verifier MUST have minted the nonce it checks.** A verifier that reads
-  the expected nonce out of the request it is verifying is comparing a value
-  against itself. An attacker replaying a captured JWS supplies the nonce that
-  JWS already contains, and the comparison passes trivially.
-
-And a nonce is only a replay defense once it is **consumed atomically** — read
-and deleted in one operation, so two concurrent replays cannot both win. The kit
-takes that as a callback:
-
-```js
-const result = await verifySiwd(client, jws, {
-  domain,
-  // Redis GETDEL, KV, a deleted row — but atomic, and answering as a boolean
-  consumeNonce: async (nonce) => (await store.getdel(nonce)) !== null,
-});
-```
-
-`consumeNonce` ships in `@metalabel/dfos-client` ≥ 0.31. A non-atomic
-read-then-delete is not a substitute: it is a race with a login in it. Verify,
-consume, then mint **your own** session and discard the JWS — a signed challenge
-is a one-shot authentication proof, not a bearer token.
+There is no `vercel` CLI in the loop. Vercel's Node runtime adds exactly two
+things to Node's own request/response pair — a pre-parsed JSON `body` and
+`status()` / `send()` — so `vite.config.ts` carries a ~50-line plugin that shims
+those two and mounts the **same handler files** as dev-server middleware. Nothing
+is reimplemented, so nothing can drift.
 
 ## Security notes
 
-- The `expect` object is removed from `sessionStorage` before verification runs,
-  so this tab cannot reuse it pass or fail. That is tab hygiene, not a replay
-  defense — a real one is server-side consumption, above.
-- The `?did=` callback param is **never trusted**. The DID rendered and looked
-  up is the one inside the verified JWS.
-- The JWS is scrubbed out of the address bar with `history.replaceState` the
+- **The verifier minted the nonce it checks.** It comes out of a cookie sealed
+  under this server's key, never out of the callback, the request body, or an
+  unsealed cookie. See "The two replay disciplines" above for what that buys.
+- **The nonce is checked last** — after signature, key currency, domain, and
+  timestamp — which is [SIWD.md's step 6](../../specs/SIWD.md#third-party-verification)
+  and what makes the move to `consumeNonce` a one-field change.
+- **The `?did=` callback param is never trusted.** The DID in the session is the
+  one inside the verified JWS.
+- **Every POST is origin-checked.** A present `Origin` header that is not this
+  deployment's own is refused with a 403; an absent one means a non-browser
+  caller, which is riding nobody's cookie jar.
+- **Cookies are `HttpOnly; Secure; SameSite=Lax; Path=/api`.** `Secure` is set
+  even in dev — browsers treat `http://localhost` as a secure context — and
+  `Path=/api` keeps them off every static asset request.
+- **The JWS is scrubbed** out of the address bar with `history.replaceState` the
   moment it is read, so it does not linger in history or in the referrer of
   anything the page loads next.
-- Every string that reaches the DOM from the URL, the API, the JWS, or the
-  served well-known file is untrusted text: it is set with `textContent`, never
-  `innerHTML`.
-- A signed challenge is a **one-shot authentication proof, not a bearer token**.
-  A real app establishes its own session after verification and discards the
-  JWS; this demo has no session at all, which is why a refresh signs you out.
+- **Everything that reaches the DOM is untrusted text.** Strings from the URL,
+  the API, the JWS, and the served well-known file are set with `textContent`,
+  never `innerHTML`.
+- **A signed challenge is a one-shot authentication proof, not a bearer token.**
+  The server establishes its own session after verification and discards the JWS.
 
 ## Coordinates
 
-All of them live at the top of `src/main.ts`:
+The backend's live at the top of `api/_lib.ts`:
 
-| Constant         | Value                            |
-| ---------------- | -------------------------------- |
-| `AUTHORIZE_URL`  | `https://app.dfos.com/authorize` |
-| `RELAY_URL`      | `https://relay.dfos.com`         |
-| `PUBLIC_API_URL` | `https://api.dfos.com/v1`        |
-| `EXPLORER_URL`   | `https://explore.dfos.com`       |
+| Constant        | Value                            |
+| --------------- | -------------------------------- |
+| `AUTHORIZE_URL` | `https://app.dfos.com/authorize` |
+| `RELAY_URL`     | `https://relay.dfos.com`         |
 
-(`EXPLORER_URL` is only used by the receipts panel, to hand you a second,
-independent verifier for the same chain.)
+`src/main.ts` holds `RELAY_URL` and `EXPLORER_URL` for the receipts panel alone —
+to hand you a second, independent verifier for the same chain.
 
 SIWD is on its own `0.x` clock, independent of the frozen protocol surface, so
-the hosted consent page URL may move before 1.0. When it does, it is one
-constant in `src/main.ts` — the challenge bytes and the verification rules do
-not change.
+the hosted consent page URL may move before 1.0. When it does, it is one constant
+in `api/_lib.ts` — the challenge bytes and the verification rules do not change.

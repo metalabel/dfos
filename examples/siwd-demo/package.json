@@ -3,13 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Sign In With DFOS — a minimal static relying party",
+  "description": "Sign In With DFOS — a minimal backend-verified relying party",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.api.json"
   },
   "dependencies": {
     "@metalabel/dfos-client": "^0.31.0",
@@ -17,6 +17,7 @@
     "@metalabel/dfos-web-relay": "^0.31.0"
   },
   "devDependencies": {
+    "@types/node": "^24.10.4",
     "typescript": "^5.9.3",
     "vite": "^7.3.1"
   }
