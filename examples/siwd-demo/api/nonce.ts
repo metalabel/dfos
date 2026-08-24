@@ -17,8 +17,8 @@
 
 */
 
-import type { VercelRequest, VercelResponse } from './vercel';
 import { randomBytes } from 'node:crypto';
+import type { VercelRequest, VercelResponse } from './vercel';
 
 const NONCE_COOKIE = 'siwd_nonce';
 
