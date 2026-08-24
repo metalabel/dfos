@@ -17,6 +17,7 @@
 
 */
 
+import type { VercelRequest, VercelResponse } from './vercel';
 import { randomBytes } from 'node:crypto';
 
 const NONCE_COOKIE = 'siwd_nonce';
@@ -48,27 +49,19 @@ const mintNonce = (): string => randomBytes(24).toString('base64url');
 const setCookie = (nonce: string): string =>
   `${NONCE_COOKIE}=${nonce}; HttpOnly; Secure; SameSite=Lax; Path=/api; Max-Age=${NONCE_TTL_SECONDS}`;
 
-export default function handler(request: Request): Response {
-  if (request.method !== 'GET') {
-    return new Response(JSON.stringify({ error: 'method not allowed' }), {
-      status: 405,
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-store',
-        Allow: 'GET',
-      },
-    });
+export default function handler(req: VercelRequest, res: VercelResponse): void {
+  res.setHeader('Content-Type', 'application/json');
+  // a cached nonce is not a nonce
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    res.status(405).send(JSON.stringify({ error: 'method not allowed' }));
+    return;
   }
 
   const nonce = mintNonce();
 
-  return new Response(JSON.stringify({ nonce }), {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/json',
-      // a cached nonce is not a nonce
-      'Cache-Control': 'no-store',
-      'Set-Cookie': setCookie(nonce),
-    },
-  });
+  res.setHeader('Set-Cookie', setCookie(nonce));
+  res.status(200).send(JSON.stringify({ nonce }));
 }
