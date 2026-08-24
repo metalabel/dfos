@@ -60,6 +60,43 @@
         height: 64px;
         width: 64px;
       }
+      ol.steps,
+      ul.checks {
+        color: #666;
+        font-size: 0.875rem;
+        margin: 1rem 0 0;
+        padding-left: 1.25rem;
+      }
+      ol.steps li,
+      ul.checks li {
+        margin: 0.35rem 0;
+      }
+      details {
+        margin-top: 1.5rem;
+      }
+      details summary {
+        cursor: pointer;
+        font-size: 0.875rem;
+      }
+      details h3 {
+        font-size: 0.9375rem;
+        margin: 1.5rem 0 0.5rem;
+      }
+      details p {
+        margin: 0.5rem 0;
+      }
+      /* The JWS and the decoded JSON are long single-line strings; let them wrap
+         rather than introducing a horizontal scrollbar on a 28rem page. */
+      pre.wrap {
+        background: #f6f6f6;
+        border-radius: 0.5rem;
+        font-size: 0.75rem;
+        margin: 0.5rem 0;
+        overflow-x: auto;
+        padding: 0.75rem;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
     </style>
   </head>
   <body>
