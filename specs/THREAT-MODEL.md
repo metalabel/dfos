@@ -269,9 +269,10 @@ These are known and deliberately accepted for v1.
   on the verifying third party — no relay and no signer can enforce them on its behalf.
   The client library ships a conforming path (`createSiwdLoginRequest`,
   `readSiwdCallback`, `verifySiwd` in
-  [`@metalabel/dfos-client/siwd`](https://protocol.dfos.com/siwd)); a relying party that
-  hand-rolls verification instead forfeits these controls silently, and nothing on the
-  wire reveals that it did (SIWD.md "Security Considerations", `specs/SIWD.md`).
+  [`@metalabel/dfos-client/siwd`](https://www.npmjs.com/package/@metalabel/dfos-client)); a
+  relying party that hand-rolls verification instead forfeits these controls silently,
+  and nothing on the wire reveals that it did (SIWD.md "Security Considerations",
+  `specs/SIWD.md`).
 - **Cursor validation is a cheap membership signal over already-public sets.** The
   list routes' 400-on-unknown-cursor answers "does this relay hold X at this position"
   with one status code — information already derivable by paging the same public

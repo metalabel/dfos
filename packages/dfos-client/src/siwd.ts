@@ -283,7 +283,10 @@ export interface SiwdLoginRequest {
    * a `domain` or `did` that drifts between mint and verify is a check that
    * silently stops checking.
    *
-   * SINGLE USE: consume the nonce on the way back, pass or fail.
+   * SINGLE USE: consume the nonce on the way back, pass or fail. A backend
+   * holding its minted nonces in shared state should hand `verifySiwd` a
+   * `consumeNonce` instead of this object's `nonce`, so the consumption is
+   * atomic and is the last thing that happens before a session is granted.
    *
    * WHOEVER VERIFIES MUST HAVE MINTED. A verifier that accepts an expectation
    * supplied by the party presenting the JWS is comparing a value against
@@ -291,8 +294,12 @@ export interface SiwdLoginRequest {
    * expectation comes from the verifier's own prior state (this object, held
    * server-side or in the session that began the sign-in) or from an
    * independent validation of it.
+   *
+   * `nonce` is REQUIRED here even though `SiwdExpectations` leaves it optional
+   * for the `consumeNonce` form: what this function mints into the challenge is
+   * always a string, and an RP persisting this object must get it back.
    */
-  expect: Pick<SiwdExpectations, 'domain' | 'nonce' | 'did'>;
+  expect: Pick<SiwdExpectations, 'domain' | 'did'> & { nonce: string };
   /** base64url canonical challenge bytes, exactly as embedded in `url`. */
   challenge: string;
   /** ISO whole-second mint timestamp, exactly as embedded in the signed bytes. */
@@ -312,19 +319,30 @@ export interface SiwdLoginRequest {
  * not downgraded, so the param is dropped here instead of being forwarded into
  * a guaranteed refusal.
  *
+ * The same judgment BOUNDS THE SCOPE. Every scope past `identity` returns a
+ * credential issued to a `client_did` — the one param a loopback request cannot
+ * carry — so specs/SIWD.md admits a loopback target for `scope=identity` only.
+ * Asking for more from a local port is not a downgrade the way `client_did` is;
+ * there is nothing to drop, so it throws.
+ *
  * It also owns the WIRE PARAM NAMES (`challenge`, `redirect_uri`, `scope`,
  * `client_did`) as their single source in this package. They are snake_case on
  * the wire and camelCase everywhere else, which is exactly the kind of seam
  * every hand-rolled RP re-implements and eventually gets wrong.
  *
  * PURE: no DOM, no storage, no navigation, no fetch — identical in a browser
- * and in Node. Throws on an unparseable `authorizeUrl` or `redirectUri`,
- * because those are mistakes in the RP's own configuration rather than runtime
- * conditions a result type would help a caller recover from.
+ * and in Node. Throws on an unparseable `authorizeUrl` or `redirectUri`, and on
+ * a non-`identity` scope over a loopback redirect, because those are mistakes
+ * in the RP's own configuration rather than runtime conditions a result type
+ * would help a caller recover from.
  */
 export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginRequest => {
   const authorizeUrl = parseUrlOrThrow(input.authorizeUrl, 'authorizeUrl');
   const redirect = parseUrlOrThrow(input.redirectUri, 'redirectUri');
+  const isLoopback = SIWD_LOOPBACK_HOSTS.has(bareHostname(redirect));
+  if (isLoopback && input.scope !== 'identity') {
+    throw new Error('invalid SIWD login request: loopback redirects support scope=identity only');
+  }
 
   const { challenge, encoded, nonce } = createSiwdChallenge({
     domain: input.domain,
@@ -339,7 +357,7 @@ export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginR
   url.searchParams.set('challenge', encoded);
   url.searchParams.set('redirect_uri', input.redirectUri);
   url.searchParams.set('scope', input.scope);
-  if (input.clientDid !== undefined && !SIWD_LOOPBACK_HOSTS.has(bareHostname(redirect))) {
+  if (input.clientDid !== undefined && !isLoopback) {
     url.searchParams.set('client_did', input.clientDid);
   }
 
@@ -536,8 +554,26 @@ export const validateSiwdSignRequest = async (
 export interface SiwdExpectations {
   /** The verifier's own origin — MUST match the challenge domain. */
   domain: string;
-  /** The nonce this verifier issued for the session. */
-  nonce: string;
+  /**
+   * The nonce this verifier issued for the session. Supply EXACTLY ONE of
+   * `nonce` and `consumeNonce`.
+   */
+  nonce?: string;
+  /**
+   * Atomically consume the presented nonce against verifier-minted state — a
+   * Redis `GETDEL`, a `DELETE … RETURNING` row — returning true iff THIS
+   * verifier minted it and it was unspent. Membership in the verifier's own
+   * minted state is what proves the verifier minted it, which is the whole
+   * check; an equality test against a `nonce` fed in from the presented
+   * artifact is a value compared against itself. The ATOMICITY is yours: a
+   * get-then-delete lets two concurrent replays both win.
+   *
+   * Called AT MOST ONCE, and only after every other check has passed —
+   * signature, current-key resolution, did binding, domain, timestamp — so an
+   * otherwise-invalid presentation can never burn a live nonce, and the
+   * consumption is the last gate before the caller grants anything.
+   */
+  consumeNonce?: (nonce: string) => boolean | Promise<boolean>;
   /** If set, the challenge (and identity) MUST bind to this DID. */
   did?: string;
   /** If set, the signed challenge's timestamp MUST equal this exact value. */
@@ -568,6 +604,14 @@ export const verifySiwd = async (
   expect: SiwdExpectations,
 ): Promise<VerifyResult<SiwdSession>> => {
   try {
+    // one nonce discipline, chosen up front: both forms configured is two
+    // answers to one question, neither is no replay defense at all. A
+    // configuration error rather than a bad artifact — but this verifier does
+    // not throw, so it comes back as a verdict like everything else.
+    if ((expect.nonce === undefined) === (expect.consumeNonce === undefined)) {
+      return fail('provide exactly one of nonce or consumeNonce');
+    }
+
     const decoded = decodeJwsUnsafe(jws);
     if (!decoded) return fail('failed to decode JWS');
 
@@ -630,9 +674,8 @@ export const verifySiwd = async (
       return fail(err instanceof Error ? err.message : 'invalid signature');
     }
 
-    // the signed payload must match what the verifier expects — nonce, domain,
-    // and (when pinned) the exact timestamp it minted
-    if (payload.nonce !== expect.nonce) return fail('nonce mismatch');
+    // the signed payload must match what the verifier expects — domain, and
+    // (when pinned) the exact timestamp it minted
     if (payload.domain !== expect.domain) return fail('domain mismatch');
     if (expect.timestamp !== undefined && payload.timestamp !== expect.timestamp) {
       return fail('timestamp does not match expected challenge timestamp');
@@ -647,6 +690,20 @@ export const verifySiwd = async (
     if (nowMs - issuedMs > maxAge * 1000) return fail('challenge expired');
     if (issuedMs - nowMs > MAX_CLOCK_SKEW_SECONDS * 1000) {
       return fail('challenge timestamp is in the future');
+    }
+
+    // NONCE LAST, and the position is the semantics: `consumeNonce` SPENDS
+    // verifier state, so nothing invalid may reach it — a forged signature, a
+    // rotated-out key, a mismatched domain, an expired challenge must never
+    // burn a nonce the real user is still holding, and the consume is then the
+    // final gate before the caller grants anything. The string form rides along
+    // in the same place so both disciplines fail identically.
+    if (expect.consumeNonce !== undefined) {
+      if (!(await expect.consumeNonce(payload.nonce))) {
+        return fail('nonce already used or not recognized');
+      }
+    } else if (payload.nonce !== expect.nonce) {
+      return fail('nonce mismatch');
     }
 
     const session: SiwdSession = {

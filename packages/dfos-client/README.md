@@ -86,6 +86,16 @@ import {
 
 Sign In With DFOS. The three verbs above are the relying-party login kit, in the order a login uses them: `createSiwdLoginRequest` mints the challenge and builds the `/authorize` URL to redirect to, `readSiwdCallback` parses what comes back, and `verifySiwd` verifies it — mint → redirect, read → verify. The `expect` object `createSiwdLoginRequest` returns (nonce, domain, and the DID when the challenge is bound to one) is what `verifySiwd` checks against, so the relying party MUST persist it across the redirect: a verifier that takes its expectation from the callback has implemented the check and none of the protection. See [`examples/siwd-demo`](../../examples/siwd-demo) for the reference consumer.
 
+In production, spend the nonce instead of comparing it:
+
+```typescript
+await verifySiwd(client, jws, { domain, consumeNonce: (nonce) => store.getdel(nonce) });
+```
+
+`consumeNonce` replaces `expect.nonce` (supply exactly one) and returns true iff **this** verifier minted the nonce and it was unspent — membership in verifier-minted state is what satisfies the spec's rule that the verifier MUST have minted the nonce it checks, and deleting it in the same operation is what makes it single-use. The atomicity is the caller's: a get-then-delete lets two concurrent replays both win, where a Redis `GETDEL` or a `DELETE … RETURNING` does not. It is called at most once, and only after every other check has passed, so an invalid presentation can never burn a nonce the user is still holding.
+
+`createSiwdLoginRequest` throws rather than returning an error on the two things that are RP misconfiguration: an `authorizeUrl` or `redirectUri` that is not an absolute URL, and any scope other than `identity` over a loopback redirect (a local port holds no `client_did` for a credential to be issued to — see [SIWD.md](../../specs/SIWD.md)).
+
 `siwdSigningInput(challenge)` is the pure byte contract both the signer and the verifier share (see [SIWD.md](../../specs/SIWD.md)); `createSiwdChallenge` mints a challenge on its own for a caller building its own redirect; `verifySiwd` is a no-throw verifier that accepts only a current `authKeys` entry of a non-deleted identity.
 
 ## License
