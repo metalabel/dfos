@@ -66,48 +66,90 @@ const MAX_BODY_BYTES = 16 * 1024;
 // -----------------------------------------------------------------------------
 
 /**
- * Set `SESSION_SECRET` to any long random string and sealed values survive
- * across instances and deploys. Left unset — the fork-and-deploy default, one
- * click and no configuration — the server mints a random key per cold start
- * rather than throwing, so the demo still runs and still runs the real
- * discipline. What it loses is durability: every session dies with the instance
- * that issued it, and a sign-in started on one instance cannot be completed on
- * another. That is a visible, explainable degradation rather than a silent
- * weakening, so every session-bearing response says `ephemeral: true` and the
- * page says so out loud.
+ * Set `SESSION_SECRET` to any long random string (32+ characters) and sealed
+ * values survive across instances and deploys.
+ *
+ * The fallback is DEV-ONLY, and that is load-bearing: on Vercel every file in
+ * api/ deploys as its own function, which means its own module instance and
+ * its own `randomBytes` — `/api/login` would seal with one key and
+ * `/api/verify` would unseal with another, and every deployed sign-in would
+ * die as "no sign-in in flight" while `npm run dev` (one process, one module
+ * graph) worked perfectly. A fallback that only ever fails in production is a
+ * trap, so deployed-without-a-secret is a loud, named misconfiguration
+ * instead, and the per-process random key is reserved for the dev server
+ * where a single process is guaranteed.
  */
 const configured = process.env['SESSION_SECRET'];
-const SECRET = configured !== undefined && configured !== '' ? configured : randomBytes(32);
+const ON_VERCEL = process.env['VERCEL'] !== undefined;
+const MIN_SECRET_CHARS = 32;
 
-/** Whether this instance is running on a key nobody chose. Told to the UI. */
-export const EPHEMERAL_SECRET = !(configured !== undefined && configured !== '');
+/** The named misconfiguration, or null. Checked by the seal-producing routes. */
+export const SECRET_ERROR: string | null =
+  configured === undefined || configured === ''
+    ? ON_VERCEL
+      ? 'SESSION_SECRET is not set — add it in your Vercel project settings ' +
+        '(any long random string, 32+ characters), then redeploy'
+      : null
+    : configured.length < MIN_SECRET_CHARS
+      ? `SESSION_SECRET must be at least ${MIN_SECRET_CHARS} characters — a short secret makes every cookie forgeable offline`
+      : null;
 
-const mac = (value: string): string =>
-  createHmac('sha256', SECRET).update(value).digest('base64url');
+const SECRET =
+  configured !== undefined && configured !== '' && configured.length >= MIN_SECRET_CHARS
+    ? configured
+    : randomBytes(32);
+
+/** Dev-server-only: running on a key nobody chose. Told to the UI. */
+export const EPHEMERAL_SECRET =
+  SECRET_ERROR === null && (configured === undefined || configured === '');
 
 /**
- * `value.mac`. Both halves are base64url, so the dot is an unambiguous
- * separator and the whole thing is a legal cookie value with no encoding hop.
+ * The tag is domain-separated by PURPOSE, so a sealed value of one class can
+ * never be replayed as another: a session cookie presented as a flight cookie
+ * fails its MAC even under the same key.
  */
-export const seal = (value: string): string => `${value}.${mac(value)}`;
+const mac = (purpose: string, body: string): string =>
+  createHmac('sha256', SECRET).update(`${purpose}:${body}`).digest('base64url');
 
 /**
- * The inverse, or `null` — for a missing cookie, a malformed one, or a tag that
- * does not check out. Callers get one falsy answer for "this did not come from
- * me", because from the verifier's side those are the same fact.
+ * `value.exp.mac` — the expiry is INSIDE the sealed bytes, so it is the
+ * verifier's clock that enforces it. A cookie's `Max-Age` is only the honest
+ * browser's copy; a captured seal in a script's hands keeps whatever it was
+ * given, and without this field it would stay recognizable forever. Every
+ * segment is dot-free (base64url values, a decimal epoch), so the dots are
+ * unambiguous separators and the whole thing is a legal cookie value.
  */
-export const unseal = (sealed: string | undefined): string | null => {
+export const seal = (purpose: string, value: string, ttlSeconds: number): string => {
+  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const body = `${value}.${exp}`;
+  return `${body}.${mac(purpose, body)}`;
+};
+
+/**
+ * The inverse, or `null` — for a missing cookie, a malformed one, a tag that
+ * does not check out, or a seal past its own expiry. Callers get one falsy
+ * answer for "this did not come from me (or no longer counts)", because from
+ * the verifier's side those are the same fact.
+ */
+export const unseal = (purpose: string, sealed: string | undefined): string | null => {
   if (sealed === undefined || sealed === '') return null;
-  const split = sealed.lastIndexOf('.');
-  if (split < 0) return null;
+  const tagAt = sealed.lastIndexOf('.');
+  if (tagAt < 0) return null;
 
-  const value = sealed.slice(0, split);
-  const presented = Buffer.from(sealed.slice(split + 1));
-  const expected = Buffer.from(mac(value));
+  const body = sealed.slice(0, tagAt);
+  const presented = Buffer.from(sealed.slice(tagAt + 1));
+  const expected = Buffer.from(mac(purpose, body));
   // `timingSafeEqual` throws on a length mismatch, so the guard is required
   // before the comparison rather than merely polite.
   if (presented.length !== expected.length) return null;
-  return timingSafeEqual(presented, expected) ? value : null;
+  if (!timingSafeEqual(presented, expected)) return null;
+
+  // only after the MAC: these bytes are now known to be this server's own
+  const expAt = body.lastIndexOf('.');
+  if (expAt < 0) return null;
+  const exp = Number(body.slice(expAt + 1));
+  if (!Number.isSafeInteger(exp) || exp * 1000 <= Date.now()) return null;
+  return body.slice(0, expAt);
 };
 
 // -----------------------------------------------------------------------------
@@ -241,11 +283,13 @@ export interface Session {
  * never supposed to choose.
  */
 export const encodeSession = (session: Session): string =>
-  seal(Buffer.from(JSON.stringify(session)).toString('base64url'));
+  seal('session', Buffer.from(JSON.stringify(session)).toString('base64url'), SESSION_TTL_SECONDS);
 
 /** The session this request carries, or `null` — unsealed, parsed, unexpired. */
 export const readSession = (req: VercelRequest): Session | null => {
-  const value = unseal(readCookie(req, SESSION_COOKIE));
+  // the seal enforces its own expiry; the checks below re-validate the fields
+  // INSIDE the sealed JSON, because an authenticated parser still parses
+  const value = unseal('session', readCookie(req, SESSION_COOKIE));
   if (value === null) return null;
 
   let parsed: unknown;
@@ -258,14 +302,17 @@ export const readSession = (req: VercelRequest): Session | null => {
 
   const raw = parsed as Record<string, unknown>;
   if (typeof raw['did'] !== 'string' || typeof raw['kid'] !== 'string') return null;
-  if (typeof raw['iat'] !== 'number' || typeof raw['exp'] !== 'number') return null;
+  const iat = raw['iat'];
+  const exp = raw['exp'];
+  // safe integers only — `JSON.parse("1e309")` is `Infinity` and still a
+  // "number" — and the pair must describe a lifetime this server would issue:
+  // not future-dated, not expired, not longer than the configured TTL.
+  if (!Number.isSafeInteger(iat) || !Number.isSafeInteger(exp)) return null;
+  const now = Math.floor(Date.now() / 1000);
+  if ((iat as number) > now + 60 || (exp as number) <= now) return null;
+  if ((exp as number) - (iat as number) > SESSION_TTL_SECONDS) return null;
 
-  // The seal makes the cookie unforgeable, not immortal. `Max-Age` is the
-  // browser's copy of the expiry and a non-browser keeps whatever it was given,
-  // so the server checks the one that is actually inside the signed bytes.
-  if (raw['exp'] * 1000 <= Date.now()) return null;
-
-  return { did: raw['did'], kid: raw['kid'], iat: raw['iat'], exp: raw['exp'] };
+  return { did: raw['did'], kid: raw['kid'], iat: iat as number, exp: exp as number };
 };
 
 // -----------------------------------------------------------------------------
@@ -310,7 +357,16 @@ export const methodNotAllowed = (res: VercelResponse, allow: string): void => {
  * and the size cap is re-applied to whatever arrived on one path.
  */
 export const readJws = (req: VercelRequest): string | null => {
-  let body: unknown = req.body;
+  // `req.body` is a LAZY GETTER on Vercel's runtime and THROWS on malformed
+  // JSON with a JSON content-type — reading it bare would turn a bad body into
+  // a 500 instead of this function's `null`. The dev shim pre-parses and never
+  // throws; the catch is what keeps the two runtimes on one error path.
+  let body: unknown;
+  try {
+    body = req.body;
+  } catch {
+    return null;
+  }
   if (typeof body === 'string') {
     if (body.length > MAX_BODY_BYTES) return null;
     try {

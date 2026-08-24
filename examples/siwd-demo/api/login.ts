@@ -31,6 +31,7 @@ import {
   requestOrigin,
   SCOPE,
   seal,
+  SECRET_ERROR,
   setCookie,
   STATEMENT,
 } from './_lib';
@@ -39,6 +40,14 @@ import type { VercelRequest, VercelResponse } from './_types';
 export default function handler(req: VercelRequest, res: VercelResponse): void {
   if (req.method !== 'POST') {
     methodNotAllowed(res, 'POST');
+    return;
+  }
+
+  // A deployment without a usable secret cannot mint a seal `/api/verify`
+  // could ever unseal (see _lib.ts) — refuse HERE, by name, instead of letting
+  // the sign-in die three redirects later as a mystery.
+  if (SECRET_ERROR !== null) {
+    json(res, 500, { ok: false, reason: SECRET_ERROR });
     return;
   }
 
@@ -71,6 +80,10 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
   // the user's host will sign, and sealed under this server's key in a cookie
   // the browser carries back. Verification is the two meeting again.
   json(res, 200, { url: request.url }, [
-    setCookie(FLIGHT_COOKIE, seal(request.expect.nonce), FLIGHT_TTL_SECONDS),
+    setCookie(
+      FLIGHT_COOKIE,
+      seal('flight', request.expect.nonce, FLIGHT_TTL_SECONDS),
+      FLIGHT_TTL_SECONDS,
+    ),
   ]);
 }

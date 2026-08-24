@@ -258,9 +258,9 @@ const registrationNotice = (found: Registration): string | undefined => {
 /** The other configuration a fork can forget — this one degrades rather than fails. */
 const EPHEMERAL_NOTICE =
   'This server is running without SESSION_SECRET, so it signs its cookies with a ' +
-  'random key minted at startup: sessions will not survive an instance recycling ' +
-  'or a redeploy, and a sign-in may not finish on a different instance than it ' +
-  'started on. Set SESSION_SECRET to any long random string.';
+  'random key minted at startup — the dev-server-only fallback: sessions die ' +
+  'with the process. Deployed, the server refuses to sign in at all until the ' +
+  'variable is set. Set SESSION_SECRET to any long random string, 32+ characters.';
 
 // -----------------------------------------------------------------------------
 // dom

@@ -83,9 +83,12 @@ implementation of it.
 
 **What the sealed cookie is.** At mint time the server binds the nonce to the
 agent that started the flow, statelessly: the value is
-`nonce + "." + base64url(HMAC-SHA256(SESSION_SECRET, nonce))`, in an `httpOnly`
-cookie scoped to `/api` and expiring with the acceptance window. At verification
-the expectation is recovered from that seal and from nowhere else.
+`nonce.exp.base64url(HMAC-SHA256(SESSION_SECRET, "flight:" + nonce + "." + exp))`
+— the expiry inside the sealed bytes so the server's own clock enforces it
+(`Max-Age` is only the honest browser's copy), and the tag domain-separated by
+purpose so a seal of one class can never be replayed as another — in an
+`httpOnly` cookie scoped to `/api` and expiring with the acceptance window. At
+verification the expectation is recovered from that seal and from nowhere else.
 
 **Why the seal and not just a cookie.** A _bare_ nonce cookie is the same trap in
 a costume. Cookies are presenter-supplied on every request: an attacker holding a
@@ -134,19 +137,27 @@ defense at all.
 ## `SESSION_SECRET`
 
 One environment variable, and it is the key both seals use. Set it to any long
-random string:
+random string, 32+ characters (the deploy button prompts you for it):
 
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 ```
 
-**If it is unset the server does not throw** — it mints a random key per cold
-start and keeps running, because a fork-and-deploy demo that 500s on first load
-teaches nothing. What it loses is durability: every session dies with the
-instance that issued it, and a sign-in started on one instance cannot be
-completed on another. That degradation is visible rather than silent — every
-session-bearing response carries `ephemeral: true` and the page renders a notice
-saying so.
+**Deployed without it, sign-in refuses by name** — the click answers
+`SESSION_SECRET is not set — add it in your Vercel project settings` instead of
+failing three redirects later as a mystery. It has to: on Vercel every file in
+`api/` is its own function with its own module instance, so a per-instance
+random key would mean `/api/login` seals with one key and `/api/verify` unseals
+with another, and every deployed sign-in would die as "no sign-in in flight" —
+while local dev, one process, concealed it. A fallback that only ever fails in
+production is a trap, so it is not one this demo carries.
+
+**Locally the dev server does fall back** — one process is guaranteed there, so
+it mints a random key at startup and keeps running. What that loses is
+durability (sessions die with the process), the page renders a notice saying
+so, and every response carries `ephemeral: true` while it holds. A secret
+shorter than 32 characters is refused outright, in dev too — a guessable key
+makes every cookie forgeable offline.
 
 ## Registration = a JSON file
 

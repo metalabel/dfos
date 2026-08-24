@@ -37,6 +37,7 @@ import {
   readJws,
   RELAY_URL,
   requestOrigin,
+  SECRET_ERROR,
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
   setCookie,
@@ -59,11 +60,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     json(res, 403, { ok: false, reason: 'cross-origin request refused' });
     return;
   }
+  if (SECRET_ERROR !== null) {
+    json(res, 500, { ok: false, reason: SECRET_ERROR });
+    return;
+  }
 
   // 1. Recover the expectation FIRST. No sign-in in flight means there is
-  //    nothing to verify against, so refuse before touching the JWS rather than
-  //    letting this endpoint be used as a free signature oracle.
-  const nonce = unseal(readCookie(req, FLIGHT_COOKIE));
+  //    nothing this endpoint could ever grant, so refuse before touching the
+  //    JWS. (That is a GRANT guard, not an abuse guard — anyone can mint
+  //    themselves a flight via /api/login; what nobody can do is verify
+  //    against an expectation this server did not seal.)
+  const nonce = unseal('flight', readCookie(req, FLIGHT_COOKIE));
   if (nonce === null) {
     json(res, 401, { ok: false, reason: 'no sign-in in flight (or it expired)' }, [
       clearCookie(FLIGHT_COOKIE),
