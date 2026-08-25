@@ -57,7 +57,7 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
   const unavailable =
     blocked ??
     (loopback
-      ? 'This is a loopback host. specs/SIWD.md admits a local redirect target for ' +
+      ? 'This is a loopback host. The SIWD spec (protocol.dfos.com/siwd) admits a local redirect target for ' +
         'scope=identity only — a local port holds no domain, so it can prove no client_did, ' +
         'and a credential has to be issued to someone. Deploy to a domain to exercise this path.'
       : (APP_KEY_ERROR ?? KV_ERROR));
@@ -77,8 +77,7 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
         available: unavailable === null,
         ...(unavailable !== null ? { unavailable } : {}),
         summary:
-          'Proves who you are AND returns a credential this app can spend against the ' +
-          'DFOS API — once per request, and only with its own key.',
+          'Proves who you are AND returns a credential — a standing grant this app can present to the DFOS API, each request signed fresh with its own key, reusable until it expires or you revoke it.',
       },
     ],
     api: {
