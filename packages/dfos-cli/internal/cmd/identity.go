@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -26,6 +27,7 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityLogCmd())
 	cmd.AddCommand(newIdentityKeysCmd())
 	cmd.AddCommand(newIdentityServicesCmd())
+	cmd.AddCommand(newIdentityWellKnownCmd())
 	cmd.AddCommand(newIdentityUpdateCmd())
 	cmd.AddCommand(newIdentityAddKeyCmd())
 	cmd.AddCommand(newIdentityDevicePubkeyCmd())
@@ -36,6 +38,9 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityRemoveCmd())
 	return cmd
 }
+
+// siwdCarriageCap is the identity_chain operation limit specified by specs/SIWD.md.
+const siwdCarriageCap = 100
 
 func newIdentityCreateCmd() *cobra.Command {
 	var name string
@@ -1138,6 +1143,158 @@ func newIdentityServicesCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func validateCarriage(chain *relay.StoredIdentityChain) error {
+	if chain == nil {
+		return fmt.Errorf("identity not found")
+	}
+	if len(chain.Log) > siwdCarriageCap {
+		return fmt.Errorf(
+			"identity chain has %d operations; the SIWD carriage cap is %d — publish the chain to a relay instead of carrying it",
+			len(chain.Log),
+			siwdCarriageCap,
+		)
+	}
+	return nil
+}
+
+func buildWellKnownPatch(chain *relay.StoredIdentityChain, doc map[string]any, path string) (map[string]any, error) {
+	name, hasName := doc["name"].(string)
+	redirectURIs, hasRedirectURIs := doc["redirect_uris"].([]any)
+	if !hasName || name == "" || !hasRedirectURIs || len(redirectURIs) == 0 {
+		return nil, fmt.Errorf(
+			"app description at %s is missing required members (name, redirect_uris); author those first — see specs/SIWD.md \"The App Description Document\"",
+			path,
+		)
+	}
+	if existing, present := doc["client_did"]; present {
+		existingDID, ok := existing.(string)
+		if !ok {
+			return nil, fmt.Errorf("app description at %s has invalid client_did: must be a string", path)
+		}
+		if existingDID != chain.DID {
+			return nil, fmt.Errorf(
+				"app description client_did %q differs from identity DID %q; refusing to rebind the document to a different identity",
+				existingDID,
+				chain.DID,
+			)
+		}
+	}
+
+	patched := make(map[string]any, len(doc)+2)
+	for key, value := range doc {
+		patched[key] = value
+	}
+	patched["client_did"] = chain.DID
+	patched["identity_chain"] = chain.Log
+	return patched, nil
+}
+
+// newIdentityWellKnownCmd emits or patches SIWD app-description chain carriage.
+func newIdentityWellKnownCmd() *cobra.Command {
+	var patchPath string
+
+	cmd := &cobra.Command{
+		Use:   "well-known [name|did]",
+		Short: "Emit this identity's chain-carriage members for /.well-known/dfos-app.json",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			var chain *relay.StoredIdentityChain
+			if len(args) > 0 {
+				did, err := resolveIdentityDID(args[0])
+				if err != nil {
+					return err
+				}
+				chain, _ = lr.Relay.GetIdentity(did)
+			} else {
+				ctx, err := resolveCtx()
+				if err != nil {
+					return err
+				}
+				if ctx.IdentityName == "" {
+					return fmt.Errorf("no identity configured. Use --identity or 'dfos identity create'")
+				}
+				if ctx.IdentityDID == "" {
+					return fmt.Errorf("identity '%s' not found in config", ctx.IdentityName)
+				}
+				chain, _ = lr.Relay.GetIdentity(ctx.IdentityDID)
+			}
+
+			if chain == nil {
+				return fmt.Errorf("identity not found")
+			}
+			if err := validateCarriage(chain); err != nil {
+				return err
+			}
+			if chain.State.IsDeleted {
+				fmt.Fprintln(os.Stderr, "Warning: identity is deleted; current-state verifiers will reject it")
+			}
+
+			if patchPath == "" {
+				output := struct {
+					ClientDID     string   `json:"client_did"`
+					IdentityChain []string `json:"identity_chain"`
+				}{
+					ClientDID:     chain.DID,
+					IdentityChain: chain.Log,
+				}
+				outputJSON(output)
+				return nil
+			}
+
+			data, err := os.ReadFile(patchPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return fmt.Errorf(
+						"%s does not exist; create the app description at /.well-known/dfos-app.json first with name and redirect_uris",
+						patchPath,
+					)
+				}
+				return fmt.Errorf("read %s: %w", patchPath, err)
+			}
+
+			var doc map[string]any
+			if err := json.Unmarshal(data, &doc); err != nil {
+				return fmt.Errorf("parse %s: %w", patchPath, err)
+			}
+			patched, err := buildWellKnownPatch(chain, doc, patchPath)
+			if err != nil {
+				return err
+			}
+			patchedData, err := json.MarshalIndent(patched, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshal %s: %w", patchPath, err)
+			}
+			patchedData = append(patchedData, '\n')
+			if err := os.WriteFile(patchPath, patchedData, 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", patchPath, err)
+			}
+			if jsonFlag {
+				status := struct {
+					Path       string `json:"path"`
+					ClientDID  string `json:"client_did"`
+					Operations int    `json:"operations"`
+				}{
+					Path:       patchPath,
+					ClientDID:  chain.DID,
+					Operations: len(chain.Log),
+				}
+				outputJSON(status)
+			} else {
+				fmt.Printf("Patched %s with %s (%d operations)\n", patchPath, chain.DID, len(chain.Log))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&patchPath, "patch", "", "Patch client_did + identity_chain into this dfos-app.json, preserving its other members")
+	return cmd
 }
 
 func newIdentityPublishCmd() *cobra.Command {

@@ -211,6 +211,39 @@ Spending the returned credential is out of scope here and normative nowhere: any
 
 ---
 
+## The App Description Document
+
+An application's `/.well-known/dfos-app.json`, served over https from its own origin, is its self-description: the file the just-in-time admission path of [redirect URI validation](#redirect-uri-validation-profile-a) fetches, where the domain vouches for itself. Serving the file **is** the registration — there is no developer portal and no client secret; domain control is the credential.
+
+```json
+{
+  "name": "3P App",
+  "client_did": "did:dfos:<3p id>",
+  "redirect_uris": ["https://3p.com/callback"],
+  "identity_chain": ["<identity-op JWS>", "<identity-op JWS>"]
+}
+```
+
+| Member           | Required | Description                                                                                                                                                                                                                                                                                                                             |
+| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`           | Yes      | Display name — the application's own claim about itself. Nothing in this spec vouches for it; a consumer that renders it renders a claim, and `domain` remains the phishing-relevant binding (see [Client identity](#client-identity-client_did)).                                                                                      |
+| `redirect_uris`  | Yes      | Exact-match allowlist of the redirect targets this origin will accept callbacks at — the strings a host compares a `redirect_uri` against under [redirect URI validation](#redirect-uri-validation-profile-a). Exact means exact: scheme, host, path, trailing slash included.                                                          |
+| `client_did`     | No       | The application's own DFOS DID. Optional at `scope=identity`; required whenever a credential-returning scope would name this application as audience (see [Scopes and Credentials](#scopes-and-credentials)). A host that has fetched the document SHOULD refuse an authorize request naming a `client_did` the document does not back. |
+| `identity_chain` | No       | The application identity's full operation log, carried in place — see below.                                                                                                                                                                                                                                                            |
+
+The member set is closed: this table is the registry. Every member is security-relevant, and a misspelled `redirect_uris` must never silently degrade into "no allowlist at all" — so a consumer MAY treat a document carrying unrecognized members as invalid, and new members are added by amending this table, never ad hoc. A document missing a required member is not an app description at all — consumers MUST treat it as invalid. A document that omits every optional member remains exactly as valid as it was before any optional member existed.
+
+### `identity_chain` — chain carriage
+
+An application named by `client_did` needs its identity chain resident somewhere a verifier can resolve it — and a freshly minted application identity may be resident nowhere at all. The optional `identity_chain` member closes that gap by carrying the chain in the one document whose origin already vouches for the application:
+
+- **Format.** An array of identity-operation JWS strings — the **application identity's** (not any user's) **full ordered operation log, genesis first**: the same ordered log a relay serves and a verifier replays to current state under the [Signature Verification Profile](https://protocol.dfos.com/spec#signature-verification-profile), carried here as bare JWS strings (a relay's log rows pair each token with its `cid`; carriage strips to the tokens). Never a fragment or a suffix; the whole chain from genesis.
+- **Self-consistency.** If `identity_chain` is present, `client_did` MUST be present (structural — checked at every parse of the document, no cryptography involved) and MUST equal the DID derived from the chain's genesis operation (cryptographic — checked wherever the chain is consumed). The two members make one claim — _this is my identity, and here is its chain_ — and a document where they disagree makes no claim at all: a consumer that consumes the chain MUST reject the document as invalid, whole-document, never ingesting the chain while ignoring the mismatched `client_did`. A processor that leaves the chain unconsumed — redirect validation, an identity-scope consent — is not obliged to verify it first, since consumption is optional (below); what it MUST NOT do is present or treat `client_did` as chain-backed without having verified.
+- **Carriage cap.** The chain MUST NOT exceed **100 operations**. The protocol core [deliberately does not bound chain length](https://protocol.dfos.com/spec#operation-size-and-cardinality-limits) — that is a transport concern, and 100 operations is this transport's bound. An identity that has outgrown the cap has outgrown carriage: its chain belongs on relays, and the document omits the member. A consumer encountering a longer chain MAY refuse the document unexamined, and no consumer is obliged to process past the hundredth operation. Per-operation size is already governed by the protocol's operation-size cap; this member adds no size rules of its own, and nodes MAY apply local ingress byte limits to the document fetch per the protocol's resource-policy posture.
+- **Consumption.** Verifiers and relays MAY fetch, verify, ingest, and re-serve a carried chain on encounter, with **no registration or approval precondition**. The chain is self-certifying — replayed from genesis it is as authentic as any relay resolution — so consuming one requires no one's permission, and an ingested chain seeds ordinary relay residence for every verifier that comes later. What carriage never adds is trust beyond the signatures: the document asserts the domain↔DID association exactly as far as serving the file always has, and whether a consumer ingests, retains, or ever re-serves what it encountered is its own policy (see [Carried identity chains](#carried-identity-chains)).
+
+---
+
 ## Security Considerations
 
 ### Replay prevention
@@ -233,7 +266,7 @@ A bare `did:dfos` identifier proves nothing. It is an address — freely copyabl
 
 ### Redirect URI validation (profile A)
 
-The host MUST establish that the `redirect_uri` belongs to the party named by `domain` before redirecting to it, and MUST refuse any target it cannot establish that for — an open redirector is a phishing engine, letting an attacker substitute their own callback URL to capture signed challenges. Three admission paths satisfy the obligation: a redirect registered in advance against the requesting application; a redirect the host validates just-in-time by fetching `/.well-known/dfos-app.json` from the redirect's own origin, where the domain vouches for itself; and a [loopback target](#profile-a--web-redirect), which asserts no domain at all and is consented to as local software. Which paths a host offers, and how prominently it distinguishes them at consent, is host policy — what is normative is that an unestablished target is refused. Outside the loopback case the `domain` field in the challenge MUST match the domain of the `redirect_uri`; the host MUST reject requests where these diverge.
+The host MUST establish that the `redirect_uri` belongs to the party named by `domain` before redirecting to it, and MUST refuse any target it cannot establish that for — an open redirector is a phishing engine, letting an attacker substitute their own callback URL to capture signed challenges. Three admission paths satisfy the obligation: a redirect registered in advance against the requesting application; a redirect the host validates just-in-time by fetching the [app description document](#the-app-description-document) (`/.well-known/dfos-app.json`) from the redirect's own origin, where the domain vouches for itself; and a [loopback target](#profile-a--web-redirect), which asserts no domain at all and is consented to as local software. Which paths a host offers, and how prominently it distinguishes them at consent, is host policy — what is normative is that an unestablished target is refused. Outside the loopback case the `domain` field in the challenge MUST match the domain of the `redirect_uri`; the host MUST reject requests where these diverge.
 
 Under profile B there is no redirect and no `redirect_uri` — the domain binding lives entirely inside the signed challenge, and the signer's obligation to render `domain` prominently is the corresponding control: the user sees exactly which origin they are authenticating to before signing.
 
@@ -244,6 +277,15 @@ If the `did` field is present in the challenge, the signer MUST refuse to sign w
 ### Client identity (`client_did`)
 
 `domain` — not `client_did` — is the phishing-relevant binding: nothing in this spec proves that a DID controls a domain, so the consent surface MUST always lead with the domain. `client_did` determines only _who can exercise a returned credential_ (its `aud`), which the credential machinery enforces cryptographically. A mismatch between a displayed domain and the party controlling `client_did` costs the attacker nothing they haven't already achieved by controlling the consent's `domain` — but a host MUST display both whenever `client_did` is present (see [Redirect to authorize](#1-redirect-to-authorize)), and MAY apply its own client-registration policy on top.
+
+### Carried identity chains
+
+A chain that arrives by [carriage](#identity_chain--chain-carriage) is verified exactly like a chain that arrives from a relay — signatures make forgery a non-issue. What carriage changes is operational: the consumer now holds identity state fetched on its own clock from an origin the application controls, and four disciplines follow.
+
+- **Monotonicity is compared on operations, not on derived state.** A consumer that retains observed chain state SHOULD compare a fresh fetch against it on the **ordered operation-log CIDs**. A fetch that is a proper prefix of previously observed state SHOULD be ignored: serving yesterday's shorter chain is the rollback move — resurrecting a rotated-out key by omitting the rotation — and prefix comparison defeats it where derived-state comparison ("the keys look plausible") does not.
+- **Divergence is signed, and acceptance is discretionary.** Two chains sharing a prefix and disagreeing after it both verify — divergence carries controller signatures, so it is not forgery but the controller's key contradicting itself, and a compromised key looks the same. Which branch, if either, a consumer accepts is operator discretion; an observed divergence SHOULD be logged.
+- **Staleness runs in both directions.** A carried chain is a snapshot at fetch time. The consumer's re-fetch cadence bounds new-key usability (a key added after the last fetch does not verify there until the next one) _and_ revoked-key death (a rotated-out key keeps verifying there until the next one). The same clock bounds both, and an operator choosing a cadence is choosing both bounds at once.
+- **Serving is discretionary, and so is stopping.** Nothing obliges any relay or verifier to ingest a carried chain, to retain it, or to keep re-serving it; removal — including abuse removal — is operator discretion. Ingestion is permissionless for the application; retention is policy for the operator.
 
 ### Token lifetime
 

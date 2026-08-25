@@ -405,6 +405,20 @@ dfos identity services alice --json
 
 Each `--service` spec is a comma-separated `key=value` list; `id` and `type` are required, every value is a string.
 
+### App description carriage (identity well-known)
+
+`identity well-known` emits the active or named local identity's `client_did` and full, genesis-first `identity_chain` for `/.well-known/dfos-app.json`. By default it prints those two members as JSON; `--patch` writes them into an existing app description while preserving `name` and `redirect_uris`.
+
+```bash
+# print the two app-description members
+dfos identity well-known alice
+
+# patch an existing app description in place
+dfos identity well-known alice --patch public/.well-known/dfos-app.json
+```
+
+Carriage is limited to 100 operations; longer chains must be published to a relay. The member set and exact carriage semantics are specified by `specs/SIWD.md` under “The App Description Document.”
+
 ---
 
 ## Solemnization (Witness)
