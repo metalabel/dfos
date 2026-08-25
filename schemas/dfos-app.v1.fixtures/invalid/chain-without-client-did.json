@@ -1,0 +1,5 @@
+{
+  "name": "Missing Client DID",
+  "redirect_uris": ["https://example.com/auth/callback"],
+  "identity_chain": ["eyJhbGciOiJFZERTQSJ9.eyJ0eXBlIjoiY3JlYXRlIn0.c2lnbmF0dXJl"]
+}

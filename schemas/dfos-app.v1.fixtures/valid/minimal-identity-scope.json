@@ -1,0 +1,4 @@
+{
+  "name": "Minimal Identity App",
+  "redirect_uris": ["https://example.com/auth/callback"]
+}

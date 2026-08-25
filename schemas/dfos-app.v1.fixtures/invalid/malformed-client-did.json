@@ -1,0 +1,5 @@
+{
+  "name": "Malformed Client DID",
+  "redirect_uris": ["https://example.com/auth/callback"],
+  "client_did": "did:web:example.com"
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.dfos.com/dfos-app/v1",
+  "title": "DFOS App Description",
+  "description": "The `/.well-known/dfos-app.json` application description document for Sign In With DFOS — served over https from the application's own origin, where the domain vouches for itself. STRUCTURAL VALIDATION ONLY: this schema checks shape, not truth. It cannot verify that `identity_chain` folds into a valid identity chain, that `client_did` equals the DID derived from the chain's genesis operation, or that each carried operation respects the protocol's per-operation size cap — those are consumption-time checks defined by the SIWD specification (https://protocol.dfos.com/siwd), which remains normative. A document this schema accepts can still be invalid at consumption. The member set is closed (`additionalProperties: false`), making the spec's closed-registry rule mechanically checkable: a consumer MAY treat a document carrying unrecognized members as invalid.",
+  "type": "object",
+  "required": ["name", "redirect_uris"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Display name — the application's own claim about itself. Nothing in the spec vouches for it; the serving domain remains the phishing-relevant binding."
+    },
+    "redirect_uris": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "format": "uri"
+      },
+      "description": "Exact-match allowlist of the redirect targets this origin will accept callbacks at. Exact means exact: scheme, host, path, trailing slash included."
+    },
+    "client_did": {
+      "type": "string",
+      "pattern": "^did:dfos:[2346789acdefhknrtvz]{31}$",
+      "description": "The application's own DFOS DID. Optional at scope=identity; required whenever a credential-returning scope would name this application as audience. When `identity_chain` is present, this MUST equal the DID derived from the chain's genesis operation — a cryptographic check this schema cannot perform."
+    },
+    "identity_chain": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The application identity's full ordered operation log, genesis first, carried as bare identity-operation JWS strings — never a fragment or a suffix. Capped at 100 operations (the SIWD carriage cap). Whether the strings fold into a valid chain deriving `client_did` is a consumption-time cryptographic check, not a structural one."
+    }
+  },
+  "dependentRequired": {
+    "identity_chain": ["client_did"]
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Full Carriage App",
+  "redirect_uris": ["https://example.com/auth/callback"],
+  "client_did": "did:dfos:2346789acdefhknrtvz2346789acdef",
+  "identity_chain": [
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIn0.eyJ0eXBlIjoiY3JlYXRlIiwidmVyc2lvbiI6MX0.cGxhY2Vob2xkZXItc2lnbmF0dXJl",
+    "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LW9wIn0.eyJ0eXBlIjoidXBkYXRlIiwidmVyc2lvbiI6MX0.cGxhY2Vob2xkZXItc2lnbmF0dXJl"
+  ]
+}

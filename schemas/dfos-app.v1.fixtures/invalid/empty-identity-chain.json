@@ -1,0 +1,6 @@
+{
+  "name": "Empty Identity Chain",
+  "redirect_uris": ["https://example.com/auth/callback"],
+  "client_did": "did:dfos:2346789acdefhknrtvz2346789acdef",
+  "identity_chain": []
+}

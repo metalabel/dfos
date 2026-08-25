@@ -1,0 +1,9 @@
+{
+  "name": "Credential App",
+  "redirect_uris": [
+    "https://example.com/auth/callback",
+    "https://example.com/settings/dfos/callback",
+    "http://localhost:3000/auth/callback"
+  ],
+  "client_did": "did:dfos:2346789acdefhknrtvz2346789acdef"
+}

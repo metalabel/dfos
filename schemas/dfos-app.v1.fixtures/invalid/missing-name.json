@@ -1,0 +1,3 @@
+{
+  "redirect_uris": ["https://example.com/auth/callback"]
+}
