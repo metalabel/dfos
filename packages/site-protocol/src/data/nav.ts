@@ -32,6 +32,7 @@ export const navLinks: NavLink[] = [
   { href: '/credits', label: 'Credits', tier: 'secondary' },
   { href: '/siwd', label: 'Sign In With DFOS', tier: 'secondary' },
   { href: '/signing', label: 'Signing', tier: 'secondary' },
+  { href: '/api-auth', label: 'API Auth', tier: 'secondary' },
   { href: '/web-relay', label: 'Web Relay', shortLabel: 'Relay', tier: 'primary' },
   { href: '/document-gateway', label: 'Document Gateway', tier: 'secondary' },
   { href: '/cli', label: 'CLI', tier: 'primary' },

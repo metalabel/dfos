@@ -33,6 +33,7 @@ This repository contains the protocol specification, reference implementations i
 - [Credits](https://protocol.dfos.com/credits) — verifiable attribution: signed credit claims bound to the content they credit
 - [Sign In With DFOS](https://protocol.dfos.com/siwd) — cryptographic identity verification for third-party applications
 - [Signing](https://protocol.dfos.com/signing) — transport-agnostic requests for DFOS signatures
+- [API Authentication](https://protocol.dfos.com/api-auth) — proof-of-possession authentication for credential-gated HTTP APIs
 - [Web Relay](https://protocol.dfos.com/web-relay) — HTTP relay for ingestion, chain state, and the content plane
 - [Document Gateway](https://protocol.dfos.com/document-gateway) — stateless content-addressed blob storage authorized from the proof plane
 - [Threat Model](https://protocol.dfos.com/threat-model) — adversary classes and the trustless-proof / honest-host split
@@ -53,6 +54,7 @@ Each spec declares its own clock in its header; this table is the index, not the
 | [CREDITS](./specs/CREDITS.md)                   | Settled — additive capability on v1                                  |
 | [SIGNING](./specs/SIGNING.md)                   | `0.1` — optional capability, own `0.x` clock                         |
 | [SIWD](./specs/SIWD.md)                         | `0.1` — optional authentication seam, own `0.x` clock                |
+| [API-AUTH](./specs/API-AUTH.md)                 | `0.1` — optional capability, own `0.x` clock                         |
 | [DOCUMENT-GATEWAY](./specs/DOCUMENT-GATEWAY.md) | `0.1` — optional service, own `0.x` clock                            |
 | [THREAT-MODEL](./specs/THREAT-MODEL.md)         | Companion — assembles specified surface, defines no rules            |
 | [CONFORMANCE](./specs/CONFORMANCE.md)           | Companion — tiers over the normative MUST sets, defines no rules     |
