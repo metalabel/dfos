@@ -89,10 +89,12 @@ encounters the document MAY fetch, verify, ingest, and re-serve that chain with 
 registration or approval precondition. Signatures verify identically to a relay-fetched
 chain — forgery is a non-issue — but the source is **controller-attested**: the consumer
 holds identity state fetched on its own clock from an origin the application itself
-controls, with no independent arbiter in the path. An identity resident nowhere but its
-own origin has no order authority at all (WEB-RELAY.md "Identity Linearity and Order
-Authority", `specs/WEB-RELAY.md`). The operational consequences are specified as the
-five carried-chain disciplines (SIWD.md "Carried identity chains", `specs/SIWD.md`):
+controls, with no independent arbiter in the path. An identity whose `services` list
+names no relay has no order authority at all — while a carried chain that does name a
+`DfosRelay` still answers to that relay's committed order, however the chain was
+obtained (WEB-RELAY.md "Identity Linearity and Order Authority", `specs/WEB-RELAY.md`).
+The operational consequences are specified as the five carried-chain disciplines
+(SIWD.md "Carried identity chains", `specs/SIWD.md`):
 
 - **Rollback by prefix omission.** Serving yesterday's shorter chain resurrects a
   rotated-out key by omitting the rotation. The defense is monotonicity compared on the
@@ -101,14 +103,17 @@ five carried-chain disciplines (SIWD.md "Carried identity chains", `specs/SIWD.m
 - **Signed divergence.** Two chains sharing a prefix and disagreeing after it both
   verify — the controller's key contradicting itself, indistinguishable from a
   compromised key. Acceptance is operator discretion; observed divergence SHOULD be
-  logged. There is no home-relay order to defer to.
+  logged. Where the `services` list names no relay, there is no home-relay order to
+  defer to.
 - **Staleness in both directions.** A carried chain is a snapshot at fetch time: the
   consumer's re-fetch cadence bounds new-key usability and rotated-key death at once.
-- **Chain substitution at first encounter.** Identity operations are public data, so a
-  carried chain's first encounter proves nothing about who served it. A consumer
-  ingesting into a store that also holds identities under its own authority MUST refuse
-  or segregate a carried chain whose derived DID it already holds — monotonicity begins
-  only after a first accepted state and cannot defend the first encounter.
+- **Chain substitution at first encounter.** Identity operations are public data:
+  HTTPS proves which origin served the document, never that the origin controls the
+  identity the chain derives. A consumer ingesting into a store that also holds
+  identities under its own authority MUST refuse or segregate a carried chain whose
+  derived DID it already holds under that authority — re-fetches of previously carried
+  state are the monotonicity discipline's ordinary case, but monotonicity begins only
+  after a first accepted state and cannot defend the first encounter.
 - **Discretionary retention.** Nothing obliges any consumer to ingest, retain, or keep
   re-serving a carried chain; removal — including abuse removal — is operator policy.
 
