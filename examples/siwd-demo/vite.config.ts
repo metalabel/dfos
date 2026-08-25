@@ -18,18 +18,22 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage } from 'node:http';
 import { defineConfig, type Plugin } from 'vite';
 import type { VercelRequest, VercelResponse } from './api/_types.js';
+import config from './api/config.js';
 import login from './api/login.js';
 import logout from './api/logout.js';
 import me from './api/me.js';
+import profile from './api/profile.js';
 import verify from './api/verify.js';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => void | Promise<void>;
 
 /** Vercel routes by filename; in dev the same map is written out by hand. */
 const ROUTES: Record<string, Handler> = {
+  '/api/config': config,
   '/api/login': login,
   '/api/logout': logout,
   '/api/me': me,
+  '/api/profile': profile,
   '/api/verify': verify,
 };
 
