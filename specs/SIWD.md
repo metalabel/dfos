@@ -207,6 +207,8 @@ The `read:profile` scope returns an [`api:<host>`](https://protocol.dfos.com/api
 
 Two rules follow from machinery already stated, and are restated here because this scope is where they bite: `client_did` is **required** (as for every credential-returning scope — a credential must be issued to a named DID, and a [loopback target](#profile-a--web-redirect), which can prove no `client_did`, can never receive one), and the verifier MUST apply the **consumed** [replay discipline](#replay-prevention) (as for every credential-returning scope — success yields an artifact redeemable outside the presenting channel). The credential alone opens nothing: exercising it requires a per-request [request proof](https://protocol.dfos.com/api-auth) signed by the `client_did`'s key — possession, not possession-of-bytes, is what the API verifies.
 
+Spending the returned credential is out of scope here and normative nowhere: any client that can sign a request proof will do. For the canonical `api.dfos.com` deployment, [`@metalabel/dfos-api`](https://www.npmjs.com/package/@metalabel/dfos-api) ([source](https://github.com/metalabel/dfos-api)) is a typed client generated from that API's OpenAPI spec, with a fetch seam the [`@metalabel/dfos-client`](https://www.npmjs.com/package/@metalabel/dfos-client) signing helpers plug into.
+
 ---
 
 ## Security Considerations

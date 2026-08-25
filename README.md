@@ -63,6 +63,7 @@ Each spec declares its own clock in its header; this table is the index, not the
 - [Chain explorer](https://explore.dfos.com) — client-side, verify-in-tab
 - [DFOS app](https://app.dfos.com) — the platform
 - [npm packages](https://www.npmjs.com/package/@metalabel/dfos-protocol) — `@metalabel/dfos-protocol`, [`@metalabel/dfos-web-relay`](https://www.npmjs.com/package/@metalabel/dfos-web-relay), [`@metalabel/dfos-client`](https://www.npmjs.com/package/@metalabel/dfos-client)
+- [`@metalabel/dfos-api`](https://github.com/metalabel/dfos-api) — typed TypeScript SDK for [api.dfos.com](https://api.dfos.com), generated from the live OpenAPI spec (separate repository)
 - [DFOS](https://nce.dfos.com) — the builder and cryptography space
 - [dfos.com](https://dfos.com)
 
