@@ -317,7 +317,7 @@ Grants the audience the right to **deposit** sign requests into the subject's re
 
 > **Status.** This form is **not** part of the frozen v1 credential surface. It lands additively with [API authentication](https://protocol.dfos.com/api-auth) and rides that spec's `0.x` clock; the credential envelope, delegation, attenuation, and revocation machinery it uses are the frozen machinery above, unchanged.
 
-Grants the audience access to the credential-gated HTTP API served at `<host>`. `<host>` is the API's bare lowercase hostname — no scheme, no port, no path. Host-as-id means any deployment gets the same form: a fork's credential for `api:api.example.org` gates that host exactly as `api:api.dfos.com` gates the canonical one, with no registry of deployments anywhere.
+Grants the audience access to the credential-gated HTTP API served at `<host>`. `<host>` is the API's lowercase authority — the bare hostname on the default HTTPS port, `host:port` otherwise; never a scheme or path. Host-as-id means any deployment gets the same form: a fork's credential for `api:api.example.org` gates that host exactly as `api:api.dfos.com` gates the canonical one, with no registry of deployments anywhere. The full byte semantics (why the port is bound only when non-default, and how it must equal the request proof's `host`) live in [API-AUTH.md](https://protocol.dfos.com/api-auth).
 
 ```json
 { "resource": "api:api.dfos.com", "action": "read:profile" }
