@@ -8,8 +8,9 @@ already specified, in prose, across [PROTOCOL.md](https://protocol.dfos.com/spec
 [CREDENTIALS.md](https://protocol.dfos.com/credentials),
 [WEB-RELAY.md](https://protocol.dfos.com/web-relay),
 [DID-METHOD.md](https://protocol.dfos.com/did-method),
-[SIGNING.md](https://protocol.dfos.com/signing), and
-[SIWD.md](https://protocol.dfos.com/siwd), and links each claim back to its source.
+[SIGNING.md](https://protocol.dfos.com/signing),
+[SIWD.md](https://protocol.dfos.com/siwd), and
+[API-AUTH.md](https://protocol.dfos.com/api-auth), and links each claim back to its source.
 
 This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
 
@@ -82,6 +83,34 @@ Signing mailbox state is on neither plane: it is never gossiped, never folded, a
 its retention is bounded by each request's own expiry. See
 [SIGNING.md "Security Considerations"](https://protocol.dfos.com/signing#security-considerations)
 for the detailed analysis.
+
+### API request authentication — possession proves audience, not the credential
+
+The credential-gated API surface (API-AUTH.md, an optional `0.x` capability) splits
+authorization from authentication deliberately: a [DFOS credential](https://protocol.dfos.com/credentials)
+names the grant, and a per-request **request proof** — a short-lived JWS signed by the
+credential's audience key, binding `{method, host, path, bodyHash, credentialCID, iat}`
+— proves the presenter _is_ that audience, making the credential useless as a bearer
+token (API-AUTH.md "Motivation", `specs/API-AUTH.md`). The threat consequences the
+surface is built around:
+
+- **A stolen credential is a metadata leak, not an access leak.** Without the audience
+  key, a captured credential authorizes nothing; the artifact that must never leak is
+  the key, which never crosses a channel (API-AUTH.md "Security Considerations").
+- **Public audience is refused at every level of the chain.** A single `aud: "*"`
+  credential anywhere in the presented delegation chain would let a stranger self-issue
+  a passing leaf audienced to their own key — a full proof-of-possession bypass — so the
+  verifier scans the whole chain, not just the leaf (API-AUTH.md verification step 9).
+- **Within-window identical-request replay is an explicitly-accepted bound**, which is
+  why the v0 registry is read-only; write-bearing actions require a per-request
+  uniqueness seam (API-AUTH.md "Within-window replay").
+- **The host binding is only as strong as its source.** The verifier compares against
+  its own configured hostname, never a request-supplied `Host`/`X-Forwarded-Host`; a
+  verifier that derived the host from the request would have no cross-host binding at
+  all (API-AUTH.md verification step 5).
+- **The browser BFF is a signing surface, not a blind oracle** — a backend that signs
+  the coordinates a browser hands it is a confused deputy (API-AUTH.md "The browser is
+  not a keyholder").
 
 ### Countersignatures live on the public proof plane
 

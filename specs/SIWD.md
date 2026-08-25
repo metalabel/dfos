@@ -19,7 +19,7 @@ The artifact is always the same: the canonical challenge bytes, signed as a JWS 
 
 A verifier cannot tell which courier delivered the artifact, and does not need to. Profile A is the **front door** — it works today against fully custodial identities and is where a relationship is established, and, when credential-returning scopes land, where its credentials are issued. Profile B is the **hallway** — once a deposit grant exists, every subsequent ask travels async with no redirect ceremony.
 
-The `typ` value `did:dfos:siwd` is registered in the [protocol `typ` registry](https://protocol.dfos.com/spec#jws-typ-registry) and as a signing family under SIGNING.
+The `typ` value `did:dfos:siwd` is registered in the [protocol `typ` registry](https://protocol.dfos.com/spec#typ-header) and as a signing family under SIGNING.
 
 ---
 
