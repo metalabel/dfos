@@ -33,7 +33,7 @@
   own at boot and says what it found — on the page, before the click, instead
   of one redirect later at the host.
 
-  WHAT THIS PAGE NEVER HOLDS: the credential, and the key that spends it. The
+  WHAT THIS PAGE NEVER HOLDS: the credential, and the key that exercises it. The
   credential arrives in the callback's URL fragment, is handed straight to the
   backend, and is never stored here. A browser cannot hold a signing key safely,
   so the backend holds it and signs — the backend-for-frontend shape
@@ -369,7 +369,7 @@ const registrationNotice = (found: Registration): string | undefined => {
   if (found.state === 'missing') {
     return (
       'This origin serves no registration, so the host will refuse the sign-in. ' +
-      `Add public/.well-known/dfos-app.json with two members: name, and ` +
+      `Add public/.well-known/dfos-app.json with its two required members: name, and ` +
       `redirect_uris containing this exact string: ${REDIRECT_URI}`
     );
   }
@@ -452,20 +452,20 @@ const whatHappensNext = (scope: string): HTMLElement => {
   const list = el('ol', 'steps');
   for (const step of [
     credentialScope
-      ? 'This page asks its backend to start a sign-in. The server mints the challenge (domain, nonce, timestamp), records the nonce in its store so it can be spent exactly once, and answers with a URL — this one carrying the app’s client_did, because a credential has to be issued to someone.'
-      : 'This page asks its backend to start a sign-in. The server mints the challenge (domain, nonce, timestamp), seals the nonce into an httpOnly cookie, and answers with a URL.',
+      ? 'Mint and redirect. This page asks its backend to start a sign-in. The server mints the challenge (domain, nonce, timestamp) and records the nonce in its store so it can be spent exactly once. The URL it answers with carries the app’s client_did, because a credential has to be issued to someone.'
+      : 'Mint and redirect. This page asks its backend to start a sign-in. The server mints the challenge (domain, nonce, timestamp), seals the nonce into an httpOnly cookie, and answers with a URL.',
     credentialScope
-      ? 'You approve on your DFOS host’s consent screen, which names what the app is asking to read. Your custodial key signs the challenge bytes and issues the credential.'
-      : 'You approve on your DFOS host’s consent screen, where your custodial key signs the challenge bytes.',
+      ? 'Consent and sign. You approve on your DFOS host’s consent screen, which names what the app is asking to read. Your custodial key signs the challenge bytes and issues the credential — and if the host is meeting this app for the first time, it ingests the identity chain the app carries in its well-known file, so its API can later resolve the app’s key.'
+      : 'Consent and sign. You approve on your DFOS host’s consent screen, where your custodial key signs the challenge bytes.',
     credentialScope
-      ? 'The browser returns here with the signed JWS in the query string and the credential in the URL fragment, and posts both to this site’s backend.'
-      : 'The browser returns here with the signed JWS and posts it to this site’s backend.',
+      ? 'Come back signed. The browser returns here with the signed JWS in the query string and the credential in the URL fragment, and posts both to this site’s backend.'
+      : 'Come back signed. The browser returns here with the signed JWS and posts it to this site’s backend.',
     credentialScope
-      ? 'The server spends the nonce with one atomic delete, verifies the JWS against your public identity chain on a relay, verifies the credential in full, and mints a session cookie.'
-      : 'The server unseals the nonce it minted, verifies the JWS against your public identity chain on a relay, and mints a session cookie.',
+      ? 'Verify where the grant happens. The server spends the nonce with one atomic delete, verifies the JWS against your public identity chain on a relay, verifies the credential in full, and mints a session cookie.'
+      : 'Verify where the grant happens. The server unseals the nonce it minted, verifies the JWS against your public identity chain on a relay, and mints a session cookie.',
     ...(credentialScope
       ? [
-          'From then on the backend can call the DFOS API on your behalf — signing each request with its own key, and presenting the credential alongside it.',
+          'Use the grant. From then on the backend can call the DFOS API on your behalf — signing each request with its own key and presenting the credential alongside — until the credential expires or you revoke it at your DFOS host.',
         ]
       : []),
   ]) {
@@ -537,7 +537,7 @@ const scopeChooser = (found: Config, onChange: () => void): HTMLElement => {
       audience.append(
         'It will be issued to ',
         el('code', undefined, found.app.did),
-        ' — this app’s DID, and the only key that can ever spend it.',
+        ' — this app’s DID, and the only key that can ever exercise it.',
       );
       grant.append(audience);
     }
@@ -552,7 +552,7 @@ const scopeChooser = (found: Config, onChange: () => void): HTMLElement => {
  * button, and again in the receipts. It is a file this origin serves, and the
  * reader can open it from here.
  */
-const registrationNote = (found: Registration): Node[] => {
+const registrationNote = (found: Registration, scope: string): Node[] => {
   if (found.state === 'loopback') {
     return [
       el(
@@ -598,7 +598,9 @@ const registrationNote = (found: Registration): Node[] => {
     line.append(
       'Declared client_did: ',
       el('code', undefined, found.clientDid),
-      ' — optional at identity scope, and this app does not send it. The file names the app.',
+      scope === SCOPE_READ_PROFILE
+        ? ' — required for a credential-returning scope, and this flow sends it in the authorize URL. The credential is issued to this DID, and only its key can exercise the grant.'
+        : ' — optional at identity scope, and this flow does not send it: the file names the app. (A file that carries identity_chain must name it, whatever the scope.)',
     );
     body.push(line);
   }
@@ -607,9 +609,9 @@ const registrationNote = (found: Registration): Node[] => {
 };
 
 /** The registration note as a quieter block inside the sign-in card. */
-const registrationSection = (found: Registration): HTMLElement => {
+const registrationSection = (found: Registration, scope: string): HTMLElement => {
   const wrap = el('div', 'section');
-  wrap.append(...registrationNote(found));
+  wrap.append(...registrationNote(found, scope));
   return wrap;
 };
 
@@ -649,7 +651,7 @@ const renderSignedOut = (notice?: string): void => {
       ...(config !== null ? [scopeChooser(config, () => renderSignedOut(notice))] : []),
       button,
       whatHappensNext(selectedScope),
-      ...(found !== null ? [registrationSection(found)] : []),
+      ...(found !== null ? [registrationSection(found, selectedScope)] : []),
     ),
     aside,
   );
@@ -722,7 +724,7 @@ const checklistReceipt = (session: Session): Node[] => {
     'Signature valid under the DFOS JWS profile (EdDSA, canonical scalar, no embedded key).',
     `Domain binding: the signed domain is this site — ${SIGNING_DOMAIN}`,
     'Timestamp inside the acceptance window, checked against the server’s clock.',
-    'Nonce checked LAST, after every other check passed — the spec’s step 6.',
+    'Nonce checked last, after every other check passed — SIWD’s verification step 6.',
     ...(consumed
       ? [
           'The returned credential verified in full — signature, schema, CID integrity, expiry — and checked to be issued by this signer, audienced to this app, and covering the resource and action that were asked for.',
@@ -739,17 +741,17 @@ const checklistReceipt = (session: Session): Node[] => {
       'p',
       'dim',
       consumed
-        ? 'This is the CONSUMED replay discipline, and it was not a choice. Success here ' +
+        ? 'This is the consumed replay discipline, and it was not a choice. Success here ' +
             'returned a credential — something portable, redeemable outside this browser — so ' +
-            'specs/SIWD.md requires the nonce be retired globally rather than bound to a ' +
+            'the SIWD spec (protocol.dfos.com/siwd) requires the nonce be retired globally rather than bound to a ' +
             'channel. The server spent it with one atomic delete, as the last step before ' +
             'granting anything. A second presentation of this same signed challenge, from ' +
             'anywhere, now finds nothing to spend.'
-        : 'This is the FLOW-BOUND replay discipline. Its guarantee: the signed ' +
+        : 'This is the flow-bound replay discipline. Its guarantee: the signed ' +
             'challenge redeems only through the browser that started the flow, inside ' +
             'the timestamp window. Not global single-use — success here grants a session ' +
             'with this browser and nothing else. Grant anything portable and the ' +
-            'discipline changes; see "The two replay disciplines" in the README.',
+            'discipline changes — see the SIWD spec (protocol.dfos.com/siwd) on replay prevention.',
     ),
   );
 };
@@ -805,7 +807,7 @@ const receipts = (session: Session, jws?: string): HTMLElement => {
     ...(jws !== undefined ? artifactReceipt(jws) : []),
     ...checklistReceipt(session),
     ...(found !== null
-      ? receiptSection('How this app is registered', ...registrationNote(found))
+      ? receiptSection('How this app is registered', ...registrationNote(found, session.scope))
       : []),
     ...lookItUpReceipt(session.did),
     ...sourceReceipt(),
@@ -814,12 +816,12 @@ const receipts = (session: Session, jws?: string): HTMLElement => {
 };
 
 // -----------------------------------------------------------------------------
-// the credential, and spending it
+// the credential, and exercising it
 // -----------------------------------------------------------------------------
 
 /**
  * RENDER BEFORE TRUST. The credential is shown in full — who issued it, to whom,
- * over what, until when — before anything is spent against it, because a grant
+ * over what, until when — before the first request is signed against it, because a grant
  * you cannot read is a grant you cannot judge. Every field here was verified on
  * the server first: signature, schema, CID integrity, expiry, and that this app
  * is the audience. Displaying an unverified one would teach the opposite habit.
@@ -872,8 +874,13 @@ const credentialCard = (facts: CredentialFacts): HTMLElement => {
     el(
       'p',
       'dim',
+      'Using it does not use it up: the credential is a standing grant, presented request after request until it expires or you revoke it. What is single-use is each request proof, minted fresh per call.',
+    ),
+    el(
+      'p',
+      'dim',
       'The credential itself stays on the backend. This page never receives it — and could not ' +
-        'use it if it did, since spending one takes the app’s signing key.',
+        'use it if it did, since exercising one takes the app’s signing key.',
     ),
   );
 };
@@ -898,12 +905,12 @@ const profileCard = (state: ProfileState, host: string, onCall: () => void): HTM
   button.addEventListener('click', onCall);
 
   const body: Node[] = [
-    el('h2', undefined, 'Spend it'),
+    el('h2', undefined, 'Use it'),
     el(
       'p',
       'dim',
-      `This calls GET /v1/profile on ${host} — real private data, served to nobody who cannot ` +
-        'prove possession of the key this credential was issued to. The backend signs a fresh ' +
+      `This calls GET /v1/profile on ${host} — real private data, served only to a caller that ` +
+        'proves possession of the key this credential was issued to. The backend signs a fresh ' +
         'proof over this exact method, host, path, and body, and sends it alongside the credential.',
     ),
     button,
@@ -986,7 +993,7 @@ const renderSignedIn = (
 };
 
 /**
- * Ask the backend to spend the credential once. The page sends nothing but the
+ * Ask the backend to present the credential once. The page sends nothing but the
  * request itself: which credential, which endpoint, and what may be signed are
  * all the server's to decide from the session it already holds.
  */
@@ -1083,7 +1090,7 @@ const signOut = async (): Promise<void> => {
  * goes up first, so what is being verified is on screen while it happens.
  *
  * The credential, when there is one, is forwarded and then forgotten. This page
- * does not keep it and could not use it if it did: spending one takes the app's
+ * does not keep it and could not use it if it did: exercising one takes the app's
  * signing key, which lives on the backend.
  */
 const handleCallback = async (jws: string, credential?: string): Promise<void> => {

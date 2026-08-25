@@ -119,7 +119,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
   // Present only on the credential path; the browser reads it out of the
-  // callback's URL fragment and posts it here, where the key that could spend it
+  // callback's URL fragment and posts it here, where the key that could exercise it
   // actually lives.
   const credential = readTokenField(body, 'credential');
   if (scope === SCOPE_READ_PROFILE && credential === null) {
@@ -216,7 +216,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   const { did, kid, timestamp } = result.value;
 
   // 4. On the credential path, answer for the second artifact too — before it is
-  //    stored, and before any session exists that could spend it.
+  //    stored, and before any session exists that could exercise it.
   let facts: CredentialFacts | null = null;
   if (scope === SCOPE_READ_PROFILE && APP_DID !== null) {
     const checked = await checkCredential(client, credential as string, did, APP_DID);

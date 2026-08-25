@@ -22,7 +22,7 @@ relay is untrusted; the crypto is what convinces us.
 **You pick the scope before you sign in, and the choice changes what the backend
 owes.** `identity` proves who you are and returns nothing else. `read:profile`
 also returns a **credential** — a durable, audience-bound authorization the app
-keeps and later spends against the DFOS API. That one difference obliges a
+keeps and later presents to the DFOS API. That one difference obliges a
 stricter replay discipline, requires the app to name its own DID, and unlocks a
 live credential-gated API call afterwards. Both run side by side so the
 difference is something you can watch rather than read about.
@@ -39,7 +39,7 @@ races (which trade away certainty).
 This demo's credential deliberately does not have that property. It is a signed
 statement that **a grant exists** — issued by the user, audience-bound to this
 app's DID, scoped to `read:profile` on `api:api.dfos.com` — and presenting it
-proves nothing by itself. What spends it is a **request proof**: a short-lived
+proves nothing by itself. What exercises it is a **request proof**: a short-lived
 signature by this app's own key over the exact request being made — method,
 host, path, body hash, right now — carrying the credential's CID inside the
 signed bytes. The API checks both. Steal the credential and you hold metadata;
@@ -73,7 +73,7 @@ headers, honor revocation. The DFOS API is simply the first host doing it.
 | `POST /login`   | Mints the challenge, remembers the nonce (sealed cookie or store, per scope), returns the `/authorize` URL          |
 | `POST /verify`  | Recovers that nonce, runs `verifySiwd` against a relay, verifies any returned credential, grants the session cookie |
 | `GET /me`       | Reads the session cookie back — the one source the signed-in view renders from                                      |
-| `POST /profile` | Spends the credential: signs one request proof and calls `GET /v1/profile` on the DFOS API                          |
+| `POST /profile` | Exercises the credential: signs one request proof and calls `GET /v1/profile` on the DFOS API                       |
 | `POST /logout`  | Expires the session and drops the stored credential                                                                 |
 
 ### The two scopes
@@ -93,7 +93,7 @@ an identity-scope sign-in returns none.
 
 At `read:profile` it is **required**, and for the same reason: a credential has
 to be issued _to_ someone. The DID this demo sends is derived from its own
-signing key, so the app cannot ask for a credential it would be unable to spend.
+signing key, so the app cannot ask for a credential it would be unable to exercise.
 
 ### The flow, step by step
 
@@ -215,7 +215,7 @@ produced.** A nonce handed to the verifier by the party presenting the artifact 
 in a callback parameter, a request body, or an unsealed cookie — is not a replay
 defense at all.
 
-## Spending the credential
+## Exercising the credential
 
 A credential says a grant exists. It does **not** say the party presenting it is
 the party it was granted to — and closing that gap is what
@@ -358,7 +358,7 @@ offline.
 This is a second key of a different kind. `SESSION_SECRET` is a secret this
 server keeps from everyone; the app key is a **DFOS identity key** whose public
 half is published in an identity chain. It exists because a credential is issued
-_to_ someone, and spending one means proving on every request that you are that
+_to_ someone, and exercising one means proving on every request that you are that
 someone.
 
 `DFOS_APP_KID` is the full DID URL — `did:dfos:<id>#key_<id>`. Its DID half is
@@ -388,7 +388,7 @@ three commands, and that is not worth a dependency.
 It holds two things: the outstanding nonce (300s), and the verified credential
 keyed by session (24h, dropped on sign-out). The credential is there rather than
 in a cookie because it is a durable authorization that belongs on the RP's side
-of the wire, and because a browser has no key to spend it with anyway.
+of the wire, and because a browser has no key to exercise it with anyway.
 
 ## Registration = a JSON file
 
@@ -398,7 +398,8 @@ of the wire, and because a browser has no key to spend it with anyway.
 {
   "name": "SIWD Demo",
   "client_did": "did:dfos:8zk83zez862n6ahnvt3h3e4kc4n2dke",
-  "redirect_uris": ["https://dfos-siwd-demo.vercel.app/"]
+  "redirect_uris": ["https://dfos-siwd-demo.vercel.app/"],
+  "identity_chain": ["<genesis identity-op JWS>", "<add-key identity-op JWS>"]
 }
 ```
 
@@ -411,7 +412,16 @@ and `redirect_uris` is an **exact-match** allowlist, trailing slash included.
 the consent screen labels it that way — nothing in the protocol vouches for it.
 The domain is what the user is being asked to trust.
 
-`client_did` is optional at identity scope. It becomes **required** for
+`identity_chain` is the app's own signed operation log, carried in the file so a
+host that has never seen this identity can verify and ingest it on first
+encounter — [SIWD.md §chain
+carriage](../../specs/SIWD.md#identity_chain--chain-carriage). The CLI writes it
+for you: `dfos identity well-known --patch public/.well-known/dfos-app.json`
+fills `client_did` and `identity_chain` from your local identity and refuses a
+mismatched rebind.
+
+`client_did` is optional at identity scope — though a file that carries
+`identity_chain` must name it, whatever the scope. It becomes **required** for
 `read:profile`, because a credential has to be issued _to_ someone — and it must
 name the same identity as `DFOS_APP_KID`, since the platform issues to the DID it
 resolves from this file and the API checks the proof was signed by that DID's
@@ -442,6 +452,9 @@ origin in `redirect_uris`, exactly, with the trailing slash:
 Commit, redeploy, done. If you forget, the boot self-check renders the exact
 string it needs to see. Update `name` too while you are there — it is what your
 users read at consent.
+
+(That one edit is the identity scope's whole story; the credential scope's
+extra members — `client_did` and `identity_chain` — are step 1 below.)
 
 Preview-deploy URLs are **not** in the allowlist, by design. Each preview gets a
 fresh hostname, and an allowlist that admitted arbitrary subdomains would be an
@@ -486,6 +499,12 @@ sequence, and the wrinkles below are the ones it actually hit.
    matters, and `/api/config` proves it landed intact by deriving the public
    key back from it.
 
+   Then carry the chain in the well-known:
+   `dfos identity well-known --patch public/.well-known/dfos-app.json` writes
+   `client_did` and `identity_chain` — the full signed op log, genesis first —
+   into the file. Commit that too: it is how a host that has never seen your
+   identity verifies and ingests it at first consent.
+
 2. **Add the store** — the **Upstash for Redis** marketplace integration
    (`vc i upstash/upstash-kv`), Free plan, connected to your project. It writes
    `KV_REST_API_URL` and `KV_REST_API_TOKEN` for you. Not the Redis Cloud
@@ -497,17 +516,15 @@ sequence, and the wrinkles below are the ones it actually hit.
    key — diff it against `dfos identity keys my-app` before anything is
    clicked.
 
-**One honest limit, as of this writing.** The API's verifier has to resolve
-your app identity's chain to check the proof's signing key, and the canonical
-`api.dfos.com` currently resolves only chains resident in its own store —
-`relay.dfos.com` is pull-only and accepts no published identities. A
-CLI-minted identity therefore clears every local check (`/api/config` green,
-consent, credential mint) and then answers `503` at the profile call, where the
-verifier cannot resolve the presenter. An app-registration ingestion path —
-publish your signed chain to the platform once, at registration — is in design
-on the platform side. Until it lands, the full gated round trip is exercised
-against a deployment whose verifier can see your chain; everything else on this
-page works today.
+**How the API learns your app's key.** The API's verifier resolves your app
+identity's chain locally at request time — it never fetches your well-known
+during verification. What closes the loop is chain carriage: at the first
+credential-returning consent, the platform reads `identity_chain` from your
+well-known file, verifies it derives your `client_did`, and ingests it — from
+then on its verifier resolves your key like any other resident identity. That is
+why step 1 ends with `dfos identity well-known --patch`: a CLI-minted identity
+that carries its chain clears the full gated round trip, mint through `GET
+/v1/profile`.
 
 ## Run it locally
 
@@ -552,8 +569,8 @@ is reimplemented, so nothing can drift.
   one inside the verified JWS.
 - **A returned credential is verified before it is stored** — and checked to be
   issued by the signer, audienced to this app, and covering the resource and
-  action asked for. The page renders it in full before anything is spent against
-  it.
+  action asked for. The page renders it in full before the first request is
+  signed against it.
 - **The signing seam takes no coordinates from the browser.** `POST /api/profile`
   signs one fixed request, authorized by the session alone. A backend that signs
   what a browser asks it to is a confused deputy holding a key.
