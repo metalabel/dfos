@@ -62,7 +62,6 @@ jobs:
           node-version-file: '.nvmrc'
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -70,6 +69,11 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Auth is npm trusted publishing (OIDC): each package on npmjs.com is
+      # configured to trust this repo + this workflow file, and pnpm exchanges
+      # the job's OIDC token for publish access. No npm token exists anywhere.
+      # Renaming this file breaks the trust binding — update the trusted
+      # publisher config on npmjs.com for every package if it ever moves.
       - name: Publish packages (skipping already-published versions)
         run: |
           for dir in dfos-protocol dfos-web-relay dfos-client; do
@@ -81,8 +85,6 @@ jobs:
               pnpm --filter "$pkg" publish --no-git-checks --access public --provenance
             fi
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release-goreleaser:
     needs: [validate, test]
