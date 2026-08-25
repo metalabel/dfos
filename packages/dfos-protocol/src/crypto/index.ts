@@ -1,5 +1,6 @@
 export * from './base64url';
 export * from './ed25519';
+export * from './hash';
 export * from './id';
 export * from './jws';
 export * from './jws-profile';
