@@ -157,6 +157,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   //    contacted; the relay is untrusted and the crypto is what convinces us.
   //    `verifySiwd` is no-throw — the relay hop, the decode, and every check
   //    share one result channel — so its error string is what the page gets.
+  //
+  //    `consumeNonce` can fail two different ways, and they are not the same
+  //    verdict. "The store answered, and this nonce is not outstanding" is the
+  //    caller's problem — an invalid or replayed presentation, a 401. "The store
+  //    did not answer at all" is the SERVER's condition and must not be reported
+  //    as a judgment about the artifact; that is a 503, the same classification
+  //    `api/login.ts` and `api/profile.ts` already use for an unreachable
+  //    dependency. `verifySiwd` is no-throw and collapses both into one refusal,
+  //    so the outage is recorded here and re-read below.
+  //
+  //    Held on an object rather than a bare `let` because the assignment happens
+  //    inside a closure the compiler cannot see run.
+  const store: { failure: Error | null } = { failure: null };
   const client = createClient({ relays: [RELAY_URL] });
   const result = await verifySiwd(client, jws, {
     domain: self.domain,
@@ -165,10 +178,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     // this server minted — retiring it for everyone — or answers null, and a
     // presentation that failed any earlier check never reaches it.
     ...(scope === SCOPE_READ_PROFILE
-      ? { consumeNonce: async (nonce: string) => (await kvGetDel(kvNonceKey(nonce))) !== null }
+      ? {
+          consumeNonce: async (nonce: string): Promise<boolean> => {
+            try {
+              return (await kvGetDel(kvNonceKey(nonce))) !== null;
+            } catch (err) {
+              // Refuse either way — the consumed discipline fails CLOSED, and a
+              // consume this server could not confirm is one it must not treat
+              // as having succeeded.
+              store.failure = err instanceof Error ? err : new Error(String(err));
+              return false;
+            }
+          },
+        }
       : { nonce: flowBoundNonce as string }),
   });
 
+  if (store.failure !== null) {
+    json(
+      res,
+      503,
+      {
+        ok: false,
+        reason: `could not spend the sign-in nonce: ${store.failure.message}`,
+      },
+      [clearCookie(FLIGHT_COOKIE)],
+    );
+    return;
+  }
   if (!result.ok || result.value === undefined) {
     json(res, 401, { ok: false, reason: result.error ?? 'verification failed' }, [
       clearCookie(FLIGHT_COOKIE),

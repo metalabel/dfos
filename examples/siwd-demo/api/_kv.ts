@@ -27,9 +27,27 @@
 /**
  * Vercel's Upstash integration writes the first pair; a database connected
  * directly at Upstash writes the second. Same protocol either way.
+ *
+ * A pair is taken WHOLE or not at all. Falling back per-variable would let a
+ * stale `KV_REST_API_URL` from one store pick up the token of another — a
+ * credential sent to the wrong host, which fails as an opaque 401 from a
+ * service the operator was not thinking about. Two complete pairs, first one
+ * wins, no mixing.
  */
-const URL_VAR = process.env['KV_REST_API_URL'] ?? process.env['UPSTASH_REDIS_REST_URL'];
-const TOKEN_VAR = process.env['KV_REST_API_TOKEN'] ?? process.env['UPSTASH_REDIS_REST_TOKEN'];
+const credentialPair = (urlVar: string, tokenVar: string): [string, string] | null => {
+  const url = process.env[urlVar];
+  const token = process.env[tokenVar];
+  return url !== undefined && url !== '' && token !== undefined && token !== ''
+    ? [url, token]
+    : null;
+};
+
+const KV_CREDENTIALS =
+  credentialPair('KV_REST_API_URL', 'KV_REST_API_TOKEN') ??
+  credentialPair('UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN');
+
+const URL_VAR = KV_CREDENTIALS?.[0];
+const TOKEN_VAR = KV_CREDENTIALS?.[1];
 
 /** Bounded, so a stalled store surfaces as a refusal rather than a hung sign-in. */
 const KV_TIMEOUT_MS = 5000;
@@ -40,10 +58,11 @@ const KV_TIMEOUT_MS = 5000;
  * that dies halfway through.
  */
 export const KV_ERROR: string | null =
-  URL_VAR === undefined || URL_VAR === '' || TOKEN_VAR === undefined || TOKEN_VAR === ''
+  KV_CREDENTIALS === null
     ? 'No KV store is configured — set KV_REST_API_URL and KV_REST_API_TOKEN ' +
       '(Vercel’s Upstash integration writes both when you add a Redis store to the ' +
-      'project), then redeploy'
+      'project), then redeploy. Both halves of a pair are required; a URL without ' +
+      'its own token is ignored rather than paired with another store’s.'
     : null;
 
 /** True when the consumed discipline is available at all. */

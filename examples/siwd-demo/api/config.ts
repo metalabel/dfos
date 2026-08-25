@@ -31,6 +31,7 @@ import {
   requestOrigin,
   SCOPE_IDENTITY,
   SCOPE_READ_PROFILE,
+  SECRET_ERROR,
 } from './_lib.js';
 import type { VercelRequest, VercelResponse } from './_types.js';
 
@@ -43,20 +44,31 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
   const self = requestOrigin(req);
   const loopback = self !== null && isLoopbackDomain(self.domain);
 
-  // The order matters: the domain rule is the one a fork cannot fix with an
-  // environment variable, so it is reported first when it applies.
-  const unavailable = loopback
-    ? 'This is a loopback host. specs/SIWD.md admits a local redirect target for ' +
-      'scope=identity only — a local port holds no domain, so it can prove no client_did, ' +
-      'and a credential has to be issued to someone. Deploy to a domain to exercise this path.'
-    : (APP_KEY_ERROR ?? KV_ERROR);
+  // `SESSION_SECRET` is the one precondition BOTH scopes share: without a usable
+  // seal this server cannot mint a flight cookie that `/api/verify` could unseal,
+  // so every sign-in refuses. It belongs in the preflight for the same reason
+  // everything else here does — a fork should read it on the page rather than
+  // meet it as a 500 on the first click.
+  const blocked = SECRET_ERROR;
+
+  // The credential scope's own chain, layered on top. Order matters: the domain
+  // rule is the one a fork cannot fix with an environment variable, so it is
+  // reported first when it applies.
+  const unavailable =
+    blocked ??
+    (loopback
+      ? 'This is a loopback host. specs/SIWD.md admits a local redirect target for ' +
+        'scope=identity only — a local port holds no domain, so it can prove no client_did, ' +
+        'and a credential has to be issued to someone. Deploy to a domain to exercise this path.'
+      : (APP_KEY_ERROR ?? KV_ERROR));
 
   json(res, 200, {
     scopes: [
       {
         scope: SCOPE_IDENTITY,
         discipline: 'flow-bound',
-        available: true,
+        available: blocked === null,
+        ...(blocked !== null ? { unavailable: blocked } : {}),
         summary: 'Proves who you are. Returns no credential, so nothing portable is granted.',
       },
       {

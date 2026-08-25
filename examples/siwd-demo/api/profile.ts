@@ -125,6 +125,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   // Signing the request the client actually built, rather than a description of
   // it, is what keeps the proof's binding honest.
   const api = createDfosApi({
+    // Derived from API_HOST rather than taken from the package default, so the
+    // authority this request is SENT to and the authority named by the
+    // credential's `api:<host>` resource are the same constant. Left implicit,
+    // they would be two independent facts that happen to agree today — and
+    // `_lib.ts` promises they cannot drift.
+    baseUrl: `https://${API_HOST}/v1/`,
     fetch: async (request: Request): Promise<Response> => {
       const url = new URL(request.url);
       const { proof } = await signApiRequest({
