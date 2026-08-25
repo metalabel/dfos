@@ -72,6 +72,19 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Reverse the inline HTML entity escaping marked applies inside code spans, so a
+// heading's slug is computed from the source text (`api:<host>`), not the
+// escaped rendering (`api:&lt;host&gt;`). Ampersand is decoded last so an
+// already-escaped entity is not double-decoded. Used only for slug derivation.
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
 async function highlight(code: string, lang?: string): Promise<string> {
   if (!lang) return `<pre class="shiki"><code>${escapeHtml(code)}</code></pre>`;
   try {
@@ -132,7 +145,11 @@ export async function renderSpec(markdown: string): Promise<RenderedSpec> {
       heading(token: Tokens.Heading) {
         const inlineHtml = this.parser.parseInline(token.tokens);
         const plain = inlineHtml.replace(/<[^>]*>/g, '');
-        const id = slugger.slug(plain);
+        // Slug from the UNESCAPED text so a heading like `api:<host>` slugs to
+        // `apihost` (GitHub's behavior, and what in-doc links are authored
+        // against) rather than `apilthostgt` from the entity-escaped `&lt;`.
+        // `plain` stays escaped — it is the TOC display text.
+        const id = slugger.slug(decodeHtmlEntities(plain));
         toc.push({ id, text: plain, level: token.depth });
         return `<h${token.depth} id="${id}"><a href="#${id}" class="anchor" aria-hidden="true">#</a>${inlineHtml}</h${token.depth}>`;
       },
