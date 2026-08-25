@@ -102,11 +102,13 @@ https://3p.com/callback?
   &did=did:dfos:<id>
 ```
 
-If a credential was requested via `scope`, it is included as an additional parameter:
+If a credential was requested via `scope`, it is delivered in the URL **fragment**, not the query string:
 
 ```
-  &credential=<DFOS credential JWS>
+  #credential=<DFOS credential JWS>
 ```
+
+Fragment delivery is deliberate: the fragment never leaves the browser — it does not appear in server access logs, proxy logs, or the `Referer` header — so the grant does not transit or land anywhere the redirect target's infrastructure would passively record. The receiving page's script reads it and forwards it to the application's backend over an intentional channel (typically a POST), which is the one copy that should exist server-side. The credential is proof-of-possession bound (see [API-AUTH](https://protocol.dfos.com/api-auth)) and is inert without the audience's key, so the fragment is defense in depth for grant _metadata_, not the load-bearing secrecy of the grant itself. The `jws` and `did` parameters remain in the query string: they are consumed server-side at the callback endpoint, which is exactly where a fragment could never reach.
 
 > **Loopback redirect targets.** A `redirect_uri` on the loopback interface — `http://localhost`, `http://127.0.0.1`, or `http://[::1]`, on any port and any path — is a valid target, for `scope=identity` only. An application running on the user's own machine holds no domain, so the binding a hosted redirect asserts is one no host could ever check; rather than refuse the case, the host consents to it under its own tier and says plainly what it is — software running on this device, with nothing about it verifiable. The consent screen shows the literal delivery target and offers no application name and no `client_did`, because neither can be proven; a `client_did` on a loopback authorize request is refused outright rather than displayed unbacked. The port is not part of the binding either — a local application cannot reserve one — so the challenge's `domain` is the bare loopback host. Self-custodied _signing_ remains profile B: the callback may go to a local port, but the key never does. A CLI that holds its own key polls a mailbox; an application that needs only the user's identity does not need to hold a key to receive a proof.
 
