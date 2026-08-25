@@ -94,6 +94,12 @@ Three inputs, and they are the irreducible ones: the credential JWS to present, 
 
 It signs **exactly the `Request` it receives** — the method, the origin-form target, and the body octets already composed — rather than a description of one. That is what keeps the binding honest: the bytes the proof covers are the bytes that go on the wire.
 
+Three consequences worth knowing before you wire it up:
+
+- **It refuses to sign a plaintext request** to anything but loopback (`localhost`, `127.0.0.1`, `[::1]`). `api:` surfaces are HTTPS surfaces, and a proof sent in the clear replays for its whole freshness window.
+- **It does not follow redirects** (`redirect: 'manual'`): a 3xx comes back to you as-is, because following it would re-issue the request at coordinates the proof does not cover and carry `X-Credential` to whatever authority the `Location` names.
+- **It buffers the request body before sending.** The proof covers the whole body, so there is nothing to sign until the last octet is in hand — size-bounded requests only. An unbounded or live stream cannot be proof-signed, in any implementation.
+
 **A backend that must not proxy uses the decomposed form.** A signing backend fronting a browser must authorize the coordinates it is about to sign against its own session, not sign whatever `{method, path, body}` the browser hands it — a backend that signs blindly is an oracle for every credential it holds ([Security Considerations](https://protocol.dfos.com/api-auth#security-considerations)). Such a backend describes the one request it is willing to make, so there is no `Request` for the adapter above to cover:
 
 ```typescript

@@ -358,6 +358,13 @@ const credentialCIDFromHeader = (credential: string): string => {
 };
 
 /**
+ * The exact hostnames a plaintext request may name. `url.hostname` returns the
+ * IPv6 literal still bracketed, so `[::1]` is the form to match. An EXACT set,
+ * never a suffix test: `localhost.evil.example` is an ordinary internet host.
+ */
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
  * A signing `fetch`. Hand it to any API client with a fetch seam and every
  * request that client composes goes out credential-gated:
  *
@@ -381,6 +388,17 @@ const credentialCIDFromHeader = (credential: string): string => {
  * has no lifecycle to get wrong. And there is no host allowlist: the caller
  * composing the URL is already the party choosing the host, so an allowlist here
  * would guard a decision it does not make.
+ *
+ * TWO REFUSALS, both because the adapter is the last place that can see them.
+ * It will not sign a plaintext request to a real host (`api:` surfaces are HTTPS
+ * surfaces — the proof and the credential would go out in the clear, and the
+ * proof replays over HTTPS for its whole freshness window), and it will not
+ * follow redirects.
+ *
+ * BUFFERING IS INHERENT. The byte contract hashes the complete body before
+ * signing, so a request body is buffered in full before anything is sent. This
+ * adapter is for size-bounded requests; an unbounded or live stream cannot be
+ * proof-signed at all, in any implementation.
  */
 export const createApiAuthFetch = (options: CreateApiAuthFetchOptions): typeof fetch => {
   // Read once, at construction: a malformed credential is the caller's bug, and
@@ -393,6 +411,16 @@ export const createApiAuthFetch = (options: CreateApiAuthFetchOptions): typeof f
     const request =
       init === undefined && input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
+    // Refused BEFORE the signature, so a misrouted call costs nothing and mints
+    // nothing: a proof that was never signed cannot be captured off the wire.
+    if (url.protocol !== 'https:' && !LOOPBACK_HOSTNAMES.has(url.hostname)) {
+      throw new Error(
+        `refusing to sign a ${url.protocol}// request to ${url.host}: api: surfaces are HTTPS ` +
+          'surfaces, and a proof sent in the clear replays for its whole freshness window ' +
+          '(plaintext is allowed only to localhost, 127.0.0.1, and [::1])',
+      );
+    }
+
     const { proof } = await signApiRequest({
       method: request.method,
       // `host`, never `hostname`: the authority carries the port when there is
@@ -403,7 +431,9 @@ export const createApiAuthFetch = (options: CreateApiAuthFetchOptions): typeof f
       // `.search` is the classic silent 401.
       path: url.pathname + url.search,
       // Hash the CLONE and forward the original: buffering the request's own
-      // stream would leave nothing to send.
+      // stream would leave nothing to send. Buffering at all is inherent — the
+      // proof covers the WHOLE body, so there is nothing to sign until the last
+      // octet is in hand.
       body: new Uint8Array(await request.clone().arrayBuffer()),
       credentialCID,
       kid: options.kid,
@@ -416,7 +446,10 @@ export const createApiAuthFetch = (options: CreateApiAuthFetchOptions): typeof f
     )) {
       headers.set(name, value);
     }
-    return send(new Request(request, { headers }));
+    // `manual`, so a 3xx comes back to the caller as-is. Following it would
+    // re-issue the request at coordinates the proof does not cover — and carry
+    // `X-Credential` to whatever authority the `Location` names.
+    return send(new Request(request, { headers, redirect: 'manual' }));
   };
 };
 
