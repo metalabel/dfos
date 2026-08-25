@@ -6,6 +6,8 @@ Proof-of-possession authentication for credential-gated HTTP APIs. A **request p
 
 [Source](https://github.com/metalabel/dfos/tree/main/packages/dfos-client) · [npm](https://www.npmjs.com/package/@metalabel/dfos-client)
 
+Non-normative: `@metalabel/dfos-api` is a typed client for the canonical `api:api.dfos.com` deployment, generated from that API's OpenAPI spec, with a fetch seam `@metalabel/dfos-client`'s signing helpers plug into — [Source](https://github.com/metalabel/dfos-api) · [npm](https://www.npmjs.com/package/@metalabel/dfos-api)
+
 ---
 
 ## Motivation
