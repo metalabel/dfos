@@ -2,24 +2,13 @@ import fs from 'node:fs';
 import type { APIRoute } from 'astro';
 import { faqs, faqsToMarkdown } from '../content/faq';
 import { overviewMarkdown } from '../content/overview';
+import { specs, type SpecEntry } from '../content/specs';
 
 export const GET: APIRoute = () => {
   // Spec markdown files — read at build time from the specs directory
-  const protocol = fs.readFileSync('../../specs/PROTOCOL.md', 'utf-8');
-  const didMethod = fs.readFileSync('../../specs/DID-METHOD.md', 'utf-8');
-  const contentModel = fs.readFileSync('../../specs/CONTENT-MODEL.md', 'utf-8');
-
-  // Specs — web relay
-  const webRelay = fs.readFileSync('../../specs/WEB-RELAY.md', 'utf-8');
-  const documentGateway = fs.readFileSync('../../specs/DOCUMENT-GATEWAY.md', 'utf-8');
-  const credentials = fs.readFileSync('../../specs/CREDENTIALS.md', 'utf-8');
-  const credits = fs.readFileSync('../../specs/CREDITS.md', 'utf-8');
-  const siwd = fs.readFileSync('../../specs/SIWD.md', 'utf-8');
-  const signing = fs.readFileSync('../../specs/SIGNING.md', 'utf-8');
-  const apiAuth = fs.readFileSync('../../specs/API-AUTH.md', 'utf-8');
-  const threatModel = fs.readFileSync('../../specs/THREAT-MODEL.md', 'utf-8');
-  const conformance = fs.readFileSync('../../specs/CONFORMANCE.md', 'utf-8');
-  const cli = fs.readFileSync('../dfos-cli/CLI.md', 'utf-8');
+  const specContent = specs
+    .filter((spec): spec is SpecEntry & { source: string } => spec.source !== undefined)
+    .map((spec) => fs.readFileSync(spec.source, 'utf-8'));
 
   // Site content — sourced from shared modules (same data renders the pages)
   const overview = overviewMarkdown.trim();
@@ -33,63 +22,7 @@ export const GET: APIRoute = () => {
     '',
     '---',
     '',
-    overview,
-    '',
-    '---',
-    '',
-    protocol,
-    '',
-    '---',
-    '',
-    didMethod,
-    '',
-    '---',
-    '',
-    contentModel,
-    '',
-    '---',
-    '',
-    webRelay,
-    '',
-    '---',
-    '',
-    documentGateway,
-    '',
-    '---',
-    '',
-    credentials,
-    '',
-    '---',
-    '',
-    credits,
-    '',
-    '---',
-    '',
-    siwd,
-    '',
-    '---',
-    '',
-    signing,
-    '',
-    '---',
-    '',
-    apiAuth,
-    '',
-    '---',
-    '',
-    threatModel,
-    '',
-    '---',
-    '',
-    conformance,
-    '',
-    '---',
-    '',
-    cli,
-    '',
-    '---',
-    '',
-    faq,
+    [overview, ...specContent, faq].join('\n\n---\n\n'),
   ].join('\n');
 
   return new Response(content, {

@@ -10,6 +10,8 @@
 // Footers render the full list with full `label`s. Order below is the canonical
 // site order (understand → spec docs → use it → reference → external).
 
+import { specs } from '../content/specs';
+
 export interface NavLink {
   href: string;
   /** Full label — used in the footer and the landing closing-nav. */
@@ -25,21 +27,14 @@ export interface NavLink {
 export const navLinks: NavLink[] = [
   { href: '/', label: 'Home', tier: 'secondary' },
   { href: '/overview', label: 'Why', tier: 'primary' },
-  { href: '/spec', label: 'Specification', shortLabel: 'Spec', tier: 'primary' },
-  { href: '/did-method', label: 'DID Method', tier: 'secondary' },
-  { href: '/content-model', label: 'Content Model', tier: 'secondary' },
-  { href: '/credentials', label: 'Credentials', tier: 'secondary' },
-  { href: '/credits', label: 'Credits', tier: 'secondary' },
-  { href: '/siwd', label: 'Sign In With DFOS', tier: 'secondary' },
-  { href: '/signing', label: 'Signing', tier: 'secondary' },
-  { href: '/api-auth', label: 'API Auth', tier: 'secondary' },
-  { href: '/web-relay', label: 'Web Relay', shortLabel: 'Relay', tier: 'primary' },
-  { href: '/document-gateway', label: 'Document Gateway', tier: 'secondary' },
-  { href: '/cli', label: 'CLI', tier: 'primary' },
-  { href: '/deploy', label: 'Deploy', tier: 'secondary' },
-  { href: '/skill', label: 'Skill', tier: 'primary' },
-  { href: '/threat-model', label: 'Threat Model', tier: 'secondary' },
-  { href: '/conformance', label: 'Conformance', tier: 'secondary' },
+  ...specs.map(
+    ({ slug, title, nav }): NavLink => ({
+      href: slug,
+      label: nav.label ?? title,
+      shortLabel: nav.shortLabel,
+      tier: nav.tier,
+    }),
+  ),
   { href: '/faq', label: 'FAQ', tier: 'primary' },
   { href: 'https://github.com/metalabel/dfos', label: 'GitHub', tier: 'primary', external: true },
   { href: 'https://dfos.com', label: 'dfos.com', tier: 'secondary', external: true },

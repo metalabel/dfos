@@ -1,3 +1,5 @@
+import { CLI_PLATFORMS } from './specs';
+
 export interface FaqEntry {
   question: string;
   /** Plain text answer — used in markdown dump and structured data. */
@@ -45,10 +47,8 @@ export const faqs: FaqEntry[] = [
   },
   {
     question: 'What languages are supported?',
-    answer:
-      'The reference implementation is in TypeScript (available as @metalabel/dfos-protocol on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the protocol specification. The CLI is written in Go with pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, curl, or Docker.',
-    answerHtml:
-      'The reference implementation is in TypeScript (available as <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">@metalabel/dfos-protocol</a> on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the <a href="/spec">protocol specification</a>. The <a href="/cli">CLI</a> is written in Go with pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, curl, or Docker.',
+    answer: `The reference implementation is in TypeScript (available as @metalabel/dfos-protocol on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the protocol specification. The CLI is written in Go with pre-built binaries for ${CLI_PLATFORMS} — installable via Homebrew, curl, or Docker.`,
+    answerHtml: `The reference implementation is in TypeScript (available as <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">@metalabel/dfos-protocol</a> on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the <a href="/spec">protocol specification</a>. The <a href="/cli">CLI</a> is written in Go with pre-built binaries for ${CLI_PLATFORMS} — installable via Homebrew, curl, or Docker.`,
   },
   {
     question: 'How is this different from blockchain-based identity?',
@@ -106,10 +106,8 @@ export const faqs: FaqEntry[] = [
   },
   {
     question: 'Is this production-ready?',
-    answer:
-      "The protocol's v1 surface is feature-complete and frozen: the core wire is settled and will not change in shape, while the reference packages remain on their own 0.x release line. The TypeScript reference implementation is published and tested, with deterministic test vectors verified across five languages. The CLI ships pre-built binaries for Linux, macOS, and Windows (x64 and arm64) via Homebrew, Docker, and direct download. The DFOS platform runs on this protocol in production. The specification has not been submitted to any formal standards body.",
-    answerHtml:
-      'The <a href="/spec">protocol\'s v1 surface</a> is feature-complete and frozen: the core wire is settled and will not change in shape, while the reference <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">packages</a> remain on their own 0.x release line. The TypeScript reference implementation is published and tested, with deterministic test vectors verified across five languages. The <a href="/cli">CLI</a> ships pre-built binaries for Linux, macOS, and Windows (x64 and arm64) via Homebrew, Docker, and direct download. The <a href="https://dfos.com">DFOS platform</a> runs on this protocol in production. The specification has not been submitted to any formal standards body.',
+    answer: `The protocol's v1 surface is feature-complete and frozen: the core wire is settled and will not change in shape, while the reference packages remain on their own 0.x release line. The TypeScript reference implementation is published and tested, with deterministic test vectors verified across five languages. The CLI ships pre-built binaries for ${CLI_PLATFORMS} via Homebrew, Docker, and direct download. The DFOS platform runs on this protocol in production. The specification has not been submitted to any formal standards body.`,
+    answerHtml: `The <a href="/spec">protocol's v1 surface</a> is feature-complete and frozen: the core wire is settled and will not change in shape, while the reference <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">packages</a> remain on their own 0.x release line. The TypeScript reference implementation is published and tested, with deterministic test vectors verified across five languages. The <a href="/cli">CLI</a> ships pre-built binaries for ${CLI_PLATFORMS} via Homebrew, Docker, and direct download. The <a href="https://dfos.com">DFOS platform</a> runs on this protocol in production. The specification has not been submitted to any formal standards body.`,
   },
   {
     question: 'Where can I discuss the protocol?',

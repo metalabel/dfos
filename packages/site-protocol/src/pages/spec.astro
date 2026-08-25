@@ -1,13 +1,15 @@
 ---
 import fs from 'node:fs';
+import { specEntry } from '../content/specs';
 import SpecPage from '../layouts/SpecPage.astro';
 
 const source = fs.readFileSync('../../specs/PROTOCOL.md', 'utf-8');
+const entry = specEntry('/spec');
 ---
 
 <SpecPage
-  title="Specification"
-  description="Complete DFOS protocol specification — Ed25519 signed chain primitives, services, credentials, countersignatures, identity and content verification, with worked examples and test vectors."
+  title={entry.title}
+  description={entry.metaDescription}
   path="/spec"
   source={source}
 />
