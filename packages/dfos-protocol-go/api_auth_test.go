@@ -224,10 +224,13 @@ func TestVerifyRequestProofAdversarialVectors(t *testing.T) {
 		{"stale iat", apiAuthVectorJWS, ok, time.Unix(apiAuthVectorIat+61, 0), ErrRequestProofInvalid},
 		{"forward-dated iat", apiAuthVectorJWS, ok, time.Unix(apiAuthVectorIat-61, 0), ErrRequestProofInvalid},
 		{"W + S over the ceiling", apiAuthVectorJWS,
-			RequestProofExpectations{Method: "GET", Host: ok.Host, Path: ok.Path, WindowSeconds: 240, SkewSeconds: 61},
+			RequestProofExpectations{Method: "GET", Host: ok.Host, Path: ok.Path, WindowSeconds: Int64Ptr(240), SkewSeconds: Int64Ptr(61)},
 			fresh, ErrRequestProofConfig},
 		{"negative window", apiAuthVectorJWS,
-			RequestProofExpectations{Method: "GET", Host: ok.Host, Path: ok.Path, WindowSeconds: -1},
+			RequestProofExpectations{Method: "GET", Host: ok.Host, Path: ok.Path, WindowSeconds: Int64Ptr(-1)},
+			fresh, ErrRequestProofConfig},
+		{"single bound over the ceiling (overflow guard)", apiAuthVectorJWS,
+			RequestProofExpectations{Method: "GET", Host: ok.Host, Path: ok.Path, WindowSeconds: Int64Ptr(301), SkewSeconds: Int64Ptr(0)},
 			fresh, ErrRequestProofConfig},
 	}
 	for _, vector := range vectors {
@@ -246,7 +249,20 @@ func TestVerifyRequestProofAgeAndSkewAreSeparateBounds(t *testing.T) {
 	resolve := apiAuthVectorResolver(key)
 	tight := RequestProofExpectations{
 		Method: "GET", Host: "api.dfos.com", Path: "/v0/profile",
-		WindowSeconds: 30, SkewSeconds: 5,
+		WindowSeconds: Int64Ptr(30), SkewSeconds: Int64Ptr(5),
+	}
+	// An explicit W=0 / S=0 is HONORED, not silently rewritten to the 60s default
+	// (the nil-vs-*0 distinction). Under W=0 a proof even 1s old is stale; a nil
+	// window would have accepted it.
+	zero := RequestProofExpectations{
+		Method: "GET", Host: "api.dfos.com", Path: "/v0/profile",
+		WindowSeconds: Int64Ptr(0), SkewSeconds: Int64Ptr(0),
+	}
+	if _, err := VerifyRequestProof(apiAuthVectorJWS, zero, resolve, time.Unix(apiAuthVectorIat, 0)); err != nil {
+		t.Fatalf("proof at exactly iat under W=0: %v", err)
+	}
+	if _, err := VerifyRequestProof(apiAuthVectorJWS, zero, resolve, time.Unix(apiAuthVectorIat+1, 0)); !errors.Is(err, ErrRequestProofInvalid) {
+		t.Fatalf("1s-old proof under explicit W=0 should be stale, got: %v", err)
 	}
 	// 20s old: inside W, and the skew bound is irrelevant.
 	if _, err := VerifyRequestProof(apiAuthVectorJWS, tight, resolve, time.Unix(apiAuthVectorIat+20, 0)); err != nil {

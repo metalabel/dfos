@@ -114,7 +114,7 @@ func validateRequestProofPayload(payload RequestProofPayload) error {
 	if !uppercaseMethodRe.MatchString(payload.Method) {
 		return fmt.Errorf("invalid request proof: method must be an uppercase HTTP method token")
 	}
-	if payload.Host != strings.ToLower(payload.Host) || strings.ContainsAny(payload.Host, " \t/\\?#") {
+	if payload.Host != strings.ToLower(payload.Host) || strings.ContainsAny(payload.Host, " \t\n\r\f\v/\\?#") {
 		return fmt.Errorf("invalid request proof: host must be a lowercase authority, without a scheme")
 	}
 
@@ -244,22 +244,39 @@ type RequestProofExpectations struct {
 	Path string
 	// Body is the received application body octets, post-content-decoding.
 	Body []byte
-	// WindowSeconds is the acceptance window W; zero means DefaultProofWindowSeconds.
-	WindowSeconds int64
-	// SkewSeconds is the clock-skew allowance S; zero means DefaultProofSkewSeconds.
-	SkewSeconds int64
+	// WindowSeconds is the acceptance window W. A nil pointer means "unset" and
+	// takes DefaultProofWindowSeconds; a non-nil *0 is honored (the tightest
+	// window, age must be <= 0). Pointer rather than a bare int64 so an explicit
+	// zero is distinguishable from omission — matching the TS verifier's
+	// `windowSeconds?: number`, where undefined defaults and 0 is honored. A bare
+	// int64 would silently rewrite a requested W=0 to 60.
+	WindowSeconds *int64
+	// SkewSeconds is the clock-skew allowance S; same nil-vs-*0 semantics as W.
+	SkewSeconds *int64
 }
 
+// Int64Ptr returns a pointer to v, for setting WindowSeconds / SkewSeconds to an
+// explicit value (including an explicit 0).
+func Int64Ptr(v int64) *int64 { return &v }
+
 func (e RequestProofExpectations) bounds() (window, skew int64, err error) {
-	window, skew = e.WindowSeconds, e.SkewSeconds
-	if window == 0 {
-		window = DefaultProofWindowSeconds
+	window, skew = DefaultProofWindowSeconds, DefaultProofSkewSeconds
+	if e.WindowSeconds != nil {
+		window = *e.WindowSeconds
 	}
-	if skew == 0 {
-		skew = DefaultProofSkewSeconds
+	if e.SkewSeconds != nil {
+		skew = *e.SkewSeconds
 	}
 	if window < 0 || skew < 0 {
 		return 0, 0, fmt.Errorf("%w: WindowSeconds and SkewSeconds must be non-negative", ErrRequestProofConfig)
+	}
+	// Cap each bound before summing: neither alone may exceed the total ceiling,
+	// and checking first means window+skew (each <= 300) cannot overflow int64 —
+	// a bare `window+skew > cap` on two near-max int64 values wraps negative and
+	// slips past the ceiling.
+	if window > MaxProofFreshnessSpanSeconds || skew > MaxProofFreshnessSpanSeconds {
+		return 0, 0, fmt.Errorf("%w: WindowSeconds and SkewSeconds must each be <= %d seconds",
+			ErrRequestProofConfig, MaxProofFreshnessSpanSeconds)
 	}
 	if window+skew > MaxProofFreshnessSpanSeconds {
 		return 0, 0, fmt.Errorf("%w: request proof freshness span W + S exceeds %d seconds: %d + %d",

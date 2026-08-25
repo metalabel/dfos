@@ -313,33 +313,58 @@ export const buildApiAuthHeaders = (input: {
 // -----------------------------------------------------------------------------
 
 /**
- * The two consumer-visible verdict classes, plus the one thing that is neither.
+ * The verdict class. Branch on `reason`, never on message text.
  *
- * - `invalid` — checked and failed. Maps to 401 for a proof-layer failure and
- *   403 for a credential-layer one.
+ * - `invalid` — checked and failed.
  * - `unverifiable` — could not check (an unresolvable presenter, an unreachable
- *   revocation source). Maps to 503 regardless of the phase it arose in: a
- *   transient resolution failure is the server's condition, not the caller's.
+ *   revocation source). A transient resolution failure is the server's
+ *   condition, not the caller's.
  * - `config` — the DEPLOYMENT is misconfigured (a `W + S` over the 300-second
- *   ceiling). Not a judgment about the artifact at all, and it must not be
- *   reported as one: this is a 500.
+ *   ceiling, or an empty required action). Not a judgment about the artifact.
  */
 export type RequestProofFailureReason = 'invalid' | 'unverifiable' | 'config';
 
-/** Branch on `reason`, never on message text. */
+/**
+ * The verification phase a failure arose in. Load-bearing for HTTP mapping: an
+ * `invalid` proof-layer failure is a 401 (with a `WWW-Authenticate: DFOS`
+ * challenge), an `invalid` credential-layer failure is a 403. `status` carries
+ * the recommended code directly so middleware never has to re-derive it.
+ */
+export type RequestProofFailurePhase = 'proof' | 'credential' | 'config';
+
+/** Branch on `reason`/`phase`/`status`, never on message text. */
 export class ApiRequestVerifyError extends Error {
   readonly reason: RequestProofFailureReason;
+  readonly phase: RequestProofFailurePhase;
+  /** Recommended HTTP status: 401 proof-invalid, 403 credential-invalid, 503 unverifiable, 500 config. */
+  readonly status: number;
 
-  constructor(reason: RequestProofFailureReason, message: string) {
+  constructor(
+    reason: RequestProofFailureReason,
+    phase: RequestProofFailurePhase,
+    status: number,
+    message: string,
+  ) {
     super(message);
     this.name = 'ApiRequestVerifyError';
     this.reason = reason;
+    this.phase = phase;
+    this.status = status;
   }
 }
 
-const invalid = (message: string) => new ApiRequestVerifyError('invalid', message);
-const unverifiable = (message: string) => new ApiRequestVerifyError('unverifiable', message);
-const misconfigured = (message: string) => new ApiRequestVerifyError('config', message);
+// invalid, split by phase so the 401-vs-403 mapping needs no message parsing.
+const invalidProof = (message: string) =>
+  new ApiRequestVerifyError('invalid', 'proof', 401, message);
+const invalidCredential = (message: string) =>
+  new ApiRequestVerifyError('invalid', 'credential', 403, message);
+// unverifiable is 503 in either phase; `phase` records where it arose.
+const unverifiableProof = (message: string) =>
+  new ApiRequestVerifyError('unverifiable', 'proof', 503, message);
+const unverifiableCredential = (message: string) =>
+  new ApiRequestVerifyError('unverifiable', 'credential', 503, message);
+const misconfigured = (message: string) =>
+  new ApiRequestVerifyError('config', 'config', 500, message);
 
 export interface VerifyApiRequestInput {
   /** The request-proof JWS — the `Authorization: DFOS <token>` token, scheme stripped. */
@@ -409,16 +434,20 @@ export interface VerifiedRequestProof {
  */
 const discoverChainRoot = (leafToken: string): string => {
   let token = leafToken;
-  for (let depth = 0; depth <= MAX_DELEGATION_DEPTH; depth++) {
+  // < MAX_DELEGATION_DEPTH: a 16-credential chain roots on the 16th (depth 15);
+  // a 17th credential exhausts the loop and rejects, the SAME boundary the
+  // protocol's verified walk enforces (so discovery and the real walk agree
+  // rather than discovery admitting one the walk would then reject).
+  for (let depth = 0; depth < MAX_DELEGATION_DEPTH; depth++) {
     const decoded = decodeDFOSCredentialUnsafe(token);
-    if (!decoded) throw invalid('failed to decode presented credential');
+    if (!decoded) throw invalidCredential('failed to decode presented credential');
     if (decoded.payload.prf.length === 0) return decoded.payload.iss;
     if (decoded.payload.prf.length > 1) {
-      throw invalid('delegation chain: multi-parent credentials are not supported');
+      throw invalidCredential('delegation chain: multi-parent credentials are not supported');
     }
     token = decoded.payload.prf[0]!;
   }
-  throw invalid('delegation chain too deep (max 16 credentials)');
+  throw invalidCredential('delegation chain too deep (max 16 credentials)');
 };
 
 /**
@@ -432,7 +461,28 @@ const discoverChainRoot = (leafToken: string): string => {
  * DEPLOYMENT: this helper never reads a request object, because the one thing a
  * host binding must not be sourced from is the request.
  *
- * Throws `ApiRequestVerifyError`; branch on `reason`.
+ * Throws `ApiRequestVerifyError`; branch on `reason`/`phase`/`status`, never on
+ * message text. `status` is the recommended HTTP code (401 proof-invalid, 403
+ * credential-invalid, 503 unverifiable, 500 config).
+ *
+ * REVOCATION AND RESOLUTION AVAILABILITY — read before deploying. This helper
+ * rejects a credential it KNOWS is revoked (`isRevoked` true at any chain level).
+ * It does NOT, with the default client, fail closed when the revocation source is
+ * unreachable: the stock `createRevocationChecker` is fail-open by design
+ * ("no revocation found" and "could not reach any relay" both return false), the
+ * system-wide v1 stance that "non-revocation is never provable." Likewise a
+ * credential-issuer that is unresolvable because relays are down surfaces from the
+ * protocol verifier as a `CredentialVerificationError` and is reported here as
+ * `invalid` (403), not `unverifiable` (503) — the underlying callback cannot
+ * distinguish "genuinely absent" from "transiently unreachable." The PRESENTER
+ * side is availability-aware (a resolution failure or unverified/stale tip is
+ * `unverifiable`, failing closed unless `allowStale`); the CREDENTIAL side inherits
+ * the v1 primitives' limitation. A deployment that needs fail-closed-on-outage for
+ * the credential/revocation phase MUST inject an availability-aware `isRevoked`
+ * (one that THROWS when it reaches zero sources — the throw is surfaced here as
+ * `unverifiable`) via the client config. Tightening the default is a client-level
+ * change to the shared revocation/resolution contract (it governs SIWD and relay
+ * verification too), tracked outside this kit.
  */
 export const verifyApiRequest = async (
   client: Client,
@@ -459,30 +509,30 @@ export const verifyApiRequest = async (
 
   // 1. Size — both tokens, before any decode. A DoS guard at the header layer.
   if (input.proof.length > MAX_REQUEST_PROOF_SIZE) {
-    throw invalid(
+    throw invalidProof(
       `request proof exceeds max size: ${input.proof.length} > ${MAX_REQUEST_PROOF_SIZE}`,
     );
   }
   if (input.credential.length > MAX_CREDENTIAL_SIZE) {
-    throw invalid(
+    throw invalidProof(
       `credential exceeds max size: ${input.credential.length} > ${MAX_CREDENTIAL_SIZE}`,
     );
   }
 
   // 2. Decode + Signature Verification Profile header gates.
   const decoded = decodeJwsUnsafe(input.proof);
-  if (!decoded) throw invalid('failed to decode request proof JWS');
+  if (!decoded) throw invalidProof('failed to decode request proof JWS');
   const rawHeader = decoded.header as unknown;
   if (typeof rawHeader !== 'object' || rawHeader === null || Array.isArray(rawHeader)) {
-    throw invalid('request proof protected header must be an object');
+    throw invalidProof('request proof protected header must be an object');
   }
-  assertJwsProfile(rawHeader as Record<string, unknown>, invalid);
+  assertJwsProfile(rawHeader as Record<string, unknown>, invalidProof);
   if (decoded.header.typ !== REQUEST_PROOF_JWS_TYP) {
-    throw invalid(`invalid typ: expected ${REQUEST_PROOF_JWS_TYP}, got ${decoded.header.typ}`);
+    throw invalidProof(`invalid typ: expected ${REQUEST_PROOF_JWS_TYP}, got ${decoded.header.typ}`);
   }
   const kid = decoded.header.kid;
   if (typeof kid !== 'string' || !kid.includes('#')) {
-    throw invalid('request proof kid must be a DID URL');
+    throw invalidProof('request proof kid must be a DID URL');
   }
   const presenterDID = kid.substring(0, kid.indexOf('#'));
   const presenterKeyId = kid.substring(kid.indexOf('#') + 1);
@@ -493,7 +543,7 @@ export const verifyApiRequest = async (
   // third-party byte substitution to defend against. The canonical rule binds
   // PRODUCERS (see specs/API-AUTH.md, Canonical Signing Input).
   const payloadSegment = input.proof.split('.')[1];
-  if (payloadSegment === undefined) throw invalid('failed to decode request proof payload');
+  if (payloadSegment === undefined) throw invalidProof('failed to decode request proof payload');
   let payload: RequestProofPayload;
   try {
     const source = new TextDecoder('utf-8', { fatal: true }).decode(
@@ -501,7 +551,7 @@ export const verifyApiRequest = async (
     );
     payload = validateRequestProofPayload(JSON.parse(source));
   } catch (err) {
-    throw invalid(err instanceof Error ? err.message : 'invalid request proof payload');
+    throw invalidProof(err instanceof Error ? err.message : 'invalid request proof payload');
   }
 
   // 4. Freshness — integer Unix seconds on both sides, so the boundary does not
@@ -509,17 +559,17 @@ export const verifyApiRequest = async (
   // a symmetric |now - iat| <= W would make a fully forward-dated proof
   // replayable for 2W, which is exactly what the W + S ceiling above prices.
   const now = Math.floor((input.now ? input.now() : Date.now()) / 1000);
-  if (now - payload.iat > window) throw invalid('request proof is stale');
+  if (now - payload.iat > window) throw invalidProof('request proof is stale');
   if (payload.iat - now > skew) {
-    throw invalid('request proof iat is beyond the clock-skew allowance');
+    throw invalidProof('request proof iat is beyond the clock-skew allowance');
   }
 
   // 5. Request binding — the non-body half first (ordering rule b).
-  if (payload.method !== input.method) throw invalid('request proof method mismatch');
-  if (payload.host !== input.host) throw invalid('request proof host mismatch');
-  if (payload.path !== input.path) throw invalid('request proof path mismatch');
+  if (payload.method !== input.method) throw invalidProof('request proof method mismatch');
+  if (payload.host !== input.host) throw invalidProof('request proof host mismatch');
+  if (payload.path !== input.path) throw invalidProof('request proof path mismatch');
   if (payload.bodyHash !== sha256BodyHash(input.body ?? EMPTY_BODY)) {
-    throw invalid('request proof bodyHash mismatch');
+    throw invalidProof('request proof bodyHash mismatch');
   }
 
   // 6. Resolve the presenter to its CURRENT identity state, failing CLOSED when
@@ -530,19 +580,19 @@ export const verifyApiRequest = async (
   try {
     resolved = await client.identity(presenterDID);
   } catch (err) {
-    throw unverifiable(
+    throw unverifiableProof(
       `failed to resolve request proof presenter: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
   const axes = resolved.trust.unverifiable ?? [];
   if (!input.allowStale && (axes.includes('tip') || resolved.provenance.fromCache)) {
-    throw unverifiable(
+    throw unverifiableProof(
       'presenter identity resolution is stale (tip unverified) — refusing to authenticate ' +
         'against a cached identity state; pass allowStale: true to accept the risk',
     );
   }
   const state = resolved.value;
-  if (state.isDeleted) throw invalid('request proof presenter identity is deleted');
+  if (state.isDeleted) throw invalidProof('request proof presenter identity is deleted');
 
   // Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
   // current-state") — auth, assert, or controller. This is wider than SIWD,
@@ -550,7 +600,7 @@ export const verifyApiRequest = async (
   const key = [...state.authKeys, ...state.assertKeys, ...state.controllerKeys].find(
     (candidate) => candidate.id === presenterKeyId,
   );
-  if (!key) throw invalid('request proof signing key is not a current key of the presenter');
+  if (!key) throw invalidProof('request proof signing key is not a current key of the presenter');
 
   // 7. Signature. THE GATE to every step below: the credential work is unbounded
   // and network-touching, and a well-formed proof with a bad signature must not
@@ -558,7 +608,7 @@ export const verifyApiRequest = async (
   try {
     verifyJws({ token: input.proof, publicKey: decodeMultikey(key.publicKeyMultibase).keyBytes });
   } catch (err) {
-    throw invalid(err instanceof Error ? err.message : 'invalid request proof signature');
+    throw invalidProof(err instanceof Error ? err.message : 'invalid request proof signature');
   }
 
   // 8. Credential chain — verified IN FULL by the protocol's own verifier
@@ -586,17 +636,17 @@ export const verifyApiRequest = async (
     chain = verifiedChain.chain;
   } catch (err) {
     if (err instanceof ApiRequestVerifyError) throw err;
-    if (err instanceof CredentialVerificationError) throw invalid(err.message);
+    if (err instanceof CredentialVerificationError) throw invalidCredential(err.message);
     // Anything else is a resolution or transport failure — the server's
     // condition, not a judgment about the credential.
-    throw unverifiable(
+    throw unverifiableCredential(
       `credential verification could not complete: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
   // 9. Credential binding, and NO PUBLIC AUDIENCE ANYWHERE.
   if (leaf.credentialCID !== payload.credentialCID) {
-    throw invalid('request proof credentialCID does not match the presented credential');
+    throw invalidCredential('request proof credentialCID does not match the presented credential');
   }
   // The public-audience scan runs BEFORE the audience-equality check so that a
   // public LEAF is reported as what it is rather than as an ordinary mismatch.
@@ -607,11 +657,13 @@ export const verifyApiRequest = async (
   // possession this whole surface is built on.
   for (const hop of chain) {
     if (hop.aud === '*') {
-      throw invalid('a credential in the presented chain carries a public audience (aud: "*")');
+      throw invalidCredential(
+        'a credential in the presented chain carries a public audience (aud: "*")',
+      );
     }
   }
   if (leaf.aud !== presenterDID) {
-    throw invalid('credential audience does not match the request proof signing key');
+    throw invalidCredential('credential audience does not match the request proof signing key');
   }
 
   // 10. Subject selection — the root `iss`, which the chain walk above proved.
@@ -623,8 +675,17 @@ export const verifyApiRequest = async (
   // must contain the route's required token. No wildcard form exists for `api:`,
   // and `read:*` is a literal token that matches no real route.
   const action = input.action ?? DEFAULT_API_ACTION;
+  // A route's required action MUST name a real token. An action that canonicalizes
+  // to the empty set ("", whitespace, or commas only) is vacuously a subset of any
+  // grant's action set (the empty set is a subset of everything), so a
+  // misconfigured or dynamically-misselected route would authorize EVERY request
+  // that merely carries the api:<host> resource. This is a deployment fault, not
+  // an artifact verdict — refuse it as config before matching.
+  if (action.split(',').every((token) => token.trim() === '')) {
+    throw misconfigured('required action must name a non-empty token');
+  }
   if (!(await matchesResource(leaf.att, `api:${input.host}`, action))) {
-    throw invalid(`credential does not cover ${action} on api:${input.host}`);
+    throw invalidCredential(`credential does not cover ${action} on api:${input.host}`);
   }
 
   return {

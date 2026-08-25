@@ -298,6 +298,15 @@ const reasonOf = async (promise: Promise<unknown>): Promise<string> => {
   }
 };
 
+const errorOf = async (promise: Promise<unknown>): Promise<ApiRequestVerifyError | undefined> => {
+  try {
+    await promise;
+    return undefined;
+  } catch (err) {
+    return err instanceof ApiRequestVerifyError ? err : undefined;
+  }
+};
+
 describe('verifyApiRequest', () => {
   it('verifies a real grant and returns the root iss as the served subject', async () => {
     const grant = await buildGrant();
@@ -535,6 +544,70 @@ describe('verifyApiRequest', () => {
     // Both boundaries are inclusive.
     await expect(verifyApiRequest(clientFor([grant.user, grant.rp]), at(30))).resolves.toBeTruthy();
     await expect(verifyApiRequest(clientFor([grant.user, grant.rp]), at(-5))).resolves.toBeTruthy();
+  });
+
+  it('honors an explicit W = 0 rather than defaulting it', async () => {
+    const grant = await buildGrant();
+    const at = (offset: number) => ({
+      ...baseInput(),
+      proof: grant.proof,
+      credential: grant.credential,
+      windowSeconds: 0,
+      skewSeconds: 0,
+      now: () => (NOW + offset) * 1000,
+    });
+    // At exactly iat, W=0 accepts. 1s old is stale — a defaulted W=60 would accept.
+    await expect(verifyApiRequest(clientFor([grant.user, grant.rp]), at(0))).resolves.toBeTruthy();
+    expect(await reasonOf(verifyApiRequest(clientFor([grant.user, grant.rp]), at(1)))).toBe(
+      'invalid',
+    );
+  });
+
+  it('refuses an empty required action as config, never as an authorized request', async () => {
+    // An action that canonicalizes to the empty set is a subset of every grant's
+    // action set — a misconfigured route would authorize any api:<host> holder.
+    const grant = await buildGrant();
+    for (const action of ['', '  ', ',', ' , ']) {
+      const err = await errorOf(
+        verifyApiRequest(clientFor([grant.user, grant.rp]), {
+          ...baseInput(),
+          proof: grant.proof,
+          credential: grant.credential,
+          action,
+        }),
+      );
+      expect(err?.reason, JSON.stringify(action)).toBe('config');
+      expect(err?.status).toBe(500);
+    }
+  });
+
+  it('carries the phase and HTTP status so 401 vs 403 needs no message parsing', async () => {
+    const grant = await buildGrant();
+    // A proof-layer failure (bad size) → invalid / proof / 401.
+    const proofErr = await errorOf(
+      verifyApiRequest(clientFor([grant.user, grant.rp]), {
+        ...baseInput(),
+        proof: 'x'.repeat(MAX_REQUEST_PROOF_SIZE + 1),
+        credential: grant.credential,
+      }),
+    );
+    expect(proofErr?.reason).toBe('invalid');
+    expect(proofErr?.phase).toBe('proof');
+    expect(proofErr?.status).toBe(401);
+    // A credential-layer failure (wrong host → coverage miss is credential-phase;
+    // here a host mismatch is proof-phase, so use a coverage miss instead): ask
+    // for an action the grant does not carry.
+    const credErr = await errorOf(
+      verifyApiRequest(clientFor([grant.user, grant.rp]), {
+        ...baseInput(),
+        proof: grant.proof,
+        credential: grant.credential,
+        action: 'read:posts',
+      }),
+    );
+    expect(credErr?.reason).toBe('invalid');
+    expect(credErr?.phase).toBe('credential');
+    expect(credErr?.status).toBe(403);
   });
 
   it('applies the profile header gates and refuses a non-canonical bodyHash on the wire', async () => {
