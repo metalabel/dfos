@@ -95,6 +95,7 @@ const LINK_REWRITES: Array<[RegExp, string]> = [
   [/href="\.\/CREDENTIALS\.md"/g, 'href="/credentials"'],
   [/href="\.\/SIWD\.md"/g, 'href="/siwd"'],
   [/href="\.\/SIGNING\.md"/g, 'href="/signing"'],
+  [/href="\.\/API-AUTH\.md"/g, 'href="/api-auth"'],
   [/href="\.\/THREAT-MODEL\.md"/g, 'href="/threat-model"'],
   [/href="\.\/CONFORMANCE\.md"/g, 'href="/conformance"'],
   // SECURITY.md lives at the repo root (not a site route); point the rendered

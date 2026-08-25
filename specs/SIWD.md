@@ -183,8 +183,9 @@ Identity proof is inherent — the signed challenge itself proves DID ownership.
 | `identity`         | None — the signed challenge alone                                                                 |
 | `read:<contentId>` | `{ "resource": "chain:<contentId>", "action": "read" }`, issued to `client_did`                   |
 | `deposit`          | `{ "resource": "mailbox:<subject id>", "action": "deposit" }`, issued to `client_did` — see below |
+| `read:profile`     | `{ "resource": "api:<api host>", "action": "read:profile" }`, issued to `client_did` — see below  |
 
-SIWD does not define a resource grammar of its own — resource forms, action vocabulary, and matching rules are the [credential spec's](https://protocol.dfos.com/credentials) (`chain:<contentId>` exact-match; `mailbox:<id>` / `deposit` exact-match as registered by [SIGNING](https://protocol.dfos.com/signing)).
+SIWD does not define a resource grammar of its own — resource forms, action vocabulary, and matching rules are the [credential spec's](https://protocol.dfos.com/credentials) (`chain:<contentId>` exact-match; `mailbox:<id>` / `deposit` exact-match as registered by [SIGNING](https://protocol.dfos.com/signing); `api:<host>` exact-match with its enumerated action registry as registered by [API-AUTH](https://protocol.dfos.com/api-auth)). Scope strings are matched against this table's registered tokens first; the parameterized `read:<contentId>` form matches only when `<contentId>` is a 31-character content id, so the literal token `read:profile` is never ambiguous with it.
 
 ### `read:<contentId>`
 
@@ -197,6 +198,12 @@ The `deposit` scope is how a third party earns the right to use profile B at all
 > **Sign in once through the front door; every later ask arrives through the hallway.** A first profile-A authorization with `scope=deposit` establishes identity _and_ grants deposit. From then on the third party never redirects again — approvals, attestations, and countersignature asks all travel as sign-requests through the subject's mailbox.
 
 Revoking the deposit credential (standard [credential revocation](https://protocol.dfos.com/credentials)) severs the relationship: the relay's deposit gate re-checks revocation on every deposit, so revocation is the user's "disconnect this app."
+
+### `read:profile` — credential-gated API access
+
+The `read:profile` scope returns an [`api:<host>`](https://protocol.dfos.com/api-auth) credential for the hosting platform's own API host: `iss` = the user's DID (the resource owner — signed custodially by the host today, by the user's own key under self-custody, same shape), `aud` = `client_did`, one attenuation entry `{ "resource": "api:<api host>", "action": "read:profile" }`. The wire scope string maps 1:1 to the action token, and every future API action token registered in [API-AUTH.md](https://protocol.dfos.com/api-auth) becomes a SIWD scope the same way — the front door is where API grants are issued, and this table never grows a second grammar for them.
+
+Two rules follow from machinery already stated, and are restated here because this scope is where they bite: `client_did` is **required** (as for every credential-returning scope — a credential must be issued to a named DID, and a [loopback target](#profile-a--web-redirect), which can prove no `client_did`, can never receive one), and the verifier MUST apply the **consumed** [replay discipline](#replay-prevention) (as for every credential-returning scope — success yields an artifact redeemable outside the presenting channel). The credential alone opens nothing: exercising it requires a per-request [request proof](https://protocol.dfos.com/api-auth) signed by the `client_did`'s key — possession, not possession-of-bytes, is what the API verifies.
 
 ---
 

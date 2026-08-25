@@ -259,7 +259,7 @@ Revocation — not expiry — is the **timely lever** for invalidating a credent
 
 ## Resource Types
 
-The frozen v1 surface defines two resource forms, both under the `chain:` prefix. New capabilities register additional forms **additively** as they land — the resource grammar (`type:id`) is open by construction, and an unrecognized resource type simply never matches a request. (Never _matches_ — it may still be carried down a delegation chain under the exact-equality rule in [Attenuation Between Forms](#attenuation-between-forms); matching a request and surviving the attenuation walk are different questions, and only registered forms are ever matched.) One additive form is registered so far: [`mailbox:<id>`](#mailboxid----signing-mailbox-deposit-additive-signing-0x), below.
+The frozen v1 surface defines two resource forms, both under the `chain:` prefix. New capabilities register additional forms **additively** as they land — the resource grammar (`type:id`) is open by construction, and an unrecognized resource type simply never matches a request. (Never _matches_ — it may still be carried down a delegation chain under the exact-equality rule in [Attenuation Between Forms](#attenuation-between-forms); matching a request and surviving the attenuation walk are different questions, and only registered forms are ever matched.) Two additive forms are registered so far: [`mailbox:<id>`](#mailboxid----signing-mailbox-deposit-additive-signing-0x) and [`api:<host>`](#apihost----credential-gated-api-access-additive-api-auth-0x), below.
 
 ### `chain:<contentId>` -- Exact Match
 
@@ -312,6 +312,20 @@ Grants the audience the right to **deposit** sign requests into the subject's re
 - **`deposit` is the only action.** There is deliberately no `collect`: reading one's own mailbox is proven by key possession, not delegated by credential — credentials delegate authority to _others_, and being yourself is not a delegation. See [SIGNING.md](https://protocol.dfos.com/signing) for the reasoning; a credential attenuated to any other action on a `mailbox:` resource grants nothing.
 - **Exact match only — in the deposit gate AND the attenuation walk.** No wildcard form is defined for `mailbox`, and a relay MUST NOT honor `mailbox:*` (or any non-exact form) as covering a deposit. Delegation follows the general non-`chain:` rule in [Attenuation Between Forms](#attenuation-between-forms): coverage for a `mailbox:` entry is exact byte equality of the full resource string, and coverage never crosses resource types.
 - **The consuming rule lives in SIGNING.md**, including the one that gives the form its teeth: a deposit credential's delegation chain MUST **root at the subject DID** — only the subject is original authority over its own mailbox.
+
+### `api:<host>` -- Credential-Gated API Access (additive, API-AUTH 0.x)
+
+> **Status.** This form is **not** part of the frozen v1 credential surface. It lands additively with [API authentication](https://protocol.dfos.com/api-auth) and rides that spec's `0.x` clock; the credential envelope, delegation, attenuation, and revocation machinery it uses are the frozen machinery above, unchanged.
+
+Grants the audience access to the credential-gated HTTP API served at `<host>`. `<host>` is the API's bare lowercase hostname — no scheme, no port, no path. Host-as-id means any deployment gets the same form: a fork's credential for `api:api.example.org` gates that host exactly as `api:api.dfos.com` gates the canonical one, with no registry of deployments anywhere.
+
+```json
+{ "resource": "api:api.dfos.com", "action": "read:profile" }
+```
+
+- **Actions are enumerated registry tokens**, defined in [API-AUTH.md](https://protocol.dfos.com/api-auth) (v0 registers exactly one: `read:profile`). Growth is enumeration — a grant carrying several tokens is an ordinary comma-separated list, narrowed by dropping tokens. Per the [action lattice](#action-coverage) there is **no action wildcard**: `read:*` is a literal token that no route ever requires, so an entry carrying it passes attenuation and grants nothing.
+- **Exact match only.** Delegation follows the general non-`chain:` rule in [Attenuation Between Forms](#attenuation-between-forms): coverage is exact byte equality of the full resource string, no wildcard form is defined (`api:*` is an ordinary id covering only itself, which is never a served host), and coverage never crosses resource types.
+- **The consuming rules live in API-AUTH.md**, including the two that give the form its teeth: a credential is exercised only alongside a **request proof** signed by the leaf audience's key (proof-of-possession — a bare credential authorizes nothing on this surface, and a leaf `aud: "*"` is refused outright), and the delegation chain MUST **root at the DID that owns the accessed resource** — the credential selects whose data is served.
 
 ---
 
