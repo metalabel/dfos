@@ -39,25 +39,30 @@ cred, err := dfos.CreateCredential(
 
 All protocol operations are covered:
 
-| Function             | Description                              |
-| -------------------- | ---------------------------------------- |
-| `SignIdentityCreate` | Sign an identity genesis operation       |
-| `SignIdentityUpdate` | Sign an identity key rotation            |
-| `SignIdentityDelete` | Sign an identity deletion (terminal)     |
-| `SignContentCreate`  | Sign a content chain genesis             |
-| `SignContentUpdate`  | Sign a content chain update              |
-| `SignContentDelete`  | Sign a content chain deletion            |
-| `SignArtifact`       | Sign a standalone inline document        |
-| `SignCountersign`    | Countersign a target operation by CID    |
-| `SignRevocation`     | Revoke a credential previously issued    |
-| `CreateAuthToken`    | Create a relay-scoped JWT auth token     |
-| `CreateCredential`   | Issue a DFOS credential (read/write)     |
-| `VerifyJWS`          | Verify an Ed25519 JWS token              |
-| `VerifyCredential`   | Verify a DFOS credential                 |
-| `VerifyRevocation`   | Verify a credential revocation           |
-| `VerifySignRequest`  | Verify a sign-request envelope           |
-| `SiwdSigningInput`   | Canonical SIWD challenge signing bytes   |
-| `DocumentCID`        | Canonical dag-cbor encode and CIDv1 hash |
+| Function                 | Description                               |
+| ------------------------ | ----------------------------------------- |
+| `SignIdentityCreate`     | Sign an identity genesis operation        |
+| `SignIdentityUpdate`     | Sign an identity key rotation             |
+| `SignIdentityDelete`     | Sign an identity deletion (terminal)      |
+| `SignContentCreate`      | Sign a content chain genesis              |
+| `SignContentUpdate`      | Sign a content chain update               |
+| `SignContentDelete`      | Sign a content chain deletion             |
+| `SignArtifact`           | Sign a standalone inline document         |
+| `SignCountersign`        | Countersign a target operation by CID     |
+| `SignRevocation`         | Revoke a credential previously issued     |
+| `CreateAuthToken`        | Create a relay-scoped JWT auth token      |
+| `CreateCredential`       | Issue a DFOS credential (read/write)      |
+| `VerifyJWS`              | Verify an Ed25519 JWS token               |
+| `VerifyCredential`       | Verify a DFOS credential                  |
+| `VerifyRevocation`       | Verify a credential revocation            |
+| `VerifySignRequest`      | Verify a sign-request envelope            |
+| `SiwdSigningInput`       | Canonical SIWD challenge signing bytes    |
+| `ApiRequestSigningInput` | Canonical API request-proof signing bytes |
+| `Sha256BodyHash`         | Hash API request body bytes               |
+| `BuildRequestProof`      | Sign an API request proof                 |
+| `VerifyRequestProof`     | Verify an API request-proof envelope      |
+| `Int64Ptr`               | Set explicit request-proof option values  |
+| `DocumentCID`            | Canonical dag-cbor encode and CIDv1 hash  |
 
 ## Tests
 

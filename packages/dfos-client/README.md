@@ -73,6 +73,36 @@ import { indexedDbStore, memoryStore } from '@metalabel/dfos-client/store';
 
 `memoryStore()` (the isomorphic default) caches the **log**. Chain reads fully drain from zero, require the fetched JWS tokens to match the trusted cached prefix, and verify forward only the suffix, so a key rotation costs one verification op and the cache is never stale-wrong. `indexedDbStore()` is the browser-only durable adapter — the only heavy dependency, quarantined behind this subpath.
 
+### `@metalabel/dfos-client/api-auth`
+
+```typescript
+import {
+  buildApiAuthHeaders,
+  signApiRequest,
+  verifyApiRequest,
+} from '@metalabel/dfos-client/api-auth';
+
+const { proof } = await signApiRequest({
+  method: 'GET',
+  host: 'api.example',
+  path: '/profile',
+  credentialCID,
+  kid,
+  sign,
+});
+const headers = buildApiAuthHeaders({ proof, credential });
+
+await verifyApiRequest(client, {
+  proof,
+  credential,
+  method: 'GET',
+  host: 'api.example',
+  path: '/profile',
+});
+```
+
+API Authentication request proofs. `signApiRequest` binds one exact HTTP request to a DFOS credential, `buildApiAuthHeaders` produces its `Authorization` and `X-Credential` headers, and `verifyApiRequest` checks the proof and credential per the [API-AUTH specification](https://protocol.dfos.com/api-auth).
+
 ### `@metalabel/dfos-client/siwd`
 
 ```typescript

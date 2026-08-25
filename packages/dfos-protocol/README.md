@@ -43,6 +43,8 @@ import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-pr
 | [CREDENTIALS.md](../../specs/CREDENTIALS.md)     | UCAN-style authorization credentials for the DFOS protocol                        |
 | [CREDITS.md](../../specs/CREDITS.md)             | Verifiable attribution for DFOS content                                           |
 | [SIGNING.md](../../specs/SIGNING.md)             | A transport-agnostic way for one party to ask another to produce a DFOS signature |
+| [SIWD.md](../../specs/SIWD.md)                   | Sign In With DFOS — cryptographic identity verification for third-party apps      |
+| [API-AUTH.md](../../specs/API-AUTH.md)           | Proof-of-possession authentication for credential-gated HTTP APIs                 |
 
 Release history lives at https://github.com/metalabel/dfos/releases.
 
