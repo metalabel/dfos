@@ -27,6 +27,44 @@ stricter replay discipline, requires the app to name its own DID, and unlocks a
 live credential-gated API call afterwards. Both run side by side so the
 difference is something you can watch rather than read about.
 
+## Why sign every request
+
+The easy design is a bearer token: the login hands the app a string, and the
+string **is** the authorization — whoever presents it, wins. Every stolen-token
+attack lives inside that one property. A bearer token in a log line, a crash
+report, a proxy cache, or an exfiltrated database is the grant itself, and the
+only remedies are short lifetimes (which trade away durability) or revocation
+races (which trade away certainty).
+
+This demo's credential deliberately does not have that property. It is a signed
+statement that **a grant exists** — issued by the user, audience-bound to this
+app's DID, scoped to `read:profile` on `api:api.dfos.com` — and presenting it
+proves nothing by itself. What spends it is a **request proof**: a short-lived
+signature by this app's own key over the exact request being made — method,
+host, path, body hash, right now — carrying the credential's CID inside the
+signed bytes. The API checks both. Steal the credential and you hold metadata;
+steal a proof and you hold one request that has already happened. The two
+artifacts only compose into authority in the hands of the party holding the
+key, which is the definition of proof-of-possession.
+
+That is why the backend signs, and the browser never sees a key. A browser
+cannot hold a signing key non-extractably, so the supported shape is the
+backend-for-frontend this demo is: the browser holds an ordinary session
+cookie, and the server — which can keep a secret — signs one fixed request on
+its behalf. "Sign every request" costs one Ed25519 signature per call, and it
+buys retiring the entire category of replayed-authorization bugs rather than
+patching instances of it.
+
+The deeper point is that none of this is platform machinery. The user's
+identity is a self-verifying chain any relay can serve; the credential and the
+proof are byte contracts published in [CREDENTIALS](../../specs/CREDENTIALS.md)
+and [API-AUTH](../../specs/API-AUTH.md); verification is a pure function of
+public keys, and revocation is the user's standing lever, re-checked on every
+request. The resource form is `api:<host>` — host-as-identifier — so **any API
+on any domain** can gate itself the same way with no registry, no OAuth server,
+and no coordination with anyone: publish which host you are, verify the two
+headers, honor revocation. The DFOS API is simply the first host doing it.
+
 ## How it works
 
 | Endpoint        | What it does                                                                                                        |
@@ -281,8 +319,14 @@ next to it** — the page asks `/api/config` at boot, so a missing precondition 
 something you read before the click rather than discover three redirects later.
 
 `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` are accepted as aliases, so
-a database connected directly at Upstash works with no edit. On Vercel, adding a
-Redis store to the project writes the `KV_*` pair for you.
+a database connected directly at Upstash works with no edit. On Vercel, the
+store that writes the `KV_*` pair is the **Upstash for Redis** marketplace
+integration — `vc i upstash/upstash-kv`, or Marketplace → Upstash → Upstash for
+Redis in the dashboard. Mind the lookalike: the "Redis" product on Vercel's own
+storage screen is Redis Cloud, which provides a `REDIS_URL` for the TCP
+protocol and **no REST endpoint** — this demo's store client speaks only the
+Upstash REST protocol, on purpose (three commands over `fetch`, no dependency),
+so Redis Cloud will not work here.
 
 ### `SESSION_SECRET`
 
@@ -404,18 +448,66 @@ fresh hostname, and an allowlist that admitted arbitrary subdomains would be an
 open redirector. Sign-in works on the origins you listed; everywhere else the
 page says which string is missing.
 
-That gets you the identity scope. For `read:profile`, three more steps:
+That gets you the identity scope. For `read:profile`, three more steps. These
+are not hypothetical — the canonical deployment was provisioned by exactly this
+sequence, and the wrinkles below are the ones it actually hit.
 
-1. **Give the app an identity and a key.** The DID goes in `client_did` above and
-   in `DFOS_APP_KID`; the secret goes in `DFOS_APP_PRIVATE_KEY`. The key has to be
-   a current key of that identity's chain, and you have to hold its secret — the
-   CLI's keychain does not export key material, so a key generated elsewhere and
-   attached with `dfos identity add-key --auth-key --pubkey z6Mk…` is the path
-   that leaves you holding both halves.
-2. **Add a Redis store** to the project, which writes `KV_REST_API_URL` and
-   `KV_REST_API_TOKEN`.
-3. **Check `/api/config`.** It reports which scopes are live and, for any that
-   are not, exactly what is missing.
+1. **Give the app an identity and a delegate key.** Two keys, two homes, on
+   purpose: the identity's controller key stays in your OS keychain, where the
+   [`dfos` CLI](https://protocol.dfos.com) puts it and will not export it; the
+   server gets its **own** key, added to the chain's auth set, so a compromised
+   deployment is a revoke-and-re-add, never a new identity.
+
+   ```sh
+   # the identity — controller + first auth key land in your OS keychain
+   dfos identity create --name my-app
+
+   # a second auth key whose secret you can actually hold: file-based key
+   # storage writes the seed to ~/.dfos/keys/ (chmod 600) instead of the
+   # keychain, and prints the id + public Multikey to hand to add-key
+   DFOS_NO_KEYCHAIN=1 dfos identity device-pubkey --identity my-app --json
+
+   # graft it into the chain's auth set, signed by the keychain controller key
+   dfos identity add-key --auth-key --id key_<from above> --pubkey z6Mk<from above>
+   ```
+
+   The DID goes in `client_did` above; `DFOS_APP_KID` is
+   `did:dfos:<id>#key_<id>` for the **new** key. The seed file at
+   `~/.dfos/keys/<did>__<key>` holds 64 hex characters; `DFOS_APP_PRIVATE_KEY`
+   wants the same 32 bytes as 43 base64url characters:
+
+   ```sh
+   node -e "console.log(Buffer.from(require('fs').readFileSync(process.argv[1],'utf8').trim(),'hex').toString('base64url'))" \
+     ~/.dfos/keys/<did>__<key> \
+     | vercel env add DFOS_APP_PRIVATE_KEY production --sensitive
+   ```
+
+   Then delete the seed file — the deployment's env is now the only copy that
+   matters, and `/api/config` proves it landed intact by deriving the public
+   key back from it.
+
+2. **Add the store** — the **Upstash for Redis** marketplace integration
+   (`vc i upstash/upstash-kv`), Free plan, connected to your project. It writes
+   `KV_REST_API_URL` and `KV_REST_API_TOKEN` for you. Not the Redis Cloud
+   product on the storage screen — see [The store](#the-store).
+
+3. **Redeploy, then check `/api/config`.** Environment changes do not touch
+   running functions until the next deployment. The config endpoint reports
+   which scopes are live, and for the app key it reports the derived **public**
+   key — diff it against `dfos identity keys my-app` before anything is
+   clicked.
+
+**One honest limit, as of this writing.** The API's verifier has to resolve
+your app identity's chain to check the proof's signing key, and the canonical
+`api.dfos.com` currently resolves only chains resident in its own store —
+`relay.dfos.com` is pull-only and accepts no published identities. A
+CLI-minted identity therefore clears every local check (`/api/config` green,
+consent, credential mint) and then answers `503` at the profile call, where the
+verifier cannot resolve the presenter. An app-registration ingestion path —
+publish your signed chain to the platform once, at registration — is in design
+on the platform side. Until it lands, the full gated round trip is exercised
+against a deployment whose verifier can see your chain; everything else on this
+page works today.
 
 ## Run it locally
 
