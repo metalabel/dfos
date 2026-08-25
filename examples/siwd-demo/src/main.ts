@@ -16,14 +16,28 @@
   The JWS is also decoded here, for display. `decodeJwsUnsafe` does no
   verification — the panel says so, and so does the name.
 
-  The authorize request carries `challenge`, `redirect_uri`, and
-  `scope=identity`, built server-side in `api/login.ts`. No `client_did`: the
-  platform learns who this app is by fetching `/.well-known/dfos-app.json` from
-  the redirect's own origin, so that file is the app identity.
+  TWO SCOPES, AND THE PAGE LETS YOU PICK. `identity` proves who you are and
+  returns nothing else. `read:profile` also returns a credential, and that one
+  difference changes the replay discipline the backend owes, adds a `client_did`
+  to the authorize request, and makes a live credential-gated API call possible
+  afterwards. Both run side by side so the difference is something you can watch
+  rather than read about.
+
+  The authorize request is built server-side in `api/login.ts`. At identity scope
+  it carries no `client_did`: the platform learns who this app is by fetching
+  `/.well-known/dfos-app.json` from the redirect's own origin, so that file is
+  the app identity. At `read:profile` the DID is required as well, because the
+  credential has to be issued to a named party.
 
   That file is the one thing a fork has to get right, so this page checks its
   own at boot and says what it found — on the page, before the click, instead
   of one redirect later at the host.
+
+  WHAT THIS PAGE NEVER HOLDS: the credential, and the key that spends it. The
+  credential arrives in the callback's URL fragment, is handed straight to the
+  backend, and is never stored here. A browser cannot hold a signing key safely,
+  so the backend holds it and signs — the backend-for-frontend shape
+  specs/API-AUTH.md describes.
 
 */
 
@@ -74,6 +88,25 @@ const bareHostname = (hostname: string): string =>
 /** The domain the backend signs into challenges, derived here the same way. */
 const SIGNING_DOMAIN = bareHostname(location.hostname);
 
+/** The two scopes, matching `api/_lib.ts`. */
+const SCOPE_IDENTITY = 'identity';
+const SCOPE_READ_PROFILE = 'read:profile';
+
+/**
+ * A credential this app holds, as the server read it out AFTER verifying it.
+ * Every field was checked before it got here — signature, schema, CID integrity,
+ * expiry, and that this app is the audience.
+ */
+interface CredentialFacts {
+  issuer: string;
+  audience: string;
+  resource: string;
+  action: string;
+  issuedAt: number;
+  expiresAt: number;
+  credentialCID: string;
+}
+
 /** A verified sign-in, as the server reads it back out of its own cookie. */
 interface Session {
   did: string;
@@ -82,6 +115,27 @@ interface Session {
   /** Issued-at and expiry, unix seconds. */
   iat: number;
   exp: number;
+  /** Which scope this sign-in was granted under. */
+  scope: string;
+  /** Present only when the scope returned one. */
+  credential?: CredentialFacts;
+}
+
+/** One scope as `/api/config` describes it, verdict included. */
+interface ScopeOption {
+  scope: string;
+  discipline: string;
+  available: boolean;
+  summary: string;
+  /** Why not, when `available` is false. */
+  unavailable?: string;
+}
+
+/** What this deployment can do, asked once at boot. */
+interface Config {
+  scopes: ScopeOption[];
+  api: { host: string; resource: string; action: string };
+  app: { did?: string; publicKeyMultibase?: string };
 }
 
 /**
@@ -146,11 +200,95 @@ const call = async (
 /** A 200 from `/api/me`, shape-checked — anything else is "nobody is signed in". */
 const sessionFrom = (result: ApiResult | null): Session | null => {
   if (result === null || result.status !== 200) return null;
-  const { did, kid, iat, exp } = result.body;
+  const { did, kid, iat, exp, scope, credential } = result.body;
   if (typeof did !== 'string' || typeof kid !== 'string') return null;
   if (typeof iat !== 'number' || typeof exp !== 'number') return null;
-  return { did, kid, iat, exp };
+  if (typeof scope !== 'string') return null;
+  return {
+    did,
+    kid,
+    iat,
+    exp,
+    scope,
+    ...(isCredentialFacts(credential) ? { credential } : {}),
+  };
 };
+
+/** Shape-checked like everything else off the wire, even from our own backend. */
+const isCredentialFacts = (value: unknown): value is CredentialFacts => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const raw = value as Record<string, unknown>;
+  const strings = ['issuer', 'audience', 'resource', 'action', 'credentialCID'];
+  return (
+    strings.every((field) => typeof raw[field] === 'string') &&
+    typeof raw['issuedAt'] === 'number' &&
+    typeof raw['expiresAt'] === 'number'
+  );
+};
+
+/**
+ * What this deployment can do. `null` means the question could not be asked —
+ * a backend that did not answer — and the page then offers the identity scope
+ * alone rather than guessing at the other one's preconditions.
+ */
+let config: Config | null = null;
+
+const fetchConfig = async (): Promise<Config | null> => {
+  const result = await call('/api/config');
+  if (result === null || result.status !== 200) return null;
+
+  const { scopes, api, app } = result.body;
+  if (!Array.isArray(scopes)) return null;
+  if (typeof api !== 'object' || api === null) return null;
+  const apiRaw = api as Record<string, unknown>;
+  if (
+    typeof apiRaw['host'] !== 'string' ||
+    typeof apiRaw['resource'] !== 'string' ||
+    typeof apiRaw['action'] !== 'string'
+  ) {
+    return null;
+  }
+
+  const options: ScopeOption[] = [];
+  for (const entry of scopes) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const raw = entry as Record<string, unknown>;
+    if (
+      typeof raw['scope'] !== 'string' ||
+      typeof raw['discipline'] !== 'string' ||
+      typeof raw['available'] !== 'boolean' ||
+      typeof raw['summary'] !== 'string'
+    ) {
+      continue;
+    }
+    options.push({
+      scope: raw['scope'],
+      discipline: raw['discipline'],
+      available: raw['available'],
+      summary: raw['summary'],
+      ...(typeof raw['unavailable'] === 'string' ? { unavailable: raw['unavailable'] } : {}),
+    });
+  }
+  if (options.length === 0) return null;
+
+  const appRaw = typeof app === 'object' && app !== null ? (app as Record<string, unknown>) : {};
+  return {
+    scopes: options,
+    api: { host: apiRaw['host'], resource: apiRaw['resource'], action: apiRaw['action'] },
+    app: {
+      ...(typeof appRaw['did'] === 'string' ? { did: appRaw['did'] } : {}),
+      ...(typeof appRaw['publicKeyMultibase'] === 'string'
+        ? { publicKeyMultibase: appRaw['publicKeyMultibase'] }
+        : {}),
+    },
+  };
+};
+
+/**
+ * Which scope the next sign-in will ask for. Sticky across re-renders of the
+ * signed-out view so a refused sign-in comes back with the choice still made.
+ */
+let selectedScope: string = SCOPE_IDENTITY;
 
 /** The server's own words for a refusal, or a fallback. */
 const reasonFrom = (result: ApiResult, fallback: string): string =>
@@ -308,18 +446,105 @@ const renderStatus = (text: string, ...extra: Node[]): void => {
   );
 };
 
-/** The four steps this page is about to run, in the order it runs them. */
-const whatHappensNext = (): HTMLElement => {
+/** The steps this page is about to run, in the order it runs them. */
+const whatHappensNext = (scope: string): HTMLElement => {
+  const credentialScope = scope === SCOPE_READ_PROFILE;
   const list = el('ol', 'steps');
   for (const step of [
-    'This page asks its backend to start a sign-in. The server mints the challenge (domain, nonce, timestamp), seals the nonce into an httpOnly cookie, and answers with a URL.',
-    "You approve on your DFOS host's consent screen, where your custodial key signs the challenge bytes.",
-    'The browser returns here with the signed JWS and posts it to this site’s backend.',
-    'The server unseals the nonce it minted, verifies the JWS against your public identity chain on a relay, and mints a session cookie.',
+    credentialScope
+      ? 'This page asks its backend to start a sign-in. The server mints the challenge (domain, nonce, timestamp), records the nonce in its store so it can be spent exactly once, and answers with a URL — this one carrying the app’s client_did, because a credential has to be issued to someone.'
+      : 'This page asks its backend to start a sign-in. The server mints the challenge (domain, nonce, timestamp), seals the nonce into an httpOnly cookie, and answers with a URL.',
+    credentialScope
+      ? 'You approve on your DFOS host’s consent screen, which names what the app is asking to read. Your custodial key signs the challenge bytes and issues the credential.'
+      : 'You approve on your DFOS host’s consent screen, where your custodial key signs the challenge bytes.',
+    credentialScope
+      ? 'The browser returns here with the signed JWS in the query string and the credential in the URL fragment, and posts both to this site’s backend.'
+      : 'The browser returns here with the signed JWS and posts it to this site’s backend.',
+    credentialScope
+      ? 'The server spends the nonce with one atomic delete, verifies the JWS against your public identity chain on a relay, verifies the credential in full, and mints a session cookie.'
+      : 'The server unseals the nonce it minted, verifies the JWS against your public identity chain on a relay, and mints a session cookie.',
+    ...(credentialScope
+      ? [
+          'From then on the backend can call the DFOS API on your behalf — signing each request with its own key, and presenting the credential alongside it.',
+        ]
+      : []),
   ]) {
     list.append(el('li', undefined, step));
   }
   return list;
+};
+
+/**
+ * The toggle. Two scopes, each with the replay discipline it obliges, because
+ * the discipline is not a preference — specs/SIWD.md decides it from what
+ * success grants, and this is the cheapest place to see that happen.
+ *
+ * A scope this deployment cannot serve is rendered disabled with the reason
+ * next to it, rather than hidden: a missing precondition is the most useful
+ * thing a fork can be told.
+ */
+const scopeChooser = (found: Config, onChange: () => void): HTMLElement => {
+  const wrap = el('div', 'scopes');
+  wrap.append(el('p', 'dim', 'Ask for:'));
+
+  for (const option of found.scopes) {
+    const row = el('label', option.available ? 'scope' : 'scope disabled');
+
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'scope';
+    input.value = option.scope;
+    input.checked = option.scope === selectedScope;
+    input.disabled = !option.available;
+    input.addEventListener('change', () => {
+      selectedScope = option.scope;
+      onChange();
+    });
+
+    const text = el('span');
+    text.append(
+      el('code', undefined, option.scope),
+      ' — ',
+      el('span', undefined, `${option.discipline} replay discipline`),
+      el('br'),
+      el('span', 'dim', option.summary),
+    );
+    if (option.unavailable !== undefined) {
+      text.append(el('br'), el('span', 'notice', option.unavailable));
+    }
+
+    row.append(input, text);
+    wrap.append(row);
+  }
+
+  // The two strings the credential will carry, shown verbatim: this is what the
+  // consent screen will describe, what the credential's attenuation will say,
+  // and what the API verifier will byte-match. Three places, one string.
+  if (selectedScope === SCOPE_READ_PROFILE) {
+    const grant = el('div', 'section');
+    const line = el('p', 'dim');
+    line.append(
+      'The credential will carry exactly one attenuation: resource ',
+      el('code', undefined, found.api.resource),
+      ', action ',
+      el('code', undefined, found.api.action),
+      '. That resource string is matched by exact byte equality — there is no wildcard form for an API host — and the action is a registry token, not a pattern.',
+    );
+    grant.append(line);
+
+    if (found.app.did !== undefined) {
+      const audience = el('p', 'dim');
+      audience.append(
+        'It will be issued to ',
+        el('code', undefined, found.app.did),
+        ' — this app’s DID, and the only key that can ever spend it.',
+      );
+      grant.append(audience);
+    }
+    wrap.append(grant);
+  }
+
+  return wrap;
 };
 
 /**
@@ -390,7 +615,7 @@ const registrationSection = (found: Registration): HTMLElement => {
 
 const renderSignedOut = (notice?: string): void => {
   const button = el('button', undefined, 'Sign in with DFOS');
-  button.addEventListener('click', () => void startSignIn());
+  button.addEventListener('click', () => void startSignIn(selectedScope));
 
   const aside = el('p', 'dim');
   aside.append(
@@ -417,7 +642,15 @@ const renderSignedOut = (notice?: string): void => {
     ),
     ...notices(notice),
     ...(warning !== undefined ? [el('p', 'notice', warning)] : []),
-    card(button, whatHappensNext(), ...(found !== null ? [registrationSection(found)] : [])),
+    card(
+      // Re-rendering the whole view on a scope change is the cheapest way to
+      // keep every dependent string — the steps, the grant, the button — in
+      // agreement with the choice.
+      ...(config !== null ? [scopeChooser(config, () => renderSignedOut(notice))] : []),
+      button,
+      whatHappensNext(selectedScope),
+      ...(found !== null ? [registrationSection(found)] : []),
+    ),
     aside,
   );
 };
@@ -477,16 +710,24 @@ const artifactReceipt = (jws: string): Node[] => {
  */
 const checklistReceipt = (session: Session): Node[] => {
   const keyId = session.kid.slice(session.kid.indexOf('#') + 1);
+  const consumed = session.scope === SCOPE_READ_PROFILE;
 
   const list = el('ul', 'checks');
   for (const line of [
-    'The expected nonce came from the server’s own sealed cookie, not from the callback or anything else the presenter could author.',
+    consumed
+      ? 'The nonce was spent against the server’s own store — one atomic delete that either found the value this server minted or found nothing. Never from the callback or anything else the presenter could author.'
+      : 'The expected nonce came from the server’s own sealed cookie, not from the callback or anything else the presenter could author.',
     'Identity chain resolved fresh from the relay and replayed to current state.',
     `Signing key is a current authentication key of a non-deleted identity: ${keyId}`,
     'Signature valid under the DFOS JWS profile (EdDSA, canonical scalar, no embedded key).',
     `Domain binding: the signed domain is this site — ${SIGNING_DOMAIN}`,
     'Timestamp inside the acceptance window, checked against the server’s clock.',
     'Nonce checked LAST, after every other check passed — the spec’s step 6.',
+    ...(consumed
+      ? [
+          'The returned credential verified in full — signature, schema, CID integrity, expiry — and checked to be issued by this signer, audienced to this app, and covering the resource and action that were asked for.',
+        ]
+      : []),
   ]) {
     list.append(el('li', undefined, line));
   }
@@ -497,11 +738,18 @@ const checklistReceipt = (session: Session): Node[] => {
     el(
       'p',
       'dim',
-      'This is the FLOW-BOUND replay discipline. Its guarantee: the signed ' +
-        'challenge redeems only through the browser that started the flow, inside ' +
-        'the timestamp window. Not global single-use — success here grants a session ' +
-        'with this browser and nothing else. Grant anything portable and the ' +
-        'discipline changes; see "The two replay disciplines" in the README.',
+      consumed
+        ? 'This is the CONSUMED replay discipline, and it was not a choice. Success here ' +
+            'returned a credential — something portable, redeemable outside this browser — so ' +
+            'specs/SIWD.md requires the nonce be retired globally rather than bound to a ' +
+            'channel. The server spent it with one atomic delete, as the last step before ' +
+            'granting anything. A second presentation of this same signed challenge, from ' +
+            'anywhere, now finds nothing to spend.'
+        : 'This is the FLOW-BOUND replay discipline. Its guarantee: the signed ' +
+            'challenge redeems only through the browser that started the flow, inside ' +
+            'the timestamp window. Not global single-use — success here grants a session ' +
+            'with this browser and nothing else. Grant anything portable and the ' +
+            'discipline changes; see "The two replay disciplines" in the README.',
     ),
   );
 };
@@ -565,7 +813,139 @@ const receipts = (session: Session, jws?: string): HTMLElement => {
   return details;
 };
 
-const renderSignedIn = (session: Session, jws?: string): void => {
+// -----------------------------------------------------------------------------
+// the credential, and spending it
+// -----------------------------------------------------------------------------
+
+/**
+ * RENDER BEFORE TRUST. The credential is shown in full — who issued it, to whom,
+ * over what, until when — before anything is spent against it, because a grant
+ * you cannot read is a grant you cannot judge. Every field here was verified on
+ * the server first: signature, schema, CID integrity, expiry, and that this app
+ * is the audience. Displaying an unverified one would teach the opposite habit.
+ */
+const credentialCard = (facts: CredentialFacts): HTMLElement => {
+  const row = (label: string, value: string, note?: string): HTMLElement => {
+    const line = el('p', 'dim');
+    line.append(`${label}: `, el('code', undefined, value));
+    if (note !== undefined) line.append(el('br'), el('span', undefined, note));
+    return line;
+  };
+
+  const expired = facts.expiresAt * 1000 <= Date.now();
+
+  return card(
+    el('h2', undefined, 'The credential you granted'),
+    row(
+      'Issuer',
+      facts.issuer,
+      'You. And, because this grant has no delegation above it, also the subject whose profile the API will serve — the credential is what selects that, not a path parameter.',
+    ),
+    row(
+      'Audience',
+      facts.audience,
+      'This app. A credential audienced elsewhere would be unusable here, key or no key.',
+    ),
+    row(
+      'Resource',
+      facts.resource,
+      'Matched by exact byte equality. There is no wildcard form for an API host.',
+    ),
+    row(
+      'Action',
+      facts.action,
+      'A registry token, not a pattern. Narrowing a grant means dropping tokens.',
+    ),
+    row('Issued', new Date(facts.issuedAt * 1000).toLocaleString()),
+    row(
+      'Expires',
+      new Date(facts.expiresAt * 1000).toLocaleString(),
+      expired
+        ? 'This credential has expired. Expiry is checked at read time, so the API will refuse it.'
+        : 'Expiry is generous on purpose; revocation is the timely lever, and the API re-checks it on every request.',
+    ),
+    row(
+      'CID',
+      facts.credentialCID,
+      'Every request proof names this CID, under its signature. That is what binds one exact request to this one grant.',
+    ),
+    el(
+      'p',
+      'dim',
+      'The credential itself stays on the backend. This page never receives it — and could not ' +
+        'use it if it did, since spending one takes the app’s signing key.',
+    ),
+  );
+};
+
+/** What the last call to the gated endpoint did, if anything. */
+type ProfileState =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | { kind: 'ok'; profile: Record<string, unknown>; host: string }
+  | { kind: 'refused'; status: number; reason: string; code?: string; message?: string }
+  | { kind: 'unreachable'; reason: string };
+
+/**
+ * The live credential-gated call. One button, no parameters — and the absence of
+ * parameters is the design, not an omission. `api/profile.ts` signs exactly one
+ * request and takes no coordinates from this page, because a backend that signs
+ * whatever a browser hands it is a confused deputy holding a key.
+ */
+const profileCard = (state: ProfileState, host: string, onCall: () => void): HTMLElement => {
+  const button = el('button', undefined, state.kind === 'pending' ? 'Calling…' : 'Read my profile');
+  button.disabled = state.kind === 'pending';
+  button.addEventListener('click', onCall);
+
+  const body: Node[] = [
+    el('h2', undefined, 'Spend it'),
+    el(
+      'p',
+      'dim',
+      `This calls GET /v1/profile on ${host} — real private data, served to nobody who cannot ` +
+        'prove possession of the key this credential was issued to. The backend signs a fresh ' +
+        'proof over this exact method, host, path, and body, and sends it alongside the credential.',
+    ),
+    button,
+  ];
+
+  if (state.kind === 'ok') {
+    body.push(
+      el('p', 'dim', 'The API answered:'),
+      el('pre', 'wrap', JSON.stringify(state.profile, null, 2)),
+      el(
+        'p',
+        'dim',
+        'No path parameter named you. The credential’s root issuer selected the subject, which ' +
+          'is why there is no way to ask this endpoint for anybody else.',
+      ),
+    );
+  }
+  if (state.kind === 'refused') {
+    body.push(el('p', 'notice', `The API refused: HTTP ${state.status}`));
+    if (state.code !== undefined) {
+      const line = el('p', 'dim');
+      line.append(
+        'Machine-readable code: ',
+        el('code', undefined, state.code),
+        state.message !== undefined ? ` — ${state.message}` : '',
+      );
+      body.push(line);
+    }
+    body.push(el('p', 'dim', state.reason));
+  }
+  if (state.kind === 'unreachable') {
+    body.push(el('p', 'notice', state.reason));
+  }
+
+  return card(...body);
+};
+
+const renderSignedIn = (
+  session: Session,
+  jws?: string,
+  profile: ProfileState = { kind: 'idle' },
+): void => {
   const signOutButton = el('button', undefined, 'Sign out');
   signOutButton.addEventListener('click', () => void signOut());
 
@@ -575,18 +955,77 @@ const renderSignedIn = (session: Session, jws?: string): void => {
   const key = el('p', 'dim');
   key.append('Verified against signing key ', el('code', undefined, session.kid));
 
+  const scope = el('p', 'dim');
+  scope.append(
+    'Granted at scope ',
+    el('code', undefined, session.scope),
+    session.scope === SCOPE_READ_PROFILE
+      ? ' — verified under the consumed replay discipline, because this sign-in returned something portable.'
+      : ' — verified under the flow-bound replay discipline, because this sign-in granted only a session with this browser.',
+  );
+
+  const facts = session.credential;
+  const host = config?.api.host ?? 'the DFOS API';
+
   render(
     el('h1', undefined, 'Signed in with DFOS'),
     ...notices(),
     card(
       who,
       key,
+      scope,
       el('p', 'dim', `Session expires ${new Date(session.exp * 1000).toLocaleString()}`),
       el('p', 'dim', 'Read from the server’s sealed session cookie via /api/me.'),
       signOutButton,
     ),
+    ...(facts !== undefined
+      ? [credentialCard(facts), profileCard(profile, host, () => void callProfile(session, jws))]
+      : []),
     receipts(session, jws),
   );
+};
+
+/**
+ * Ask the backend to spend the credential once. The page sends nothing but the
+ * request itself: which credential, which endpoint, and what may be signed are
+ * all the server's to decide from the session it already holds.
+ */
+const callProfile = async (session: Session, jws?: string): Promise<void> => {
+  renderSignedIn(session, jws, { kind: 'pending' });
+
+  const result = await call('/api/profile', { method: 'POST', timeoutMs: VERIFY_TIMEOUT_MS });
+  if (result === null) {
+    renderSignedIn(session, jws, {
+      kind: 'unreachable',
+      reason: 'The request to this site’s backend did not complete.',
+    });
+    return;
+  }
+  if (result.status !== 200) {
+    renderSignedIn(session, jws, {
+      kind: 'unreachable',
+      reason: reasonFrom(result, `this site’s backend answered HTTP ${result.status}`),
+    });
+    return;
+  }
+
+  const body = result.body;
+  if (body['ok'] === true && typeof body['profile'] === 'object' && body['profile'] !== null) {
+    renderSignedIn(session, jws, {
+      kind: 'ok',
+      profile: body['profile'] as Record<string, unknown>,
+      host: typeof body['host'] === 'string' ? body['host'] : 'the DFOS API',
+    });
+    return;
+  }
+
+  renderSignedIn(session, jws, {
+    kind: 'refused',
+    status: typeof body['status'] === 'number' ? body['status'] : 0,
+    reason: reasonFrom(result, 'the API refused the request'),
+    ...(typeof body['code'] === 'string' ? { code: body['code'] } : {}),
+    ...(typeof body['message'] === 'string' ? { message: body['message'] } : {}),
+  });
 };
 
 // -----------------------------------------------------------------------------
@@ -611,13 +1050,14 @@ const EXPIRED_NOTICE =
 const isExpiredReason = (reason: string): boolean =>
   reason.includes('challenge expired') || reason.includes('challenge has expired');
 
-const startSignIn = async (): Promise<void> => {
+const startSignIn = async (scope: string): Promise<void> => {
   renderStatus('Starting sign-in…');
 
   // The server mints the challenge, so the server's clock authors the
   // timestamp — a browser with a skewed clock no longer produces sign-ins that
-  // are born stale and refused on the way back.
-  const result = await call('/api/login', { method: 'POST' });
+  // are born stale and refused on the way back. The scope goes with it, because
+  // the server is the one that has to owe the matching replay discipline.
+  const result = await call('/api/login', { method: 'POST', body: { scope } });
   if (result === null) {
     renderSignedOut('Could not reach this site’s backend to start the sign-in.');
     return;
@@ -641,8 +1081,12 @@ const signOut = async (): Promise<void> => {
 /**
  * The callback: decode for the reader, then let the server decide. The panel
  * goes up first, so what is being verified is on screen while it happens.
+ *
+ * The credential, when there is one, is forwarded and then forgotten. This page
+ * does not keep it and could not use it if it did: spending one takes the app's
+ * signing key, which lives on the backend.
  */
-const handleCallback = async (jws: string): Promise<void> => {
+const handleCallback = async (jws: string, credential?: string): Promise<void> => {
   const panel = el('details');
   panel.open = true;
   panel.append(el('summary', undefined, 'What just came back'), ...artifactReceipt(jws));
@@ -650,7 +1094,7 @@ const handleCallback = async (jws: string): Promise<void> => {
 
   const result = await call('/api/verify', {
     method: 'POST',
-    body: { jws },
+    body: { jws, ...(credential !== undefined ? { credential } : {}) },
     timeoutMs: VERIFY_TIMEOUT_MS,
   });
   if (result === null) {
@@ -678,19 +1122,34 @@ const handleCallback = async (jws: string): Promise<void> => {
   renderSignedIn(session, jws);
 };
 
+/**
+ * The credential rides in the URL FRAGMENT, not the query string. A fragment is
+ * never sent to a server, so it lands in no access log, no proxy log, and no
+ * `Referer` header — which is why a durable grant is delivered there while the
+ * one-shot challenge JWS stays a query parameter.
+ *
+ * It is read here and handed to the backend, and this page keeps no copy.
+ */
+const credentialFromFragment = (hash: string): string | undefined => {
+  const value = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash).get('credential');
+  return value === null || value === '' ? undefined : value;
+};
+
 const boot = async (): Promise<void> => {
   const callback = readSiwdCallback(location.search);
+  const credential = credentialFromFragment(location.hash);
 
-  // get the JWS out of the address bar, history, and the referrer of anything
-  // this page loads next. The kit deliberately leaves this to us: `history`
-  // belongs to the environment, not the library.
-  if (callback.kind !== 'none') {
+  // get the JWS and the credential out of the address bar, history, and the
+  // referrer of anything this page loads next. The kit deliberately leaves this
+  // to us: `history` belongs to the environment, not the library. Replacing with
+  // the bare path drops the query and the fragment together.
+  if (callback.kind !== 'none' || credential !== undefined) {
     history.replaceState(null, '', location.pathname);
   }
 
-  // settled before the first render, so no view has to handle a half-known
-  // registration and no view triggers a second fetch
-  registration = await checkRegistration();
+  // Both settled before the first render, so no view has to handle a half-known
+  // registration or an unknown scope list, and no view triggers a second fetch.
+  [registration, config] = await Promise.all([checkRegistration(), fetchConfig()]);
 
   if (callback.kind === 'denied') {
     renderSignedOut(
@@ -701,7 +1160,11 @@ const boot = async (): Promise<void> => {
     return;
   }
   if (callback.kind === 'success') {
-    await handleCallback(callback.jws);
+    // Keep the chooser on the scope this callback belongs to, so a refused
+    // credential sign-in offers a retry of the same thing rather than silently
+    // dropping back to identity.
+    if (credential !== undefined) selectedScope = SCOPE_READ_PROFILE;
+    await handleCallback(callback.jws, credential);
     return;
   }
 

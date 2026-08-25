@@ -22,28 +22,106 @@
   window, which is the accepted trade, since they already hold the session they
   would gain. The moment success grants anything portable — a credential scope,
   a token redeemable elsewhere, profile B — use `verifySiwd`'s `consumeNonce`
-  instead. The README says where that line is.
+  instead. `api/_kv.ts` is where this demo does exactly that, for the one scope
+  that earns it.
+
+  This file also holds THE APP'S OWN SIGNING KEY. That is a second key of a
+  different kind: the seal above is a secret this server keeps from everyone,
+  while the app key is a DFOS identity key whose public half is published in an
+  identity chain. It exists because a credential is issued TO someone, and
+  spending one means proving you are that someone on every request.
 
 */
 
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { encodeEd25519Multikey } from '@metalabel/dfos-protocol/chain';
+import {
+  base64urlDecode,
+  importEd25519Keypair,
+  signPayloadEd25519,
+} from '@metalabel/dfos-protocol/crypto';
 import type { VercelRequest, VercelResponse } from './_types.js';
 
 // deployment coordinates — edit these when forking the demo
 export const AUTHORIZE_URL = 'https://app.dfos.com/authorize';
 export const RELAY_URL = 'https://relay.dfos.com';
 
+/**
+ * The API host this demo spends its credential against. It is the `<host>` half
+ * of the `api:<host>` resource string AND the `host` member of every request
+ * proof, and specs/API-AUTH.md requires those to name the same origin — so it
+ * is one constant here rather than two strings that could drift.
+ */
+export const API_HOST = 'api.dfos.com';
+
 /** Consent-screen prose. The host renders it as the app's own words. */
 export const STATEMENT = 'Sign in to the SIWD demo';
 
-/** The only scope SIWD implements today, and the only one flow-binding covers. */
-export const SCOPE = 'identity';
+// -----------------------------------------------------------------------------
+// scopes
+// -----------------------------------------------------------------------------
+
+/**
+ * The two scopes this demo can ask for, and the whole reason it has a toggle.
+ *
+ *   identity     — proves who you are, and returns nothing else. Success grants
+ *                  a session with the browser standing here, so specs/SIWD.md
+ *                  admits the FLOW-BOUND replay discipline (the sealed cookie).
+ *   read:profile — additionally returns a DFOS credential, which is portable and
+ *                  outlives this browser, so the CONSUMED discipline is REQUIRED.
+ *
+ * The discipline is not a preference. It is decided by what success grants, and
+ * the toggle exists so the reader can watch the same flow owe a different
+ * obligation depending on which line they picked.
+ */
+export const SCOPE_IDENTITY = 'identity';
+export const SCOPE_READ_PROFILE = 'read:profile';
+
+export type Scope = typeof SCOPE_IDENTITY | typeof SCOPE_READ_PROFILE;
+
+export const isScope = (value: unknown): value is Scope =>
+  value === SCOPE_IDENTITY || value === SCOPE_READ_PROFILE;
+
+/**
+ * The wire scope string maps 1:1 to the credential's action token
+ * (specs/SIWD.md → `read:profile`), so the string the user consented to and the
+ * string the API verifier requires are the same string.
+ */
+export const API_ACTION = SCOPE_READ_PROFILE;
+
+/** The credential's attenuation, as the API verifier byte-matches it. */
+export const API_RESOURCE = `api:${API_HOST}`;
 
 /** The sealed nonce, in flight between the redirect out and the callback back. */
 export const FLIGHT_COOKIE = 'siwd_flight';
 
+/**
+ * ONE cookie, two seal purposes — and the purpose IS the record of which replay
+ * discipline this flight owes, sealed so the presenter cannot pick.
+ *
+ *   'flight'            — identity scope. The sealed value is the NONCE, and the
+ *                         cookie IS the expectation: recovering it is the whole
+ *                         flow-bound check.
+ *   'flight-credential' — read:profile. The sealed value is the SCOPE, a marker
+ *                         and nothing more. The expectation lives in the KV
+ *                         store and is spent there by an atomic GETDEL, because
+ *                         under the consumed discipline the expectation must be
+ *                         state the verifier can RETIRE — which a cookie handed
+ *                         back by the presenter can never be.
+ *
+ * The tags are domain-separated (see `mac`), so a flight of one class cannot be
+ * presented as the other: an attacker cannot downgrade a credential callback
+ * into the weaker discipline by relabelling a cookie.
+ */
+export const FLIGHT_PURPOSE_FLOW_BOUND = 'flight';
+export const FLIGHT_PURPOSE_CONSUMED = 'flight-credential';
+
 /** The sealed session this backend mints once verification passes. */
 export const SESSION_COOKIE = 'siwd_session';
+
+/** Namespaces in the shared store, so the two uses never collide. */
+export const kvNonceKey = (nonce: string): string => `siwd:nonce:${nonce}`;
+export const kvCredentialKey = (sessionId: string): string => `siwd:credential:${sessionId}`;
 
 /**
  * Matched to `verifySiwd`'s default acceptance window: the cookie stops being
@@ -55,7 +133,12 @@ export const FLIGHT_TTL_SECONDS = 300;
 /** How long a verified sign-in is good for. One day, and no refresh dance. */
 export const SESSION_TTL_SECONDS = 86_400;
 
-/** A signed challenge is a few hundred bytes; anything near this is not one. */
+/**
+ * A signed challenge is a few hundred bytes and a single-hop credential about a
+ * kilobyte; anything near this is neither. Well under the protocol's own 256 KiB
+ * credential cap, deliberately — that cap is what the PROTOCOL accepts, and what
+ * a given deployment accepts is its own, smaller, business.
+ */
 const MAX_BODY_BYTES = 16 * 1024;
 
 // -----------------------------------------------------------------------------
@@ -145,6 +228,130 @@ export const unseal = (purpose: string, sealed: string | undefined): string | nu
 };
 
 // -----------------------------------------------------------------------------
+// the app's own key
+// -----------------------------------------------------------------------------
+
+/*
+
+  The second key, and the one that makes a credential spendable.
+
+  A DFOS credential is issued TO a named DID — `aud` is the app's `client_did`,
+  the one served in `/.well-known/dfos-app.json`. specs/API-AUTH.md is built so
+  that holding the credential bytes is not enough: every request additionally
+  carries a fresh JWS signed by that DID's key, binding the credential's CID to
+  this exact method, host, path, and body. So a captured credential authorizes
+  nothing, and this key is the only artifact here that must never leak.
+
+  It lives on the server, never in the browser. API-AUTH.md's Security
+  Considerations say why: a browser cannot hold a key non-extractably, so the
+  supported shape is a backend-for-frontend — the browser holds an ordinary
+  session with this backend, and this backend signs. `api/profile.ts` is that
+  seam, and it takes no request coordinates from the browser at all.
+
+  Two variables, because the proof needs both halves of a DID URL: which
+  identity is signing, and which of its keys.
+
+*/
+
+const kidConfigured = process.env['DFOS_APP_KID'];
+const privateKeyConfigured = process.env['DFOS_APP_PRIVATE_KEY'];
+
+/** 32 raw seed bytes are exactly 43 canonical unpadded base64url characters. */
+const BASE64URL_32 = /^[A-Za-z0-9_-]{43}$/;
+
+interface AppKey {
+  /** The signing key's DID URL — `did:dfos:<id>#key_<id>`. */
+  kid: string;
+  /** The DID half: this app's `client_did`, and the `aud` of its credentials. */
+  did: string;
+  /** The public half, multibase-encoded, so an operator can eyeball it. */
+  publicKeyMultibase: string;
+  privateKey: Uint8Array;
+}
+
+/**
+ * Parse the pair, or name what is wrong with it. Every failure is a deployment
+ * mistake rather than a runtime condition, so each one is worded as the edit
+ * that fixes it — the same posture `SECRET_ERROR` takes.
+ */
+const readAppKey = (): { key: AppKey } | { error: string } => {
+  if (kidConfigured === undefined || kidConfigured === '') {
+    return {
+      error:
+        'DFOS_APP_KID is not set, so this app holds no signing key and cannot spend a ' +
+        'credential. Set it to the DID URL of a current key of your app’s identity — ' +
+        'did:dfos:<id>#key_<id> — and set DFOS_APP_PRIVATE_KEY to that key’s secret.',
+    };
+  }
+  if (!kidConfigured.includes('#')) {
+    return {
+      error: `DFOS_APP_KID must be a DID URL naming a key — did:dfos:<id>#key_<id> — not ${kidConfigured}`,
+    };
+  }
+  if (privateKeyConfigured === undefined || privateKeyConfigured === '') {
+    return {
+      error:
+        'DFOS_APP_PRIVATE_KEY is not set. It is the Ed25519 secret for the key named by ' +
+        'DFOS_APP_KID, as 43 base64url characters.',
+    };
+  }
+  if (!BASE64URL_32.test(privateKeyConfigured)) {
+    return {
+      error:
+        'DFOS_APP_PRIVATE_KEY must be a 32-byte Ed25519 secret encoded as 43 unpadded ' +
+        'base64url characters.',
+    };
+  }
+
+  let key: AppKey;
+  try {
+    const { privateKey, publicKey } = importEd25519Keypair(base64urlDecode(privateKeyConfigured));
+    key = {
+      kid: kidConfigured,
+      did: kidConfigured.substring(0, kidConfigured.indexOf('#')),
+      publicKeyMultibase: encodeEd25519Multikey(publicKey),
+      privateKey,
+    };
+  } catch (err) {
+    return {
+      error: `DFOS_APP_PRIVATE_KEY is not a usable Ed25519 secret: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  return { key };
+};
+
+const appKey = readAppKey();
+
+/** The named misconfiguration, or null. Checked by every credential-path route. */
+export const APP_KEY_ERROR: string | null = 'error' in appKey ? appKey.error : null;
+
+/** This app's `client_did` — the `aud` of any credential issued to it. */
+export const APP_DID: string | null = 'key' in appKey ? appKey.key.did : null;
+
+/** The DID URL the request proof's `kid` header carries. */
+export const APP_KID: string | null = 'key' in appKey ? appKey.key.kid : null;
+
+/**
+ * The public half of the configured secret. Reported to the page so a fork can
+ * compare it against `dfos identity keys` output: a secret that does not belong
+ * to the key `DFOS_APP_KID` names is the one misconfiguration whose only other
+ * symptom is a 401 from the API, arriving several steps later with nothing local
+ * to compare against.
+ */
+export const APP_PUBLIC_KEY_MULTIBASE: string | null =
+  'key' in appKey ? appKey.key.publicKeyMultibase : null;
+
+/**
+ * The raw Ed25519 signer `signApiRequest` takes. Async because that is the seam's
+ * shape — a deployment holding its key in a KMS returns a promise from a network
+ * call, and this demo should not make the local case look like the only one.
+ */
+export const signAsApp = async (message: Uint8Array): Promise<Uint8Array> => {
+  if (!('key' in appKey)) throw new Error(APP_KEY_ERROR ?? 'no app key configured');
+  return signPayloadEd25519(message, appKey.key.privateKey);
+};
+
+// -----------------------------------------------------------------------------
 // cookies
 // -----------------------------------------------------------------------------
 
@@ -183,6 +390,14 @@ export const readCookie = (req: VercelRequest, name: string): string | undefined
 
 /** Hosts that ride the platform's loopback tier — and speak http, not https. */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+/**
+ * A local port holds no domain, so it can prove no `client_did` — which is why
+ * the loopback tier admits `scope=identity` and nothing else. The credential
+ * path is therefore unavailable under `npm run dev`, by design and at both ends:
+ * the kit refuses to build the request, and the platform would refuse it too.
+ */
+export const isLoopbackDomain = (domain: string): boolean => LOOPBACK_HOSTS.has(domain);
 
 export interface RequestOrigin {
   /** Scheme and authority, no trailing slash — what an `Origin` header holds. */
@@ -263,12 +478,26 @@ export interface Session {
   /** Issued-at and expiry, unix seconds. */
   iat: number;
   exp: number;
+  /** Which scope this sign-in was granted under. */
+  scope: Scope;
+  /**
+   * An opaque id for THIS session, minted at grant time. It is the key the
+   * credential is stored under, and it exists because the credential is the one
+   * thing here that does not fit the zero-state pattern: it is a durable,
+   * portable artifact that belongs on the server's side of the wire, so the
+   * cookie carries a pointer to it rather than the artifact itself.
+   *
+   * Absent on an identity-scope session, which has nothing to point at.
+   */
+  sid?: string;
 }
 
 /**
  * The session rides in the cookie itself: base64url JSON under the same seal.
  * Zero server state, so any instance can answer for a session any other
- * instance issued, given the same `SESSION_SECRET`.
+ * instance issued, given the same `SESSION_SECRET` — the credential behind
+ * `sid` being the one exception, and it lives in the shared store for exactly
+ * that reason.
  *
  * The nonce is deliberately NOT in here. It was the secret the flight cookie
  * held, and echoing it back would hand the presenter the one value they must
@@ -276,6 +505,13 @@ export interface Session {
  */
 export const encodeSession = (session: Session): string =>
   seal('session', Buffer.from(JSON.stringify(session)).toString('base64url'), SESSION_TTL_SECONDS);
+
+/**
+ * A fresh session id. Only ever used as a store key, never shown and never
+ * meaningful on its own — but unguessable anyway, because a guessable one would
+ * name another session's credential.
+ */
+export const newSessionId = (): string => randomBytes(16).toString('base64url');
 
 /** The session this request carries, or `null` — unsealed, parsed, unexpired. */
 export const readSession = (req: VercelRequest): Session | null => {
@@ -304,7 +540,96 @@ export const readSession = (req: VercelRequest): Session | null => {
   if ((iat as number) > now + 60 || (exp as number) <= now) return null;
   if ((exp as number) - (iat as number) > SESSION_TTL_SECONDS) return null;
 
-  return { did: raw['did'], kid: raw['kid'], iat: iat as number, exp: exp as number };
+  // The scope is re-validated like every other field: it decides whether this
+  // session may reach the signing seam at all, so a value this server would not
+  // have written is no session.
+  const scope = raw['scope'];
+  if (!isScope(scope)) return null;
+  const sid = raw['sid'];
+  if (sid !== undefined && (typeof sid !== 'string' || sid === '')) return null;
+
+  return {
+    did: raw['did'],
+    kid: raw['kid'],
+    iat: iat as number,
+    exp: exp as number,
+    scope,
+    ...(typeof sid === 'string' ? { sid } : {}),
+  };
+};
+
+// -----------------------------------------------------------------------------
+// the held credential
+// -----------------------------------------------------------------------------
+
+/**
+ * What the demo shows about a credential it holds — the RENDER-BEFORE-TRUST
+ * habit, in a UI. Every field here was read out of a credential this server had
+ * already verified: signature, schema, CID integrity, expiry, issuer identity
+ * chain. Displaying an unverified grant would teach the opposite reflex.
+ */
+export interface CredentialFacts {
+  /** Who authorized this — and, for a single-hop grant, whose data it serves. */
+  issuer: string;
+  /** Who may spend it: this app's DID, and nobody else's. */
+  audience: string;
+  /** The attenuation, exactly as the API verifier byte-matches it. */
+  resource: string;
+  action: string;
+  /** Issued-at and expiry, unix seconds. */
+  issuedAt: number;
+  expiresAt: number;
+  /** The CID every request proof binds to. */
+  credentialCID: string;
+}
+
+/** The credential and its already-verified facts, as one stored record. */
+export interface HeldCredential {
+  jws: string;
+  facts: CredentialFacts;
+}
+
+/**
+ * Parse a stored record back, or `null` if the store held something unusable.
+ *
+ * Every field is re-checked rather than cast. This server wrote the record, but
+ * it comes back over a network from a store that a fork may share, may have
+ * migrated, or may have half-written — and `credentialCID` in particular goes
+ * straight into a signature. Trusting the shape of bytes because of where they
+ * came from is the habit this whole demo argues against.
+ */
+export const parseHeldCredential = (stored: string | null): HeldCredential | null => {
+  if (stored === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const raw = parsed as Record<string, unknown>;
+  if (typeof raw['jws'] !== 'string' || raw['jws'] === '') return null;
+
+  const facts = raw['facts'];
+  if (typeof facts !== 'object' || facts === null || Array.isArray(facts)) return null;
+  const f = facts as Record<string, unknown>;
+  for (const field of ['issuer', 'audience', 'resource', 'action', 'credentialCID'] as const) {
+    if (typeof f[field] !== 'string' || f[field] === '') return null;
+  }
+  if (!Number.isSafeInteger(f['issuedAt']) || !Number.isSafeInteger(f['expiresAt'])) return null;
+
+  return {
+    jws: raw['jws'],
+    facts: {
+      issuer: f['issuer'] as string,
+      audience: f['audience'] as string,
+      resource: f['resource'] as string,
+      action: f['action'] as string,
+      issuedAt: f['issuedAt'] as number,
+      expiresAt: f['expiresAt'] as number,
+      credentialCID: f['credentialCID'] as string,
+    },
+  };
 };
 
 // -----------------------------------------------------------------------------
@@ -343,10 +668,10 @@ export const methodNotAllowed = (res: VercelResponse, allow: string): void => {
 };
 
 /**
- * The JWS out of a JSON body, or `null`. Vercel's Node runtime pre-parses a
+ * The JSON body as an object, or `null`. Vercel's Node runtime pre-parses a
  * JSON body onto `req.body`; the string branch covers a runtime that did not.
  */
-export const readJws = (req: VercelRequest): string | null => {
+export const readJsonBody = (req: VercelRequest): Record<string, unknown> | null => {
   // `req.body` is a LAZY GETTER on Vercel's runtime and throws on malformed
   // JSON sent with a JSON content-type, so reading it bare would turn a bad
   // body into a 500 instead of this function's `null`. The dev shim pre-parses
@@ -366,7 +691,16 @@ export const readJws = (req: VercelRequest): string | null => {
     }
   }
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
-  const jws = (body as Record<string, unknown>)['jws'];
-  if (typeof jws !== 'string' || jws === '' || jws.length > MAX_BODY_BYTES) return null;
-  return jws;
+  return body as Record<string, unknown>;
+};
+
+/** One member of a JSON body, as a bounded non-empty string — or `null`. */
+export const readTokenField = (
+  body: Record<string, unknown> | null,
+  field: string,
+): string | null => {
+  if (body === null) return null;
+  const value = body[field];
+  if (typeof value !== 'string' || value === '' || value.length > MAX_BODY_BYTES) return null;
+  return value;
 };
