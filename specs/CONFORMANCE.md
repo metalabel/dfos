@@ -9,8 +9,10 @@ points at the normative MUST sets already specified in
 [CREDENTIALS.md](https://protocol.dfos.com/credentials),
 [CREDITS.md](https://protocol.dfos.com/credits),
 [WEB-RELAY.md](https://protocol.dfos.com/web-relay),
-[DID-METHOD.md](https://protocol.dfos.com/did-method), and
-[SIGNING.md](https://protocol.dfos.com/signing) (`0.x`), and binds each tier to the tests
+[DID-METHOD.md](https://protocol.dfos.com/did-method),
+[SIGNING.md](https://protocol.dfos.com/signing) (`0.x`),
+[SIWD.md](https://protocol.dfos.com/siwd) (`0.x`), and
+[API-AUTH.md](https://protocol.dfos.com/api-auth) (`0.x`), and binds each tier to the tests
 that exercise it.
 
 This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
