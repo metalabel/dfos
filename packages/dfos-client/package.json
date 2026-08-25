@@ -24,6 +24,7 @@
   ],
   "exports": {
     ".": "./src/index.ts",
+    "./api-auth": "./src/api-auth.ts",
     "./siwd": "./src/siwd.ts",
     "./store": "./src/store/index.ts"
   },
@@ -32,6 +33,10 @@
       ".": {
         "import": "./dist/index.js",
         "types": "./dist/index.d.ts"
+      },
+      "./api-auth": {
+        "import": "./dist/api-auth.js",
+        "types": "./dist/api-auth.d.ts"
       },
       "./siwd": {
         "import": "./dist/siwd.js",
