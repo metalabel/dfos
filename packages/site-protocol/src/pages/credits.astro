@@ -1,13 +1,15 @@
 ---
 import fs from 'node:fs';
+import { specEntry } from '../content/specs';
 import SpecPage from '../layouts/SpecPage.astro';
 
 const source = fs.readFileSync('../../specs/CREDITS.md', 'utf-8');
+const entry = specEntry('/credits');
 ---
 
 <SpecPage
-  title="Credits"
-  description="DFOS Credits — verifiable attribution via credit claims: the signed envelope, the two-way bind, and the four verification states."
+  title={entry.title}
+  description={entry.metaDescription}
   path="/credits"
   source={source}
 />

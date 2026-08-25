@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import { specs } from '../content/specs';
 import { navLinks, primaryNav, headerLabel } from '../data/nav';
 ---
 
@@ -172,71 +173,27 @@ dfos serve`} /></pre>
     <h2>Read the protocol</h2>
 
     <div class="spec-links spec-links--quad">
-      <a href="/spec" class="spec-link">
-        <span class="spec-link-title">Protocol Specification</span>
-        <span class="spec-link-desc">Chains, services, credentials, CID derivation, verification rules, test vectors</span>
-      </a>
-      <a href="/did-method" class="spec-link">
-        <span class="spec-link-title">DID Method</span>
-        <span class="spec-link-desc">W3C <code>did:dfos</code> &mdash; self-certifying, transport-agnostic identifiers</span>
-      </a>
-      <a href="/content-model" class="spec-link">
-        <span class="spec-link-title">Content Model</span>
-        <span class="spec-link-desc">JSON Schema content types committed via content-addressed CIDs</span>
-      </a>
-      <a href="/credentials" class="spec-link">
-        <span class="spec-link-title">Credentials</span>
-        <span class="spec-link-desc">Delegated authorization, revocation, standing access, and attenuation</span>
-      </a>
-      <a href="/credits" class="spec-link">
-        <span class="spec-link-title">Credits</span>
-        <span class="spec-link-desc">Verifiable attribution &mdash; signed credit claims bound to the content they credit</span>
-      </a>
-      <a href="/web-relay" class="spec-link">
-        <span class="spec-link-title">Web Relay</span>
-        <span class="spec-link-desc">Verifying HTTP relay with gossip, read-through, and sync peering</span>
-      </a>
-      <a href="/siwd" class="spec-link">
-        <span class="spec-link-title">Sign In With DFOS</span>
-        <span class="spec-link-desc">Identity verification, consent scopes, and credential issuance for third-party applications</span>
-      </a>
-      <a href="/api-auth" class="spec-link">
-        <span class="spec-link-title">API Authentication</span>
-        <span class="spec-link-desc">Proof-of-possession request signing for credential-gated HTTP APIs</span>
-      </a>
-      <a href="/signing" class="spec-link">
-        <span class="spec-link-title">Signing</span>
-        <span class="spec-link-desc">Sign-request envelopes, signer obligations, and relay-hosted mailboxes</span>
-      </a>
-      <a href="/document-gateway" class="spec-link">
-        <span class="spec-link-title">Document Gateway</span>
-        <span class="spec-link-desc">Stateless blob storage authorized live from the proof plane</span>
-      </a>
-      <a href="/threat-model" class="spec-link">
-        <span class="spec-link-title">Threat Model</span>
-        <span class="spec-link-desc">Adversaries, trust boundaries, and what the proof/content separation defends</span>
-      </a>
-      <a href="/conformance" class="spec-link">
-        <span class="spec-link-title">Conformance</span>
-        <span class="spec-link-desc">Signer, verifier, and relay tiers with the test vectors that prove them</span>
-      </a>
+      {
+        specs.filter((spec) => spec.grid === 'specifications').map(({ slug, title, listTitle, tile }) => (
+          <a href={slug} class="spec-link">
+            <span class="spec-link-title">{listTitle ?? title}</span>
+            <span class="spec-link-desc" set:html={tile} />
+          </a>
+        ))
+      }
     </div>
 
     <span class="section-label" style="margin-top: 3rem;">U S E &nbsp; I T</span>
 
     <div class="spec-links">
-      <a href="/cli" class="spec-link">
-        <span class="spec-link-title">CLI</span>
-        <span class="spec-link-desc">Identities, content chains, credentials, relays &mdash; Linux, macOS, Windows</span>
-      </a>
-      <a href="/deploy" class="spec-link">
-        <span class="spec-link-title">Deploy</span>
-        <span class="spec-link-desc">Run a relay with Docker, Caddy auto-TLS, peering, and container images</span>
-      </a>
-      <a href="/skill" class="spec-link">
-        <span class="spec-link-title">Agent Skill</span>
-        <span class="spec-link-desc">Drive the CLI from your AI coding agent &mdash; Claude Code, or any agent via npx skills</span>
-      </a>
+      {
+        specs.filter((spec) => spec.grid === 'use').map(({ slug, title, listTitle, tile }) => (
+          <a href={slug} class="spec-link">
+            <span class="spec-link-title">{listTitle ?? title}</span>
+            <span class="spec-link-desc" set:html={tile} />
+          </a>
+        ))
+      }
       <a href="/overview" class="spec-link">
         <span class="spec-link-title">Why</span>
         <span class="spec-link-desc">The structural condition, design principles, what the protocol is and isn't</span>

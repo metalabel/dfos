@@ -1,5 +1,6 @@
 ---
 import fs from 'node:fs';
+import { specEntry } from '../content/specs';
 import SpecPage from '../layouts/SpecPage.astro';
 
 // Canonical skill source. The same file is embedded in the dfos binary
@@ -9,11 +10,12 @@ import SpecPage from '../layouts/SpecPage.astro';
 // body strips the frontmatter block.
 const source = fs.readFileSync('../../skills/dfos/SKILL.md', 'utf-8');
 const body = source.replace(/^---\n[\s\S]*?\n---\n/, '');
+const entry = specEntry('/skill');
 ---
 
 <SpecPage
-  title="Agent Skill"
-  description="Agent skill for the DFOS CLI — install into Claude Code or any coding agent to create identities, publish content, issue credentials, and manage relays."
+  title={entry.title}
+  description={entry.metaDescription}
   path="/skill"
   source={source}
   body={body}

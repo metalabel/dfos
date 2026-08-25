@@ -1,6 +1,10 @@
 import type { APIRoute } from 'astro';
+import { specs } from '../content/specs';
 
 export const GET: APIRoute = () => {
+  const specLink = ({ title, listTitle, slug, llms }: (typeof specs)[number]) =>
+    `- [${listTitle ?? title}](https://protocol.dfos.com${slug}): ${llms}`;
+
   const content = [
     '# DFOS Protocol',
     '',
@@ -14,24 +18,11 @@ export const GET: APIRoute = () => {
     '',
     '## Specifications',
     '',
-    '- [Protocol Specification](https://protocol.dfos.com/spec): Core protocol — identity chains, content chains, services discovery vocabulary, credentials, countersignatures, verification rules, and test vectors',
-    '- [DID Method](https://protocol.dfos.com/did-method): W3C DID method specification for did:dfos',
-    '- [Content Model](https://protocol.dfos.com/content-model): Standard JSON Schema content types (post, profile)',
-    '- [Credentials](https://protocol.dfos.com/credentials): Authorization credentials, delegation chains, and revocation',
-    '- [Credits](https://protocol.dfos.com/credits): Verifiable attribution — the credit-claim envelope, the two-way bind between a credits entry and a claimant signature, and the four verification states',
-    '- [Sign In With DFOS](https://protocol.dfos.com/siwd): Cryptographic identity verification for third-party applications — one challenge artifact, two couriers (hosted web redirect, sign-request mailbox), verification with no DFOS server in the loop',
-    '- [Signing](https://protocol.dfos.com/signing): Sign-request envelopes, signer obligations, and relay-hosted mailbox transport',
-    '- [API Authentication](https://protocol.dfos.com/api-auth): Proof-of-possession authentication for credential-gated HTTP APIs — the request-proof envelope and the api:<host> credential resource',
-    '- [Threat Model](https://protocol.dfos.com/threat-model): Adversary model, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol defends against',
-    '- [Conformance](https://protocol.dfos.com/conformance): Conformance tiers (signer, verifier, relay), the normative MUST sets per tier, and the deterministic test vectors that prove them',
+    ...specs.filter((spec) => spec.llmsSection === 'specifications').map(specLink),
     '',
     '## Implementation',
     '',
-    '- [Web Relay](https://protocol.dfos.com/web-relay): Verifying HTTP relay for identity chains, content chains, services, countersignatures, and content blobs',
-    '- [Document Gateway](https://protocol.dfos.com/document-gateway): Stateless content-addressed blob store (0.1) — the content plane, with authorization re-derived live from the proof plane',
-    '- [CLI](https://protocol.dfos.com/cli): Go command-line interface for managing identities, signing operations, and interacting with relays',
-    '- [Deploy](https://protocol.dfos.com/deploy): Run a relay with Docker Compose, Caddy auto-TLS, peering, and container images',
-    '- [Agent Skill](https://protocol.dfos.com/skill): Drive the DFOS CLI from a coding agent — install into Claude Code or any agent (plugin, npx skills, or the embedded `dfos skill` command)',
+    ...specs.filter((spec) => spec.llmsSection === 'implementation').map(specLink),
     '',
     '## Full Content',
     '',

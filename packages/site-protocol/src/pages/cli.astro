@@ -1,13 +1,15 @@
 ---
 import fs from 'node:fs';
+import { specEntry } from '../content/specs';
 import SpecPage from '../layouts/SpecPage.astro';
 
 const source = fs.readFileSync('../dfos-cli/CLI.md', 'utf-8');
+const entry = specEntry('/cli');
 ---
 
 <SpecPage
-  title="CLI"
-  description="DFOS CLI — Go command-line interface for managing identities, content chains, services, and credentials against protocol relays."
+  title={entry.title}
+  description={entry.metaDescription}
   path="/cli"
   source={source}
 />
