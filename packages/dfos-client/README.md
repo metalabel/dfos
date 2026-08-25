@@ -1,6 +1,8 @@
 # @metalabel/dfos-client
 
-The high-level read client for the [DFOS protocol](https://protocol.dfos.com). The protocol library owns the crypto truth (CID re-derivation, signature verification, chain folding); this client owns the four things it deliberately refuses to do: **fetch, resolve, verify-orchestration, and cache** — over an untrusted set of relays. It holds no keys and never writes.
+The client-side kit for participating in the [DFOS protocol](https://protocol.dfos.com) — **resolve, verify, prove**. The protocol library owns the crypto truth (CID re-derivation, signature verification, chain folding); this client owns the four things it deliberately refuses to do: **fetch, resolve, verify-orchestration, and cache** — over an untrusted set of relays — plus the two proof surfaces that ride on top of them, [SIWD](#metalabeldfos-clientsiwd) and [API-AUTH](#metalabeldfos-clientapi-auth).
+
+**It holds no keys.** Signing is always a `sign` callback the caller supplies: this kit composes the exact bytes that must be signed and hands them over, and key material never crosses into it.
 
 If verification logic appears in this package, that is the bug: every proof comes from `@metalabel/dfos-protocol`.
 
@@ -75,12 +77,27 @@ import { indexedDbStore, memoryStore } from '@metalabel/dfos-client/store';
 
 ### `@metalabel/dfos-client/api-auth`
 
+API Authentication request proofs. A proof is a short-lived JWS, signed by the key a DFOS credential was issued to, that binds one exact HTTP request — method, host, path, body — to that credential. The credential says what its holder may do; the proof says the holder is the one doing it, and doing exactly this. See the [API-AUTH specification](https://protocol.dfos.com/api-auth).
+
+**Spending a credential: a signing `fetch`.** Hand it to any API client with a fetch seam, and every request that client composes goes out credential-gated.
+
 ```typescript
-import {
-  buildApiAuthHeaders,
-  signApiRequest,
-  verifyApiRequest,
-} from '@metalabel/dfos-client/api-auth';
+import { createDfosApi } from '@metalabel/dfos-api';
+import { createApiAuthFetch } from '@metalabel/dfos-client/api-auth';
+
+const api = createDfosApi({ fetch: createApiAuthFetch({ credential, kid, sign }) });
+
+const { data } = await api.GET('/profile');
+```
+
+Three inputs, and they are the irreducible ones: the credential JWS to present, the DID URL of the key it was issued to, and a `sign` callback over bytes. The proof's `credentialCID` is read from the credential's own header, so the two can never drift apart. Pass `fetch` to supply the underlying transport (default `globalThis.fetch`).
+
+It signs **exactly the `Request` it receives** — the method, the origin-form target, and the body octets already composed — rather than a description of one. That is what keeps the binding honest: the bytes the proof covers are the bytes that go on the wire.
+
+**A backend that must not proxy uses the decomposed form.** A signing backend fronting a browser must authorize the coordinates it is about to sign against its own session, not sign whatever `{method, path, body}` the browser hands it — a backend that signs blindly is an oracle for every credential it holds ([Security Considerations](https://protocol.dfos.com/api-auth#security-considerations)). Such a backend describes the one request it is willing to make, so there is no `Request` for the adapter above to cover:
+
+```typescript
+import { buildApiAuthHeaders, signApiRequest } from '@metalabel/dfos-client/api-auth';
 
 const { proof } = await signApiRequest({
   method: 'GET',
@@ -91,17 +108,25 @@ const { proof } = await signApiRequest({
   sign,
 });
 const headers = buildApiAuthHeaders({ proof, credential });
+```
+
+**Verifying** is the other half, and it lives here so that an API host's middleware is a thin adapter over the kit rather than a second implementation of the spec's eleven steps:
+
+```typescript
+import { verifyApiRequest } from '@metalabel/dfos-client/api-auth';
 
 await verifyApiRequest(client, {
   proof,
   credential,
   method: 'GET',
-  host: 'api.example',
+  host: 'api.example', // the verifier's OWN configured authority, never a request header
   path: '/profile',
 });
 ```
 
-API Authentication request proofs. `signApiRequest` binds one exact HTTP request to a DFOS credential, `buildApiAuthHeaders` produces its `Authorization` and `X-Credential` headers, and `verifyApiRequest` checks the proof and credential per the [API-AUTH specification](https://protocol.dfos.com/api-auth).
+It throws `ApiRequestVerifyError`, carrying `reason` (`invalid` / `unverifiable` / `config`), `phase`, and the recommended `status` — branch on those, never on message text.
+
+`apiRequestSigningInput(payload)` is the pure byte contract both halves share, and the one place per language the canonical bytes are built.
 
 ### `@metalabel/dfos-client/siwd`
 
