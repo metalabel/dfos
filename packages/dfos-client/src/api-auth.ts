@@ -79,6 +79,13 @@ export const MAX_PROOF_FRESHNESS_SPAN_SECONDS = 300;
 /** The v0 action registry's only token. */
 export const DEFAULT_API_ACTION = 'read:profile';
 
+/**
+ * Default cap on the decoded body a verifier will hash, in bytes (1 MiB). The v0
+ * action registry is bodyless, so this never binds today; it is the defensive
+ * ceiling for the first body-bearing action, overridable per verifier.
+ */
+export const MAX_BODY_BYTES = 1_048_576;
+
 /** Linear delegation depth ceiling — the protocol's own chain-walk bound. */
 const MAX_DELEGATION_DEPTH = 16;
 
@@ -389,6 +396,16 @@ export interface VerifyApiRequestInput {
   path: string;
   /** The received application body octets, post-content-decoding. Omitted = no body. */
   body?: Uint8Array;
+  /**
+   * Cap on the decoded body this verifier will hash, in bytes. Default
+   * `MAX_BODY_BYTES`. A body over the cap is refused BEFORE the SHA-256 (a
+   * proof-layer `413`), so a well-formed proof with a bad signature cannot force
+   * an unbounded hash. NOTE: the spec's "abort decode at the cap" is a MIDDLEWARE
+   * obligation — by the time the body reaches this helper it is already a buffered
+   * `Uint8Array`, so this is the second, defensive cap; the middleware must still
+   * bound decoding upstream (a decompression bomb inflates before the kit sees it).
+   */
+  maxBodyBytes?: number;
 
   /** The action token this route requires. Default `read:profile`. */
   action?: string;
@@ -506,6 +523,19 @@ export const verifyApiRequest = async (
         `${window} + ${skew}`,
     );
   }
+  // The route's required action is deployment config, so it is validated HERE with
+  // the other config — before any network work — not at the coverage step. An
+  // action canonicalizing to the empty set is a subset of every grant's action
+  // set, so a misconfigured route would authorize any api:<host> holder; a broken
+  // route must fail fast and deterministically (500), never return 401/403.
+  const action = input.action ?? DEFAULT_API_ACTION;
+  if (action.split(',').every((token) => token.trim() === '')) {
+    throw misconfigured('required action must name a non-empty token');
+  }
+  const maxBodyBytes = input.maxBodyBytes ?? MAX_BODY_BYTES;
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) {
+    throw misconfigured('maxBodyBytes must be a non-negative integer');
+  }
 
   // 1. Size — both tokens, before any decode. A DoS guard at the header layer.
   if (input.proof.length > MAX_REQUEST_PROOF_SIZE) {
@@ -564,11 +594,22 @@ export const verifyApiRequest = async (
     throw invalidProof('request proof iat is beyond the clock-skew allowance');
   }
 
-  // 5. Request binding — the non-body half first (ordering rule b).
+  // 5. Request binding — the non-body half first (ordering rule b), then the body
+  // hash last and only up to the cap, so an over-cap body is refused (413) before
+  // the SHA-256 rather than hashed to discover it does not match.
   if (payload.method !== input.method) throw invalidProof('request proof method mismatch');
   if (payload.host !== input.host) throw invalidProof('request proof host mismatch');
   if (payload.path !== input.path) throw invalidProof('request proof path mismatch');
-  if (payload.bodyHash !== sha256BodyHash(input.body ?? EMPTY_BODY)) {
+  const body = input.body ?? EMPTY_BODY;
+  if (body.length > maxBodyBytes) {
+    throw new ApiRequestVerifyError(
+      'invalid',
+      'proof',
+      413,
+      `request body exceeds max size: ${body.length} > ${maxBodyBytes}`,
+    );
+  }
+  if (payload.bodyHash !== sha256BodyHash(body)) {
     throw invalidProof('request proof bodyHash mismatch');
   }
 
@@ -674,16 +715,7 @@ export const verifyApiRequest = async (
   // verifier's OWN configured authority, and the leaf's canonical action set
   // must contain the route's required token. No wildcard form exists for `api:`,
   // and `read:*` is a literal token that matches no real route.
-  const action = input.action ?? DEFAULT_API_ACTION;
-  // A route's required action MUST name a real token. An action that canonicalizes
-  // to the empty set ("", whitespace, or commas only) is vacuously a subset of any
-  // grant's action set (the empty set is a subset of everything), so a
-  // misconfigured or dynamically-misselected route would authorize EVERY request
-  // that merely carries the api:<host> resource. This is a deployment fault, not
-  // an artifact verdict — refuse it as config before matching.
-  if (action.split(',').every((token) => token.trim() === '')) {
-    throw misconfigured('required action must name a non-empty token');
-  }
+  // `action` was validated as non-empty in the config block above.
   if (!(await matchesResource(leaf.att, `api:${input.host}`, action))) {
     throw invalidCredential(`credential does not cover ${action} on api:${input.host}`);
   }

@@ -53,6 +53,9 @@ const (
 	// MaxProofFreshnessSpanSeconds caps W + S: the total span over which any one
 	// proof is accepted, and therefore its worst-case replay window.
 	MaxProofFreshnessSpanSeconds = 300
+	// MaxBodyBytesDefault is the default cap on the decoded body a verifier will
+	// hash (1 MiB). The v0 action registry is bodyless, so it never binds today.
+	MaxBodyBytesDefault = 1 << 20
 )
 
 // Sentinel errors for the consumer-visible verdicts. Callers branch with
@@ -253,6 +256,20 @@ type RequestProofExpectations struct {
 	WindowSeconds *int64
 	// SkewSeconds is the clock-skew allowance S; same nil-vs-*0 semantics as W.
 	SkewSeconds *int64
+	// MaxBodyBytes caps the decoded body this verifier will hash; nil means
+	// MaxBodyBytesDefault, a non-nil *0 means "no body permitted". An over-cap
+	// body is refused before the SHA-256.
+	MaxBodyBytes *int64
+}
+
+func (e RequestProofExpectations) maxBodyBytes() (int64, error) {
+	if e.MaxBodyBytes == nil {
+		return MaxBodyBytesDefault, nil
+	}
+	if *e.MaxBodyBytes < 0 {
+		return 0, fmt.Errorf("%w: MaxBodyBytes must be non-negative", ErrRequestProofConfig)
+	}
+	return *e.MaxBodyBytes, nil
 }
 
 // Int64Ptr returns a pointer to v, for setting WindowSeconds / SkewSeconds to an
@@ -311,6 +328,10 @@ func VerifyRequestProof(proofToken string, expect RequestProofExpectations,
 	// 4 (config half). Checked FIRST: a deployment whose window is out of bounds
 	// must never verify anything, not merely fail some proofs.
 	window, skew, err := expect.bounds()
+	if err != nil {
+		return nil, err
+	}
+	maxBody, err := expect.maxBodyBytes()
 	if err != nil {
 		return nil, err
 	}
@@ -401,6 +422,15 @@ func VerifyRequestProof(proofToken string, expect RequestProofExpectations,
 	}
 	if payload.Path != expect.Path {
 		return nil, fmt.Errorf("%w: request proof path mismatch", ErrRequestProofInvalid)
+	}
+	// Body hash last, and only up to the cap: an over-cap body is refused before
+	// the SHA-256, so a bad-signature proof cannot force an unbounded hash. (As in
+	// TS, this is the defensive cap on an already-buffered body; aborting decode at
+	// the cap is the middleware's job upstream — a decompression bomb inflates
+	// before the twin sees it.)
+	if int64(len(expect.Body)) > maxBody {
+		return nil, fmt.Errorf("%w: request body exceeds max size: %d > %d",
+			ErrRequestProofInvalid, len(expect.Body), maxBody)
 	}
 	if payload.BodyHash != Sha256BodyHash(expect.Body) {
 		return nil, fmt.Errorf("%w: request proof bodyHash mismatch", ErrRequestProofInvalid)

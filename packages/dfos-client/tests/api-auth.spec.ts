@@ -563,6 +563,35 @@ describe('verifyApiRequest', () => {
     );
   });
 
+  it('refuses an over-cap body before hashing it (413), and honors maxBodyBytes', async () => {
+    const grant = await buildGrant();
+    // A proof whose bodyHash matches a large body, presented with maxBodyBytes
+    // below that body: refused at 413 before the SHA-256, not accepted.
+    const big = new Uint8Array(64);
+    const { proof } = await signApiRequest({
+      method: 'GET',
+      host: HOST,
+      path: '/v0/profile',
+      body: big,
+      credentialCID: grant.credentialCID,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      iat: NOW,
+    });
+    const err = await errorOf(
+      verifyApiRequest(clientFor([grant.user, grant.rp]), {
+        ...baseInput(),
+        proof,
+        credential: grant.credential,
+        body: big,
+        maxBodyBytes: 32,
+      }),
+    );
+    expect(err?.reason).toBe('invalid');
+    expect(err?.phase).toBe('proof');
+    expect(err?.status).toBe(413);
+  });
+
   it('refuses an empty required action as config, never as an authorized request', async () => {
     // An action that canonicalizes to the empty set is a subset of every grant's
     // action set — a misconfigured route would authorize any api:<host> holder.

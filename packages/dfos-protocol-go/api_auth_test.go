@@ -232,6 +232,12 @@ func TestVerifyRequestProofAdversarialVectors(t *testing.T) {
 		{"single bound over the ceiling (overflow guard)", apiAuthVectorJWS,
 			RequestProofExpectations{Method: "GET", Host: ok.Host, Path: ok.Path, WindowSeconds: Int64Ptr(301), SkewSeconds: Int64Ptr(0)},
 			fresh, ErrRequestProofConfig},
+		{"over-cap body refused before hashing", bodyProof,
+			RequestProofExpectations{Method: "POST", Host: ok.Host, Path: ok.Path, Body: []byte(`{"a":1}`), MaxBodyBytes: Int64Ptr(3)},
+			fresh, ErrRequestProofInvalid},
+		{"negative maxBodyBytes is config", bodyProof,
+			RequestProofExpectations{Method: "POST", Host: ok.Host, Path: ok.Path, Body: []byte(`{"a":1}`), MaxBodyBytes: Int64Ptr(-1)},
+			fresh, ErrRequestProofConfig},
 	}
 	for _, vector := range vectors {
 		_, err := VerifyRequestProof(vector.token, vector.expect, resolve, vector.now)
