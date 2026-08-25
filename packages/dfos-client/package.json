@@ -2,7 +2,7 @@
   "name": "@metalabel/dfos-client",
   "version": "0.32.0",
   "type": "module",
-  "description": "DFOS Client — read-only resolve + verify orchestration over untrusted relays. Fetch, resolve, verify-orchestration, cache; all crypto truth comes from @metalabel/dfos-protocol",
+  "description": "DFOS Client — the client-side kit for participating in the protocol: resolve, verify, prove. Fetch, resolve, verify-orchestration and cache over untrusted relays, plus the SIWD and API-AUTH proof surfaces. Holds no keys; all crypto truth comes from @metalabel/dfos-protocol",
   "license": "MIT",
   "author": "Metalabel <hello@metalabel.com> (https://metalabel.com)",
   "repository": {

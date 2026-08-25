@@ -315,6 +315,144 @@ export const buildApiAuthHeaders = (input: {
   'X-Credential': input.credential,
 });
 
+export interface CreateApiAuthFetchOptions {
+  /**
+   * The leaf credential JWS to present — the `X-Credential` value, and the
+   * source of every proof's `credentialCID`. It embeds its chain in `prf`.
+   */
+  credential: string;
+  /**
+   * The signing key's DID URL. Its DID portion MUST be the credential's `aud` —
+   * that equality IS the possession being proven.
+   */
+  kid: string;
+  /** Raw Ed25519 signer over the JWS signing input. Never key material. */
+  sign: (message: Uint8Array) => Promise<Uint8Array>;
+  /** The underlying transport. Default `globalThis.fetch`. */
+  fetch?: typeof fetch;
+}
+
+/**
+ * The `credentialCID` a proof must carry, read from the credential's OWN
+ * protected header rather than passed alongside it — so the CID and the
+ * credential cannot become two facts that drift (a reissued credential paired
+ * with the previous CID is a 403 this shape simply cannot produce).
+ *
+ * The header is NOT re-derived here, deliberately. `verifyApiRequest` re-derives
+ * it and refuses any credential whose header disagrees, so a divergent header is
+ * refused either way: re-deriving would change which message the deployment
+ * sees, never whether the request succeeds, and it would drag dag-cbor and the
+ * credential schema into a producer path that today needs neither.
+ *
+ * A request proof deliberately carries no `cid` header (API-AUTH.md), so
+ * requiring one here also catches a proof handed over in a credential's place.
+ */
+const credentialCIDFromHeader = (credential: string): string => {
+  const decoded = decodeJwsUnsafe(credential);
+  if (!decoded) throw new Error('invalid credential: failed to decode the credential JWS');
+  const cid = decoded.header.cid;
+  if (typeof cid !== 'string' || cid === '') {
+    throw new Error('invalid credential: the credential JWS carries no cid header');
+  }
+  return cid;
+};
+
+/**
+ * The exact hostnames a plaintext request may name. `url.hostname` returns the
+ * IPv6 literal still bracketed, so `[::1]` is the form to match. An EXACT set,
+ * never a suffix test: `localhost.evil.example` is an ordinary internet host.
+ */
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * A signing `fetch`. Hand it to any API client with a fetch seam and every
+ * request that client composes goes out credential-gated:
+ *
+ * ```ts
+ * createDfosApi({ fetch: createApiAuthFetch({ credential, kid, sign }) })
+ * ```
+ *
+ * It signs EXACTLY the `Request` it receives — the method, the origin-form
+ * target, and the body octets already composed — rather than a description of
+ * one. That is what keeps the binding honest: the bytes the proof covers are the
+ * bytes that go on the wire.
+ *
+ * `signApiRequest` stays exported for the backends that must NOT proxy. A
+ * signing backend fronting a browser MUST authorize the coordinates it is about
+ * to sign against its own session (API-AUTH.md, Security Considerations) — it
+ * describes the one request it is willing to make rather than receiving one, so
+ * there is no `Request` for this adapter to cover.
+ *
+ * Two things are deliberately absent. There is no credential-provider callback:
+ * a caller whose credential rotates builds a new fetch, which is one line and
+ * has no lifecycle to get wrong. And there is no host allowlist: the caller
+ * composing the URL is already the party choosing the host, so an allowlist here
+ * would guard a decision it does not make.
+ *
+ * TWO REFUSALS, both because the adapter is the last place that can see them.
+ * It will not sign a plaintext request to a real host (`api:` surfaces are HTTPS
+ * surfaces — the proof and the credential would go out in the clear, and the
+ * proof replays over HTTPS for its whole freshness window), and it will not
+ * follow redirects.
+ *
+ * BUFFERING IS INHERENT. The byte contract hashes the complete body before
+ * signing, so a request body is buffered in full before anything is sent. This
+ * adapter is for size-bounded requests; an unbounded or live stream cannot be
+ * proof-signed at all, in any implementation.
+ */
+export const createApiAuthFetch = (options: CreateApiAuthFetchOptions): typeof fetch => {
+  // Read once, at construction: a malformed credential is the caller's bug, and
+  // it should surface where the credential was passed rather than as a refusal
+  // on some later request.
+  const credentialCID = credentialCIDFromHeader(options.credential);
+  const send: typeof fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+
+  return async (input, init) => {
+    const request =
+      init === undefined && input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    // Refused BEFORE the signature, so a misrouted call costs nothing and mints
+    // nothing: a proof that was never signed cannot be captured off the wire.
+    if (url.protocol !== 'https:' && !LOOPBACK_HOSTNAMES.has(url.hostname)) {
+      throw new Error(
+        `refusing to sign a ${url.protocol}// request to ${url.host}: api: surfaces are HTTPS ` +
+          'surfaces, and a proof sent in the clear replays for its whole freshness window ' +
+          '(plaintext is allowed only to localhost, 127.0.0.1, and [::1])',
+      );
+    }
+
+    const { proof } = await signApiRequest({
+      method: request.method,
+      // `host`, never `hostname`: the authority carries the port when there is
+      // one, and the verifier compares it byte for byte.
+      host: url.host,
+      // Path plus query, byte for byte — no normalization, because the verifier
+      // compares against the request target it actually received. Dropping
+      // `.search` is the classic silent 401.
+      path: url.pathname + url.search,
+      // Hash the CLONE and forward the original: buffering the request's own
+      // stream would leave nothing to send. Buffering at all is inherent — the
+      // proof covers the WHOLE body, so there is nothing to sign until the last
+      // octet is in hand.
+      body: new Uint8Array(await request.clone().arrayBuffer()),
+      credentialCID,
+      kid: options.kid,
+      sign: options.sign,
+    });
+
+    const headers = new Headers(request.headers);
+    for (const [name, value] of Object.entries(
+      buildApiAuthHeaders({ proof, credential: options.credential }),
+    )) {
+      headers.set(name, value);
+    }
+    // `manual`, so a 3xx comes back to the caller as-is. Following it would
+    // re-issue the request at coordinates the proof does not cover — and carry
+    // `X-Credential` to whatever authority the `Location` names.
+    return send(new Request(request, { headers, redirect: 'manual' }));
+  };
+};
+
 // -----------------------------------------------------------------------------
 // verify
 // -----------------------------------------------------------------------------

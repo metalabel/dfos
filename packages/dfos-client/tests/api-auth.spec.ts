@@ -14,6 +14,7 @@
 
 import { createDFOSCredential, type Attenuation } from '@metalabel/dfos-protocol/credentials';
 import {
+  base64urlDecode,
   base64urlEncode,
   importEd25519Keypair,
   signPayloadEd25519,
@@ -23,6 +24,7 @@ import {
   apiRequestSigningInput,
   ApiRequestVerifyError,
   buildApiAuthHeaders,
+  createApiAuthFetch,
   DEFAULT_API_ACTION,
   EMPTY_BODY_SHA256,
   MAX_REQUEST_PROOF_SIZE,
@@ -950,5 +952,347 @@ describe('verifyApiRequest', () => {
       action: 'read:posts',
     });
     expect(result.action).toBe('read:posts');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// createApiAuthFetch — the same byte contract, driven by a Request
+// -----------------------------------------------------------------------------
+
+/** A transport that records what it was handed, so the signed Request is inspectable. */
+const capturing = (): { calls: Request[]; fetch: typeof fetch } => {
+  const calls: Request[] = [];
+  return {
+    calls,
+    fetch: async (input, init) => {
+      calls.push(init === undefined && input instanceof Request ? input : new Request(input, init));
+      return new Response(null, { status: 204 });
+    },
+  };
+};
+
+const sentProof = (request: Request): string => {
+  const authorization = request.headers.get('Authorization');
+  if (authorization === null) throw new Error('the signed request carries no Authorization header');
+  return authorization.slice('DFOS '.length);
+};
+
+const proofPayload = (proof: string): RequestProofPayload => {
+  const segment = proof.split('.')[1];
+  if (segment === undefined) throw new Error('the proof is not a JWS');
+  return JSON.parse(decoder.decode(base64urlDecode(segment))) as RequestProofPayload;
+};
+
+describe('createApiAuthFetch', () => {
+  it('emits EXACTLY the proof signApiRequest emits for the hand-decomposed request', async () => {
+    // The equivalence that makes this an adapter and not a second signer: the
+    // adapter's only job is decomposing a Request into the fields below.
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    await signed(new Request('https://api.dfos.com/v0/profile?a=1&b=2'));
+    const proof = sentProof(sink.calls[0]!);
+    const payload = proofPayload(proof);
+
+    const { proof: expected } = await signApiRequest({
+      method: 'GET',
+      host: 'api.dfos.com',
+      path: '/v0/profile?a=1&b=2',
+      credentialCID: grant.credentialCID,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      iat: payload.iat,
+    });
+    expect(proof).toBe(expected);
+  });
+
+  it('carries the query string byte for byte, and reads credentialCID off the credential', async () => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    await signed(new Request('https://api.dfos.com/v0/profile?b=2&a=1'));
+    const payload = proofPayload(sentProof(sink.calls[0]!));
+    // Not `url.pathname` alone, and not a reordering: dropping or normalizing
+    // the query is the classic silent 401.
+    expect(payload.path).toBe('/v0/profile?b=2&a=1');
+    expect(payload.credentialCID).toBe(grant.credentialCID);
+  });
+
+  it('hashes the empty body, and leaves a body-bearing request forwardable', async () => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    await signed(new Request('https://api.dfos.com/v0/profile'));
+    expect(proofPayload(sentProof(sink.calls[0]!)).bodyHash).toBe(EMPTY_BODY_SHA256);
+
+    await signed(
+      new Request('https://api.dfos.com/v0/profile', { method: 'POST', body: '{"a":1}' }),
+    );
+    const posted = sink.calls[1]!;
+    expect(proofPayload(sentProof(posted)).bodyHash).toBe(VECTOR_BODY_HASH);
+    // The proof hashes a CLONE, so the stream handed onward is still unread —
+    // buffering the request's own body would forward an empty one.
+    expect(posted.bodyUsed).toBe(false);
+    expect(await posted.text()).toBe('{"a":1}');
+  });
+
+  it('binds the authority WITH its port — url.host, not url.hostname', async () => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    await signed(new Request('https://api.example.org:8443/v0/profile'));
+    expect(proofPayload(sentProof(sink.calls[0]!)).host).toBe('api.example.org:8443');
+
+    // The default port is not part of the authority, and must not appear.
+    await signed(new Request('https://api.example.org:443/v0/profile'));
+    expect(proofPayload(sentProof(sink.calls[1]!)).host).toBe('api.example.org');
+  });
+
+  it('sets both carriage headers with the DFOS scheme, preserving the request’s own', async () => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    const response = await signed(
+      new Request('https://api.dfos.com/v0/profile', { headers: { Accept: 'application/json' } }),
+    );
+    const sent = sink.calls[0]!;
+    expect(sent.headers.get('Authorization')).toMatch(/^DFOS ey/);
+    expect(sent.headers.get('Authorization')).not.toMatch(/Bearer/);
+    expect(sent.headers.get('X-Credential')).toBe(grant.credential);
+    expect(sent.headers.get('Accept')).toBe('application/json');
+    // The underlying transport's response is passed through untouched.
+    expect(response.status).toBe(204);
+  });
+
+  it('signs a request composed from a URL and init, not only from a Request', async () => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    await signed('https://api.dfos.com/v0/profile', { method: 'POST', body: '{"a":1}' });
+    const payload = proofPayload(sentProof(sink.calls[0]!));
+    expect(payload.method).toBe('POST');
+    expect(payload.path).toBe('/v0/profile');
+    expect(payload.bodyHash).toBe(VECTOR_BODY_HASH);
+  });
+
+  it('produces a request verifyApiRequest accepts — the whole loop', async () => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    await signed(new Request(`https://${HOST}/v0/profile`));
+    const sent = sink.calls[0]!;
+    const proof = sentProof(sent);
+    const credential = sent.headers.get('X-Credential')!;
+    const payload = proofPayload(proof);
+
+    const result = await verifyApiRequest(clientFor([grant.user, grant.rp]), {
+      proof,
+      credential,
+      method: 'GET',
+      host: HOST,
+      path: '/v0/profile',
+      now: () => payload.iat * 1000,
+    });
+    expect(result.subjectDID).toBe(grant.user.did);
+    expect(result.credentialCID).toBe(grant.credentialCID);
+  });
+
+  it('REFUSES to sign a plaintext request to a real host, before signing anything', async () => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    let signCalls = 0;
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: async (message) => {
+        signCalls += 1;
+        return grant.rp.k.signer(message);
+      },
+      fetch: sink.fetch,
+    });
+
+    await expect(signed(new Request('http://api.dfos.com/v0/profile'))).rejects.toThrow(/HTTPS/);
+    // Nothing was minted and nothing was sent: a proof that was never signed
+    // cannot be captured off a plaintext wire.
+    expect(signCalls).toBe(0);
+    expect(sink.calls).toHaveLength(0);
+
+    // The lookalike is an ordinary internet host — the check is an exact set,
+    // never a suffix test.
+    await expect(signed(new Request('http://localhost.evil.example/v0/profile'))).rejects.toThrow(
+      /HTTPS/,
+    );
+    expect(sink.calls).toHaveLength(0);
+  });
+
+  it('allows plaintext to loopback, so a local API host is still developable', async () => {
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    for (const origin of ['http://localhost:8787', 'http://127.0.0.1:8787', 'http://[::1]:8787']) {
+      await signed(new Request(`${origin}/v0/profile`));
+    }
+    expect(sink.calls).toHaveLength(3);
+    expect(sink.calls.map((call) => proofPayload(sentProof(call)).host)).toEqual([
+      'localhost:8787',
+      '127.0.0.1:8787',
+      '[::1]:8787',
+    ]);
+  });
+
+  it('refuses to follow redirects — a 3xx comes back to the caller as-is', async () => {
+    // Following one would re-issue the request at coordinates the proof does not
+    // cover, and carry X-Credential to whatever authority the Location names.
+    const grant = await buildGrant();
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+
+    await signed(new Request('https://api.dfos.com/v0/profile'));
+    expect(sink.calls[0]!.redirect).toBe('manual');
+  });
+
+  it('sends through globalThis.fetch when no transport is supplied', async () => {
+    const grant = await buildGrant();
+    // Built BEFORE the stub exists: the default transport is late-bound, so it
+    // reads globalThis.fetch at call time rather than capturing it here.
+    const signed = createApiAuthFetch({
+      credential: grant.credential,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+    });
+
+    const calls: Request[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
+      calls.push(init === undefined && input instanceof Request ? input : new Request(input, init));
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+    try {
+      await signed(new Request('https://api.dfos.com/v0/profile'));
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    expect(calls).toHaveLength(1);
+    const payload = proofPayload(sentProof(calls[0]!));
+    expect(payload.path).toBe('/v0/profile');
+    expect(payload.credentialCID).toBe(grant.credentialCID);
+  });
+
+  it('a FORGED credential header cid changes no authorization outcome', async () => {
+    // The premise the construction-time header read rests on: reading the header
+    // trusts the credential holder about its own credential, and an attacker who
+    // rewrites that header has broken the signature it is covered by. The adapter
+    // duly emits a proof carrying the forged CID; the verifier refuses the request.
+    const grant = await buildGrant();
+    const parts = grant.credential.split('.');
+    const header = JSON.parse(decoder.decode(base64urlDecode(parts[0]!))) as Record<
+      string,
+      unknown
+    >;
+    const forged = [
+      base64urlEncode(JSON.stringify({ ...header, cid: VECTOR_CID })),
+      parts[1],
+      parts[2],
+    ].join('.');
+
+    const sink = capturing();
+    const signed = createApiAuthFetch({
+      credential: forged,
+      kid: grant.rp.kid,
+      sign: grant.rp.k.signer,
+      fetch: sink.fetch,
+    });
+    await signed(new Request(`https://${HOST}/v0/profile`));
+
+    const sent = sink.calls[0]!;
+    const proof = sentProof(sent);
+    expect(proofPayload(proof).credentialCID).toBe(VECTOR_CID);
+
+    const err = await errorOf(
+      verifyApiRequest(clientFor([grant.user, grant.rp]), {
+        proof,
+        credential: sent.headers.get('X-Credential')!,
+        method: 'GET',
+        host: HOST,
+        path: '/v0/profile',
+        now: () => proofPayload(proof).iat * 1000,
+      }),
+    );
+    expect(err?.reason).toBe('invalid');
+    expect(err?.phase).toBe('credential');
+    expect(err?.status).toBe(403);
+  });
+
+  it('refuses a credential with no cid header at CONSTRUCTION, not on the first request', async () => {
+    const grant = await buildGrant();
+    // A request proof is the artifact most likely to be passed here by mistake,
+    // and it deliberately carries no `cid` header at all.
+    expect(() =>
+      createApiAuthFetch({
+        credential: grant.proof,
+        kid: grant.rp.kid,
+        sign: grant.rp.k.signer,
+      }),
+    ).toThrow(/cid header/);
+    expect(() =>
+      createApiAuthFetch({ credential: 'not-a-jws', kid: grant.rp.kid, sign: grant.rp.k.signer }),
+    ).toThrow(/decode/);
   });
 });
