@@ -77,6 +77,46 @@ choosing peers is a trust decision, which is the model working as intended: this
 is **selectively trusting** (you pick your hosts and peers, and can be your own), not a
 Byzantine-consensus network, and its guarantees are stated accordingly.
 
+Relay resolution is not the only currency source: an identity chain can also arrive by
+**carriage** inside an application's own well-known document — a second source with a
+different trust texture, covered next.
+
+### Carried identity chains — controller-attested currency
+
+SIWD's app description MAY carry the application identity's full operation log in place
+(SIWD.md "`identity_chain` — chain carriage", `specs/SIWD.md`), and any consumer that
+encounters the document MAY fetch, verify, ingest, and re-serve that chain with no
+registration or approval precondition. Signatures verify identically to a relay-fetched
+chain — forgery is a non-issue — but the source is **controller-attested**: the consumer
+holds identity state fetched on its own clock from an origin the application itself
+controls, with no independent arbiter in the path. An identity whose `services` list
+names no relay has no order authority at all — while a carried chain that does name a
+`DfosRelay` still answers to that relay's committed order, however the chain was
+obtained (WEB-RELAY.md "Identity Linearity and Order Authority", `specs/WEB-RELAY.md`).
+The operational consequences are specified as the five carried-chain disciplines
+(SIWD.md "Carried identity chains", `specs/SIWD.md`):
+
+- **Rollback by prefix omission.** Serving yesterday's shorter chain resurrects a
+  rotated-out key by omitting the rotation. The defense is monotonicity compared on the
+  ordered operation-log CIDs — a fetch that is a proper prefix of previously observed
+  state SHOULD be ignored; derived-state comparison does not catch this.
+- **Signed divergence.** Two chains sharing a prefix and disagreeing after it both
+  verify — the controller's key contradicting itself, indistinguishable from a
+  compromised key. Acceptance is operator discretion; observed divergence SHOULD be
+  logged. Where the `services` list names no relay, there is no home-relay order to
+  defer to.
+- **Staleness in both directions.** A carried chain is a snapshot at fetch time: the
+  consumer's re-fetch cadence bounds new-key usability and rotated-key death at once.
+- **Chain substitution at first encounter.** Identity operations are public data:
+  HTTPS proves which origin served the document, never that the origin controls the
+  identity the chain derives. A consumer ingesting into a store that also holds
+  identities under its own authority MUST refuse or segregate a carried chain whose
+  derived DID it already holds under that authority — re-fetches of previously carried
+  state are the monotonicity discipline's ordinary case, but monotonicity begins only
+  after a first accepted state and cannot defend the first encounter.
+- **Discretionary retention.** Nothing obliges any consumer to ingest, retain, or keep
+  re-serving a carried chain; removal — including abuse removal — is operator policy.
+
 ### Signing mailbox — ephemeral courier state outside both planes
 
 Signing mailbox state is on neither plane: it is never gossiped, never folded, and
@@ -126,13 +166,13 @@ If the fact of the attestation is itself sensitive, do not countersign.
 
 ## Adversary Classes
 
-| Adversary                   | Can                                                                                       | Cannot                                                             | Pointer                                                 |
-| --------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------- |
-| Malicious/Byzantine relay   | Withhold, reorder, equivocate, censor, serve stale state, read stored content-plane blobs | Forge a chain or operation                                         | DID-METHOD.md §6.4 `specs/DID-METHOD.md`                |
-| Malicious peer              | Push invalid/spam operations to peers                                                     | Have invalid operations accepted (each peer re-verifies, no trust) | WEB-RELAY.md "Peering" `specs/WEB-RELAY.md`             |
-| Unauthenticated submitter   | POST arbitrary JWS to `/proof/v1/operations`; impose CPU + storage cost                   | Have malformed/unsigned ops accepted                               | WEB-RELAY.md "Operation Ingestion" `specs/WEB-RELAY.md` |
-| Compromised custody/KMS key | Full, indistinguishable impersonation of the user                                         | Be detected on-chain (signature is valid Ed25519)                  | SIWD.md "The custodial signer agent" `specs/SIWD.md`    |
-| Lost key                    | —                                                                                         | — (1-of-N availability vs. total loss)                             | DID-METHOD.md §6.2 `specs/DID-METHOD.md`                |
+| Adversary                   | Can                                                                                                                                                                      | Cannot                                                             | Pointer                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Malicious/Byzantine relay   | Withhold, reorder, equivocate, censor, serve stale state, read stored content-plane blobs                                                                                | Forge a chain or operation                                         | DID-METHOD.md §6.4 `specs/DID-METHOD.md`                                                                             |
+| Malicious peer              | Push invalid/spam operations to peers                                                                                                                                    | Have invalid operations accepted (each peer re-verifies, no trust) | WEB-RELAY.md "Peering" `specs/WEB-RELAY.md`                                                                          |
+| Unauthenticated submitter   | POST arbitrary JWS to `/proof/v1/operations`; publish a carried chain and let encounter-triggered fetch ingest it (a write path with no POST); impose CPU + storage cost | Have malformed/unsigned ops accepted                               | WEB-RELAY.md "Operation Ingestion" `specs/WEB-RELAY.md`; SIWD.md "`identity_chain` — chain carriage" `specs/SIWD.md` |
+| Compromised custody/KMS key | Full, indistinguishable impersonation of the user                                                                                                                        | Be detected on-chain (signature is valid Ed25519)                  | SIWD.md "The custodial signer agent" `specs/SIWD.md`                                                                 |
+| Lost key                    | —                                                                                                                                                                        | — (1-of-N availability vs. total loss)                             | DID-METHOD.md §6.2 `specs/DID-METHOD.md`                                                                             |
 
 ### Malicious / Byzantine relay
 
@@ -167,6 +207,16 @@ a small set of cardinality caps bound per-operation abuse — there is deliberat
 per-field string-length table (PROTOCOL.md "Operation Size and Cardinality Limits",
 `specs/PROTOCOL.md`) — but **protocol-layer rate limiting is explicitly deferred** to
 the deployment layer (WEB-RELAY.md "What's Deferred", `specs/WEB-RELAY.md`).
+
+The same class reaches ingestion **without POSTing anything**: SIWD chain carriage is
+encounter-triggered — a consumer that meets an app description MAY fetch and ingest its
+carried chain on the consumer's own initiative, so the write path is the consumer's
+outbound fetch, not an inbound submission (SIWD.md "`identity_chain` — chain carriage",
+`specs/SIWD.md`). The submitter's cost-imposition surface is the same — every carried
+operation is verified like any other — and it is bounded by the 100-operation carriage
+cap (a consumer MAY refuse a longer chain unexamined) with ingestion and retention
+entirely at the consumer's discretion, including abuse removal (SIWD.md "Carried
+identity chains", `specs/SIWD.md`).
 
 ### Compromised custody / KMS key
 
