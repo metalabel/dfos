@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import dfosApp from '../../../schemas/dfos-app.v1.json';
 import creditClaim from '../../dfos-protocol/schemas/credit-claim.v1.json';
 import index from '../../dfos-protocol/schemas/index.v1.json';
 import post from '../../dfos-protocol/schemas/post.v1.json';
@@ -15,6 +16,7 @@ const schemas: Record<string, object> = {
   '/profile/v1': profile,
   '/index/v1': index,
   '/credit-claim/v1': creditClaim,
+  '/dfos-app/v1': dfosApp,
 };
 
 const SCHEMA_HEADERS = {
@@ -35,12 +37,14 @@ app.get('/post/v1', serveSchema);
 app.get('/profile/v1', serveSchema);
 app.get('/index/v1', serveSchema);
 app.get('/credit-claim/v1', serveSchema);
+app.get('/dfos-app/v1', serveSchema);
 
 // CORS preflight for schema routes
 app.options('/post/v1', cors());
 app.options('/profile/v1', cors());
 app.options('/index/v1', cors());
 app.options('/credit-claim/v1', cors());
+app.options('/dfos-app/v1', cors());
 
 // ── Meta Routes ────────────────────────────────────────────────────────────────
 
@@ -51,7 +55,7 @@ app.get('/robots.txt', (c) => {
 });
 
 app.get('/sitemap.xml', (c) => {
-  const urls = ['/', '/post/v1', '/profile/v1', '/index/v1', '/credit-claim/v1'];
+  const urls = ['/', '/post/v1', '/profile/v1', '/index/v1', '/credit-claim/v1', '/dfos-app/v1'];
   const xml = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
@@ -77,6 +81,7 @@ app.get('/llms.txt', (c) => {
       '- [profile/v1](https://schemas.dfos.com/profile/v1): Identity profiles',
       '- [index/v1](https://schemas.dfos.com/index/v1): Index chains — LWW-Map curation over content refs',
       '- [credit-claim/v1](https://schemas.dfos.com/credit-claim/v1): Credit claims — verifiable attribution carried inside document bytes',
+      '- [dfos-app/v1](https://schemas.dfos.com/dfos-app/v1): SIWD app descriptions — the /.well-known/dfos-app.json document',
       '',
       '## Related',
       '',
@@ -140,6 +145,7 @@ small a { color: #666; }
 <li><a href="/profile/v1">profile/v1</a> &mdash; identity profiles</li>
 <li><a href="/index/v1">index/v1</a> &mdash; index chains (LWW-Map curation)</li>
 <li><a href="/credit-claim/v1">credit-claim/v1</a> &mdash; verifiable attribution credits</li>
+<li><a href="/dfos-app/v1">dfos-app/v1</a> &mdash; SIWD app descriptions (/.well-known/dfos-app.json)</li>
 </ul>
 <hr>
 <p><small><a href="https://protocol.dfos.com">Protocol</a> · <a href="https://github.com/metalabel/dfos">GitHub</a> · <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">npm</a> · <a href="https://dfos.com">dfos.com</a></small></p>

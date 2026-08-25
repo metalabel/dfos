@@ -1,0 +1,5 @@
+{
+  "name": "Non-string Client DID",
+  "redirect_uris": ["https://example.com/auth/callback"],
+  "client_did": 42
+}

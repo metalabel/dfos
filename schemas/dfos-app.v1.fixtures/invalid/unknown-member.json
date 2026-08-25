@@ -1,0 +1,5 @@
+{
+  "name": "Unknown Member App",
+  "redirect_uris": ["https://example.com/auth/callback"],
+  "logo_uri": "https://example.com/logo.png"
+}
