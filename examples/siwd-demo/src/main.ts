@@ -894,7 +894,7 @@ type ProfileState =
  */
 const profileCard = (state: ProfileState, host: string, onCall: () => void): HTMLElement => {
   const button = el('button', undefined, state.kind === 'pending' ? 'Calling…' : 'Read my profile');
-  (button as HTMLButtonElement).disabled = state.kind === 'pending';
+  button.disabled = state.kind === 'pending';
   button.addEventListener('click', onCall);
 
   const body: Node[] = [

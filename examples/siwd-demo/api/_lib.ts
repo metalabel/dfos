@@ -589,7 +589,15 @@ export interface HeldCredential {
   facts: CredentialFacts;
 }
 
-/** Parse a stored record back, or `null` if the store held something unusable. */
+/**
+ * Parse a stored record back, or `null` if the store held something unusable.
+ *
+ * Every field is re-checked rather than cast. This server wrote the record, but
+ * it comes back over a network from a store that a fork may share, may have
+ * migrated, or may have half-written — and `credentialCID` in particular goes
+ * straight into a signature. Trusting the shape of bytes because of where they
+ * came from is the habit this whole demo argues against.
+ */
 export const parseHeldCredential = (stored: string | null): HeldCredential | null => {
   if (stored === null) return null;
   let parsed: unknown;
@@ -600,10 +608,28 @@ export const parseHeldCredential = (stored: string | null): HeldCredential | nul
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
   const raw = parsed as Record<string, unknown>;
-  if (typeof raw['jws'] !== 'string' || typeof raw['facts'] !== 'object' || raw['facts'] === null) {
-    return null;
+  if (typeof raw['jws'] !== 'string' || raw['jws'] === '') return null;
+
+  const facts = raw['facts'];
+  if (typeof facts !== 'object' || facts === null || Array.isArray(facts)) return null;
+  const f = facts as Record<string, unknown>;
+  for (const field of ['issuer', 'audience', 'resource', 'action', 'credentialCID'] as const) {
+    if (typeof f[field] !== 'string' || f[field] === '') return null;
   }
-  return { jws: raw['jws'], facts: raw['facts'] as CredentialFacts };
+  if (!Number.isSafeInteger(f['issuedAt']) || !Number.isSafeInteger(f['expiresAt'])) return null;
+
+  return {
+    jws: raw['jws'],
+    facts: {
+      issuer: f['issuer'] as string,
+      audience: f['audience'] as string,
+      resource: f['resource'] as string,
+      action: f['action'] as string,
+      issuedAt: f['issuedAt'] as number,
+      expiresAt: f['expiresAt'] as number,
+      credentialCID: f['credentialCID'] as string,
+    },
+  };
 };
 
 // -----------------------------------------------------------------------------
