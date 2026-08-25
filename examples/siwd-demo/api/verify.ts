@@ -137,7 +137,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  // 2. The verification itself: resolve the signer's identity chain from a
+  // 2. Deployment configuration, checked BEFORE any verification runs — because
+  //    verification on this path SPENDS the nonce, and a misconfigured server
+  //    must not burn a user's one-shot challenge only to answer 500. The window
+  //    is small (a redeploy between the redirect out and the callback back) but
+  //    the cost is a sign-in the user cannot retry with the artifact in hand.
+  if (scope === SCOPE_READ_PROFILE && (APP_KEY_ERROR !== null || APP_DID === null)) {
+    json(res, 500, { ok: false, reason: APP_KEY_ERROR }, [clearCookie(FLIGHT_COOKIE)]);
+    return;
+  }
+  if (scope === SCOPE_READ_PROFILE && KV_ERROR !== null) {
+    json(res, 500, { ok: false, reason: KV_ERROR }, [clearCookie(FLIGHT_COOKIE)]);
+    return;
+  }
+
+  // 3. The verification itself: resolve the signer's identity chain from a
   //    public relay, replay it to CURRENT state, and accept only a key that is
   //    still an authKey of a non-deleted identity. No DFOS platform server is
   //    contacted; the relay is untrusted and the crypto is what convinces us.
@@ -164,19 +178,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
   const { did, kid, timestamp } = result.value;
 
-  // 3. On the credential path, answer for the second artifact too — before it is
+  // 4. On the credential path, answer for the second artifact too — before it is
   //    stored, and before any session exists that could spend it.
   let facts: CredentialFacts | null = null;
-  if (scope === SCOPE_READ_PROFILE) {
-    if (APP_KEY_ERROR !== null || APP_DID === null) {
-      json(res, 500, { ok: false, reason: APP_KEY_ERROR }, [clearCookie(FLIGHT_COOKIE)]);
-      return;
-    }
-    if (KV_ERROR !== null) {
-      json(res, 500, { ok: false, reason: KV_ERROR }, [clearCookie(FLIGHT_COOKIE)]);
-      return;
-    }
-
+  if (scope === SCOPE_READ_PROFILE && APP_DID !== null) {
     const checked = await checkCredential(client, credential as string, did, APP_DID);
     if ('error' in checked) {
       json(res, 400, { ok: false, reason: checked.error }, [clearCookie(FLIGHT_COOKIE)]);
@@ -185,7 +190,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     facts = checked.facts;
   }
 
-  // 4. Granted. The flight cookie is cleared in the same response that mints the
+  // 5. Granted. The flight cookie is cleared in the same response that mints the
   //    session, and the JWS is discarded: a signed challenge is a one-shot
   //    authentication proof, not a bearer token. The CREDENTIAL is not discarded
   //    — it is the durable half of what the user granted, and holding it is the
