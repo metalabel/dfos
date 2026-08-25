@@ -233,6 +233,8 @@ An application's `/.well-known/dfos-app.json`, served over https from its own or
 
 The member set is closed: this table is the registry. Every member is security-relevant, and a misspelled `redirect_uris` must never silently degrade into "no allowlist at all" — so a consumer MAY treat a document carrying unrecognized members as invalid, and new members are added by amending this table, never ad hoc. A document missing a required member is not an app description at all — consumers MUST treat it as invalid. A document that omits every optional member remains exactly as valid as it was before any optional member existed.
 
+A JSON Schema for **structural** validation of this document is published at [`https://schemas.dfos.com/dfos-app/v1`](https://schemas.dfos.com/dfos-app/v1) (source: [`schemas/dfos-app.v1.json`](https://github.com/metalabel/dfos/blob/main/schemas/dfos-app.v1.json)). It mechanically checks this table — required members, the closed member set, the chain-requires-`client_did` dependency, and the carriage cap — and nothing more: chain validity, the genesis-DID equality, and per-operation size are consumption-time checks this schema cannot express, and this spec remains normative wherever the two could be read to disagree.
+
 ### `identity_chain` — chain carriage
 
 An application named by `client_did` needs its identity chain resident somewhere a verifier can resolve it — and a freshly minted application identity may be resident nowhere at all. The optional `identity_chain` member closes that gap by carrying the chain in the one document whose origin already vouches for the application:

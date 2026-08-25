@@ -47,7 +47,9 @@ between a family that reads as part of the corpus and one that reads as bolted o
 7. **Sync the derivative docs.** CONFORMANCE.md (doc list + the tier bullets your
    MUST sets belong to), THREAT-MODEL.md (any new residual risk), WEB-RELAY.md's
    route/auth quick-start table, and the OpenAPI document — including its 501
-   responses.
+   responses. Enforcement for every spec PR (not just new families): see the
+   derivative-docs rule in [`AGENTS.md`](AGENTS.md) — sync these docs or state in
+   the PR body why there is no derivative impact.
 8. **Vectors are the spec's teeth.** Ship deterministic reference vectors with the
    reference implementations; adversarial vectors for any byte-contract (the WYSIWYS
    canonicalization set is the model). The five-language sweep is required at freeze,
