@@ -474,9 +474,13 @@ describe('relay store — earliest revocation boundary wins', () => {
     // opposite orders on two relays: both MUST converge on the earlier boundary.
     const forwards = await seedChain(-60);
     const backwards = await seedChain(-60);
+    // one shared pair of createdAt strings — minting per-chain lets the wall
+    // clock tick a second between the two runs and skew the boundaries apart
+    const earlyAt = iso(-30);
+    const lateAt = iso(-5);
     const boundary = async (c: typeof forwards, order: 'early-first' | 'late-first') => {
-      const early = await c.signRevocationAt(iso(-30));
-      const late = await c.signRevocationAt(iso(-5));
+      const early = await c.signRevocationAt(earlyAt);
+      const late = await c.signRevocationAt(lateAt);
       const seq = order === 'early-first' ? [early, late] : [late, early];
       for (const rev of seq) {
         const [res] = await ingestOperations([rev.jws], c.store);
