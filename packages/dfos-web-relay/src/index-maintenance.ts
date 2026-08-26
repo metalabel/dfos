@@ -220,7 +220,16 @@ export const collectIndexDirtyAfterOp = async (
         }
         break;
       case 'artifact': {
-        const row = artifactIndexRow(result.cid, jwsToken, new Date().toISOString());
+        // source ingestedAt from the operation log's receipt stamp so
+        // /index/v0/artifacts and /index/v0/operations agree on one receipt
+        // time for the same op (mirrors the Go twin); wall clock only as
+        // fallback for stores without the optional accessor
+        const opRow = await store.getIndexOperationRow?.(result.cid);
+        const row = artifactIndexRow(
+          result.cid,
+          jwsToken,
+          opRow?.ingestedAt ?? new Date().toISOString(),
+        );
         if (row) dirty.artifacts.push(row);
         break;
       }

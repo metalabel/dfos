@@ -578,6 +578,15 @@ export interface RelayStore {
     limit: number;
   }): Promise<IndexOperationRow[]>;
 
+  /**
+   * Optional: read one relay-held operation row by CID. Index maintenance uses
+   * it to source an artifact row's `ingestedAt` from the operation log's
+   * receipt stamp, so the two index surfaces report one receipt time for the
+   * same op (mirrors the Go twin); absent, maintenance falls back to the wall
+   * clock.
+   */
+  getIndexOperationRow?(cid: string): Promise<IndexOperationRow | undefined>;
+
   /** Upsert an identity projection row by DID. */
   putIndexIdentityRow(row: IndexIdentityRow): Promise<void>;
   /** Upsert a content projection row by contentId. */

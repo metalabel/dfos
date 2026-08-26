@@ -862,6 +862,11 @@ func decodeIndexCreditCursor(raw string) (*indexCreditCursor, bool) {
 	if err != nil {
 		return nil, false
 	}
+	// canonicality round-trip: reject non-canonical encodings (padding,
+	// whitespace) so both twins agree on exactly which cursors are valid
+	if base64.RawURLEncoding.EncodeToString(decoded) != raw {
+		return nil, false
+	}
 	parts := strings.Split(string(decoded), "~")
 	if len(parts) != 2 || !contentIDRe.MatchString(parts[0]) || parts[1] == "" {
 		return nil, false
