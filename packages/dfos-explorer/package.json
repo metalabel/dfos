@@ -14,6 +14,9 @@
   "homepage": "https://explore.dfos.com",
   "scripts": {
     "dev": "vite",
+    "schema:build": "node scripts/build-schema-validator.mjs",
+    "predev": "pnpm schema:build",
+    "prebuild": "pnpm schema:build",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
@@ -28,6 +31,8 @@
     "preact": "^10.28.2"
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "fake-indexeddb": "^6.2.2",
     "vite": "^7.2.7",
     "vitest": "^4.1.8"

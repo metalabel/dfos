@@ -60,6 +60,12 @@ importers:
         specifier: ^10.28.2
         version: 10.29.2
     devDependencies:
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.20.0)
       fake-indexeddb:
         specifier: ^6.2.2
         version: 6.2.5

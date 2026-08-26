@@ -1,8 +1,18 @@
 # @metalabel/dfos-explorer
 
 A **client-side-only chain explorer** for the DFOS proof plane. Paste a `did:dfos`, a
-contentId, or an operation CID; the explorer fetches signed bytes from one or more
-_untrusted, swappable_ relays and **re-verifies everything in the tab**. No backend, ever.
+contentId, an operation CID, or a domain; the explorer fetches signed bytes from one or more
+_untrusted, swappable_ relays and **re-verifies everything in the tab**.
+
+There is no backend for protocol data, and there never will be: everything the explorer
+renders comes from a relay you chose and is verified locally. The explorer has exactly one
+serverless route — a stateless fetch proxy for `/.well-known/dfos-app.json` — which exists
+solely because third-party origins don't reliably send CORS headers on their well-knowns, so
+a browser cannot read those documents directly. It stores no data, keeps no state between
+requests, and calls no platform API: it forwards one document and gets out of the way. Every
+verdict about that document — schema validity, chain verification, the comparison against
+what the relays hold — is still computed in the tab. For all protocol data the explorer
+remains relay-only.
 
 This is not an etherscan. Etherscan is a trusted window onto one canonical state — DFOS has
 no canonical state, so the explorer inverts the trust direction: you trust _your own
@@ -33,6 +43,13 @@ verified — or MISMATCH, loudly).
   name: the identity chain folds in the tab, its controller-signed anchor is followed, and
   the bytes must re-hash to the CID the chain commits to. A gated or absent profile stays
   a bare DID, always.
+- **Domain lookup** — paste a domain and the explorer reads its app description document
+  (`/.well-known/dfos-app.json`), the one place where a domain vouches for a DFOS identity.
+  The document's carried identity chain is verified in the tab, its `client_did` must equal
+  the DID that chain's genesis operation derives (a mismatch rejects the whole document),
+  and the result is compared against the log the relays serve for that DID — agreeing,
+  ahead, rolled back, or contradicting. A valid document that carries no chain says so
+  plainly and stays amber; nothing goes green without a verified chain.
 - **Untrusted relay set** — relays are parameters, like RPC endpoints. Reads fan out
   across the set; provenance (who answered, whether the set agreed) is part of the UI.
 
