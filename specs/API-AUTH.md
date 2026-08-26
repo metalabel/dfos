@@ -155,13 +155,14 @@ The credential side of this capability is one additive resource form, registered
 
 **`<host>` is the API's lowercase authority** — the bare hostname on the default HTTPS port, `host:port` on any other; never a scheme, never a path. Host-as-id means the resource names the surface by where it is served, so a fork or self-hosted deployment gets the same form for free: a credential for `api:api.example.org` gates that host's API exactly as `api:api.dfos.com` gates the canonical one, with no registry of deployments anywhere. It MUST byte-equal the proof's `host` (a non-default port appears in both or neither), so the resource id and the request binding name the same origin — see [`host` above](#the-request-proof) for why the port is load-bearing when non-default.
 
-**Actions are enumerated registry tokens.** This spec's v0 registry defines exactly one:
+**Actions are enumerated registry tokens.** This spec's v0 registry defines exactly two:
 
-| Action         | Grants                                         |
-| -------------- | ---------------------------------------------- |
-| `read:profile` | Read access to the granting user's own profile |
+| Action         | Grants                                                                                                                          |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `read:profile` | Read access to the granting user's own profile — display name, handle, avatar, and public profile fields. The account email address is excluded; that is `read:email` |
+| `read:email`   | Read access to the granting user's account email address                                                                         |
 
-The registry's `v0` is this spec's own `0.x` clock; a `/v1/...` segment in a route path — as in the [payload example](#payload) above — is the serving API's own path versioning. The two clocks are unrelated, and the registry names actions, never paths. New tokens register here additively as API surface grows (`read:posts`, and eventually write-bearing tokens once revocation tooling is user-facing). A grant carrying several tokens is an ordinary comma-separated action list (`read:profile,read:posts`), and narrowing is dropping tokens — the credential spec's action-set machinery, unchanged.
+The registry's `v0` is this spec's own `0.x` clock; a `/v1/...` segment in a route path — as in the [payload example](#payload) above — is the serving API's own path versioning. The two clocks are unrelated, and the registry names actions, never paths. New tokens register here additively as API surface grows (`read:posts`, and eventually write-bearing tokens once revocation tooling is user-facing). A grant carrying several tokens is an ordinary comma-separated action list (`read:profile,read:email`), and narrowing is dropping tokens — the credential spec's action-set machinery, unchanged.
 
 **There is no action wildcard, and `read:*` is a trap, not a shorthand.** Per the frozen [action lattice](https://protocol.dfos.com/credentials), `*` is a **literal token**: an `att` entry with action `read:*` matches only a route requiring the literal action `read:*` — which no route ever will, because the registry above enumerates real tokens. So a `read:*` entry grants nothing at verification (step 11 finds no route whose action token is the literal `read:*`). Note this is a matching fact, not an attenuation fact: `{read:*}` is an ordinary non-empty action set, so under the [frozen subset rule](https://protocol.dfos.com/credentials) it survives a delegation hop only when the parent's set also contains `read:*` — it does not "pass any parent," and it can never widen to a real token, because `read:*` and `read:profile` are unrelated literals. Growth is enumeration, always: more tokens, never a pattern.
 
