@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS index_content (
 	title TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_index_content_creator ON index_content(creator_did, content_id);
+CREATE INDEX IF NOT EXISTS idx_index_content_public ON index_content(public_read, content_id);
 CREATE INDEX IF NOT EXISTS idx_index_content_schema ON index_content(doc_schema, content_id);
 CREATE INDEX IF NOT EXISTS idx_index_content_doccid ON index_content(current_document_cid);
 CREATE INDEX IF NOT EXISTS idx_index_content_genesis ON index_content(genesis_at, content_id);
@@ -2039,7 +2040,7 @@ func (s *SQLiteStore) CountUnsequenced() (int, error) {
 }
 
 // ---------------------------------------------------------------------------
-// revocations (stub)
+// revocations — storage plus the as-of validity boundary logic
 // ---------------------------------------------------------------------------
 
 func (s *SQLiteStore) GetRevocations(issuerDID string) ([]string, error) {

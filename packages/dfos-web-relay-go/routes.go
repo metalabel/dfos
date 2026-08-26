@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -249,9 +250,49 @@ func (r *Relay) handleGetOperation(w http.ResponseWriter, req *http.Request) {
 // identities
 // ---------------------------------------------------------------------------
 
+// Read-through bounds. An unauthenticated GET on a local miss drives this loop,
+// and each page it fetches is handed to r.Ingest, which takes the global
+// ingestMu — so an unbounded walk lets one anonymous request pin the relay's
+// single ingestion lane for as long as a peer keeps serving pages. Peer sync
+// bounds itself for exactly this reason (maxOpsPerSyncCycle); read-through gets
+// the same treatment.
+//
+// On hitting either bound the walk stops and reports INCOMPLETE (false). It does
+// not discard what it already ingested and it does not error the request: the
+// caller re-reads the local store and serves the chain if it now resolves,
+// otherwise the request 404s exactly as an unresolved miss does today. A partial
+// walk therefore degrades to "not found yet" — never to a truncated chain served
+// as if it were whole — and the next request resumes the work.
+const (
+	// maxOpsPerReadThrough caps ops pulled from one peer in one read-through.
+	// Deliberately the same budget as a peer sync cycle.
+	maxOpsPerReadThrough = maxOpsPerSyncCycle
+	// readThroughDeadline caps wall-clock time in one read-through, so a peer
+	// that answers slowly (but answers) cannot hold ingestMu indefinitely. Sized
+	// to the peer client's own per-request timeout (30s).
+	readThroughDeadline = 30 * time.Second
+)
+
+// readThroughBudget tracks the op and time bounds of a single read-through walk.
+type readThroughBudget struct {
+	ops      int
+	deadline time.Time
+}
+
+func newReadThroughBudget() readThroughBudget {
+	return readThroughBudget{deadline: time.Now().Add(readThroughDeadline)}
+}
+
+// spend records a fetched page and reports whether the walk may continue.
+func (b *readThroughBudget) spend(n int) bool {
+	b.ops += n
+	return b.ops < maxOpsPerReadThrough && time.Now().Before(b.deadline)
+}
+
 func (r *Relay) readThroughIdentity(peerURL, did string) bool {
 	after := ""
 	restarted := false
+	budget := newReadThroughBudget()
 	for {
 		page, err := r.peerClient.GetIdentityLog(peerURL, did, after, 1000)
 		if errors.Is(err, ErrPeerInvalidCursor) {
@@ -276,6 +317,11 @@ func (r *Relay) readThroughIdentity(peerURL, did string) bool {
 		if page.Resume() == nil {
 			return true
 		}
+		if !budget.spend(len(tokens)) {
+			r.logger.Warn("read-through budget exhausted — stopping walk",
+				"peer", peerURL, "did", did, "ops", budget.ops)
+			return false
+		}
 		after = *page.Resume()
 	}
 }
@@ -283,6 +329,7 @@ func (r *Relay) readThroughIdentity(peerURL, did string) bool {
 func (r *Relay) readThroughContent(peerURL, contentID string) bool {
 	after := ""
 	restarted := false
+	budget := newReadThroughBudget()
 	for {
 		page, err := r.peerClient.GetContentLog(peerURL, contentID, after, 1000)
 		if errors.Is(err, ErrPeerInvalidCursor) {
@@ -306,6 +353,11 @@ func (r *Relay) readThroughContent(peerURL, contentID string) bool {
 		r.Ingest(tokens)
 		if page.Resume() == nil {
 			return true
+		}
+		if !budget.spend(len(tokens)) {
+			r.logger.Warn("read-through budget exhausted — stopping walk",
+				"peer", peerURL, "contentId", contentID, "ops", budget.ops)
+			return false
 		}
 		after = *page.Resume()
 	}

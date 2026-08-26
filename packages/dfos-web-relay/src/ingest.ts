@@ -63,31 +63,57 @@ export const IDENTITY_CONFLICTING_EXTENSION_ERROR =
   'identity chains are linear: conflicting extension refused';
 
 /**
- * Substrings that mark a verify-time failure as a missing-dependency (key not
- * yet resolvable because the signing identity has not synced). These are the
- * only cases where a thrown verification error is retryable rather than a
- * permanent rejection. The genesis verifiers (`verifyIdentityChain` /
- * `verifyContentChain`) throw these via the key resolver
- * (`createKeyResolver` → "unknown identity: <did>" / "unknown key ...").
+ * Substrings that mark a verify-time failure as a missing-dependency (the
+ * signing identity / key has not synced yet). These are the only cases where a
+ * thrown verification error is retryable rather than a permanent rejection.
  *
- * Mirrors the Go twin: its sequencer classifier matches "unknown identity:"
- * and "unknown previous operation" as dependency failures. Keeping this as a
- * narrow, explicit list (not the full error text) is what makes the structured
- * `dependencyMissing` flag deterministic and twin-equivalent.
+ * This list is the UNION across both relay implementations and MUST stay
+ * byte-identical to the Go twin's `dependencyFailureSubstrings` in ingest.go.
+ * The two had drifted — Go carried the content-chain entries, TS carried the
+ * credential entries in a second, separately-applied predicate — so the same op
+ * could be permanently rejected by one twin and kept retryable by the other.
+ * Since a permanent rejection DELETES the raw op (`markOpRejected`), a
+ * misclassification is unrecoverable; the union is the correct reconciliation
+ * (strictly more retries, never more deletions).
+ *
+ * Every entry is a real, greppable producer:
+ *
+ *   - "unknown identity:"          — `createKeyResolver`: identity chain not synced
+ *   - "unknown key "               — `createKeyResolver`: key not on the (synced)
+ *     identity ("unknown key <id> on identity <did>")
+ *   - "unknown previous operation" — content/identity chain dependency, surfaced
+ *     directly or through a wrapped verify error
+ *   - "content chain not found:"   — same, for the content chain lookup (the
+ *     trailing colon keeps it off the relays' bare 404 body of the same words)
+ *   - "issuer identity not found:" — dfos-protocol `dfos-credential.ts`:
+ *     credential issuer chain not synced
+ *   - " not found on identity "    — dfos-protocol `dfos-credential.ts` /
+ *     `credit-claim.ts`: "key <id> not found on identity <did>"
+ *
+ * Keeping this a narrow, explicit list (not the full error text) is what makes
+ * the structured `dependencyMissing` flag deterministic and twin-equivalent.
  */
-const DEPENDENCY_FAILURE_SUBSTRINGS = ['unknown identity:', 'unknown key '];
+const DEPENDENCY_FAILURE_SUBSTRINGS = [
+  'unknown identity:',
+  'unknown key ',
+  'unknown previous operation',
+  'content chain not found:',
+  'issuer identity not found:',
+  ' not found on identity ',
+];
 
 /** True if a thrown verification error message indicates a missing dependency. */
 const isKeyResolutionFailure = (message: string): boolean =>
   DEPENDENCY_FAILURE_SUBSTRINGS.some((s) => message.includes(s));
 
 /**
- * Credential verification surfaces the unsynced-issuer dependency with a
- * different message ("issuer identity not found: <iss>") than the chain key
- * resolvers. Treat that — and the per-key not-found — as retryable.
+ * Credential verification surfaces the unsynced-issuer dependency with different
+ * messages ("issuer identity not found: <iss>", "key <id> not found on identity
+ * <did>") than the chain key resolvers. Both are now entries in the single union
+ * list above, so this is the same predicate under the credential-site name —
+ * kept as a distinct name because the call site reads better with it.
  */
-const isCredentialDependencyFailure = (message: string): boolean =>
-  message.includes('issuer identity not found:') || message.includes(' not found on identity ');
+const isCredentialDependencyFailure = isKeyResolutionFailure;
 
 export type AdmissionMode = 'current' | 'historical';
 

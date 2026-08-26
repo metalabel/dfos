@@ -173,8 +173,13 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 
 	issuerDID := kid[:strings.Index(kid, "#")]
 
-	// check issuer identity is not deleted
-	issuerIdentity, _ := store.GetIdentityChain(issuerDID)
+	// check issuer identity is not deleted. A store failure is NOT "not deleted":
+	// an authorization gate that cannot be evaluated denies (mirrors
+	// verifySigningCredential in signing.go, which propagates the same call).
+	issuerIdentity, err := store.GetIdentityChain(issuerDID)
+	if err != nil {
+		return fmt.Errorf("failed to check credential issuer identity: %v", err)
+	}
 	if issuerIdentity != nil && issuerIdentity.State.IsDeleted {
 		return fmt.Errorf("credential issuer identity is deleted")
 	}
@@ -193,8 +198,12 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 		return err
 	}
 
-	// check leaf revocation — timeless (asOf 0), the live read-path question
-	revoked, _ := store.IsCredentialRevoked(verified.Iss, verified.CID, 0)
+	// check leaf revocation — timeless (asOf 0), the live read-path question.
+	// A lookup that FAILS is not an answer of "not revoked": deny.
+	revoked, err := store.IsCredentialRevoked(verified.Iss, verified.CID, 0)
+	if err != nil {
+		return fmt.Errorf("failed to check credential revocation: %v", err)
+	}
 	if revoked {
 		return fmt.Errorf("credential is revoked")
 	}
@@ -236,12 +245,19 @@ func verifyCredentialForAccess(credJws string, resolveKey dfos.KeyResolver, requ
 	// credential revoked as far as we know right now?" — exactly as before. The
 	// as-of basis belongs to verification of committed history, not to read-path
 	// authorization.
+	//
+	// Both closures PROPAGATE store errors rather than answering "not revoked" /
+	// "not deleted" — VerifyDelegationChain turns a callback error into a chain
+	// verification failure, so a gate the relay could not evaluate denies the
+	// read instead of silently authorizing it. Same shape as signing.go.
 	isRevoked := func(issuerDID, credentialCID string, _ int64) (bool, error) {
-		revoked, _ := store.IsCredentialRevoked(issuerDID, credentialCID, 0)
-		return revoked, nil
+		return store.IsCredentialRevoked(issuerDID, credentialCID, 0)
 	}
 	isDeleted := func(did string) (bool, error) {
-		idc, _ := store.GetIdentityChain(did)
+		idc, err := store.GetIdentityChain(did)
+		if err != nil {
+			return false, err
+		}
 		return idc != nil && idc.State.IsDeleted, nil
 	}
 	if err := dfos.VerifyDelegationChain(credJws, verified, att, prf, resolveKey, creatorDID, isRevoked, isDeleted, 0); err != nil {

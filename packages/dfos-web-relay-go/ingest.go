@@ -16,18 +16,42 @@ import (
 
 // dependencyFailureSubstrings mark a verify-time failure as a missing
 // dependency (the signing identity / key has not synced yet). These are the
-// only thrown-error cases that are retryable rather than permanent. Mirrors
-// the TS twin's DEPENDENCY_FAILURE_SUBSTRINGS in ingest.ts.
+// only thrown-error cases that are retryable rather than permanent.
 //
-//   - "unknown identity:"   — CreateKeyResolver: identity chain not synced
-//   - "unknown key "        — CreateKeyResolver: key not on the (synced) identity
-//   - "unknown previous operation", "content chain not found:" — content
-//     chain dependency surfaced through a wrapped verify error
+// This list is the UNION across both relay implementations and MUST stay
+// byte-identical to the TS twin's DEPENDENCY_FAILURE_SUBSTRINGS in ingest.ts.
+// The two lists had drifted (Go carried the two content-chain entries, TS
+// carried the two credential entries in a second, separately-applied
+// predicate), which meant the same op could be permanently rejected by one twin
+// and kept retryable by the other. Since a permanent rejection DELETES the raw
+// op (MarkOpRejected), a misclassification is unrecoverable — so the union is
+// the correct reconciliation: strictly more retries, never more deletions.
+//
+// Every entry is a real, greppable producer:
+//
+//   - "unknown identity:"          — CreateKeyResolver (ingest.go) / TS
+//     createKeyResolver: identity chain not synced
+//   - "unknown key "               — CreateKeyResolver: key not on the (synced)
+//     identity ("unknown key <id> on identity <did>")
+//   - "unknown previous operation" — content/identity chain dependency, surfaced
+//     directly or through a wrapped verify error
+//   - "content chain not found:"   — same, for the content chain lookup (the
+//     trailing colon keeps it off the relays' bare 404 body of the same words)
+//   - "issuer identity not found:" — dfos-protocol (TS) dfos-credential.ts:
+//     credential issuer chain not synced
+//   - " not found on identity "    — dfos-protocol (TS) dfos-credential.ts /
+//     credit-claim.ts: "key <id> not found on identity <did>"
+//
+// The last two have no producer in dfos-protocol-go today (it emits no
+// "not found" text at all); they are carried here so the twins classify
+// identically if a Go verifier ever grows the same message.
 var dependencyFailureSubstrings = []string{
 	"unknown identity:",
 	"unknown key ",
 	"unknown previous operation",
 	"content chain not found:",
+	"issuer identity not found:",
+	" not found on identity ",
 }
 
 const noncurrentSigningKeyError = "signing key is not in the identity's current state"
@@ -427,10 +451,14 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 		return IngestionResult{CID: cid, Status: "duplicate", Kind: "content-op", ChainID: existing.ChainID}
 	}
 
-	// reject content ops from deleted identities
+	// reject content ops from deleted identities. A failed lookup is NOT
+	// "not deleted" — the gate fails closed and the op stays pending.
 	signerDID, _ := payload["did"].(string)
 	if signerDID != "" {
-		signerIdentity, _ := store.GetIdentityChain(signerDID)
+		signerIdentity, err := store.GetIdentityChain(signerDID)
+		if serr := storeReadError(cid, err); serr != nil {
+			return *serr
+		}
 		if signerIdentity != nil && signerIdentity.State.IsDeleted {
 			return IngestionResult{CID: cid, Status: "rejected", Error: "signer identity is deleted"}
 		}
@@ -511,8 +539,11 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 		return IngestionResult{CID: cid, Status: "rejected", Error: fmt.Sprintf("content chain not found: %s", prevOp.ChainID), DependencyMissing: true}
 	}
 
-	// reject if creator's identity is deleted
-	creatorIdentity, _ := store.GetIdentityChain(chain.State.CreatorDID)
+	// reject if creator's identity is deleted (fails closed on a store error)
+	creatorIdentity, cerr := store.GetIdentityChain(chain.State.CreatorDID)
+	if serr := storeReadError(cid, cerr); serr != nil {
+		return *serr
+	}
 	if creatorIdentity != nil && creatorIdentity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "content creator identity is deleted"}
 	}
@@ -638,8 +669,11 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool, mode admis
 		return IngestionResult{CID: cid, Status: "rejected", Error: "witness DID must differ from target author DID"}
 	}
 
-	// reject countersigns from deleted witnesses
-	witnessIdentity, _ := store.GetIdentityChain(witnessDID)
+	// reject countersigns from deleted witnesses (fails closed on a store error)
+	witnessIdentity, werr := store.GetIdentityChain(witnessDID)
+	if serr := storeReadError(cid, werr); serr != nil {
+		return *serr
+	}
 	if witnessIdentity != nil && witnessIdentity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "witness identity is deleted"}
 	}
@@ -690,8 +724,11 @@ func ingestArtifact(jwsToken string, store Store, logEnabled bool, mode admissio
 		return IngestionResult{CID: cid, Status: "duplicate", Kind: "artifact", ChainID: did}
 	}
 
-	// reject artifacts from deleted identities
-	identity, _ := store.GetIdentityChain(did)
+	// reject artifacts from deleted identities (fails closed on a store error)
+	identity, ierr := store.GetIdentityChain(did)
+	if serr := storeReadError(cid, ierr); serr != nil {
+		return *serr
+	}
 	if identity != nil && identity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
 	}
@@ -727,8 +764,11 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 		return IngestionResult{CID: cid, Status: "duplicate", Kind: "revocation", ChainID: did}
 	}
 
-	// reject if identity is deleted
-	identity, _ := store.GetIdentityChain(did)
+	// reject if identity is deleted (fails closed on a store error)
+	identity, ierr := store.GetIdentityChain(did)
+	if serr := storeReadError(cid, ierr); serr != nil {
+		return *serr
+	}
 	if identity != nil && identity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "identity is deleted"}
 	}
@@ -829,15 +869,23 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 	}
 
 	// reject credentials from a deleted issuer (matches TS verifyDFOSCredential,
-	// which resolves the issuer identity and rejects when isDeleted).
-	issuerIdentity, _ := store.GetIdentityChain(kidDID)
+	// which resolves the issuer identity and rejects when isDeleted). Fails
+	// closed on a store error.
+	issuerIdentity, ierr := store.GetIdentityChain(kidDID)
+	if serr := storeReadError(cid, ierr); serr != nil {
+		return *serr
+	}
 	if issuerIdentity != nil && issuerIdentity.State.IsDeleted {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "issuer identity is deleted"}
 	}
 
 	// check if already revoked — timeless (asOf 0): admitting a standing credential
-	// is an acceptance decision, so it asks what the relay knows right now
-	revoked, _ := store.IsCredentialRevoked(kidDID, cid, 0)
+	// is an acceptance decision, so it asks what the relay knows right now. A
+	// revocation lookup that FAILS is not "not revoked": the gate fails closed.
+	revoked, rerr := store.IsCredentialRevoked(kidDID, cid, 0)
+	if serr := storeReadError(cid, rerr); serr != nil {
+		return *serr
+	}
 	if revoked {
 		return IngestionResult{CID: cid, Status: "rejected", Error: "credential has been revoked"}
 	}
