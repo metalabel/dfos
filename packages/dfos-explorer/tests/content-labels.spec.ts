@@ -27,7 +27,8 @@ describe('verifiedContentLabel — only integral document bytes name a content c
         true,
       ),
     ).toEqual({
-      text: 'So today I did a whole bunch of things worth wri…',
+      // truncation breaks on the last word boundary inside the limit — never mid-word
+      text: 'So today I did a whole bunch of things worth…',
       quoted: true,
       kind: 'snippet',
     });

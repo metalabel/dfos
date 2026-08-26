@@ -20,6 +20,18 @@ describe('snippet', () => {
   it('leaves a short string untouched', () => {
     expect(snippet('hello')).toBe('hello');
   });
+
+  it('breaks on the last word boundary inside the limit, never mid-word', () => {
+    expect(snippet('one two three four', 12)).toBe('one two…');
+  });
+
+  it('hard-cuts a single token longer than half the budget (a URL cannot eat the snippet)', () => {
+    const out = snippet(`x ${'y'.repeat(SNIPPET_MAX + 10)}`, SNIPPET_MAX);
+    // the lone space sits inside the first half — a word-boundary break there
+    // would collapse the snippet to "x…", so the hard character cut stands
+    expect(out.length).toBe(SNIPPET_MAX + 1);
+    expect(out.endsWith('…')).toBe(true);
+  });
 });
 
 describe('deriveDocLabel', () => {
