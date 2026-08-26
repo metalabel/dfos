@@ -52,6 +52,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'Discovery vocabulary in identity state: DfosRelay entries advertise a relay endpoint holding this identity’s data; ContentAnchor entries pin a stable contentId or artifact CID (e.g. a profile).',
   },
   {
+    key: 'originBinding',
+    term: 'origin binding',
+    def: 'A bidirectional binding between an identity and a web domain: a DfosOrigin services entry names the domain on the signed chain, and the domain attests the DID back at /.well-known/dfos-did or in a _dfos TXT record. It proves control of that domain — never personhood or endorsement.',
+  },
+  {
     key: 'artifact',
     term: 'artifact',
     def: 'A standalone signed immutable document addressed by its own CID, with no predecessor or successor — where a chain is a history, an artifact is a single fixed statement.',

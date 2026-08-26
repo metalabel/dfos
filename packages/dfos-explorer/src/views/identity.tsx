@@ -56,6 +56,18 @@ import { projectedTitle, useIndexContentRow } from '../lib/index-point';
 import { useIndexCredits, type IndexCreditRow } from '../lib/index-raw';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
+import {
+  assessBinding,
+  fallbackEligible,
+  fetchBindingAttestation,
+  isBareHostname,
+  readOriginClaim,
+  runAppFallback,
+  type BindingMethodResult,
+  type BindingVerdict,
+  type FallbackResult,
+  type OriginClaim,
+} from '../lib/origin-binding';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
 import { fetchBlobRaw, fetchClaim, type ClaimResult } from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
@@ -336,6 +348,12 @@ export const Identity = (props: { did: string }) => {
 
   const services = ('services' in state ? state.services : undefined) ?? [];
 
+  // the chain half of an origin binding (ORIGIN-BINDING.md). The claim is only
+  // ever acted on once the chain has VERIFIED here — a relay-asserted services
+  // set is not a signed claim, and the domain half is checked against a signed
+  // claim or not at all.
+  const originClaim = readOriginClaim(services);
+
   // credential list source: the live relay index when the relay is index-capable AND
   // the credentials route answered (always fresh, no sync needed), else the local
   // synced scan. Both expose {cid, jwsToken}, so the row renders identically.
@@ -433,8 +451,12 @@ export const Identity = (props: { did: string }) => {
         </Checks>
       </Panel>
 
+      {stateVerified && originClaim.kind === 'claimed' ? (
+        <OriginBindingPanel did={props.did} claim={originClaim} />
+      ) : null}
+
       <KeysPanel state={state} verified={stateVerified} />
-      <ServicesPanel services={services} />
+      <ServicesPanel services={services} claim={originClaim} />
 
       <ActorLedger
         indexed={indexed}
@@ -463,6 +485,13 @@ export const Identity = (props: { did: string }) => {
 
       <Related
         rows={[
+          {
+            k: 'claimed origin',
+            v:
+              originClaim.kind === 'claimed' ? (
+                <a href={`#/domain/${originClaim.domain}`}>{originClaim.domain}</a>
+              ) : null,
+          },
           {
             k: 'content chains',
             v:
@@ -1012,6 +1041,207 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
   );
 };
 
+// -----------------------------------------------------------------------------
+// ORIGIN BINDING — the chain's domain claim, checked against the domain's answer
+//
+// The chain half is already proven when this renders: a `DfosOrigin` entry in the
+// VERIFIED services state, signed by a controller key and ordered by the chain.
+// The domain half is checked JIT, in this tab, through `/api/binding` (a browser
+// cannot query DNS, and origins do not reliably send CORS headers on well-knowns).
+//
+// Display discipline here is NORMATIVE (ORIGIN-BINDING.md, "Display Discipline"):
+// a binding proves control of a DOMAIN at verification time — never personhood,
+// endorsement, or notability — so the panel leads with the domain string itself
+// and never collapses the verdict into a bare checkmark divorced from it.
+// -----------------------------------------------------------------------------
+
+/** One method's row state. An answer that names a DIFFERENT DID is red; every
+ *  form of silence is amber; only an exact match is green. */
+const methodState = (result: BindingMethodResult, did: string): CheckState => {
+  if (result.status === 'ok') return result.did === did ? 'ok' : 'bad';
+  if (result.status === 'contradiction') return 'bad';
+  return 'warn';
+};
+
+/** The mechanical note under a method row — what was actually observed. */
+const methodNote = (result: BindingMethodResult, did: string): string => {
+  switch (result.status) {
+    case 'ok':
+      return result.did === did
+        ? `attests ${result.did} — exactly this identity`
+        : `attests ${result.did} — a DIFFERENT identity`;
+    case 'contradiction':
+      return result.reason;
+    case 'malformed':
+      return `${result.reason} — present, but not an attestation`;
+    case 'none':
+      return result.reason ?? 'nothing published';
+    case 'error':
+      return `${result.reason ?? 'the lookup failed'}${
+        result.httpStatus !== undefined ? ` (HTTP ${result.httpStatus})` : ''
+      } — could not check`;
+    case 'refused':
+      return `${result.reason} — refused before it left the explorer`;
+  }
+};
+
+const bindingPill = (verdict: BindingVerdict): { state: 'ok' | 'warn' | 'bad'; text: string } => {
+  switch (verdict.kind) {
+    case 'bound':
+      return { state: 'ok', text: 'bound' };
+    case 'stale':
+      return { state: 'warn', text: 'bound (stale) — domain silent' };
+    case 'broken':
+      return { state: 'bad', text: 'broken — domain contradicts' };
+    case 'proxy-unavailable':
+      return { state: 'warn', text: 'verifier unavailable' };
+    case 'none':
+      return { state: 'warn', text: 'no claim' };
+  }
+};
+
+const OriginBindingPanel = (props: {
+  did: string;
+  claim: Extract<OriginClaim, { kind: 'claimed' }>;
+}) => {
+  const domain = props.claim.domain;
+  const [verdict, setVerdict] = useState<BindingVerdict | null>(null);
+  const [probe, setProbe] = useState<{
+    https: BindingMethodResult;
+    dns: BindingMethodResult;
+  } | null>(null);
+  const [fallback, setFallback] = useState<FallbackResult | null>(null);
+
+  useEffect(() => {
+    let dead = false;
+    setVerdict(null);
+    setProbe(null);
+    setFallback(null);
+    const claim = props.claim;
+    void (async () => {
+      const answer = await fetchBindingAttestation(domain);
+      // the app-description fallback is a MUST, and ONLY on absence: a dfos-did
+      // document that is present but says something else is a contradiction, and
+      // must not be fallen through
+      const fell = fallbackEligible(answer) ? await runAppFallback(domain, props.did) : undefined;
+      if (dead) return;
+      if (answer.kind === 'answered') setProbe({ https: answer.https, dns: answer.dns });
+      setFallback(fell ?? null);
+      setVerdict(assessBinding(props.did, claim, answer, fell));
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [props.did, domain]);
+
+  const pill = verdict ? bindingPill(verdict) : null;
+
+  return (
+    <Panel
+      title={
+        <>
+          origin binding{' '}
+          {pill ? (
+            <Pill state={pill.state}>{pill.text}</Pill>
+          ) : (
+            <Pill state="pending">asking the domain…</Pill>
+          )}
+        </>
+      }
+      accent={pill ? pill.state : undefined}
+      right={<span class="lbl">checked in your browser</span>}
+      orient={
+        <>
+          The chain names a domain and the domain answers back — an{' '}
+          <Term word="origin binding" def={GLOSSARY['originBinding'] ?? ''} />. It proves{' '}
+          <b>control of that domain</b> at check time: never personhood, endorsement, or notability.
+          The domain is the credential, so it is shown, not summarized.
+        </>
+      }
+    >
+      <div class="kv">
+        <div class="k">
+          domain <span class="lbl">claimed on the verified chain</span>
+        </div>
+        <div class="v">
+          <a href={`#/domain/${domain}`}>{domain}</a>{' '}
+          <a
+            href={`https://${domain}/.well-known/dfos-did`}
+            rel="noreferrer noopener"
+            target="_blank"
+            class="lbl"
+          >
+            attestation ↗
+          </a>
+        </div>
+      </div>
+
+      <Checks>
+        <Check state="ok" note={`DfosOrigin service entry — ${domain}`}>
+          the chain names a domain
+        </Check>
+        {verdict === null ? (
+          <Check state="pend">checking the domain's attest-back…</Check>
+        ) : verdict.kind === 'proxy-unavailable' ? (
+          <Check state="warn" note={verdict.reason}>
+            the explorer's own binding route did not answer — <b>nothing was learned</b> about{' '}
+            {domain}
+          </Check>
+        ) : probe === null ? null : (
+          <>
+            <Check
+              state={methodState(probe.https, props.did)}
+              note={methodNote(probe.https, props.did)}
+            >
+              https attest-back <code>/.well-known/dfos-did</code>
+            </Check>
+            <Check
+              state={methodState(probe.dns, props.did)}
+              note={methodNote(probe.dns, props.did)}
+            >
+              dns attest-back <code>_dfos</code> TXT
+            </Check>
+            {fallback !== null ? (
+              <Check
+                state={
+                  fallback.kind === 'attests'
+                    ? 'ok'
+                    : fallback.kind === 'answers-other'
+                      ? 'bad'
+                      : 'warn'
+                }
+                note={
+                  fallback.kind === 'attests'
+                    ? `client_did is ${fallback.did} — exactly this identity`
+                    : fallback.kind === 'answers-other'
+                      ? `client_did is ${fallback.did} — a DIFFERENT identity`
+                      : fallback.reason
+                }
+              >
+                app-description fallback <code>/.well-known/dfos-app.json</code>
+              </Check>
+            ) : null}
+          </>
+        )}
+      </Checks>
+
+      {verdict?.kind === 'stale' ? (
+        <div class="ck-note" style={{ marginTop: 10 }}>
+          The domain is <b>silent</b>, not contradicting — DNS and web hosting fail routinely and
+          recover routinely, so staleness is legal. It is not a claim that the binding is wrong.
+        </div>
+      ) : null}
+      {verdict?.kind === 'broken' ? (
+        <div class="ck-note" style={{ marginTop: 10 }}>
+          {verdict.details.join(' · ')}. A domain that answers with something else contradicts this
+          identity's claim — the identity and its history are untouched, only the domain claim is
+          contradicted.
+        </div>
+      ) : null}
+    </Panel>
+  );
+};
+
 const KeysPanel = (props: { state: IdentityClaimState | VerifiedIdentity; verified: boolean }) => {
   const rows = new Map<string, { publicKeyMultibase: string; roles: string[] }>();
   const add = (
@@ -1071,7 +1301,7 @@ const KeysPanel = (props: { state: IdentityClaimState | VerifiedIdentity; verifi
   );
 };
 
-const ServicesPanel = (props: { services: ServiceEntry[] }) => (
+const ServicesPanel = (props: { services: ServiceEntry[]; claim: OriginClaim }) => (
   <Panel
     title="services"
     right={
@@ -1080,6 +1310,16 @@ const ServicesPanel = (props: { services: ServiceEntry[] }) => (
       </span>
     }
   >
+    {/* an identity claims AT MOST ONE canonical domain: more than one DfosOrigin
+        entry claims none at all ("an ambiguous claim is no claim"), which is
+        deliberately not `broken` — nobody is being contradicted, the claim is
+        simply unreadable. So the binding panel is absent and this says why. */}
+    {props.claim.kind === 'ambiguous' ? (
+      <div class="ck-note" style={{ marginBottom: 10 }}>
+        ⚠ {props.claim.count} <code>DfosOrigin</code> entries — an identity claims at most one
+        canonical domain, so this set claims <b>no</b> origin binding at all.
+      </div>
+    ) : null}
     {props.services.length === 0 ? (
       <span class="muted">none declared</span>
     ) : (
@@ -1123,6 +1363,25 @@ const ServiceTarget = (props: { entry: ServiceEntry }) => {
         </a>{' '}
         <span class="lbl">add as relay</span>
       </>
+    );
+  }
+  if (props.entry.type === 'DfosOrigin') {
+    const domain = rec['domain'];
+    // the entry's `domain` is an exact byte comparison everywhere in
+    // ORIGIN-BINDING.md, so anything that is not already a bare lowercase
+    // hostname claims nothing — and is rendered as the dead letter it is
+    if (isBareHostname(domain)) {
+      return (
+        <>
+          <a href={`#/domain/${domain}`}>{domain}</a> <span class="lbl">claimed origin</span>
+        </>
+      );
+    }
+    return (
+      <span class="err">
+        {typeof domain === 'string' ? domain : JSON.stringify(props.entry)}{' '}
+        <span class="lbl">not a bare hostname — claims nothing</span>
+      </span>
     );
   }
   if (props.entry.type === 'ContentAnchor' && typeof rec['anchor'] === 'string') {
