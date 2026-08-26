@@ -265,6 +265,12 @@ export const collectIndexDirtyAfterOp = async (
         const relation = typeof payload?.['relation'] === 'string' ? payload['relation'] : null;
         const witnessDID = typeof payload?.['did'] === 'string' ? payload['did'] : '';
         const createdAt = typeof payload?.['createdAt'] === 'string' ? payload['createdAt'] : '';
+        // source ingestedAt from the operation log's receipt stamp so this row
+        // and /index/v0/operations agree on one receipt time for the same op
+        // (same sourcing as the artifact case above; keyed by the ingest CID,
+        // since the countersign row's own CID may be the header CID); wall
+        // clock only as fallback for stores without the optional accessor
+        const csOpRow = await store.getIndexOperationRow?.(result.cid);
         dirty.countersigns.push({
           cid,
           targetCID: result.chainId,
@@ -272,7 +278,7 @@ export const collectIndexDirtyAfterOp = async (
           jwsToken,
           witnessDID,
           createdAt,
-          ingestedAt: new Date().toISOString(),
+          ingestedAt: csOpRow?.ingestedAt ?? new Date().toISOString(),
         });
         break;
       }

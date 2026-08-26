@@ -591,19 +591,129 @@ describe('index v0', () => {
     expect((await req('/index/v0/artifacts?order=createdAt.desc&after=bogus')).status).toBe(400);
   });
 
-  it('reports one receipt time for an artifact across artifacts and operations routes', async () => {
+  // One op, one receipt stamp: every projection row carrying an op's receipt
+  // time must carry the SAME string /index/v0/operations reports for that op. A
+  // second wall-clock read anywhere on the ingest path shows up here as a
+  // millisecond of divergence — and only sometimes, which is why this asserts
+  // equality rather than closeness.
+  it('reports one receipt time for an op across every index surface', async () => {
     const signer = await createIdentity();
+    const witness = await createIdentity();
     const made = await createArtifact(signer, { $schema: 'example/artifact-receipt', value: 1 }, 1);
+    const content = await createContent(signer, { $schema: 'example/post', title: 'receipt' });
+    const { jwsToken, countersignCID } = await signCountersignature({
+      payload: {
+        version: 1,
+        type: 'countersign',
+        did: witness.did,
+        targetCID: content.operationCID,
+        createdAt: ts(3),
+      },
+      signer: witness.authKey.signer,
+      kid: `${witness.did}#${witness.authKey.keyId}`,
+    });
+    expect((await postOps([jwsToken])).status).toBe(200);
+
+    const operations = await json(await req('/index/v0/operations?limit=100'));
+    const stampOf = (cid: string): string | undefined =>
+      operations.operations.find((row: { cid: string }) => row.cid === cid)?.ingestedAt;
 
     const artifacts = await json(
       await req(`/index/v0/artifacts?cid=${encodeURIComponent(made.artifactCID)}`),
     );
-    const operations = await json(await req('/index/v0/operations?kind=artifact&limit=100'));
-    const opRow = operations.operations.find(
-      (row: { cid: string }) => row.cid === made.artifactCID,
+    expect(stampOf(made.artifactCID)).toEqual(expect.any(String));
+    expect(artifacts.artifacts[0].ingestedAt).toBe(stampOf(made.artifactCID));
+
+    // the countersign receipt is off-wire (it only orders `order=ingestedAt.desc`),
+    // so assert it at the store layer
+    const [csRow] = await store.queryIndexCountersignatures({ witness: witness.did, limit: 100 });
+    expect(csRow?.cid).toBe(countersignCID);
+    expect(stampOf(countersignCID)).toEqual(expect.any(String));
+    expect(csRow?.ingestedAt).toBe(stampOf(countersignCID));
+  });
+
+  // Deterministic counterpart to the parity check above. Two wall-clock reads
+  // usually land in the same millisecond, so equality alone only catches a
+  // second clock read SOMETIMES — which is how one reached main. A store whose
+  // operation-log receipt is an obviously-not-now stamp turns "sources it from
+  // the log" into an assertion that fails every run when a projection writer
+  // reads its own clock instead.
+  it('sources projection receipt stamps from the operation log, never its own clock', async () => {
+    const pinned = '1999-12-31T23:59:59.000Z';
+    class PinnedReceiptStore extends MemoryRelayStore {
+      override async getIndexOperationRow(cid: string) {
+        const row = await super.getIndexOperationRow(cid);
+        return row ? { ...row, ingestedAt: pinned } : undefined;
+      }
+    }
+    const pinnedStore = new PinnedReceiptStore();
+    const pinnedIdentity = await bootstrapRelayIdentity(pinnedStore);
+    const pinnedRelay = await createRelay({ store: pinnedStore, identity: pinnedIdentity });
+    const post = (operations: string[]) =>
+      pinnedRelay.app.request('http://localhost/proof/v1/operations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ operations }),
+      });
+
+    const signer = await createIdentityOp();
+    const witness = await createIdentityOp();
+    expect((await post([signer.jwsToken, witness.jwsToken])).status).toBe(200);
+
+    const artifact = await signArtifact({
+      payload: {
+        version: 1,
+        type: 'artifact',
+        did: signer.did,
+        content: { $schema: 'example/artifact-pinned', value: 1 },
+        createdAt: ts(1),
+      },
+      signer: signer.authKey.signer,
+      kid: `${signer.did}#${signer.authKey.keyId}`,
+    });
+    expect((await post([artifact.jwsToken])).status).toBe(200);
+
+    const document = { $schema: 'example/post', title: 'pinned' };
+    const encoded = await dagCborCanonicalEncode(document);
+    const contentOp = await signContentOperation({
+      operation: {
+        version: 1,
+        type: 'create',
+        did: signer.did,
+        documentCID: encoded.cid.toString(),
+        baseDocumentCID: null,
+        createdAt: ts(1),
+        note: null,
+      },
+      signer: signer.authKey.signer,
+      kid: `${signer.did}#${signer.authKey.keyId}`,
+    });
+    expect((await post([contentOp.jwsToken])).status).toBe(200);
+
+    const countersign = await signCountersignature({
+      payload: {
+        version: 1,
+        type: 'countersign',
+        did: witness.did,
+        targetCID: contentOp.operationCID,
+        createdAt: ts(2),
+      },
+      signer: witness.authKey.signer,
+      kid: `${witness.did}#${witness.authKey.keyId}`,
+    });
+    expect((await post([countersign.jwsToken])).status).toBe(200);
+
+    const artifactRes = await pinnedRelay.app.request(
+      `http://localhost/index/v0/artifacts?cid=${encodeURIComponent(artifact.artifactCID)}`,
     );
-    expect(opRow).toBeDefined();
-    expect(artifacts.artifacts[0].ingestedAt).toBe(opRow.ingestedAt);
+    const artifactRows = await json(artifactRes);
+    expect(artifactRows.artifacts[0].ingestedAt).toBe(pinned);
+
+    const [csRow] = await pinnedStore.queryIndexCountersignatures({
+      witness: witness.did,
+      limit: 100,
+    });
+    expect(csRow?.ingestedAt).toBe(pinned);
   });
 
   it('enumerates identities with profile projection, filters, pagination, and deleted rows', async () => {

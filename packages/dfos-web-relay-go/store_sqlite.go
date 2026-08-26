@@ -1676,7 +1676,20 @@ func (s *SQLiteStore) ClearIndexProjection() error {
 
 func (s *SQLiteStore) AppendToLog(entry LogEntry) error {
 	createdAt := operationCreatedAt(entry.JWSToken)
+	// One op, one receipt stamp: PutOperation wrote this op's ingested_at moments
+	// ago in the same ingest, so source the log row's stamp from the operations
+	// table rather than re-reading the wall clock — otherwise
+	// /index/v0/operations and the projection rows that source from the operation
+	// (artifacts, countersignatures) can disagree by a millisecond about the same
+	// op. Wall clock only as a last-resort fallback for a log entry with no
+	// stored op.
 	ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	var storedIngestedAt string
+	if err := s.readerDB().QueryRow(
+		"SELECT ingested_at FROM operations WHERE cid = ?", entry.CID,
+	).Scan(&storedIngestedAt); err == nil && storedIngestedAt != "" {
+		ingestedAt = storedIngestedAt
+	}
 	_, err := s.writerDB().Exec(
 		"INSERT INTO operation_log (cid, jws_token, kind, chain_id, created_at, ingested_at) VALUES (?, ?, ?, ?, ?, ?)",
 		entry.CID, entry.JWSToken, entry.Kind, entry.ChainID, createdAt, ingestedAt,

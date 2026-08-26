@@ -691,6 +691,12 @@ export class MemoryRelayStore implements RelayStore {
 
   // --- operation log ---
 
+  // One op, one receipt stamp: this is the ONLY place an operation's receipt
+  // time is read off the wall clock. `putOperation` holds no receipt, so the
+  // operation-log row is the single source, and every other projection writer
+  // sources it back out through `getIndexOperationRow` (the Go twin sources
+  // from its op store instead, but the invariant is the same — one clock read
+  // per op, so no two index surfaces can disagree by a millisecond).
   async appendToLog(entry: LogEntry): Promise<void> {
     this.operationLog.push(entry);
     const payload = decodeJwsUnsafe(entry.jwsToken)?.payload;
