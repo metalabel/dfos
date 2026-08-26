@@ -154,6 +154,21 @@ func TestSignSiwdAskProofRejectsMalformedInput(t *testing.T) {
 	if _, err := SignSiwdAskProof(bad, client.kid, client.priv); err == nil {
 		t.Error("non-whole-second challenge timestamp accepted")
 	}
+
+	// A wrong-length key is a bad input to report, not an ed25519.Sign panic to
+	// take — the key reaches this signer from a keystore or a file.
+	for name, key := range map[string]ed25519.PrivateKey{
+		"nil":        nil,
+		"empty":      {},
+		"seed-sized": make([]byte, ed25519.SeedSize),
+		"one short":  make([]byte, ed25519.PrivateKeySize-1),
+		"one long":   make([]byte, ed25519.PrivateKeySize+1),
+	} {
+		token, err := SignSiwdAskProof(challenge, client.kid, key)
+		if err == nil {
+			t.Errorf("%s: a %d-byte private key produced %s", name, len(key), token)
+		}
+	}
 }
 
 func TestSiwdSignRequestBuildAndValidate(t *testing.T) {

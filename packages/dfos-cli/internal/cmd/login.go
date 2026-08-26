@@ -24,6 +24,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -33,6 +34,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,7 +107,7 @@ func newLoginCmd() *cobra.Command {
 	var timeoutFlag string
 
 	cmd := &cobra.Command{
-		Use:     "login [identity]",
+		Use:     "login [name|did]",
 		Short:   "Sign in to an identity's authorize host and store the credential it returns",
 		GroupID: "auth",
 		Long: "Run the Sign In With DFOS loopback flow for an identity: discover its authorize endpoint from " +
@@ -192,6 +194,9 @@ func newLoginCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// The store of size one, minted here alongside the challenge it holds
+			// and consumed as the LAST gate below.
+			expect := &challengeExpectation{encoded: encodedChallenge}
 
 			// Progress goes to stderr so --json keeps stdout to one document.
 			fmt.Fprintf(os.Stderr, "Sign in as %s\n\n  %s\n\n", subjectDID, authRequest)
@@ -202,29 +207,18 @@ func newLoginCmd() *cobra.Command {
 			}
 			fmt.Fprintf(os.Stderr, "Waiting for the callback on %s (timeout %s)...\n", redirectURI, timeout)
 
-			var collected string
-			select {
-			case collected = <-listener.urls:
-			case <-time.After(timeout):
-				return fmt.Errorf("timed out after %s waiting for the sign-in callback", timeout)
+			callback, err := awaitLoginCallback(listener.urls, timeout, os.Stderr)
+			if err != nil {
+				return err
 			}
 			listener.close()
 
-			callback, err := parseLoginCallback(collected)
+			signerDID, keyID, segment, err := signerFromLoginJWS(callback.JWS, callback.DID)
 			if err != nil {
 				return err
 			}
-
-			// The store of size one. Everything from here to the signature check
-			// runs against the expectation this process minted; nothing the
-			// callback supplied is allowed to stand in for it.
-			expect := &challengeExpectation{encoded: encodedChallenge}
-			signerDID, keyID, err := signerFromLoginJWS(callback.JWS, callback.DID, expect)
-			if err != nil {
+			if err := assertSignerBinding(signerDID, subjectDID); err != nil {
 				return err
-			}
-			if signerDID != subjectDID {
-				return fmt.Errorf("the challenge was bound to %s but %s signed it — sign-in refused", subjectDID, signerDID)
 			}
 
 			// Re-resolve the signer's chain NOW rather than reusing the copy
@@ -239,8 +233,19 @@ func newLoginCmd() *cobra.Command {
 				return err
 			}
 
+			// CONSUMED LAST, per SIWD.md §Replay prevention: everything above has
+			// passed, so nothing invalid can spend the expectation, and this is the
+			// final gate before a sign-in is granted.
+			if err := expect.consume(segment); err != nil {
+				return err
+			}
+
 			credentialPath := ""
 			if callback.Credential != "" {
+				if err := assertCredentialForClient(callback.Credential, lc.DID); err != nil {
+					return fmt.Errorf("signed in as %s — the sign-in itself verified — but refusing to store what came back: %w",
+						signerDID, err)
+				}
 				credentialPath, err = storeLoginCredential(subjectDID, lc, callback.Credential)
 				if err != nil {
 					return err
@@ -297,17 +302,47 @@ func newLoginCmd() *cobra.Command {
 // discovery
 // ---------------------------------------------------------------------------
 
-// authorizeOrigin folds a services set into the one authorize origin it names,
-// or into the reason it names none.
+// parseAuthorizeURL is the shared URL mechanic behind both ways this command
+// learns where to send the user. Both paths run through it so they cannot drift
+// into two different ideas of what a usable endpoint is — the drift that let a
+// string-concatenated "/authorize" land after an endpoint's query string and
+// produce a URL nobody named.
+func parseAuthorizeURL(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return nil, fmt.Errorf("%q is not an absolute http(s) URL", raw)
+	}
+	return parsed, nil
+}
+
+// withAuthorizePath appends this profile's /authorize surface to a base URL
+// through the PARSED path. Never by concatenation: concatenation appends after
+// whatever the string already ends with — a query, a fragment — instead of to
+// the path, and the result is a request the far end has no route for.
+func withAuthorizePath(base *url.URL) string {
+	joined := *base
+	joined.Path = strings.TrimRight(joined.Path, "/") + "/authorize"
+	joined.RawPath = ""
+	return joined.String()
+}
+
+// authorizeEndpoint folds a services set into the one authorize endpoint it
+// names, or into the reason it names none.
 //
 // SIWD.md's rule is ONE ENTRY, OR NONE: a set carrying more than one
 // DfosAuthorizationServer entry names no discoverable endpoint, and a consumer
 // MUST fall back exactly as if the entry were absent — the same ambiguity rule
 // DfosOrigin follows, chosen so that ambiguity degrades to the fallback and
-// never to a choice. An entry whose endpoint is missing, empty, or not an
-// absolute http(s) URL is ignored the same way: it names nothing, and a
-// consumer that guessed at it would be inventing the binding.
-func authorizeOrigin(services []protocol.ServiceEntry) (origin string, reason string) {
+// never to a choice.
+//
+// An endpoint that is missing, empty, not an absolute http(s) URL, or not a
+// bare ORIGIN url is ignored the same way. The last of those is the entry's own
+// definition doing the work: the spec calls the member the "canonical authorize
+// origin URL", so a value carrying a query, a fragment, or userinfo is not one,
+// and the choices left are to silently drop the parts that cannot be honored or
+// to treat the value as naming nothing. Dropping them would send the user
+// somewhere the identity never published, so it names nothing.
+func authorizeEndpoint(services []protocol.ServiceEntry) (endpoint string, reason string) {
 	var endpoints []string
 	for _, entry := range services {
 		if typ, _ := entry["type"].(string); typ != authorizationServerType {
@@ -324,14 +359,18 @@ func authorizeOrigin(services []protocol.ServiceEntry) (origin string, reason st
 		return "", fmt.Sprintf("%d %s entries — an ambiguous set names no endpoint", len(endpoints), authorizationServerType)
 	}
 
-	// Trailing slashes are stripped before the path is appended so one endpoint
-	// spelling does not become two authorize URLs.
-	raw := strings.TrimRight(endpoints[0], "/")
-	parsed, err := url.Parse(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return "", fmt.Sprintf("the %s entry's endpoint %q is not an absolute http(s) URL — it names nothing", authorizationServerType, endpoints[0])
+	parsed, err := parseAuthorizeURL(endpoints[0])
+	if err != nil {
+		return "", fmt.Sprintf("the %s entry's endpoint %s — it names nothing", authorizationServerType, err)
 	}
-	return raw, ""
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.EscapedFragment() != "" || parsed.User != nil {
+		return "", fmt.Sprintf("the %s entry's endpoint %q carries a query, fragment, or userinfo rather than being a bare origin URL — it names nothing",
+			authorizationServerType, endpoints[0])
+	}
+	// The endpoint is the BASE at which the host serves this profile, so the
+	// /authorize surface is appended to it — a base path is kept and extended
+	// (https://x.example/base → https://x.example/base/authorize).
+	return withAuthorizePath(parsed), ""
 }
 
 // resolveAuthorizeURL answers SIWD.md's "which authorize endpoint speaks for
@@ -343,12 +382,12 @@ func resolveAuthorizeURL(peer *client.Client, subjectDID, fallback string) (stri
 	if err != nil {
 		return "", err
 	}
-	origin, reason := authorizeOrigin(verified.State.Services)
-	if origin != "" {
+	endpoint, reason := authorizeEndpoint(verified.State.Services)
+	if endpoint != "" {
 		if fallback != "" {
 			fmt.Fprintf(os.Stderr, "Note: %s names an authorize endpoint in its chain; ignoring --authorize-url.\n", subjectDID)
 		}
-		return origin + "/authorize", nil
+		return endpoint, nil
 	}
 	if fallback == "" {
 		return "", fmt.Errorf("%s names no authorize endpoint: %s — pass --authorize-url <url> to name one out of band",
@@ -358,16 +397,22 @@ func resolveAuthorizeURL(peer *client.Client, subjectDID, fallback string) (stri
 }
 
 // normalizeAuthorizeURL accepts either spelling of --authorize-url: a bare
-// origin (the "configured host" the spec's fallback describes) or the authorize
-// endpoint itself. A bare origin gets /authorize appended; anything carrying a
-// path is taken as the endpoint and left alone.
+// origin (the "configured host" the spec's fallback describes), which gets the
+// /authorize surface appended, or the endpoint itself, which is left alone
+// because a user who typed a path meant it.
+//
+// The bare-origin rule is the only thing this shares with the discovery path's
+// treatment of an endpoint. The rest deliberately differs: a chain entry is
+// discovery vocabulary governed by the one-entry-or-none rule, while this flag
+// is an instruction typed this run, so a query the user wrote into it is
+// carried rather than read as naming nothing.
 func normalizeAuthorizeURL(raw string) (string, error) {
-	parsed, err := url.Parse(strings.TrimRight(raw, "/"))
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return "", fmt.Errorf("invalid --authorize-url %q: expected an absolute http(s) URL", raw)
+	parsed, err := parseAuthorizeURL(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid --authorize-url: %w", err)
 	}
-	if parsed.Path == "" {
-		parsed.Path = "/authorize"
+	if strings.TrimRight(parsed.Path, "/") == "" {
+		return withAuthorizePath(parsed), nil
 	}
 	return parsed.String(), nil
 }
@@ -520,29 +565,50 @@ func mintLoginClient() (*loginClient, ed25519.PrivateKey, error) {
 		return nil, nil, fmt.Errorf("create config dir: %w", err)
 	}
 
-	// O_EXCL, because login deliberately does not take the process-wide state
-	// lock: two first logins racing must not leave one of them holding a DID the
-	// file no longer names. The loser drops its key and adopts the winner's
-	// identity, which is the outcome a lock would have produced anyway.
-	path := loginClientPath()
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// WRITE, THEN CLAIM THE NAME. Login deliberately does not take the
+	// process-wide state lock, so two first logins can race here, and the file
+	// must never be visible under its real name until it is complete — an O_EXCL
+	// create publishes an EMPTY file and fills it afterwards, which is exactly
+	// the window where a racing reader finds an unparseable client record.
+	//
+	// os.Link is the claim: it fails with EEXIST rather than replacing, so it
+	// keeps the first-writer-wins semantics the race needs, unlike rename. The
+	// loser drops its key and adopts the winner's identity — the outcome a lock
+	// would have produced anyway — and the winner's file is complete by
+	// construction.
+	dir := config.ConfigDir()
+	temp, err := os.CreateTemp(dir, "."+loginClientFileName+".*")
 	if err != nil {
-		if os.IsExist(err) {
-			keys.DeleteKey(loginClientAccount(keyID))
-			existing, existingPriv, loadErr := loadLoginClient()
-			if loadErr != nil {
-				return nil, nil, loadErr
-			}
-			if existing == nil {
-				return nil, nil, fmt.Errorf("%s appeared and vanished while minting a login client identity", path)
-			}
-			return existing, existingPriv, nil
-		}
-		return nil, nil, fmt.Errorf("write %s: %w", path, err)
+		return nil, nil, fmt.Errorf("create a temp file in %s: %w", dir, err)
 	}
-	defer file.Close()
-	if _, err := file.Write(append(data, '\n')); err != nil {
-		return nil, nil, fmt.Errorf("write %s: %w", path, err)
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return nil, nil, fmt.Errorf("set permissions on %s: %w", tempPath, err)
+	}
+	if _, err := temp.Write(append(data, '\n')); err != nil {
+		temp.Close()
+		return nil, nil, fmt.Errorf("write %s: %w", tempPath, err)
+	}
+	if err := temp.Close(); err != nil {
+		return nil, nil, fmt.Errorf("close %s: %w", tempPath, err)
+	}
+
+	path := loginClientPath()
+	if err := os.Link(tempPath, path); err != nil {
+		if !os.IsExist(err) {
+			return nil, nil, fmt.Errorf("write %s: %w", path, err)
+		}
+		keys.DeleteKey(loginClientAccount(keyID))
+		existing, existingPriv, loadErr := loadLoginClient()
+		if loadErr != nil {
+			return nil, nil, loadErr
+		}
+		if existing == nil {
+			return nil, nil, fmt.Errorf("%s appeared and vanished while minting a login client identity", path)
+		}
+		return existing, existingPriv, nil
 	}
 	return lc, priv, nil
 }
@@ -676,6 +742,12 @@ const loginRelayPage = `<!doctype html>
   fetch("/collect", { method: "POST", body: location.href })
     .then(function (response) {
       if (!response.ok) { throw new Error("HTTP " + response.status); }
+      // Scrub immediately. The signed challenge is in the query and the
+      // credential is in the fragment, so until this runs both sit in the
+      // address bar and in this browser's history, on a page the user is about
+      // to leave open. Wrapped because a failure to tidy the URL must not be
+      // reported as a failure to deliver it.
+      try { history.replaceState(null, "", "/callback"); } catch (e) {}
       document.getElementById("status").textContent = "Signed in — you can close this tab.";
       document.getElementById("detail").textContent = "";
     })
@@ -688,9 +760,20 @@ const loginRelayPage = `<!doctype html>
 </html>
 `
 
-// maxCollectBody bounds what POST /collect will read. A callback URL is a few
-// kilobytes of JWS; anything past this is not one.
-const maxCollectBody = 64 << 10
+const (
+	// maxCollectBody bounds what POST /collect will read. Sized for the artifact
+	// rather than the request line: a delegation-chain credential rides the
+	// fragment and is legitimately large, and the earlier, tighter cap would have
+	// silently truncated one into a corrupt token that stored fine and could
+	// never be spent. Over-cap bodies are now refused outright instead.
+	maxCollectBody = 1 << 20
+
+	// collectBuffer is the depth of the delivery queue. Non-blocking sends mean a
+	// full queue drops rather than wedging a handler goroutine, so the depth is
+	// only there to keep a burst of junk POSTs from displacing the real callback
+	// in the window before the waiting command reads.
+	collectBuffer = 4
+)
 
 type loginListener struct {
 	server *http.Server
@@ -701,11 +784,31 @@ type loginListener struct {
 
 // newLoginMux wires the two routes the relay needs. Split out from the listener
 // so the handlers are testable without binding a port.
-func newLoginMux(urls chan string) *http.ServeMux {
+//
+// expectedHost is the literal loopback authority this listener was reached at,
+// and every request must carry it. That gate is what closes DNS REBINDING: a
+// port on 127.0.0.1 is reachable from any page the user's browser happens to
+// load, and an attacker who rebinds a hostname they control to 127.0.0.1 can
+// have that page talk to this listener — but its requests carry the attacker's
+// hostname in Host, never the literal authority the redirect_uri named. Host is
+// attacker-controlled in general; here it is exactly the thing that distinguishes
+// the flow this process started from every other origin in the browser.
+func newLoginMux(urls chan string, expectedHost string) *http.ServeMux {
+	guard := func(w http.ResponseWriter, r *http.Request, method string) bool {
+		if r.Method != method {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return false
+		}
+		if r.Host != expectedHost {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return false
+		}
+		return true
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		if !guard(w, r, http.MethodGet) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -713,20 +816,26 @@ func newLoginMux(urls chan string) *http.ServeMux {
 		io.WriteString(w, loginRelayPage)
 	})
 	mux.HandleFunc("/collect", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		if !guard(w, r, http.MethodPost) {
 			return
 		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxCollectBody))
+		// One byte past the cap, so an over-cap body is DETECTED rather than
+		// quietly cut to length. A truncated callback URL parses fine and yields a
+		// credential that is bytes, not a credential.
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxCollectBody+1))
 		if err != nil {
 			http.Error(w, "could not read the callback URL", http.StatusBadRequest)
+			return
+		}
+		if len(body) > maxCollectBody {
+			http.Error(w, "callback URL exceeds the size limit", http.StatusBadRequest)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 		// Delivered AFTER the response is written so the waiting command can shut
 		// the listener down the moment it reads, without cutting the page off
-		// mid-answer. The channel is buffered and the send non-blocking: a second
-		// POST must not wedge a handler goroutine.
+		// mid-answer. The send is non-blocking: a burst of POSTs must not wedge
+		// handler goroutines.
 		select {
 		case urls <- string(body):
 		default:
@@ -743,11 +852,15 @@ func startLoginListener() (*loginListener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen on %s: %w", loopbackHost, err)
 	}
-	urls := make(chan string, 1)
+	port := socket.Addr().(*net.TCPAddr).Port
+	urls := make(chan string, collectBuffer)
 	listener := &loginListener{
-		server: &http.Server{Handler: newLoginMux(urls), ReadHeaderTimeout: 10 * time.Second},
-		urls:   urls,
-		port:   socket.Addr().(*net.TCPAddr).Port,
+		server: &http.Server{
+			Handler:           newLoginMux(urls, loopbackHost+":"+strconv.Itoa(port)),
+			ReadHeaderTimeout: 10 * time.Second,
+		},
+		urls: urls,
+		port: port,
 	}
 	go listener.server.Serve(socket)
 	return listener, nil
@@ -778,6 +891,16 @@ type loginCallback struct {
 	Credential string
 }
 
+// errNotACallback marks a collected body that is not a SIWD callback at all — a
+// probe, a stray fetch from another page, a truncated paste. It is the one parse
+// verdict the waiting loop treats as noise rather than as the end of the flow:
+// anyone can POST to a loopback port, and letting a stranger's garbage cancel a
+// sign-in the user is halfway through would make that a denial-of-service.
+//
+// A well-formed callback that says no — a denial, a half-callback — is NOT this.
+// That is the host's answer, and it ends the flow.
+var errNotACallback = errors.New("not a SIWD callback")
+
 // parseLoginCallback splits a collected callback URL into its query verdict and
 // its fragment payload.
 //
@@ -791,7 +914,7 @@ type loginCallback struct {
 func parseLoginCallback(raw string) (loginCallback, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
-		return loginCallback{}, fmt.Errorf("malformed SIWD callback URL: %w", err)
+		return loginCallback{}, fmt.Errorf("%w: unparseable URL: %s", errNotACallback, err)
 	}
 	query := parsed.Query()
 	jws, did := query.Get("jws"), query.Get("did")
@@ -812,16 +935,56 @@ func parseLoginCallback(raw string) (loginCallback, error) {
 	if did != "" {
 		return loginCallback{}, fmt.Errorf("malformed SIWD callback: missing jws")
 	}
-	return loginCallback{}, fmt.Errorf("malformed SIWD callback: no jws, did, or error parameter")
+	return loginCallback{}, fmt.Errorf("%w: no jws, did, or error parameter", errNotACallback)
+}
+
+// awaitLoginCallback waits for the host's answer and refuses to let a stranger
+// end the flow.
+//
+// Anyone on this machine — any page in the user's browser, any other process —
+// can POST to a loopback port, so junk arriving on /collect is logged and
+// skipped rather than treated as the callback. What bounds that tolerance is
+// the DEADLINE, computed once here: skipping garbage buys no extra time, so a
+// flood delays nothing beyond the timeout the user asked for.
+//
+// A well-formed callback ends the wait whatever it says. A denial and a
+// half-callback are the host's answer, not noise, and retrying past one would
+// hang on a flow that is already over.
+func awaitLoginCallback(urls <-chan string, timeout time.Duration, warn io.Writer) (loginCallback, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		var collected string
+		select {
+		case collected = <-urls:
+		case <-time.After(time.Until(deadline)):
+			return loginCallback{}, fmt.Errorf("timed out after %s waiting for the sign-in callback", timeout)
+		}
+		callback, err := parseLoginCallback(collected)
+		if err == nil {
+			return callback, nil
+		}
+		if !errors.Is(err, errNotACallback) {
+			return loginCallback{}, err
+		}
+		fmt.Fprintf(warn, "Ignoring a POST to the callback listener that is not a SIWD callback: %v\n", err)
+	}
 }
 
 // challengeExpectation is this verifier's entire replay store. SIWD.md §Replay
 // prevention names the shape for a loopback client: consumed verification with a
 // store of size one — the expectation lives in the process that minted it, held
-// in memory and discarded after ONE comparison.
+// in memory and discarded after one comparison.
 //
-// Discarded pass or fail. A store of size one that survived a failed comparison
-// would admit a second presentation, which is the thing being prevented.
+// CONSUMED LAST, and the position IS the semantics. The spec makes consumption
+// the final verification step, after the signature, key currency, and every
+// binding check have passed, so that an invalid presentation can never spend an
+// expectation its legitimate holder is still carrying — and so the spend is the
+// last thing that happens before a sign-in is granted.
+//
+// Spent pass or fail. Nothing invalid reaches this by construction, so the only
+// wrong answer that can arrive is one that cleared every other gate; a store of
+// size one that survived it would admit a second presentation, which is the
+// thing being prevented.
 type challengeExpectation struct {
 	encoded string
 	spent   bool
@@ -838,41 +1001,52 @@ func (e *challengeExpectation) consume(segment string) error {
 	return nil
 }
 
-// signerFromLoginJWS applies every gate that can be applied before the network:
-// the typ gate, the kid split, the byte-exact challenge comparison, and the
-// courier check. It returns the DID and key id the artifact CLAIMS — claims that
-// mean nothing until verifyLoginSignature checks them against the signer's own
-// verified chain.
-func signerFromLoginJWS(jws, courierDID string, expect *challengeExpectation) (did, keyID string, err error) {
+// signerFromLoginJWS applies the gates that need nothing but the artifact: the
+// typ gate, the kid split, and the courier check. It returns the DID and key id
+// the artifact CLAIMS — claims that mean nothing until verifyLoginSignature
+// checks them against the signer's own verified chain — along with the payload
+// SEGMENT, which is handed back rather than compared here so that the
+// expectation is consumed as the last gate rather than the first.
+//
+// The segment is what the caller compares, not a re-parse of the challenge:
+// comparing re-serialized objects would accept a non-canonical spelling of the
+// right values, and the bytes are what was signed.
+func signerFromLoginJWS(jws, courierDID string) (did, keyID, segment string, err error) {
 	parts := strings.Split(jws, ".")
 	if len(parts) != 3 {
-		return "", "", fmt.Errorf("invalid SIWD callback: jws is not a three-part compact JWS")
+		return "", "", "", fmt.Errorf("invalid SIWD callback: jws is not a three-part compact JWS")
 	}
 	header, _, err := protocol.DecodeJWSUnsafe(jws)
 	if err != nil {
-		return "", "", fmt.Errorf("invalid SIWD callback: %w", err)
+		return "", "", "", fmt.Errorf("invalid SIWD callback: %w", err)
 	}
 	// The typ gate is what keeps a client's ask proof — which covers the SAME
 	// canonical bytes — from being presented here as a subject's sign-in.
 	if header.Typ != protocol.SiwdJWSTyp {
-		return "", "", fmt.Errorf("invalid SIWD callback: expected typ %s, got %s", protocol.SiwdJWSTyp, header.Typ)
+		return "", "", "", fmt.Errorf("invalid SIWD callback: expected typ %s, got %s", protocol.SiwdJWSTyp, header.Typ)
 	}
 	hashIdx := strings.Index(header.Kid, "#")
 	if hashIdx <= 0 || hashIdx == len(header.Kid)-1 {
-		return "", "", fmt.Errorf("invalid SIWD callback: kid must be a DID URL with both halves non-empty (<did>#<keyId>)")
+		return "", "", "", fmt.Errorf("invalid SIWD callback: kid must be a DID URL with both halves non-empty (<did>#<keyId>)")
 	}
 	did, keyID = header.Kid[:hashIdx], header.Kid[hashIdx+1:]
 
-	// The payload SEGMENT is compared, not a re-parse of the challenge: comparing
-	// re-serialized objects would accept a non-canonical spelling of the right
-	// values, and the bytes are what was signed.
-	if err := expect.consume(parts[1]); err != nil {
-		return "", "", err
-	}
 	if did != courierDID {
-		return "", "", fmt.Errorf("the callback names %s but %s signed the challenge", courierDID, did)
+		return "", "", "", fmt.Errorf("the callback names %s but %s signed the challenge", courierDID, did)
 	}
-	return did, keyID, nil
+	return did, keyID, parts[1], nil
+}
+
+// assertSignerBinding enforces the challenge's own binding: it named ONE
+// subject, so a signature by anyone else is not the sign-in that was asked for.
+// Binding a challenge without checking the binding proves nothing — a host that
+// ignored the binding would return a signature from whoever happened to be
+// logged in, and a client checking only the signature would accept it.
+func assertSignerBinding(signerDID, subjectDID string) error {
+	if signerDID != subjectDID {
+		return fmt.Errorf("the challenge was bound to %s but %s signed it — sign-in refused", subjectDID, signerDID)
+	}
+	return nil
 }
 
 // verifyLoginSignature is the far half: the signature must verify under a
@@ -918,6 +1092,35 @@ func credentialFileName(did string) string {
 	return strings.ReplaceAll(did, ":", "_") + ".json"
 }
 
+// credentialJWSTyp is the registered typ of a DFOS credential artifact.
+const credentialJWSTyp = "did:dfos:credential"
+
+// assertCredentialForClient refuses a credential this installation could never
+// spend. A DFOS credential is audience-bound and inert without the audience's
+// key (API-AUTH), so one issued to any DID but this client's is bytes we hold
+// and can never present — and storing it under a success line would be a lie
+// about what the user now has.
+//
+// Deliberately NOT gated on `iss`. Who may issue is the resource's business,
+// and a space-owned resource legitimately issues from the space's own DID
+// rather than from the subject the user signed in as; a check there would
+// refuse correct credentials.
+func assertCredentialForClient(token, clientDID string) error {
+	header, payload, err := protocol.DecodeJWSUnsafe(token)
+	if err != nil {
+		return fmt.Errorf("the returned credential does not decode: %w", err)
+	}
+	if header.Typ != credentialJWSTyp {
+		return fmt.Errorf("the returned artifact carries typ %q, not %s", header.Typ, credentialJWSTyp)
+	}
+	audience, _ := payload["aud"].(string)
+	if audience != clientDID {
+		return fmt.Errorf("the returned credential is issued to %q, not to this installation's client identity %s — nothing here could ever present it",
+			audience, clientDID)
+	}
+	return nil
+}
+
 func storeLoginCredential(subjectDID string, lc *loginClient, credential string) (string, error) {
 	dir := filepath.Join(config.ConfigDir(), "credentials")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -935,10 +1138,45 @@ func storeLoginCredential(subjectDID string, lc *loginClient, credential string)
 		return "", err
 	}
 	path := filepath.Join(dir, credentialFileName(subjectDID))
-	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
-		return "", fmt.Errorf("write %s: %w", path, err)
+	if err := writeFileAtomic(path, append(data, '\n')); err != nil {
+		return "", err
 	}
 	return path, nil
+}
+
+// writeFileAtomic writes through a temp file in the same directory and renames
+// it into place. Two properties, both of which a plain WriteFile lacks: a reader
+// (or a crash) never observes a half-written record, since rename is atomic and
+// the file is complete before it has the name; and rename REPLACES the target
+// rather than opening it, so a symlink someone dropped at the path is discarded
+// instead of followed into whatever it points at.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+	if err != nil {
+		return fmt.Errorf("create a temp file in %s: %w", dir, err)
+	}
+	tempPath := temp.Name()
+	// Removed on every failure path; a no-op once the rename has taken the name.
+	defer os.Remove(tempPath)
+
+	// Explicit rather than relying on CreateTemp's 0600, because the mode of a
+	// file holding a credential is not a detail to inherit from umask.
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return fmt.Errorf("set permissions on %s: %w", tempPath, err)
+	}
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return fmt.Errorf("write %s: %w", tempPath, err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", tempPath, err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
 }
 
 // credentialSummary is what the artifact says about itself.

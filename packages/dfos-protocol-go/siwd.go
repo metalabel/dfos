@@ -187,6 +187,12 @@ func SignSiwdAskProof(challenge SiwdChallenge, kid string, privateKey ed25519.Pr
 	if hashIdx <= 0 || hashIdx == len(kid)-1 {
 		return "", fmt.Errorf("invalid SIWD ask proof: kid must be a DID URL with both halves non-empty (<did>#<keyId>)")
 	}
+	// ed25519.Sign PANICS on a wrong-length key, and this signer is reached with
+	// key material a caller loaded from a keystore or a file. A malformed key is
+	// a bad input to report, never a crash to take.
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return "", fmt.Errorf("invalid SIWD ask proof: private key must be %d bytes, got %d", ed25519.PrivateKeySize, len(privateKey))
+	}
 	payload, err := SiwdSigningInput(challenge)
 	if err != nil {
 		return "", err

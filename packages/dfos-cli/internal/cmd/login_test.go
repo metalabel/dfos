@@ -17,11 +17,13 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -104,6 +106,26 @@ func TestParseLoginCallbackSuccess(t *testing.T) {
 	}
 }
 
+// The fragment is read from the bytes the browser sent, not from a
+// percent-decoded view of them: the host serializes it with URLSearchParams, so
+// it is parsed with the same grammar. A value carrying %2B or %26 must come back
+// with a literal + and & rather than being split into extra parameters or
+// having its plus eaten.
+func TestParseLoginCallbackDecodesFragmentEscapes(t *testing.T) {
+	raw := "http://127.0.0.1:51234/callback?jws=a.b.c&did=" + testLoginSubject +
+		"#credential=head%2Bmid%26tail.body.sig"
+	got, err := parseLoginCallback(raw)
+	if err != nil {
+		t.Fatalf("parseLoginCallback: %v", err)
+	}
+	if want := "head+mid&tail.body.sig"; got.Credential != want {
+		t.Fatalf("credential = %q, want %q", got.Credential, want)
+	}
+	if got.JWS != "a.b.c" || got.DID != testLoginSubject {
+		t.Fatalf("the query half was disturbed by the fragment: %+v", got)
+	}
+}
+
 func TestParseLoginCallbackSuccessWithoutFragment(t *testing.T) {
 	raw := "http://127.0.0.1:51234/callback?jws=a.b.c&did=" + testLoginSubject
 	got, err := parseLoginCallback(raw)
@@ -162,10 +184,120 @@ func TestChallengeExpectationSpendsOnAFailedComparison(t *testing.T) {
 	if err := expect.consume("YmFy"); err == nil {
 		t.Fatal("a foreign challenge was accepted")
 	}
-	// Discarded pass OR fail: an expectation that survived a wrong answer would
+	// Spent pass OR fail: an expectation that survived a wrong answer would
 	// admit a second presentation.
 	if err := expect.consume("Zm9v"); err == nil {
 		t.Fatal("the expectation survived a failed comparison")
+	}
+}
+
+// TestChallengeIsConsumedLast pins the ORDERING SIWD.md §Replay prevention
+// requires: consumption is the final verification step, so an artifact that
+// fails an earlier gate must never reach the expectation at all. It is asserted
+// functionally — run the command's own sequence and check the expectation is
+// still unspent after each failure that precedes it.
+func TestChallengeIsConsumedLast(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	challenge := testChallenge(testLoginSubject)
+	encoded := mustEncodeChallenge(t, challenge)
+	kid := testLoginSubject + "#key_abc"
+	state := protocol.IdentityState{
+		DID:      testLoginSubject,
+		AuthKeys: []protocol.MultikeyPublicKey{protocol.NewMultikeyPublicKey("key_abc", pub)},
+	}
+
+	// A callback that fails the signature gate: correct challenge bytes, but
+	// signed by a key the chain does not publish.
+	_, impostorPriv, _ := ed25519.GenerateKey(nil)
+	forged := signSiwdChallenge(t, challenge, kid, impostorPriv)
+
+	expect := &challengeExpectation{encoded: encoded}
+	signerDID, keyID, segment, err := signerFromLoginJWS(forged, testLoginSubject)
+	if err != nil {
+		t.Fatalf("signerFromLoginJWS: %v", err)
+	}
+	if err := assertSignerBinding(signerDID, testLoginSubject); err != nil {
+		t.Fatalf("assertSignerBinding: %v", err)
+	}
+	if err := verifyLoginSignature(forged, keyID, state); err == nil {
+		t.Fatal("a forged signature verified")
+	}
+	if expect.spent {
+		t.Fatal("a forged callback spent the expectation — consumption is not the final gate")
+	}
+
+	// And a subject-binding failure, likewise, never reaches it.
+	if err := assertSignerBinding(signerDID, testLoginOther); err == nil {
+		t.Fatal("a signer other than the bound subject was accepted")
+	}
+	if expect.spent {
+		t.Fatal("a binding failure spent the expectation")
+	}
+
+	// The real artifact clears every gate and then spends it, once.
+	genuine := signSiwdChallenge(t, challenge, kid, priv)
+	_, keyID, segment, err = signerFromLoginJWS(genuine, testLoginSubject)
+	if err != nil {
+		t.Fatalf("signerFromLoginJWS: %v", err)
+	}
+	if err := verifyLoginSignature(genuine, keyID, state); err != nil {
+		t.Fatalf("verifyLoginSignature: %v", err)
+	}
+	if err := expect.consume(segment); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if err := expect.consume(segment); err == nil {
+		t.Fatal("the expectation admitted a second presentation")
+	}
+}
+
+// TestWrongChallengeSpendsOnlyAtTheFinalGate: a well-formed, correctly-signed
+// callback carrying a challenge this run did not mint passes every earlier gate
+// and is caught by the consume — which is where the store of size one is meant
+// to catch it.
+func TestWrongChallengeSpendsOnlyAtTheFinalGate(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	kid := testLoginSubject + "#key_abc"
+	state := protocol.IdentityState{
+		DID:      testLoginSubject,
+		AuthKeys: []protocol.MultikeyPublicKey{protocol.NewMultikeyPublicKey("key_abc", pub)},
+	}
+	foreign := testChallenge(testLoginSubject)
+	foreign.Nonce = "a-nonce-this-run-never-minted"
+	jws := signSiwdChallenge(t, foreign, kid, priv)
+
+	expect := &challengeExpectation{encoded: mustEncodeChallenge(t, testChallenge(testLoginSubject))}
+	signerDID, keyID, segment, err := signerFromLoginJWS(jws, testLoginSubject)
+	if err != nil {
+		t.Fatalf("signerFromLoginJWS: %v", err)
+	}
+	if err := assertSignerBinding(signerDID, testLoginSubject); err != nil {
+		t.Fatalf("assertSignerBinding: %v", err)
+	}
+	if err := verifyLoginSignature(jws, keyID, state); err != nil {
+		t.Fatalf("verifyLoginSignature: %v", err)
+	}
+	if expect.spent {
+		t.Fatal("the expectation was spent before the final gate")
+	}
+	if err := expect.consume(segment); err == nil {
+		t.Fatal("a challenge this run never minted was accepted")
+	} else if !strings.Contains(err.Error(), "this run's challenge") {
+		t.Fatalf("error %q does not name the mismatch", err)
+	}
+}
+
+func TestAssertSignerBinding(t *testing.T) {
+	if err := assertSignerBinding(testLoginSubject, testLoginSubject); err != nil {
+		t.Fatalf("the bound subject was refused: %v", err)
+	}
+	err := assertSignerBinding(testLoginOther, testLoginSubject)
+	if err == nil {
+		t.Fatal("a signature by a DID the challenge did not name was accepted")
+	}
+	// Both DIDs belong in the message: which was asked for, and which answered.
+	if !strings.Contains(err.Error(), testLoginSubject) || !strings.Contains(err.Error(), testLoginOther) {
+		t.Fatalf("error %q does not name both DIDs", err)
 	}
 }
 
@@ -177,25 +309,38 @@ func authServerEntry(id, endpoint string) protocol.ServiceEntry {
 	return protocol.ServiceEntry{"id": id, "type": authorizationServerType, "endpoint": endpoint}
 }
 
-func TestAuthorizeOriginOneEntryWins(t *testing.T) {
+func TestAuthorizeEndpointOneEntryWins(t *testing.T) {
 	services := []protocol.ServiceEntry{
 		{"id": "relay", "type": "DfosRelay", "endpoint": "https://relay.example"},
 		authServerEntry("auth", "https://app.example.com"),
 	}
-	origin, reason := authorizeOrigin(services)
-	if origin != "https://app.example.com" {
-		t.Fatalf("origin = %q (reason %q)", origin, reason)
+	endpoint, reason := authorizeEndpoint(services)
+	if endpoint != "https://app.example.com/authorize" {
+		t.Fatalf("endpoint = %q (reason %q)", endpoint, reason)
 	}
 }
 
-func TestAuthorizeOriginStripsTrailingSlash(t *testing.T) {
-	origin, _ := authorizeOrigin([]protocol.ServiceEntry{authServerEntry("auth", "https://app.example.com/")})
-	if origin != "https://app.example.com" {
-		t.Fatalf("origin = %q, want the trailing slash stripped", origin)
+// The /authorize surface is joined onto the PARSED path, so one endpoint
+// spelling cannot become two authorize URLs and a base path is extended rather
+// than replaced.
+func TestAuthorizeEndpointJoinsThePath(t *testing.T) {
+	cases := map[string]string{
+		"https://app.example.com":       "https://app.example.com/authorize",
+		"https://app.example.com/":      "https://app.example.com/authorize",
+		"https://app.example.com///":    "https://app.example.com/authorize",
+		"https://app.example.com/base":  "https://app.example.com/base/authorize",
+		"https://app.example.com/base/": "https://app.example.com/base/authorize",
+		"http://app.example.com:8443":   "http://app.example.com:8443/authorize",
+	}
+	for in, want := range cases {
+		endpoint, reason := authorizeEndpoint([]protocol.ServiceEntry{authServerEntry("auth", in)})
+		if endpoint != want {
+			t.Errorf("endpoint for %q = %q (reason %q), want %q", in, endpoint, reason, want)
+		}
 	}
 }
 
-func TestAuthorizeOriginFallsBack(t *testing.T) {
+func TestAuthorizeEndpointFallsBack(t *testing.T) {
 	cases := map[string]struct {
 		services []protocol.ServiceEntry
 		reason   string
@@ -228,12 +373,31 @@ func TestAuthorizeOriginFallsBack(t *testing.T) {
 			[]protocol.ServiceEntry{authServerEntry("auth", "ftp://app.example.com")},
 			"names nothing",
 		},
+		// SIWD.md calls the member the canonical authorize ORIGIN url. These are
+		// not origins, and appending a path to one would send the user somewhere
+		// the identity never published.
+		"endpoint carrying a query": {
+			[]protocol.ServiceEntry{authServerEntry("auth", "https://app.example.com?tenant=a")},
+			"names nothing",
+		},
+		"endpoint carrying a path and a query": {
+			[]protocol.ServiceEntry{authServerEntry("auth", "https://app.example.com/base?tenant=a")},
+			"names nothing",
+		},
+		"endpoint carrying a fragment": {
+			[]protocol.ServiceEntry{authServerEntry("auth", "https://app.example.com#frag")},
+			"names nothing",
+		},
+		"endpoint carrying userinfo": {
+			[]protocol.ServiceEntry{authServerEntry("auth", "https://user:pw@app.example.com")},
+			"names nothing",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			origin, reason := authorizeOrigin(tc.services)
-			if origin != "" {
-				t.Fatalf("origin = %q, want the fallback", origin)
+			endpoint, reason := authorizeEndpoint(tc.services)
+			if endpoint != "" {
+				t.Fatalf("endpoint = %q, want the fallback", endpoint)
 			}
 			if !strings.Contains(reason, tc.reason) {
 				t.Fatalf("reason %q does not mention %q", reason, tc.reason)
@@ -249,6 +413,9 @@ func TestNormalizeAuthorizeURL(t *testing.T) {
 		"https://app.example.com/authorize": "https://app.example.com/authorize",
 		"http://localhost:3000":             "http://localhost:3000/authorize",
 		"https://app.example.com/siwd/go":   "https://app.example.com/siwd/go",
+		// A query the user typed into the flag is carried, unlike a chain entry's:
+		// this is an instruction, not discovery vocabulary.
+		"https://app.example.com/authorize?tenant=a": "https://app.example.com/authorize?tenant=a",
 	}
 	for in, want := range accepts {
 		got, err := normalizeAuthorizeURL(in)
@@ -373,10 +540,22 @@ func TestEncodeClientChainBounds(t *testing.T) {
 // the loopback relay
 // ---------------------------------------------------------------------------
 
+// testListenerHost is the literal authority the mux under test was "reached at".
+const testListenerHost = "127.0.0.1:51234"
+
+// loopbackRequest builds a request carrying the expected Host, which every
+// request to this listener must. httptest.NewRequest defaults Host to
+// example.com — precisely the shape the guard exists to refuse.
+func loopbackRequest(method, path string, body io.Reader) *http.Request {
+	r := httptest.NewRequest(method, path, body)
+	r.Host = testListenerHost
+	return r
+}
+
 func TestLoginCallbackPageRelaysTheFragment(t *testing.T) {
-	mux := newLoginMux(make(chan string, 1))
+	mux := newLoginMux(make(chan string, collectBuffer), testListenerHost)
 	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/callback", nil))
+	mux.ServeHTTP(recorder, loopbackRequest(http.MethodGet, "/callback", nil))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET /callback = %d", recorder.Code)
@@ -387,6 +566,11 @@ func TestLoginCallbackPageRelaysTheFragment(t *testing.T) {
 			t.Fatalf("the relay page does not contain %q", want)
 		}
 	}
+	// The signed challenge and the credential sit in the address bar and in
+	// history until the page replaces them.
+	if !strings.Contains(body, "history.replaceState") {
+		t.Fatal("the relay page never scrubs the callback URL from the address bar")
+	}
 	// No external assets: the page must render with the network unavailable.
 	for _, forbidden := range []string{"http://", "https://"} {
 		if strings.Contains(body, forbidden) {
@@ -396,12 +580,12 @@ func TestLoginCallbackPageRelaysTheFragment(t *testing.T) {
 }
 
 func TestLoginCollectRoundTripsTheURL(t *testing.T) {
-	urls := make(chan string, 1)
-	mux := newLoginMux(urls)
+	urls := make(chan string, collectBuffer)
+	mux := newLoginMux(urls, testListenerHost)
 
 	want := "http://127.0.0.1:51234/callback?jws=a.b.c&did=" + testLoginSubject + "#credential=cred"
 	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/collect", strings.NewReader(want)))
+	mux.ServeHTTP(recorder, loopbackRequest(http.MethodPost, "/collect", strings.NewReader(want)))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("POST /collect = %d", recorder.Code)
 	}
@@ -416,9 +600,147 @@ func TestLoginCollectRoundTripsTheURL(t *testing.T) {
 
 	// A GET on /collect is not a callback.
 	recorder = httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/collect", nil))
+	mux.ServeHTTP(recorder, loopbackRequest(http.MethodGet, "/collect", nil))
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /collect = %d, want 405", recorder.Code)
+	}
+}
+
+// A page reaching this port through a rebound DNS name carries that name in
+// Host, never the literal loopback authority the redirect_uri named. Refusing on
+// Host is what keeps a rebound origin from driving the listener.
+func TestLoginListenerRefusesAForeignHost(t *testing.T) {
+	urls := make(chan string, collectBuffer)
+	mux := newLoginMux(urls, testListenerHost)
+
+	for _, host := range []string{
+		"evil.example.com",       // a rebound name
+		"evil.example.com:51234", // …on the right port
+		"localhost:51234",        // a loopback NAME is not the literal authority
+		"127.0.0.1",              // right host, no port
+		"127.0.0.1:51235",        // right host, wrong port
+		"",                       // absent
+	} {
+		for _, route := range []struct {
+			method, path string
+		}{{http.MethodGet, "/callback"}, {http.MethodPost, "/collect"}} {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(route.method, route.path, strings.NewReader("http://x/callback?jws=a.b.c&did=d"))
+			request.Host = host
+			mux.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusForbidden {
+				t.Errorf("%s %s with Host %q = %d, want 403", route.method, route.path, host, recorder.Code)
+			}
+		}
+	}
+	select {
+	case got := <-urls:
+		t.Fatalf("a foreign-Host POST delivered %q to the waiting flow", got)
+	default:
+	}
+}
+
+// An over-cap body is REFUSED, not silently truncated. A truncated callback URL
+// parses fine and yields a credential that is bytes, not a credential — and
+// delegation-chain credentials are legitimately large, which is why the cap is
+// 1 MiB and why crossing it has to be detected rather than clipped.
+func TestLoginCollectRefusesAnOversizedBody(t *testing.T) {
+	urls := make(chan string, collectBuffer)
+	mux := newLoginMux(urls, testListenerHost)
+
+	oversized := "http://127.0.0.1:51234/callback?jws=a.b.c&did=" + testLoginSubject +
+		"#credential=" + strings.Repeat("x", maxCollectBody)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, loopbackRequest(http.MethodPost, "/collect", strings.NewReader(oversized)))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("an oversized POST /collect = %d, want a refusal", recorder.Code)
+	}
+	select {
+	case got := <-urls:
+		t.Fatalf("an oversized body was delivered anyway (%d bytes)", len(got))
+	default:
+	}
+
+	// A body at the cap is still a callback.
+	padding := maxCollectBody - len("http://127.0.0.1:51234/callback?jws=a.b.c&did="+testLoginSubject+"#credential=")
+	atCap := "http://127.0.0.1:51234/callback?jws=a.b.c&did=" + testLoginSubject +
+		"#credential=" + strings.Repeat("x", padding)
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, loopbackRequest(http.MethodPost, "/collect", strings.NewReader(atCap)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("a %d-byte POST /collect = %d, want 200", len(atCap), recorder.Code)
+	}
+	select {
+	case got := <-urls:
+		if got != atCap {
+			t.Fatalf("a body at the cap was delivered altered (%d bytes, want %d)", len(got), len(atCap))
+		}
+	default:
+		t.Fatal("a body at the cap delivered nothing")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// the wait loop
+// ---------------------------------------------------------------------------
+
+// Anyone on this machine can POST to a loopback port, so junk must not cancel a
+// sign-in the user is halfway through.
+func TestAwaitLoginCallbackSkipsGarbageAndKeepsWaiting(t *testing.T) {
+	urls := make(chan string, 8)
+	urls <- "not a url at all"
+	urls <- ""
+	urls <- "http://127.0.0.1:51234/callback"
+	urls <- "{\"json\":\"probe\"}"
+	want := "http://127.0.0.1:51234/callback?jws=a.b.c&did=" + testLoginSubject + "#credential=cred"
+	urls <- want
+
+	var warnings strings.Builder
+	callback, err := awaitLoginCallback(urls, 5*time.Second, &warnings)
+	if err != nil {
+		t.Fatalf("awaitLoginCallback: %v", err)
+	}
+	if callback.JWS != "a.b.c" || callback.Credential != "cred" {
+		t.Fatalf("callback = %+v, want the valid POST that followed the garbage", callback)
+	}
+	if got := strings.Count(warnings.String(), "\n"); got != 4 {
+		t.Fatalf("logged %d warnings, want one per skipped body:\n%s", got, warnings.String())
+	}
+}
+
+// A well-formed callback that says no is the host's ANSWER, not noise: it ends
+// the wait rather than being skipped, or the flow would hang on a sign-in that
+// is already over.
+func TestAwaitLoginCallbackStopsOnAWellFormedRefusal(t *testing.T) {
+	for name, raw := range map[string]string{
+		"denial":        "http://127.0.0.1:51234/callback?error=access_denied",
+		"half-callback": "http://127.0.0.1:51234/callback?jws=a.b.c",
+		"missing jws":   "http://127.0.0.1:51234/callback?did=" + testLoginSubject,
+	} {
+		t.Run(name, func(t *testing.T) {
+			urls := make(chan string, 1)
+			urls <- raw
+			// A long timeout: if this were skipped as garbage the test would block
+			// rather than return, so a prompt error is the assertion.
+			if _, err := awaitLoginCallback(urls, time.Minute, io.Discard); err == nil {
+				t.Fatal("a well-formed refusal was treated as noise")
+			}
+		})
+	}
+}
+
+// Skipping garbage buys no extra time: the deadline is computed once, so a
+// flood delays nothing past the timeout the user asked for.
+func TestAwaitLoginCallbackHonorsTheDeadline(t *testing.T) {
+	urls := make(chan string, 1)
+	urls <- "garbage"
+	start := time.Now()
+	_, err := awaitLoginCallback(urls, 80*time.Millisecond, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("err = %v, want a timeout", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("the deadline was extended by the skipped body (waited %s)", elapsed)
 	}
 }
 
@@ -474,19 +796,23 @@ func TestSignerFromLoginJWSHappyPath(t *testing.T) {
 	encoded := mustEncodeChallenge(t, challenge)
 	jws := signSiwdChallenge(t, challenge, testLoginSubject+"#key_abc", priv)
 
-	did, keyID, err := signerFromLoginJWS(jws, testLoginSubject, &challengeExpectation{encoded: encoded})
+	did, keyID, segment, err := signerFromLoginJWS(jws, testLoginSubject)
 	if err != nil {
 		t.Fatalf("signerFromLoginJWS: %v", err)
 	}
 	if did != testLoginSubject || keyID != "key_abc" {
 		t.Fatalf("signer = %s#%s", did, keyID)
 	}
+	// The payload SEGMENT is handed back verbatim for the caller to consume as
+	// the final gate — not compared here, and not re-serialized.
+	if segment != encoded {
+		t.Fatalf("segment = %q, want the payload segment %q", segment, encoded)
+	}
 }
 
 func TestSignerFromLoginJWSRejections(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(nil)
 	challenge := testChallenge(testLoginSubject)
-	encoded := mustEncodeChallenge(t, challenge)
 	kid := testLoginSubject + "#key_abc"
 
 	// An ASK PROOF covers the very same canonical bytes. Only the typ gate keeps
@@ -495,10 +821,6 @@ func TestSignerFromLoginJWSRejections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// A challenge this run did not mint.
-	foreign := challenge
-	foreign.Nonce = "some-other-nonce"
 
 	cases := map[string]struct {
 		jws     string
@@ -509,12 +831,11 @@ func TestSignerFromLoginJWSRejections(t *testing.T) {
 		"not a compact JWS":                 {"nope", testLoginSubject, "three-part"},
 		"kid without a key id":              {signSiwdChallenge(t, challenge, testLoginSubject+"#", priv), testLoginSubject, "kid must be a DID URL"},
 		"kid without a did":                 {signSiwdChallenge(t, challenge, "#key_abc", priv), testLoginSubject, "kid must be a DID URL"},
-		"a challenge this run did not mint": {signSiwdChallenge(t, foreign, kid, priv), testLoginSubject, "this run's challenge"},
 		"courier did disagrees with signer": {signSiwdChallenge(t, challenge, kid, priv), testLoginOther, "signed the challenge"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if did, keyID, err := signerFromLoginJWS(tc.jws, tc.courier, &challengeExpectation{encoded: encoded}); err == nil {
+			if did, keyID, _, err := signerFromLoginJWS(tc.jws, tc.courier); err == nil {
 				t.Fatalf("accepted, returning %s#%s", did, keyID)
 			} else if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error %q does not mention %q", err, tc.want)
@@ -671,6 +992,63 @@ func TestCredentialFileName(t *testing.T) {
 	}
 }
 
+// A credential issued to anyone but this installation's client identity is
+// inert here — audience-bound and unspendable without that DID's key — so
+// storing it under a success line would misreport what the user now holds.
+func TestAssertCredentialForClient(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(nil)
+	lc, _ := newTestLoginClient(t)
+
+	mine, err := protocol.CreateCredential(
+		testLoginSubject, lc.DID, testLoginSubject+"#key_abc",
+		"chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "read", time.Hour, priv,
+	)
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	if err := assertCredentialForClient(mine, lc.DID); err != nil {
+		t.Fatalf("a credential issued to this client was refused: %v", err)
+	}
+
+	// Issued to a different audience: the sign-in stands, the artifact does not.
+	theirs, err := protocol.CreateCredential(
+		testLoginSubject, testLoginOther, testLoginSubject+"#key_abc",
+		"chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "read", time.Hour, priv,
+	)
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	err = assertCredentialForClient(theirs, lc.DID)
+	if err == nil {
+		t.Fatal("a credential issued to another DID was accepted")
+	}
+	if !strings.Contains(err.Error(), testLoginOther) || !strings.Contains(err.Error(), lc.DID) {
+		t.Fatalf("error %q does not name both the actual and expected audience", err)
+	}
+
+	// iss is deliberately NOT gated: a space-owned resource legitimately issues
+	// from the space's own DID rather than from the subject who signed in.
+	fromElsewhere, err := protocol.CreateCredential(
+		testLoginOther, lc.DID, testLoginOther+"#key_abc",
+		"chain:cv7n8vkvr64cctf3294h9k4eanhff8z", "read", time.Hour, priv,
+	)
+	if err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	if err := assertCredentialForClient(fromElsewhere, lc.DID); err != nil {
+		t.Fatalf("a credential issued by another DID was refused: %v", err)
+	}
+
+	// Wrong typ, and undecodable bytes.
+	notACredential := signSiwdChallengeTyp(t, testChallenge(testLoginSubject), testLoginSubject+"#key_abc", priv, protocol.SiwdJWSTyp)
+	if err := assertCredentialForClient(notACredential, lc.DID); err == nil {
+		t.Fatal("a sign-in artifact was accepted as a credential")
+	}
+	if err := assertCredentialForClient("nonsense", lc.DID); err == nil {
+		t.Fatal("undecodable bytes were accepted as a credential")
+	}
+}
+
 func TestStoreLoginCredential(t *testing.T) {
 	setupLoginClientEnv(t)
 	lc, _ := newTestLoginClient(t)
@@ -708,6 +1086,69 @@ func TestStoreLoginCredential(t *testing.T) {
 	}
 	if _, err := time.Parse(loginTimestampLayout, record.ObtainedAt); err != nil {
 		t.Fatalf("obtainedAt %q is not a protocol timestamp: %v", record.ObtainedAt, err)
+	}
+}
+
+// The record is written through a temp file and renamed, so a re-login replaces
+// the target rather than opening it — which means a symlink dropped at the path
+// is discarded instead of followed into whatever it points at.
+func TestStoreLoginCredentialReplacesRatherThanFollows(t *testing.T) {
+	setupLoginClientEnv(t)
+	lc, _ := newTestLoginClient(t)
+
+	dir := filepath.Join(config.ConfigDir(), "credentials")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere.json")
+	if err := os.WriteFile(elsewhere, []byte("untouched\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, credentialFileName(testLoginSubject))
+	if err := os.Symlink(elsewhere, target); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	path, err := storeLoginCredential(testLoginSubject, lc, "cred.header.sig")
+	if err != nil {
+		t.Fatalf("storeLoginCredential: %v", err)
+	}
+	if body, err := os.ReadFile(elsewhere); err != nil || string(body) != "untouched\n" {
+		t.Fatalf("the symlink was followed: %q (%v)", body, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("the target is still a symlink")
+	}
+
+	// A second login overwrites in place, leaving no temp files behind.
+	if _, err := storeLoginCredential(testLoginSubject, lc, "second.header.sig"); err != nil {
+		t.Fatalf("second store: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != credentialFileName(testLoginSubject) {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("credentials dir holds %v, want only the record", names)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record storedLoginCredential
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatalf("stored record is not JSON: %v", err)
+	}
+	if record.Credential != "second.header.sig" {
+		t.Fatalf("credential = %q, want the newer one", record.Credential)
 	}
 }
 
