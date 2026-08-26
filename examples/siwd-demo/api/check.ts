@@ -60,7 +60,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
   const target = readTokenField(body, 'target');
-  if (target === null || target.length > MAX_IDENTIFIER_CHARS || !IDENTIFIER.test(target)) {
+  if (
+    target === null ||
+    target.length > MAX_IDENTIFIER_CHARS ||
+    !IDENTIFIER.test(target) ||
+    // `.` and `..` pass the charset but are path GRAMMAR, not identifiers: the
+    // URL parser folds a dot segment into the path, which would carry the
+    // signed request off the template this file promised to stay on. No
+    // identifier is a bare run of dots, so those are refused by name.
+    /^\.+$/.test(target)
+  ) {
     json(res, 400, {
       ok: false,
       reason:

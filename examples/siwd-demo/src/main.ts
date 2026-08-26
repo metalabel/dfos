@@ -1491,6 +1491,13 @@ let checkTarget = '';
 let check: CheckState = { kind: 'idle' };
 
 /**
+ * A ticket for the newest check. Two checks can be in flight at once — the
+ * reader asked again before the first answered — and without this the LAST
+ * answer to arrive would render, even when it answers the older question.
+ */
+let checkSeq = 0;
+
+/**
  * Ask about ONE membership rather than walking the list. This is the gating
  * primitive a relying party actually needs — "is this user in our space" — and
  * the one place on the page where a value the reader typed reaches the signed
@@ -1684,10 +1691,29 @@ const membershipsSection = (
   }
 
   // Compact, and worded exactly as the hero words the same two outcomes: this is
-  // a section, so it gets a line rather than a panel.
+  // a section, so it gets a line rather than a panel. The walks are independent
+  // and each outcome is said for itself, so a group walk that answered is not
+  // unrendered by a space walk that did not.
+  const failed: Node[] = [heading, ...failureLines(state)];
+  if (groups.kind === 'ok') {
+    const groupItems = arrayField(groups.groupMemberships, 'items').filter(isRecord);
+    if (groupItems.length > 0) {
+      failed.push(el('p', 'dim', 'The group walk did answer:'));
+      const list = el('ul', 'groups');
+      for (const entry of groupItems) list.append(groupRow(entry));
+      failed.push(list);
+    }
+    const groupPanel = el('details', 'rawjson');
+    groupPanel.append(
+      el('summary', undefined, 'Raw response — group memberships'),
+      el('pre', 'wrap', JSON.stringify(groups.groupMemberships, null, 2)),
+    );
+    failed.push(groupPanel);
+  }
   const retry = el('button', 'quiet', 'Try again');
   retry.addEventListener('click', onReload);
-  section.replaceChildren(heading, ...failureLines(state), retry, checkBlock(onCheck));
+  failed.push(retry, checkBlock(onCheck));
+  section.replaceChildren(...failed);
   return section;
 };
 
@@ -1938,6 +1964,9 @@ const enterSignedIn = (session: Session, jws?: string): void => {
   reads = NOTHING_READ;
   checkTarget = '';
   check = { kind: 'idle' };
+  // Advancing the ticket orphans any check still in flight from the session
+  // this one replaces, so its answer cannot land on the fresh view.
+  checkSeq += 1;
   if (session.credential === undefined) {
     renderSignedIn(session, jws, reads);
     return;
@@ -2055,7 +2084,15 @@ const callCheck = async (
   kind: CheckKind,
   target: string,
 ): Promise<void> => {
-  showCheck(session, jws, { kind: 'pending', asked: kind, target });
+  // This call holds the newest ticket for as long as nobody asks again; an
+  // answer arriving after the ticket moved on belongs to a superseded question
+  // and is dropped rather than rendered against the newer one.
+  const seq = ++checkSeq;
+  const file = (state: CheckState): void => {
+    if (seq === checkSeq) showCheck(session, jws, state);
+  };
+
+  file({ kind: 'pending', asked: kind, target });
 
   const result = await call('/api/check', {
     method: 'POST',
@@ -2063,14 +2100,14 @@ const callCheck = async (
     timeoutMs: VERIFY_TIMEOUT_MS,
   });
   if (result === null) {
-    showCheck(session, jws, {
+    file({
       kind: 'unreachable',
       reason: 'The request to this site’s backend did not complete.',
     });
     return;
   }
   if (result.status !== 200) {
-    showCheck(session, jws, {
+    file({
       kind: 'unreachable',
       reason: reasonFrom(result, `this site’s backend answered HTTP ${result.status}`),
     });
@@ -2080,9 +2117,7 @@ const callCheck = async (
   const body = result.body;
   if (body['ok'] === true) {
     const entry = body['entry'];
-    showCheck(
-      session,
-      jws,
+    file(
       body['member'] === true && isRecord(entry)
         ? { kind: 'member', asked: kind, target, entry }
         : { kind: 'absent', asked: kind, target },
@@ -2090,7 +2125,7 @@ const callCheck = async (
     return;
   }
 
-  showCheck(session, jws, {
+  file({
     kind: 'refused',
     status: typeof body['status'] === 'number' ? body['status'] : 0,
     reason: reasonFrom(result, 'the API refused the request'),
