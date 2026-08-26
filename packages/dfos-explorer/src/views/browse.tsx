@@ -32,14 +32,16 @@ import { useEffect, useState } from 'preact/hooks';
 import { DidChip } from '../components/did-chip';
 import {
   DocName,
+  IdentityName,
   IndexLightNote,
   useVerifyOnVisible,
   VerifyBadge,
 } from '../components/index-light';
 import { Badge, Pager, Panel, Pill, Term } from '../components/ui';
+import { useIndexRowLabel } from '../lib/content-labels';
 import type { ChainRollup, DocumentsBrowse, IdentitiesBrowse } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { deriveDocLabel, useIndexRowLabel } from '../lib/doc-label';
+import { deriveDocLabel } from '../lib/doc-label';
 import { fmtAge, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
@@ -152,20 +154,25 @@ const FellBackNote = () => (
   </div>
 );
 
-/** One identity index row: name (attributed) + a live verify badge; opCount and
- *  deletion reconcile to the fold once it lands (the fold wins over the hint). */
+/**
+ * One identity index row: name + a live verify badge; opCount and deletion
+ * reconcile to the fold once it lands (the fold wins over the hint).
+ *
+ * THE NAME RUNS THE SAME THREE BEATS AS THE CHIPS, through the shared
+ * {@link IdentityName}: the relay's projected public name amber, replaced in
+ * place by the name re-derived from the identity's own signed profile bytes as
+ * the row scrolls into view — and a projection the fold contradicts (no public
+ * profile after all) is retired rather than left standing.
+ */
 const IndexIdentityRowView = (props: { row: IndexIdentityRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did, row.opCount);
   const rec = useVerifyStatus('identity', row.did);
-  // Honest degradation: only surface a projected name the relay marks public. An
-  // unupgraded relay may still send a non-public name; never render it.
-  const name = row.profile?.publicRead ? (row.profile.name ?? '') : '';
   const opCount = rec.facts?.opCount ?? row.opCount;
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>
       <td>
-        {name ? <span class="attr">{name}</span> : <span class="muted">— no public profile</span>}{' '}
+        <IdentityName row={row} seen={rec.status !== 'attributed'} />{' '}
         <VerifyBadge kind="identity" chainId={row.did} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
@@ -233,21 +240,24 @@ const IndexIdentitiesLight = (props: { page: IndexPage<IndexIdentityRow>; query:
   );
 };
 
-/** One content index row: the projected title (attributed) + type ($schema,
- *  held-bytes only) + creator + when, with a live verify badge. The title, like an
- *  identity's name, is a relay projection over held head bytes — shown amber; the
- *  badge greens as the tab folds the chain (which re-checks its structural facts). */
+/** One content index row: the chain's label + type ($schema, held-bytes only) +
+ *  creator + when, with a live verify badge. The label runs the three beats every
+ *  surface that names a chain runs (`useIndexRowLabel`): the relay's projected
+ *  title amber, replaced by a label derived from bytes this tab re-hashed to the
+ *  committed CID. The badge tracks a DIFFERENT question on its own track — the
+ *  chain's structural facts (signatures, op count, deletion) — so a row can be
+ *  green on its chain while its name is still amber, and vice versa. */
 const IndexContentRowView = (props: { row: IndexContentRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
   const rec = useVerifyStatus('content', row.contentId);
   const opCount = rec.facts?.opCount ?? row.opCount;
   const gated = !(row.docSchema && row.publicRead);
-  const label = useIndexRowLabel(row, rec.status === 'attributed');
+  const { label, tier } = useIndexRowLabel(row, rec.status !== 'attributed');
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
+        <DocName label={label} tier={tier} /> <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
       <td>

@@ -15,19 +15,21 @@
   A short `$schema` badge (post/v1, profile/v1) sits alongside it.
 
   A relay's index projects `title` ONLY for a post/v1 with a non-empty title;
-  everything else needs the document bytes. Those are fetched LAZILY and
-  concurrency-capped through `useDocSnippet` (the local index already carries
-  projected title/snippet — see sync-projections.ts — so the local paths pass
-  them straight in and never fetch). The bytes are relay-served and UNVERIFIED,
-  so a snippet stays in the same attributed (amber) tier as a projected title —
-  the detail page is the proof, exactly as with `name`/`title`.
+  everything else needs the document bytes. THIS MODULE NEVER FETCHES THEM. It is
+  pure: the local index passes its own projected title/snippet straight in (see
+  sync-projections.ts), and the relay-index surfaces pass the VERIFIED document
+  from lib/content-labels.ts, whose bytes re-hash to the CID the chain commits to.
+
+  An earlier draft did fetch them here — raw, from a relay, with no integrity
+  check — and rendered the excerpt amber alongside projected titles. That made a
+  relay the AUTHOR of a snippet on any chain it served, which no amber tier
+  redeems: the projected-title tier restates a field the relay indexed, while a
+  raw-bytes excerpt is prose the relay chose. The fix was not a better disclaimer
+  but the integrity gate, so a snippet now arrives only as proof.
 
 */
 
-import { useEffect, useState } from 'preact/hooks';
 import { short } from './format';
-import { fetchBlobRaw } from './relay-raw';
-import { getRelays } from './relays';
 
 /** How many characters of a body/description snippet to show before ellipsis. */
 export const SNIPPET_MAX = 48;
@@ -92,130 +94,55 @@ export const deriveDocLabel = (input: {
   return { text: short(input.contentId, 14, 5), quoted: false, kind: 'id' };
 };
 
-// -----------------------------------------------------------------------------
-// lazy, concurrency-capped document-bytes resolver for untitled index rows
-//
-// verify-queue folds a row's CHAIN (signatures/CIDs/op-count) but never fetches
-// the document bytes, so a body/description snippet needs its own fetch. It is
-// bounded (a wide corpus never fans out) and memoized module-wide (a row seen on
-// two surfaces fetches once). Triggered by visibility via the `active` flag the
-// caller derives from the row's verify status — no second IntersectionObserver.
-// -----------------------------------------------------------------------------
-
-const CONCURRENCY = 6;
-
-/** contentId → parsed doc (or null once resolved to gated/absent/non-JSON). */
-const cache = new Map<string, Record<string, unknown> | null>();
-const waiters = new Map<string, Set<() => void>>();
-const queue: string[] = [];
-let active = 0;
-
-const notify = (id: string): void => {
-  for (const fn of waiters.get(id) ?? []) fn();
-};
-
-const resolveOne = async (id: string): Promise<void> => {
-  try {
-    const blob = await fetchBlobRaw(id, getRelays());
-    if (!blob.bytes) {
-      // status 0 = no relay answered (transient/unreachable) — do NOT negative-
-      // cache, so a later mount retries. A real HTTP verdict (401/403 gated, 404
-      // absent) is durable — cache null so a known-empty chain isn't refetched.
-      if (blob.status !== 0) cache.set(id, null);
-      return;
-    }
-    const parsed: unknown = JSON.parse(
-      new TextDecoder('utf-8', { fatal: false }).decode(blob.bytes),
-    );
-    cache.set(
-      id,
-      typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : null,
-    );
-  } catch {
-    cache.set(id, null); // gated / absent / non-JSON — no snippet, fall back to id
-  } finally {
-    notify(id);
-  }
-};
-
-const pump = (): void => {
-  while (active < CONCURRENCY && queue.length > 0) {
-    const id = queue.shift()!;
-    active += 1;
-    void resolveOne(id).finally(() => {
-      active -= 1;
-      pump();
-    });
-  }
-};
-
-const enqueueSnippet = (id: string): void => {
-  if (cache.has(id) || queue.includes(id)) return;
-  queue.push(id);
-  pump();
-};
-
 /**
- * Resolve a content chain's document bytes for snippet derivation — lazily and
- * only when needed. `active` gates the fetch on visibility (the caller passes a
- * flag derived from the row's verify status, which flips the moment the row
- * scrolls into view). Returns the parsed doc, or null until/unless it resolves.
+ * The name a document states about ITSELF — the title/name half of
+ * {@link deriveDocLabel}'s precedence, and nothing inferred from it. A body or
+ * description snippet is an EXCERPT: right for a row label (quoted, so it can
+ * never be mistaken for a title) and wrong for a `title` field on a detail page,
+ * which reads as the document's own claim about what it is called. `''` when the
+ * document names itself nothing — a verdict, not a gap; see {@link contentTitle}.
+ * Pure.
  */
-export const useDocSnippet = (contentId: string, need: boolean): Record<string, unknown> | null => {
-  const [doc, setDoc] = useState<Record<string, unknown> | null>(
-    () => cache.get(contentId) ?? null,
-  );
-  useEffect(() => {
-    if (!need) return;
-    if (cache.has(contentId)) {
-      setDoc(cache.get(contentId) ?? null);
-      return;
-    }
-    const read = (): void => setDoc(cache.get(contentId) ?? null);
-    let set = waiters.get(contentId);
-    if (!set) {
-      set = new Set();
-      waiters.set(contentId, set);
-    }
-    set.add(read);
-    enqueueSnippet(contentId);
-    return () => {
-      set.delete(read);
-    };
-  }, [contentId, need]);
-  return doc;
+export const documentName = (doc: unknown): string => {
+  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) return '';
+  const label = deriveDocLabel({ contentId: '', doc: doc as Record<string, unknown> });
+  return label.kind === 'title' ? label.text : '';
 };
 
+/** Which tier the content detail page's `title` row is entitled to render in:
+ *  `verified` = the document's own name, from bytes this tab re-hashed to the
+ *  committed CID · `attributed` = the relay index's projection standing in ·
+ *  `none` = there is nothing anyone may say. */
+export type TitleTier = 'verified' | 'attributed' | 'none';
+
+/** The detail page's title row. `text` is meaningless when `tier` is `none`. */
+export interface ContentTitle {
+  tier: TitleTier;
+  text: string;
+}
+
 /**
- * The label for one relay-index content row — the single place the honesty rule
- * for a projected title lives, so every table that renders index rows obeys it
- * identically. `attributed` is the row's verify status still sitting at the
- * attributed floor; an untitled public row fetches its snippet only once that
- * flips (i.e. once the row has actually been seen).
+ * The title row's tier, and the whole trust ordering in one place: THE FOLD
+ * ALWAYS WINS. Sibling of `creditsTier` in components/credits.tsx — the same
+ * reasoning applied to the chain's name rather than its attribution.
  *
- * HONEST DEGRADATION: only a relay-marked-PUBLIC title is safe to render. An
- * unupgraded relay may still send a title for a non-public chain; it never
- * reaches the screen.
+ * `verifiedName` is null only while the fold has no answer: the bytes are not
+ * fetched, or not yet re-hashed to the committed document CID on a verified
+ * chain. In exactly that window the relay's projected title may stand in, amber.
+ * Once it is a STRING the fold has spoken, and the EMPTY string is a verdict
+ * rather than a gap — this document names itself nothing. It must retire the
+ * projection rather than leave it standing, or a stale (or hostile) relay keeps
+ * a title on screen that bytes bound to the chain contradict, which is precisely
+ * the assertion the fold exists to overrule.
+ *
+ * Whitespace is not a name on either side: a projection that renders as a blank
+ * amber span is worse than the row it replaced. Pure, unit-tested.
  */
-export const useIndexRowLabel = (
-  row: {
-    contentId: string;
-    title: string | null;
-    docSchema: string | null;
-    publicRead: boolean;
-  },
-  attributed: boolean,
-): DocLabel => {
-  const doc = useDocSnippet(
-    row.contentId,
-    !attributed && !row.title && !!row.docSchema && row.publicRead,
-  );
-  return deriveDocLabel({
-    title: row.publicRead ? row.title : null,
-    docSchema: row.docSchema,
-    contentId: row.contentId,
-    doc,
-  });
+export const contentTitle = (verifiedName: string | null, projected: string): ContentTitle => {
+  if (verifiedName !== null) {
+    const verified = verifiedName.trim();
+    return verified ? { tier: 'verified', text: verified } : { tier: 'none', text: '' };
+  }
+  const attributed = projected.trim();
+  return attributed ? { tier: 'attributed', text: attributed } : { tier: 'none', text: '' };
 };

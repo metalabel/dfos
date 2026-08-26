@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { verifiedContentLabel } from '../src/lib/content-labels';
+import { rowProjection, verifiedContentLabel } from '../src/lib/content-labels';
 
 const CONTENT_ID = 'ct7kkfz7ehzvv6fzvate9rz2874nc3e';
 const POST = 'https://schemas.dfos.com/post/v1';
@@ -66,5 +66,28 @@ describe('verifiedContentLabel — only integral document bytes name a content c
 
   it('an integral document with no derivable text yields a cacheable bare-id verdict', () => {
     expect(verifiedContentLabel(CONTENT_ID, { $schema: POST }, true)).toBeNull();
+  });
+});
+
+describe('rowProjection — the amber beat an index row is allowed to show', () => {
+  const row = (over: { title?: string | null; publicRead?: boolean }) => ({
+    contentId: CONTENT_ID,
+    title: over.title ?? null,
+    publicRead: over.publicRead ?? true,
+  });
+
+  it('a public chain projects its title', () => {
+    expect(rowProjection(row({ title: 'A Post' }))).toBe('A Post');
+  });
+
+  it('a NON-public chain never projects one, even when the relay sent it', () => {
+    // an unupgraded relay may still send it; it must not reach the screen, not
+    // even for the moment before the verified answer lands
+    expect(rowProjection(row({ title: 'A Post', publicRead: false }))).toBe('');
+  });
+
+  it('an absent or whitespace-only title is no title', () => {
+    expect(rowProjection(row({}))).toBe('');
+    expect(rowProjection(row({ title: '   ' }))).toBe('');
   });
 });

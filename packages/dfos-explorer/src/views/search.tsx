@@ -25,12 +25,13 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { DidChip } from '../components/did-chip';
 import {
   DocName,
+  IdentityName,
   IndexLightNote,
   useVerifyOnVisible,
   VerifyBadge,
 } from '../components/index-light';
 import { Pager, Panel, Term } from '../components/ui';
-import { useIndexRowLabel } from '../lib/doc-label';
+import { useIndexRowLabel } from '../lib/content-labels';
 import { fmtAge, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
@@ -53,16 +54,17 @@ const useDebounced = <T,>(value: T, ms: number): T => {
   return settled;
 };
 
+/** One identity hit: the same name cell the document browser renders — the
+ *  relay's projected public name amber, promoted in place to the name re-derived
+ *  from the identity's own signed profile bytes as the row is seen. */
 const IdentityHit = (props: { row: IndexIdentityRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('identity', row.did, row.opCount);
-  // Honest degradation: only surface a projected name the relay marks public. An
-  // unupgraded relay may still send a non-public name; never render it.
-  const name = row.profile?.publicRead ? (row.profile.name ?? '') : '';
+  const rec = useVerifyStatus('identity', row.did);
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/did/${row.did}`)}>
       <td>
-        {name ? <span class="attr">{name}</span> : <span class="muted">— no public profile</span>}{' '}
+        <IdentityName row={row} seen={rec.status !== 'attributed'} />{' '}
         <VerifyBadge kind="identity" chainId={row.did} />
       </td>
       <td class="cid">{short(row.did, 16, 6)}</td>
@@ -71,18 +73,19 @@ const IdentityHit = (props: { row: IndexIdentityRow }) => {
   );
 };
 
-/** One content hit: the projected title (attributed), its type, creator, and a
- *  live verify badge — the same row vocabulary the document browser uses, so a
- *  title reached by search reads identically to one reached by browsing. */
+/** One content hit: the chain's label, its type, creator, and a live verify
+ *  badge — the same row vocabulary (and the same three label beats) the document
+ *  browser uses, so a chain reached by search reads identically to one reached by
+ *  browsing. */
 const ContentHit = (props: { row: IndexContentRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
   const rec = useVerifyStatus('content', row.contentId);
-  const label = useIndexRowLabel(row, rec.status === 'attributed');
+  const { label, tier } = useIndexRowLabel(row, rec.status !== 'attributed');
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
+        <DocName label={label} tier={tier} /> <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
       <td>

@@ -46,7 +46,7 @@ import { getClient } from './client';
 import { getRelays, subscribeRelays } from './relays';
 
 /** In-flight point lookups at once — the same politeness budget did-profiles
- *  and doc-label give their row hydrators. */
+ *  and content-labels give their row hydrators. */
 const CONCURRENCY = 4;
 
 // -----------------------------------------------------------------------------
@@ -71,16 +71,23 @@ export const rowForContentId = (
  * HONEST DEGRADATION, identical to the browse rows: only a name the relay marks
  * `publicRead` ever reaches the screen — an unupgraded relay may still project a
  * non-public one. Pure.
+ *
+ * A WHITESPACE-ONLY PROJECTION IS NOTHING. The verified path already treats a
+ * blank name as no name (did-profiles.ts: "a nameless profile resolves to
+ * none"), so leaving the projection untrimmed would let a relay replace a short,
+ * readable identifier with an empty amber span that clicks nowhere the eye can
+ * see — and then have it "promote" to the id it should have shown all along.
  */
 export const projectedName = (row: IndexIdentityRow | null): string =>
-  row?.profile?.publicRead ? (row.profile.name ?? '') : '';
+  row?.profile?.publicRead ? (row.profile.name ?? '').trim() : '';
 
 /**
- * The projected title a content row is allowed to display, or ''. Same rule as
- * {@link projectedName}: a non-public chain never surfaces its title. Pure.
+ * The projected title a content row is allowed to display, or ''. Same two rules
+ * as {@link projectedName}: a non-public chain never surfaces its title, and a
+ * whitespace-only title is not a title. Pure.
  */
 export const projectedTitle = (row: IndexContentRow | null): string =>
-  row?.publicRead ? (row.title ?? '') : '';
+  row?.publicRead ? (row.title ?? '').trim() : '';
 
 // -----------------------------------------------------------------------------
 // resolver — module cache + waiter/pump, the did-profiles.ts idiom

@@ -24,10 +24,10 @@ import { ContentChip } from '../components/content-chip';
 import { DidChip } from '../components/did-chip';
 import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { OpLink, Pager, Panel, Term } from '../components/ui';
+import { useIndexRowLabel } from '../lib/content-labels';
 import type { OpKind } from '../lib/db';
 import { estimateStorageBytes, OP_KINDS } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { useIndexRowLabel } from '../lib/doc-label';
 import { fmtAge, fmtBytes, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { useIndexCapable, useIndexContent, useIndexIter2 } from '../lib/index-light';
@@ -435,16 +435,19 @@ const OperationsPanel = (props: {
 // POSTS — the public post feed off the relay's content index
 // -----------------------------------------------------------------------------
 
+/** One post in the public feed: the chain's label + type + creator + when. Same
+ *  row vocabulary and same three label beats as the document browser — a post
+ *  reached from the feed reads identically to one reached by browsing. */
 const PostRow = (props: { row: IndexContentRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
   const rec = useVerifyStatus('content', row.contentId);
-  const label = useIndexRowLabel(row, rec.status === 'attributed');
+  const { label, tier } = useIndexRowLabel(row, rec.status !== 'attributed');
   const gated = !(row.docSchema && row.publicRead);
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
+        <DocName label={label} tier={tier} /> <VerifyBadge kind="content" chainId={row.contentId} />
         {gated ? <span class="err"> gated</span> : null}
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>

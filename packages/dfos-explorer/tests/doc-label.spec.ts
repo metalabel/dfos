@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { deriveDocLabel, snippet, SNIPPET_MAX } from '../src/lib/doc-label';
+import {
+  contentTitle,
+  deriveDocLabel,
+  documentName,
+  snippet,
+  SNIPPET_MAX,
+} from '../src/lib/doc-label';
 
 const POST = 'https://schemas.dfos.com/post/v1';
 const PROFILE = 'https://schemas.dfos.com/profile/v1';
@@ -95,5 +101,63 @@ describe('deriveDocLabel', () => {
 
   it('ignores blank/whitespace titles and snippets', () => {
     expect(deriveDocLabel({ title: '   ', snippet: '  ', contentId: CID }).kind).toBe('id');
+  });
+});
+
+describe('documentName — the name a document states about ITSELF', () => {
+  it('reads a post/v1 title and a profile/v1 name', () => {
+    expect(documentName({ $schema: POST, title: 'A Post' })).toBe('A Post');
+    expect(documentName({ $schema: PROFILE, name: 'Alice' })).toBe('Alice');
+  });
+
+  it('a body or description EXCERPT is never a name', () => {
+    // a quoted snippet is an honest row label and a dishonest `title` field: the
+    // detail page's title row reads as the document's own claim about itself
+    expect(documentName({ $schema: POST, body: 'so today I did a thing' })).toBe('');
+    expect(documentName({ $schema: PROFILE, description: 'a maker of things' })).toBe('');
+  });
+
+  it('a document that names itself nothing yields the empty string', () => {
+    expect(documentName({ $schema: POST })).toBe('');
+    expect(documentName({ $schema: POST, title: '   ' })).toBe('');
+    expect(documentName({})).toBe('');
+  });
+
+  it('a non-object document has nowhere to state a name', () => {
+    expect(documentName(null)).toBe('');
+    expect(documentName(undefined)).toBe('');
+    expect(documentName('a string')).toBe('');
+    expect(documentName(42)).toBe('');
+    expect(documentName([{ title: 'array title' }])).toBe('');
+  });
+});
+
+describe('contentTitle — the fold always wins over the relay projection', () => {
+  it('the projection stands in ONLY while the fold has no answer', () => {
+    expect(contentTitle(null, 'relay title')).toEqual({ tier: 'attributed', text: 'relay title' });
+  });
+
+  it('a folded name replaces the projection with plain, verified ink', () => {
+    expect(contentTitle('the real title', 'relay title')).toEqual({
+      tier: 'verified',
+      text: 'the real title',
+    });
+    expect(contentTitle('the real title', '')).toEqual({
+      tier: 'verified',
+      text: 'the real title',
+    });
+  });
+
+  it('a folded EMPTY name RETIRES the projection — the honest-degradation guard', () => {
+    // the relay projects a title for a chain whose verified current document
+    // names itself nothing: stale, or hostile. The amber tier must not survive
+    // its own contradiction by bytes this tab re-hashed to the committed CID.
+    expect(contentTitle('', 'relay title')).toEqual({ tier: 'none', text: '' });
+    expect(contentTitle('   ', 'relay title')).toEqual({ tier: 'none', text: '' });
+  });
+
+  it('no fold and no projection is simply no title row', () => {
+    expect(contentTitle(null, '')).toEqual({ tier: 'none', text: '' });
+    expect(contentTitle(null, '   ')).toEqual({ tier: 'none', text: '' });
   });
 });

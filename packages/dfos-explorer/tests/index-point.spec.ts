@@ -86,6 +86,25 @@ describe('projectedName — only a relay-marked-PUBLIC name ever displays', () =
     ).toBe('');
     expect(projectedName(null)).toBe('');
   });
+
+  it('a whitespace-only projection is not a name', () => {
+    // the verified path already treats a blank name as no name; leaving the
+    // projection untrimmed would replace a readable identifier with an empty
+    // amber span, then "promote" it to the id it should have shown all along
+    expect(
+      projectedName(
+        identity(DID, { anchor: CONTENT, publicRead: true, docSchema: null, name: '   ' }),
+      ),
+    ).toBe('');
+  });
+
+  it('trims a projection the relay padded', () => {
+    expect(
+      projectedName(
+        identity(DID, { anchor: CONTENT, publicRead: true, docSchema: null, name: '  asha  ' }),
+      ),
+    ).toBe('asha');
+  });
 });
 
 describe('projectedTitle — the same rule for a content row', () => {
@@ -100,5 +119,10 @@ describe('projectedTitle — the same rule for a content row', () => {
   it('an unprojected title and a missing row are both nothing', () => {
     expect(projectedTitle(content(CONTENT))).toBe('');
     expect(projectedTitle(null)).toBe('');
+  });
+
+  it('a whitespace-only title is not a title, and a padded one is trimmed', () => {
+    expect(projectedTitle(content(CONTENT, { title: '   ' }))).toBe('');
+    expect(projectedTitle(content(CONTENT, { title: '  a post  ' }))).toBe('a post');
   });
 });
