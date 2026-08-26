@@ -142,7 +142,11 @@ export const encodeIndexOrderedCursor = (timestamp: string, key: string): string
 
 export const decodeIndexOrderedCursor = (raw: string): IndexOrderedCursor | null => {
   try {
-    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    const bytes = Buffer.from(raw, 'base64url');
+    // canonicality round-trip: reject non-canonical encodings (padding,
+    // whitespace) so both twins agree on exactly which cursors are valid
+    if (bytes.toString('base64url') !== raw) return null;
+    const decoded = bytes.toString('utf8');
     const sep = decoded.indexOf('~');
     if (sep <= 0 || sep !== decoded.lastIndexOf('~') || sep === decoded.length - 1) return null;
     const timestamp = decoded.slice(0, sep);

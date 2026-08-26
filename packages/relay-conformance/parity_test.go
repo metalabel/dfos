@@ -3,6 +3,7 @@ package conformance
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,7 +145,7 @@ func getBody(t *testing.T, url string) (int, []byte) {
 	return resp.StatusCode, b
 }
 
-func postOps(t *testing.T, base string, ops []string) {
+func postOps(t *testing.T, base string, ops []string) []byte {
 	t.Helper()
 	payload, _ := json.Marshal(map[string]any{"operations": ops})
 	resp, err := http.Post(base+"/proof/v1/operations", "application/json", bytes.NewReader(payload))
@@ -151,9 +153,55 @@ func postOps(t *testing.T, base string, ops []string) {
 		t.Fatalf("POST %s/proof/v1/operations: %v", base, err)
 	}
 	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("POST %s/proof/v1/operations: status %d, body %s", base, resp.StatusCode, b)
+	}
+	return b
+}
+
+// canonicalizeNormalized canonicalizes after replacing the values of named
+// relay-local volatile fields (e.g. ingestedAt — each relay stamps its own
+// receipt clock, so byte-equality is impossible by construction) with a fixed
+// placeholder. Structure and every convergent field still byte-compare.
+func canonicalizeNormalized(t *testing.T, body []byte, volatile ...string) string {
+	t.Helper()
+	var parsed any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("canonicalizeNormalized: unmarshal: %v (body: %s)", err, body)
+	}
+	vol := map[string]bool{}
+	for _, key := range volatile {
+		vol[key] = true
+	}
+	normalized := normalizeVolatileFields(parsed, vol)
+	out, err := json.Marshal(sortKeys(normalized))
+	if err != nil {
+		t.Fatalf("canonicalizeNormalized: marshal: %v", err)
+	}
+	return string(out)
+}
+
+func normalizeVolatileFields(v any, volatile map[string]bool) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for key, value := range x {
+			if volatile[key] {
+				if s, ok := value.(string); ok && s != "" {
+					x[key] = "<relay-local>"
+				}
+				continue
+			}
+			x[key] = normalizeVolatileFields(value, volatile)
+		}
+		return x
+	case []any:
+		for i := range x {
+			x[i] = normalizeVolatileFields(x[i], volatile)
+		}
+		return x
+	default:
+		return v
 	}
 }
 
@@ -277,8 +325,20 @@ func TestDualRelayParity(t *testing.T) {
 	// Replay the fixed op set into BOTH relays in the SAME fixed order:
 	// bootstrap ops (relay genesis + profile) first, then the user op set.
 	allOps := append(append([]string{}, fix.BootstrapOps...), fix.Ops...)
-	postOps(t, tsURL, allOps)
-	postOps(t, goURL, allOps)
+	tsPostBody := postOps(t, tsURL, allOps)
+	goPostBody := postOps(t, goURL, allOps)
+
+	// POST response parity: the ingestion verdict (per-op status / error /
+	// dependencyMissing) is the relay's most semantically loaded output —
+	// compare the bodies, not just the HTTP status.
+	t.Run("POST /proof/v1/operations response body", func(t *testing.T) {
+		tsCanon := canonicalize(t, tsPostBody)
+		goCanon := canonicalize(t, goPostBody)
+		if tsCanon != goCanon {
+			t.Fatalf("PARITY MISMATCH on POST /proof/v1/operations response\n%s\n--- TS (canonical) ---\n%s\n--- Go (canonical) ---\n%s",
+				prettyDiff(tsCanon, goCanon), tsCanon, goCanon)
+		}
+	})
 
 	// Expected accepted entries = every op in the fixture: bootstrap (relay
 	// genesis + profile) + the user op set (identities A/B/C/D, A's content
@@ -410,6 +470,72 @@ func TestDualRelayParity(t *testing.T) {
 					route, prettyDiff(tsCanon, goCanon), tsCanon, goCanon)
 			}
 		})
+	}
+
+	// The two newest index families expose `ingestedAt` — a relay-local receipt
+	// stamp that can never byte-match across two processes — so they compare
+	// under canonicalizeNormalized with that one field neutralized. Everything
+	// else (row sets, ordering, cursors, every other field) still byte-compares.
+	// Ordering uses the author clock (createdAt), which the fixture pins.
+	volatileRoutes := []string{
+		"/index/v0/artifacts?limit=1000",
+		"/index/v0/artifacts?order=createdAt.desc&limit=1000",
+		"/index/v0/operations?order=createdAt.desc&limit=1000",
+		"/index/v0/operations?kind=artifact&order=createdAt.desc&limit=1000",
+	}
+	for _, route := range volatileRoutes {
+		t.Run(route, func(t *testing.T) {
+			tsStatus, tsBody := getBody(t, tsURL+route)
+			goStatus, goBody := getBody(t, goURL+route)
+			if tsStatus != goStatus {
+				t.Fatalf("status mismatch on %s: TS=%d Go=%d", route, tsStatus, goStatus)
+			}
+			if tsStatus != 200 {
+				t.Fatalf("expected 200 on %s, got %d (TS body: %s)", route, tsStatus, tsBody)
+			}
+			tsCanon := canonicalizeNormalized(t, tsBody, "ingestedAt")
+			goCanon := canonicalizeNormalized(t, goBody, "ingestedAt")
+			if tsCanon != goCanon {
+				t.Fatalf("PARITY MISMATCH on %s\n%s\n--- TS (canonical) ---\n%s\n--- Go (canonical) ---\n%s",
+					route, prettyDiff(tsCanon, goCanon), tsCanon, goCanon)
+			}
+		})
+	}
+
+	// Cursor canonicality parity: non-canonical base64 variants of a
+	// well-formed cursor MUST be rejected identically by both twins. This exact
+	// divergence shipped (TS accepted padded/whitespace ordered cursors that Go
+	// rejected; Go accepted a newline credits cursor that TS rejected), and the
+	// emitted-cursor walks above can never catch it — they only replay cursors
+	// the relays themselves produced.
+	orderedCanonical := base64.RawURLEncoding.EncodeToString([]byte("2026-01-01T00:00:00Z~did:dfos:parity"))
+	creditCanonical := base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("a", 31) + "~0"))
+	for _, suffix := range []string{"=", "==", "\n", " "} {
+		malformedRoutes := []string{
+			"/index/v0/content?order=genesisAt.desc&after=" + url.QueryEscape(orderedCanonical+suffix),
+			"/index/v0/identities?order=genesisAt.desc&after=" + url.QueryEscape(orderedCanonical+suffix),
+			"/index/v0/artifacts?order=createdAt.desc&after=" + url.QueryEscape(orderedCanonical+suffix),
+			"/index/v0/countersignatures?witness=" + url.QueryEscape(fix.QueryRevocationIssuerDID) + "&order=createdAt.desc&after=" + url.QueryEscape(orderedCanonical+suffix),
+			"/index/v0/operations?after=" + url.QueryEscape(orderedCanonical+suffix),
+			"/index/v0/credits?after=" + url.QueryEscape(creditCanonical+suffix),
+		}
+		for _, route := range malformedRoutes {
+			t.Run("malformed cursor "+route, func(t *testing.T) {
+				tsStatus, tsBody := getBody(t, tsURL+route)
+				goStatus, goBody := getBody(t, goURL+route)
+				if tsStatus != goStatus {
+					t.Fatalf("status mismatch on %s: TS=%d Go=%d (TS body: %s; Go body: %s)", route, tsStatus, goStatus, tsBody, goBody)
+				}
+				if tsStatus != http.StatusBadRequest {
+					t.Fatalf("expected 400 on %s, got %d (TS body: %s)", route, tsStatus, tsBody)
+				}
+				tsCanon := canonicalize(t, tsBody)
+				goCanon := canonicalize(t, goBody)
+				if tsCanon != goCanon {
+					t.Fatalf("PARITY MISMATCH on %s\n--- TS ---\n%s\n--- Go ---\n%s", route, tsCanon, goCanon)
+				}
+			})
+		}
 	}
 
 	// REGRESSION GUARD (index fan-out): the walk requires >= 2 non-empty pages, so

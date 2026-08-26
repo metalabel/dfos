@@ -124,10 +124,14 @@ A relay ingests, sequences, and serves. It implements:
   tests in both reference relays; no disabled-mode live serve variant exists yet (the
   conformance suite's disabled tests self-skip unless a relay advertises `false`).
 - **Index (`/index/v0`)** (if served) — the optional, non-authoritative identity,
-  content, countersignature, credential, and credit projections; actor/name/public-read
-  filters; deterministic ordering; and complete keyset/ordered-cursor walks live in the
-  relay tier on the index family's own `0.x` clock (WEB-RELAY.md "Index (v0)",
-  `specs/WEB-RELAY.md`). The credits family additionally carries the credit projection's
+  content, countersignature, credential, credit, artifact, and operation projections;
+  actor/name/public-read filters; deterministic ordering; complete keyset/ordered-cursor
+  walks; and cursor canonicality (non-canonical base64 encodings of a well-formed
+  cursor are rejected) live in the relay tier on the index family's own `0.x` clock
+  (WEB-RELAY.md "Index (v0)", `specs/WEB-RELAY.md`). The artifact and operation
+  families expose `ingestedAt` — a relay-local receipt stamp, excluded from
+  cross-relay parity by construction — and both surfaces MUST report the same
+  `ingestedAt` for the same operation on any one relay. The credits family additionally carries the credit projection's
   public-only / head-only / full-replace rules — rows exist only for publicly readable,
   non-deleted chains with held head bytes, and a chain's row set always restates the
   current head document or is empty. A relay advertising `capabilities.index: false` returns **501

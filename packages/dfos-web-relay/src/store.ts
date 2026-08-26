@@ -711,6 +711,10 @@ export class MemoryRelayStore implements RelayStore {
     });
   }
 
+  async getIndexOperationRow(cid: string): Promise<IndexOperationRow | undefined> {
+    return this.indexOperationRows.get(cid);
+  }
+
   async readLog(params: {
     after?: string;
     limit: number;

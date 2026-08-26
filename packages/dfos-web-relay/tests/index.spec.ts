@@ -591,6 +591,21 @@ describe('index v0', () => {
     expect((await req('/index/v0/artifacts?order=createdAt.desc&after=bogus')).status).toBe(400);
   });
 
+  it('reports one receipt time for an artifact across artifacts and operations routes', async () => {
+    const signer = await createIdentity();
+    const made = await createArtifact(signer, { $schema: 'example/artifact-receipt', value: 1 }, 1);
+
+    const artifacts = await json(
+      await req(`/index/v0/artifacts?cid=${encodeURIComponent(made.artifactCID)}`),
+    );
+    const operations = await json(await req('/index/v0/operations?kind=artifact&limit=100'));
+    const opRow = operations.operations.find(
+      (row: { cid: string }) => row.cid === made.artifactCID,
+    );
+    expect(opRow).toBeDefined();
+    expect(artifacts.artifacts[0].ingestedAt).toBe(opRow.ingestedAt);
+  });
+
   it('enumerates identities with profile projection, filters, pagination, and deleted rows', async () => {
     const subject = await createIdentity();
     const unprofiled = await createIdentity();
