@@ -20,9 +20,10 @@
 import type { IndexContentRow } from '@metalabel/dfos-client';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
+import { ContentChip } from '../components/content-chip';
 import { DidChip } from '../components/did-chip';
 import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
-import { ContentLink, OpLink, Pager, Panel, Term } from '../components/ui';
+import { OpLink, Pager, Panel, Term } from '../components/ui';
 import type { OpKind } from '../lib/db';
 import { estimateStorageBytes, OP_KINDS } from '../lib/db';
 import { getDb } from '../lib/db-instance';
@@ -197,7 +198,7 @@ const ChainCell = (props: { chainId: string }) => {
   if (!chainId) return <span class="muted">—</span>;
   if (chainId.startsWith('did:dfos:')) return <DidChip did={chainId} />;
   if (chainId.startsWith('baf')) return <OpLink cid={chainId} />;
-  return <ContentLink id={chainId} />;
+  return <ContentChip id={chainId} />;
 };
 
 /** The shared cells of an operation row; the two wrappers below differ only in

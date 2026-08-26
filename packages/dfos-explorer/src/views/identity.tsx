@@ -20,13 +20,13 @@ import { classifyAnchor } from '@metalabel/dfos-protocol/chain';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks, type CheckState } from '../components/checks';
+import { ContentChip } from '../components/content-chip';
 import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { ProfileCard } from '../components/profile';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
 import {
   Badge,
-  ContentLink,
   CredLink,
   CredStatus,
   DidLink,
@@ -123,6 +123,8 @@ export const Identity = (props: { did: string }) => {
   // operations this identity has WITNESSED — a relay-index reverse lookup by
   // witness DID (attributed hint; open a target op to fold the real proof)
   const [witnessed, setWitnessed] = useState<IndexCountersignatureRow[] | null>(null);
+  const [witnessRelation, setWitnessRelation] = useState<string | null>(null);
+  const [witnessRelations, setWitnessRelations] = useState<string[]>([]);
   // content chains this identity CREATED (creator=did) and CONTRIBUTED to
   // (signer=did minus the rows it created — the client-side subtraction the spec
   // prescribes). Both are index-only reverse lookups, so they key on [did, indexed].
@@ -146,6 +148,8 @@ export const Identity = (props: { did: string }) => {
     setRows([]);
     setCreds(null);
     setRevoked(emptyRevocations());
+    setWitnessRelation(null);
+    setWitnessRelations([]);
     setError('');
     const relays = getRelays();
 
@@ -214,17 +218,39 @@ export const Identity = (props: { did: string }) => {
   }, [props.did]);
 
   // separate lane: the countersignatures-by-witness reverse lookup only exists on
-  // an index-capable relay, so it keys on [did, indexed] and stands apart from the
-  // proof-plane fold above (never gates it).
+  // an index-capable relay, so it stands apart from the proof-plane fold above
+  // (never gates it). The relation filter is a server-side exact-match re-query,
+  // reaching past the first page of other relations. Its buttons come only from
+  // the unfiltered page: an open-namespace tag absent from that page is not offered.
   useEffect(() => {
     let dead = false;
     setWitnessed(null);
     setWitnessedErr(false);
     if (indexed !== true) return;
     void getClient()
-      .indexCountersignatures(props.did, { limit: 200 })
+      .indexCountersignatures(props.did, {
+        limit: 200,
+        ...(witnessRelation ? { relation: witnessRelation } : {}),
+      })
       .then((p) => {
-        if (!dead) setWitnessed(p.countersignatures);
+        if (dead) return;
+        // A relay predating relation= ignores it and answers unfiltered, so keep
+        // only rows that answer the exact question — the index-point.ts rule.
+        const rows = witnessRelation
+          ? p.countersignatures.filter((row) => row.relation === witnessRelation)
+          : p.countersignatures;
+        setWitnessed(rows);
+        if (!witnessRelation) {
+          setWitnessRelations(
+            [
+              ...new Set(
+                p.countersignatures
+                  .map((row) => row.relation)
+                  .filter((relation): relation is string => !!relation),
+              ),
+            ].sort(),
+          );
+        }
       })
       .catch(() => {
         // rejected — an error, NOT a confirmed "witnessed nothing"
@@ -236,7 +262,7 @@ export const Identity = (props: { did: string }) => {
     return () => {
       dead = true;
     };
-  }, [props.did, indexed]);
+  }, [props.did, indexed, witnessRelation]);
 
   // separate index lane: public-read content chains CREATED and CONTRIBUTED TO
   // by this DID. Created is `creator=did` (predates iteration 2 — always fetched).
@@ -481,6 +507,9 @@ export const Identity = (props: { did: string }) => {
         contributedTruncated={contributedTruncated}
         witnessed={witnessed}
         witnessedErr={witnessedErr}
+        witnessRelation={witnessRelation}
+        witnessRelations={witnessRelations}
+        onWitnessRelation={setWitnessRelation}
         credSource={credSource}
         credFromRelayIndex={credFromRelayIndex}
         revoked={revoked}
@@ -511,7 +540,7 @@ export const Identity = (props: { did: string }) => {
               contentAnchors.length > 0 ? (
                 contentAnchors.map((a) => (
                   <div key={a}>
-                    <ContentLink id={a} full />
+                    <ContentChip id={a} full />
                   </div>
                 ))
               ) : (
@@ -776,6 +805,9 @@ const ActorLedger = (props: {
   contributedTruncated: boolean;
   witnessed: IndexCountersignatureRow[] | null;
   witnessedErr: boolean;
+  witnessRelation: string | null;
+  witnessRelations: string[];
+  onWitnessRelation: (relation: string | null) => void;
   credSource: { cid: string; jwsToken: string }[] | null;
   credFromRelayIndex: boolean;
   revoked: RevocationView;
@@ -844,6 +876,9 @@ const ActorLedger = (props: {
           indexed={props.indexed}
           witnessed={props.witnessed}
           error={props.witnessedErr}
+          relations={props.witnessRelations}
+          relation={props.witnessRelation}
+          onRelation={props.onWitnessRelation}
         />
       ) : (
         <IssuedTable
@@ -862,18 +897,56 @@ const WitnessedTable = (props: {
   indexed: boolean | null;
   witnessed: IndexCountersignatureRow[] | null;
   error: boolean;
+  relations: string[];
+  relation: string | null;
+  onRelation: (relation: string | null) => void;
 }) => {
   if (props.indexed === null) return <span class="muted">checking relay capabilities…</span>;
   if (props.indexed !== true) return <span class="muted">requires an index-capable relay.</span>;
+  const filters =
+    props.relations.length > 0 ? (
+      <div class="filters" style={{ marginBottom: 8 }}>
+        <span class="lbl">relation</span>
+        {props.relations.map((relation) => (
+          <button
+            key={relation}
+            class={props.relation === relation ? 'on' : ''}
+            onClick={() => props.onRelation(props.relation === relation ? null : relation)}
+          >
+            {relation}
+          </button>
+        ))}
+      </div>
+    ) : null;
   const state = indexListState(props.witnessed === null, props.error, props.witnessed?.length ?? 0);
-  if (state === 'loading') return <span class="muted">reading relay index…</span>;
-  if (state === 'error') return <span class="muted">couldn’t reach the relay index.</span>;
+  if (state === 'loading')
+    return (
+      <>
+        {filters}
+        <span class="muted">reading relay index…</span>
+      </>
+    );
+  if (state === 'error')
+    return (
+      <>
+        {filters}
+        <span class="muted">couldn’t reach the relay index.</span>
+      </>
+    );
   if (state === 'empty')
     return (
-      <span class="muted">this identity has witnessed no operations the relay index surfaces.</span>
+      <>
+        {filters}
+        <span class="muted">
+          {props.relation
+            ? 'no witnessed operations with this relation the relay index surfaces.'
+            : 'this identity has witnessed no operations the relay index surfaces.'}
+        </span>
+      </>
     );
   return (
     <>
+      {filters}
       <table>
         <thead>
           <tr>
@@ -1483,7 +1556,7 @@ const ServiceTarget = (props: { entry: ServiceEntry }) => {
   if (props.entry.type === 'ContentAnchor' && typeof rec['anchor'] === 'string') {
     const anchor = rec['anchor'];
     const kind = classifyAnchor(anchor);
-    if (kind === 'chain') return <ContentLink id={anchor} full />;
+    if (kind === 'chain') return <ContentChip id={anchor} full />;
     if (kind === 'artifact')
       return (
         <>

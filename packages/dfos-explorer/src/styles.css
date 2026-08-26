@@ -870,13 +870,15 @@ tr:hover td {
   margin-left: auto;
 }
 
-/* -------------------------------------------------------------- did chip
+/* ----------------------------------------------------- did / content chips
 
-   A DID resolved to its public profile name. The name is plain ink, NOT the
-   amber `.attr` used for relay projections — it came from bytes re-hashed to the
-   chain's committed CID in this tab. Unresolved, it is the short DID as before. */
+   A DID or contentId resolved to its verified name/label. Verified text is plain
+   ink, NOT the amber `.attr` used for relay projections — it came from bytes re-
+   hashed to the chain's committed CID in this tab. Unresolved, it is the short
+   identifier as before. */
 
-.did-chip {
+.did-chip,
+.content-chip {
   overflow-wrap: anywhere;
 }
 
@@ -885,7 +887,8 @@ tr:hover td {
   border-bottom: 1px solid var(--line2);
 }
 
-.did-chip:hover .did-name {
+.did-chip:hover .did-name,
+.content-chip:hover .did-name {
   color: var(--link);
   border-bottom-color: var(--link);
 }

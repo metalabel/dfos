@@ -25,10 +25,10 @@ import { decodeDFOSCredentialUnsafe } from '@metalabel/dfos-protocol/credentials
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { Check, Checks, type CheckState } from '../components/checks';
+import { ContentChip } from '../components/content-chip';
 import { JsonView } from '../components/json-view';
 import { OpTimeline, OpType } from '../components/timeline';
 import {
-  ContentLink,
   CredLink,
   DidLink,
   KidLink,
@@ -367,7 +367,7 @@ export const Op = (props: { cid: string }) => {
 
   const chainLink = op?.chainId ? (
     op.kind === 'content-op' ? (
-      <ContentLink id={op.chainId} />
+      <ContentChip id={op.chainId} />
     ) : (
       <DidLink did={op.chainId} />
     )
@@ -807,6 +807,6 @@ const AuthorizationRow = (props: { token: string }) => {
 const AuthResource = (props: { resource: string }) => {
   const r = props.resource;
   if (r === 'chain:*') return <span class="muted">chain:*</span>;
-  if (r.startsWith('chain:')) return <ContentLink id={r.slice('chain:'.length)} />;
+  if (r.startsWith('chain:')) return <ContentChip id={r.slice('chain:'.length)} />;
   return <span class="muted">{r}</span>;
 };

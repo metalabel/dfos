@@ -20,17 +20,9 @@ import {
 import { dagCborCanonicalEncode } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
+import { ContentChip } from '../components/content-chip';
 import { ProvenancePanel } from '../components/provenance';
-import {
-  ContentLink,
-  DidLink,
-  KidLink,
-  Panel,
-  Pill,
-  Related,
-  Term,
-  TruncId,
-} from '../components/ui';
+import { DidLink, KidLink, Panel, Pill, Related, Term, TruncId } from '../components/ui';
 import { getClient } from '../lib/client';
 import { getDb } from '../lib/db-instance';
 import { fmtUnixDate, short } from '../lib/format';
@@ -546,7 +538,7 @@ export const Credential = (props: { cid: string }) => {
             k: 'granted chain',
             v:
               firstAtt && /^chain:[^*]/.test(firstAtt.resource) ? (
-                <ContentLink id={firstAtt.resource.slice('chain:'.length)} full />
+                <ContentChip id={firstAtt.resource.slice('chain:'.length)} full />
               ) : null,
           },
           {
@@ -577,7 +569,7 @@ const ResourceLabel = (props: { resource: string }) => {
     return (
       <>
         <span class="muted">chain:</span>
-        <ContentLink id={r.slice('chain:'.length)} />
+        <ContentChip id={r.slice('chain:'.length)} />
       </>
     );
   return <>{r}</>;
