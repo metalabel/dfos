@@ -60,6 +60,14 @@ links to the served file and to this app's own page in the explorer. Those bytes
 are decoded for display and nothing more. What makes the chain real is a host
 verifying that it derives the declared DID, which happens at first consent.
 
+The panel reports only what it actually read. "This page could not load the
+file", "the origin serves no file", and "the file declares nothing" are three
+different sentences, and the panel never substitutes one for another — a request
+that failed is not evidence about a file's contents. Whether this origin is in
+the file's `redirect_uris` is asked separately and answered separately, because
+what an app declares about itself and where it may be redirected to are
+different questions.
+
 **Everything mechanical is one disclosure down, under "Show the receipts":** the
 credential in full, the signing seam that exercised it, the decoded sign-in
 artifact, the checks the server ran before it granted anything, how this app is
@@ -527,7 +535,9 @@ extra members — `client_did` and `identity_chain` — are step 1 below.)
 Preview-deploy URLs are **not** in the allowlist, by design. Each preview gets a
 fresh hostname, and an allowlist that admitted arbitrary subdomains would be an
 open redirector. Sign-in works on the origins you listed; everywhere else the
-page says which string is missing.
+page says which string is missing. The identity panel still renders the app's
+declared identity there — being outside the redirect allowlist says nothing
+about what the file declares, and the panel keeps the two apart.
 
 That gets you the identity scope. For `read:profile`, three more steps. These
 are not hypothetical — the canonical deployment was provisioned by exactly this

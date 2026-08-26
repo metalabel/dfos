@@ -323,16 +323,27 @@ const reasonFrom = (result: ApiResult, fallback: string): string =>
 /**
  * What this origin's own `/.well-known/dfos-app.json` says about it:
  *
- *   loopback   — dev run; no file is needed and none is looked for.
- *   registered — the file lists this page's exact redirect target.
- *   unlisted   — the file is served but that exact string is not in it.
- *   missing    — no file, no network, or nothing parseable.
+ *   loopback    — dev run; no file is needed and none is looked for.
+ *   registered  — the file parsed and lists this page's exact redirect target.
+ *   unlisted    — the file parsed but that exact string is not in it.
+ *   missing     — the origin answered, and there is no usable file to read.
+ *   unreachable — the request did not complete. NOTHING was learned.
  *
- * Only `registered` carries the file's claims, since only then does the host
- * have something it will stand behind at consent.
+ * `missing` and `unreachable` are kept apart on purpose. Collapsing them lets
+ * the page report an absence it never established — "this app declares no
+ * identity" when the truth was "this page could not ask". A failed request is
+ * not evidence about the file's contents, and this page does not get to say
+ * otherwise.
+ *
+ * A parsed file carries its claims under BOTH `registered` and `unlisted`. What
+ * the file declares about the app — its name, its DID, the chain it carries —
+ * is a fact about the file; whether THIS origin may redirect here is a separate
+ * question with a separate answer. Reading only one of them off a `registered`
+ * verdict is what made a preview deployment, whose origin is deliberately not in
+ * the production allowlist, render as an app with no identity at all.
  */
 interface Registration {
-  state: 'loopback' | 'registered' | 'unlisted' | 'missing';
+  state: 'loopback' | 'registered' | 'unlisted' | 'missing' | 'unreachable';
   name?: string;
   clientDid?: string;
   /**
@@ -343,20 +354,31 @@ interface Registration {
 }
 
 /**
- * One same-origin fetch, best-effort: no retries and no spinner. Every failure
- * collapses to `missing` — from the host's side they are the same fact. Bounded
- * because boot awaits this before the first render and a browser fetch has no
- * timeout of its own: a stalled request (a misbehaving service worker, a proxy)
- * must degrade to `missing` rather than hold the page, and the callback
- * verification behind it, hostage.
+ * One same-origin fetch, best-effort: no retries and no spinner. Bounded because
+ * boot awaits this before the first render and a browser fetch has no timeout of
+ * its own: a stalled request (a misbehaving service worker, a proxy) must
+ * degrade rather than hold the page, and the callback verification behind it,
+ * hostage. It degrades to `unreachable`, which claims nothing.
  */
 const checkRegistration = async (): Promise<Registration> => {
   if (LOOPBACK_HOSTS.has(SIGNING_DOMAIN)) return { state: 'loopback' };
 
+  let response: Response;
+  try {
+    response = await fetch(WELL_KNOWN_PATH, { signal: AbortSignal.timeout(3000) });
+  } catch {
+    // Offline, aborted, timed out. We asked and got no answer, which is not the
+    // same as asking and being told there is nothing.
+    return { state: 'unreachable' };
+  }
+
+  // A 404 is the origin answering definitively: there is no file here. Any other
+  // failure status is the origin failing to answer, which settles nothing.
+  if (response.status === 404) return { state: 'missing' };
+  if (!response.ok) return { state: 'unreachable' };
+
   let parsed: unknown;
   try {
-    const response = await fetch(WELL_KNOWN_PATH, { signal: AbortSignal.timeout(3000) });
-    if (!response.ok) return { state: 'missing' };
     parsed = await response.json();
   } catch {
     return { state: 'missing' };
@@ -366,21 +388,24 @@ const checkRegistration = async (): Promise<Registration> => {
   }
 
   const raw = parsed as Record<string, unknown>;
-  const listed = Array.isArray(raw['redirect_uris'])
-    ? raw['redirect_uris'].filter((value): value is string => typeof value === 'string')
-    : [];
-  if (!listed.includes(REDIRECT_URI)) return { state: 'unlisted' };
-
   const chain = Array.isArray(raw['identity_chain'])
     ? raw['identity_chain'].filter((value): value is string => typeof value === 'string')
     : [];
 
-  return {
-    state: 'registered',
+  // Read off the parsed file, before the allowlist question is asked, because
+  // these are answers to a different question than that one.
+  const claims = {
     ...(typeof raw['name'] === 'string' ? { name: raw['name'] } : {}),
     ...(typeof raw['client_did'] === 'string' ? { clientDid: raw['client_did'] } : {}),
     ...(chain.length > 0 ? { identityChain: chain } : {}),
   };
+
+  const listed = Array.isArray(raw['redirect_uris'])
+    ? raw['redirect_uris'].filter((value): value is string => typeof value === 'string')
+    : [];
+  if (!listed.includes(REDIRECT_URI)) return { state: 'unlisted', ...claims };
+
+  return { state: 'registered', ...claims };
 };
 
 /**
@@ -403,6 +428,14 @@ const registrationNotice = (found: Registration): string | undefined => {
       'This origin serves no registration, so the host will refuse the sign-in. ' +
       `Add public/.well-known/dfos-app.json with its two required members: name, and ` +
       `redirect_uris containing this exact string: ${REDIRECT_URI}`
+    );
+  }
+  if (found.state === 'unreachable') {
+    return (
+      'This page could not fetch its own registration, so it cannot tell you ' +
+      'whether the sign-in will be accepted. The file may be fine and the request ' +
+      `may simply have failed. Open ${WELL_KNOWN_PATH} and check that redirect_uris ` +
+      `contains this exact string: ${REDIRECT_URI}`
     );
   }
   return undefined;
@@ -522,6 +555,12 @@ const summarizeChain = (chain: string[]): ChainSummary | null => {
  * Who THIS app is, from the file this app serves about itself. The user side of
  * a sign-in gets a DID, a chain, and an explorer to check it in; so does the app
  * side, and this panel is that symmetry made visible rather than asserted.
+ *
+ * The panel reports only what it actually read. "This page could not load the
+ * file" and "the file declares nothing" are different sentences, and saying the
+ * second when the first is true would be the page inventing evidence about its
+ * own app — the precise habit the receipts elsewhere on this page exist to
+ * discourage.
  */
 const appIdentityCard = (found: Registration): HTMLElement => {
   const body: Node[] = [el('h2', undefined, 'This app’s own identity')];
@@ -538,6 +577,46 @@ const appIdentityCard = (found: Registration): HTMLElement => {
       ),
     );
     return card(...body);
+  }
+
+  if (found.state === 'unreachable') {
+    body.push(
+      el(
+        'p',
+        'notice',
+        'This page could not load its own registration file, so it has nothing to ' +
+          'report about what this app declares. That is a request that failed, not a ' +
+          'file that is empty — the file may be perfectly fine. Open it and see.',
+      ),
+      linkRow([WELL_KNOWN_PATH, 'The served file'], [DOCS.siwd, 'SIWD: app registration']),
+    );
+    return card(...body);
+  }
+
+  if (found.state === 'missing') {
+    body.push(
+      el(
+        'p',
+        'notice',
+        'This origin serves no /.well-known/dfos-app.json, so this app declares no ' +
+          'identity at all. A host asked to consent to it has nothing to fetch, and ' +
+          'will refuse the sign-in.',
+      ),
+      linkRow([DOCS.siwd, 'SIWD: app registration']),
+    );
+    return card(...body);
+  }
+
+  if (found.state === 'unlisted') {
+    body.push(
+      el(
+        'p',
+        'dim',
+        'This origin is not in the file’s redirect_uris, so a sign-in started here ' +
+          'will be refused — see the notice above. What the file declares about the ' +
+          'app is a separate question, and it is answered below.',
+      ),
+    );
   }
 
   if (found.name !== undefined) {
@@ -563,8 +642,11 @@ const appIdentityCard = (found: Registration): HTMLElement => {
     body.push(did);
   }
 
-  const summary = found.identityChain === undefined ? null : summarizeChain(found.identityChain);
-  if (summary === null) {
+  // Three outcomes, kept apart for the same reason the fetch states are: a chain
+  // this page failed to decode is not a chain the file failed to carry.
+  const carried = found.identityChain;
+  const summary = carried === undefined ? null : summarizeChain(carried);
+  if (carried === undefined) {
     body.push(
       el(
         'p',
@@ -574,6 +656,15 @@ const appIdentityCard = (found: Registration): HTMLElement => {
           'API call would have nothing to verify the app’s request proofs against.',
       ),
     );
+  } else if (summary === null) {
+    const line = el('p', 'dim');
+    line.append(
+      `The file carries an identity_chain of ${carried.length} ${carried.length === 1 ? 'entry' : 'entries'}, `,
+      'but this page could not decode it well enough to summarize. That is this ' +
+        'panel’s failure to read, not a verdict on the chain — decoding was never ' +
+        'the check that matters. Open the file and look.',
+    );
+    body.push(line);
   } else {
     const line = el('p', 'dim');
     line.append(
