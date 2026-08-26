@@ -28,7 +28,18 @@ import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
-import { Badge, DidLink, Panel, Pill, Related, Term, TruncId } from '../components/ui';
+import {
+  Badge,
+  DidLink,
+  DocsLink,
+  Panel,
+  Pill,
+  Related,
+  SETUP_GUIDE,
+  Term,
+  TROUBLESHOOTING_GUIDE,
+  TruncId,
+} from '../components/ui';
 import { getClient } from '../lib/client';
 import { GLOSSARY } from '../lib/glossary';
 import { toOpRows, type OpRow } from '../lib/op-rows';
@@ -55,6 +66,13 @@ type RelayBeat =
 export const Domain = (props: { host: string }) => {
   const [document, setDocument] = useState<DomainVerdict | null>(null);
   const [relay, setRelay] = useState<RelayBeat>({ phase: 'idle' });
+  // re-check nonce. Most of the amber and red states here are TRANSIENT — a
+  // hosting blip, a deploy mid-flight, our own route flapping — and the explorer
+  // is stateless, so the only honest answer to "is this still true?" is to ask
+  // the origin again. Bumping this re-runs beat 1 from nothing: no cache, no
+  // remembered verdict, no "last confirmed" date we were never in a position to
+  // know.
+  const [nonce, setNonce] = useState(0);
 
   // beat 1-3: the origin's document, fetched through the proxy and verified here
   useEffect(() => {
@@ -69,7 +87,7 @@ export const Domain = (props: { host: string }) => {
     return () => {
       dead = true;
     };
-  }, [props.host]);
+  }, [props.host, nonce]);
 
   // beat 4: resolve the DERIVED did on the relays — the same two-beat machinery
   // every other view uses. Only runs once a chain has actually verified, because
@@ -136,6 +154,8 @@ export const Domain = (props: { host: string }) => {
             is no developer portal and no client secret,{' '}
             <Term word="domain control" def={GLOSSARY['did'] ?? ''} /> is the credential. What the
             document <i>claims</i> is checked here; what the relays hold is compared below.
+            Everything on this page is recomputed in your browser — relays are inputs, not
+            authorities. <a href="#/">how this works</a>
           </>
         }
       >
@@ -166,7 +186,13 @@ export const Domain = (props: { host: string }) => {
           </Checks>
         </Panel>
       ) : (
-        <Verification host={props.host} verdict={verdict} relay={relay} comparison={comparison} />
+        <Verification
+          host={props.host}
+          verdict={verdict}
+          relay={relay}
+          comparison={comparison}
+          onRecheck={() => setNonce((n) => n + 1)}
+        />
       )}
 
       {proven !== null ? <AppPanel app={proven.app} /> : null}
@@ -205,22 +231,73 @@ export const Domain = (props: { host: string }) => {
 // the top-level pill — green ONLY for a verified chain
 // -----------------------------------------------------------------------------
 
+/**
+ * The plain-language layer under the pill. The verdict WORD is unchanged and
+ * stays primary — it is the thing that stays machine-distinguishable — and this
+ * is what it means, said plainly, one hover or tap away.
+ *
+ * Nothing here softens a state into a neighbouring one: an unreachable origin is
+ * still an origin we learned nothing about, an absent document is still not a
+ * contradiction, and a divergence is still signed.
+ */
+const STATE_DEFS: Record<Exclude<DomainVerdict['kind'], 'unreachable'>, string> = {
+  verified:
+    'The origin served an app description, the identity chain it carries verifies in your browser, and that chain derives the exact client_did the document claims.',
+  'relay-diverged': GLOSSARY['relayDiverged'] ?? '',
+  'no-carriage': GLOSSARY['noCarriage'] ?? '',
+  malformed:
+    'The origin served something at this path and it is not a valid app description — a document that fails here makes no claim at all, so nothing about an identity follows from it.',
+  'no-app-description':
+    'The origin answered, and has no such document — it describes no DFOS app. An absence, not a contradiction: nothing here says the domain got anything wrong.',
+};
+
+/** The two flavours of `unreachable` mean opposite things about WHOSE fault it
+ *  is, so they never share a definition. */
+const PROXY_DOWN_DEF =
+  'The explorer’s own lookup route did not answer, so nothing at all was learned about this domain. This is our failure, not a statement about the origin.';
+const ORIGIN_DOWN_DEF =
+  'Nothing was served, so nothing below could be checked. A transport failure — not a statement about what the domain publishes.';
+
 const StatePill = (props: { verdict: DomainVerdict | null }) => {
   const { verdict } = props;
   if (verdict === null) return <Pill state="pending">checking origin…</Pill>;
   switch (verdict.kind) {
     case 'verified':
-      return <Pill state="ok">verified</Pill>;
+      return (
+        <Pill state="ok" def={STATE_DEFS.verified}>
+          verified
+        </Pill>
+      );
     case 'relay-diverged':
-      return <Pill state="warn">origin verified · relay log diverged</Pill>;
+      return (
+        <Pill state="warn" def={STATE_DEFS['relay-diverged']}>
+          origin verified · relay log diverged
+        </Pill>
+      );
     case 'no-carriage':
-      return <Pill state="warn">app document present · no chain carried</Pill>;
+      return (
+        <Pill state="warn" def={STATE_DEFS['no-carriage']}>
+          app document present · no chain carried
+        </Pill>
+      );
     case 'malformed':
-      return <Pill state="bad">malformed app description</Pill>;
+      return (
+        <Pill state="bad" def={STATE_DEFS.malformed}>
+          malformed app description
+        </Pill>
+      );
     case 'unreachable':
-      return <Pill state="bad">unreachable</Pill>;
+      return (
+        <Pill state="bad" def={verdict.proxyDown ? PROXY_DOWN_DEF : ORIGIN_DOWN_DEF}>
+          unreachable
+        </Pill>
+      );
     case 'no-app-description':
-      return <Pill state="warn">no app description</Pill>;
+      return (
+        <Pill state="warn" def={STATE_DEFS['no-app-description']}>
+          no app description
+        </Pill>
+      );
   }
 };
 
@@ -240,12 +317,30 @@ const Verification = (props: {
   verdict: DomainVerdict;
   relay: RelayBeat;
   comparison: LogComparison | null;
+  onRecheck: () => void;
 }) => {
   const { verdict, relay, comparison } = props;
   const proven = originVerified(verdict);
 
   return (
-    <Panel title="verification" right={<span class="lbl">re-run in your browser</span>}>
+    <Panel
+      title="verification"
+      right={<span class="lbl">re-run in your browser</span>}
+      // TWO well-known documents exist and they are constantly confused for one
+      // another, so wherever either is checked BOTH are named — and the panel
+      // says which one it is looking at, and where the other one is checked.
+      orient={
+        <>
+          This checks the domain's{' '}
+          <Term word="app description" def={GLOSSARY['appDescription'] ?? ''} /> (
+          <code>dfos-app.json</code>) — how a domain describes an app. A domain can separately
+          attest an identity back (the{' '}
+          <Term word="domain attestation" def={GLOSSARY['domainAttestation'] ?? ''} />,{' '}
+          <code>dfos-did</code> / <code>_dfos</code> TXT); that check lives on the identity page's
+          origin-binding panel.
+        </>
+      }
+    >
       <Checks>
         {/* ---------------------------------------------------------------- */}
         {/* beat 1 — did the ORIGIN answer                                     */}
@@ -356,7 +451,46 @@ const Verification = (props: {
           {props.host}.
         </div>
       ) : null}
+
+      <NextStep verdict={verdict} onRecheck={props.onRecheck} />
     </Panel>
+  );
+};
+
+/**
+ * WHAT TO DO ABOUT IT — the one muted line every amber and red verdict earns.
+ *
+ * Deliberately separate from the checks above it: the ladder says what was
+ * OBSERVED, this says where to go next, and mixing them would let an action hint
+ * soften an observation. Setup-shaped states (the domain has not published
+ * something yet) point at the setup guide; failure and contradiction states point
+ * at troubleshooting. A re-check sits beside both, because the explorer keeps no
+ * history and half of these states are a minute old.
+ */
+const SETUP_HINT: Partial<Record<DomainVerdict['kind'], string>> = {
+  'no-app-description': 'covers serving the app description',
+  malformed: "covers the app description's required members",
+  'no-carriage': 'covers carrying the identity chain in the app description',
+};
+
+const NextStep = (props: { verdict: DomainVerdict; onRecheck: () => void }) => {
+  if (props.verdict.kind === 'verified') return null;
+  const hint = SETUP_HINT[props.verdict.kind];
+  return (
+    <div class="ck-note" style={{ marginTop: 10 }}>
+      {hint !== undefined ? (
+        <>
+          if this is your domain, the <DocsLink href={SETUP_GUIDE}>setup guide ↗</DocsLink> {hint}.
+          troubleshooting: <DocsLink href={TROUBLESHOOTING_GUIDE}>what can go wrong ↗</DocsLink>.
+        </>
+      ) : (
+        <>
+          what this means and what to do:{' '}
+          <DocsLink href={TROUBLESHOOTING_GUIDE}>the troubleshooting guide ↗</DocsLink>.
+        </>
+      )}{' '}
+      <button onClick={props.onRecheck}>re-check</button>
+    </div>
   );
 };
 

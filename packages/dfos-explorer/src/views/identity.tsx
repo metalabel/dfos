@@ -30,12 +30,15 @@ import {
   CredLink,
   CredStatus,
   DidLink,
+  DocsLink,
   OpLink,
   Pager,
   Panel,
   Pill,
   Related,
+  SETUP_GUIDE,
   Term,
+  TROUBLESHOOTING_GUIDE,
   TruncId,
 } from '../components/ui';
 import { contributedFromSignerPage } from '../lib/actor-ledger';
@@ -388,7 +391,9 @@ export const Identity = (props: { did: string }) => {
           <>
             A self-sovereign <Term word="identity" def={GLOSSARY['did'] ?? ''} /> — its{' '}
             <Term word="DID" def={GLOSSARY['did'] ?? ''} /> is the hash of its own genesis op, so{' '}
-            <b>no registry issues it and no server can revoke it.</b>
+            <b>no registry issues it and no server can revoke it.</b> Everything on this page is
+            recomputed in your browser — relays are inputs, not authorities.{' '}
+            <a href="#/">how this works</a>
           </>
         }
       >
@@ -434,11 +439,19 @@ export const Identity = (props: { did: string }) => {
               >
                 {rows.length} operation(s) — every signature and CID recomputed here
               </Check>
+              {/* one amber bucket, several very different underlying situations.
+                  The domain view splits the same comparison into ahead / behind /
+                  diverged because it holds two ORDERED logs; here we hold one tip
+                  and one asserted tip, and a tip mismatch alone cannot tell a
+                  relay that is simply behind from one signing a contradiction. So
+                  the note says so rather than implying the amber means one thing. */}
               {claimHead ? (
                 <Check
                   state={headMatch ? 'ok' : 'warn'}
                   note={
-                    headMatch ? undefined : `local ${short(localHead)} vs relay ${short(claimHead)}`
+                    headMatch
+                      ? undefined
+                      : `local ${short(localHead)} vs relay ${short(claimHead)}. drift covers everything from benign lag to a signed contradiction — the operation history below, and the domain page's relay checks, are what tell those apart`
                   }
                 >
                   {headMatch
@@ -1085,19 +1098,79 @@ const methodNote = (result: BindingMethodResult, did: string): string => {
   }
 };
 
-const bindingPill = (verdict: BindingVerdict): { state: 'ok' | 'warn' | 'bad'; text: string } => {
+/**
+ * The pill, and the PLAIN rendering of the same verdict.
+ *
+ * The precise word is the label and does not move — bound / stale / broken are
+ * what stay machine-distinguishable, and the whole discipline rests on them not
+ * collapsing into each other. `def` is the second layer: the same verdict said in
+ * words that need no spec, one hover or tap away. It preserves every distinction
+ * the word carries, in particular that silence is not contradiction and that our
+ * own route failing is a statement about US.
+ *
+ * Note what the plain layer does NOT say: no "last confirmed" date. The explorer
+ * is stateless and has never seen this binding before this page load, so there is
+ * no such date to render, and inventing one would be the only dishonest sentence
+ * on the page.
+ */
+const bindingPill = (
+  verdict: BindingVerdict,
+): { state: 'ok' | 'warn' | 'bad'; text: string; def: string } => {
   switch (verdict.kind) {
     case 'bound':
-      return { state: 'ok', text: 'bound' };
+      return { state: 'ok', text: 'bound', def: GLOSSARY['bindingBound'] ?? '' };
     case 'stale':
-      return { state: 'warn', text: 'bound (stale) — domain silent' };
+      return {
+        state: 'warn',
+        text: 'bound (stale) — domain silent',
+        def: GLOSSARY['bindingStale'] ?? '',
+      };
     case 'broken':
-      return { state: 'bad', text: 'broken — domain contradicts' };
+      return {
+        state: 'bad',
+        text: 'broken — domain contradicts',
+        def: GLOSSARY['bindingBroken'] ?? '',
+      };
     case 'proxy-unavailable':
-      return { state: 'warn', text: 'verifier unavailable' };
+      return {
+        state: 'warn',
+        text: 'verifier unavailable',
+        def: 'The explorer’s own route failed, so nothing at all was learned about the domain. This is our failure — it says nothing either way about whether the domain attests this identity.',
+      };
     case 'none':
-      return { state: 'warn', text: 'no claim' };
+      return {
+        state: 'warn',
+        text: 'no claim',
+        def: 'This chain names no domain, so there is no binding to check. Nothing is missing and nothing is wrong — the identity simply claims no origin.',
+      };
   }
+};
+
+/** The action line under an amber/red binding. Setup-shaped states (the domain
+ *  has published nothing yet — a visitor who owns the domain can fix that) point
+ *  at the setup guide; failure and contradiction states point at troubleshooting.
+ *  Never restates the verdict: the checks above own that. */
+const BindingNextStep = (props: { verdict: BindingVerdict; onRecheck: () => void }) => {
+  const kind = props.verdict.kind;
+  if (kind === 'bound') return null;
+  const setupShaped = kind === 'stale' || kind === 'none';
+  return (
+    <div class="ck-note" style={{ marginTop: 10 }}>
+      {setupShaped ? (
+        <>
+          if this is your domain, the <DocsLink href={SETUP_GUIDE}>setup guide ↗</DocsLink> covers
+          publishing the attestation. troubleshooting:{' '}
+          <DocsLink href={TROUBLESHOOTING_GUIDE}>what can go wrong ↗</DocsLink>.
+        </>
+      ) : (
+        <>
+          what this means and what to do:{' '}
+          <DocsLink href={TROUBLESHOOTING_GUIDE}>the troubleshooting guide ↗</DocsLink>.
+        </>
+      )}{' '}
+      <button onClick={props.onRecheck}>re-check</button>
+    </div>
+  );
 };
 
 const OriginBindingPanel = (props: {
@@ -1111,6 +1184,12 @@ const OriginBindingPanel = (props: {
     dns: BindingMethodResult;
   } | null>(null);
   const [fallback, setFallback] = useState<FallbackResult | null>(null);
+  // re-check nonce. `stale` in particular is a live, moment-to-moment reading of
+  // someone else's DNS and hosting — both of which fail and recover routinely —
+  // and the explorer remembers nothing between page loads, so the only honest way
+  // to answer "is it still silent?" is to ask again. Bumping this clears the
+  // verdict back to pending and re-runs the probe from nothing.
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let dead = false;
@@ -1132,7 +1211,7 @@ const OriginBindingPanel = (props: {
     return () => {
       dead = true;
     };
-  }, [props.did, domain]);
+  }, [props.did, domain, nonce]);
 
   const pill = verdict ? bindingPill(verdict) : null;
 
@@ -1142,7 +1221,9 @@ const OriginBindingPanel = (props: {
         <>
           origin binding{' '}
           {pill ? (
-            <Pill state={pill.state}>{pill.text}</Pill>
+            <Pill state={pill.state} def={pill.def} word={pill.text}>
+              {pill.text}
+            </Pill>
           ) : (
             <Pill state="pending">asking the domain…</Pill>
           )}
@@ -1173,6 +1254,17 @@ const OriginBindingPanel = (props: {
           >
             attestation ↗
           </a>
+          {/* the two well-known documents are constantly mistaken for one another,
+              and the crosslink is exactly where that mistake gets made — so name
+              both systems at the point of the click. */}
+          <div class="ck-note">
+            this panel checks the{' '}
+            <Term word="domain attestation" def={GLOSSARY['domainAttestation'] ?? ''} /> (
+            <code>dfos-did</code> / <code>_dfos</code> TXT). Opening the domain page checks the
+            domain's <Term word="app description" def={GLOSSARY['appDescription'] ?? ''} /> (
+            <code>dfos-app.json</code>) instead — a different claim, which neither confirms nor
+            denies this binding.
+          </div>
         </div>
       </div>
 
@@ -1237,6 +1329,10 @@ const OriginBindingPanel = (props: {
           identity's claim — the identity and its history are untouched, only the domain claim is
           contradicted.
         </div>
+      ) : null}
+
+      {verdict !== null ? (
+        <BindingNextStep verdict={verdict} onRecheck={() => setNonce((n) => n + 1)} />
       ) : null}
     </Panel>
   );
