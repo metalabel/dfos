@@ -29,7 +29,11 @@
 
 */
 
-import { isForbiddenAddress, validateHostname } from './wellknown';
+// NB: the `.js` extension is load-bearing — Vercel's node runtime loads these
+// routes as ESM (package.json `"type": "module"`) without bundling them, and
+// Node's ESM loader refuses extensionless relative specifiers at module load
+// (FUNCTION_INVOCATION_FAILED before the handler ever runs)
+import { isForbiddenAddress, validateHostname } from './wellknown.js';
 
 const FIXED_PATH = '/.well-known/dfos-did';
 const MAX_BODY_BYTES = 1024;
