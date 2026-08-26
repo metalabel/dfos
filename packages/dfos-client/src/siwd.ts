@@ -17,8 +17,13 @@
 import {
   buildSignRequest,
   decodeMultikey,
+  encodeEd25519Multikey,
+  signIdentityOperation,
   SignRequestVerifyError,
+  verifyIdentityChain,
   verifySignRequest,
+  type IdentityOperation,
+  type MultikeyPublicKey,
   type Signer,
   type VerifiedIdentity,
   type VerifiedSignRequest,
@@ -27,8 +32,12 @@ import {
   assertJwsProfile,
   base64urlDecode,
   base64urlEncode,
+  createNewEd25519Keypair,
   decodeJwsUnsafe,
+  generateId,
   generateIdNoPrefix,
+  importEd25519Keypair,
+  signPayloadEd25519,
   verifyJws,
 } from '@metalabel/dfos-protocol/crypto';
 import type { Client, VerifyResult } from './types';
@@ -43,6 +52,20 @@ import type { Client, VerifyResult } from './types';
  * routing dispatchers tell a SIWD proof apart from credentials and chain ops.
  */
 export const SIWD_JWS_TYP = 'did:dfos:siwd';
+
+/**
+ * The normative JWS header `typ` for a client ASK PROOF — the artifact a
+ * loopback client signs to prove key control at ask-time, registered alongside
+ * `SIWD_JWS_TYP` by SIWD.md §The ask proof.
+ *
+ * The two artifacts cover the SAME canonical challenge bytes, so the distinct
+ * `typ` is the only thing keeping them from being fungible: without it, an ask
+ * proof a client signed to open a consent screen would present as a subject's
+ * sign-in for that same challenge, and a subject's sign-in would present as a
+ * client's ask. The typ gate on each side is what scopes a signature to the
+ * purpose it was produced for.
+ */
+export const SIWD_ASK_JWS_TYP = 'did:dfos:siwd-ask';
 
 /** Allowed forward clock skew when validating challenge timestamps (seconds). */
 const MAX_CLOCK_SKEW_SECONDS = 60;
@@ -223,9 +246,12 @@ export const decodeSiwdChallenge = (encoded: string): SiwdChallenge =>
 
 /**
  * Hostnames that make a redirect a LOOPBACK redirect — a CLI or a desktop app
- * listening on a local port. Exact matches only: `127.0.0.2` and
- * `localhost.evil.example` are NOT loopback, and quietly treating them as such
- * would strip a client DID from a request that was entitled to assert one.
+ * listening on a local port. Exact matches only, because this set is what
+ * CLASSIFIES a request into a tier, and the tiers have different rules:
+ * `127.0.0.2` and `localhost.evil.example` are public domains that merely read
+ * as local, and classifying one as loopback would hand a domain-holding site
+ * the scope bound and the derived-domain treatment written for software that
+ * holds no domain at all.
  */
 const SIWD_LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
@@ -265,7 +291,11 @@ export interface SiwdLoginRequestInput {
    * only the signature would accept it.
    */
   did?: string;
-  /** The RP's own DID. Omitted from the URL automatically for loopback redirects. */
+  /**
+   * The RP's own DID. Rides through on a loopback redirect too, but a host
+   * honors it there only under the loopback credential tier — see
+   * `createSiwdLoopbackLoginRequest`, which adds the proof that backs it.
+   */
   clientDid?: string;
   /** Supply a nonce minted elsewhere (e.g. by your backend); default: minted here. */
   nonce?: string;
@@ -311,37 +341,48 @@ export interface SiwdLoginRequest {
  * OUTBOUND half of profile A. `readSiwdCallback` is the inbound half, and
  * `verifySiwd` is what both compose around: mint → redirect, read → verify.
  *
- * The rule this function exists to own is the LOOPBACK OMISSION. Nothing can
- * prove a client DID for an app on a local port — there is no domain serving a
- * well-known and no registration to check — so a host REFUSES a `client_did`
- * on a loopback redirect rather than displaying an identity it cannot stand
- * behind. A CLI that passed its own DID would have the whole request rejected,
- * not downgraded, so the param is dropped here instead of being forwarded into
- * a guaranteed refusal.
+ * The rule this function owns is the LOOPBACK RULE, and what it turns on is
+ * whether the request names a client identity. A bare `client_did` from an app
+ * on a local port used to be refused outright — there is no domain serving a
+ * well-known and no registration to check, so nothing backed the DID and a host
+ * would not display an identity it could not stand behind. The LOOPBACK
+ * CREDENTIAL TIER (specs/SIWD.md §Loopback Clients) replaces "nothing backs it"
+ * with the one thing local software can prove: control of that identity's
+ * current keys. So the param now rides through on a loopback redirect instead
+ * of being dropped — but it is honored only when the request ALSO carries an
+ * ask proof and, unless the DID is already resident on the host, the client's
+ * identity chain. `createSiwdLoopbackLoginRequest` composes all three; a
+ * `clientDid` passed to this function alone is an unbacked assertion the host
+ * will refuse.
  *
  * The same judgment BOUNDS THE SCOPE. Every scope past `identity` returns a
- * credential issued to a `client_did` — the one param a loopback request cannot
- * carry — so specs/SIWD.md admits a loopback target for `scope=identity` only.
- * Asking for more from a local port is not a downgrade the way `client_did` is;
- * there is nothing to drop, so it throws.
+ * credential issued to a `client_did`, so a loopback request with no client
+ * identity at all still has nothing to issue to and specs/SIWD.md admits it for
+ * `scope=identity` only — there is nothing to downgrade, so it throws. With a
+ * client identity the tier is open and every scope is available.
  *
  * It also owns the WIRE PARAM NAMES (`challenge`, `redirect_uri`, `scope`,
- * `client_did`) as their single source in this package. They are snake_case on
- * the wire and camelCase everywhere else, which is exactly the kind of seam
+ * `client_did`, and — via `createSiwdLoopbackLoginRequest` — `client_proof` and
+ * `client_chain`) as their single source in this package. They are snake_case
+ * on the wire and camelCase everywhere else, which is exactly the kind of seam
  * every hand-rolled RP re-implements and eventually gets wrong.
  *
  * PURE: no DOM, no storage, no navigation, no fetch — identical in a browser
  * and in Node. Throws on an unparseable `authorizeUrl` or `redirectUri`, and on
- * a non-`identity` scope over a loopback redirect, because those are mistakes
- * in the RP's own configuration rather than runtime conditions a result type
- * would help a caller recover from.
+ * a non-`identity` scope over a loopback redirect with no client identity,
+ * because those are mistakes in the RP's own configuration rather than runtime
+ * conditions a result type would help a caller recover from.
  */
 export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginRequest => {
   const authorizeUrl = parseUrlOrThrow(input.authorizeUrl, 'authorizeUrl');
   const redirect = parseUrlOrThrow(input.redirectUri, 'redirectUri');
   const isLoopback = SIWD_LOOPBACK_HOSTS.has(bareHostname(redirect));
-  if (isLoopback && input.scope !== 'identity') {
-    throw new Error('invalid SIWD login request: loopback redirects support scope=identity only');
+  if (isLoopback && input.scope !== 'identity' && input.clientDid === undefined) {
+    throw new Error(
+      'invalid SIWD login request: loopback redirects support scope=identity only without a ' +
+        'client identity — a credential scope needs a client_did proven under the loopback ' +
+        'credential tier (specs/SIWD.md §Loopback Clients)',
+    );
   }
 
   const { challenge, encoded, nonce } = createSiwdChallenge({
@@ -357,7 +398,7 @@ export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginR
   url.searchParams.set('challenge', encoded);
   url.searchParams.set('redirect_uri', input.redirectUri);
   url.searchParams.set('scope', input.scope);
-  if (input.clientDid !== undefined && !isLoopback) {
+  if (input.clientDid !== undefined) {
     url.searchParams.set('client_did', input.clientDid);
   }
 
@@ -373,12 +414,334 @@ export const createSiwdLoginRequest = (input: SiwdLoginRequestInput): SiwdLoginR
   };
 };
 
+// -----------------------------------------------------------------------------
+// loopback credential tier
+// -----------------------------------------------------------------------------
+
+/**
+ * Sign the ask proof for a loopback authorize request: a JWS over the exact
+ * canonical bytes of the request's own challenge, under `SIWD_ASK_JWS_TYP`,
+ * signed by a CURRENT auth key of the client identity's chain (SIWD.md §The ask
+ * proof). It is what makes a `client_did` on a loopback request mean something
+ * — the host verifies it against the chain's current state before rendering any
+ * consent, so key control is established at ask-time, not just at spend-time.
+ *
+ * BYTE-PRECISE, and deliberately not built with `createJws`. The host compares
+ * the proof's payload SEGMENT by string equality against its own re-derivation
+ * of `base64url(siwdSigningInput(challenge))`; a construction that round-tripped
+ * the challenge through a JSON object would re-serialize it, and any spelling
+ * that differed from the canonical one by a single byte would fail that
+ * comparison while looking correct here. So this signs the `siwdSigningInput`
+ * output directly.
+ *
+ * `kid` is the DID URL of the signing key. The host ignores it for key
+ * SELECTION — it tries the chain's current auth keys — but it is set honestly
+ * because a proof that names a key it was not signed with is a lie the wire
+ * format has no reason to carry.
+ *
+ * The `client_proof` param that carries this is the REFERENCE wire surface, not
+ * a normative name: SIWD.md defers how the ask proof travels to the hosted
+ * endpoint's reference implementation, exactly as it does the endpoint itself.
+ * What is normative is that it arrives WITH the ask and verifies BEFORE any
+ * consent is rendered.
+ */
+export const signSiwdAskProof = async (input: {
+  challenge: SiwdChallenge;
+  /** DID URL of the signing key: `<did>#<keyId>`. Must be a CURRENT auth key. */
+  kid: string;
+  signer: Signer;
+}): Promise<string> => {
+  // Both halves must be present: `#x`, `x#`, and a bare `#` name no key, no
+  // identity, or neither, and a host cannot resolve any of them to a chain.
+  const hashIdx = input.kid.indexOf('#');
+  if (hashIdx <= 0 || hashIdx === input.kid.length - 1) {
+    throw new Error(
+      'invalid SIWD ask proof: kid must be a DID URL with both halves non-empty (<did>#<keyId>)',
+    );
+  }
+  const headerB64 = base64urlEncode(
+    JSON.stringify({ alg: 'EdDSA', typ: SIWD_ASK_JWS_TYP, kid: input.kid }),
+  );
+  const payloadB64 = base64urlEncode(siwdSigningInput(input.challenge));
+  const signingInput = `${headerB64}.${payloadB64}`;
+  const signature = await input.signer(new TextEncoder().encode(signingInput));
+  return `${signingInput}.${base64urlEncode(signature)}`;
+};
+
+/** SIWD.md carriage cap — an identity that has outgrown it has outgrown carriage. */
+export const MAX_SIWD_CLIENT_CHAIN_OPS = 100;
+
+/**
+ * Encode a client identity chain for carriage on the authorize request: the
+ * FULL ordered operation log, genesis first, as base64url of its JSON array —
+ * the same grammar as the `challenge` param, so one decoder shape serves both.
+ *
+ * The DID derived from the genesis operation MUST equal the `client_did` the
+ * request names; a request where the two disagree makes no claim at all and the
+ * host refuses it WHOLE rather than ingesting the chain and ignoring the
+ * mismatch (SIWD.md §Chain residence). Carriage is only needed when the DID is
+ * not already resident on the verifying host.
+ *
+ * The 100-operation cap is spec-normative and enforced here. Hosts MAY
+ * additionally bound the ENCODED size for URL-transport reasons — the reference
+ * host refuses carriages over 8KiB — which is transport policy rather than
+ * protocol, so it is not a client-side throw; the practical reading is that a
+ * chain anywhere near the op cap belongs on relays, not in a URL.
+ *
+ * As with the ask proof, the `client_chain` param is the REFERENCE wire surface
+ * rather than a normative name — SIWD.md leaves the carriage encoding to the
+ * hosted endpoint's reference implementation and pins only that the chain
+ * arrives with the ask and verifies before any consent is rendered.
+ */
+export const encodeSiwdClientChain = (log: string[]): string => {
+  if (!Array.isArray(log)) {
+    throw new Error('invalid SIWD client chain: expected an array of identity-op JWS strings');
+  }
+  if (log.length === 0) {
+    throw new Error('invalid SIWD client chain: log is empty — carriage needs the full log');
+  }
+  if (log.length > MAX_SIWD_CLIENT_CHAIN_OPS) {
+    throw new Error(
+      `invalid SIWD client chain: ${log.length} operations exceeds the ` +
+        `${MAX_SIWD_CLIENT_CHAIN_OPS}-operation carriage cap`,
+    );
+  }
+  if (log.some((operation) => typeof operation !== 'string' || operation.length === 0)) {
+    throw new Error(
+      'invalid SIWD client chain: every member must be a non-empty identity-op JWS string',
+    );
+  }
+  return base64urlEncode(JSON.stringify(log));
+};
+
+export interface SiwdClientIdentity {
+  did: string;
+  /** Verbatim identity-op JWS log, genesis first — feed to encodeSiwdClientChain. */
+  chain: string[];
+  /** DID URL of the current auth key — feed to signSiwdAskProof. */
+  kid: string;
+  signer: Signer;
+  /** Raw Ed25519 private key — persist it (with `chain`) to keep this DID across runs. */
+  privateKey: Uint8Array;
+}
+
+/**
+ * Mint a fresh client identity for the loopback credential tier: one Ed25519
+ * keypair and a single genesis `create` operation naming it as the auth,
+ * assertion, and controller key. That is the whole identity a CLI needs to ask
+ * under this tier — a DID it can prove control of, and a one-operation chain
+ * small enough to carry on the request itself.
+ *
+ * KEY CUSTODY IS THE CALLER'S, and the identity is only as durable as the
+ * custody: persist `privateKey` and `chain` — an OS keychain, a file the caller
+ * protects — and hand them back to `restoreSiwdClientIdentity` on the next run.
+ * That is the other half of this function, and it is not optional in practice.
+ * A client that re-mints instead of restoring arrives as a DIFFERENT DID every
+ * time, so every run asks the user to consent again and every credential the
+ * last run earned belongs to an identity nothing will ever present again.
+ * Nothing here touches storage; where the key lives is the caller's to decide.
+ */
+export const mintSiwdClientIdentity = async (): Promise<SiwdClientIdentity> => {
+  const keypair = createNewEd25519Keypair();
+  const keyId = generateId('key');
+  const key: MultikeyPublicKey = {
+    id: keyId,
+    type: 'Multikey',
+    publicKeyMultibase: encodeEd25519Multikey(keypair.publicKey),
+  };
+  const signer: Signer = async (message) => signPayloadEd25519(message, keypair.privateKey);
+
+  const genesis: IdentityOperation = {
+    version: 1,
+    type: 'create',
+    authKeys: [key],
+    assertKeys: [key],
+    controllerKeys: [key],
+    createdAt: new Date(Math.floor(Date.now() / 1000) * 1000).toISOString(),
+  };
+  // genesis is signed with a BARE keyId: the DID is derived from this very
+  // operation's CID, so there is no DID yet to build a DID URL from.
+  const { jwsToken } = await signIdentityOperation({ operation: genesis, signer, keyId });
+  const { did } = await verifyIdentityChain({ didPrefix: 'did:dfos', log: [jwsToken] });
+
+  return {
+    did,
+    chain: [jwsToken],
+    kid: `${did}#${keyId}`,
+    signer,
+    privateKey: keypair.privateKey,
+  };
+};
+
+/**
+ * Rebuild a client identity from what a previous run persisted — the other half
+ * of `mintSiwdClientIdentity`, and what makes the DID (and the consent it
+ * earned) survive across runs.
+ *
+ * It re-derives the public key from `privateKey` and finds the CURRENT auth key
+ * of the verified chain that key belongs to, which is the same currency rule the
+ * host applies to the ask proof. A key that has been ROTATED OUT of the chain
+ * therefore refuses to restore rather than producing an identity whose proofs
+ * would be rejected at the far end: failing here, with the reason in hand, is
+ * strictly better than failing after a redirect. The `kid` comes from the chain
+ * rather than from storage for the same reason — the chain is the authority on
+ * which key is current, and a persisted `kid` is a guess that ages.
+ *
+ * `chain` is the caller's stored log, and it is verified here, so a corrupted or
+ * truncated log surfaces as a throw rather than as a silently wrong DID.
+ */
+export const restoreSiwdClientIdentity = async (input: {
+  privateKey: Uint8Array;
+  /** The verbatim log `mintSiwdClientIdentity` returned, genesis first. */
+  chain: string[];
+}): Promise<SiwdClientIdentity> => {
+  const keypair = importEd25519Keypair(input.privateKey);
+  const identity = await verifyIdentityChain({ didPrefix: 'did:dfos', log: input.chain });
+
+  const authKey = identity.authKeys.find((key) => {
+    const keyBytes = decodeMultikey(key.publicKeyMultibase).keyBytes;
+    return (
+      keyBytes.length === keypair.publicKey.length &&
+      keyBytes.every((byte, index) => byte === keypair.publicKey[index])
+    );
+  });
+  if (!authKey) {
+    throw new Error(
+      'invalid SIWD client identity: the private key is not a CURRENT authentication key of ' +
+        'the supplied chain — a rotated-out key cannot restore, because the host would refuse ' +
+        'the ask proof it signs',
+    );
+  }
+
+  return {
+    did: identity.did,
+    chain: input.chain,
+    kid: `${identity.did}#${authKey.id}`,
+    signer: async (message) => signPayloadEd25519(message, keypair.privateKey),
+    privateKey: input.privateKey,
+  };
+};
+
+export interface SiwdLoopbackLoginRequestInput {
+  /** The host's authorize endpoint, e.g. `https://app.example.com/authorize`. */
+  authorizeUrl: string;
+  /** Loopback redirect target — `http://` on localhost / 127.0.0.1 / [::1], any port/path. */
+  redirectUri: string;
+  /**
+   * Requested scope. Naming a client identity opens the tier, so every scope the
+   * HOST offers is available here — the `identity`-only bound belongs to the
+   * anonymous loopback shape, which has no `client_did` to issue a credential to.
+   */
+  scope: string;
+  /** Consent-screen prose. A host MAY decline to render it; see specs/SIWD.md. */
+  statement?: string;
+  /** Bind the challenge to ONE subject DID (sign in as this DID or not at all). */
+  did?: string;
+  /** The client identity asking under the loopback credential tier. */
+  client: Pick<SiwdClientIdentity, 'did' | 'kid' | 'signer'> & {
+    /** Verbatim chain to carry; omit when the DID is already resident on the host. */
+    chain?: string[];
+  };
+  /** Supply a nonce minted elsewhere; default: minted here. Verify against it. */
+  nonce?: string;
+}
+
+/**
+ * Build a loopback authorize URL under the LOOPBACK CREDENTIAL TIER — the
+ * outbound half of what `createSiwdLoginRequest` alone cannot produce. It is
+ * that function plus the two things that back the `client_did` it now carries:
+ * an ask proof (SIWD.md §The ask proof) and, unless the DID is already resident
+ * on the host, the client's identity chain (SIWD.md §Chain residence).
+ *
+ * `domain` is DERIVED, not accepted. SIWD.md pins a loopback challenge's domain
+ * to the BARE loopback host — the port is not part of the binding, because a
+ * local application cannot reserve one — and the host compares that value
+ * literally against the redirect's host. Taking a `domain` input here would be
+ * an invitation to a mismatch that fails only after the redirect.
+ *
+ * WHAT THIS PROVES IS KEY CONTROL, NOT PROVENANCE. The chain says which keys
+ * the asking party holds; nothing about a loopback client's origin or authorship
+ * is checkable, and the host's consent screen says exactly that rather than
+ * displaying a domain it cannot stand behind. The residue is bounded on the
+ * other side: a credential minted to a loopback client carries a hard expiry
+ * ceiling — RECOMMENDED 14 days — so a proven-but-unvouched-for client's grant
+ * ages out on its own, with revocation remaining the user's real disconnect.
+ *
+ * Async (it signs) and throwing on configuration errors — a `redirectUri` that
+ * is not an `http://` loopback target, a `kid` that does not belong to the
+ * client's own DID, a chain past the carriage cap — consistent with the
+ * constructor half of this module.
+ */
+export const createSiwdLoopbackLoginRequest = async (
+  input: SiwdLoopbackLoginRequestInput,
+): Promise<SiwdLoginRequest> => {
+  const redirect = parseUrlOrThrow(input.redirectUri, 'redirectUri');
+  const domain = bareHostname(redirect);
+  // SIWD.md defines the loopback interface as `http://` on these hosts. The
+  // scheme is pinned HERE rather than in the general classifier because this
+  // entrypoint is the one that asserts "I am local software": an `https://` or
+  // `ftp://` target on a loopback name is a misconfiguration, not a tier.
+  if (!SIWD_LOOPBACK_HOSTS.has(domain) || redirect.protocol !== 'http:') {
+    throw new Error(
+      'invalid SIWD login request: redirectUri must be an http:// loopback target ' +
+        '(localhost, 127.0.0.1, [::1])',
+    );
+  }
+  // A kid outside the client's own DID cannot resolve against the chain the
+  // request carries, so the host would refuse it — cheaper to say so now than
+  // after a redirect. Whether the key is CURRENT is the host's call (and
+  // `restoreSiwdClientIdentity`'s), not something to re-verify here.
+  if (!input.client.kid.startsWith(`${input.client.did}#`)) {
+    throw new Error(
+      'invalid SIWD login request: client.kid must be a DID URL of client.did (<did>#<keyId>)',
+    );
+  }
+
+  const request = createSiwdLoginRequest({
+    authorizeUrl: input.authorizeUrl,
+    domain,
+    redirectUri: input.redirectUri,
+    scope: input.scope,
+    clientDid: input.client.did,
+    ...(input.statement !== undefined ? { statement: input.statement } : {}),
+    ...(input.did !== undefined ? { did: input.did } : {}),
+    ...(input.nonce !== undefined ? { nonce: input.nonce } : {}),
+  });
+
+  // Sign the challenge the URL actually carries, recovered from the param
+  // itself: the proof and the request must cover the same bytes, and deriving
+  // them twice from the same input is how they would silently stop matching.
+  const proof = await signSiwdAskProof({
+    challenge: decodeSiwdChallenge(request.challenge),
+    kid: input.client.kid,
+    signer: input.client.signer,
+  });
+
+  const url = new URL(request.url);
+  url.searchParams.set('client_proof', proof);
+  if (input.client.chain !== undefined) {
+    url.searchParams.set('client_chain', encodeSiwdClientChain(input.client.chain));
+  }
+
+  return { ...request, url: url.toString() };
+};
+
+// -----------------------------------------------------------------------------
+// profile A callback
+// -----------------------------------------------------------------------------
+
 /**
  * What came back on the redirect. `none` means this was a plain page load, not
  * a callback at all — the common case on an RP's own landing page.
  */
 export type SiwdCallbackResult =
-  | { kind: 'success'; jws: string; did: string }
+  | {
+      kind: 'success';
+      jws: string;
+      did: string;
+      /** Present only when the host minted one and the input carried a fragment. */
+      credential?: string;
+    }
   | { kind: 'denied'; error: string }
   | { kind: 'none' };
 
@@ -393,11 +756,35 @@ const callbackParam = (params: URLSearchParams, key: string): string | undefined
  * or a bare query string — `location.search` is what a browser RP reaches for,
  * and it is `''` on a plain page load, which must read as "no callback" rather
  * than blow up on the most common path through the function.
+ *
+ * The bare-string form SPLITS ON THE FIRST `#` itself, because
+ * `URLSearchParams` does not treat `#` as a delimiter: a caller who reached for
+ * `location.search + location.hash` — the natural reach once the docs say the
+ * credential is in the fragment — would otherwise get the whole fragment glued
+ * onto the last query value, silently corrupting `did` into
+ * `did:dfos:x#credential=…` rather than failing. `fragment` stays ABSENT when
+ * there is none, rather than empty: there was nothing to have looked in.
+ *
+ * The host serializes the fragment with `URLSearchParams`, so it is parsed with
+ * the same thing.
  */
-const callbackParams = (url: string | URL): URLSearchParams => {
-  if (typeof url !== 'string') return url.searchParams;
-  if (url === '' || url.startsWith('?')) return new URLSearchParams(url);
-  return parseUrlOrThrow(url, 'url').searchParams;
+const callbackParts = (
+  url: string | URL,
+): { query: URLSearchParams; fragment?: URLSearchParams } => {
+  if (typeof url === 'string' && (url === '' || url.startsWith('?'))) {
+    const hashIdx = url.indexOf('#');
+    const hash = hashIdx < 0 ? '' : url.slice(hashIdx + 1);
+    return {
+      query: new URLSearchParams(hashIdx < 0 ? url : url.slice(0, hashIdx)),
+      ...(hash !== '' ? { fragment: new URLSearchParams(hash) } : {}),
+    };
+  }
+  const parsed = typeof url === 'string' ? parseUrlOrThrow(url, 'url') : url;
+  const hash = parsed.hash.startsWith('#') ? parsed.hash.slice(1) : parsed.hash;
+  return {
+    query: parsed.searchParams,
+    ...(hash !== '' ? { fragment: new URLSearchParams(hash) } : {}),
+  };
 };
 
 /**
@@ -410,25 +797,50 @@ const callbackParams = (url: string | URL): URLSearchParams => {
  * Takes an absolute URL string, a `URL`, or a bare `?…` query string (so
  * `readSiwdCallback(location.search)` works, including when it is empty).
  *
- * SCRUB THE URL YOURSELF, IMMEDIATELY. A signed JWS is sitting in the query
- * string, which means it is in the address bar, in `history`, in the referrer
- * of anything the page loads next, and in any analytics that samples the
- * location. This function cannot do the scrubbing for you — `history` is
- * environment-owned and this package stays free of the DOM — so a browser RP
- * should follow the read with a `history.replaceState` back to the bare path.
+ * A CREDENTIAL COMES BACK IN THE FRAGMENT, and that is a deliberate asymmetry
+ * with `jws`/`did`, which ride the query. A fragment is never sent to a server:
+ * it lands in no access log, no proxy log, and no `Referer` header, so the one
+ * artifact that is redeemable outside this channel is the one that stays on the
+ * client. Reading it therefore requires the WHOLE URL — `location.href`, not
+ * `location.search`.
+ *
+ * THAT SAME PROPERTY IS A PROBLEM FOR A CLI, and this tier's primary consumer is
+ * a CLI. A browser does not send the fragment to the loopback listener either,
+ * so the request line a local HTTP server sees carries the query and nothing
+ * else. The standard resolution (SIWD.md §4's loopback note) is for the listener
+ * to answer with a small page whose script reads `location.href` and posts the
+ * whole URL back to the local server; feed THAT to this function. A browser RP
+ * passes `location.href` directly and needs no relay.
+ *
+ * SCRUB THE URL YOURSELF, IMMEDIATELY. The signed JWS in the query string is in
+ * the address bar, in `history`, in the referrer of anything the page loads
+ * next, and in any analytics that samples the location; a credential in the
+ * fragment is spared the referrer and the server-side logs but is in the address
+ * bar and `history` just the same. This function cannot do the scrubbing for you
+ * — `history` is environment-owned and this package stays free of the DOM — so a
+ * browser RP should follow the read with a `history.replaceState` back to the
+ * bare path, which clears both halves.
  *
  * A HALF-CALLBACK IS A FAILURE, NOT A NON-EVENT: `jws` without `did` (or the
  * reverse) resolves to `denied` carrying a synthetic reason rather than `none`.
  * Silently treating it as a plain page load would strand the user on a
  * sign-in button with no explanation of why the last attempt vanished.
+ *
+ * THE QUERY HALF'S VERDICT WINS. A credential in the fragment is lifted only
+ * onto a `success`, never on its own: a `denied` or `none` stays exactly what
+ * it was. There is no half-callback state a stray fragment could promote —
+ * a fragment on a non-callback page load is noise, not a session.
  */
 export const readSiwdCallback = (url: string | URL): SiwdCallbackResult => {
-  const params = callbackParams(url);
-  const jws = callbackParam(params, 'jws');
-  const did = callbackParam(params, 'did');
-  const error = callbackParam(params, 'error');
+  const { query, fragment } = callbackParts(url);
+  const jws = callbackParam(query, 'jws');
+  const did = callbackParam(query, 'did');
+  const error = callbackParam(query, 'error');
 
-  if (jws !== undefined && did !== undefined) return { kind: 'success', jws, did };
+  if (jws !== undefined && did !== undefined) {
+    const credential = fragment ? callbackParam(fragment, 'credential') : undefined;
+    return { kind: 'success', jws, did, ...(credential !== undefined ? { credential } : {}) };
+  }
   if (error !== undefined) return { kind: 'denied', error };
   if (jws !== undefined) return { kind: 'denied', error: 'malformed SIWD callback: missing did' };
   if (did !== undefined) return { kind: 'denied', error: 'malformed SIWD callback: missing jws' };
