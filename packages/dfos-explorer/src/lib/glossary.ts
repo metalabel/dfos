@@ -57,6 +57,46 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'A bidirectional binding between an identity and a web domain: a DfosOrigin services entry names the domain on the signed chain, and the domain attests the DID back at /.well-known/dfos-did or in a _dfos TXT record. It proves control of that domain — never personhood or endorsement.',
   },
   {
+    key: 'bindingBound',
+    term: 'bound (origin binding)',
+    def: 'Domain confirms it: the domain answered back with exactly this identity’s DID, over HTTPS or DNS.',
+  },
+  {
+    key: 'bindingStale',
+    term: 'stale (origin binding)',
+    def: 'Domain silent: the chain claims the domain, but the domain is not confirming it right now. Hosting and DNS fail and recover routinely — silence is not contradiction, and this is not a claim the binding is wrong.',
+  },
+  {
+    key: 'bindingBroken',
+    term: 'broken (origin binding)',
+    def: 'Domain contradicts it: the domain answered with a different identity’s DID. Only the domain claim is contradicted — the identity and its history are untouched.',
+  },
+  {
+    key: 'appDescription',
+    term: 'app description',
+    def: 'The document at /.well-known/dfos-app.json: a domain describes an app (name, client DID, optionally its identity chain). Checked on the domain page. Distinct from the domain attestation.',
+  },
+  {
+    key: 'domainAttestation',
+    term: 'domain attestation',
+    def: 'The answer at /.well-known/dfos-did or the _dfos DNS TXT record: a domain attests a DID back. Checked in the identity page’s origin-binding panel. Distinct from the app description.',
+  },
+  {
+    key: 'relayDiverged',
+    term: 'origin verified · relay log diverged',
+    def: 'The chain the origin carries verifies here, and the relays’ ordered log for that same DID signs a different history — a signed contradiction from the relay side, not a lag. The origin’s half stands; the two logs cannot both be the whole story.',
+  },
+  {
+    key: 'noCarriage',
+    term: 'app document present · no chain carried',
+    def: 'The origin serves a valid app description that omits identity_chain — legal, since the member is optional, but the origin alone then proves no DID. Nothing here is contradicted; nothing here is verified either.',
+  },
+  {
+    key: 'logAheadBehindDiverged',
+    term: 'ahead / behind / diverged',
+    def: 'How the origin’s carried log relates to the relays’ log, positionally: ahead means the origin carries newer operations the relays have not ingested (benign lag); behind means the document has shed operations the relays still hold (a rollback signal); diverged means the two sides sign different operations at the same position (a signed contradiction). Only the last one accuses anybody.',
+  },
+  {
     key: 'artifact',
     term: 'artifact',
     def: 'A standalone signed immutable document addressed by its own CID, with no predecessor or successor — where a chain is a history, an artifact is a single fixed statement.',

@@ -483,6 +483,21 @@ header {
   font-weight: 600;
 }
 
+/* a pill carrying a plain-language definition wears the same dotted underline
+   as .term, so the affordance reads identically wherever it appears */
+.pill.defined {
+  cursor: help;
+}
+
+.pill.defined .pill-word {
+  border-bottom: 1px dotted currentColor;
+}
+
+.pill.defined:focus {
+  outline: none;
+  box-shadow: 0 0 0 1px currentColor;
+}
+
 .pill.pending {
   color: var(--dim);
   border-color: var(--line2);

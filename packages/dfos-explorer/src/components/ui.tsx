@@ -53,12 +53,53 @@ export const Badge = (props: {
 
 export type PillState = 'pending' | 'ok' | 'bad' | 'warn';
 
-export const Pill = (props: { state: PillState; children: ComponentChildren }) => (
-  <span class={`pill ${props.state}`}>
-    {props.state === 'pending' ? <span class="spin">◍</span> : null}
-    {props.children}
-  </span>
-);
+/**
+ * A verdict pill. `def` adds the PLAIN-LANGUAGE layer without touching the
+ * verdict: the precise word stays the label — "stale", not "probably fine" — and
+ * the plain rendering is one hover or tap away, through exactly the interaction
+ * {@link Term} already implements (title tooltip, pinned termbar on touch). The
+ * precise vocabulary is what stays machine-distinguishable; the plain sentence is
+ * what makes it legible to someone who has never read the spec. Neither replaces
+ * the other.
+ */
+export const Pill = (props: {
+  state: PillState;
+  /** plain-language rendering of this verdict — makes the pill a Term affordance */
+  def?: string | undefined;
+  /** what to pin as the term; defaults to the pill's own text */
+  word?: string | undefined;
+  children: ComponentChildren;
+}) => {
+  const spinner = props.state === 'pending' ? <span class="spin">◍</span> : null;
+  const def = props.def;
+  if (!def)
+    return (
+      <span class={`pill ${props.state}`}>
+        {spinner}
+        {props.children}
+      </span>
+    );
+  const word = props.word ?? (typeof props.children === 'string' ? props.children : '');
+  return (
+    <span
+      class={`pill ${props.state} defined`}
+      tabIndex={0}
+      role="button"
+      title={def}
+      aria-label={`${word}: ${def}`}
+      onClick={() => pinTerm(word, def)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          pinTerm(word, def);
+        }
+      }}
+    >
+      {spinner}
+      <span class="pill-word">{props.children}</span>
+    </span>
+  );
+};
 
 // -----------------------------------------------------------------------------
 // key/value grid
@@ -174,6 +215,26 @@ export const Pager = (props: {
         : `${props.count} ${props.noun}${props.offFirst ? ' · paged' : ''}`}
     </span>
   </div>
+);
+
+// -----------------------------------------------------------------------------
+// docs — the one place the SIWD guide slugs live
+//
+// A verdict says what was observed; it never says what to do about it. These two
+// links are the whole action layer, and both detail views point at them from
+// every amber and red state — so a visitor who reads "stale" is one click from
+// what that means, and a domain owner is one click from the fix.
+// -----------------------------------------------------------------------------
+
+export const SETUP_GUIDE = 'https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup';
+export const TROUBLESHOOTING_GUIDE =
+  'https://docs.dfos.com/docs/developers/sign-in-with-dfos/troubleshooting';
+
+/** An external docs link — new tab, no referrer. */
+export const DocsLink = (props: { href: string; children: ComponentChildren }) => (
+  <a href={props.href} rel="noreferrer noopener" target="_blank">
+    {props.children}
+  </a>
 );
 
 // -----------------------------------------------------------------------------
