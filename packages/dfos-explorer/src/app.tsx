@@ -5,7 +5,7 @@
 */
 
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { TermBar } from './components/ui';
+import { TermModal } from './components/ui';
 import { getClient } from './lib/client';
 import { fmtCount } from './lib/format';
 import { getRelays, subscribeRelays } from './lib/relays';
@@ -262,7 +262,7 @@ export const App = () => {
         </div>
         <Foot />
       </div>
-      <TermBar />
+      <TermModal />
     </>
   );
 };

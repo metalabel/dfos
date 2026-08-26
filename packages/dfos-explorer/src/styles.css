@@ -446,29 +446,89 @@ header {
   outline: none;
 }
 
-.termbar {
+/* ----------------------------------------------------------- term modal
+
+   Tapping a term (or a defined pill) opens its plain-language rendering in a
+   dialog: a fullscreen sheet on mobile, a centered panel over a shadowbox at
+   width — one component, one breakpoint. Same hairline-panel vocabulary as
+   everything else; it sits above the mobile index drawer (z-index 30). */
+
+.termmodal {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 20;
-  background: var(--hi);
-  color: var(--hd-ink);
-  border-top: 1px solid var(--hd-line);
-  padding: 8px 14px;
-  font-size: 11px;
-  line-height: 1.5;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
 }
 
-.termbar b {
-  color: var(--hd-bright);
+.termmodal-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  overflow: hidden;
 }
 
-.termbar-x {
-  float: right;
-  color: var(--hd-dim);
+.termmodal-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--panel-hd);
+  border-bottom: 1px solid var(--line2);
+}
+
+.termmodal-x {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding: 3px 9px;
   cursor: pointer;
-  padding-left: 12px;
+}
+
+.termmodal-x:hover,
+.termmodal-x:focus {
+  border-color: var(--ink);
+  color: var(--ink);
+  outline: none;
+}
+
+.termmodal-body {
+  padding: 14px 12px;
+  overflow-y: auto;
+}
+
+.termmodal-word {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.termmodal-def {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink);
+}
+
+@media (min-width: 700px) {
+  .termmodal {
+    align-items: center;
+    padding: 24px;
+  }
+
+  .termmodal-panel {
+    width: min(520px, 100%);
+    max-height: 80vh;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  }
 }
 
 /* ---------------------------------------------------------------- pills */

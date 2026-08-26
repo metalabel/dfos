@@ -9,7 +9,7 @@
 */
 
 import type { ComponentChildren } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { useDidProfile } from '../lib/did-profiles';
 import { copyToClipboard, short } from '../lib/format';
 import type { RevocationStatus } from '../lib/revocations';
@@ -57,7 +57,7 @@ export type PillState = 'pending' | 'ok' | 'bad' | 'warn';
  * A verdict pill. `def` adds the PLAIN-LANGUAGE layer without touching the
  * verdict: the precise word stays the label — "stale", not "probably fine" — and
  * the plain rendering is one hover or tap away, through exactly the interaction
- * {@link Term} already implements (title tooltip, pinned termbar on touch). The
+ * {@link Term} already implements (title tooltip, definition modal on tap). The
  * precise vocabulary is what stays machine-distinguishable; the plain sentence is
  * what makes it legible to someone who has never read the spec. Neither replaces
  * the other.
@@ -124,7 +124,7 @@ export const KvRow = (props: {
 );
 
 // -----------------------------------------------------------------------------
-// term tooltip — dotted underline; click/tap pins the definition to the termbar
+// term tooltip — dotted underline; click/tap opens the definition modal
 // -----------------------------------------------------------------------------
 
 type TermPin = { word: string; def: string } | null;
@@ -155,25 +155,130 @@ export const Term = (props: { word: string; def: string }) => (
   </span>
 );
 
-/** Bottom-pinned definition bar — the touch answer to title= tooltips. */
-export const TermBar = () => {
+/** Anything that can hold focus inside the dialog — the trap's ring. */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * TERM MODAL — the plain-language layer, one tap away.
+ *
+ * Mounted ONCE, at the app root; {@link pinTerm} (the same call {@link Term} and
+ * a defined {@link Pill} have always made) is what opens it. A term tapped while
+ * it is already open REPLACES the content rather than stacking — there is only
+ * ever one definition on screen.
+ *
+ * Presentation: a fullscreen sheet on mobile, a centered shadowboxed panel at
+ * width — one component, one CSS breakpoint.
+ *
+ * Interaction contract: dismiss by Escape, backdrop click, or the close button.
+ * While open, focus moves into the dialog, Tab is trapped inside it, and closing
+ * restores focus to whatever was focused when it opened; body scroll is locked.
+ * `role="dialog"` + `aria-modal` + `aria-labelledby` the term word.
+ */
+export const TermModal = () => {
   const [pin, setPin] = useState<TermPin>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // where focus came from — captured on OPEN only, so a replace-while-open still
+  // returns focus to the element that started the interaction
+  const restoreRef = useRef<HTMLElement | null>(null);
+  const openRef = useRef(false);
+
   useEffect(() => {
-    const fn: TermListener = (p) => setPin(p);
+    const fn: TermListener = (p) => {
+      if (p && !openRef.current) {
+        const active = document.activeElement;
+        restoreRef.current = active instanceof HTMLElement ? active : null;
+      }
+      openRef.current = p !== null;
+      setPin(p);
+    };
     termListeners.add(fn);
     return () => {
       termListeners.delete(fn);
     };
   }, []);
+
+  const close = useCallback(() => {
+    openRef.current = false;
+    setPin(null);
+  }, []);
+
+  const open = pin !== null;
+
+  useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    panel?.querySelector<HTMLElement>('.termmodal-x')?.focus();
+
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+        return;
+      }
+      if (e.key !== 'Tab' || !panel) return;
+      const ring = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (ring.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = ring[0] as HTMLElement;
+      const last = ring[ring.length - 1] as HTMLElement;
+      const active = document.activeElement;
+      const inside = active instanceof Node && panel.contains(active);
+      if (e.shiftKey ? !inside || active === first : !inside || active === last) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      }
+    };
+    // capture, so the trap wins over anything the page binds on keydown
+    document.addEventListener('keydown', onKey, true);
+
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [open, close]);
+
+  // restore focus on close (a no-op on first mount — nothing was captured yet)
+  useEffect(() => {
+    if (open) return;
+    const el = restoreRef.current;
+    restoreRef.current = null;
+    el?.focus();
+  }, [open]);
+
   if (!pin) return null;
   return (
-    <div class="termbar">
-      <span class="termbar-x" onClick={() => setPin(null)}>
-        ✕ dismiss
-      </span>
-      <span>
-        <b>{pin.word}</b> — {pin.def}
-      </span>
+    <div
+      class="termmodal"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+    >
+      <div
+        class="termmodal-panel"
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="termmodal-word"
+      >
+        <div class="termmodal-hd">
+          <span class="lbl">definition</span>
+          <button class="termmodal-x" onClick={close}>
+            ✕ close
+          </button>
+        </div>
+        <div class="termmodal-body">
+          <div class="termmodal-word" id="termmodal-word">
+            {pin.word}
+          </div>
+          <p class="termmodal-def">{pin.def}</p>
+        </div>
+      </div>
     </div>
   );
 };
