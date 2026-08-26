@@ -13,6 +13,14 @@
     2. come back with a JWS and hand it to `/api/verify`
     3. render `/api/me`
 
+  THE PAGE SHOWS BEFORE IT EXPLAINS. Signed in with a credential, it reads the
+  user's profile from the DFOS API immediately — no button to press — because
+  that data is what the sign-in bought, and a demo that hides the payoff behind
+  one more click has buried it. The session and the credential sit above it as a
+  status bar, the way an app shows who is signed in. Everything mechanical — the
+  decoded artifact, the checks the server ran, the signing seam, how this app is
+  registered — is still here in full, one disclosure down.
+
   The JWS is also decoded here, for display. `decodeJwsUnsafe` does no
   verification — the panel says so, and so does the name.
 
@@ -50,6 +58,20 @@ const EXPLORER_URL = 'https://explore.dfos.com';
 
 /** Where the source of the files in this flow lives. */
 const REPO = 'https://github.com/metalabel/dfos/blob/main';
+
+/**
+ * Where the long form lives. This page carries the walkthrough, not the whole
+ * argument: the specs say what is required of any implementation, and the kit's
+ * README says how the two subpaths this demo uses are meant to be wired.
+ */
+const DOCS = {
+  siwd: 'https://protocol.dfos.com/siwd',
+  apiAuth: 'https://protocol.dfos.com/api-auth',
+  credentials: 'https://protocol.dfos.com/credentials',
+  clientSiwd: `${REPO}/packages/dfos-client/README.md#metalabeldfos-clientsiwd`,
+  clientApiAuth: `${REPO}/packages/dfos-client/README.md#metalabeldfos-clientapi-auth`,
+  demo: 'https://github.com/metalabel/dfos/tree/main/examples/siwd-demo',
+};
 
 /** This origin's own registration, served as a static file out of `public/`. */
 const WELL_KNOWN_PATH = '/.well-known/dfos-app.json';
@@ -313,6 +335,11 @@ interface Registration {
   state: 'loopback' | 'registered' | 'unlisted' | 'missing';
   name?: string;
   clientDid?: string;
+  /**
+   * The app's own signed operation log, as carried in the file. Read here only
+   * to count and label it — decoding is not verifying, and the panel says so.
+   */
+  identityChain?: string[];
 }
 
 /**
@@ -344,10 +371,15 @@ const checkRegistration = async (): Promise<Registration> => {
     : [];
   if (!listed.includes(REDIRECT_URI)) return { state: 'unlisted' };
 
+  const chain = Array.isArray(raw['identity_chain'])
+    ? raw['identity_chain'].filter((value): value is string => typeof value === 'string')
+    : [];
+
   return {
     state: 'registered',
     ...(typeof raw['name'] === 'string' ? { name: raw['name'] } : {}),
     ...(typeof raw['client_did'] === 'string' ? { clientDid: raw['client_did'] } : {}),
+    ...(chain.length > 0 ? { identityChain: chain } : {}),
   };
 };
 
@@ -427,11 +459,159 @@ const linkNote = (href: string, text: string, caption: string): HTMLElement => {
   return wrap;
 };
 
+/** One fact in the status bar. `tone` colors the live ones: a grant, or a dead one. */
+const chip = (text: string, tone?: 'ok' | 'warn'): HTMLElement =>
+  el('span', tone === undefined ? 'chip' : `chip ${tone}`, text);
+
+/** A row of links on one line, separated the way the footer already is. */
+const linkRow = (...items: [string, string][]): HTMLElement => {
+  const wrap = el('p', 'links');
+  items.forEach(([href, text], index) => {
+    if (index > 0) wrap.append(' · ');
+    wrap.append(link(href, text));
+  });
+  return wrap;
+};
+
 /** The notices that belong above every view, in the order they matter. */
 const notices = (notice?: string): Node[] => [
   ...(notice !== undefined ? [el('p', 'notice', notice)] : []),
   ...(ephemeral ? [el('p', 'notice', EPHEMERAL_NOTICE)] : []),
 ];
+
+// -----------------------------------------------------------------------------
+// this app's own identity
+// -----------------------------------------------------------------------------
+
+/**
+ * The carried chain, counted and labelled. DECODING IS NOT VERIFYING: these
+ * bytes are read with `decodeJwsUnsafe` for display, exactly like the sign-in
+ * artifact. What makes the chain real is a host verifying it derives the
+ * declared `client_did` — which happens at first consent, not here.
+ */
+interface ChainSummary {
+  ops: number;
+  /** The operation types in order, e.g. `create`, `update`. */
+  types: string[];
+  /** Auth keys in the terminal operation — the keys that can sign as this app today. */
+  authKeys: number;
+  /** The terminal operation's CID: the head this chain replays to. */
+  headCID?: string;
+}
+
+const summarizeChain = (chain: string[]): ChainSummary | null => {
+  const types: string[] = [];
+  let authKeys = 0;
+  let headCID: string | undefined;
+
+  for (const token of chain) {
+    const decoded = decodeJwsUnsafe(token);
+    if (decoded === null) return null;
+    const { type } = decoded.payload;
+    types.push(typeof type === 'string' ? type : 'unknown');
+    const keys = decoded.payload['authKeys'];
+    authKeys = Array.isArray(keys) ? keys.length : 0;
+    headCID = decoded.header.cid;
+  }
+  if (types.length === 0) return null;
+
+  return { ops: types.length, types, authKeys, ...(headCID !== undefined ? { headCID } : {}) };
+};
+
+/**
+ * Who THIS app is, from the file this app serves about itself. The user side of
+ * a sign-in gets a DID, a chain, and an explorer to check it in; so does the app
+ * side, and this panel is that symmetry made visible rather than asserted.
+ */
+const appIdentityCard = (found: Registration): HTMLElement => {
+  const body: Node[] = [el('h2', undefined, 'This app’s own identity')];
+
+  if (found.state === 'loopback') {
+    body.push(
+      el(
+        'p',
+        'dim',
+        'This is a loopback host, so this app publishes no registration and needs ' +
+          'none: http://localhost is an accepted redirect target for scope=identity ' +
+          'under the platform’s loopback tier. Deployed to a domain, the app is ' +
+          'whatever its /.well-known/dfos-app.json says it is.',
+      ),
+    );
+    return card(...body);
+  }
+
+  if (found.name !== undefined) {
+    const line = el('p');
+    line.append('Name: ', el('code', undefined, found.name));
+    body.push(line);
+  }
+
+  if (found.clientDid === undefined) {
+    body.push(
+      el(
+        'p',
+        'dim',
+        'This origin declares no client_did, so it has no identity of its own to ' +
+          'show. That is fine for the identity scope — the served file names the ' +
+          'app — but a credential has to be issued to someone, so read:profile ' +
+          'needs one.',
+      ),
+    );
+  } else {
+    const did = el('p');
+    did.append('DID: ', el('code', undefined, found.clientDid));
+    body.push(did);
+  }
+
+  const summary = found.identityChain === undefined ? null : summarizeChain(found.identityChain);
+  if (summary === null) {
+    body.push(
+      el(
+        'p',
+        'dim',
+        'The file carries no identity_chain. Without it, a host meeting this app ' +
+          'for the first time has no way to resolve its key, and a credential-gated ' +
+          'API call would have nothing to verify the app’s request proofs against.',
+      ),
+    );
+  } else {
+    const line = el('p', 'dim');
+    line.append(
+      `Carried identity chain: ${summary.ops} signed ${summary.ops === 1 ? 'operation' : 'operations'} (`,
+      el('code', undefined, summary.types.join(' → ')),
+      `), ${summary.authKeys} current auth ${summary.authKeys === 1 ? 'key' : 'keys'}.`,
+    );
+    body.push(line);
+
+    if (summary.headCID !== undefined) {
+      const head = el('p', 'dim');
+      head.append('Head operation: ', el('code', undefined, summary.headCID));
+      body.push(head);
+    }
+
+    body.push(
+      el(
+        'p',
+        'dim',
+        'The chain travels in the file so a host that has never seen this app can ' +
+          'verify it derives the declared DID and ingest it at first consent. ' +
+          'After that the host’s own API resolves this app’s key like any other ' +
+          'resident identity. Counted here for display only — this page does no ' +
+          'verifying.',
+      ),
+    );
+  }
+
+  const links: [string, string][] = [[WELL_KNOWN_PATH, 'The served file']];
+  if (found.clientDid !== undefined) {
+    // NOT encoded: the explorer's hash router takes the DID literally.
+    links.push([`${EXPLORER_URL}/#/did/${found.clientDid}`, 'This app in the explorer']);
+  }
+  links.push([DOCS.siwd, 'SIWD: app registration']);
+  body.push(linkRow(...links));
+
+  return card(...body);
+};
 
 // -----------------------------------------------------------------------------
 // views
@@ -608,11 +788,23 @@ const registrationNote = (found: Registration, scope: string): Node[] => {
   return body;
 };
 
-/** The registration note as a quieter block inside the sign-in card. */
-const registrationSection = (found: Registration, scope: string): HTMLElement => {
-  const wrap = el('div', 'section');
-  wrap.append(...registrationNote(found, scope));
-  return wrap;
+/**
+ * The mechanism, one disclosure down. Nothing here was cut when the page was
+ * turned around to lead with the demonstration — the steps, the registration
+ * note, and the links out are the same content, just no longer standing between
+ * the reader and the button.
+ */
+const walkthrough = (found: Registration | null, scope: string): HTMLElement => {
+  const details = el('details');
+  details.append(
+    el('summary', undefined, 'What happens when you click'),
+    whatHappensNext(scope),
+    ...(found !== null
+      ? receiptSection('How this app is registered', ...registrationNote(found, scope))
+      : []),
+    ...docsReceipt(),
+  );
+  return details;
 };
 
 const renderSignedOut = (notice?: string): void => {
@@ -623,10 +815,7 @@ const renderSignedOut = (notice?: string): void => {
   aside.append(
     'Verification runs on this site’s own backend, against a public relay. No DFOS ' +
       'platform server is asked whether to believe the signature. ',
-    link(
-      'https://github.com/metalabel/dfos/tree/main/examples/siwd-demo',
-      'This demo site is open source',
-    ),
+    link(DOCS.demo, 'This demo site is open source'),
     '.',
   );
 
@@ -646,13 +835,13 @@ const renderSignedOut = (notice?: string): void => {
     ...(warning !== undefined ? [el('p', 'notice', warning)] : []),
     card(
       // Re-rendering the whole view on a scope change is the cheapest way to
-      // keep every dependent string — the steps, the grant, the button — in
-      // agreement with the choice.
+      // keep every dependent string — the grant, the walkthrough, the button —
+      // in agreement with the choice.
       ...(config !== null ? [scopeChooser(config, () => renderSignedOut(notice))] : []),
       button,
-      whatHappensNext(selectedScope),
-      ...(found !== null ? [registrationSection(found, selectedScope)] : []),
     ),
+    walkthrough(found, selectedScope),
+    ...(found !== null ? [appIdentityCard(found)] : []),
     aside,
   );
 };
@@ -774,6 +963,81 @@ const lookItUpReceipt = (did: string): Node[] =>
     ),
   );
 
+/**
+ * THE SIGNING SEAM, shown rather than summarized. This is the composition
+ * `api/profile.ts` actually runs: the API client composes a `Request`, and the
+ * wrapper signs exactly that request. `@metalabel/dfos-client/api-auth` also
+ * ships `createApiAuthFetch`, which is this wrapper as one call — but a backend
+ * fronting a browser writes the long form on purpose, because it must authorize
+ * the coordinates it is about to sign against its own session rather than sign
+ * whatever the page hands it.
+ */
+const signingSeamReceipt = (host: string): Node[] =>
+  receiptSection(
+    'How the request was signed',
+    el(
+      'p',
+      'dim',
+      `Reading the profile above meant calling GET /v1/profile on ${host} — real ` +
+        'private data, served only to a caller that proves possession of the key this ' +
+        'credential was issued to. The backend signed a fresh proof over that exact ' +
+        'method, host, path, and body, and sent it alongside the credential.',
+    ),
+    el(
+      'pre',
+      'wrap',
+      `const api = createDfosApi({
+  baseUrl: \`https://${host}/v1/\`,
+  fetch: async (request) => {
+    const url = new URL(request.url);
+    const { proof } = await signApiRequest({
+      method: request.method,
+      host: url.host,
+      path: url.pathname + url.search,
+      body: new Uint8Array(await request.clone().arrayBuffer()),
+      credentialCID,
+      kid,
+      sign,
+    });
+    const headers = new Headers(request.headers);
+    for (const [name, value] of Object.entries(
+      buildApiAuthHeaders({ proof, credential }),
+    )) {
+      headers.set(name, value);
+    }
+    return fetch(new Request(request, { headers }));
+  },
+});
+
+await api.GET('/profile');`,
+    ),
+    el(
+      'p',
+      'dim',
+      'Two packages meet at that seam and neither had to learn about the other. ' +
+        '@metalabel/dfos-api knows the API’s shape, generated from its OpenAPI ' +
+        'document; @metalabel/dfos-client knows the byte contract. The client hands ' +
+        'the wrapper one fully-composed request, and the wrapper signs the bytes that ' +
+        'are about to go on the wire rather than a description of them.',
+    ),
+    el(
+      'p',
+      'dim',
+      'The endpoint that runs this takes no parameters, and that is the design. A ' +
+        'backend that signs whatever method, path, and body a browser hands it is a ' +
+        'confused deputy holding a key: an XSS on the page, or simply a hostile ' +
+        'client, would obtain proofs for arbitrary requests against every credential ' +
+        'the backend holds. POST /api/profile signs one request, and the only thing ' +
+        'the caller supplies is a session cookie saying which credential to use.',
+    ),
+    el(
+      'p',
+      'dim',
+      'No path parameter named you, either. The credential’s root issuer selects the ' +
+        'subject, which is why there is no way to ask this endpoint for anybody else.',
+    ),
+  );
+
 const sourceReceipt = (): Node[] =>
   receiptSection(
     'Read the source',
@@ -797,13 +1061,57 @@ const sourceReceipt = (): Node[] =>
       'packages/dfos-client/src/siwd.ts',
       'The kit: mint, read, verify.',
     ),
+    linkNote(
+      `${REPO}/examples/siwd-demo/api/profile.ts`,
+      'examples/siwd-demo/api/profile.ts',
+      'The signing seam: one credential-gated call, and nothing the browser gets to name.',
+    ),
+  );
+
+/** Where the argument is made in full, for a reader who wants more than a panel. */
+const docsReceipt = (): Node[] =>
+  receiptSection(
+    'Where the details live',
+    linkNote(
+      DOCS.siwd,
+      'SIWD',
+      'The sign-in protocol: the challenge, the two replay disciplines, registration.',
+    ),
+    linkNote(
+      DOCS.apiAuth,
+      'API Authentication',
+      'The request proof: what a credential-gated call carries, and the eleven checks it faces.',
+    ),
+    linkNote(
+      DOCS.credentials,
+      'Credentials',
+      'What a credential is, how it attenuates, and how revocation works.',
+    ),
+    linkNote(
+      DOCS.clientSiwd,
+      '@metalabel/dfos-client/siwd',
+      'The login kit this page uses, with both replay disciplines written out.',
+    ),
+    linkNote(
+      DOCS.clientApiAuth,
+      '@metalabel/dfos-client/api-auth',
+      'The signing side, including createApiAuthFetch and why a browser-fronting backend does not use it.',
+    ),
+    linkNote(
+      DOCS.demo,
+      'This demo, in full',
+      'The README: every route, every variable, and how to fork it.',
+    ),
   );
 
 const receipts = (session: Session, jws?: string): HTMLElement => {
   const details = el('details');
   const found = registration;
+  const facts = session.credential;
   details.append(
     el('summary', undefined, 'Show the receipts'),
+    ...(facts !== undefined ? credentialReceipt(facts) : []),
+    ...(facts !== undefined ? signingSeamReceipt(config?.api.host ?? 'the DFOS API') : []),
     ...(jws !== undefined ? artifactReceipt(jws) : []),
     ...checklistReceipt(session),
     ...(found !== null
@@ -811,6 +1119,7 @@ const receipts = (session: Session, jws?: string): HTMLElement => {
       : []),
     ...lookItUpReceipt(session.did),
     ...sourceReceipt(),
+    ...docsReceipt(),
   );
   return details;
 };
@@ -826,7 +1135,7 @@ const receipts = (session: Session, jws?: string): HTMLElement => {
  * the server first: signature, schema, CID integrity, expiry, and that this app
  * is the audience. Displaying an unverified one would teach the opposite habit.
  */
-const credentialCard = (facts: CredentialFacts): HTMLElement => {
+const credentialReceipt = (facts: CredentialFacts): Node[] => {
   const row = (label: string, value: string, note?: string): HTMLElement => {
     const line = el('p', 'dim');
     line.append(`${label}: `, el('code', undefined, value));
@@ -836,8 +1145,8 @@ const credentialCard = (facts: CredentialFacts): HTMLElement => {
 
   const expired = facts.expiresAt * 1000 <= Date.now();
 
-  return card(
-    el('h2', undefined, 'The credential you granted'),
+  return receiptSection(
+    'The credential you granted',
     row(
       'Issuer',
       facts.issuer,
@@ -894,40 +1203,106 @@ type ProfileState =
   | { kind: 'unreachable'; reason: string };
 
 /**
- * The live credential-gated call. One button, no parameters — and the absence of
- * parameters is the design, not an omission. `api/profile.ts` signs exactly one
- * request and takes no coordinates from this page, because a backend that signs
- * whatever a browser hands it is a confused deputy holding a key.
+ * The profile as the API served it, read defensively. Every member is optional
+ * here even though the OpenAPI document says otherwise: this is untrusted text
+ * off the wire, and a hero that throws on a missing field is a worse demo than
+ * one that renders what it got.
  */
-const profileCard = (state: ProfileState, host: string, onCall: () => void): HTMLElement => {
-  const button = el('button', undefined, state.kind === 'pending' ? 'Calling…' : 'Read my profile');
-  button.disabled = state.kind === 'pending';
-  button.addEventListener('click', onCall);
+const profileText = (raw: Record<string, unknown>, field: string): string | undefined => {
+  const value = raw[field];
+  return typeof value === 'string' && value !== '' ? value : undefined;
+};
 
-  const body: Node[] = [
-    el('h2', undefined, 'Use it'),
-    el(
-      'p',
-      'dim',
-      `This calls GET /v1/profile on ${host} — real private data, served only to a caller that ` +
-        'proves possession of the key this credential was issued to. The backend signs a fresh ' +
-        'proof over this exact method, host, path, and body, and sends it alongside the credential.',
-    ),
-    button,
-  ];
+/**
+ * THE HERO — the thing the sign-in bought, rendered first and without a button.
+ * A relying party's whole reason for running this flow is the data at the end of
+ * it, so the page reads it on arrival the way an app would and shows the profile
+ * itself rather than an invitation to go fetch one.
+ *
+ * The raw response stays one disclosure down: this is a protocol demo, and the
+ * exact JSON is worth being able to see.
+ */
+const profileHero = (state: ProfileState, onReload: () => void): HTMLElement => {
+  const body: Node[] = [];
+
+  if (state.kind === 'idle' || state.kind === 'pending') {
+    body.push(
+      el('h2', undefined, 'Reading your profile…'),
+      el('p', 'dim', 'The backend is signing a request proof and calling the DFOS API with it.'),
+    );
+    return card(...body);
+  }
 
   if (state.kind === 'ok') {
+    const raw = state.profile;
+    const name = profileText(raw, 'displayName');
+    const username = profileText(raw, 'username');
+    const description = profileText(raw, 'description');
+    const email = profileText(raw, 'email');
+    const created = profileText(raw, 'createdAt');
+
     body.push(
-      el('p', 'dim', 'The API answered:'),
-      el('pre', 'wrap', JSON.stringify(state.profile, null, 2)),
+      el('h2', undefined, name ?? (username !== undefined ? `@${username}` : 'Your profile')),
+    );
+    if (name !== undefined && username !== undefined) {
+      body.push(el('p', 'handle', `@${username}`));
+    }
+    if (description !== undefined) body.push(el('p', undefined, description));
+
+    const meta = el('div', 'meta');
+    if (email !== undefined) {
+      const line = el('p', 'dim');
+      line.append('Email ', el('code', undefined, email));
+      meta.append(line);
+    }
+    if (created !== undefined) {
+      const joined = new Date(created);
+      meta.append(
+        el(
+          'p',
+          'dim',
+          Number.isNaN(joined.getTime())
+            ? `Joined ${created}`
+            : `Joined ${joined.toLocaleDateString()}`,
+        ),
+      );
+    }
+    if (meta.childNodes.length > 0) body.push(meta);
+
+    body.push(
       el(
         'p',
         'dim',
-        'No path parameter named you. The credential’s root issuer selected the subject, which ' +
-          'is why there is no way to ask this endpoint for anybody else.',
+        `Served by ${state.host} under the credential below — private data, released only ` +
+          'to a caller that proved possession of the key it was issued to.',
       ),
     );
+
+    const rawPanel = el('details');
+    rawPanel.append(
+      el('summary', undefined, 'The raw response'),
+      el('pre', 'wrap', JSON.stringify(raw, null, 2)),
+    );
+    body.push(rawPanel);
+
+    const again = el('button', 'quiet', 'Read it again');
+    again.addEventListener('click', onReload);
+    body.push(again);
+    body.push(
+      el(
+        'p',
+        'dim',
+        'Reading again mints a fresh request proof against the same standing grant. ' +
+          'Revoke the grant at your DFOS host and press it once more: the same call ' +
+          'answers 403, because the API re-checks revocation on every request.',
+      ),
+    );
+    return card(...body);
   }
+
+  // A refusal or an unreachable backend is the honest hero too: this is what the
+  // credential path looks like when the grant is gone or the API cannot answer.
+  body.push(el('h2', undefined, 'Your profile did not load'));
   if (state.kind === 'refused') {
     body.push(el('p', 'notice', `The API refused: HTTP ${state.status}`));
     if (state.code !== undefined) {
@@ -940,12 +1315,96 @@ const profileCard = (state: ProfileState, host: string, onCall: () => void): HTM
       body.push(line);
     }
     body.push(el('p', 'dim', state.reason));
-  }
-  if (state.kind === 'unreachable') {
+  } else {
     body.push(el('p', 'notice', state.reason));
   }
 
+  const retry = el('button', 'quiet', 'Try again');
+  retry.addEventListener('click', onReload);
+  body.push(retry);
   return card(...body);
+};
+
+/** The hero when the sign-in granted no credential: what was proved, and what was not. */
+const identityHero = (session: Session): HTMLElement =>
+  card(
+    el('h2', undefined, 'You are signed in'),
+    el(
+      'p',
+      undefined,
+      'This sign-in proved who you are and nothing else. The identity scope returns ' +
+        'no credential, so this app holds no standing grant and has nothing to read ' +
+        'on your behalf.',
+    ),
+    el(
+      'p',
+      'dim',
+      `Verified against signing key ${session.kid} — a current authentication key of ` +
+        'your identity chain, resolved from a public relay.',
+    ),
+    el(
+      'p',
+      'dim',
+      'Sign out and sign in again asking for read:profile to see the other half: a ' +
+        'credential this app keeps, and a live credential-gated API call made with it.',
+    ),
+  );
+
+/**
+ * The session indicator, the way an application shows one — who is signed in,
+ * under what scope, and whether the grant behind it is still good. Everything
+ * here is a fact the server read back out of its own sealed cookie.
+ */
+const sessionBar = (session: Session): HTMLElement => {
+  const signOutButton = el('button', 'quiet', 'Sign out');
+  signOutButton.addEventListener('click', () => void signOut());
+
+  const who = el('p', 'who');
+  who.append(el('span', 'dim', 'Signed in as '), el('code', undefined, session.did));
+
+  const chips = el('div', 'chips');
+  chips.append(chip(session.scope));
+
+  const facts = session.credential;
+  if (facts === undefined) {
+    chips.append(chip('no credential'));
+  } else {
+    const remaining = facts.expiresAt * 1000 - Date.now();
+    const days = Math.floor(remaining / 86_400_000);
+    chips.append(
+      remaining <= 0
+        ? chip('credential expired', 'warn')
+        : chip(`credential active · ${days}d left`, 'ok'),
+    );
+  }
+
+  const body: Node[] = [who, chips];
+
+  if (facts !== undefined) {
+    const grant = el('p', 'dim');
+    grant.append(
+      'Grant: ',
+      el('code', undefined, facts.action),
+      ' on ',
+      el('code', undefined, facts.resource),
+      `, expires ${new Date(facts.expiresAt * 1000).toLocaleString()}.`,
+    );
+    body.push(grant);
+  }
+
+  body.push(
+    el(
+      'p',
+      'dim',
+      `Session expires ${new Date(session.exp * 1000).toLocaleString()} — read from the ` +
+        'server’s sealed session cookie via /api/me.',
+    ),
+    signOutButton,
+  );
+
+  const bar = el('div', 'card session');
+  bar.replaceChildren(...body);
+  return bar;
 };
 
 const renderSignedIn = (
@@ -953,43 +1412,31 @@ const renderSignedIn = (
   jws?: string,
   profile: ProfileState = { kind: 'idle' },
 ): void => {
-  const signOutButton = el('button', undefined, 'Sign out');
-  signOutButton.addEventListener('click', () => void signOut());
-
-  const who = el('p');
-  who.append('Signed in as ', el('code', undefined, session.did));
-
-  const key = el('p', 'dim');
-  key.append('Verified against signing key ', el('code', undefined, session.kid));
-
-  const scope = el('p', 'dim');
-  scope.append(
-    'Granted at scope ',
-    el('code', undefined, session.scope),
-    session.scope === SCOPE_READ_PROFILE
-      ? ' — verified under the consumed replay discipline, because this sign-in returned something portable.'
-      : ' — verified under the flow-bound replay discipline, because this sign-in granted only a session with this browser.',
-  );
-
   const facts = session.credential;
-  const host = config?.api.host ?? 'the DFOS API';
+  const found = registration;
 
   render(
-    el('h1', undefined, 'Signed in with DFOS'),
     ...notices(),
-    card(
-      who,
-      key,
-      scope,
-      el('p', 'dim', `Session expires ${new Date(session.exp * 1000).toLocaleString()}`),
-      el('p', 'dim', 'Read from the server’s sealed session cookie via /api/me.'),
-      signOutButton,
-    ),
-    ...(facts !== undefined
-      ? [credentialCard(facts), profileCard(profile, host, () => void callProfile(session, jws))]
-      : []),
+    sessionBar(session),
+    facts !== undefined
+      ? profileHero(profile, () => void callProfile(session, jws))
+      : identityHero(session),
+    ...(found !== null ? [appIdentityCard(found)] : []),
     receipts(session, jws),
   );
+};
+
+/**
+ * Enter the signed-in view. On the credential path the profile call starts
+ * immediately — no click — so the payoff is on screen as soon as there is a
+ * session to render it from.
+ */
+const enterSignedIn = (session: Session, jws?: string): void => {
+  if (session.credential === undefined) {
+    renderSignedIn(session, jws);
+    return;
+  }
+  void callProfile(session, jws);
 };
 
 /**
@@ -1126,7 +1573,7 @@ const handleCallback = async (jws: string, credential?: string): Promise<void> =
     );
     return;
   }
-  renderSignedIn(session, jws);
+  enterSignedIn(session, jws);
 };
 
 /**
@@ -1188,7 +1635,7 @@ const boot = async (): Promise<void> => {
     renderSignedOut();
     return;
   }
-  renderSignedIn(session);
+  enterSignedIn(session);
 };
 
 void boot();
