@@ -219,6 +219,11 @@ describe('signApiRequest', () => {
 
 const HOST = 'api.dfos.com';
 const NOW = Math.floor(Date.now() / 1000);
+
+/** Replace one char with a guaranteed-different one — a byte-level tamper that
+ *  can never round-trip to the original string. */
+const tamperOneChar = (s: string, index: number): string =>
+  `${s.slice(0, index)}${s[index] === 'A' ? 'B' : 'A'}${s.slice(index + 1)}`;
 const API_ATT: Attenuation[] = [{ resource: `api:${HOST}`, action: DEFAULT_API_ACTION }];
 
 type Identity = Awaited<ReturnType<typeof buildIdentity>>;
@@ -685,7 +690,11 @@ describe('verifyApiRequest', () => {
         'missing member',
         await signRaw(good, canonical.replace(`,"credentialCID":"${grant.credentialCID}"`, '')),
       ],
-      ['tampered signature', `${grant.proof.slice(0, -2)}AA`],
+      // Tamper mid-signature, not at the tail: the final two base64url chars
+      // encode S's high byte, which `S < L` keeps small — it is genuinely 0x00
+      // for ~1 in 16 keys, so forcing the tail to "AA" reproduced the original
+      // proof byte-for-byte on those runs and the vector verified.
+      ['tampered signature', tamperOneChar(grant.proof, grant.proof.length - 10)],
     ];
 
     for (const [name, proof] of vectors) {
