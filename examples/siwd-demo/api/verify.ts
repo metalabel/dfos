@@ -58,8 +58,8 @@ import {
   readTokenField,
   RELAY_URL,
   requestOrigin,
+  SCOPE_API,
   SCOPE_IDENTITY,
-  SCOPE_READ_PROFILE,
   SECRET_ERROR,
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
@@ -108,7 +108,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     ]);
     return;
   }
-  const scope = consumedMarker !== null ? SCOPE_READ_PROFILE : SCOPE_IDENTITY;
+  const scope = consumedMarker !== null ? SCOPE_API : SCOPE_IDENTITY;
 
   const body = readJsonBody(req);
   const jws = readTokenField(body, 'jws');
@@ -122,14 +122,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   // callback's URL fragment and posts it here, where the key that could exercise it
   // actually lives.
   const credential = readTokenField(body, 'credential');
-  if (scope === SCOPE_READ_PROFILE && credential === null) {
+  if (scope === SCOPE_API && credential === null) {
     json(
       res,
       400,
       {
         ok: false,
         reason:
-          'this sign-in asked for read:profile, so the callback should have carried a ' +
+          'this sign-in asked for a credential scope, so the callback should have carried a ' +
           'credential — none arrived',
       },
       [clearCookie(FLIGHT_COOKIE)],
@@ -142,11 +142,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   //    must not burn a user's one-shot challenge only to answer 500. The window
   //    is small (a redeploy between the redirect out and the callback back) but
   //    the cost is a sign-in the user cannot retry with the artifact in hand.
-  if (scope === SCOPE_READ_PROFILE && (APP_KEY_ERROR !== null || APP_DID === null)) {
+  if (scope === SCOPE_API && (APP_KEY_ERROR !== null || APP_DID === null)) {
     json(res, 500, { ok: false, reason: APP_KEY_ERROR }, [clearCookie(FLIGHT_COOKIE)]);
     return;
   }
-  if (scope === SCOPE_READ_PROFILE && KV_ERROR !== null) {
+  if (scope === SCOPE_API && KV_ERROR !== null) {
     json(res, 500, { ok: false, reason: KV_ERROR }, [clearCookie(FLIGHT_COOKIE)]);
     return;
   }
@@ -177,7 +177,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     // kit puts the nonce check last: an atomic GETDEL either returns the value
     // this server minted — retiring it for everyone — or answers null, and a
     // presentation that failed any earlier check never reaches it.
-    ...(scope === SCOPE_READ_PROFILE
+    ...(scope === SCOPE_API
       ? {
           consumeNonce: async (nonce: string): Promise<boolean> => {
             try {
@@ -218,7 +218,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   // 4. On the credential path, answer for the second artifact too — before it is
   //    stored, and before any session exists that could exercise it.
   let facts: CredentialFacts | null = null;
-  if (scope === SCOPE_READ_PROFILE && APP_DID !== null) {
+  if (scope === SCOPE_API && APP_DID !== null) {
     const checked = await checkCredential(client, credential as string, did, APP_DID);
     if ('error' in checked) {
       json(res, 400, { ok: false, reason: checked.error }, [clearCookie(FLIGHT_COOKIE)]);
@@ -307,7 +307,7 @@ const checkCredential = async (
     };
   }
 
-  // This demo asks for the one credential SIWD's read:profile scope mints: a
+  // This demo asks for the one credential SIWD's API scope set mints: a
   // single hop, issued by the user directly. A delegated chain is perfectly
   // legal protocol — it is just not what this flow produces, and walking one
   // correctly means `verifyDelegationChain`, not this function.
@@ -315,7 +315,7 @@ const checkCredential = async (
     return {
       error:
         'the returned credential carries a delegation chain; this demo expects the ' +
-        'single-hop credential the read:profile scope mints',
+        'single-hop credential the API scope set mints',
     };
   }
   if (verified.iss !== signerDID) {

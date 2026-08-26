@@ -45,8 +45,8 @@ import {
   originAllowed,
   readJsonBody,
   requestOrigin,
+  SCOPE_API,
   SCOPE_IDENTITY,
-  SCOPE_READ_PROFILE,
   seal,
   SECRET_ERROR,
   setCookie,
@@ -82,7 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   if (!isScope(requested)) {
     json(res, 400, {
       ok: false,
-      reason: `unknown scope: this demo asks for identity or read:profile`,
+      reason: `unknown scope: this demo asks for '${SCOPE_IDENTITY}' or '${SCOPE_API}'`,
     });
     return;
   }
@@ -92,7 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   // back. Ordered the same way `/api/config` reports them, so a direct caller
   // and the page are told the same thing first: the domain rule leads, because
   // it is the one no environment variable can fix.
-  if (requested === SCOPE_READ_PROFILE) {
+  if (requested === SCOPE_API) {
     if (isLoopbackDomain(self.domain)) {
       json(res, 400, {
         ok: false,
@@ -131,7 +131,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       redirectUri: self.redirectUri,
       scope: requested,
       statement: STATEMENT,
-      ...(requested === SCOPE_READ_PROFILE && APP_DID !== null ? { clientDid: APP_DID } : {}),
+      ...(requested === SCOPE_API && APP_DID !== null ? { clientDid: APP_DID } : {}),
     });
   } catch (err) {
     // The kit refuses a credential scope over a loopback redirect, because a
@@ -145,7 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  if (requested === SCOPE_READ_PROFILE) {
+  if (requested === SCOPE_API) {
     // Written BEFORE the redirect, and a failure here refuses the sign-in: the
     // consumed discipline fails closed, since a nonce this server did not record
     // is one it could never retire.
@@ -165,7 +165,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     json(res, 200, { url: request.url, scope: requested }, [
       setCookie(
         FLIGHT_COOKIE,
-        seal(FLIGHT_PURPOSE_CONSUMED, SCOPE_READ_PROFILE, FLIGHT_TTL_SECONDS),
+        seal(FLIGHT_PURPOSE_CONSUMED, SCOPE_API, FLIGHT_TTL_SECONDS),
         FLIGHT_TTL_SECONDS,
       ),
     ]);

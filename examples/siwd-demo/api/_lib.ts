@@ -62,32 +62,39 @@ export const STATEMENT = 'Sign in to the SIWD demo';
 // -----------------------------------------------------------------------------
 
 /**
- * The two scopes this demo can ask for, and the whole reason it has a toggle.
+ * The two things this demo can ask for.
  *
- *   identity     — proves who you are, and returns nothing else. Success grants
- *                  a session with the browser standing here, so specs/SIWD.md
- *                  admits the FLOW-BOUND replay discipline (the sealed cookie).
- *   read:profile — additionally returns a DFOS credential, which is portable and
- *                  outlives this browser, so the CONSUMED discipline is REQUIRED.
+ *   identity                    — proves who you are, and returns nothing else.
+ *   read:profile read:email     — additionally returns a DFOS credential.
  *
- * The discipline is not a preference. It is decided by what success grants, and
- * the toggle exists so the reader can watch the same flow owe a different
- * obligation depending on which line they picked.
+ * The second is a SCOPE SET: `scope` is space-separated, the OAuth convention,
+ * and each token is validated against SIWD's registry independently. Both of
+ * these tokens name the same `api:<host>` resource, so they coalesce into ONE
+ * credential carrying the combined action list — never one credential per token,
+ * which is what makes revoking it sever the whole API grant at once.
  */
 export const SCOPE_IDENTITY = 'identity';
 export const SCOPE_READ_PROFILE = 'read:profile';
+export const SCOPE_READ_EMAIL = 'read:email';
 
-export type Scope = typeof SCOPE_IDENTITY | typeof SCOPE_READ_PROFILE;
+/** The wire value of the credential option: a space-separated set. */
+export const SCOPE_API = `${SCOPE_READ_PROFILE} ${SCOPE_READ_EMAIL}`;
+
+export type Scope = typeof SCOPE_IDENTITY | typeof SCOPE_API;
 
 export const isScope = (value: unknown): value is Scope =>
-  value === SCOPE_IDENTITY || value === SCOPE_READ_PROFILE;
+  value === SCOPE_IDENTITY || value === SCOPE_API;
+
+/** The action tokens the credential must carry, in the order they were asked for. */
+export const API_ACTIONS = [SCOPE_READ_PROFILE, SCOPE_READ_EMAIL];
 
 /**
- * The wire scope string maps 1:1 to the credential's action token
- * (specs/SIWD.md → `read:profile`), so the string the user consented to and the
- * string the API verifier requires are the same string.
+ * The same tokens as the credential's action list: comma-joined, which is the
+ * form the credential spec's action-set machinery matches. Each wire scope token
+ * maps 1:1 to an API-AUTH action token, so what the user consented to and what
+ * the API verifier requires are the same tokens in both places.
  */
-export const API_ACTION = SCOPE_READ_PROFILE;
+export const API_ACTION = API_ACTIONS.join(',');
 
 /** The credential's attenuation, as the API verifier byte-matches it. */
 export const API_RESOURCE = `api:${API_HOST}`;
@@ -278,7 +285,7 @@ const readAppKey = (): { key: AppKey } | { error: string } => {
   if (kidConfigured === undefined || kidConfigured === '') {
     return {
       error:
-        'DFOS_APP_KID is not set, so this app holds no signing key and cannot spend a ' +
+        'DFOS_APP_KID is not set, so this app holds no signing key and cannot exercise a ' +
         'credential. Set it to the DID URL of a current key of your app’s identity — ' +
         'did:dfos:<id>#key_<id> — and set DFOS_APP_PRIVATE_KEY to that key’s secret.',
     };
@@ -571,7 +578,7 @@ export const readSession = (req: VercelRequest): Session | null => {
 export interface CredentialFacts {
   /** Who authorized this — and, for a single-hop grant, whose data it serves. */
   issuer: string;
-  /** Who may spend it: this app's DID, and nobody else's. */
+  /** Who may exercise it: this app's DID, and nobody else's. */
   audience: string;
   /** The attenuation, exactly as the API verifier byte-matches it. */
   resource: string;

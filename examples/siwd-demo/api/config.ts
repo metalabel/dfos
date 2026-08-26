@@ -2,12 +2,12 @@
 
   What this deployment can actually do, answered before the user clicks anything.
 
-  The demo offers two scopes, and the second one has real preconditions: a
-  signing key, a store, and a domain. Rather than let a reader pick `read:profile`
-  and discover three redirects later that the deployment was never set up for it,
-  the page asks here first and renders each scope with its own verdict — the same
-  posture as the boot-time registration self-check, which says what is missing
-  while there is still something to do about it.
+  The demo offers two options, and the second — the credential scope set — has
+  real preconditions: a signing key, a store, and a domain. Rather than let a
+  reader pick it and discover three redirects later that the deployment was never
+  set up for it, the page asks here first and renders each option with its own
+  verdict — the same posture as the boot-time registration self-check, which says
+  what is missing while there is still something to do about it.
 
   Nothing secret leaves this endpoint. The app's DID is published in a well-known
   file, and the public key is public by definition — it is here precisely so a
@@ -29,8 +29,8 @@ import {
   json,
   methodNotAllowed,
   requestOrigin,
+  SCOPE_API,
   SCOPE_IDENTITY,
-  SCOPE_READ_PROFILE,
   SECRET_ERROR,
 } from './_lib.js';
 import type { VercelRequest, VercelResponse } from './_types.js';
@@ -66,18 +66,16 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
     scopes: [
       {
         scope: SCOPE_IDENTITY,
-        discipline: 'flow-bound',
         available: blocked === null,
         ...(blocked !== null ? { unavailable: blocked } : {}),
-        summary: 'Proves who you are. Returns no credential, so nothing portable is granted.',
+        summary: 'Proves who you are. Nothing else.',
       },
       {
-        scope: SCOPE_READ_PROFILE,
-        discipline: 'consumed',
+        scope: SCOPE_API,
         available: unavailable === null,
         ...(unavailable !== null ? { unavailable } : {}),
         summary:
-          'Proves who you are AND returns a credential — a standing grant this app can present to the DFOS API, each request signed fresh with its own key, reusable until it expires or you revoke it.',
+          'Proves who you are and grants this app a credential to read your profile and your account email.',
       },
     ],
     api: {

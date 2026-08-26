@@ -91,7 +91,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       ok: false,
       reason:
         'this session was granted at identity scope, which returns no credential. Sign out ' +
-        'and sign in again asking for read:profile.',
+        'and sign in again asking for the credential scope.',
     });
     return;
   }
