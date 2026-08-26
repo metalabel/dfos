@@ -5,8 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# Key pull_request runs by PR number, not by ref: a pull_request run that starts
+# after its PR merges resolves `github.ref` to `refs/heads/main` (observable in
+# its reusable-workflow resolution), landing it in the push run's group — where
+# cancel-in-progress kills the real main CI for the merge commit. Seen on #294
+# and #296 (runs 33021768492, 33022478169), both cancelled ~20s after a ghost
+# post-merge pull_request run spawned.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
