@@ -15,6 +15,7 @@ package relay
 //     dedup by DID-URL id across roles
 //   - §4.3 controller is always the DID itself
 //   - §4.5 service[] mapping (DfosRelay→serviceEndpoint,
+//     DfosAuthorizationServer→serviceEndpoint,
 //     ContentAnchor→serviceEndpoint+label, unknown types preserved verbatim)
 //   - §5.2.2 resolution metadata (created/updated/deactivated/operationCount)
 //   - §5.4 deactivated identity → empty verification-method set
@@ -87,6 +88,15 @@ type dfosRelayService struct {
 	ServiceEndpoint any    `json:"serviceEndpoint"`
 }
 
+// dfosAuthorizationServerService is shape-identical to dfosRelayService by
+// construction: the TS arm emits the same three keys in the same order, and the
+// raw bytes must match per type, so the twin is declared rather than aliased.
+type dfosAuthorizationServerService struct {
+	ID              string `json:"id"`
+	Type            string `json:"type"`
+	ServiceEndpoint any    `json:"serviceEndpoint"`
+}
+
 type contentAnchorService struct {
 	ID              string `json:"id"`
 	Type            string `json:"type"`
@@ -146,6 +156,10 @@ func projectService(did string, entry dfos.ServiceEntry) any {
 	switch typ {
 	case "DfosRelay":
 		return dfosRelayService{ID: id, Type: typ, ServiceEndpoint: entry["endpoint"]}
+	case "DfosAuthorizationServer":
+		// an authorize origin (SIWD.md): open-namespace type whose `endpoint`
+		// member is the exact DfosRelay mirror, so it projects identically.
+		return dfosAuthorizationServerService{ID: id, Type: typ, ServiceEndpoint: entry["endpoint"]}
 	case "ContentAnchor":
 		return contentAnchorService{ID: id, Type: typ, ServiceEndpoint: entry["anchor"], Label: entry["label"]}
 	default:

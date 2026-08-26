@@ -50,7 +50,7 @@ type Fixture struct {
 	QueryContentID   string `json:"queryContentId"`
 	QueryDocumentCID string `json:"queryDocumentCid"`
 	// QueryServiceDID resolves to an identity carrying a DfosRelay + ContentAnchor
-	// services set; QueryDeletedDID resolves to a deactivated (create+delete)
+	// + DfosAuthorizationServer services set; QueryDeletedDID resolves to a deactivated (create+delete)
 	// identity. Both drive the universal-resolver parity cases.
 	QueryServiceDID  string `json:"queryServiceDid"`
 	QueryDeletedDID  string `json:"queryDeletedDid"`
@@ -345,14 +345,19 @@ func main() {
 	// exactly one countersignature on both twins.
 	bCountersign, _ := countersign(bDID, cCreateCID, bKid, pinnedTimeAt(4), bPriv)
 
-	// --- user C (seed 4): genesis WITH a services set (DfosRelay + ContentAnchor) ---
+	// --- user C (seed 4): genesis WITH a services set (DfosRelay + ContentAnchor
+	// + DfosAuthorizationServer) ---
 	// The ContentAnchor points at A's public profile chain, which satisfies the
 	// contentId anchor shape validated at ingest and yields a named profile row.
+	// The DfosAuthorizationServer entry is the open-namespace authorize origin
+	// SIWD adds; it is here so the resolver parity case actually exercises the
+	// endpoint→serviceEndpoint arm on BOTH twins rather than only in unit tests.
 	cPriv, cPub := seededKey(4)
 	cKeyID := "key_userC00000000000000000000000"
 	cServices := []any{
 		map[string]any{"id": "svc_relay", "type": "DfosRelay", "endpoint": "https://relay.example"},
 		map[string]any{"id": "svc_anchor", "type": "ContentAnchor", "label": "profile", "anchor": profileContentID},
+		map[string]any{"id": "svc_authz", "type": "DfosAuthorizationServer", "endpoint": "https://app.example"},
 	}
 	cGenesis, cDID, _ := identityCreateWithServices(cPriv, cPub, cKeyID, cServices)
 

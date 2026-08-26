@@ -1492,5 +1492,25 @@ const ServiceTarget = (props: { entry: ServiceEntry }) => {
       );
     return <span class="err">{anchor}</span>;
   }
+  // an authorize origin, not a relay: nothing to add, nothing to navigate to —
+  // the endpoint is where this identity's person signs in, and that is all it says
+  if (props.entry.type === 'DfosAuthorizationServer' && typeof rec['endpoint'] === 'string') {
+    return (
+      <>
+        {rec['endpoint']} <span class="lbl">sign-in server</span>
+      </>
+    );
+  }
+  // the services namespace is deliberately open (DID-METHOD.md §4.5), so new
+  // endpoint-bearing types keep arriving. An unknown one still reads as its
+  // endpoint under its own type name rather than degrading to a raw blob; only
+  // an entry with no recognizable target falls through to the JSON.
+  if (typeof rec['endpoint'] === 'string') {
+    return (
+      <span class="muted">
+        {rec['endpoint']} <span class="lbl">{props.entry.type}</span>
+      </span>
+    );
+  }
   return <span class="muted">{JSON.stringify(props.entry)}</span>;
 };

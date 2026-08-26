@@ -14,6 +14,7 @@
       dedup by DID-URL id across roles
     - §4.3 controller is always the DID itself
     - §4.5 service[] mapping (DfosRelay→serviceEndpoint,
+      DfosAuthorizationServer→serviceEndpoint,
       ContentAnchor→serviceEndpoint+label, unknown types preserved verbatim)
     - §5.2.2 resolution metadata (created/updated/deactivated/operationCount)
     - §5.4 deactivated identity → empty verification-method set
@@ -110,6 +111,15 @@ const projectService = (
 ): DidServiceEntry => {
   const id = didUrl(did, entry.id);
   if (entry.type === 'DfosRelay') {
+    return {
+      id,
+      type: entry.type,
+      serviceEndpoint: (entry as Record<string, unknown>)['endpoint'],
+    };
+  }
+  // an authorize origin (SIWD.md): an open-namespace type whose `endpoint` member
+  // is the exact DfosRelay mirror, so it projects exactly as DfosRelay does
+  if (entry.type === 'DfosAuthorizationServer') {
     return {
       id,
       type: entry.type,
