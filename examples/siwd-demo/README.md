@@ -19,19 +19,18 @@ Verification contacts **no DFOS platform server**. The only network hop is to a
 public relay, to resolve the signer's identity chain to its current state. The
 relay is untrusted; the crypto is what convinces us.
 
-**You pick the scope before you sign in, and the choice changes what the backend
-owes.** `identity` proves who you are and returns nothing else. `read:profile`
-also returns a **credential** — a durable, audience-bound authorization the app
-keeps and presents to the DFOS API. That one difference obliges a stricter
-replay discipline, requires the app to name its own DID, and unlocks the live
-credential-gated API call. Both run side by side so the difference is something
-you can watch rather than read about.
+**You pick what to ask for before you sign in.** `identity` proves who you are
+and returns nothing else. `read:profile read:email` also returns a
+**credential** — a durable, audience-bound authorization the app keeps and
+presents to the DFOS API. That difference requires the app to name its own DID
+and unlocks the live credential-gated API call. Both run side by side so the
+difference is something you can watch rather than read about.
 
 ## What you see
 
 The page demonstrates before it explains, and from here on so does this README.
 
-**Signed in at `read:profile`, the first thing on screen is your profile** —
+**Signed in with the credential, the first thing on screen is your profile** —
 display name, handle, bio, email, joined date — read live from `GET /v1/profile`
 the moment there is a session to read it with. No button. That data is what the
 sign-in bought, and a demo that makes you press one more thing to see it has
@@ -40,25 +39,28 @@ a protocol demo, and **Read it again** re-runs the call against the same
 standing grant — which is the cheapest way to watch that using a credential does
 not use it up.
 
-**Above it sits the session indicator**, the way an application shows one: the
-signed-in DID, a chip for the scope, and a chip for the credential —
-`credential active · 89d left`, or `credential expired` — plus the grant's
-action and resource and when the session runs out. Every value there was read
-back out of the server's own sealed cookie, never out of anything the browser
-supplied.
+**Below it sits the session indicator**, the way an application shows one: the
+signed-in DID, one chip per granted scope token, and a chip for the credential.
+Every value there was read back out of the server's own session cookie, never
+out of anything the browser supplied.
+
+That credential chip says only what it knows. An expiry date supports
+`credential unexpired · 89d left` and nothing stronger, so that is what it shows
+until the live call answers — at which point it defers to the outcome:
+`credential accepted`, or `credential refused · 403`. A revoked grant is
+unexpired right up until the API says otherwise, and a chip claiming "active"
+above a 403 is a chip lying about something it never checked.
 
 At `identity` scope there is no credential and so nothing to read, and the page
 says that rather than showing an empty panel.
 
-**Then this app's own identity.** The user side of a sign-in gets a DID, a
-signed chain, and an explorer to check it in; so does the app side, and that
-symmetry is worth seeing rather than being told about. The panel shows what
-`public/.well-known/dfos-app.json` says about this app — its `name`, its
-`client_did`, and a summary of the `identity_chain` it carries: how many signed
-operations, of which types, how many current auth keys, and the head CID — with
-links to the served file and to this app's own page in the explorer. Those bytes
-are decoded for display and nothing more. What makes the chain real is a host
-verifying that it derives the declared DID, which happens at first consent.
+**Then this app's own identity**, quieter again. The user side of a sign-in gets
+a DID, a signed chain, and an explorer to check it in; so does the app side. The
+panel reads `public/.well-known/dfos-app.json` and shows the `name`, the
+`client_did`, and a one-line summary of the carried `identity_chain` — how many
+signed operations, of which types, how many current auth keys, and the head CID.
+Decoded for display and nothing more: what makes the chain real is a host
+verifying that it derives the declared DID, at first consent.
 
 The panel reports only what it actually read. "This page could not load the
 file", "the origin serves no file", and "the file declares nothing" are three
@@ -70,168 +72,99 @@ different questions.
 
 **Everything mechanical is one disclosure down, under "Show the receipts":** the
 credential in full, the signing seam that exercised it, the decoded sign-in
-artifact, the checks the server ran before it granted anything, how this app is
-registered, links to look the same chain up in a second verifier, the source of
-every file in the flow, and the specs. Nothing was cut to lead with the
-demonstration — it moved.
+artifact, the checks the server ran, and how this app is registered.
+
+Every "go check this yourself" on the page is a **link list** rather than a link
+buried in a paragraph — the raw operation log, the chain in the explorer, the
+served `dfos-app.json`, then the specs and this demo's own source. The page
+hands you somewhere to go; it does not try to be the destination.
+
+Those four tiers — hero, status, identity, receipts — are the whole layout, and
+they are weighted in that order on purpose.
 
 The rest of this README is that material in long form.
 
 ## How it works
 
-| Endpoint        | What it does                                                                                                                     |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /config`   | What this deployment can serve — which scopes are available, and why not when they are not                                       |
-| `POST /login`   | Mints the challenge, remembers the nonce (sealed cookie or store, per scope), returns the `/authorize` URL                       |
-| `POST /verify`  | Recovers that nonce, runs `verifySiwd` against a relay, verifies any returned credential, grants the session cookie              |
-| `GET /me`       | Reads the session cookie back — the one source the signed-in view renders from                                                   |
-| `POST /profile` | Exercises the credential: signs one request proof and calls `GET /v1/profile` on the DFOS API. Called on arrival, not on a click |
-| `POST /logout`  | Expires the session and drops the stored credential                                                                              |
+| Endpoint        | What it does                                                                            |
+| --------------- | --------------------------------------------------------------------------------------- |
+| `GET /config`   | What this deployment can serve, and why not when it cannot                              |
+| `POST /login`   | Mints the challenge and returns the `/authorize` URL                                    |
+| `POST /verify`  | Runs `verifySiwd` against a relay, verifies any returned credential, grants the session |
+| `GET /me`       | Reads the session cookie back — the one source the signed-in view renders from          |
+| `POST /profile` | Signs one request proof and calls `GET /v1/profile`. Called on arrival, not on a click  |
+| `POST /logout`  | Expires the session and drops the stored credential                                     |
 
-### The two scopes
+### The two options
 
-| Scope          | Returns                | Replay discipline | `client_did` | Needs                        |
-| -------------- | ---------------------- | ----------------- | ------------ | ---------------------------- |
-| `identity`     | a signed challenge     | flow-bound        | not sent     | `SESSION_SECRET`             |
-| `read:profile` | …plus a **credential** | **consumed**      | **required** | …plus an app key and a store |
+| Option                    | Returns                | `client_did` | Needs                        |
+| ------------------------- | ---------------------- | ------------ | ---------------------------- |
+| `identity`                | a signed challenge     | not sent     | `SESSION_SECRET`             |
+| `read:profile read:email` | …plus a **credential** | **required** | …plus an app key and a store |
+
+The second is a **scope set**: `scope` is space-separated, the OAuth convention
+SIWD adopts, and each token is validated against the scope registry on its own.
+Both tokens here name the same `api:<host>` resource, so they coalesce into
+**one** credential carrying the combined action list `read:profile,read:email` —
+never one credential per token, which is what makes revoking it sever the whole
+API grant at once. The consent screen names every token in the set, one line
+each.
+
+`read:profile` grants the profile without the account email — display name,
+handle, avatar. `read:email` grants the email address. Ask for both and the
+profile the demo renders carries all of it.
 
 At `identity` scope the authorize request carries `challenge`, `redirect_uri`,
 and `scope` and does **not** send `client_did`. The platform learns who this app
 is by fetching `/.well-known/dfos-app.json` from the redirect's own origin — the
-served file _is_ the app identity. What `client_did` determines is the `aud` of a
-returned credential
-([SIWD.md §Client identity](../../specs/SIWD.md#client-identity-client_did)), and
-an identity-scope sign-in returns none.
-
-At `read:profile` it is **required**, and for the same reason: a credential has
-to be issued _to_ someone. The DID this demo sends is derived from its own
-signing key, so the app cannot ask for a credential it would be unable to exercise.
+served file _is_ the app identity. `client_did` is what determines the `aud` of a
+returned credential, and an identity-scope sign-in returns none. On the
+credential set it is **required**, because a credential has to be issued _to_
+someone.
 
 ### The flow, step by step
 
 1. **Mint and redirect.** The sign-in click posts to `/api/login` with the chosen
    scope. `createSiwdLoginRequest` returns the `/authorize` URL — carrying
-   `challenge`, `redirect_uri`, `scope`, and (at `read:profile`) `client_did` —
-   plus the nonce it minted. Where that nonce is remembered depends on the
-   discipline the scope obliges: sealed into the `siwd_flight` cookie, or written
-   to the store. Minting here also puts the timestamp on **the server's clock**,
-   which retires a failure mode: a browser whose clock was minutes off produced
+   `challenge`, `redirect_uri`, `scope`, and (on the credential set) `client_did`.
+   Minting server-side also puts the timestamp on **the server's clock**, which
+   retires a failure mode: a browser whose clock was minutes off produced
    challenges that were born stale and correctly refused on the way back.
-2. **Come back signed.** The platform authenticates the user, shows consent,
-   signs the canonical challenge bytes with a key from the user's identity chain,
-   and redirects back with `?jws=<signed challenge>&did=<did>`. On a
-   credential scope it appends `#credential=<credential JWS>` — in the **URL
+2. **Come back signed.** The platform authenticates the user, shows consent for
+   every requested token, signs the canonical challenge bytes with a key from the
+   user's identity chain, and redirects back with `?jws=<signed challenge>&did=<did>`.
+   On a credential scope it appends `#credential=<credential JWS>` — in the **URL
    fragment**, which is never sent to a server and so lands in no access log, no
    proxy log, and no `Referer` header. `readSiwdCallback(location.search)` sorts
-   the return into success, denied, or "not a callback at all", the page reads
-   the fragment itself, and both are scrubbed out of the address bar immediately.
+   the return into success, denied, or "not a callback at all", and both the JWS
+   and the credential are scrubbed out of the address bar immediately.
 3. **Verify where the grant happens.** The page posts `{ jws }` — plus
-   `credential` when there was one — to `/api/verify`, and nothing else: no
-   nonce, no DID. The server recovers its own expectation, then
-   `verifySiwd` resolves the signer's identity chain from a public relay,
-   replays it to current state, and checks that the signing key is a **current**
-   `authKeys` entry of a non-deleted identity — plus the domain, the timestamp
-   window, and the nonce last.
+   `credential` when there was one — to `/api/verify`, and nothing else. The
+   server recovers its own expectation, then `verifySiwd` resolves the signer's
+   identity chain from a public relay, replays it to current state, and checks
+   that the signing key is a **current** `authKeys` entry of a non-deleted
+   identity, plus the domain and the timestamp window.
 4. **Answer for the credential too.** On the credential path the server verifies
    the returned credential in full before storing it — signature, schema, CID
    integrity, expiry — and then checks it is the grant that was actually asked
    for: issued by the identity that just signed in, audienced to **this** app,
-   and covering `read:profile` on `api:api.dfos.com`. An RP that files away an
-   unverified grant has learned nothing from having a verifier.
-5. **Grant.** The flight cookie is cleared in the same response that sets
-   `siwd_session` — the DID, the `kid`, the scope, and an expiry, sealed under
-   the same key. The JWS is discarded: a signed challenge is a one-shot
-   authentication proof, not a bearer token. The **credential is not** discarded;
-   holding it is the point.
+   and covering every requested action on `api:api.dfos.com`. An RP that files
+   away an unverified grant has learned nothing from having a verifier.
+5. **Grant.** The session cookie carries the DID, the `kid`, the scope, and an
+   expiry, sealed under this server's key. The JWS is discarded: a signed
+   challenge is a one-shot authentication proof, not a bearer token. The
+   **credential is not** discarded; holding it is the point.
+6. **Read something with it.** The page does not wait to be asked: as soon as the
+   session exists it posts to `/api/profile`, which signs one request proof and
+   calls `GET /v1/profile`. What comes back is the hero of the signed-in page.
 
-6. **Read something with it.** On the credential path the page does not wait to
-   be asked: as soon as the session exists it posts to `/api/profile`, which
-   signs one request proof and calls `GET /v1/profile`. What comes back is the
-   hero of the signed-in page.
+**On replay prevention** — how the nonce is minted, remembered, and checked, and
+which discipline a given scope obliges — see
+[SIWD § Replay prevention](https://protocol.dfos.com/siwd#replay-prevention).
+That is the spec's argument to make, and `api/verify.ts` is where this demo
+implements it.
 
-The browser still **decodes** the returned JWS and shows it, in a panel labelled
-for what it is: `decodeJwsUnsafe` does no verification and says so in its name.
-Sign in and open **"Show the receipts"** for the credential in full, the signing
-seam that exercised it, the decoded artifact, the list of checks the server ran,
-and links to look the same chain up yourself.
-
-Spec: [`specs/SIWD.md`](../../specs/SIWD.md) · <https://protocol.dfos.com/siwd>
-
-## The two replay disciplines
-
-SIWD admits two, and
-[which one you owe is decided by what success grants](../../specs/SIWD.md#replay-prevention).
-This demo runs **both**, one per scope, because the rule is easier to believe
-when you can switch between them:
-
-- **`identity` → flow-bound.** Success grants a session with the browser standing
-  in front of it, and nothing else. The sealed cookie is the whole mechanism.
-- **`read:profile` → consumed.** Success also hands back a credential, which is
-  portable and outlives this browser. Flow-binding is no longer admissible, and
-  the nonce must be spent by an atomic check-and-delete in the store.
-
-The difference in code is one field on `verifySiwd` — `nonce` becomes
-`consumeNonce` — which is exactly the claim the section below makes, now
-exercised rather than asserted.
-
-**What the sealed cookie is.** At mint time the server binds the nonce to the
-agent that started the flow, statelessly. The value is
-`nonce.exp.base64url(HMAC-SHA256(SESSION_SECRET, "flight:" + nonce + "." + exp))`
-— the expiry sits inside the sealed bytes so the server's own clock enforces it
-(`Max-Age` is only the honest browser's copy), and the tag is domain-separated by
-purpose so a seal of one class cannot be replayed as another. It rides in an
-`httpOnly` cookie scoped to `/api`, expiring with the acceptance window. At
-verification the expectation is recovered from that seal and from nowhere else.
-
-**Why the seal and not just a cookie.** A bare cookie value is no defense.
-Cookies are presenter-supplied on every request: an attacker holding a captured
-JWS reads the nonce out of the payload and sends it back in a `Cookie` header of
-their own, since `HttpOnly` constrains a browser's scripts and not `curl`. The
-tag is what binds — only this server's key can produce it, so the expectation is
-recoverable only from the server's own prior act of minting it.
-
-**What it guarantees, exactly.** _The artifact redeems only through the channel
-that initiated the flow, inside the timestamp window._ It is **not** global
-single-use: a party holding both the artifact and the cookie jar can redeem again
-within the window. That is the accepted trade for a session-only grant, since a
-party holding the cookie jar already holds the session they would gain. It is
-also what the surrounding ecosystem applies to browser login: OpenID Connect's
-`state` and `nonce` verified against browser-carried session state, Sign in with
-Ethereum's session-bound nonce.
-
-**When you must switch.** The moment success yields anything beyond a session
-with the presenting browser — a credential-returning scope, a token or grant
-redeemable outside the originating channel, any of profile B (a mailbox flow has
-no presenting channel to bind) — flow-binding is no longer admissible and
-**consumed verification is REQUIRED**. Store each minted nonce server-side and
-consume it atomically:
-
-```js
-const result = await verifySiwd(client, jws, {
-  domain,
-  // Redis GETDEL, KV, a DELETE … RETURNING row — but atomic, and answering as a boolean
-  consumeNonce: async (nonce) => (await store.getdel(nonce)) !== null,
-});
-```
-
-That is literally what `api/verify.ts` does on the credential path, against the
-store in `api/_kv.ts` — three Redis commands over the REST API, no client
-library. The kit runs the nonce check last under both disciplines — after
-signature, key currency, domain, and timestamp — so an invalid presentation never
-spends a nonce its legitimate holder is still carrying. A non-atomic
-read-then-delete is not a substitute: it is a race with a login in it.
-`consumeNonce` ships in `@metalabel/dfos-client` ≥ 0.31.
-
-**Which discipline a callback owes is itself sealed.** The `siwd_flight` cookie
-is written under one of two HMAC purposes — `flight` for the flow-bound path,
-`flight-credential` for the consumed one — and `/api/verify` learns the scope by
-seeing which one unseals. Because the tag is domain-separated by purpose, a
-presenter cannot relabel a credential callback into the weaker check.
-
-**Either way, the expectation must be something only the verifier could have
-produced.** A nonce handed to the verifier by the party presenting the artifact —
-in a callback parameter, a request body, or an unsealed cookie — is not a replay
-defense at all.
+Spec: <https://protocol.dfos.com/siwd>
 
 ## Why sign every request
 
@@ -244,7 +177,7 @@ races (which trade away certainty).
 
 This demo's credential deliberately does not have that property. It is a signed
 statement that **a grant exists** — issued by the user, audience-bound to this
-app's DID, scoped to `read:profile` on `api:api.dfos.com` — and presenting it
+app's DID, scoped to `read:profile,read:email` on `api:api.dfos.com` — and presenting it
 proves nothing by itself. What exercises it is a **request proof**: a short-lived
 signature by this app's own key over the exact request being made — method,
 host, path, body hash, right now — carrying the credential's CID inside the
@@ -375,13 +308,13 @@ demo changed; the API simply asked a question whose answer moved.
 
 ## Configuration
 
-| Variable               | Needed for     | What it is                                                                   |
-| ---------------------- | -------------- | ---------------------------------------------------------------------------- |
-| `SESSION_SECRET`       | everything     | The key both cookie seals use. 32+ characters.                               |
-| `DFOS_APP_KID`         | `read:profile` | The DID URL of a current key of the app's own identity.                      |
-| `DFOS_APP_PRIVATE_KEY` | `read:profile` | That key's Ed25519 secret, 43 base64url characters.                          |
-| `KV_REST_API_URL`      | `read:profile` | A Redis-compatible REST endpoint, for the consumed nonce and the credential. |
-| `KV_REST_API_TOKEN`    | `read:profile` | Its bearer token.                                                            |
+| Variable               | Needed for     | What it is                                                                |
+| ---------------------- | -------------- | ------------------------------------------------------------------------- |
+| `SESSION_SECRET`       | everything     | The key both cookie seals use. 32+ characters.                            |
+| `DFOS_APP_KID`         | the credential | The DID URL of a current key of the app's own identity.                   |
+| `DFOS_APP_PRIVATE_KEY` | the credential | That key's Ed25519 secret, 43 base64url characters.                       |
+| `KV_REST_API_URL`      | the credential | A Redis-compatible REST endpoint, for challenge state and the credential. |
+| `KV_REST_API_TOKEN`    | the credential | Its bearer token.                                                         |
 
 Only `SESSION_SECRET` is required. Without the other four the identity scope works
 exactly as before and the credential scope renders **disabled, with the reason
@@ -450,13 +383,13 @@ an ordinary session, and the backend signs.
 
 ### The store
 
-The consumed discipline needs an atomic check-and-delete, which is one `GETDEL`.
+The credential path needs an atomic check-and-delete, which is one `GETDEL`.
 `api/_kv.ts` speaks the Upstash REST protocol directly — a JSON array of command
 arguments in, a `{ result }` back — because the whole surface this demo needs is
 three commands, and that is not worth a dependency.
 
-It holds two things: the outstanding nonce (300s), and the verified credential
-keyed by session (24h, dropped on sign-out). The credential is there rather than
+It holds two things: the outstanding challenge state (300s), and the verified
+credential keyed by session (24h, dropped on sign-out). The credential is there rather than
 in a cookie because it is a durable authorization that belongs on the RP's side
 of the wire, and because a browser has no key to exercise it with anyway.
 
@@ -492,7 +425,7 @@ mismatched rebind.
 
 `client_did` is optional at identity scope — though a file that carries
 `identity_chain` must name it, whatever the scope. It becomes **required** for
-`read:profile`, because a credential has to be issued _to_ someone — and it must
+any credential scope, because a credential has to be issued _to_ someone — and it must
 name the same identity as `DFOS_APP_KID`, since the platform issues to the DID it
 resolves from this file and the API checks the proof was signed by that DID's
 key.
@@ -539,7 +472,7 @@ page says which string is missing. The identity panel still renders the app's
 declared identity there — being outside the redirect allowlist says nothing
 about what the file declares, and the panel keeps the two apart.
 
-That gets you the identity scope. For `read:profile`, three more steps. These
+That gets you the identity scope. For the credential set, three more steps. These
 are not hypothetical — the canonical deployment was provisioned by exactly this
 sequence, and the wrinkles below are the ones it actually hit.
 
@@ -619,8 +552,8 @@ redirect asserts is one no host could check; rather than refuse the case, the
 host consents to it under its own tier and says so. The boot self-check knows
 this and skips itself on a loopback host.
 
-**`read:profile` cannot run on a loopback host, and the page says so rather than
-letting you try.** The same fact that makes the loopback tier possible rules the
+**The credential scope cannot run on a loopback host, and the page says so
+rather than letting you try.** The same fact that makes the loopback tier possible rules the
 credential scope out: a local port holds no domain, so it can prove no
 `client_did`, so there is nobody to issue a credential to. The kit refuses to
 build the request and the platform would refuse it too. Exercising that path
@@ -634,15 +567,11 @@ is reimplemented, so nothing can drift.
 
 ## Security notes
 
-- **The verifier minted the nonce it checks.** It comes out of a cookie sealed
-  under this server's key, or out of this server's own store, never out of the
-  callback, the request body, or an unsealed cookie. See "The two replay
-  disciplines" above for what that buys.
-- **The nonce is checked last** — after signature, key currency, domain, and
-  timestamp — which is [SIWD.md's step 6](../../specs/SIWD.md#third-party-verification)
-  and what makes the move to `consumeNonce` a one-field change.
-- **Which discipline a callback owes is sealed too**, as an HMAC purpose, so it
-  is not a label the presenter can edit.
+- **Replay prevention follows the spec**, and the spec is where it is explained:
+  [SIWD § Replay prevention](https://protocol.dfos.com/siwd#replay-prevention).
+  The expectation this server checks is always state this server minted — never
+  the callback, the request body, or an unsealed cookie. `api/_lib.ts` and
+  `api/verify.ts` are the implementation.
 - **The `?did=` callback param is never trusted.** The DID in the session is the
   one inside the verified JWS.
 - **A returned credential is verified before it is stored** — and checked to be

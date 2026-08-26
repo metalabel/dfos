@@ -25,6 +25,11 @@
       h1 {
         font-size: 1.5rem;
       }
+      /* The one-line intro under the signed-out h1. */
+      .lede {
+        color: #444;
+        margin-bottom: 1.5rem;
+      }
       h2 {
         font-size: 1.125rem;
         margin: 0.5rem 0;
@@ -56,19 +61,80 @@
         font-size: 0.875rem;
         padding: 0.4rem 0.8rem;
       }
-      /* The session indicator: the strip an application puts at the top to say
-         who is signed in and what they are signed in with. */
-      .session {
-        background: #fafafa;
+      /* ---------------------------------------------------------------------
+         Four tiers, in the order the page reads: the hero carries the payoff,
+         the session strip is a status line, this app's identity is quieter
+         still, and the receipts are closed. Weight, not just order, is what
+         makes that a hierarchy rather than a stack of equal boxes.
+         ------------------------------------------------------------------ */
+
+      /* Tier 1 — the hero. */
+      .hero {
+        border-color: #ccc;
+        padding: 1.5rem;
       }
-      .session .who {
+      .hero h2 {
+        font-size: 1.5rem;
+        line-height: 1.2;
         margin: 0;
       }
+      .hero .handle {
+        color: #666;
+        margin: 0.15rem 0 0;
+      }
+      .hero .bio {
+        margin: 0.75rem 0 0;
+      }
+      .hero .meta {
+        margin-top: 1rem;
+      }
+      .hero .meta p {
+        margin: 0.15rem 0;
+      }
+      .hero button {
+        margin-top: 1rem;
+      }
+      .hero details.rawjson {
+        margin-top: 1rem;
+      }
+
+      /* Tier 2 — the session strip. Compact, and visibly a status line. */
+      .session {
+        background: #fafafa;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem 0.75rem;
+        padding: 0.85rem 1rem;
+      }
+      .session .who {
+        flex: 1 1 100%;
+        font-size: 0.875rem;
+        margin: 0;
+      }
+      .session button {
+        margin-left: auto;
+      }
+
+      /* Tier 3 — this app's own identity. Present, deliberately unshouty. */
+      .quiet {
+        background: #fcfcfc;
+        border-color: #eee;
+        padding: 1rem 1.25rem;
+      }
+      .quiet h2 {
+        color: #555;
+        font-size: 0.9375rem;
+        letter-spacing: 0.02em;
+        margin: 0 0 0.6rem;
+        text-transform: uppercase;
+      }
+
       .chips {
         display: flex;
         flex-wrap: wrap;
         gap: 0.4rem;
-        margin: 0.6rem 0;
+        margin: 0;
       }
       .chip {
         background: #eee;
@@ -76,6 +142,7 @@
         color: #444;
         font-size: 0.75rem;
         padding: 0.15rem 0.6rem;
+        white-space: nowrap;
       }
       .chip.ok {
         background: #e6f4ea;
@@ -85,16 +152,38 @@
         background: #fdeaea;
         color: #7f1d1d;
       }
-      /* The profile hero's secondary facts, held together under the bio. */
-      .handle {
-        color: #666;
-        margin: 0 0 0.75rem;
-      }
-      .meta p {
-        margin: 0.15rem 0;
-      }
-      .links {
+
+      /* Link lists: every "go check this yourself" on the page is one of these,
+         so they scan as a list rather than hiding inside a paragraph. */
+      ul.linklist {
         font-size: 0.875rem;
+        list-style: none;
+        margin: 0.75rem 0 0;
+        padding: 0;
+      }
+      ul.linklist li {
+        border-top: 1px solid #eee;
+        padding: 0.4rem 0;
+      }
+      ul.linklist li:first-child {
+        border-top: 0;
+      }
+
+      /* Fact lists: label/value pairs where the page used to run a paragraph of
+         annotation under every field. */
+      dl.facts {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.25rem 0.75rem;
+        font-size: 0.875rem;
+        margin: 0.5rem 0 0;
+      }
+      dl.facts dt {
+        color: #666;
+      }
+      dl.facts dd {
+        margin: 0;
+        min-width: 0;
       }
       /* A quieter block under the main content of a card — separated, not boxed,
          so the page stays one column of 28rem rather than a stack of frames. */

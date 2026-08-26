@@ -10,7 +10,7 @@
   When the session was granted under `read:profile`, the credential's already-
   verified facts come back with it, so the page can render the grant BEFORE
   anything is spent against it. The credential JWS itself stays here: the browser
-  has no key to spend it with, and handing it out would move a durable
+  has no key to exercise it with, and handing it out would move a durable
   authorization into the one place that cannot hold anything safely.
 
   The page renders its signed-in card from here, including right after a
