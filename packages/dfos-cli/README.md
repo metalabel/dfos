@@ -91,6 +91,23 @@ dfos --ctx witness@local witness "$CID" --relation endorses --peer local
 dfos content verify "$CONTENT"
 ```
 
+## Login
+
+`dfos login` signs in to the authorize host that speaks for an identity and stores the credential it returns. The CLI opens a consent screen in a browser, listens on a local port for the redirect, and verifies the signed challenge itself before storing anything.
+
+```bash
+# sign in as the active context's identity
+dfos login
+
+# sign in as a named identity, asking for a scope that returns a credential
+dfos login alice --scope read:profile
+
+# print the URL instead of opening a browser
+dfos login --no-browser
+```
+
+The authorize endpoint comes from the identity's own chain — a `DfosAuthorizationServer` service entry — with `--authorize-url` as the fallback when the chain names none. Because a CLI holds no domain, it asks with a per-install client identity minted on first login, and proves control of that identity's keys as part of the request. Credentials land in `~/.dfos/credentials/`. See [CLI.md](./CLI.md#login-sign-in-with-dfos) for the full flow and flags.
+
 ## Discovery Services
 
 An identity can publish an additive **services** set — relay endpoints and content anchors — carried in its chain state. Services are full-state on each create/update (an update replaces the set), and the type namespace is open.
@@ -170,6 +187,7 @@ dfos content publish <id> --peer prod   # submit when ready
 | `credential revoke`         | Revoke a credential                                     |
 | `content verify`            | Re-verify chain integrity                               |
 | `witness`                   | Countersign (solemnize) an operation                    |
+| `login`                     | Sign in via SIWD, store the credential                  |
 | `auth token`                | Mint auth token (stdout)                                |
 | `auth status`               | Show auth state                                         |
 | `api`                       | Raw HTTP to relay                                       |

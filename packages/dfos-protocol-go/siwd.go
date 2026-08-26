@@ -12,6 +12,13 @@ import (
 
 const SiwdJWSTyp = "did:dfos:siwd"
 
+// SiwdAskJWSTyp is the registered JWS typ of a loopback client's ask proof
+// (SIWD.md §The ask proof) — distinct from SiwdJWSTyp because both artifacts
+// sign the SAME canonical challenge bytes, so the typ gate is the only thing
+// keeping a client's ask from presenting as a subject's sign-in, or a subject's
+// sign-in from presenting as a client's ask.
+const SiwdAskJWSTyp = "did:dfos:siwd-ask"
+
 // SiwdChallenge is the closed SIWD 0.1 challenge schema. Pointer optionals
 // preserve the distinction between an absent member and a present empty string,
 // which is part of the canonical byte contract.
@@ -153,6 +160,49 @@ func ParseSiwdChallenge(octets []byte) (SiwdChallenge, error) {
 		return SiwdChallenge{}, fmt.Errorf("invalid SIWD challenge: payload bytes are not canonical")
 	}
 	return challenge, nil
+}
+
+// SignSiwdAskProof signs the ask proof a loopback client carries on its
+// authorize request: a JWS over the exact canonical bytes of that request's own
+// challenge, under SiwdAskJWSTyp, signed by a CURRENT auth key of the client
+// identity's chain (SIWD.md §The ask proof). It is what makes a client_did on a
+// loopback request mean anything — the host verifies it against the chain's
+// current state before rendering any consent.
+//
+// BYTE-PRECISE, and assembled by hand rather than through CreateJWS for the same
+// reason BuildRequestProof is: the host compares the proof's payload SEGMENT by
+// string equality against its own re-derivation of
+// Base64urlEncode(SiwdSigningInput(challenge)), so a construction that
+// round-tripped the challenge through a JSON object would re-serialize it, and
+// any spelling differing by one byte would fail that comparison while looking
+// correct here.
+//
+// kid is the DID URL of the signing key. The host ignores it for key SELECTION
+// — it tries the chain's current auth keys — but a proof naming a key it was not
+// signed with is a lie the wire format has no reason to carry.
+func SignSiwdAskProof(challenge SiwdChallenge, kid string, privateKey ed25519.PrivateKey) (string, error) {
+	// Both halves must be present: "#x", "x#", and a bare "#" name no key, no
+	// identity, or neither, and a host cannot resolve any of them to a chain.
+	hashIdx := strings.Index(kid, "#")
+	if hashIdx <= 0 || hashIdx == len(kid)-1 {
+		return "", fmt.Errorf("invalid SIWD ask proof: kid must be a DID URL with both halves non-empty (<did>#<keyId>)")
+	}
+	// ed25519.Sign PANICS on a wrong-length key, and this signer is reached with
+	// key material a caller loaded from a keystore or a file. A malformed key is
+	// a bad input to report, never a crash to take.
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return "", fmt.Errorf("invalid SIWD ask proof: private key must be %d bytes, got %d", ed25519.PrivateKeySize, len(privateKey))
+	}
+	payload, err := SiwdSigningInput(challenge)
+	if err != nil {
+		return "", err
+	}
+	headerJSON, err := json.Marshal(JWSHeader{Alg: "EdDSA", Typ: SiwdAskJWSTyp, Kid: kid})
+	if err != nil {
+		return "", fmt.Errorf("marshal header: %w", err)
+	}
+	signingInput := Base64urlEncode(headerJSON) + "." + Base64urlEncode(payload)
+	return signingInput + "." + Base64urlEncode(ed25519.Sign(privateKey, []byte(signingInput))), nil
 }
 
 func validateSiwdAcceptanceWindow(acceptanceWindow time.Duration) error {

@@ -464,6 +464,49 @@ Exit `1` is also the CLI's generic error status (unresolvable target, chain not 
 
 ---
 
+## Login (Sign In With DFOS)
+
+`dfos login` signs in to the authorize host that speaks for an identity and stores the credential it returns. It runs the [SIWD](https://protocol.dfos.com/siwd) loopback flow: the CLI opens a consent screen in a browser, listens on a local port for the redirect, and verifies the signed challenge itself before anything is stored.
+
+```bash
+# sign in as the active context's identity
+dfos login
+
+# sign in as a named local identity, or a bare DID
+dfos login alice
+dfos login did:dfos:xxx
+
+# request a scope that returns a credential
+dfos login alice --scope read:profile
+
+# no browser (containers, SSH): print the URL and wait
+dfos login --no-browser --timeout 10m
+
+# name the authorize endpoint when the chain names none
+dfos login alice --authorize-url https://app.example.com
+```
+
+**Where the authorize endpoint comes from.** The subject's identity chain is fetched from the configured peer as an operation log, re-verified locally, and read for a `DfosAuthorizationServer` service entry — `{id, type, endpoint}`, where `endpoint` is the canonical authorize *origin*. The `/authorize` surface is appended to it, so a base path is kept and extended (`https://x.example/base` → `https://x.example/base/authorize`). **One entry, or none:** zero entries, more than one, an endpoint that is empty or not an absolute `http(s)` URL, and an endpoint that is not a bare origin (it carries a query, a fragment, or userinfo) all name nothing, and the CLI falls back to `--authorize-url`; with no fallback it errors and names both the missing entry and the flag. Ambiguity degrades to the fallback, never to a choice.
+
+**How this machine asks.** A CLI holds no domain, so it asks under SIWD's **loopback credential tier**: a per-install client identity, minted on first login and recorded at `~/.dfos/login-client.json` with its key in the keystore. The request carries that identity's DID, an ask proof signed by its current authentication key, and its one-operation chain — which is what lets a credential-returning scope have something to be issued to. The DID is stable across logins, so the consent you give names the same party each time; if its key goes missing the command errors instead of minting a new DID behind your back (delete the file to start over, and expect to consent again). Key control is all this proves about the software: origin and authorship are unverifiable from the host's side, which is why a credential minted here carries a hard expiry ceiling.
+
+**The fragment relay.** A credential comes back in the URL *fragment*, which a browser never sends to a server, so the local listener answers with a small page whose inline script posts the whole URL back to it — the only path by which the fragment reaches the process that minted the challenge. The page scrubs the URL from the address bar as soon as the post lands. The listener accepts requests only at the literal `127.0.0.1:<port>` it was reached at, so a rebound hostname pointed at the same port cannot drive it, and a POST that is not a callback at all is logged and ignored rather than ending the wait — a stray request from elsewhere on the machine cannot cancel a sign-in in progress.
+
+**What is checked before anything is stored.** The returned artifact must carry `typ: did:dfos:siwd`, the signer must be the DID the challenge was bound to, and the signature must verify against a **current** authentication key of the signer's freshly re-fetched chain — resolved through the configured peer, whose operation log is replayed and re-verified locally. Only then is the challenge consumed: its payload segment must equal this run's challenge bytes exactly, compared once and then spent, which is the spec's rule that consumption is the *final* verification step so nothing invalid can ever spend it. A returned credential is checked once more before it is written — it must be issued to this installation's client DID, since one issued to anyone else is inert here. Any failure exits non-zero and stores nothing.
+
+Credentials land in `~/.dfos/credentials/<did>.json` (mode `600`, directory `700`) alongside the client DID they were issued to. The summary printed on success is decoded from the artifact locally — no network call. `scope=identity` returns no credential, and that is a success too: the sign-in was verified, there was just nothing to store.
+
+| Flag              | Default    | Meaning                                                                    |
+| ----------------- | ---------- | -------------------------------------------------------------------------- |
+| `--scope`         | `identity` | Passed to the host verbatim; space-separate several. Never parsed here.    |
+| `--authorize-url` | —          | Authorize endpoint (or bare origin) to use when the chain names none.      |
+| `--no-browser`    | `false`    | Print the URL and wait without attempting to open a browser.               |
+| `--timeout`       | `5m`       | How long to wait for the callback.                                         |
+
+The global `--ctx`, `--identity`, and `--peer` flags select the subject and the peer to resolve chains through. With `--json` the command emits `{did, clientDid, credentialPath?, credential?}`.
+
+---
+
 ## Solemnization (Witness)
 
 `witness` countersigns an operation by CID — a collective endorsement that solemnizes it. This is the protocol's only inter-subjective primitive: a separate identity attesting to someone else's operation. An optional `--relation` tags the nature of the endorsement (open namespace, 1..64 chars). There is no withdrawal primitive — a countersignature is a standing attestation.
@@ -569,6 +612,7 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `witness <cid>`                 | Countersign an operation (`--relation`)                  |
 | `GET`  | `countersigs <cid>`             | Show countersignatures for an operation                  |
 | `GET`  | `operation show <cid>`          | Inspect a protocol operation                             |
+| `POST` | `login [name\|did]`             | Sign in via SIWD, store the credential (`--scope`)       |
 | `GET`  | `auth token`                    | Mint short-lived auth token (stdout)                     |
 | `GET`  | `auth status`                   | Show current auth state                                  |
 | `*`    | `api <METHOD> <path>`           | Raw HTTP to relay with optional `--auth`                 |

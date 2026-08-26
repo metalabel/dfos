@@ -124,6 +124,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newCountersigsCmd())
 	root.AddCommand(newOperationCmd())
 	root.AddCommand(newAuthCmd())
+	root.AddCommand(newLoginCmd())
 	root.AddCommand(newPeerCmd())
 	root.AddCommand(newAPICmd())
 	root.AddCommand(newConfigCmd())
