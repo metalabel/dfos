@@ -5,14 +5,16 @@ contentId, an operation CID, or a domain; the explorer fetches signed bytes from
 _untrusted, swappable_ relays and **re-verifies everything in the tab**.
 
 There is no backend for protocol data, and there never will be: everything the explorer
-renders comes from a relay you chose and is verified locally. The explorer has exactly one
-serverless route — a stateless fetch proxy for `/.well-known/dfos-app.json` — which exists
-solely because third-party origins don't reliably send CORS headers on their well-knowns, so
-a browser cannot read those documents directly. It stores no data, keeps no state between
-requests, and calls no platform API: it forwards one document and gets out of the way. Every
-verdict about that document — schema validity, chain verification, the comparison against
-what the relays hold — is still computed in the tab. For all protocol data the explorer
-remains relay-only.
+renders comes from a relay you chose and is verified locally. The explorer has exactly two
+serverless routes, both stateless lookup proxies onto a domain's public surface: one fetches
+`/.well-known/dfos-app.json`, the other runs the two origin-binding attest-back methods
+(`/.well-known/dfos-did` and the `_dfos` TXT record). They exist solely because a browser
+cannot do either honestly — third-party origins don't reliably send CORS headers on their
+well-knowns, and a tab cannot query DNS at all. Neither route stores data, keeps state
+between requests, or calls a platform API: they forward what they observed and get out of
+the way. Every verdict — schema validity, chain verification, the comparison against what
+the relays hold, the bound/stale/broken binding verdict — is still computed in the tab. For
+all protocol data the explorer remains relay-only.
 
 This is not an etherscan. Etherscan is a trusted window onto one canonical state — DFOS has
 no canonical state, so the explorer inverts the trust direction: you trust _your own
