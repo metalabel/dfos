@@ -136,6 +136,8 @@ It throws `ApiRequestVerifyError`, carrying `reason` (`invalid` / `unverifiable`
 
 ### `@metalabel/dfos-client/siwd`
 
+The end-to-end integration recipe (mint an app identity, serve the app description, verify the callback) is at <https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup>.
+
 ```typescript
 import {
   createSiwdLoginRequest,

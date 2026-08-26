@@ -23,9 +23,11 @@ This repository contains the protocol specification, reference implementations i
 | [`site-protocol`](./packages/site-protocol)              | Astro               | Static site for [protocol.dfos.com](https://protocol.dfos.com)                                                       |
 | [`site-schemas`](./packages/site-schemas)                | Hono                | Worker for [schemas.dfos.com](https://schemas.dfos.com)                                                              |
 | [`dfos-explorer`](./packages/dfos-explorer)              | TypeScript          | Client-side chain explorer at [explore.dfos.com](https://explore.dfos.com) — re-verifies untrusted relays in the tab |
+| [`siwd-demo`](./examples/siwd-demo)                      | TypeScript          | Complete Sign In With DFOS relying party — live at [dfos-siwd-demo.vercel.app](https://dfos-siwd-demo.vercel.app)    |
 
 ## Links
 
+- [Set up Sign In With DFOS](https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup) — task-oriented guide to adding DFOS sign-in to your app; the specs below are the normative layer
 - [Protocol specification](https://protocol.dfos.com/spec) — core protocol with worked examples and test vectors
 - [DID Method](https://protocol.dfos.com/did-method) — W3C DID method specification for `did:dfos`
 - [Content Model](https://protocol.dfos.com/content-model) — standard JSON Schema content types

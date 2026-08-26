@@ -143,6 +143,8 @@ The `@` syntax is shorthand: `alice@local` = identity "alice" + relay "local". I
 
 ## Key Management
 
+> The task-oriented view of key custody — what is and isn't backed up, what key loss costs, and the deploy-time provisioning recipe — lives at [docs.dfos.com/docs/developers/sign-in-with-dfos/key-custody](https://docs.dfos.com/docs/developers/sign-in-with-dfos/key-custody). The full app-integration walkthrough is at [docs.dfos.com/docs/developers/sign-in-with-dfos/setup](https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup).
+
 ### Backends
 
 The CLI stores each Ed25519 seed under an account key of the form `did:dfos:xxx#key_yyy`. There are two storage backends:

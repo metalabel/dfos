@@ -9,6 +9,10 @@ signed in. One static page, seven serverless functions, no database beyond a
 small key-value store, and no SDK beyond the two DFOS packages installed from
 npm like any third party would. Deployed at <https://dfos-siwd-demo.vercel.app>.
 
+Integrating sign-in into your own app? The step-by-step guide is at
+<https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup> — this demo is
+its worked example.
+
 The load-bearing decision is **where verification happens**. It happens in
 `api/verify.ts`, because that is where the session is granted.
 [SIWD.md §Security Considerations](../../specs/SIWD.md#a-did-is-an-address-not-a-proof)
