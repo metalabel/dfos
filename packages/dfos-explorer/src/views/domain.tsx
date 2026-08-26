@@ -16,7 +16,7 @@
     3. its carried chain verifies + derives its client_did  → malformed
     4. the relays' log for that DID agrees  → relay-diverged
 
-  The reachability beat runs through the explorer's one serverless route, so a
+  The reachability beat runs through the explorer's app-description route, so a
   failure there is OUR failure, and says so — never "this origin has no app
   description", which is a claim about someone else's server we did not observe.
 
@@ -350,9 +350,9 @@ const Verification = (props: {
 
       {verdict.kind === 'unreachable' && verdict.proxyDown ? (
         <div class="ck-note" style={{ marginTop: 10 }}>
-          The explorer reaches third-party origins through one serverless route, because origins
-          don't reliably send CORS headers on well-knowns. That route isn't answering here (it does
-          not exist on a local <code>vite dev</code> server), so this says nothing about{' '}
+          The explorer reaches third-party origins through a stateless serverless route, because
+          origins don't reliably send CORS headers on well-knowns. That route isn't answering here
+          (it does not exist on a local <code>vite dev</code> server), so this says nothing about{' '}
           {props.host}.
         </div>
       ) : null}

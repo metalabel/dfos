@@ -9,7 +9,7 @@
   ordered-log comparison against what the relays hold. The view owns the async
   orchestration and the rendering; nothing here touches the DOM.
 
-  The explorer reaches the origin through its ONE serverless route
+  The explorer reaches the origin through a serverless route
   (`/api/wellknown`), which exists solely because third-party origins do not
   reliably send CORS headers on well-knowns. The route is a stateless fetch
   proxy: it stores nothing and it decides nothing. Every verdict below is
