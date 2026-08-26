@@ -45,6 +45,12 @@ verified — or MISMATCH, loudly).
   name: the identity chain folds in the tab, its controller-signed anchor is followed, and
   the bytes must re-hash to the CID the chain commits to. A gated or absent profile stays
   a bare DID, always.
+- **Labels, not hashes** — every contentId chip resolves in place to its chain's current
+  document label, in three beats: the short id, then the relay index's projected title
+  (amber, marked attributed), then the verified label once the document bytes are folded
+  and re-hash to the CID the chain commits to. A document with no title falls back to a
+  quoted body snippet, cut at a word boundary and derived in the tab. A gated or
+  unresolvable chain stays the short id, linked — the same thing it always rendered.
 - **Domain lookup** — paste a domain and the explorer reads its app description document
   (`/.well-known/dfos-app.json`), the one place where a domain vouches for a DFOS identity.
   The document's carried identity chain is verified in the tab, its `client_did` must equal
@@ -52,6 +58,19 @@ verified — or MISMATCH, loudly).
   and the result is compared against the log the relays serve for that DID — agreeing,
   ahead, rolled back, or contradicting. A valid document that carries no chain says so
   plainly and stays amber; nothing goes green without a verified chain.
+- **Services, read as vocabulary** — an identity page renders its discovery entries by type
+  rather than as a JSON blob: `DfosRelay` endpoints you can add to your own relay set,
+  `ContentAnchor` pointers into content chains, `DfosOrigin` domain claims, and
+  `DfosAuthorizationServer` — the authorize origin that speaks for this DID, where its
+  person signs in, so a client holding only the DID can find it. The namespace is open, so
+  an unrecognized type still renders as a legible claim, just one with no special reading.
+- **Plain language beside the precise words** — the precise word stays the label (`stale`,
+  not "probably fine"); its plain-language definition is one hover or tap away on every
+  verdict pill and glossary term. Wherever either well-known document is checked, both are
+  named — the **app description** (`/.well-known/dfos-app.json`) and the **domain
+  attestation** (`/.well-known/dfos-did` or the `_dfos` TXT record) make different claims
+  and are routinely mistaken for one another. Every amber and red state carries one line
+  saying where to go next, plus a re-check button that re-runs the probe from nothing.
 - **Untrusted relay set** — relays are parameters, like RPC endpoints. Reads fan out
   across the set; provenance (who answered, whether the set agreed) is part of the UI.
 

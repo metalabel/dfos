@@ -634,12 +634,19 @@ redirect asserts is one no host could check; rather than refuse the case, the
 host consents to it under its own tier and says so. The boot self-check knows
 this and skips itself on a loopback host.
 
-**The credential scope cannot run on a loopback host, and the page says so
-rather than letting you try.** The same fact that makes the loopback tier possible rules the
-credential scope out: a local port holds no domain, so it can prove no
-`client_did`, so there is nobody to issue a credential to. The kit refuses to
-build the request and the platform would refuse it too. Exercising that path
-means deploying to a domain.
+**The credential scope cannot run on a loopback host _in this demo_, and the page
+says so rather than letting you try.** A local port holds no domain, so the way a
+hosted app proves its `client_did` — the well-known file at its own origin — is a
+registration a loopback host can never perform. There is a second way: SIWD's
+[loopback credential tier](https://protocol.dfos.com/siwd#loopback-clients) lets
+local software prove `client_did` the one way it can, by proving key control
+(`client_proof` + `client_chain` on the authorize request), and a host that
+implements the tier issues against it. This demo is a hosted web relying party
+and does not
+implement that tier — it holds no client identity to sign an ask proof with — so
+the kit refuses to build the request. Exercising the credential scope from this
+demo means deploying to a domain; exercising the loopback tier means a client
+that carries its own keys, which is what `dfos login` does.
 
 There is no `vercel` CLI in the loop. Vercel's Node runtime adds exactly two
 things to Node's own request/response pair — a pre-parsed JSON `body` and

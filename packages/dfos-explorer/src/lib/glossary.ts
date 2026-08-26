@@ -52,6 +52,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'Discovery vocabulary in identity state: DfosRelay entries advertise a relay endpoint holding this identity’s data; ContentAnchor entries pin a stable contentId or artifact CID (e.g. a profile); DfosAuthorizationServer entries name the server where this identity’s person signs in, so a client holding only the DID can find it. The vocabulary is open — an unrecognized type is still a legible claim, just one this explorer has no special reading for.',
   },
   {
+    key: 'signInServer',
+    term: 'sign-in server',
+    def: 'What a DfosAuthorizationServer services entry names: the authorize origin where this identity’s person signs in, so a client holding only the DID can find where to send them. It is an authorize origin, not a relay — no chain data is fetched from it, and the entry claims nothing beyond "this identity authorizes there."',
+  },
+  {
     key: 'originBinding',
     term: 'origin binding',
     def: 'A bidirectional binding between an identity and a web domain: a DfosOrigin services entry names the domain on the signed chain, and the domain attests the DID back at /.well-known/dfos-did or in a _dfos TXT record. It proves control of that domain — never personhood or endorsement.',
@@ -117,6 +122,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'One resource+action grant (e.g. chain:<id> / read); a delegated child’s attenuations must be a subset of its parent’s — scope only narrows down a delegation, never widens.',
   },
   {
+    key: 'delegationChain',
+    term: 'delegation chain',
+    def: 'The parent-to-parent walk a credential’s prf member roots it through, rendered leaf → root: every link must be issued by the identity its child names, and every child’s attenuations must be a subset of its parent’s. A credential with no prf is a self-issued root; one whose walk does not verify grants nothing, however valid its own signature is.',
+  },
+  {
     key: 'standingGrant',
     term: 'standing public-read grant',
     def: 'A public credential (aud: "*") with read access, ingested into a relay as standing authorization — this is what makes a content chain’s document bytes servable to anyone.',
@@ -135,6 +145,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     key: 'planes',
     term: 'proof plane vs content plane',
     def: 'The proof plane is the public, gossiped layer of signed chains anyone can verify with a public key; the content plane is the access-controlled document bytes a relay serves only to the authorized — the protocol commits to hashes, not plaintext.',
+  },
+  {
+    key: 'gated',
+    term: 'gated',
+    def: 'The relay refused a document’s bytes to an anonymous reader (HTTP 401 or 403). The operation and the document CID it commits to are public on the proof plane either way — gating is a statement about who may read the plaintext, never about whether the document exists or verifies. Distinct from "not materialized" (404), where the relay proves the chain but holds no bytes to serve.',
   },
   {
     key: 'verifiedLocal',
@@ -180,6 +195,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     key: 'attributed',
     term: 'attributed',
     def: 'A cheap discovery heuristic: a public profile is attributed to the DID that signed its content chain’s genesis op (author == subject by convention, not by proof). Browse rows are labelled "attributed"; open the identity to fold the rigorous services→anchor→profile proof.',
+  },
+  {
+    key: 'actorLedger',
+    term: 'actor ledger',
+    def: 'The identity page’s four-tab enumeration of what THIS identity’s own keys signed — chains it created, chains it signed but did not create, operations it witnessed, credentials it issued. Actor-axis and re-derivable from the proof plane, which is what separates it from the credits panel: there, other people’s documents assert this DID’s involvement. Rows arrive as attributed relay-index hints and verify as your tab folds each chain, and an index can withhold rows, so an empty tab means "nothing this relay index surfaces", never "nothing exists".',
   },
   {
     key: 'indexLight',
