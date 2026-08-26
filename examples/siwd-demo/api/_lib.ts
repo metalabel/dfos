@@ -64,21 +64,24 @@ export const STATEMENT = 'Sign in to the SIWD demo';
 /**
  * The two things this demo can ask for.
  *
- *   identity                    — proves who you are, and returns nothing else.
- *   read:profile read:email     — additionally returns a DFOS credential.
+ *   identity                                        — proves who you are, and
+ *                                                     returns nothing else.
+ *   read:profile read:email read:memberships        — additionally returns a
+ *                                                     DFOS credential.
  *
  * The second is a SCOPE SET: `scope` is space-separated, the OAuth convention,
- * and each token is validated against SIWD's registry independently. Both of
- * these tokens name the same `api:<host>` resource, so they coalesce into ONE
+ * and each token is validated against SIWD's registry independently. All three
+ * of these tokens name the same `api:<host>` resource, so they coalesce into ONE
  * credential carrying the combined action list — never one credential per token,
  * which is what makes revoking it sever the whole API grant at once.
  */
 export const SCOPE_IDENTITY = 'identity';
 export const SCOPE_READ_PROFILE = 'read:profile';
 export const SCOPE_READ_EMAIL = 'read:email';
+export const SCOPE_READ_MEMBERSHIPS = 'read:memberships';
 
 /** The wire value of the credential option: a space-separated set. */
-export const SCOPE_API = `${SCOPE_READ_PROFILE} ${SCOPE_READ_EMAIL}`;
+export const SCOPE_API = `${SCOPE_READ_PROFILE} ${SCOPE_READ_EMAIL} ${SCOPE_READ_MEMBERSHIPS}`;
 
 export type Scope = typeof SCOPE_IDENTITY | typeof SCOPE_API;
 
@@ -86,7 +89,7 @@ export const isScope = (value: unknown): value is Scope =>
   value === SCOPE_IDENTITY || value === SCOPE_API;
 
 /** The action tokens the credential must carry, in the order they were asked for. */
-export const API_ACTIONS = [SCOPE_READ_PROFILE, SCOPE_READ_EMAIL];
+export const API_ACTIONS = [SCOPE_READ_PROFILE, SCOPE_READ_EMAIL, SCOPE_READ_MEMBERSHIPS];
 
 /**
  * The same tokens as the credential's action list: comma-joined, which is the
@@ -99,6 +102,17 @@ export const API_ACTION = API_ACTIONS.join(',');
 /** The credential's attenuation, as the API verifier byte-matches it. */
 export const API_RESOURCE = `api:${API_HOST}`;
 
+/**
+ * The API refusals worth explaining, mapped from what the wire actually says.
+ * Shared by every credential-gated route here: the meanings belong to the API's
+ * two verification layers, not to the endpoint that happened to be called.
+ */
+export const API_REFUSALS: Record<number, string> = {
+  401: 'The API refused the request proof. Either the proof did not verify against this app’s key, or the app’s configured key is not a current key of its identity.',
+  403: 'The API accepted the proof and refused the credential. The usual cause is revocation — the user revoked this grant, and the API re-checks that on every request.',
+  503: 'The API could not complete the check — a resolution or revocation source was unreachable. That is the server’s condition, not a judgment about the grant, and it is reported as unverifiable rather than as a refusal.',
+};
+
 /** The sealed nonce, in flight between the redirect out and the callback back. */
 export const FLIGHT_COOKIE = 'siwd_flight';
 
@@ -109,8 +123,8 @@ export const FLIGHT_COOKIE = 'siwd_flight';
  *   'flight'            — identity scope. The sealed value is the NONCE, and the
  *                         cookie IS the expectation: recovering it is the whole
  *                         flow-bound check.
- *   'flight-credential' — read:profile. The sealed value is the SCOPE, a marker
- *                         and nothing more. The expectation lives in the KV
+ *   'flight-credential' — the credential set. The sealed value is the SCOPE, a
+ *                         marker and nothing more. The expectation lives in the KV
  *                         store and is spent there by an atomic GETDEL, because
  *                         under the consumed discipline the expectation must be
  *                         state the verifier can RETIRE — which a cookie handed

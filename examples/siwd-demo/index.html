@@ -98,6 +98,58 @@
         margin-top: 1rem;
       }
 
+      /* Tier 1, second read — the spaces. Same payoff tier as the hero and one
+         weight down from it: a list to run down, not a headline. */
+      .memberships h2 {
+        font-size: 1.125rem;
+      }
+      .memberships p {
+        margin: 0.1rem 0;
+      }
+      .memberships ul.spaces {
+        list-style: none;
+        margin: 0.75rem 0 0;
+        padding: 0;
+      }
+      .memberships ul.spaces > li {
+        border-top: 1px solid #eee;
+        padding: 0.6rem 0;
+      }
+      .memberships ul.spaces > li:first-child {
+        border-top: 0;
+      }
+      .memberships .name {
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+      .memberships .avatar {
+        border-radius: 50%;
+        height: 1.5rem;
+        object-fit: cover;
+        width: 1.5rem;
+      }
+      /* A group's color is a named palette token, rendered as a dot. An
+         unrecognized token gets no dot at all rather than a guessed color. */
+      .memberships .dot {
+        border-radius: 999px;
+        height: 0.5rem;
+        width: 0.5rem;
+      }
+      .memberships ul.groups {
+        list-style: none;
+        margin: 0.4rem 0 0;
+        padding-left: 1rem;
+      }
+      .memberships ul.groups li {
+        margin: 0.3rem 0;
+      }
+      .memberships details.rawjson,
+      .memberships button {
+        margin-top: 1rem;
+      }
+
       /* Tier 2 — the session strip. Compact, and visibly a status line. */
       .session {
         background: #fafafa;

@@ -10,14 +10,15 @@
   WHERE it is remembered depends on the scope, and that is the whole point of
   the toggle:
 
-    identity     — sealed into an httpOnly cookie. Success grants a session with
-                   this browser, so the flow-bound discipline is admissible, and
-                   the seal is what binds the redemption to this channel.
-    read:profile — written to the shared store. Success also hands back a
-                   CREDENTIAL, which is portable and outlives this browser, so
-                   specs/SIWD.md requires the consumed discipline: the nonce must
-                   be spendable exactly once, globally, by an atomic delete that
-                   no second presentation can win.
+    identity       — sealed into an httpOnly cookie. Success grants a session
+                     with this browser, so the flow-bound discipline is
+                     admissible, and the seal is what binds the redemption to
+                     this channel.
+    credential set — written to the shared store. Success also hands back a
+                     CREDENTIAL, which is portable and outlives this browser, so
+                     specs/SIWD.md requires the consumed discipline: the nonce
+                     must be spendable exactly once, globally, by an atomic
+                     delete that no second presentation can win.
 
   Minting here also means the server's clock authors the timestamp. A browser
   whose clock is minutes off produced challenges that were born stale or born in

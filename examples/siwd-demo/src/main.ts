@@ -15,9 +15,10 @@
 
   THE PAGE SHOWS BEFORE IT EXPLAINS, and it explains less than it used to. The
   demo demonstrates; the spec explains. Signed in with a credential, this page
-  reads the user's profile from the DFOS API immediately — no button to press —
-  because that data is what the sign-in bought. Status sits above it, this app's
-  own identity below it, and everything mechanical is one disclosure down.
+  reads the user's profile and the spaces they belong to from the DFOS API
+  immediately — two calls, no button to press — because that data is what the
+  sign-in bought. Status sits under it, this app's own identity below that, and
+  everything mechanical is one disclosure down.
 
   Where the reader wants the protocol argument — replay prevention, the byte
   contracts, the verification algorithm — the receipts link out to the specs
@@ -25,9 +26,10 @@
   the moment the spec moves, and it buries the thing it was built to show.
 
   TWO OPTIONS. `identity` proves who you are and returns nothing else. The other
-  is a SCOPE SET — `read:profile read:email`, space-separated per the OAuth
-  convention SIWD adopts — which additionally returns one credential carrying
-  both action tokens. The consent screen names every token in the set.
+  is a SCOPE SET — `read:profile read:email read:memberships`, space-separated
+  per the OAuth convention SIWD adopts — which additionally returns one
+  credential carrying all three action tokens. The consent screen names every
+  token in the set.
 
   The authorize request is built server-side in `api/login.ts`. At identity scope
   it carries no `client_did`: the platform learns who this app is by fetching
@@ -114,10 +116,10 @@ const SIGNING_DOMAIN = bareHostname(location.hostname);
 
 /**
  * The two options, matching `api/_lib.ts`. The second is a space-separated
- * scope SET, and both of its tokens land in one credential.
+ * scope SET, and all three of its tokens land in one credential.
  */
 const SCOPE_IDENTITY = 'identity';
-const SCOPE_API = 'read:profile read:email';
+const SCOPE_API = 'read:profile read:email read:memberships';
 
 /**
  * A credential this app holds, as the server read it out AFTER verifying it.
@@ -495,6 +497,21 @@ const link = (href: string, text: string): HTMLAnchorElement => {
   return node;
 };
 
+/**
+ * A DID inline, in the page's small-mono style and linked to the explorer, so
+ * every identity the page names comes with a second verifier to check it in.
+ * NOT encoded: the explorer's hash router takes the DID literally.
+ */
+const didLink = (did: string): HTMLAnchorElement => {
+  const anchor = link(`${EXPLORER_URL}/#/did/${did}`, '');
+  anchor.append(el('code', undefined, did));
+  return anchor;
+};
+
+/** An object off the wire, or not. Nothing here trusts a shape it did not check. */
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
 /** One fact in the status bar. `tone` colors the live ones: a grant, or a dead one. */
 const chip = (text: string, tone?: 'ok' | 'warn'): HTMLElement =>
   el('span', tone === undefined ? 'chip' : `chip ${tone}`, text);
@@ -740,7 +757,7 @@ const whatHappensNext = (scope: string): HTMLElement => {
       : 'The backend verifies the signature against your identity chain on a public relay and grants a session.',
     ...(credentialScope
       ? [
-          'The backend reads your profile from the DFOS API, signing the request with its own key and presenting the credential alongside it.',
+          'The backend reads your profile and your spaces from the DFOS API, signing each request with its own key and presenting the same credential alongside it.',
         ]
       : []),
   ]) {
@@ -974,6 +991,15 @@ await api.GET('/profile');`,
     el(
       'p',
       'dim',
+      'Two calls ride that seam, one credential under three tokens: GET /v1/profile, ' +
+        'under read:profile and read:email, and GET /v1/memberships, under ' +
+        'read:memberships. The memberships route composes its own Request — ' +
+        '@metalabel/dfos-api has no typed method for that path yet — and signs it here, ' +
+        'the same way, against the same credential.',
+    ),
+    el(
+      'p',
+      'dim',
       'Two packages meet at that seam. @metalabel/dfos-api composes the request; ' +
         '@metalabel/dfos-client signs the bytes that are about to go on the wire. ' +
         'The kit also ships createApiAuthFetch, which is this wrapper in one call — ' +
@@ -1014,6 +1040,11 @@ const docsReceipt = (): Node[] =>
     linkList(
       [`${REPO}/examples/siwd-demo/api/verify.ts`, 'api/verify.ts', 'where the session is granted'],
       [`${REPO}/examples/siwd-demo/api/profile.ts`, 'api/profile.ts', 'the signing seam'],
+      [
+        `${REPO}/examples/siwd-demo/api/memberships.ts`,
+        'api/memberships.ts',
+        'the second gated call',
+      ],
       [`${REPO}/examples/siwd-demo/src/main.ts`, 'src/main.ts', 'this page'],
       [DOCS.demo, 'The demo README', 'routes, variables, forking'],
     ),
@@ -1071,7 +1102,7 @@ const credentialReceipt = (facts: CredentialFacts): Node[] => {
       'p',
       'dim',
       tokens.length > 1
-        ? 'Both action tokens ride in one credential, not one credential each — so ' +
+        ? 'Every action token rides in one credential, not one credential each — so ' +
             'revoking it severs the whole API grant at once. Using it does not use it ' +
             'up; what is single-use is each request proof.'
         : 'Using it does not use it up: the credential is a standing grant. What is ' +
@@ -1095,14 +1126,29 @@ type ProfileState =
   | { kind: 'unreachable'; reason: string };
 
 /**
- * The profile as the API served it, read defensively. Every member is optional
- * here even though the OpenAPI document says otherwise: this is untrusted text
- * off the wire, and a hero that throws on a missing field is a worse demo than
- * one that renders what it got.
+ * A response member as the API served it, read defensively. Every member is
+ * optional here even though the OpenAPI document says otherwise: this is
+ * untrusted text off the wire, and a view that throws on a missing field is a
+ * worse demo than one that renders what it got.
  */
-const profileText = (raw: Record<string, unknown>, field: string): string | undefined => {
+const textField = (raw: Record<string, unknown>, field: string): string | undefined => {
   const value = raw[field];
   return typeof value === 'string' && value !== '' ? value : undefined;
+};
+
+/** The same tolerance for a nested object: the member, or `null`. */
+const objectField = (
+  raw: Record<string, unknown>,
+  field: string,
+): Record<string, unknown> | null => {
+  const value = raw[field];
+  return isRecord(value) ? value : null;
+};
+
+/** The same tolerance for a list: the member, or nothing to iterate. */
+const arrayField = (raw: Record<string, unknown>, field: string): unknown[] => {
+  const value = raw[field];
+  return Array.isArray(value) ? value : [];
 };
 
 /**
@@ -1120,11 +1166,11 @@ const profileHero = (state: ProfileState, onReload: () => void): HTMLElement => 
 
   if (state.kind === 'ok') {
     const raw = state.profile;
-    const name = profileText(raw, 'displayName');
-    const username = profileText(raw, 'username');
-    const description = profileText(raw, 'description');
-    const email = profileText(raw, 'email');
-    const created = profileText(raw, 'createdAt');
+    const name = textField(raw, 'displayName');
+    const username = textField(raw, 'username');
+    const description = textField(raw, 'description');
+    const email = textField(raw, 'email');
+    const created = textField(raw, 'createdAt');
 
     const body: Node[] = [
       el('h2', undefined, name ?? (username !== undefined ? `@${username}` : 'Your profile')),
@@ -1194,6 +1240,187 @@ const profileHero = (state: ProfileState, onReload: () => void): HTMLElement => 
   body.push(retry);
   hero.replaceChildren(...body);
   return hero;
+};
+
+/** What the last call to the memberships endpoint did, if anything. */
+type MembershipsState =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | { kind: 'ok'; memberships: Record<string, unknown>; host: string }
+  | { kind: 'refused'; status: number; reason: string; code?: string; message?: string }
+  | { kind: 'unreachable'; reason: string };
+
+/**
+ * A group's `color` is a named palette TOKEN, not a CSS value: the API names a
+ * color and the client decides what that looks like. A token this page does not
+ * know renders with no dot rather than with a guess.
+ */
+const GROUP_COLORS: Record<string, string> = {
+  red: '#ef4444',
+  orange: '#f97316',
+  amber: '#f59e0b',
+  yellow: '#eab308',
+  lime: '#84cc16',
+  green: '#22c55e',
+  emerald: '#10b981',
+  teal: '#14b8a6',
+  cyan: '#06b6d4',
+  sky: '#0ea5e9',
+  blue: '#3b82f6',
+  indigo: '#6366f1',
+  violet: '#8b5cf6',
+  purple: '#a855f7',
+  fuchsia: '#d946ef',
+  pink: '#ec4899',
+  rose: '#f43f5e',
+};
+
+/** A resolved avatar URL, when there is one. Decorative, so the alt text is empty. */
+const avatarImage = (url: string | undefined): HTMLImageElement | null => {
+  if (url === undefined || !url.startsWith('https://')) return null;
+  const image = el('img', 'avatar');
+  image.src = url;
+  image.alt = '';
+  return image;
+};
+
+/** One group under its space: the dot, the name, the role, and the group's DID. */
+const groupRow = (raw: Record<string, unknown>): HTMLElement => {
+  const row = el('li');
+  const name = el('p', 'name');
+
+  const token = textField(raw, 'color');
+  const color = token === undefined ? undefined : GROUP_COLORS[token];
+  if (color !== undefined) {
+    const dot = el('span', 'dot');
+    dot.style.background = color;
+    name.append(dot);
+  }
+  name.append(el('span', undefined, textField(raw, 'name') ?? 'A group'));
+
+  // Roles are an open enumeration: an unrecognized one is rendered, not dropped.
+  const role = textField(raw, 'role');
+  if (role !== undefined) name.append(el('span', 'dim', ` · ${role}`));
+  row.append(name);
+
+  const did = textField(raw, 'did');
+  if (did !== undefined) {
+    const line = el('p');
+    line.append(didLink(did));
+    row.append(line);
+  }
+  return row;
+};
+
+/** One membership: the space, this user's role in it, and their groups inside it. */
+const spaceRow = (item: Record<string, unknown>): HTMLElement => {
+  const row = el('li');
+  const space = objectField(item, 'space') ?? {};
+  const domain = textField(space, 'domain');
+
+  const name = el('p', 'name');
+  const image = avatarImage(textField(space, 'avatarUrl'));
+  if (image !== null) name.append(image);
+  name.append(el('span', undefined, textField(space, 'displayName') ?? domain ?? 'A space'));
+  const role = textField(item, 'role');
+  if (role !== undefined) name.append(el('span', 'dim', ` · ${role}`));
+  row.append(name);
+
+  // `domain` is a mutable alias and may not resolve publicly, so it is text here
+  // and never a link — `id` and `did` are the canonical names. The member count
+  // is a worded bucket the API deliberately keeps inexact; it is rendered as it
+  // arrived rather than turned into a number this page does not have.
+  const aside = [domain, textField(space, 'memberCountSummary')]
+    .filter((part): part is string => part !== undefined)
+    .join(' · ');
+  if (aside !== '') row.append(el('p', 'dim', aside));
+
+  const did = textField(space, 'did');
+  if (did !== undefined) {
+    const line = el('p');
+    line.append(didLink(did));
+    row.append(line);
+  }
+
+  const groups = arrayField(item, 'groups').filter(isRecord);
+  if (groups.length > 0) {
+    const list = el('ul', 'groups');
+    for (const group of groups) list.append(groupRow(group));
+    row.append(list);
+  }
+  return row;
+};
+
+/**
+ * THE SECOND READ — one credential, a second endpoint, under a third token. The
+ * profile says who you are; this says where you are, and private spaces are in
+ * it because that is what `read:memberships` granted.
+ */
+const membershipsSection = (state: MembershipsState, onReload: () => void): HTMLElement => {
+  const section = el('div', 'card memberships');
+  const heading = el('h2', undefined, 'Your spaces');
+
+  if (state.kind === 'idle' || state.kind === 'pending') {
+    section.replaceChildren(heading, el('p', 'dim', 'Reading your memberships…'));
+    return section;
+  }
+
+  if (state.kind === 'ok') {
+    const raw = state.memberships;
+    const items = arrayField(raw, 'items').filter(isRecord);
+    const body: Node[] = [heading];
+
+    if (items.length === 0) {
+      // A normal answer, not a failure: an account can belong to nothing.
+      body.push(el('p', 'dim', 'No space memberships.'));
+    } else {
+      const list = el('ul', 'spaces');
+      for (const item of items) list.append(spaceRow(item));
+      body.push(list);
+
+      // The endpoint signs one fixed request, so there is no page-two coordinate
+      // to send. The default page is what there is, and the line says so.
+      if (textField(raw, 'nextCursor') !== undefined) body.push(el('p', 'dim', '…and more.'));
+    }
+
+    const rawPanel = el('details', 'rawjson');
+    rawPanel.append(
+      el('summary', undefined, 'Raw response'),
+      el('pre', 'wrap', JSON.stringify(raw, null, 2)),
+    );
+    body.push(rawPanel);
+
+    const again = el('button', 'quiet', 'Read them again');
+    again.addEventListener('click', onReload);
+    body.push(again);
+
+    section.replaceChildren(...body);
+    return section;
+  }
+
+  // Compact, and worded exactly as the hero words the same two outcomes: this is
+  // a section, so it gets a line rather than a panel.
+  const body: Node[] = [heading];
+  if (state.kind === 'refused') {
+    body.push(el('p', 'notice', `The API refused: HTTP ${state.status}`));
+    if (state.code !== undefined) {
+      const line = el('p', 'dim');
+      line.append(
+        el('code', undefined, state.code),
+        state.message !== undefined ? ` — ${state.message}` : '',
+      );
+      body.push(line);
+    }
+    body.push(el('p', 'dim', state.reason));
+  } else {
+    body.push(el('p', 'notice', state.reason));
+  }
+
+  const retry = el('button', 'quiet', 'Try again');
+  retry.addEventListener('click', onReload);
+  body.push(retry);
+  section.replaceChildren(...body);
+  return section;
 };
 
 /** The hero when the sign-in granted no credential: what was proved, and what was not. */
@@ -1267,36 +1494,59 @@ const sessionBar = (session: Session, profile: ProfileState): HTMLElement => {
   return bar;
 };
 
-const renderSignedIn = (
-  session: Session,
-  jws?: string,
-  profile: ProfileState = { kind: 'idle' },
-): void => {
+/**
+ * The two credential-gated reads, carried as one pair. They are separate calls
+ * against separate endpoints and either can answer first, so the view renders
+ * from both at once: a memberships call that finishes late must not paint over
+ * the profile the hero is already showing, and the reverse.
+ */
+interface Reads {
+  profile: ProfileState;
+  memberships: MembershipsState;
+}
+
+const NOTHING_READ: Reads = { profile: { kind: 'idle' }, memberships: { kind: 'idle' } };
+
+/** The latest pair, so whichever call renders next renders the other's result too. */
+let reads: Reads = NOTHING_READ;
+
+const renderSignedIn = (session: Session, jws?: string, state: Reads = NOTHING_READ): void => {
   const facts = session.credential;
   const found = registration;
 
   render(
     ...notices(),
     facts !== undefined
-      ? profileHero(profile, () => void callProfile(session, jws))
+      ? profileHero(state.profile, () => void callProfile(session, jws))
       : identityHero(session),
-    sessionBar(session, profile),
+    ...(facts !== undefined
+      ? [membershipsSection(state.memberships, () => void callMemberships(session, jws))]
+      : []),
+    sessionBar(session, state.profile),
     ...(found !== null ? [appIdentityCard(found)] : []),
     receipts(session, jws),
   );
 };
 
+/** One half of the pair moves, and the view re-renders from both. */
+const showRead = (session: Session, jws: string | undefined, moved: Partial<Reads>): void => {
+  reads = { ...reads, ...moved };
+  renderSignedIn(session, jws, reads);
+};
+
 /**
- * Enter the signed-in view. On the credential path the profile call starts
- * immediately — no click — so the payoff is on screen as soon as there is a
- * session to render it from.
+ * Enter the signed-in view. On the credential path both calls start immediately
+ * — no click — so the payoff is on screen as soon as there is a session to
+ * render it from.
  */
 const enterSignedIn = (session: Session, jws?: string): void => {
+  reads = NOTHING_READ;
   if (session.credential === undefined) {
-    renderSignedIn(session, jws);
+    renderSignedIn(session, jws, reads);
     return;
   }
   void callProfile(session, jws);
+  void callMemberships(session, jws);
 };
 
 /**
@@ -1305,40 +1555,101 @@ const enterSignedIn = (session: Session, jws?: string): void => {
  * all the server's to decide from the session it already holds.
  */
 const callProfile = async (session: Session, jws?: string): Promise<void> => {
-  renderSignedIn(session, jws, { kind: 'pending' });
+  showRead(session, jws, { profile: { kind: 'pending' } });
 
   const result = await call('/api/profile', { method: 'POST', timeoutMs: VERIFY_TIMEOUT_MS });
   if (result === null) {
-    renderSignedIn(session, jws, {
-      kind: 'unreachable',
-      reason: 'The request to this site’s backend did not complete.',
+    showRead(session, jws, {
+      profile: {
+        kind: 'unreachable',
+        reason: 'The request to this site’s backend did not complete.',
+      },
     });
     return;
   }
   if (result.status !== 200) {
-    renderSignedIn(session, jws, {
-      kind: 'unreachable',
-      reason: reasonFrom(result, `this site’s backend answered HTTP ${result.status}`),
+    showRead(session, jws, {
+      profile: {
+        kind: 'unreachable',
+        reason: reasonFrom(result, `this site’s backend answered HTTP ${result.status}`),
+      },
     });
     return;
   }
 
   const body = result.body;
-  if (body['ok'] === true && typeof body['profile'] === 'object' && body['profile'] !== null) {
-    renderSignedIn(session, jws, {
-      kind: 'ok',
-      profile: body['profile'] as Record<string, unknown>,
-      host: typeof body['host'] === 'string' ? body['host'] : 'the DFOS API',
+  const served = body['profile'];
+  if (body['ok'] === true && isRecord(served)) {
+    showRead(session, jws, {
+      profile: {
+        kind: 'ok',
+        profile: served,
+        host: typeof body['host'] === 'string' ? body['host'] : 'the DFOS API',
+      },
     });
     return;
   }
 
-  renderSignedIn(session, jws, {
-    kind: 'refused',
-    status: typeof body['status'] === 'number' ? body['status'] : 0,
-    reason: reasonFrom(result, 'the API refused the request'),
-    ...(typeof body['code'] === 'string' ? { code: body['code'] } : {}),
-    ...(typeof body['message'] === 'string' ? { message: body['message'] } : {}),
+  showRead(session, jws, {
+    profile: {
+      kind: 'refused',
+      status: typeof body['status'] === 'number' ? body['status'] : 0,
+      reason: reasonFrom(result, 'the API refused the request'),
+      ...(typeof body['code'] === 'string' ? { code: body['code'] } : {}),
+      ...(typeof body['message'] === 'string' ? { message: body['message'] } : {}),
+    },
+  });
+};
+
+/**
+ * The same shape against the second endpoint. A separate call rather than one
+ * combined route: two API reads under two tokens, and the page shows each one's
+ * outcome for itself.
+ */
+const callMemberships = async (session: Session, jws?: string): Promise<void> => {
+  showRead(session, jws, { memberships: { kind: 'pending' } });
+
+  const result = await call('/api/memberships', { method: 'POST', timeoutMs: VERIFY_TIMEOUT_MS });
+  if (result === null) {
+    showRead(session, jws, {
+      memberships: {
+        kind: 'unreachable',
+        reason: 'The request to this site’s backend did not complete.',
+      },
+    });
+    return;
+  }
+  if (result.status !== 200) {
+    showRead(session, jws, {
+      memberships: {
+        kind: 'unreachable',
+        reason: reasonFrom(result, `this site’s backend answered HTTP ${result.status}`),
+      },
+    });
+    return;
+  }
+
+  const body = result.body;
+  const served = body['memberships'];
+  if (body['ok'] === true && isRecord(served)) {
+    showRead(session, jws, {
+      memberships: {
+        kind: 'ok',
+        memberships: served,
+        host: typeof body['host'] === 'string' ? body['host'] : 'the DFOS API',
+      },
+    });
+    return;
+  }
+
+  showRead(session, jws, {
+    memberships: {
+      kind: 'refused',
+      status: typeof body['status'] === 'number' ? body['status'] : 0,
+      reason: reasonFrom(result, 'the API refused the request'),
+      ...(typeof body['code'] === 'string' ? { code: body['code'] } : {}),
+      ...(typeof body['message'] === 'string' ? { message: body['message'] } : {}),
+    },
   });
 };
 
