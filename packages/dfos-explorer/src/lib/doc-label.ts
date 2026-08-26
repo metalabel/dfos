@@ -44,10 +44,16 @@ export interface DocLabel {
 const clean = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 /** Collapse whitespace/newlines to a single space and truncate — a plain-text
- *  strip (no markdown rendering), so a multi-paragraph body reads as one line. */
+ *  strip (no markdown rendering), so a multi-paragraph body reads as one line.
+ *  The cut prefers the last word boundary inside the limit ("…worth…" beats
+ *  "…worth wri…"); a single token longer than half the budget takes the hard
+ *  character cut instead, so one long URL can't collapse the whole snippet. */
 export const snippet = (text: string, max = SNIPPET_MAX): string => {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > max ? `${flat.slice(0, max).trimEnd()}…` : flat;
+  if (flat.length <= max) return flat;
+  const hard = flat.slice(0, max);
+  const brk = hard.lastIndexOf(' ');
+  return `${(brk > max / 2 ? hard.slice(0, brk) : hard).trimEnd()}…`;
 };
 
 /** Derive a label from a projected title/snippet (local index) and/or lazily
