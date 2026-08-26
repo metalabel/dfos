@@ -76,6 +76,86 @@ func TestParseSiwdChallengeAdversarialVectors(t *testing.T) {
 	}
 }
 
+func TestSignSiwdAskProof(t *testing.T) {
+	client := makeSignRequestParty("siwd-ask-client")
+	challenge := SiwdChallenge{
+		Domain: "127.0.0.1", Nonce: "ask-nonce-01", Timestamp: "2026-08-10T12:34:56.000Z",
+		DID: siwdString("did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae"),
+	}
+	token, err := SignSiwdAskProof(challenge, client.kid, client.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("ask proof is not a 3-part compact JWS: %s", token)
+	}
+
+	// The payload SEGMENT — not a re-serialization of the decoded challenge — is
+	// what the host string-compares against its own re-derivation.
+	canonical, err := SiwdSigningInput(challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := base64.RawURLEncoding.EncodeToString(canonical); parts[1] != want {
+		t.Fatalf("payload segment:\n got %s\nwant %s", parts[1], want)
+	}
+
+	headerBytes, err := Base64urlDecode(parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var header JWSHeader
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		t.Fatal(err)
+	}
+	if header.Alg != "EdDSA" || header.Typ != SiwdAskJWSTyp || header.Kid != client.kid {
+		t.Fatalf("unexpected protected header: %+v", header)
+	}
+	// Member ORDER is part of the mirror with the TS kit (alg, typ, kid).
+	wantHeader := `{"alg":"EdDSA","typ":"did:dfos:siwd-ask","kid":"` + client.kid + `"}`
+	if string(headerBytes) != wantHeader {
+		t.Fatalf("protected header bytes:\n got %s\nwant %s", headerBytes, wantHeader)
+	}
+
+	if _, _, err := VerifyJWS(token, client.pub); err != nil {
+		t.Fatalf("ask proof does not verify with the signing key: %v", err)
+	}
+
+	// The FUNGIBILITY GATE: the ask proof and a subject's sign-in cover the same
+	// canonical bytes, so a verifier gating on SiwdJWSTyp must refuse this one.
+	if SiwdAskJWSTyp == SiwdJWSTyp {
+		t.Fatal("ask proof and sign-in typ must be distinct")
+	}
+	if header.Typ == SiwdJWSTyp {
+		t.Fatalf("ask proof presents as a sign-in: typ %s", header.Typ)
+	}
+}
+
+func TestSignSiwdAskProofRejectsMalformedInput(t *testing.T) {
+	client := makeSignRequestParty("siwd-ask-malformed")
+	challenge := SiwdChallenge{Domain: "127.0.0.1", Nonce: "n", Timestamp: "2026-08-10T12:34:56.000Z"}
+
+	for name, kid := range map[string]string{
+		"no separator":   "did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae",
+		"empty did":      "#key_x",
+		"empty key id":   "did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae#",
+		"bare separator": "#",
+		"empty":          "",
+	} {
+		if _, err := SignSiwdAskProof(challenge, kid, client.priv); err == nil {
+			t.Errorf("%s: malformed kid %q accepted", name, kid)
+		}
+	}
+
+	// A challenge that is not canonical-serializable must fail before any
+	// signature exists, not produce bytes no host will re-derive.
+	bad := SiwdChallenge{Domain: "127.0.0.1", Nonce: "n", Timestamp: "2026-08-10T12:34:56.123Z"}
+	if _, err := SignSiwdAskProof(bad, client.kid, client.priv); err == nil {
+		t.Error("non-whole-second challenge timestamp accepted")
+	}
+}
+
 func TestSiwdSignRequestBuildAndValidate(t *testing.T) {
 	requester := makeSignRequestParty("siwd-requester")
 	subject := makeSignRequestParty("siwd-subject")
