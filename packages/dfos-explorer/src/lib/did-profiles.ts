@@ -110,14 +110,14 @@ export const cacheIsFresh = (at: number, now: number, ttlMs = PROFILE_TTL_MS): b
   now >= at && now - at < ttlMs;
 
 /** Keep the `max` most recently resolved entries — oldest resolves fall off. */
-export const trimCache = (
-  entries: Record<string, CachedProfile>,
+export const trimCache = <T extends { at: number }>(
+  entries: Record<string, T>,
   max = CACHE_MAX,
-): Record<string, CachedProfile> => {
+): Record<string, T> => {
   const keys = Object.keys(entries);
   if (keys.length <= max) return entries;
   const kept = keys.sort((a, b) => (entries[b]?.at ?? 0) - (entries[a]?.at ?? 0)).slice(0, max);
-  const out: Record<string, CachedProfile> = {};
+  const out: Record<string, T> = {};
   for (const k of kept) {
     const v = entries[k];
     if (v) out[k] = v;
@@ -247,6 +247,10 @@ export const useDidProfile = (
 
   useEffect(() => {
     if (!need || !did) return;
+    if (!cache.has(did)) {
+      setProfile(null);
+      setState('pending');
+    }
     const read = (): void => {
       if (!cache.has(did)) return;
       const hit = cache.get(did) ?? null;

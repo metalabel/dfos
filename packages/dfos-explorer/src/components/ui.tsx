@@ -273,12 +273,6 @@ export const DidLink = (props: { did: string; full?: boolean; plain?: boolean })
   );
 };
 
-export const ContentLink = (props: { id: string; full?: boolean }) => (
-  <a href={`#/content/${props.id}`} title={props.id}>
-    {props.full ? props.id : short(props.id, 14, 6)}
-  </a>
-);
-
 export const OpLink = (props: { cid: string; full?: boolean }) => (
   <a href={`#/op/${props.cid}`} class="cid" title={props.cid}>
     {props.full ? props.cid : short(props.cid, 12, 8)}
