@@ -39,7 +39,7 @@ All configuration is via environment variables on the `relay` service in
 | ---------------- | ------------------ | --------------------------------------------------------------------------------------------------- |
 | `PORT`           | `8080`             | HTTP listen port inside the container                                                               |
 | `RELAY_NAME`     | `DFOS Relay`       | Human-readable relay profile name                                                                   |
-| `PEERS`          | _(none)_           | Peer relay URLs to sync from (comma-separated or JSON array)                                        |
+| `PEERS`          | _(none)_           | Peer relay URLs to sync from (comma-separated, JSON array, or per-peer objects)                     |
 | `SYNC_INTERVAL`  | `30s`              | How often to pull from peers and run the sequencer                                                  |
 | `SQLITE_PATH`    | `~/.dfos/relay.db` | Database file path (set to `/data/relay.db` in the container)                                       |
 | `RESYNC`         | `false`            | Set to `true` to reset peer cursors on boot for a full re-pull                                      |
@@ -61,6 +61,18 @@ Or as a JSON array:
 environment:
   PEERS: '["https://relay-a.example.com", "https://relay-b.example.com"]'
 ```
+
+Or as a JSON array of objects, when a peer needs non-default switches (`gossip`,
+`readThrough`, `sync` — all default to `true`):
+
+```yaml
+environment:
+  PEERS: '[{"url":"https://relay-a.example.com"},{"url":"https://relay-b.example.com","gossip":false}]'
+```
+
+An unparseable `PEERS` value, a non-`http(s)` peer URL, or an unknown per-peer
+field stops the relay at boot with an error instead of leaving it running against
+peers it can never reach.
 
 The relay pulls new operations from each peer on every sync interval and gossips
 its own sequenced operations back. Peering is additive -- adding a peer never
