@@ -258,9 +258,20 @@ export const runAppFallback = async (host: string, candidate: string): Promise<F
     : { kind: 'answers-other', did: clientDid };
 };
 
-/** True when the app-description fallback is eligible: the HTTPS well-known was
- *  ABSENT. A `malformed` body means the document EXISTS — presence without an
- *  answer — and the spec's fallback applies only on absence. */
+/**
+ * True when the app-description fallback is eligible: the HTTPS well-known was
+ * ABSENT. The spec's trigger is literal — "if /.well-known/dfos-did is absent (a
+ * 404)" — so nothing weaker qualifies:
+ *
+ *   malformed — the document EXISTS (presence without an answer)
+ *   error     — we never established anything, redirects included: an origin
+ *               that redirects has not shown us the document is missing
+ *
+ * The stakes are the stale/broken split. Falling back on a non-absence lets a
+ * dfos-app.json naming another DID turn a should-be-`stale` binding into a
+ * public accusation of `broken`, which is exactly the over-accusation the
+ * silence-is-not-contradiction discipline exists to prevent.
+ */
 export const fallbackEligible = (probe: BindingProbe): boolean =>
   probe.kind === 'answered' && probe.https.status === 'none';
 

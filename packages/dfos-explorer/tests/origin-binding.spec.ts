@@ -204,11 +204,13 @@ describe('fallbackEligible', () => {
   });
 
   // presence without an answer is not absence: the document exists, so the spec's
-  // fallback does not apply
+  // fallback does not apply. Neither does a failure to establish anything at all
+  // — the spec's trigger is literal, "absent (a 404)", and nothing weaker.
   it('does NOT fire on a malformed, errored, refused, or answered document', () => {
     for (const https of [
       { status: 'malformed', reason: 'not a did' },
       { status: 'error', reason: 'timeout' },
+      { status: 'error', httpStatus: 302, reason: 'the origin redirected' },
       { status: 'refused', reason: 'policy' },
       { status: 'ok', did: DID },
     ] as BindingMethodResult[]) {
@@ -377,6 +379,22 @@ describe('assessBinding', () => {
       ),
     );
     expect(out.kind).toBe('stale');
+  });
+
+  // the redirect corner, end to end: a redirecting origin is silence, the
+  // fallback never runs, and the verdict is stale — NOT broken, even though that
+  // origin's app description happens to name someone else
+  it('is stale on a redirecting origin, with no fallback consulted', () => {
+    const redirected: BindingMethodResult = {
+      status: 'error',
+      httpStatus: 302,
+      reason: 'the origin redirected; redirects are not followed',
+    };
+    const probe = answered(redirected, { status: 'none' });
+    expect(fallbackEligible(probe)).toBe(false);
+    const out = assessBinding(DID, claimed, probe);
+    expect(out.kind).toBe('stale');
+    if (out.kind === 'stale') expect(out.reasons.join(' ')).toMatch(/HTTP 302/);
   });
 
   // a malformed document is presence without an answer: silence for the verdict

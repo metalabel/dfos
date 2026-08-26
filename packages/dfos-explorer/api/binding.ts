@@ -17,7 +17,8 @@
    - resolve-then-check: every resolved address is refused if it is private,
      loopback, link-local, unique-local, or v4-mapped into any of those
    - redirects are not followed: a redirect attests nothing (ORIGIN-BINDING.md),
-     so it is reported as SILENCE, never as a contradiction
+     so it is reported as silence — never as a contradiction, and never as the
+     ABSENCE that alone licenses the app-description fallback
    - 1024-byte response cap (a conforming body is under a hundred bytes), 5s timeout
    - the TXT lookup makes no connection, so it needs no address policy of its own
 
@@ -48,7 +49,8 @@ const ASCII_WS_RE = /^[\t\n\f\r ]+|[\t\n\f\r ]+$/g;
  *
  *   ok            — the domain answered with a DFOS DID
  *   none          — the domain is silent (no record, no document: an ABSENCE it
- *                   affirmatively demonstrated). Fallback-eligible on HTTPS.
+ *                   affirmatively demonstrated — an HTTPS 404/410, nothing
+ *                   weaker). Fallback-eligible on HTTPS.
  *   malformed     — the domain answered with something that is NOT a DID. Present
  *                   without an answer: silence for the verdict, but it BLOCKS the
  *                   app-description fallback, which applies only on absence.
@@ -191,9 +193,18 @@ const probeHttps = async (host: string): Promise<BindingMethodResult> => {
   }
 
   // a redirect attests NOTHING — the attestation must come from the named origin
-  // at the fixed path, so this is silence rather than a contradiction
+  // at the fixed path, so this is silence rather than a contradiction. It is
+  // `error` and not `none` because a redirect is NOT the absence the spec's
+  // app-description fallback turns on ("if /.well-known/dfos-did is absent (a
+  // 404)"): an origin that redirects has not shown us the document is missing,
+  // and reading it as absence would let a fallback document naming another DID
+  // escalate a should-be-stale binding into a public accusation of `broken`.
   if (res.status >= 300 && res.status < 400) {
-    return { status: 'none', reason: 'the origin redirected; redirects are not followed' };
+    return {
+      status: 'error',
+      httpStatus: res.status,
+      reason: 'the origin redirected; redirects are not followed',
+    };
   }
   if (res.status === 404 || res.status === 410) {
     return { status: 'none', reason: `the origin serves no ${FIXED_PATH} (HTTP ${res.status})` };
