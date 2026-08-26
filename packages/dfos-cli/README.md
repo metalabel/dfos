@@ -25,6 +25,8 @@ make build
 ./dfos version
 ```
 
+Building an app with Sign In With DFOS? The setup guide is at <https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup>.
+
 ## Quick Start
 
 ```bash
