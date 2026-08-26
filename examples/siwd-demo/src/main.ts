@@ -1129,11 +1129,13 @@ const receipts = (session: Session, jws?: string): HTMLElement => {
 // -----------------------------------------------------------------------------
 
 /**
- * RENDER BEFORE TRUST. The credential is shown in full — who issued it, to whom,
- * over what, until when — before the first request is signed against it, because a grant
- * you cannot read is a grant you cannot judge. Every field here was verified on
- * the server first: signature, schema, CID integrity, expiry, and that this app
- * is the audience. Displaying an unverified one would teach the opposite habit.
+ * VERIFY BEFORE TRUST. The credential in full — who issued it, to whom, over
+ * what, until when — because a grant you cannot read is a grant you cannot
+ * judge. Every field here was verified on the server before the credential was
+ * stored and so before anything was ever signed against it: signature, schema,
+ * CID integrity, expiry, and that this app is the audience. That ordering is the
+ * load-bearing one, not this panel's place on the page. Displaying an unverified
+ * grant would teach the opposite habit.
  */
 const credentialReceipt = (facts: CredentialFacts): Node[] => {
   const row = (label: string, value: string, note?: string): HTMLElement => {
