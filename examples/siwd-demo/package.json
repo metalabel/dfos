@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.api.json"
   },
   "dependencies": {
-    "@metalabel/dfos-api": "^0.2.0",
+    "@metalabel/dfos-api": "^0.4.0",
     "@metalabel/dfos-client": "^0.32.0",
     "@metalabel/dfos-protocol": "^0.32.0",
     "@metalabel/dfos-web-relay": "^0.32.0"

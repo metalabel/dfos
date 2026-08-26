@@ -4,8 +4,8 @@
 
 A complete Sign In With DFOS login — challenge minted server-side, JWS verified
 server-side, session cookie granted server-side — small enough to read in one
-sitting, and two live credential-gated API calls that run the moment you are
-signed in. One static page, seven serverless functions, no database beyond a
+sitting, and four live credential-gated API calls that run the moment you are
+signed in. One static page, ten serverless functions, no database beyond a
 small key-value store, and no SDK beyond the two DFOS packages installed from
 npm like any third party would. Deployed at <https://dfos-siwd-demo.vercel.app>.
 
@@ -35,22 +35,47 @@ the difference is something you can watch rather than read about.
 The page demonstrates before it explains, and from here on so does this README.
 
 **Signed in with the credential, the first thing on screen is your profile** —
-display name, handle, bio, email, joined date — read live from `GET /v1/profile`
-the moment there is a session to read it with. No button. That data is what the
-sign-in bought, and a demo that makes you press one more thing to see it has
-buried its own point. The raw JSON is one disclosure down, because this is still
-a protocol demo, and **Read it again** re-runs the call against the same
-standing grant — which is the cheapest way to watch that using a credential does
-not use it up.
+avatar, display name, handle, bio, email, joined date — read live from
+`GET /v1/profile` the moment there is a session to read it with. No button. That
+data is what the sign-in bought, and a demo that makes you press one more thing
+to see it has buried its own point. The raw JSON is one disclosure down, because
+this is still a protocol demo, and **Read it again** re-runs the call against the
+same standing grant — which is the cheapest way to watch that using a credential
+does not use it up.
 
 **Under it, the spaces you belong to** — read live from `GET /v1/memberships`
 by the same credential, under `read:memberships`, in a second call that starts
 at the same moment. Each space shows its display name, its domain, the worded
-member count the API serves, your role, and the space's DID linked to the
-explorer; your groups inside it are indented under it with their own names,
-roles, and DIDs. Private and unlisted spaces are in that list, because that is
-what the token granted. Belonging to nothing is a normal answer and the section
-says so in one line. The raw JSON is one disclosure down here too.
+member count the API serves, your role, when you joined, how many groups you
+belong to inside it, and the space's DID linked to the explorer.
+
+The groups themselves come from a **second walk**, `GET /v1/group-memberships`,
+correlated to their spaces client-side on the space id: the API serves the
+membership graph as two flat pages rather than one nested one, so either can page
+without the other. A group shows an **exact** member count where a space shows a
+worded bucket — that contrast is the API's deliberate design (a room's population
+is ambient; a group is an operational unit whose size has a real answer), and
+the page renders both as served. Private and unlisted spaces are in the list,
+because that is what the token granted. Belonging to nothing is a normal answer
+and the section says so in one line. The raw JSON of each walk is one disclosure
+down here too.
+
+**At the bottom of that card, a single-membership check.** Type a space or group
+— id, DID, or domain — and ask about that one thing instead of walking the list.
+That is the gating primitive a relying party actually needs, and it answers
+either "member, with this role, since this date" or "not a member — or no such
+space". The API deliberately cannot tell you which of those two it was: the
+identifier is matched against your own membership rows, never resolved against
+the platform, so this credential discloses your memberships and never the
+existence of anything else.
+
+**Then, what this app holds** — `GET /v1/credential`, the credential describing
+itself: who issued it, which app holds it, the scopes it carries, how the app was
+resolved, and when it was issued and expires. It needs no scope at all, because a
+credential may always describe itself. The receipts show the same grant as this
+app verified and stored it at sign-in; this card shows what the API says right
+now, which is a different answer the moment a grant is revoked — a revoked one
+does not describe itself, it refuses with `403` here like everywhere else.
 
 **Below that sits the session indicator**, the way an application shows one: the
 signed-in DID, one chip per granted scope token, and a chip for the credential.
@@ -99,15 +124,18 @@ The rest of this README is that material in long form.
 
 ## How it works
 
-| Endpoint            | What it does                                                                            |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| `GET /config`       | What this deployment can serve, and why not when it cannot                              |
-| `POST /login`       | Mints the challenge and returns the `/authorize` URL                                    |
-| `POST /verify`      | Runs `verifySiwd` against a relay, verifies any returned credential, grants the session |
-| `GET /me`           | Reads the session cookie back — the one source the signed-in view renders from          |
-| `POST /profile`     | Signs one request proof and calls `GET /v1/profile`. Called on arrival, not on a click  |
-| `POST /memberships` | Signs one request proof and calls `GET /v1/memberships`. Called on arrival too          |
-| `POST /logout`      | Expires the session and drops the stored credential                                     |
+| Endpoint                  | What it does                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GET /config`             | What this deployment can serve, and why not when it cannot                                              |
+| `POST /login`             | Mints the challenge and returns the `/authorize` URL                                                    |
+| `POST /verify`            | Runs `verifySiwd` against a relay, verifies any returned credential, grants the session                 |
+| `GET /me`                 | Reads the session cookie back — the one source the signed-in view renders from                          |
+| `POST /profile`           | Signs one request proof and calls `GET /v1/profile`, avatar included. Called on arrival, not on a click |
+| `POST /memberships`       | Signs one request proof and calls `GET /v1/memberships`. Called on arrival too                          |
+| `POST /group-memberships` | The same, for `GET /v1/group-memberships` — the second walk the page correlates against the first       |
+| `POST /credential`        | The same, for `GET /v1/credential` — the credential describing itself, under no scope                   |
+| `POST /check`             | Fills one path segment of `GET /v1/membership/{space}` or `GET /v1/group-membership/{group}`. On demand |
+| `POST /logout`            | Expires the session and drops the stored credential                                                     |
 
 ### The two options
 
@@ -127,7 +155,7 @@ screen names every token in the set, one line each.
 `read:profile` grants the profile without the account email — display name,
 handle, avatar. `read:email` grants the email address. `read:memberships` grants
 the spaces and groups the account belongs to, and its roles in them. Ask for all
-three and the two panels the demo renders carry all of it.
+three and the panels the demo renders carry all of it.
 
 At `identity` scope the authorize request carries `challenge`, `redirect_uri`,
 and `scope` and does **not** send `client_did`. The platform learns who this app
@@ -170,11 +198,13 @@ someone.
    challenge is a one-shot authentication proof, not a bearer token. The
    **credential is not** discarded; holding it is the point.
 6. **Read something with it.** The page does not wait to be asked: as soon as the
-   session exists it posts to `/api/profile` and `/api/memberships`, each of
-   which signs its own request proof against the same credential and calls its
-   one fixed endpoint. What comes back is the top of the signed-in page. The two
-   calls are independent — either can answer first, or refuse on its own, and
-   the page renders each outcome for itself.
+   session exists it posts to `/api/profile`, `/api/memberships`,
+   `/api/group-memberships`, and `/api/credential`, each of which signs its own
+   request proof against the same credential and calls its one fixed endpoint.
+   What comes back is the top of the signed-in page. The four calls are
+   independent — any can answer first, or refuse on its own, and the page renders
+   each outcome for itself. The single-membership checks are the exception: those
+   are on demand, when you ask about one space or group.
 
 **On replay prevention** — how the nonce is minted, remembered, and checked, and
 which discipline a given scope obliges — see
@@ -286,13 +316,14 @@ its own session, so there is no browser-composed `Request` for the adapter to
 cover in the first place. The demo writes the seam out, and the page shows it
 under "Show the receipts", because the composition is the thing worth seeing.
 
-**The second call, hand-composed.** `@metalabel/dfos-api@0.2.0` predates
-`GET /v1/memberships`, so `api/memberships.ts` builds that `Request` itself and
-signs it through the same `signApiRequest` / `buildApiAuthHeaders` pair. Which
-package composes the request is the whole difference: the same method, host,
-path, and body octets are covered, against the same credential. When the
-generated client ships the route, those two lines become
-`api.GET('/memberships')` and nothing else moves.
+**One seam, written twice on purpose.** `@metalabel/dfos-api@0.4.0` ships every
+route this demo calls, so every gated route now composes through the typed
+client — the hand-composed `Request` `api/memberships.ts` used to build is gone.
+`api/profile.ts` remains the seam written out long-form, because it is what the
+page shows under "Show the receipts" and the composition is the thing worth
+seeing; `api/_gated.ts` is that same seam factored for the other four routes, so
+there is one implementation of the preamble and the signing rather than five
+copies drifting apart.
 
 **The endpoints take no parameters, and that is the design.** API-AUTH's
 [Security Considerations](../../specs/API-AUTH.md#security-considerations) name
@@ -301,9 +332,29 @@ is a confused deputy — an XSS on the page, or simply a hostile client, obtains
 proofs for arbitrary requests against every credential the backend holds. So
 `POST /api/profile` signs one request, `GET /v1/profile`, and
 `POST /api/memberships` signs one request, `GET /v1/memberships` — no `limit`,
-no `after`, no `space`, though the API offers all three. The only thing the
-caller supplies is a session cookie saying which credential to use. There is
-nothing to ask with.
+no `after`, no `space`, though the API offers all three. Same for
+`/api/group-memberships` and `/api/credential`. The only thing the caller
+supplies is a session cookie saying which credential to use. There is nothing to
+ask with.
+
+**`POST /api/check` is the one exception, and it is a disciplined one.** A
+relying party's real question is usually "is this user in our space", and
+answering it by walking every membership is the wrong shape. So `api/check.ts`
+holds two fixed request _templates_ — `GET /v1/membership/{space}` and
+`GET /v1/group-membership/{group}` — and the caller supplies the identifier that
+fills the one path segment, validated against a tight charset and percent-encoded
+by the client. Everything else about the request is written in the file. An XSS
+there can ask membership questions the session's credential already answers; it
+cannot obtain a proof for any other method, path, or body. The rule that
+generalizes: parameterizing a signer means confining the input to a **named slot**
+in a request you wrote, never accepting coordinates.
+
+Both check routes answer `404` when the user is not a member — and that `404` is
+**collapsed by design**: "no such space" and "not a member" are deliberately
+indistinguishable, because the identifier is matched against the user's own
+membership rows rather than resolved against the platform. The credential
+discloses the holder's memberships and never the existence of anything else. The
+page renders that as an answer rather than as a failure, which is what it is.
 
 **There is no route parameter naming the user, either.** The credential's root
 issuer selects the subject
@@ -333,7 +384,9 @@ The credential's `exp` is 90 days out; **revocation is the timely lever**, and i
 is checked in the verify path on every request rather than cached anywhere. Revoke
 the grant at your DFOS host and press **Read it again** under the profile — the
 same call that filled the page a moment ago now answers `403`. Nothing about this
-demo changed; the API simply asked a question whose answer moved.
+demo changed; the API simply asked a question whose answer moved. The credential
+card shows the same thing at its sharpest: that route needs no scope at all, so a
+`403` there is the grant itself being gone and can be nothing else.
 
 ## Configuration
 
@@ -608,10 +661,13 @@ is reimplemented, so nothing can drift.
   action asked for. Nothing is ever signed against a credential that has not
   cleared that check first, and the page renders it in full under the receipts
   so it can be read.
-- **The signing seam takes no coordinates from the browser.** `POST /api/profile`
-  and `POST /api/memberships` each sign one fixed request, authorized by the
-  session alone. A backend that signs what a browser asks it to is a confused
-  deputy holding a key.
+- **The signing seam takes no coordinates from the browser.** `POST /api/profile`,
+  `POST /api/memberships`, `POST /api/group-memberships`, and
+  `POST /api/credential` each sign one fixed request, authorized by the session
+  alone. `POST /api/check` is the single parameterized route, and what it accepts
+  is one validated identifier filling one path segment of one of two fixed
+  templates — never a method, a path, or a body. A backend that signs what a
+  browser asks it to is a confused deputy holding a key.
 - **The app's signing key never reaches the browser, and neither does the
   credential.** The browser holds an ordinary session; the backend holds both.
 - **Every POST is origin-checked.** A present `Origin` header that is not this
