@@ -94,8 +94,9 @@ func TestProjection_VMFirstSeenOrder(t *testing.T) {
 	}
 }
 
-// Services: order preserved; DfosRelay → serviceEndpoint(endpoint); ContentAnchor
-// → serviceEndpoint(anchor)+label; unknown type → verbatim (envelope + extras,
+// Services: order preserved; DfosRelay → serviceEndpoint(endpoint);
+// DfosAuthorizationServer → serviceEndpoint(endpoint); ContentAnchor →
+// serviceEndpoint(anchor)+label; unknown type → verbatim (envelope + extras,
 // type intact, id re-anchored).
 func TestProjection_ServiceShapes(t *testing.T) {
 	did := "did:dfos:2222222222222222222222222222222"
@@ -107,13 +108,14 @@ func TestProjection_ServiceShapes(t *testing.T) {
 		Services: []dfos.ServiceEntry{
 			{"id": "svc_relay", "type": "DfosRelay", "endpoint": "https://relay.example"},
 			{"id": "svc_anchor", "type": "ContentAnchor", "label": "pinned", "anchor": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			{"id": "svc_authz", "type": "DfosAuthorizationServer", "endpoint": "https://app.example"},
 			{"id": "svc_x", "type": "CustomThing", "foo": "bar", "nested": map[string]any{"k": "v"}},
 		},
 	}
 	m := marshalMap(t, identityToDidDocument(state))
 	svc, _ := m["service"].([]any)
-	if len(svc) != 3 {
-		t.Fatalf("expected 3 services, got %d", len(svc))
+	if len(svc) != 4 {
+		t.Fatalf("expected 4 services, got %d", len(svc))
 	}
 
 	relaySvc, _ := svc[0].(map[string]any)
@@ -130,7 +132,18 @@ func TestProjection_ServiceShapes(t *testing.T) {
 		t.Fatalf("ContentAnchor projection wrong: %v", anchor)
 	}
 
-	unknown, _ := svc[2].(map[string]any)
+	// SIWD's authorize origin projects exactly as DfosRelay does: the same three
+	// keys, mapped (the raw `endpoint` member does not survive), never verbatim.
+	authz, _ := svc[2].(map[string]any)
+	if authz["id"] != did+"#svc_authz" || authz["type"] != "DfosAuthorizationServer" ||
+		authz["serviceEndpoint"] != "https://app.example" {
+		t.Fatalf("DfosAuthorizationServer projection wrong: %v", authz)
+	}
+	if len(authz) != 3 {
+		t.Fatalf("DfosAuthorizationServer must carry exactly id/type/serviceEndpoint: %v", authz)
+	}
+
+	unknown, _ := svc[3].(map[string]any)
 	if unknown["id"] != did+"#svc_x" || unknown["type"] != "CustomThing" ||
 		unknown["foo"] != "bar" {
 		t.Fatalf("unknown-type projection wrong: %v", unknown)
@@ -138,6 +151,35 @@ func TestProjection_ServiceShapes(t *testing.T) {
 	nested, _ := unknown["nested"].(map[string]any)
 	if nested["k"] != "v" {
 		t.Fatalf("unknown-type must preserve nested extras verbatim: %v", unknown)
+	}
+}
+
+// RAW-BYTE NOTE (did_document.go header): recognized service types are emitted
+// from structs so the key ORDER matches the TS object literal, not just the key
+// set. DfosAuthorizationServer is the exact DfosRelay mirror, so both arms must
+// serialize to the identical byte shape — this pins that, since a map-backed
+// projection would sort the keys and silently break raw-byte parity with TS.
+func TestProjection_EndpointServicesShareRawByteShape(t *testing.T) {
+	did := "did:dfos:2222222222222222222222222222222"
+	relay := projectService(did, dfos.ServiceEntry{"id": "s", "type": "DfosRelay", "endpoint": "https://e.example"})
+	authz := projectService(did, dfos.ServiceEntry{"id": "s", "type": "DfosAuthorizationServer", "endpoint": "https://e.example"})
+
+	relayJSON, err := json.Marshal(relay)
+	if err != nil {
+		t.Fatalf("marshal relay: %v", err)
+	}
+	authzJSON, err := json.Marshal(authz)
+	if err != nil {
+		t.Fatalf("marshal authz: %v", err)
+	}
+
+	wantAuthz := `{"id":"` + did + `#s","type":"DfosAuthorizationServer","serviceEndpoint":"https://e.example"}`
+	if string(authzJSON) != wantAuthz {
+		t.Fatalf("DfosAuthorizationServer raw JSON = %s, want %s", authzJSON, wantAuthz)
+	}
+	// same bytes modulo the type name itself
+	if string(relayJSON) != `{"id":"`+did+`#s","type":"DfosRelay","serviceEndpoint":"https://e.example"}` {
+		t.Fatalf("DfosRelay raw JSON drifted: %s", relayJSON)
 	}
 }
 

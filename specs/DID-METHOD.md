@@ -170,8 +170,11 @@ resolves to an artifact.
 Because the namespace is open, services beyond the proof plane define their own
 types additively. The document gateway adds `DfosDocumentGateway` (a gateway
 endpoint) and `DfosProfile` (a contentId-or-CID profile anchor); a relay that
-does not recognize them preserves and ignores them. See
-[DOCUMENT-GATEWAY.md → Discovery](https://protocol.dfos.com/document-gateway#discovery).
+does not recognize them preserves and ignores them. SIWD adds
+`DfosAuthorizationServer` (an authorize origin; a relay that maps it projects
+`endpoint` → `serviceEndpoint` exactly as for `DfosRelay`). See
+[DOCUMENT-GATEWAY.md → Discovery](https://protocol.dfos.com/document-gateway#discovery)
+and [SIWD.md → Finding the authorize endpoint](https://protocol.dfos.com/siwd#finding-the-authorize-endpoint--the-dfosauthorizationserver-entry).
 
 ```json
 "service": [

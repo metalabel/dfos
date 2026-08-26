@@ -805,6 +805,30 @@ describe('web relay', () => {
       });
     });
 
+    it('projects a DfosAuthorizationServer entry exactly as it projects a DfosRelay', async () => {
+      // SIWD's authorize origin is an open-namespace type whose `endpoint` member
+      // mirrors DfosRelay's, so the projection is the same three keys in the same
+      // order — the Go twin emits byte-identical output (did_document.go).
+      const id = await createIdentityWithServices([
+        {
+          id: 'svc_authz',
+          type: 'DfosAuthorizationServer',
+          endpoint: 'https://app.dfos.com',
+        } as unknown as ServiceEntry,
+      ]);
+      await postOps([id.jwsToken]);
+
+      const doc = (await json(await resolve(id.did))).didDocument;
+      const authz = doc.service.find((s: { id: string }) => s.id === `${id.did}#svc_authz`);
+      expect(authz).toEqual({
+        id: `${id.did}#svc_authz`,
+        type: 'DfosAuthorizationServer',
+        serviceEndpoint: 'https://app.dfos.com',
+      });
+      // mapped, NOT preserved verbatim: the raw `endpoint` member is gone
+      expect(Object.keys(authz)).toEqual(['id', 'type', 'serviceEndpoint']);
+    });
+
     it('preserves an unrecognized service type verbatim, re-anchoring only the id', async () => {
       // §4.5 MUST-ignore-unknown: a type the relay does not recognize keeps all
       // of its fields; only the entry id is re-anchored to a DID-URL fragment.

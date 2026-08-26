@@ -49,7 +49,7 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
   {
     key: 'services',
     term: 'services',
-    def: 'Discovery vocabulary in identity state: DfosRelay entries advertise a relay endpoint holding this identity’s data; ContentAnchor entries pin a stable contentId or artifact CID (e.g. a profile).',
+    def: 'Discovery vocabulary in identity state: DfosRelay entries advertise a relay endpoint holding this identity’s data; ContentAnchor entries pin a stable contentId or artifact CID (e.g. a profile); DfosAuthorizationServer entries name the server where this identity’s person signs in, so a client holding only the DID can find it. The vocabulary is open — an unrecognized type is still a legible claim, just one this explorer has no special reading for.',
   },
   {
     key: 'originBinding',

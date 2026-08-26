@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ import (
 //
 //   1. live+services  — VM dedup, FULL per-role arrays, service[] with DfosRelay
 //                        (serviceEndpoint) + ContentAnchor (serviceEndpoint+label)
-//                        in state order.
+//                        + DfosAuthorizationServer (serviceEndpoint) in state order.
 //   2. live+noService — a live identity with NO services: pins the `service` key
 //                        OMISSION (omitempty) parity end-to-end on the wire.
 //   3. deactivated    — four-key doc, deactivated:true, empty verificationMethod,
@@ -61,7 +62,19 @@ func TestDualRelayParity_Resolver(t *testing.T) {
 	drainUntilStable(t, goURL, len(allOps))
 
 	t.Run("live+services", func(t *testing.T) {
-		compareResolver(t, tsURL, goURL, "/1.0/identifiers/"+fix.QueryServiceDID, 200)
+		path := "/1.0/identifiers/" + fix.QueryServiceDID
+		compareResolver(t, tsURL, goURL, path, 200)
+
+		// Equal bodies alone cannot tell "both twins map the entry" from "both
+		// twins dropped it", so pin that the open-namespace authorize origin is
+		// actually present AND mapped on the wire — otherwise the fixture would
+		// stop exercising the endpoint→serviceEndpoint arm without any red bar.
+		_, tsBody := getBody(t, tsURL+path)
+		want := `"serviceEndpoint":"https://app.example"`
+		if !strings.Contains(string(tsBody), `"DfosAuthorizationServer"`) ||
+			!strings.Contains(string(tsBody), want) {
+			t.Fatalf("DfosAuthorizationServer entry not projected in resolver body: %s", tsBody)
+		}
 	})
 	t.Run("live+noService", func(t *testing.T) {
 		// QueryDID (user A) is a live identity with no services set — the `service`
