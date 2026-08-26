@@ -32,7 +32,11 @@
       .card {
         border: 1px solid #ddd;
         border-radius: 0.75rem;
+        margin: 0 0 1.25rem;
         padding: 1.25rem;
+      }
+      .card > h2:first-child {
+        margin-top: 0;
       }
       button {
         background: #111;
@@ -42,6 +46,55 @@
         cursor: pointer;
         font: inherit;
         padding: 0.6rem 1rem;
+      }
+      /* Secondary actions — sign out, re-read — next to a primary that is the
+         page's own subject rather than a button. */
+      button.quiet {
+        background: #fff;
+        border: 1px solid #ccc;
+        color: #111;
+        font-size: 0.875rem;
+        padding: 0.4rem 0.8rem;
+      }
+      /* The session indicator: the strip an application puts at the top to say
+         who is signed in and what they are signed in with. */
+      .session {
+        background: #fafafa;
+      }
+      .session .who {
+        margin: 0;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin: 0.6rem 0;
+      }
+      .chip {
+        background: #eee;
+        border-radius: 999px;
+        color: #444;
+        font-size: 0.75rem;
+        padding: 0.15rem 0.6rem;
+      }
+      .chip.ok {
+        background: #e6f4ea;
+        color: #14532d;
+      }
+      .chip.warn {
+        background: #fdeaea;
+        color: #7f1d1d;
+      }
+      /* The profile hero's secondary facts, held together under the bio. */
+      .handle {
+        color: #666;
+        margin: 0 0 0.75rem;
+      }
+      .meta p {
+        margin: 0.15rem 0;
+      }
+      .links {
+        font-size: 0.875rem;
       }
       /* A quieter block under the main content of a card — separated, not boxed,
          so the page stays one column of 28rem rather than a stack of frames. */
@@ -132,6 +185,7 @@
     <footer class="dim">
       <p>
         <a href="https://protocol.dfos.com/siwd">SIWD spec</a> ·
+        <a href="https://protocol.dfos.com/api-auth">API-AUTH spec</a> ·
         <a href="https://github.com/metalabel/dfos">source on GitHub</a>
       </p>
     </footer>

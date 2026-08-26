@@ -4,10 +4,10 @@
 
 A complete Sign In With DFOS login — challenge minted server-side, JWS verified
 server-side, session cookie granted server-side — small enough to read in one
-sitting, plus a live credential-gated API call at the end of it. One static page,
-six serverless functions, no database beyond a small key-value store, and no SDK
-beyond the two DFOS packages installed from npm like any third party would.
-Deployed at <https://dfos-siwd-demo.vercel.app>.
+sitting, and a live credential-gated API call that runs the moment you are
+signed in. One static page, six serverless functions, no database beyond a small
+key-value store, and no SDK beyond the two DFOS packages installed from npm like
+any third party would. Deployed at <https://dfos-siwd-demo.vercel.app>.
 
 The load-bearing decision is **where verification happens**. It happens in
 `api/verify.ts`, because that is where the session is granted.
@@ -22,59 +22,71 @@ relay is untrusted; the crypto is what convinces us.
 **You pick the scope before you sign in, and the choice changes what the backend
 owes.** `identity` proves who you are and returns nothing else. `read:profile`
 also returns a **credential** — a durable, audience-bound authorization the app
-keeps and later presents to the DFOS API. That one difference obliges a
-stricter replay discipline, requires the app to name its own DID, and unlocks a
-live credential-gated API call afterwards. Both run side by side so the
-difference is something you can watch rather than read about.
+keeps and presents to the DFOS API. That one difference obliges a stricter
+replay discipline, requires the app to name its own DID, and unlocks the live
+credential-gated API call. Both run side by side so the difference is something
+you can watch rather than read about.
 
-## Why sign every request
+## What you see
 
-The easy design is a bearer token: the login hands the app a string, and the
-string **is** the authorization — whoever presents it, wins. Every stolen-token
-attack lives inside that one property. A bearer token in a log line, a crash
-report, a proxy cache, or an exfiltrated database is the grant itself, and the
-only remedies are short lifetimes (which trade away durability) or revocation
-races (which trade away certainty).
+The page demonstrates before it explains, and from here on so does this README.
 
-This demo's credential deliberately does not have that property. It is a signed
-statement that **a grant exists** — issued by the user, audience-bound to this
-app's DID, scoped to `read:profile` on `api:api.dfos.com` — and presenting it
-proves nothing by itself. What exercises it is a **request proof**: a short-lived
-signature by this app's own key over the exact request being made — method,
-host, path, body hash, right now — carrying the credential's CID inside the
-signed bytes. The API checks both. Steal the credential and you hold metadata;
-steal a proof and you hold one request that has already happened. The two
-artifacts only compose into authority in the hands of the party holding the
-key, which is the definition of proof-of-possession.
+**Signed in at `read:profile`, the first thing on screen is your profile** —
+display name, handle, bio, email, joined date — read live from `GET /v1/profile`
+the moment there is a session to read it with. No button. That data is what the
+sign-in bought, and a demo that makes you press one more thing to see it has
+buried its own point. The raw JSON is one disclosure down, because this is still
+a protocol demo, and **Read it again** re-runs the call against the same
+standing grant — which is the cheapest way to watch that using a credential does
+not use it up.
 
-That is why the backend signs, and the browser never sees a key. A browser
-cannot hold a signing key non-extractably, so the supported shape is the
-backend-for-frontend this demo is: the browser holds an ordinary session
-cookie, and the server — which can keep a secret — signs one fixed request on
-its behalf. "Sign every request" costs one Ed25519 signature per call, and it
-buys retiring the entire category of replayed-authorization bugs rather than
-patching instances of it.
+**Above it sits the session indicator**, the way an application shows one: the
+signed-in DID, a chip for the scope, and a chip for the credential —
+`credential active · 89d left`, or `credential expired` — plus the grant's
+action and resource and when the session runs out. Every value there was read
+back out of the server's own sealed cookie, never out of anything the browser
+supplied.
 
-The deeper point is that none of this is platform machinery. The user's
-identity is a self-verifying chain any relay can serve; the credential and the
-proof are byte contracts published in [CREDENTIALS](../../specs/CREDENTIALS.md)
-and [API-AUTH](../../specs/API-AUTH.md); verification is a pure function of
-public keys, and revocation is the user's standing lever, re-checked on every
-request. The resource form is `api:<host>` — host-as-identifier — so **any API
-on any domain** can gate itself the same way with no registry, no OAuth server,
-and no coordination with anyone: publish which host you are, verify the two
-headers, honor revocation. The DFOS API is simply the first host doing it.
+At `identity` scope there is no credential and so nothing to read, and the page
+says that rather than showing an empty panel.
+
+**Then this app's own identity.** The user side of a sign-in gets a DID, a
+signed chain, and an explorer to check it in; so does the app side, and that
+symmetry is worth seeing rather than being told about. The panel shows what
+`public/.well-known/dfos-app.json` says about this app — its `name`, its
+`client_did`, and a summary of the `identity_chain` it carries: how many signed
+operations, of which types, how many current auth keys, and the head CID — with
+links to the served file and to this app's own page in the explorer. Those bytes
+are decoded for display and nothing more. What makes the chain real is a host
+verifying that it derives the declared DID, which happens at first consent.
+
+The panel reports only what it actually read. "This page could not load the
+file", "the origin serves no file", and "the file declares nothing" are three
+different sentences, and the panel never substitutes one for another — a request
+that failed is not evidence about a file's contents. Whether this origin is in
+the file's `redirect_uris` is asked separately and answered separately, because
+what an app declares about itself and where it may be redirected to are
+different questions.
+
+**Everything mechanical is one disclosure down, under "Show the receipts":** the
+credential in full, the signing seam that exercised it, the decoded sign-in
+artifact, the checks the server ran before it granted anything, how this app is
+registered, links to look the same chain up in a second verifier, the source of
+every file in the flow, and the specs. Nothing was cut to lead with the
+demonstration — it moved.
+
+The rest of this README is that material in long form.
 
 ## How it works
 
-| Endpoint        | What it does                                                                                                        |
-| --------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `GET /config`   | What this deployment can serve — which scopes are available, and why not when they are not                          |
-| `POST /login`   | Mints the challenge, remembers the nonce (sealed cookie or store, per scope), returns the `/authorize` URL          |
-| `POST /verify`  | Recovers that nonce, runs `verifySiwd` against a relay, verifies any returned credential, grants the session cookie |
-| `GET /me`       | Reads the session cookie back — the one source the signed-in view renders from                                      |
-| `POST /profile` | Exercises the credential: signs one request proof and calls `GET /v1/profile` on the DFOS API                       |
-| `POST /logout`  | Expires the session and drops the stored credential                                                                 |
+| Endpoint        | What it does                                                                                                                     |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /config`   | What this deployment can serve — which scopes are available, and why not when they are not                                       |
+| `POST /login`   | Mints the challenge, remembers the nonce (sealed cookie or store, per scope), returns the `/authorize` URL                       |
+| `POST /verify`  | Recovers that nonce, runs `verifySiwd` against a relay, verifies any returned credential, grants the session cookie              |
+| `GET /me`       | Reads the session cookie back — the one source the signed-in view renders from                                                   |
+| `POST /profile` | Exercises the credential: signs one request proof and calls `GET /v1/profile` on the DFOS API. Called on arrival, not on a click |
+| `POST /logout`  | Expires the session and drops the stored credential                                                                              |
 
 ### The two scopes
 
@@ -132,10 +144,16 @@ signing key, so the app cannot ask for a credential it would be unable to exerci
    authentication proof, not a bearer token. The **credential is not** discarded;
    holding it is the point.
 
+6. **Read something with it.** On the credential path the page does not wait to
+   be asked: as soon as the session exists it posts to `/api/profile`, which
+   signs one request proof and calls `GET /v1/profile`. What comes back is the
+   hero of the signed-in page.
+
 The browser still **decodes** the returned JWS and shows it, in a panel labelled
 for what it is: `decodeJwsUnsafe` does no verification and says so in its name.
-Sign in and open **"Show the receipts"** for the decoded artifact, the list of
-checks the server ran, and links to look the same chain up yourself.
+Sign in and open **"Show the receipts"** for the credential in full, the signing
+seam that exercised it, the decoded artifact, the list of checks the server ran,
+and links to look the same chain up yourself.
 
 Spec: [`specs/SIWD.md`](../../specs/SIWD.md) · <https://protocol.dfos.com/siwd>
 
@@ -215,6 +233,44 @@ produced.** A nonce handed to the verifier by the party presenting the artifact 
 in a callback parameter, a request body, or an unsealed cookie — is not a replay
 defense at all.
 
+## Why sign every request
+
+The easy design is a bearer token: the login hands the app a string, and the
+string **is** the authorization — whoever presents it, wins. Every stolen-token
+attack lives inside that one property. A bearer token in a log line, a crash
+report, a proxy cache, or an exfiltrated database is the grant itself, and the
+only remedies are short lifetimes (which trade away durability) or revocation
+races (which trade away certainty).
+
+This demo's credential deliberately does not have that property. It is a signed
+statement that **a grant exists** — issued by the user, audience-bound to this
+app's DID, scoped to `read:profile` on `api:api.dfos.com` — and presenting it
+proves nothing by itself. What exercises it is a **request proof**: a short-lived
+signature by this app's own key over the exact request being made — method,
+host, path, body hash, right now — carrying the credential's CID inside the
+signed bytes. The API checks both. Steal the credential and you hold metadata;
+steal a proof and you hold one request that has already happened. The two
+artifacts only compose into authority in the hands of the party holding the
+key, which is the definition of proof-of-possession.
+
+That is why the backend signs, and the browser never sees a key. A browser
+cannot hold a signing key non-extractably, so the supported shape is the
+backend-for-frontend this demo is: the browser holds an ordinary session
+cookie, and the server — which can keep a secret — signs one fixed request on
+its behalf. "Sign every request" costs one Ed25519 signature per call, and it
+buys retiring the entire category of replayed-authorization bugs rather than
+patching instances of it.
+
+The deeper point is that none of this is platform machinery. The user's
+identity is a self-verifying chain any relay can serve; the credential and the
+proof are byte contracts published in [CREDENTIALS](../../specs/CREDENTIALS.md)
+and [API-AUTH](../../specs/API-AUTH.md); verification is a pure function of
+public keys, and revocation is the user's standing lever, re-checked on every
+request. The resource form is `api:<host>` — host-as-identifier — so **any API
+on any domain** can gate itself the same way with no registry, no OAuth server,
+and no coordination with anyone: publish which host you are, verify the two
+headers, honor revocation. The DFOS API is simply the first host doing it.
+
 ## Exercising the credential
 
 A credential says a grant exists. It does **not** say the party presenting it is
@@ -237,6 +293,7 @@ scheme is `DFOS` and not `Bearer`.
 
 ```ts
 const api = createDfosApi({
+  baseUrl: `https://${API_HOST}/v1/`,
   fetch: async (request) => {
     const url = new URL(request.url);
     const { proof } = await signApiRequest({
@@ -249,8 +306,9 @@ const api = createDfosApi({
       sign,
     });
     const headers = new Headers(request.headers);
-    headers.set('authorization', `DFOS ${proof}`);
-    headers.set('x-credential', credential);
+    for (const [name, value] of Object.entries(buildApiAuthHeaders({ proof, credential }))) {
+      headers.set(name, value);
+    }
     return fetch(new Request(request, { headers }));
   },
 });
@@ -263,6 +321,18 @@ the API's shape — paths and response types generated from the live OpenAPI spe
 [`@metalabel/dfos-client`](https://www.npmjs.com/package/@metalabel/dfos-client)
 knows the byte contract. Neither had to learn about the other: the client hands
 the wrapper one fully-composed `Request`, and the wrapper signs exactly that.
+
+**Why the long form, when the kit ships a one-liner.**
+`@metalabel/dfos-client/api-auth` also exports
+[`createApiAuthFetch`](../../packages/dfos-client/README.md#metalabeldfos-clientapi-auth),
+which is that whole wrapper as a single call — hand it a credential, a `kid`,
+and a `sign` callback and every request the API client composes goes out
+credential-gated. It is the right answer for a process signing on its own
+behalf. It is the wrong answer here, and the next paragraph is why: a backend
+fronting a browser must authorize the coordinates it is about to sign against
+its own session, so there is no browser-composed `Request` for the adapter to
+cover in the first place. The demo writes the seam out, and the page shows it
+under "Show the receipts", because the composition is the thing worth seeing.
 
 **The endpoint takes no parameters, and that is the design.** API-AUTH's
 [Security Considerations](../../specs/API-AUTH.md#security-considerations) name
@@ -299,8 +369,8 @@ are the status code and the envelope.
 
 The credential's `exp` is 90 days out; **revocation is the timely lever**, and it
 is checked in the verify path on every request rather than cached anywhere. Revoke
-the grant at your DFOS host and press "Read my profile" again — the same button
-that returned your profile a moment ago now answers `403`. Nothing about this
+the grant at your DFOS host and press **Read it again** under the profile — the
+same call that filled the page a moment ago now answers `403`. Nothing about this
 demo changed; the API simply asked a question whose answer moved.
 
 ## Configuration
@@ -433,6 +503,12 @@ key.
 says so — naming the exact string and the exact file — before you click anything.
 The sign-in button stays live either way, so you can watch the host refuse it.
 
+**And it renders what it found**, in the "This app's own identity" panel
+described under [What you see](#what-you-see): the `name` and `client_did` this
+app claims, a count and summary of the carried `identity_chain`, and a link to
+this app's own page in the explorer. An app asking a user to trust it can afford
+to be as inspectable as the user it is asking about.
+
 The server derives the same string from the request's own origin rather than
 hardcoding it, so the target the page checks and the target the server sends
 cannot drift apart.
@@ -459,7 +535,9 @@ extra members — `client_did` and `identity_chain` — are step 1 below.)
 Preview-deploy URLs are **not** in the allowlist, by design. Each preview gets a
 fresh hostname, and an allowlist that admitted arbitrary subdomains would be an
 open redirector. Sign-in works on the origins you listed; everywhere else the
-page says which string is missing.
+page says which string is missing. The identity panel still renders the app's
+declared identity there — being outside the redirect allowlist says nothing
+about what the file declares, and the panel keeps the two apart.
 
 That gets you the identity scope. For `read:profile`, three more steps. These
 are not hypothetical — the canonical deployment was provisioned by exactly this
@@ -569,8 +647,9 @@ is reimplemented, so nothing can drift.
   one inside the verified JWS.
 - **A returned credential is verified before it is stored** — and checked to be
   issued by the signer, audienced to this app, and covering the resource and
-  action asked for. The page renders it in full before the first request is
-  signed against it.
+  action asked for. Nothing is ever signed against a credential that has not
+  cleared that check first, and the page renders it in full under the receipts
+  so it can be read.
 - **The signing seam takes no coordinates from the browser.** `POST /api/profile`
   signs one fixed request, authorized by the session alone. A backend that signs
   what a browser asks it to is a confused deputy holding a key.
