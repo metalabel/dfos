@@ -77,12 +77,12 @@ https://app.dfos.com/authorize?
   &client_did=did:dfos:<3p id>
 ```
 
-| Parameter      | Required                          | Description                                                                            |
-| -------------- | --------------------------------- | -------------------------------------------------------------------------------------- |
-| `challenge`    | Yes                               | Base64url of the canonical challenge bytes (see [Challenge schema](#challenge-schema)) |
-| `redirect_uri` | Yes                               | URL the host redirects to after signing                                                |
-| `scope`        | Yes                               | A space-separated set of requested scope tokens (the OAuth `scope` convention); each token MUST be a registered scope — see [Scopes and Credentials](#scopes-and-credentials) |
-| `client_did`   | When any requested scope returns a credential | The third party's own DFOS DID — the `aud` any returned credential is issued to        |
+| Parameter      | Required                                      | Description                                                                                                                                                                   |
+| -------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `challenge`    | Yes                                           | Base64url of the canonical challenge bytes (see [Challenge schema](#challenge-schema))                                                                                        |
+| `redirect_uri` | Yes                                           | URL the host redirects to after signing                                                                                                                                       |
+| `scope`        | Yes                                           | A space-separated set of requested scope tokens (the OAuth `scope` convention); each token MUST be a registered scope — see [Scopes and Credentials](#scopes-and-credentials) |
+| `client_did`   | When any requested scope returns a credential | The third party's own DFOS DID — the `aud` any returned credential is issued to                                                                                               |
 
 `client_did` is what makes a credential-returning scope well-posed: the credential is issued to a named DID, not to an unnamed "the app." The host MUST display `client_did` (or an identity resolved from it) alongside `domain` on the consent screen; the credential's audience binding is to the DID the user consented to, and `domain` remains the phishing-relevant binding (see [Security](#security-considerations)).
 

@@ -157,10 +157,10 @@ The credential side of this capability is one additive resource form, registered
 
 **Actions are enumerated registry tokens.** This spec's v0 registry defines exactly two:
 
-| Action         | Grants                                                                                                                          |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Action         | Grants                                                                                                                                                                |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `read:profile` | Read access to the granting user's own profile — display name, handle, avatar, and public profile fields. The account email address is excluded; that is `read:email` |
-| `read:email`   | Read access to the granting user's account email address                                                                         |
+| `read:email`   | Read access to the granting user's account email address                                                                                                              |
 
 The registry's `v0` is this spec's own `0.x` clock; a `/v1/...` segment in a route path — as in the [payload example](#payload) above — is the serving API's own path versioning. The two clocks are unrelated, and the registry names actions, never paths. New tokens register here additively as API surface grows (`read:posts`, and eventually write-bearing tokens once revocation tooling is user-facing). A grant carrying several tokens is an ordinary comma-separated action list (`read:profile,read:email`), and narrowing is dropping tokens — the credential spec's action-set machinery, unchanged.
 
