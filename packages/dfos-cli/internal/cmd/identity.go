@@ -9,6 +9,7 @@ import (
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
@@ -31,6 +32,8 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityUpdateCmd())
 	cmd.AddCommand(newIdentityAddKeyCmd())
 	cmd.AddCommand(newIdentityDevicePubkeyCmd())
+	cmd.AddCommand(newIdentityBindDomainCmd())
+	cmd.AddCommand(newIdentityVerifyBindingCmd())
 	cmd.AddCommand(newIdentityDeleteCmd())
 	cmd.AddCommand(newIdentityRestoreCmd())
 	cmd.AddCommand(newIdentityPublishCmd())
@@ -439,6 +442,304 @@ func newIdentityDevicePubkeyCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&controller, "controller", false, "Suggest a controller role in the printed add-key hint (auth is the default)")
 	return cmd
+}
+
+// newIdentityBindDomainCmd writes the chain's half of an origin binding: a
+// DfosOrigin services entry naming the domain, signed by a controller key. The
+// domain's half is served by the operator, so the command's real output is the
+// instruction block telling them exactly what to publish. See
+// specs/ORIGIN-BINDING.md (https://protocol.dfos.com/origin-binding).
+func newIdentityBindDomainCmd() *cobra.Command {
+	var peerName string
+	var serviceID string
+
+	cmd := &cobra.Command{
+		Use:   "bind-domain <domain>",
+		Short: "Claim a domain in the identity chain and print what the domain must serve",
+		Long: "Append (or replace) this identity's DfosOrigin services entry so its chain claims <domain>, " +
+			"then print the attestation the domain must serve back — a /.well-known/dfos-did document or a " +
+			"_dfos TXT record, either one sufficient. The claim is an ordinary services full-state replacement " +
+			"signed by a controller key: every other service entry is carried forward unchanged, and an " +
+			"identity claims at most one domain. A binding proves control of the domain at verification time — " +
+			"never personhood, endorsement, or trustworthiness. Normative spec: https://protocol.dfos.com/origin-binding",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			domain, err := validateDomain(args[0])
+			if err != nil {
+				return err
+			}
+
+			_, chain, err := requireIdentity()
+			if err != nil {
+				return err
+			}
+
+			plan, err := planOriginBinding(chain.State.Services, domain, serviceID)
+			if err != nil {
+				return err
+			}
+
+			// Already claiming exactly this — signing an identical services set
+			// would burn a chain operation to say nothing.
+			if plan.Action == bindActionUnchanged {
+				if jsonFlag {
+					outputJSON(map[string]any{
+						"did":       chain.DID,
+						"domain":    domain,
+						"unchanged": true,
+						"wellKnown": map[string]string{"path": wellKnownDIDPath, "content": chain.DID},
+						"dnsRecord": map[string]string{"name": originTXTName(domain) + ".", "type": "TXT", "value": dnsAttestationTag + chain.DID},
+					})
+					return nil
+				}
+				fmt.Printf("Already bound:\n")
+				fmt.Printf("  DID:            %s\n", chain.DID)
+				fmt.Printf("  Domain:         %s\n", domain)
+				fmt.Printf("  Chain unchanged (no operation signed).\n")
+				printBindInstructions(chain.DID, domain)
+				return nil
+			}
+
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			kid, err := selectHeldKey(chain.DID, chain.State.ControllerKeys, "controller")
+			if err != nil {
+				return err
+			}
+			controllerPriv, err := keys.GetPrivateKey(kid)
+			if err != nil {
+				return fmt.Errorf("controller key not in keychain: %w", err)
+			}
+
+			lastToken := chain.Log[len(chain.Log)-1]
+			h, _, err := protocol.DecodeJWSUnsafe(lastToken)
+			if err != nil {
+				return fmt.Errorf("decode last operation: %w", err)
+			}
+
+			// Key sets carried forward untouched: this operation only moves the
+			// services set.
+			jwsToken, opCID, err := protocol.SignIdentityUpdateWithServices(
+				h.CID,
+				chain.State.ControllerKeys, chain.State.AuthKeys, chain.State.AssertKeys,
+				plan.Services,
+				kid, controllerPriv,
+			)
+			if err != nil {
+				return fmt.Errorf("sign update: %w", err)
+			}
+
+			results := lr.Relay.Ingest([]string{jwsToken})
+			if len(results) > 0 && results[0].Status == "rejected" {
+				return fmt.Errorf("local relay rejected: %s", results[0].Error)
+			}
+
+			rn := peerName
+			if rn == "" {
+				rn = peerFlag
+			}
+			if rn != "" {
+				c, _, err := getPeerClient(rn)
+				if err != nil {
+					return err
+				}
+				peerResults, err := c.SubmitOperations([]string{jwsToken})
+				if err != nil {
+					return fmt.Errorf("submit: %w", err)
+				}
+				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
+					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
+				}
+			}
+
+			if jsonFlag {
+				out := map[string]any{
+					"did":          chain.DID,
+					"domain":       domain,
+					"serviceID":    plan.ID,
+					"operationCID": opCID,
+					"wellKnown":    map[string]string{"path": wellKnownDIDPath, "content": chain.DID},
+					"dnsRecord":    map[string]string{"name": originTXTName(domain) + ".", "type": "TXT", "value": dnsAttestationTag + chain.DID},
+				}
+				if plan.Action == bindActionRebind && plan.Previous != "" {
+					out["previousDomain"] = plan.Previous
+				}
+				if plan.Collapsed > 0 {
+					out["collapsedEntries"] = plan.Collapsed
+				}
+				outputJSON(out)
+				return nil
+			}
+
+			fmt.Printf("Domain claimed in chain:\n")
+			fmt.Printf("  DID:            %s\n", chain.DID)
+			fmt.Printf("  Domain:         %s\n", domain)
+			fmt.Printf("  Service entry:  %s  [%s]\n", plan.ID, originServiceType)
+			fmt.Printf("  Operation CID:  %s\n", opCID)
+			if plan.Action == bindActionRebind && plan.Previous != domain {
+				fmt.Printf("  Re-binding:     %s → %s\n", plan.Previous, domain)
+			}
+			if plan.Collapsed > 0 {
+				fmt.Printf("  Collapsed:      %d extra %s entr(y|ies) removed — a set with more than one claims nothing\n", plan.Collapsed, originServiceType)
+			}
+			printBindInstructions(chain.DID, domain)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
+	cmd.Flags().StringVar(&serviceID, "id", "", "Service entry id to use (default: the existing entry's id, else \"origin\")")
+	return cmd
+}
+
+// newIdentityVerifyBindingCmd runs both halves of the bidirectional check
+// locally — chain claim plus the domain's HTTPS and DNS attestations — and
+// folds them into the spec's three verdicts. No DFOS server is in the loop.
+func newIdentityVerifyBindingCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "verify-binding [name|did|domain]",
+		Short: "Verify an identity's origin binding (chain claim vs the domain's attestation)",
+		Long: "Verify a DfosOrigin binding end to end. With no argument, or an identity name or DID, the walk " +
+			"starts from the chain: read the claimed domain, then query the domain. With a bare hostname the walk " +
+			"starts from the domain: read its attestation, resolve that DID's chain, and require the chain to claim " +
+			"this exact domain. Both attestation methods are checked — https://<domain>/.well-known/dfos-did (falling " +
+			"back to /.well-known/dfos-app.json only when the well-known document is ABSENT) and a did= TXT record at " +
+			"_dfos.<domain>.\n\n" +
+			"Verdicts and exit codes:\n" +
+			"  bound     0   at least one method attests this DID and no method answers anything else\n" +
+			"  broken    1   a method answers a different DID, the methods disagree, or DNS carries several did= records\n" +
+			"  stale     2   a claim exists and every method is silent (silence is not contradiction — staleness is legal)\n" +
+			"  no-claim  0   the chain claims no domain, so there is nothing to verify\n\n" +
+			"Exit 1 is also the CLI's generic error status (unresolvable target, chain not held locally, malformed input); " +
+			"those print an error on stderr instead of a verdict.\n\n" +
+			"Normative spec: https://protocol.dfos.com/origin-binding",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+
+			// No argument: the active identity, chain-first.
+			if len(args) == 0 {
+				_, chain, err := requireIdentity()
+				if err != nil {
+					return err
+				}
+				return verifyBindingFromChain(chain)
+			}
+
+			// An identity name, a DID, or a bare 31-char id resolves chain-first;
+			// anything else must be a hostname. The two forms are structurally
+			// disjoint (a DID id carries no dots, a hostname must), so this
+			// dispatch never guesses.
+			arg := args[0]
+			_, named := cfg.Identities[arg]
+			if named || strings.HasPrefix(arg, "did:") || protocol.IsValidDID("did:dfos:"+arg) {
+				did, err := resolveIdentityDID(arg)
+				if err != nil {
+					return err
+				}
+				fetchIdentityFromPeerIfRequested(did)
+				chain, _ := lr.Relay.GetIdentity(did)
+				if chain == nil {
+					return fmt.Errorf("identity '%s' not found in local relay (fetch it with 'dfos identity fetch %s --peer <peer>')", arg, did)
+				}
+				return verifyBindingFromChain(chain)
+			}
+
+			domain, err := validateDomain(arg)
+			if err != nil {
+				return fmt.Errorf("%q is not a known identity name, a did:dfos identifier, or a bare hostname: %w", arg, err)
+			}
+			return verifyBindingFromDomain(lr, domain)
+		},
+	}
+}
+
+// verifyBindingFromChain is the chain-first walk: the identity names a domain,
+// the domain answers (or does not).
+func verifyBindingFromChain(chain *relay.StoredIdentityChain) error {
+	claim := readOriginClaim(chain.State.Services)
+	if claim.Domain == "" {
+		return bindingReport{DID: chain.DID, Verdict: verdictNoClaim, Reason: claim.Reason}.emit()
+	}
+	results := probeBinding(claim.Domain)
+	return bindingReport{
+		DID:     chain.DID,
+		Domain:  claim.Domain,
+		Claim:   claim.Domain,
+		Verdict: foldVerdict(chain.DID, results),
+		Results: results,
+	}.emit()
+}
+
+// verifyBindingFromDomain is the domain-first walk: the domain names a DID, that
+// DID's chain must name this exact domain back. Half a binding is no binding.
+func verifyBindingFromDomain(lr *localrelay.LocalRelay, domain string) error {
+	results := probeBinding(domain)
+
+	// A domain that contradicts itself is broken before any chain is resolved.
+	if foldVerdict("", results) == verdictBroken {
+		return bindingReport{Domain: domain, Verdict: verdictBroken, Results: results}.emit()
+	}
+
+	candidate := ""
+	for _, r := range results {
+		if r.answered() {
+			candidate = r.DID
+			break
+		}
+	}
+	if candidate == "" {
+		// Nothing published at all: unverifiable, not contradicted.
+		return bindingReport{
+			Domain:  domain,
+			Verdict: verdictStale,
+			Results: results,
+			Reason:  "the domain publishes no attestation, so no binding could be checked",
+		}.emit()
+	}
+
+	fetchIdentityFromPeerIfRequested(candidate)
+	chain, _ := lr.Relay.GetIdentity(candidate)
+	if chain == nil {
+		return fmt.Errorf(
+			"%s attests %s, but that identity is not in the local relay (fetch it with 'dfos identity fetch %s --peer <peer>')",
+			domain, candidate, candidate,
+		)
+	}
+
+	claim := readOriginClaim(chain.State.Services)
+	if claim.Domain == "" {
+		return bindingReport{
+			DID:     chain.DID,
+			Domain:  domain,
+			Verdict: verdictNoClaim,
+			Reason:  claim.Reason + " — an attestation without a chain claim is not a binding",
+			Results: results,
+		}.emit()
+	}
+	if claim.Domain != domain {
+		return bindingReport{
+			DID:     chain.DID,
+			Domain:  domain,
+			Claim:   claim.Domain,
+			Verdict: verdictBroken,
+			Results: results,
+			Reason:  fmt.Sprintf("%s attests this identity, but the chain claims %s — the two halves name different domains", domain, claim.Domain),
+		}.emit()
+	}
+
+	return bindingReport{
+		DID:     chain.DID,
+		Domain:  domain,
+		Claim:   claim.Domain,
+		Verdict: foldVerdict(chain.DID, results),
+		Results: results,
+	}.emit()
 }
 
 // newIdentityAddKeyCmd is the A-side of the multi-device handoff. It appends an
