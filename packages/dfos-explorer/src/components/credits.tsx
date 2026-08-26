@@ -71,6 +71,26 @@ const readDisplay = (value: unknown): CreditDisplay => {
   };
 };
 
+/** Which of a credit row's two identity fields leads the row. */
+export type CreditLead = 'name' | 'did' | 'none';
+
+/**
+ * The lead slot for one verified credit row. A document credit's `name` is
+ * OPTIONAL and frequently absent — the DID is the entry's actual identity, and
+ * it resolves to a public profile name through the same chip every other surface
+ * uses. So a nameless entry leads with its DID rather than announcing "unnamed
+ * credit" across a row that names someone perfectly well, alongside their role.
+ *
+ * The muted placeholder is reserved for the one entry that really has nothing to
+ * lead with: neither field present. Whitespace is not a name (nor a DID) —
+ * a blank <b> would read as a rendering bug rather than an absent field.
+ *
+ * The amber tier already leads with the chip; this is the verified tier catching
+ * up to its own row vocabulary. Pure, unit-tested.
+ */
+export const creditLead = (name: string | undefined, did: string | undefined): CreditLead =>
+  name?.trim() ? 'name' : did?.trim() ? 'did' : 'none';
+
 const initialResult = (display: CreditDisplay): CreditResult =>
   display.claimPresent
     ? { state: 'pending', note: 'checking claimant identity, signature, CID, and exact bind…' }
@@ -184,11 +204,31 @@ const VerifiedCredits = (props: { contentId: string; entries: readonly unknown[]
       <Checks>
         {displays.map((display, index) => {
           const result = results[index] ?? initialResult(display);
+          const lead = creditLead(display.name, display.did);
           return (
             <Check key={index} state={checkState(result.state)} note={result.note}>
-              {display.name ? <b>{display.name}</b> : <span class="muted">unnamed credit</span>}
-              {' · '}
-              {display.did ? <DidLink did={display.did} /> : <span class="err">missing DID</span>}
+              {/* one identity slot, never two: when the DID leads, the chip IS
+                  the identity — a DidLink beside it would print the same
+                  identifier twice on one row (see {@link creditLead}) */}
+              {lead === 'name' ? (
+                <>
+                  <b>{display.name}</b>
+                  {' · '}
+                  {display.did ? (
+                    <DidLink did={display.did} />
+                  ) : (
+                    <span class="err">missing DID</span>
+                  )}
+                </>
+              ) : lead === 'did' && display.did ? (
+                <DidChip did={display.did} />
+              ) : (
+                <>
+                  <span class="muted">unnamed credit</span>
+                  {' · '}
+                  <span class="err">missing DID</span>
+                </>
+              )}
               {' · '}
               {display.role !== undefined ? (
                 <span class="k-role">{display.role || 'empty role'}</span>

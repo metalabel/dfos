@@ -43,9 +43,9 @@ import {
 } from '../components/ui';
 import { contributedFromSignerPage } from '../lib/actor-ledger';
 import { getClient } from '../lib/client';
+import { useIndexRowLabel } from '../lib/content-labels';
 import type { ExplorerOp } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { deriveDocLabel, useDocSnippet } from '../lib/doc-label';
 import { fmtAge, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
@@ -55,7 +55,6 @@ import {
   useIndexCapable,
   useIndexIter2,
 } from '../lib/index-light';
-import { projectedTitle, useIndexContentRow } from '../lib/index-point';
 import { useIndexCredits, type IndexCreditRow } from '../lib/index-raw';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
@@ -586,21 +585,28 @@ export const Identity = (props: { did: string }) => {
 // identity made nothing."
 // -----------------------------------------------------------------------------
 
-/** One credited work: the title if the relay projects one (amber), the role, and
- *  whether a claim token is ATTACHED — byte-presence, which is equally true of a
- *  token that fails to verify or binds to a different role. None of the four
- *  verification words appear here; opening the work is where the fold happens. */
+/** One credited work: the work's own label, the role, and whether a claim token
+ *  is ATTACHED — byte-presence, which is equally true of a token that fails to
+ *  verify or binds to a different role. None of the four verification words
+ *  appear here; opening the work is where the fold happens.
+ *
+ *  THE WORK CELL RUNS THE FULL THREE BEATS, like every other surface that names
+ *  a content chain: short id → the relay index's projected public title (amber)
+ *  → a verified label derived from bytes this tab re-hashed to the committed CID
+ *  (plain ink; a body excerpt renders quoted). It used to render the projection
+ *  ALONE, which meant a public post with a body and no title — the relay index
+ *  projects `title` only for a post/v1 that has one — sat as a bare id pill
+ *  forever, on the one panel whose entire subject is works.
+ *
+ *  `ContentChip` links to the same `#/content/…` target the row click navigates
+ *  to, so the anchor and the row handler agree and a click through either lands
+ *  in the same place. */
 const CreditedRow = (props: { row: IndexCreditRow }) => {
   const { row } = props;
-  const title = projectedTitle(useIndexContentRow(row.contentId));
   return (
     <tr onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        {title ? (
-          <span class="attr">{title}</span>
-        ) : (
-          <span class="cid">{short(row.contentId, 14, 5)}</span>
-        )}
+        <ContentChip id={row.contentId} />
         {row.position === 0 ? <span class="lbl"> primary</span> : null}
       </td>
       <td>
@@ -645,7 +651,9 @@ const CreditedOn = (props: { did: string; indexed: boolean | null }) => {
         <>
           Publicly readable works whose current head document credits this identity — the relay's{' '}
           <Term word="credit" def={GLOSSARY['creditClaim'] ?? ''} /> projection, <b>amber</b>: the
-          document's signer asserts each one. Open a work to fold its claim and see whether the
+          document's signer asserts each one, and it is <b>the credit</b> that is relay-asserted
+          here — each work names itself, promoting to a <span class="did-name">verified</span> label
+          once your tab has re-hashed its bytes. Open a work to fold its claim and see whether the
           credited party signed too. Private works crediting this identity are <b>never</b> listed.
         </>
       }
@@ -715,28 +723,23 @@ const CreditedOn = (props: { did: string; indexed: boolean | null }) => {
 
 type LedgerTab = 'created' | 'contributed' | 'witnessed' | 'issued';
 
-/** One content row in the actor ledger (Created / Contributed): the projected
- *  title (attributed) + type + when, with a live verify badge that greens as the
- *  tab folds the chain — the same amber→verified posture as the browse rows. */
+/** One content row in the actor ledger (Created / Contributed): the chain's
+ *  label + type + when, with a live verify badge that greens as the tab folds the
+ *  chain. The label runs the same three beats as every other index row (see
+ *  `useIndexRowLabel`) — short id → amber projected title → verified label —
+ *  which also puts this row behind the public-read honesty rule it used to sit
+ *  outside of: it passed the relay's `title` through ungated, so a non-public
+ *  chain on an unupgraded relay could surface one. */
 const LedgerContentRow = (props: { row: IndexContentRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
   const rec = useVerifyStatus('content', row.contentId);
   const opCount = rec.facts?.opCount ?? row.opCount;
-  const doc = useDocSnippet(
-    row.contentId,
-    rec.status !== 'attributed' && !row.title && !!row.docSchema && row.publicRead,
-  );
-  const label = deriveDocLabel({
-    title: row.title,
-    docSchema: row.docSchema,
-    contentId: row.contentId,
-    doc,
-  });
+  const { label, tier } = useIndexRowLabel(row, rec.status !== 'attributed');
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
       <td>
-        <DocName label={label} /> <VerifyBadge kind="content" chainId={row.contentId} />
+        <DocName label={label} tier={tier} /> <VerifyBadge kind="content" chainId={row.contentId} />
         {rec.facts?.isDeleted ? <span class="err"> · deleted</span> : null}
       </td>
       <td>

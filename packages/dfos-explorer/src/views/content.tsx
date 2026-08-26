@@ -34,6 +34,7 @@ import {
 import { getClient } from '../lib/client';
 import { grantsForChain, grantsFromIndex, type GrantSummary } from '../lib/credentials';
 import { getDb } from '../lib/db-instance';
+import { contentTitle, documentName } from '../lib/doc-label';
 import { fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { isIndexDocument } from '../lib/index-fold';
@@ -79,6 +80,9 @@ export const Content = (props: { id: string }) => {
   // the chain calls itself, landing well before the document bytes do. It is a
   // relay projection over held bytes, so it renders amber and grounds nothing:
   // the document panel below re-hashes the real bytes and is the actual answer.
+  // It is a PRELUDE, not a resting place — `title` below hands the row to the
+  // fold the moment those bytes are trusted, and the projection is retired even
+  // when the fold's answer is "this document names itself nothing".
   const indexRow = useIndexContentRow(props.id, indexed === true);
   const projectedName = projectedTitle(indexRow);
   const [claim, setClaim] = useState<ClaimResult | null>(null);
@@ -285,6 +289,13 @@ export const Content = (props: { id: string }) => {
   // doc always has `parsed` and the extraction is total.
   const docBytesTrusted = !!chain && !!doc?.derivedCid && doc.derivedCid === docCid;
   const credits = docBytesTrusted ? documentCredits(doc?.parsed) : null;
+  // THE SAME ORDERING, APPLIED TO THE CHAIN'S NAME. Until the bytes are trusted
+  // the relay's point-lookup projection stands in, amber and labelled
+  // relay-asserted; the moment they are, the document's OWN title/name replaces
+  // it in plain ink — and a trusted document that names itself nothing retires
+  // the projection rather than letting a relay-asserted title outlive the bytes
+  // that contradict it. See `contentTitle` for the rule.
+  const title = contentTitle(docBytesTrusted ? documentName(doc?.parsed) : null, projectedName);
 
   return (
     <>
@@ -307,13 +318,14 @@ export const Content = (props: { id: string }) => {
           <div class="v">
             <TruncId value={props.id} head={31} tail={0} />
           </div>
-          {projectedName ? (
+          {title.tier !== 'none' ? (
             <>
               <div class="k">
-                title <span class="lbl">relay-asserted</span>
+                title{' '}
+                <span class="lbl">{title.tier === 'verified' ? 'verified' : 'relay-asserted'}</span>
               </div>
               <div class="v">
-                <span class="attr">{projectedName}</span>
+                {title.tier === 'verified' ? title.text : <span class="attr">{title.text}</span>}
               </div>
             </>
           ) : null}

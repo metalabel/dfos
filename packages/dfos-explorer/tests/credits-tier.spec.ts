@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { creditsTier, documentCredits } from '../src/components/credits';
+import { creditLead, creditsTier, documentCredits } from '../src/components/credits';
 
 describe('documentCredits — the fold’s answer is always a list', () => {
   it('extracts a document’s credits array', () => {
@@ -47,5 +47,29 @@ describe('creditsTier — the fold always wins over the relay projection', () =>
 
   it('no fold and no rows is simply nothing — credits are enrichment', () => {
     expect(creditsTier(null, 0)).toBe('none');
+  });
+});
+
+describe('creditLead — a nameless credit still names someone', () => {
+  const DID = 'did:dfos:27z77a722tacvrne3k7f6k6rzd9evkc';
+
+  it('a named entry leads with its name', () => {
+    expect(creditLead('Asha', DID)).toBe('name');
+    expect(creditLead('Asha', undefined)).toBe('name');
+  });
+
+  it('a nameless entry leads with its DID, not with "unnamed credit"', () => {
+    // `name` is optional on a credit entry and frequently absent; the DID is the
+    // entry's actual identity and resolves to a public profile name through the
+    // same chip every other surface uses
+    expect(creditLead(undefined, DID)).toBe('did');
+    expect(creditLead('', DID)).toBe('did');
+    expect(creditLead('   ', DID)).toBe('did');
+  });
+
+  it('the muted placeholder is reserved for an entry with genuinely nothing', () => {
+    expect(creditLead(undefined, undefined)).toBe('none');
+    expect(creditLead('', '')).toBe('none');
+    expect(creditLead('  ', '  ')).toBe('none');
   });
 });

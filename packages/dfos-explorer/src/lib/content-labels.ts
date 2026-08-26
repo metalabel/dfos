@@ -15,6 +15,12 @@
   read honesty rule, so a title the relay does not mark public never reaches the
   screen even as a temporary projection.
 
+  EVERY SURFACE THAT NAMES A CONTENT CHAIN RUNS THOSE THREE BEATS — the chip, and
+  equally the index-row tables (browse, search, the post feed, the actor ledger,
+  credited-on) through `useIndexRowLabel`, which reads the amber beat straight off
+  the row it already holds instead of spending a point lookup on it. There is no
+  fourth kind of label and no surface that stops at beat two.
+
   THE INTEGRITY GATE IS ABSOLUTE: `client.document(contentId)` folds the content
   chain, anonymously fetches its current document, and re-hashes those bytes to
   the documentCID the chain commits to. A label renders verified only when that
@@ -202,10 +208,19 @@ export type ContentLabelTier = 'attributed' | 'verified';
  * result lands. `need` gates the work. Returns the attributed floor — `pending`
  * — until the resolve settles, with a public projected title standing in when
  * the relay index supplies one.
+ *
+ * `projected` is that same amber beat handed in by a caller who ALREADY holds
+ * the relay's row (a browse, search, or feed table does — the projection came
+ * down with the page). Supplying it, INCLUDING as `''` for "the relay projects
+ * no title here", suppresses the point lookup a bare chip has to spend a round
+ * trip on: 25 rows would otherwise mean 25 extra index requests for answers the
+ * page already received. The caller owns the public-read honesty rule for what
+ * it passes; {@link useIndexRowLabel} applies it.
  */
 export const useContentLabel = (
   contentId: string,
   need = true,
+  projected?: string,
 ): { label: DocLabel | null; state: ContentLabelState; tier: ContentLabelTier } => {
   const [label, setLabel] = useState<DocLabel | null>(() => cache.get(contentId) ?? null);
   const [state, setState] = useState<ContentLabelState>(() =>
@@ -239,18 +254,66 @@ export const useContentLabel = (
   }, [contentId, need]);
 
   // AMBER PRELUDE — one round trip against the index's point lookup while the
-  // verified document resolve above is still running. Dropped the instant the
-  // verified answer lands (or resolves to "no label"), so a projection never
-  // outlives the proof it was standing in for.
-  const row = useIndexContentRow(contentId, need && state === 'pending');
-  const projected = projectedTitle(row);
-  if (state === 'pending' && !label && projected) {
+  // verified document resolve above is still running, skipped entirely when the
+  // caller already handed the projection in. Dropped the instant the verified
+  // answer lands (or resolves to "no label"), so a projection never outlives the
+  // proof it was standing in for.
+  const row = useIndexContentRow(contentId, need && state === 'pending' && projected === undefined);
+  const amber = (projected ?? projectedTitle(row)).trim();
+  if (state === 'pending' && !label && amber) {
     return {
-      label: { text: projected, quoted: false, kind: 'title' },
+      label: { text: amber, quoted: false, kind: 'title' },
       state,
       tier: 'attributed',
     };
   }
 
   return { label, state, tier: 'verified' };
+};
+
+/** The relay index's projection of one content row — exactly the fields a browse,
+ *  search, feed, or ledger row already holds when the page lands. */
+export interface IndexRowProjection {
+  contentId: string;
+  title: string | null;
+  publicRead: boolean;
+}
+
+/**
+ * THE PUBLIC-READ HONESTY RULE for a projected title, in one place. Only a title
+ * the relay marks `publicRead` is safe to render: an unupgraded relay may still
+ * project one for a non-public chain, and it must never reach the screen — not
+ * even as a temporary amber beat. Pure, unit-tested.
+ */
+export const rowProjection = (row: IndexRowProjection): string =>
+  row.publicRead ? (row.title ?? '').trim() : '';
+
+/**
+ * The label for one relay-index content row, running the SAME THREE BEATS as
+ * ContentChip: the short contentId, promoted to the relay's projected public
+ * title in the amber attributed tier, promoted again to a VERIFIED label derived
+ * from bytes this tab re-hashed to the chain's committed document CID.
+ *
+ * It used to stop at beat two. An untitled public post — the relay index projects
+ * `title` only for a post/v1 that has one — was labelled by fetching the document
+ * bytes RAW and rendering an excerpt of them amber, with no integrity check at
+ * all: a snippet a relay could write by serving whatever it liked under a
+ * committed chain. That path is gone. The verified resolve fetches the same bytes
+ * through the integrity gate and yields the same excerpt (quoted) as PROOF, and a
+ * row the gate rejects falls back to the short id rather than to a relay's prose.
+ *
+ * `seen` gates the verified resolve on the row having actually been looked at —
+ * the caller derives it from the verify status, which flips as the row scrolls
+ * into view, so a 300-row corpus never folds 300 chains. The amber beat needs no
+ * gate: it came down with the page. A chain the relay marks non-public is never
+ * resolved either — its bytes are gated by definition, so the request could only
+ * ever spend a round trip to learn what the row already says.
+ */
+export const useIndexRowLabel = (
+  row: IndexRowProjection,
+  seen: boolean,
+): { label: DocLabel; tier: ContentLabelTier } => {
+  const projected = rowProjection(row);
+  const { label, tier } = useContentLabel(row.contentId, seen && row.publicRead, projected);
+  return { label: label ?? deriveDocLabel({ contentId: row.contentId }), tier };
 };

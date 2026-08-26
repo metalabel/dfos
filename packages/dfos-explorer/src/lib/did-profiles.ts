@@ -6,7 +6,7 @@
   profile, so every row that renders a DID resolves it to that profile's NAME and
   hydrates in place (see components/did-chip.tsx). This module is the resolver
   behind that: a module-level cache + a bounded worker pump, the same idiom as
-  doc-label.ts's snippet resolver.
+  content-labels.ts's verified-label resolver.
 
   THE PRIVACY INVARIANT IS ABSOLUTE: only a PUBLIC profile ever yields a name.
   Resolution runs entirely through the proof plane —
@@ -69,8 +69,8 @@ export const PROFILE_TTL_MS = 60 * 60 * 1000;
 /** Cap on persisted profiles — a wide browse must not grow the key unbounded. */
 const CACHE_MAX = 400;
 
-/** In-flight resolves at once — mirrors doc-label's snippet pump so the two
- *  lazy row-hydrators stay equally polite to relays. */
+/** In-flight resolves at once — mirrors content-labels' pump so the two lazy
+ *  row-hydrators stay equally polite to relays. */
 const CONCURRENCY = 4;
 
 const LS_KEY = 'dfos.explorer.didProfiles';
@@ -151,7 +151,7 @@ const writeStore = (entries: Record<string, CachedProfile>): void => {
 };
 
 // -----------------------------------------------------------------------------
-// resolver — module cache + waiter/pump, the doc-label.ts idiom
+// resolver — module cache + waiter/pump, the content-labels.ts idiom
 // -----------------------------------------------------------------------------
 
 /** did → resolved public profile, or null once it resolved to "none". */
@@ -235,10 +235,18 @@ export type DidProfileTier = 'attributed' | 'verified';
  * `need` gates the work so a chip can hold off (an already-named row needs no
  * resolve). Returns the attributed floor — `pending` — until the resolve settles,
  * with the relay index's projected name standing in meanwhile (tier `attributed`).
+ *
+ * `projected` is that same amber beat handed in by a caller who ALREADY holds the
+ * relay's identity row — a browse or search page received it with the page.
+ * Supplying it, INCLUDING as `''` for "the relay projects no public name here",
+ * suppresses the point lookup a bare chip has to spend a round trip on. The
+ * caller owns the public-read honesty rule for what it passes (`projectedName`
+ * in lib/index-point.ts is that rule).
  */
 export const useDidProfile = (
   did: string,
   need = true,
+  projected?: string,
 ): { profile: DidProfile | null; state: DidProfileState; tier: DidProfileTier } => {
   const [profile, setProfile] = useState<DidProfile | null>(() => cache.get(did) ?? null);
   const [state, setState] = useState<DidProfileState>(() =>
@@ -272,14 +280,15 @@ export const useDidProfile = (
   }, [did, need]);
 
   // AMBER PRELUDE — one round trip against the index's point lookup while the
-  // three-beat verified resolve above is still running. Dropped the instant the
-  // verified answer lands (or resolves to "no public profile"), so a projection
-  // never outlives the proof it was standing in for.
-  const indexRow = useIndexIdentityRow(did, need && state === 'pending');
-  const projected = projectedName(indexRow);
-  if (state === 'pending' && !profile && projected) {
+  // three-beat verified resolve above is still running, skipped entirely when the
+  // caller already handed the projection in. Dropped the instant the verified
+  // answer lands (or resolves to "no public profile"), so a projection never
+  // outlives the proof it was standing in for.
+  const indexRow = useIndexIdentityRow(did, need && state === 'pending' && projected === undefined);
+  const amber = (projected ?? projectedName(indexRow)).trim();
+  if (state === 'pending' && !profile && amber) {
     return {
-      profile: { did, name: projected, description: '', avatar: null },
+      profile: { did, name: amber, description: '', avatar: null },
       state,
       tier: 'attributed',
     };
