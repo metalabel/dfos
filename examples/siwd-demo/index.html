@@ -82,6 +82,20 @@
         color: #666;
         margin: 0.15rem 0 0;
       }
+      /* The avatar sits left of the name rather than above it, so the hero still
+         opens on who you are rather than on a picture. */
+      .hero .idrow {
+        align-items: center;
+        display: flex;
+        gap: 0.75rem;
+      }
+      .hero .avatar {
+        border-radius: 50%;
+        flex: none;
+        height: 2.75rem;
+        object-fit: cover;
+        width: 2.75rem;
+      }
       .hero .bio {
         margin: 0.75rem 0 0;
       }
@@ -147,6 +161,37 @@
       }
       .memberships details.rawjson,
       .memberships button {
+        margin-top: 1rem;
+      }
+      /* The check affordance: one line to type in, two questions to ask of it. */
+      .memberships .section input[type='text'] {
+        border: 1px solid #ccc;
+        border-radius: 0.5rem;
+        font: inherit;
+        font-size: 0.875rem;
+        margin-top: 0.6rem;
+        padding: 0.4rem 0.6rem;
+        width: 100%;
+      }
+      .memberships .checkrow {
+        display: flex;
+        gap: 0.4rem;
+        margin-top: 0.6rem;
+      }
+      .memberships .checkrow button {
+        margin-top: 0;
+      }
+
+      /* Tier 1, third read — what the API says about the grant itself. Same
+         weight as the spaces list: another thing the credential bought. */
+      .credential h2 {
+        font-size: 1.125rem;
+      }
+      .credential p {
+        margin: 0.5rem 0 0;
+      }
+      .credential details.rawjson,
+      .credential button {
         margin-top: 1rem;
       }
 
