@@ -9,8 +9,9 @@ already specified, in prose, across [PROTOCOL.md](https://protocol.dfos.com/spec
 [WEB-RELAY.md](https://protocol.dfos.com/web-relay),
 [DID-METHOD.md](https://protocol.dfos.com/did-method),
 [SIGNING.md](https://protocol.dfos.com/signing),
-[SIWD.md](https://protocol.dfos.com/siwd), and
-[API-AUTH.md](https://protocol.dfos.com/api-auth), and links each claim back to its source.
+[SIWD.md](https://protocol.dfos.com/siwd),
+[API-AUTH.md](https://protocol.dfos.com/api-auth), and
+[ORIGIN-BINDING.md](https://protocol.dfos.com/origin-binding), and links each claim back to its source.
 
 This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.
 
@@ -151,6 +152,36 @@ surface is built around:
 - **The browser BFF is a signing surface, not a blind oracle** — a backend that signs
   the coordinates a browser hands it is a confused deputy (API-AUTH.md "The browser is
   not a keyholder").
+
+### Origin binding — domain control is the web-side half, nothing more
+
+Origin binding (ORIGIN-BINDING.md, an optional `0.x` capability) ties an identity to a
+domain bidirectionally: a `DfosOrigin` services entry inside the signed chain, answered
+by a well-known HTTPS document or DNS TXT record the domain serves back
+(ORIGIN-BINDING.md "Attest-Back", `specs/ORIGIN-BINDING.md`). The threat consequences
+the surface is built around:
+
+- **Compromising the domain compromises the attestation, never the identity.** A
+  registrant, registrar, DNS, or hosting attacker can silence or contradict the
+  web-side half — rendering the binding `stale` or `broken`, both visible verdicts —
+  but cannot extend the bound identity's chain or transfer the binding to themselves
+  silently (ORIGIN-BINDING.md "Lapse, Transfer, and Re-binding").
+- **A lapsed domain's new registrant claiming it breaks the old binding visibly.**
+  Their fresh identity may verify `bound`; the old identity's binding verifies
+  `broken` the moment the domain attests a different DID. The old identity and its
+  history survive untouched (ORIGIN-BINDING.md "Lapse, Transfer, and Re-binding").
+- **Silence and contradiction are machine-distinguishable verdicts** — `stale`
+  ("could not check") versus `broken` ("checked and contradicted"), the corpus's
+  standing invalid/unverifiable split. Conflating them either turns hosting blips
+  into public accusations or hides hijacks behind shrugs (ORIGIN-BINDING.md
+  "Verification").
+- **A binding proves domain control at verification time, never personhood.**
+  Consumers MUST render the domain itself, never a generic verified badge — the
+  display layer is where the binding's meaning is most easily laundered into implied
+  identity vetting (ORIGIN-BINDING.md "Display Discipline").
+- **DNS answers are resolver-trust; HTTPS answers are TLS-trust.** A spoofed resolver
+  can forge the DNS half for that verifier; the HTTPS method is unaffected by
+  resolver spoofing beyond denial (ORIGIN-BINDING.md "Security Considerations").
 
 ### Countersignatures live on the public proof plane
 

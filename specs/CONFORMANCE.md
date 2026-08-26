@@ -11,8 +11,9 @@ points at the normative MUST sets already specified in
 [WEB-RELAY.md](https://protocol.dfos.com/web-relay),
 [DID-METHOD.md](https://protocol.dfos.com/did-method),
 [SIGNING.md](https://protocol.dfos.com/signing) (`0.x`),
-[SIWD.md](https://protocol.dfos.com/siwd) (`0.x`), and
-[API-AUTH.md](https://protocol.dfos.com/api-auth) (`0.x`), and binds each tier to the tests
+[SIWD.md](https://protocol.dfos.com/siwd) (`0.x`),
+[API-AUTH.md](https://protocol.dfos.com/api-auth) (`0.x`), and
+[ORIGIN-BINDING.md](https://protocol.dfos.com/origin-binding) (`0.x`), and binds each tier to the tests
 that exercise it.
 
 This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com) space.

@@ -132,6 +132,18 @@ export const specs: SpecEntry[] = [
     nav: { label: 'API Auth', tier: 'secondary' },
   },
   {
+    slug: '/origin-binding',
+    title: 'Origin Binding',
+    tile: 'Bidirectional identity&harr;domain binding &mdash; chain-signed claim, domain attest-back',
+    llms: 'Bidirectional binding between a DFOS identity and a web domain — the DfosOrigin service entry, HTTPS/DNS attest-back, and the bound/stale/broken verification verdicts',
+    metaDescription:
+      'DFOS Origin Binding — bidirectional identity-to-domain binding via a chain-signed DfosOrigin service entry and HTTPS well-known or DNS TXT attestation, with three-state verification.',
+    source: '../../specs/ORIGIN-BINDING.md',
+    grid: 'specifications',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
     slug: '/web-relay',
     title: 'Web Relay',
     tile: 'Verifying HTTP relay with gossip, read-through, and sync peering',
