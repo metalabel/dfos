@@ -92,7 +92,12 @@ dfos skill install --global      # write ~/.claude/skills/dfos/SKILL.md
 - **Services** — an identity's discovery vocabulary: a controller-signed,
   full-state set of `DfosRelay` locators and `ContentAnchor` entries carried in
   the identity chain. Answers "given a DID, where do I reach it and what stable
-  content does it publish?"
+  content does it publish?" The namespace is open; extension types registered by
+  specs outside the core ride it too — `DfosOrigin`, the domain this identity
+  claims, and `DfosAuthorizationServer`, the authorize origin that speaks for
+  this DID (where a client holding only the DID finds the sign-in server its
+  person authenticates to, registered by
+  [SIWD.md](https://protocol.dfos.com/siwd)).
 - **Credential** — a signed grant of scoped **read** or **write** access to
   content, issued by the content creator to a delegate DID.
 - **Countersignature** — a public witness attestation referencing an operation by
