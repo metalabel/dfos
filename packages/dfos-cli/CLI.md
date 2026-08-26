@@ -442,18 +442,18 @@ dfos identity verify-binding example.com --json
 
 The domain then serves **either** attestation — whichever its hosting allows:
 
-| Method | What to publish                                                             |
-| ------ | ---------------------------------------------------------------------------- |
+| Method | What to publish                                                                |
+| ------ | ------------------------------------------------------------------------------ |
 | HTTPS  | `https://<domain>/.well-known/dfos-did` containing exactly the DID, plain text |
-| DNS    | `_dfos.<domain>.  TXT  "did=did:dfos:<id>"`                                   |
+| DNS    | `_dfos.<domain>.  TXT  "did=did:dfos:<id>"`                                    |
 
 A SIWD app already serving `/.well-known/dfos-app.json` with a matching `client_did` attests too: `verify-binding` falls back to it when `dfos-did` is **absent** (404), so every existing SIWD application is attest-back-capable with no new file. The fallback applies to absence only — a `dfos-did` document that is present but malformed blocks it.
 
 `verify-binding` checks both methods and folds them into the spec's verdicts, which map to exit codes so scripts can branch without parsing output:
 
-| Verdict    | Exit | Meaning                                                                                       |
-| ---------- | ---- | ----------------------------------------------------------------------------------------------- |
-| `bound`    | 0    | At least one method attests this DID, and no method answers anything else                     |
+| Verdict    | Exit | Meaning                                                                                        |
+| ---------- | ---- | ---------------------------------------------------------------------------------------------- |
+| `bound`    | 0    | At least one method attests this DID, and no method answers anything else                      |
 | `broken`   | 1    | A method answers a different DID, the methods disagree, or DNS carries multiple `did=` records |
 | `stale`    | 2    | A claim exists and every method is silent (network, TLS, timeout, 404, NXDOMAIN)               |
 | `no-claim` | 0    | The chain claims no domain, so there is nothing to verify                                      |
