@@ -380,6 +380,8 @@ Two types are structurally recognized:
 - **`DfosRelay`** — `{id, type, endpoint}`, a transport endpoint where this identity's chains can be fetched.
 - **`ContentAnchor`** — `{id, type, label, anchor}`, a stable pointer to a content chain (31-char content id) or an artifact (CIDv1 `baf…`), addressable by `label` (e.g. `profile`, `avatar`).
 
+Extensions ride the same open namespace — `DfosOrigin` (see **Origin Binding** below) is one, written by `identity bind-domain` and given meaning by a spec outside the frozen core rather than by a core verifier.
+
 Bounds (enforced at sign time by the protocol layer): at most 256 entries, unique ids, non-empty `id`/`type`, and a 32768-byte cap on the encoded services array. Individual field lengths are not separately capped — the aggregate byte cap is the single bound.
 
 ```bash
@@ -418,6 +420,45 @@ dfos identity well-known alice --patch public/.well-known/dfos-app.json
 ```
 
 Carriage is limited to 100 operations; longer chains must be published to a relay. The member set and exact carriage semantics are specified by `specs/SIWD.md` under “The App Description Document.”
+
+---
+
+## Origin Binding (bind a domain)
+
+An identity can claim a **domain** — a `DfosOrigin` services entry, `{id, type, domain}`, signed into the chain by a controller key — and the domain attests the DID back by publishing it. Each half alone is a claim anyone could make; together they prove one party controls both, and any consumer can check the pair with a chain resolution plus one HTTPS or DNS lookup. No DFOS server is in the loop. The normative spec is [ORIGIN-BINDING.md](https://protocol.dfos.com/origin-binding); the `DfosOrigin` type is an extension the core carries verbatim and never structurally validates, so all of its rules live in consumers like this CLI.
+
+```bash
+# claim the domain in the chain, and print what the domain must serve
+dfos identity bind-domain example.com
+
+# verify the pair — chain claim vs the domain's attestation
+dfos identity verify-binding                      # active identity
+dfos identity verify-binding alice                # a local identity name or DID
+dfos identity verify-binding example.com          # domain-first walk
+dfos identity verify-binding example.com --json
+```
+
+`bind-domain <domain>` takes a **bare lowercase hostname** — no scheme, no port, no path, no underscores; internationalized names must already be in A-label (Punycode) form. It carries every other service entry forward unchanged, replaces an existing `DfosOrigin` entry in place (an identity claims at most one domain), and re-running it with the same domain signs nothing. `--id <id>` picks the entry id (default `origin`, or the existing entry's id); `--peer <name>` pushes the operation immediately.
+
+The domain then serves **either** attestation — whichever its hosting allows:
+
+| Method | What to publish                                                             |
+| ------ | ---------------------------------------------------------------------------- |
+| HTTPS  | `https://<domain>/.well-known/dfos-did` containing exactly the DID, plain text |
+| DNS    | `_dfos.<domain>.  TXT  "did=did:dfos:<id>"`                                   |
+
+A SIWD app already serving `/.well-known/dfos-app.json` with a matching `client_did` attests too: `verify-binding` falls back to it when `dfos-did` is **absent** (404), so every existing SIWD application is attest-back-capable with no new file. The fallback applies to absence only — a `dfos-did` document that is present but malformed blocks it.
+
+`verify-binding` checks both methods and folds them into the spec's verdicts, which map to exit codes so scripts can branch without parsing output:
+
+| Verdict    | Exit | Meaning                                                                                       |
+| ---------- | ---- | ----------------------------------------------------------------------------------------------- |
+| `bound`    | 0    | At least one method attests this DID, and no method answers anything else                     |
+| `broken`   | 1    | A method answers a different DID, the methods disagree, or DNS carries multiple `did=` records |
+| `stale`    | 2    | A claim exists and every method is silent (network, TLS, timeout, 404, NXDOMAIN)               |
+| `no-claim` | 0    | The chain claims no domain, so there is nothing to verify                                      |
+
+Exit `1` is also the CLI's generic error status (unresolvable target, chain not held locally, malformed input); those print an error on stderr instead of a verdict. **Silence is never contradiction:** hosting and DNS fail and recover routinely, so `stale` means _could not check_ and `broken` means _checked and contradicted_ — the two must not be conflated. A verified binding proves control of the domain at verification time, never personhood or endorsement, which is why every output names the domain instead of collapsing into a checkmark.
 
 ---
 
@@ -502,6 +543,8 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `POST` | `identity update`               | Rotate keys / set services (`--service`)                 |
 | `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey              |
 | `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)                     |
+| `POST` | `identity bind-domain <domain>` | Claim a domain in the chain (`DfosOrigin`, `--id`)       |
+| `GET`  | `identity verify-binding [t]`   | Verify a binding (exit: bound 0 / broken 1 / stale 2)    |
 | `POST` | `identity delete`               | Delete identity (restorable)                             |
 | `POST` | `identity restore`              | Restore a deleted identity                               |
 | `POST` | `identity publish [name\|did]`  | Submit identity chain to a relay                         |

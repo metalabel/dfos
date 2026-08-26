@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -23,6 +24,13 @@ func main() {
 
 	root := cmd.NewRootCmd()
 	if err := root.Execute(); err != nil {
+		// A verdict-bearing command (identity verify-binding) already printed its
+		// result on stdout and carries only an exit status — exit with its code,
+		// printing nothing on top.
+		var exitErr *cmd.ExitCodeError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
 		// Honor --json on the error path too, so scripted callers always get
 		// machine-readable output instead of a bare error line.
 		if cmd.JSONFlag() {

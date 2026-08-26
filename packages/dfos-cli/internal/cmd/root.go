@@ -42,6 +42,15 @@ const annNoStateLock = "dfos:no_state_lock"
 // top-level command error as JSON instead of a plain line.
 func JSONFlag() bool { return jsonFlag }
 
+// ExitCodeError carries a process exit status for a command that has ALREADY
+// reported its outcome on stdout and must not print an error line on top of it.
+// `identity verify-binding` maps its verdict to a status (bound 0, broken 1,
+// stale 2, no-claim 0) so scripts branch on the exit code instead of parsing
+// output; main recognizes this type and exits with Code, printing nothing.
+type ExitCodeError struct{ Code int }
+
+func (e *ExitCodeError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
+
 // skipStateLock reports whether a command should NOT take the state lock:
 // commands explicitly opted out (daemons), and cobra's own completion/help
 // machinery, which never mutate local state and must stay non-blocking (shell
