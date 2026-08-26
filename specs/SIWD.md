@@ -77,12 +77,12 @@ https://app.dfos.com/authorize?
   &client_did=did:dfos:<3p id>
 ```
 
-| Parameter      | Required                          | Description                                                                            |
-| -------------- | --------------------------------- | -------------------------------------------------------------------------------------- |
-| `challenge`    | Yes                               | Base64url of the canonical challenge bytes (see [Challenge schema](#challenge-schema)) |
-| `redirect_uri` | Yes                               | URL the host redirects to after signing                                                |
-| `scope`        | Yes                               | A single requested scope (one scope per authorization request)                         |
-| `client_did`   | When `scope` returns a credential | The third party's own DFOS DID — the `aud` any returned credential is issued to        |
+| Parameter      | Required                                      | Description                                                                                                                                                                   |
+| -------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `challenge`    | Yes                                           | Base64url of the canonical challenge bytes (see [Challenge schema](#challenge-schema))                                                                                        |
+| `redirect_uri` | Yes                                           | URL the host redirects to after signing                                                                                                                                       |
+| `scope`        | Yes                                           | A space-separated set of requested scope tokens (the OAuth `scope` convention); each token MUST be a registered scope — see [Scopes and Credentials](#scopes-and-credentials) |
+| `client_did`   | When any requested scope returns a credential | The third party's own DFOS DID — the `aud` any returned credential is issued to                                                                                               |
 
 `client_did` is what makes a credential-returning scope well-posed: the credential is issued to a named DID, not to an unnamed "the app." The host MUST display `client_did` (or an identity resolved from it) alongside `domain` on the consent screen; the credential's audience binding is to the DID the user consented to, and `domain` remains the phishing-relevant binding (see [Security](#security-considerations)).
 
@@ -178,7 +178,7 @@ No DFOS platform server is contacted during verification. The third party only n
 
 ## Scopes and Credentials
 
-Identity proof is inherent — the signed challenge itself proves DID ownership. A `scope` beyond `identity` additionally returns one [DFOS credential](https://protocol.dfos.com/credentials); one scope per authorization request.
+Identity proof is inherent — the signed challenge itself proves DID ownership. `scope` is a space-separated set of tokens (the OAuth convention): `identity` alone asks for the proof and nothing more, and every other requested token additionally returns a [DFOS credential](https://protocol.dfos.com/credentials). Each token MUST match a registered scope from the table below; a request carrying an unregistered token MUST be refused whole — never partially honored, because a consent screen that silently drops tokens misstates what was asked. Tokens that map to the same `api:<host>` resource coalesce into **one** credential carrying the combined action list (the credential spec's ordinary action-set machinery — see below); tokens naming distinct resources return one credential each. Consent is to the set: the consent screen describes every requested token.
 
 | Scope              | Returned credential                                                                               |
 | ------------------ | ------------------------------------------------------------------------------------------------- |
@@ -186,8 +186,9 @@ Identity proof is inherent — the signed challenge itself proves DID ownership.
 | `read:<contentId>` | `{ "resource": "chain:<contentId>", "action": "read" }`, issued to `client_did`                   |
 | `deposit`          | `{ "resource": "mailbox:<subject id>", "action": "deposit" }`, issued to `client_did` — see below |
 | `read:profile`     | `{ "resource": "api:<api host>", "action": "read:profile" }`, issued to `client_did` — see below  |
+| `read:email`       | `{ "resource": "api:<api host>", "action": "read:email" }`, issued to `client_did` — see below    |
 
-SIWD does not define a resource grammar of its own — resource forms, action vocabulary, and matching rules are the [credential spec's](https://protocol.dfos.com/credentials) (`chain:<contentId>` exact-match; `mailbox:<id>` / `deposit` exact-match as registered by [SIGNING](https://protocol.dfos.com/signing); `api:<host>` exact-match with its enumerated action registry as registered by [API-AUTH](https://protocol.dfos.com/api-auth)). Scope strings are matched against this table's registered tokens first; the parameterized `read:<contentId>` form matches only when `<contentId>` is a 31-character content id, so the literal token `read:profile` is never ambiguous with it.
+SIWD does not define a resource grammar of its own — resource forms, action vocabulary, and matching rules are the [credential spec's](https://protocol.dfos.com/credentials) (`chain:<contentId>` exact-match; `mailbox:<id>` / `deposit` exact-match as registered by [SIGNING](https://protocol.dfos.com/signing); `api:<host>` exact-match with its enumerated action registry as registered by [API-AUTH](https://protocol.dfos.com/api-auth)). Each token in the scope set is matched against this table's registered tokens first; the parameterized `read:<contentId>` form matches only when `<contentId>` is a 31-character content id, so the literal tokens `read:profile` and `read:email` are never ambiguous with it.
 
 ### `read:<contentId>`
 
@@ -201,11 +202,11 @@ The `deposit` scope is how a third party earns the right to use profile B at all
 
 Revoking the deposit credential (standard [credential revocation](https://protocol.dfos.com/credentials)) severs the relationship: the relay's deposit gate re-checks revocation on every deposit, so revocation is the user's "disconnect this app."
 
-### `read:profile` — credential-gated API access
+### `read:profile`, `read:email` — credential-gated API access
 
-The `read:profile` scope returns an [`api:<host>`](https://protocol.dfos.com/api-auth) credential for the hosting platform's own API host: `iss` = the user's DID (the resource owner — signed custodially by the host today, by the user's own key under self-custody, same shape), `aud` = `client_did`, one attenuation entry `{ "resource": "api:<api host>", "action": "read:profile" }`. The wire scope string maps 1:1 to the action token, and every future API action token registered in [API-AUTH.md](https://protocol.dfos.com/api-auth) becomes a SIWD scope the same way — the front door is where API grants are issued, and this table never grows a second grammar for them.
+An API scope returns an [`api:<host>`](https://protocol.dfos.com/api-auth) credential for the hosting platform's own API host: `iss` = the user's DID (the resource owner — signed custodially by the host today, by the user's own key under self-custody, same shape), `aud` = `client_did`, one attenuation entry whose action list is the requested API tokens. Several API tokens in one authorization coalesce into that single entry (`read:profile,read:email`) — one credential per resource, never one per token, so revoking it severs the whole API grant at once. Each wire scope token maps 1:1 to an [API-AUTH.md](https://protocol.dfos.com/api-auth) action token — `read:profile` grants the profile without the account email (display name, handle, avatar); `read:email` grants the account's email address — and every future API action token registered there becomes a SIWD scope the same way: the front door is where API grants are issued, and this table never grows a second grammar for them.
 
-Two rules follow from machinery already stated, and are restated here because this scope is where they bite: `client_did` is **required** (as for every credential-returning scope — a credential must be issued to a named DID, and a [loopback target](#profile-a--web-redirect), which can prove no `client_did`, can never receive one), and the verifier MUST apply the **consumed** [replay discipline](#replay-prevention) (as for every credential-returning scope — success yields an artifact redeemable outside the presenting channel). The credential alone opens nothing: exercising it requires a per-request [request proof](https://protocol.dfos.com/api-auth) signed by the `client_did`'s key — possession, not possession-of-bytes, is what the API verifies.
+Two rules follow from machinery already stated, and are restated here because these scopes are where they bite: `client_did` is **required** (as for every credential-returning scope — a credential must be issued to a named DID, and a [loopback target](#profile-a--web-redirect), which can prove no `client_did`, can never receive one), and the verifier MUST apply the **consumed** [replay discipline](#replay-prevention) (as for every credential-returning scope — success yields an artifact redeemable outside the presenting channel). The credential alone opens nothing: exercising it requires a per-request [request proof](https://protocol.dfos.com/api-auth) signed by the `client_did`'s key — possession, not possession-of-bytes, is what the API verifies.
 
 Spending the returned credential is out of scope here and normative nowhere: any client that can sign a request proof will do. For the canonical `api.dfos.com` deployment, [`@metalabel/dfos-api`](https://www.npmjs.com/package/@metalabel/dfos-api) ([source](https://github.com/metalabel/dfos-api)) is a typed client generated from that API's OpenAPI spec, with a fetch seam the [`@metalabel/dfos-client`](https://www.npmjs.com/package/@metalabel/dfos-client) signing helpers plug into.
 
