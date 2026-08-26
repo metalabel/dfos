@@ -654,6 +654,102 @@ func TestIndexArtifactsProjectionFiltersAndOrderedPagination(t *testing.T) {
 	}
 }
 
+// TestIndexReceiptStampIsSingleSourced locks the one-op-one-receipt-stamp
+// invariant: every projection row carrying an op's receipt time must carry the
+// SAME string /index/v0/operations reports for that op. A second wall-clock read
+// anywhere on the ingest path (PutOperation, AppendToLog, index maintenance)
+// shows up here as a millisecond of divergence — and only sometimes, which is
+// exactly why this asserts equality rather than closeness. Both backings are
+// exercised because memory and SQLite write the operation log through separate
+// code paths.
+func TestIndexReceiptStampIsSingleSourced(t *testing.T) {
+	for _, backing := range []string{"memory", "sqlite"} {
+		t.Run(backing, func(t *testing.T) {
+			var store Store
+			if backing == "memory" {
+				store = NewMemoryStore()
+			} else {
+				sqliteStore, err := NewSQLiteStore(filepath.Join(t.TempDir(), "receipt.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer sqliteStore.Close()
+				store = sqliteStore
+			}
+			r, err := NewRelay(RelayOptions{Store: store})
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler := r.Handler()
+
+			signer := ingestIdentity(t, r)
+			witness := ingestIdentity(t, r)
+
+			artifactToken, artifactCID, err := dfos.SignArtifact(
+				signer.did,
+				map[string]any{"$schema": "example/artifact-receipt", "value": 1},
+				signer.did+"#"+signer.auth.keyID,
+				signer.auth.priv,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res := r.Ingest([]string{artifactToken}); res[0].Status != "new" {
+				t.Fatalf("ingest artifact: %+v", res[0])
+			}
+
+			content := createIndexedContent(t, r, NewMemoryStore(), signer, map[string]any{
+				"$schema": testPostSchema, "title": "receipt",
+			}, false)
+			csToken, csCID, err := dfos.SignCountersign(
+				witness.did, content.operationCID, witness.did+"#"+witness.auth.keyID, witness.auth.priv,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res := r.Ingest([]string{csToken}); res[0].Status != "new" {
+				t.Fatalf("ingest countersign: %+v", res[0])
+			}
+
+			// The receipt stamps as /index/v0/operations reports them, by CID.
+			opStamps := map[string]string{}
+			for _, kind := range []string{"artifact", "countersign"} {
+				status, body, raw := getIndexJSONBody(t, handler, "/index/v0/operations?kind="+kind+"&limit=100")
+				if status != 200 {
+					t.Fatalf("operations?kind=%s status = %d (%s)", kind, status, raw)
+				}
+				for _, entry := range body["operations"].([]any) {
+					row := entry.(map[string]any)
+					opStamps[row["cid"].(string)] = row["ingestedAt"].(string)
+				}
+			}
+
+			// Artifact row vs its operation row — the wire-visible parity the
+			// relay-conformance suite asserts across the two routes.
+			_, artifacts, _ := getIndexJSONBody(t, handler, "/index/v0/artifacts?cid="+url.QueryEscape(artifactCID))
+			rows := artifacts["artifacts"].([]any)
+			if len(rows) != 1 {
+				t.Fatalf("artifacts by cid = %v", artifacts)
+			}
+			if got := rows[0].(map[string]any)["ingestedAt"].(string); got == "" || got != opStamps[artifactCID] {
+				t.Fatalf("artifact ingestedAt = %q, operations ingestedAt = %q", got, opStamps[artifactCID])
+			}
+
+			// Countersign row vs its operation row — the countersign receipt is
+			// off-wire (it only orders `order=ingestedAt.desc`), so assert it at
+			// the store layer.
+			csRows, err := store.QueryIndexCountersignatures(IndexCountersignatureQuery{Witness: witness.did, Limit: 100})
+			if err != nil || len(csRows) != 1 || csRows[0].CID != csCID {
+				t.Fatalf("countersign rows = %v err=%v", csRows, err)
+			}
+			if csRows[0].IngestedAt == "" || csRows[0].IngestedAt != opStamps[csCID] {
+				t.Fatalf("countersign ingestedAt = %q, operations ingestedAt = %q",
+					csRows[0].IngestedAt, opStamps[csCID])
+			}
+		})
+	}
+}
+
 func TestIndexIdentitiesProjectionFiltersPaginationAndDeleted(t *testing.T) {
 	r, store := indexRelay(t)
 	handler := r.Handler()

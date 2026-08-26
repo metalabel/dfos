@@ -256,6 +256,9 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 			}
 		}
 	case "artifact":
+		// One op, one receipt stamp: source ingestedAt from the stored operation's
+		// receipt stamp so this row and /index/v0/operations report one receipt
+		// time for the same op. Wall clock only as a last-resort fallback.
 		ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 		if op, err := store.GetOperation(result.CID); err == nil && op != nil && op.IngestedAt != "" {
 			ingestedAt = op.IngestedAt
@@ -313,6 +316,15 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 			}
 			createdAt, _ = payload["createdAt"].(string)
 		}
+		// One op, one receipt stamp: same sourcing as the artifact case above —
+		// the stored operation's stamp, keyed by the ingest CID (the countersign
+		// row's own CID may be the header CID), so this row and
+		// /index/v0/operations report one receipt time for the same op. Wall
+		// clock only as a last-resort fallback.
+		ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+		if op, err := store.GetOperation(result.CID); err == nil && op != nil && op.IngestedAt != "" {
+			ingestedAt = op.IngestedAt
+		}
 		dirty.countersigns = append(dirty.countersigns, storedIndexCountersignature{
 			CID:        cid,
 			TargetCID:  result.ChainID,
@@ -320,7 +332,7 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 			JWSToken:   jwsToken,
 			WitnessDID: witnessDID,
 			CreatedAt:  createdAt,
-			IngestedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+			IngestedAt: ingestedAt,
 		})
 	}
 }

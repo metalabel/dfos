@@ -770,9 +770,19 @@ func (s *MemoryStore) AppendToLog(entry LogEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.operationLog = append(s.operationLog, entry)
+	// One op, one receipt stamp: PutOperation stamped this op moments ago in the
+	// same ingest, so source ingestedAt from the stored operation's receipt stamp
+	// rather than re-reading the wall clock — otherwise /index/v0/operations and
+	// the projection rows that source from the operation (artifacts,
+	// countersignatures) can disagree by a millisecond about the same op. Wall
+	// clock only as a last-resort fallback for a log entry with no stored op.
+	ingestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	if op, ok := s.operations[entry.CID]; ok && op.IngestedAt != "" {
+		ingestedAt = op.IngestedAt
+	}
 	s.indexOperationRows[entry.CID] = indexOperationRow{
 		CID: entry.CID, Kind: entry.Kind, ChainID: entry.ChainID, CreatedAt: operationCreatedAt(entry.JWSToken),
-		IngestedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		IngestedAt: ingestedAt,
 	}
 	return nil
 }
