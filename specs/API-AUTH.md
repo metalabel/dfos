@@ -155,12 +155,15 @@ The credential side of this capability is one additive resource form, registered
 
 **`<host>` is the API's lowercase authority** — the bare hostname on the default HTTPS port, `host:port` on any other; never a scheme, never a path. Host-as-id means the resource names the surface by where it is served, so a fork or self-hosted deployment gets the same form for free: a credential for `api:api.example.org` gates that host's API exactly as `api:api.dfos.com` gates the canonical one, with no registry of deployments anywhere. It MUST byte-equal the proof's `host` (a non-default port appears in both or neither), so the resource id and the request binding name the same origin — see [`host` above](#the-request-proof) for why the port is load-bearing when non-default.
 
-**Actions are enumerated registry tokens.** This spec's v0 registry defines exactly two:
+**Actions are enumerated registry tokens.** This spec's v0 registry defines exactly three:
 
-| Action         | Grants                                                                                                                                                                |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read:profile` | Read access to the granting user's own profile — display name, handle, avatar, and public profile fields. The account email address is excluded; that is `read:email` |
-| `read:email`   | Read access to the granting user's account email address                                                                                                              |
+| Action             | Grants                                                                                                                                                                |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read:profile`     | Read access to the granting user's own profile — display name, handle, avatar, and public profile fields. The account email address is excluded; that is `read:email` |
+| `read:email`       | Read access to the granting user's account email address                                                                                                              |
+| `read:memberships` | Read access to the granting user's own memberships — the spaces and groups the account belongs to, and its roles in them                                              |
+
+**Every token is a real grant, not a public-data ceremony.** A profile document may be non-public — a hosting platform may give the user a privacy control over it — so `read:profile` gates access an anonymous fetch does not have. And a serving route applies the registry per token, never as a lump: the granting user's DID is already known from the credential chain itself (step 10), while each field class beyond it requires its own token — profile fields under `read:profile`, the email address under `read:email`, membership data under `read:memberships`.
 
 The registry's `v0` is this spec's own `0.x` clock; a `/v1/...` segment in a route path — as in the [payload example](#payload) above — is the serving API's own path versioning. The two clocks are unrelated, and the registry names actions, never paths. New tokens register here additively as API surface grows (`read:posts`, and eventually write-bearing tokens once revocation tooling is user-facing). A grant carrying several tokens is an ordinary comma-separated action list (`read:profile,read:email`), and narrowing is dropping tokens — the credential spec's action-set machinery, unchanged.
 
