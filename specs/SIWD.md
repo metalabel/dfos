@@ -67,6 +67,18 @@ These bytes are simultaneously: the JWS payload segment (what the `alg: "EdDSA"`
 
 The synchronous, interactive courier: the third party redirects the user's browser to a hosted `/authorize` endpoint; consent and signing happen there; the signed artifact returns by redirect. This is the profile to use when the user is present and latency matters.
 
+### Finding the authorize endpoint — the `DfosAuthorizationServer` entry
+
+```typescript
+{ id: string, type: "DfosAuthorizationServer", endpoint: string }   // endpoint: bare URL string
+```
+
+The entry is a [service entry](https://protocol.dfos.com/spec#services) under the core's open type namespace, registered by this spec exactly as [ORIGIN-BINDING](https://protocol.dfos.com/origin-binding) registers `DfosOrigin`: the core carries it, this document gives it meaning. To a core verifier it is an unrecognized type — preserved verbatim, never structurally validated; structural validation is a consumer obligation under this spec. The member set mirrors `DfosRelay` member-for-member: `endpoint` is the **canonical authorize origin URL** — the base URL at which a platform able to produce this subject's signature serves this profile's `/authorize` surface.
+
+It answers the one question profile A otherwise leaves out-of-band: **which authorize endpoint speaks for this DID.** A client that already holds the subject's DID SHOULD resolve the subject's identity chain and take the redirect target of step 1 below from the chain's `DfosAuthorizationServer` entry, falling back to its configured or out-of-band host when the entry is absent — absence is today's behavior, and fully legal. **One entry, or none**: a services set carrying more than one `DfosAuthorizationServer` entry names no discoverable endpoint, and a consumer MUST fall back exactly as if the entry were absent — the same ambiguity rule as `DfosOrigin`, chosen so that ambiguity degrades to the fallback and never to a choice. An entry whose `endpoint` is missing or empty is ignored the same way.
+
+This makes profile A **identity-first-capable**, symmetric with profile B: the mailbox courier has always discovered its deposit target from the subject's own chain (its `DfosRelay` services entries — see [SIGNING](https://protocol.dfos.com/signing) on mailbox placement), and this entry gives the redirect courier the same property. Trusting the entry is the existing services posture, nothing more — it is controller-signed discovery vocabulary in the same class as `DfosRelay`, and a party able to write it already controls the identity outright. Non-normative: a platform MAY additionally serve RFC 8414-shaped authorization-server metadata at the named endpoint; nothing in this spec reads it.
+
 ### 1. Redirect to authorize
 
 ```
@@ -124,6 +136,8 @@ The asynchronous courier: the third party wraps the canonical challenge bytes in
 2. **Deposit.** `POST /signing/v0/requests` at the subject's relay, authorized by a `mailbox:<subject id>` / `deposit` credential (obtained at a prior profile-A consent via the [`deposit` scope](#scopes-and-credentials), or from a published open grant — see [SIGNING → deposit authorization](https://protocol.dfos.com/signing)).
 3. **Sign.** The subject's signer polls, applies the [signer obligations](#signer-obligations-for-this-family), and responds with the signed artifact.
 4. **Collect.** The third party polls `GET /signing/v0/requests/{cid}/response` and receives the same JWS a profile-A callback would have delivered. Verification is identical.
+
+Discovery under this profile has always been identity-first — the deposit target comes from the subject's own chain, its `DfosRelay` services entries, never from configuration. Profile A gains the symmetric property through the [`DfosAuthorizationServer` entry](#finding-the-authorize-endpoint--the-dfosauthorizationserver-entry).
 
 ### The one-clock rule
 
