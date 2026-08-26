@@ -1,6 +1,6 @@
 /*
 
-  `npm run dev` — the static page AND the four api routes, no vercel CLI.
+  `npm run dev` — the static page AND every api route, no vercel CLI.
 
   Vercel's Node runtime adds exactly two things to Node's own
   `IncomingMessage` / `ServerResponse` pair: a pre-parsed JSON `body` on the
@@ -22,6 +22,7 @@ import config from './api/config.js';
 import login from './api/login.js';
 import logout from './api/logout.js';
 import me from './api/me.js';
+import memberships from './api/memberships.js';
 import profile from './api/profile.js';
 import verify from './api/verify.js';
 
@@ -33,6 +34,7 @@ const ROUTES: Record<string, Handler> = {
   '/api/login': login,
   '/api/logout': logout,
   '/api/me': me,
+  '/api/memberships': memberships,
   '/api/profile': profile,
   '/api/verify': verify,
 };

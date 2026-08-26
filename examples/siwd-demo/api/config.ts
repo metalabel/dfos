@@ -75,7 +75,8 @@ export default function handler(req: VercelRequest, res: VercelResponse): void {
         available: unavailable === null,
         ...(unavailable !== null ? { unavailable } : {}),
         summary:
-          'Proves who you are and grants this app a credential to read your profile and your account email.',
+          'Proves who you are and grants this app a credential to read your profile, your ' +
+          'account email, and the spaces you belong to.',
       },
     ],
     api: {

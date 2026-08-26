@@ -8,13 +8,14 @@
   The expectation NEVER comes from the request body. Which prior state it comes
   from is decided by what success is about to grant:
 
-    identity     — the sealed flight cookie. Recovering it IS the flow-bound
-                   check: the artifact redeems only through the channel that
-                   started the flow.
-    read:profile — the shared store, spent by an atomic GETDEL. Success hands
-                   back a credential that outlives this browser, so specs/SIWD.md
-                   requires the artifact be retired globally, not merely bound to
-                   a channel. `consumeNonce` is that one-field difference.
+    identity       — the sealed flight cookie. Recovering it IS the flow-bound
+                     check: the artifact redeems only through the channel that
+                     started the flow.
+    credential set — the shared store, spent by an atomic GETDEL. Success hands
+                     back a credential that outlives this browser, so
+                     specs/SIWD.md requires the artifact be retired globally, not
+                     merely bound to a channel. `consumeNonce` is that one-field
+                     difference.
 
   `verifySiwd` checks the nonce LAST (spec step 6), after the signature, the
   current-key resolution, the domain, and the timestamp window — same function,

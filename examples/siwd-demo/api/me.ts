@@ -7,9 +7,9 @@
   by the caller. A cookie that does not unseal, does not parse, or has passed its
   own `exp` means the same thing as no cookie at all: nobody is signed in.
 
-  When the session was granted under `read:profile`, the credential's already-
-  verified facts come back with it, so the page can render the grant BEFORE
-  anything is spent against it. The credential JWS itself stays here: the browser
+  When the session was granted under the credential set, the credential's
+  already-verified facts come back with it, so the page can render the grant
+  BEFORE anything is spent against it. The credential JWS stays here: the browser
   has no key to exercise it with, and handing it out would move a durable
   authorization into the one place that cannot hold anything safely.
 

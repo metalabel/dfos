@@ -37,6 +37,7 @@ import { buildApiAuthHeaders, signApiRequest } from '@metalabel/dfos-client/api-
 import { kvGet } from './_kv.js';
 import {
   API_HOST,
+  API_REFUSALS,
   APP_KEY_ERROR,
   APP_KID,
   json,
@@ -50,13 +51,6 @@ import {
   type HeldCredential,
 } from './_lib.js';
 import type { VercelRequest, VercelResponse } from './_types.js';
-
-/** The API refusals worth explaining, mapped from what the wire actually says. */
-const REFUSALS: Record<number, string> = {
-  401: 'The API refused the request proof. Either the proof did not verify against this app’s key, or the app’s configured key is not a current key of its identity.',
-  403: 'The API accepted the proof and refused the credential. The usual cause is revocation — the user revoked this grant, and the API re-checks that on every request.',
-  503: 'The API could not complete the check — a resolution or revocation source was unreachable. That is the server’s condition, not a judgment about the grant, and it is reported as unverifiable rather than as a refusal.',
-};
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== 'POST') {
@@ -188,6 +182,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     status,
     ...(typeof envelope['code'] === 'string' ? { code: envelope['code'] } : {}),
     ...(typeof envelope['message'] === 'string' ? { message: envelope['message'] } : {}),
-    reason: REFUSALS[status] ?? `The API answered HTTP ${status}.`,
+    reason: API_REFUSALS[status] ?? `The API answered HTTP ${status}.`,
   });
 }
