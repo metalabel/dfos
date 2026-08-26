@@ -9,12 +9,21 @@
 
 */
 
-import { buildSignRequest } from '@metalabel/dfos-protocol/chain';
+import {
+  buildSignRequest,
+  decodeMultikey,
+  signIdentityOperation,
+  verifyIdentityChain,
+  type IdentityOperation,
+} from '@metalabel/dfos-protocol/chain';
 import {
   base64urlDecode,
+  base64urlEncode,
   createJws,
+  decodeJwsUnsafe,
   importEd25519Keypair,
   signPayloadEd25519,
+  verifyJws,
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import { createClient } from '../src/client';
@@ -22,17 +31,25 @@ import {
   buildSiwdSignRequest,
   createSiwdChallenge,
   createSiwdLoginRequest,
+  createSiwdLoopbackLoginRequest,
   decodeSiwdChallenge,
+  encodeSiwdClientChain,
+  MAX_SIWD_CLIENT_CHAIN_OPS,
+  mintSiwdClientIdentity,
   parseSiwdChallenge,
   readSiwdCallback,
+  restoreSiwdClientIdentity,
+  signSiwdAskProof,
+  SIWD_ASK_JWS_TYP,
   SIWD_JWS_TYP,
   siwdSigningInput,
   validateSiwdSignRequest,
   verifySiwd,
   type SiwdChallenge,
+  type SiwdClientIdentity,
 } from '../src/siwd';
 import { memoryStore } from '../src/store/memory';
-import { buildIdentity, fakePeerClient, makeKey, ts } from './fixtures';
+import { buildIdentity, cidOf, fakePeerClient, makeKey, ts } from './fixtures';
 
 const RELAY = 'https://relay.test';
 const encoder = new TextEncoder();
@@ -239,16 +256,17 @@ describe('siwd login kit', () => {
   });
 
   /*
-    Nothing can prove a client DID for an app on a local port, so a host refuses
-    a `client_did` on a loopback redirect outright — the whole request, not just
-    the param. Dropping it here is what keeps a CLI's sign-in from being a
-    guaranteed rejection.
+    The loopback credential tier (specs/SIWD.md §Loopback Clients) is what a
+    bare `client_did` on a local port used to lack: the request itself proves
+    key control. So the param rides through now instead of being dropped — the
+    proof that backs it is `createSiwdLoopbackLoginRequest`'s job, not this
+    function's.
   */
   it.each([
     ['ipv4 loopback with a port', 'http://127.0.0.1:8976/cb'],
     ['localhost with a port', 'http://localhost:3000/'],
     ['bracketed ipv6 loopback', 'http://[::1]:8080/x'],
-  ])('omits client_did for a %s redirect even when supplied', (_label, redirectUri) => {
+  ])('carries client_did for a %s redirect', (_label, redirectUri) => {
     const request = createSiwdLoginRequest({
       authorizeUrl: AUTHORIZE,
       domain: 'localhost',
@@ -257,17 +275,39 @@ describe('siwd login kit', () => {
       clientDid: 'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae',
     });
 
-    expect(paramsOf(request.url).get('client_did')).toBeNull();
+    expect(paramsOf(request.url).get('client_did')).toBe(
+      'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae',
+    );
     expect(paramsOf(request.url).get('redirect_uri')).toBe(redirectUri);
   });
 
   /*
-    A loopback target is admitted for `scope=identity` only (specs/SIWD.md):
-    every richer scope returns a credential issued to a `client_did`, which is
-    the one param a loopback request cannot carry. Nothing to drop, so it fails
-    at build time rather than after a redirect into a guaranteed refusal.
+    The ANONYMOUS loopback shape is untouched by the tier: no client identity,
+    `scope=identity`, and the URL carries exactly the three params it always
+    did — no `client_did` conjured from nowhere.
   */
-  it('throws on a non-identity scope over a loopback redirect', () => {
+  it('builds the anonymous loopback request with no client_did at all', () => {
+    const request = createSiwdLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      domain: 'localhost',
+      redirectUri: 'http://127.0.0.1:8976/cb',
+      scope: 'identity',
+    });
+    const params = paramsOf(request.url);
+
+    expect(params.get('client_did')).toBeNull();
+    expect(params.get('client_proof')).toBeNull();
+    expect(params.get('client_chain')).toBeNull();
+    expect([...params.keys()].sort()).toEqual(['challenge', 'redirect_uri', 'scope']);
+  });
+
+  /*
+    A loopback target with NO client identity is admitted for `scope=identity`
+    only (specs/SIWD.md): every richer scope returns a credential issued to a
+    `client_did`, and there is none to issue to. Naming a client identity opens
+    the tier, and with it every scope.
+  */
+  it('throws on a non-identity loopback scope only when no client identity is named', () => {
     for (const redirectUri of [
       'http://127.0.0.1:8976/cb',
       'http://localhost:3000/',
@@ -281,6 +321,19 @@ describe('siwd login kit', () => {
           scope: 'deposit',
         }),
       ).toThrow(/scope/);
+
+      // …and naming a client identity lifts the bound HERE. This is the
+      // CONSTRUCTOR admitting the shape, not the tier being satisfied: only the
+      // composed request — proof, plus chain when the DID is not resident —
+      // is one a host will honor. `createSiwdLoopbackLoginRequest` builds that.
+      const tiered = createSiwdLoginRequest({
+        authorizeUrl: AUTHORIZE,
+        domain: 'localhost',
+        redirectUri,
+        scope: 'deposit',
+        clientDid: 'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae',
+      });
+      expect(paramsOf(tiered.url).get('scope')).toBe('deposit');
     }
 
     // …and the admitted scope over the same targets is untouched
@@ -316,7 +369,8 @@ describe('siwd login kit', () => {
 
   it('keeps client_did for a loopback-LOOKALIKE hostname', () => {
     // `127.0.0.1.evil.example` is a public domain that merely reads as loopback.
-    // Matching it would strip an assertion a real registered app is entitled to.
+    // Classifying it as local would apply the wrong tier's rules to a site that
+    // holds a real domain — and can therefore vouch for itself the hosted way.
     const request = createSiwdLoginRequest({
       authorizeUrl: AUTHORIZE,
       domain: '127.0.0.1.evil.example',
@@ -433,6 +487,471 @@ describe('siwd login kit', () => {
   });
 });
 
+/*
+
+  LOOPBACK CREDENTIAL TIER
+
+  What a `client_did` on a local port now rests on: an ask proof over the
+  request's own challenge bytes, and (unless resident) the client's chain.
+  These tests replicate the HOST's checks — payload-segment string equality and
+  a signature against a current auth key — because those are what the byte
+  discipline in `signSiwdAskProof` exists to satisfy.
+
+*/
+describe('siwd loopback credential tier', () => {
+  const AUTHORIZE = 'https://app.example.com/authorize';
+  const paramsOf = (url: string): URLSearchParams => new URL(url).searchParams;
+
+  /** The host's own ask-proof check: typ/alg gate, payload-segment equality
+      against its re-derivation, signature against a CURRENT auth key. */
+  const hostAcceptsAskProof = async (
+    proof: string,
+    challenge: SiwdChallenge,
+    chain: string[],
+  ): Promise<boolean> => {
+    const decoded = decodeJwsUnsafe(proof);
+    if (!decoded || decoded.header.alg !== 'EdDSA' || decoded.header.typ !== SIWD_ASK_JWS_TYP) {
+      return false;
+    }
+    if (proof.split('.')[1] !== base64urlEncode(siwdSigningInput(challenge))) return false;
+    const identity = await verifyIdentityChain({ didPrefix: 'did:dfos', log: chain });
+    return identity.authKeys.some((authKey) => {
+      try {
+        verifyJws({ token: proof, publicKey: decodeMultikey(authKey.publicKeyMultibase).keyBytes });
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  };
+
+  const askChallenge = (): SiwdChallenge => ({
+    domain: 'localhost',
+    nonce: 'ask-nonce',
+    timestamp: siwdTs(0),
+  });
+
+  it('signs an ask proof whose payload segment IS the canonical challenge bytes', async () => {
+    const client = await mintSiwdClientIdentity();
+    const challenge = askChallenge();
+    const proof = await signSiwdAskProof({ challenge, kid: client.kid, signer: client.signer });
+
+    const [headerSegment, payloadSegment] = proof.split('.');
+    expect(JSON.parse(new TextDecoder().decode(base64urlDecode(headerSegment as string)))).toEqual({
+      alg: 'EdDSA',
+      typ: 'did:dfos:siwd-ask',
+      kid: client.kid,
+    });
+    // the host compares this segment as a STRING against its own re-derivation
+    expect(payloadSegment).toBe(base64urlEncode(siwdSigningInput(challenge)));
+    expect(await hostAcceptsAskProof(proof, challenge, client.chain)).toBe(true);
+  });
+
+  it.each([['key_bare'], ['#key_only'], ['did:dfos:x#'], ['#']])(
+    'throws on a kid that is not a DID URL with both halves: %s',
+    async (kid) => {
+      const client = await mintSiwdClientIdentity();
+      await expect(
+        signSiwdAskProof({ challenge: askChallenge(), kid, signer: client.signer }),
+      ).rejects.toThrow(/kid/);
+    },
+  );
+
+  /*
+    The reverse fungibility direction, and the more security-relevant one: a
+    SUBJECT's sign-in artifact covers the very same bytes, and only the typ gate
+    stops it from being replayed at the host as a client's ask proof.
+  */
+  it('refuses a subject sign-in presented as an ask proof', async () => {
+    const client = await mintSiwdClientIdentity();
+    const challenge = askChallenge();
+    // same key, same bytes — only the typ differs
+    const signIn = await signChallenge(client.kid, client.signer, challenge);
+
+    expect(await hostAcceptsAskProof(signIn, challenge, client.chain)).toBe(false);
+  });
+
+  it('refuses an ask proof over a different challenge', async () => {
+    const client = await mintSiwdClientIdentity();
+    const other: SiwdChallenge = { ...askChallenge(), nonce: 'some-other-nonce' };
+    const proof = await signSiwdAskProof({
+      challenge: other,
+      kid: client.kid,
+      signer: client.signer,
+    });
+
+    expect(await hostAcceptsAskProof(proof, askChallenge(), client.chain)).toBe(false);
+  });
+
+  /*
+    Key currency, the host's rule: a key rotated OUT of the chain must not open
+    a consent screen, even though its signature is perfectly valid. The fixtures'
+    `rotate` ADDS a key without retiring the first, so this builds the stricter
+    shape — a successor that REPLACES the genesis key outright.
+  */
+  const rotatedOutChain = async (): Promise<{ chain: string[]; retired: SiwdClientIdentity }> => {
+    const retired = await mintSiwdClientIdentity();
+    const successor = makeKey();
+    const update: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: cidOf(retired.chain[0] as string),
+      authKeys: [successor.key],
+      assertKeys: [successor.key],
+      controllerKeys: [successor.key],
+      createdAt: siwdTs(1),
+    };
+    // signed by the genesis key, which is still a current controller key AT the
+    // moment of the update — and is not one afterward
+    const signed = await signIdentityOperation({
+      operation: update,
+      signer: retired.signer,
+      keyId: retired.kid.slice(retired.kid.indexOf('#') + 1),
+      identityDID: retired.did,
+    });
+    return { chain: [...retired.chain, signed.jwsToken], retired };
+  };
+
+  it('refuses an ask proof signed by a key rotated out of the chain', async () => {
+    const { chain, retired } = await rotatedOutChain();
+    const challenge = askChallenge();
+
+    // the retired key still signs perfectly well; it is simply not current
+    const proof = await signSiwdAskProof({
+      challenge,
+      kid: retired.kid,
+      signer: retired.signer,
+    });
+    expect(await hostAcceptsAskProof(proof, challenge, retired.chain)).toBe(true);
+    expect(await hostAcceptsAskProof(proof, challenge, chain)).toBe(false);
+  });
+
+  /*
+    The whole point of the distinct typ: the ask proof and a subject's sign-in
+    cover the SAME bytes, so only the typ gate keeps one from being presented
+    as the other.
+  */
+  it('produces an artifact verifySiwd refuses — a client ask is not a sign-in', async () => {
+    const client = await mintSiwdClientIdentity();
+    const challenge = askChallenge();
+    const proof = await signSiwdAskProof({ challenge, kid: client.kid, signer: client.signer });
+
+    const resolvable = createClient({
+      relays: [RELAY],
+      peerClient: fakePeerClient({ [RELAY]: { identities: { [client.did]: client.chain } } }),
+    });
+    const res = await verifySiwd(resolvable, proof, { domain: 'localhost', nonce: 'ask-nonce' });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/typ/);
+  });
+
+  it('encodes a carried chain as base64url JSON, genesis first', async () => {
+    const client = await mintSiwdClientIdentity();
+    const encoded = encodeSiwdClientChain(client.chain);
+
+    expect(JSON.parse(new TextDecoder().decode(base64urlDecode(encoded)))).toEqual(client.chain);
+  });
+
+  it('enforces the carriage cap and refuses a log that is not one', () => {
+    const filler = (count: number): string[] => Array.from({ length: count }, (_, i) => `op-${i}`);
+
+    // each rejection reports its OWN reason — a caller debugging a refused
+    // carriage should not have to guess which of the three it tripped
+    expect(() => encodeSiwdClientChain('nope' as unknown as string[])).toThrow(/expected an array/);
+    expect(() => encodeSiwdClientChain([])).toThrow(/log is empty/);
+    expect(() => encodeSiwdClientChain(['ok', ''])).toThrow(/every member/);
+    expect(() => encodeSiwdClientChain(['ok', 42 as unknown as string])).toThrow(/every member/);
+    expect(() => encodeSiwdClientChain(filler(MAX_SIWD_CLIENT_CHAIN_OPS + 1))).toThrow(
+      /carriage cap/,
+    );
+    expect(() => encodeSiwdClientChain(filler(MAX_SIWD_CLIENT_CHAIN_OPS))).not.toThrow();
+  });
+
+  it('mints a client identity whose chain verifies to the DID it names', async () => {
+    const client = await mintSiwdClientIdentity();
+    const verified = await verifyIdentityChain({ didPrefix: 'did:dfos', log: client.chain });
+
+    expect(client.chain).toHaveLength(1);
+    expect(verified.did).toBe(client.did);
+    expect(client.kid).toBe(`${client.did}#${verified.authKeys[0]?.id}`);
+    expect(verified.isDeleted).toBe(false);
+
+    // and the returned signer is the current auth key, checked the host's way
+    const challenge = askChallenge();
+    const proof = await signSiwdAskProof({ challenge, kid: client.kid, signer: client.signer });
+    expect(await hostAcceptsAskProof(proof, challenge, client.chain)).toBe(true);
+  });
+
+  /*
+    The identity is only as durable as its custody: a CLI that cannot restore
+    re-mints a DIFFERENT DID every run, re-consents every run, and orphans every
+    credential the last run earned. `privateKey` + `chain` is what it persists.
+  */
+  it('restores a minted identity from privateKey + chain to the same did and kid', async () => {
+    const minted = await mintSiwdClientIdentity();
+    const restored = await restoreSiwdClientIdentity({
+      privateKey: minted.privateKey,
+      chain: minted.chain,
+    });
+
+    expect(restored.did).toBe(minted.did);
+    expect(restored.kid).toBe(minted.kid);
+    expect(restored.chain).toEqual(minted.chain);
+
+    // the restored signer is the same key by the only test that matters
+    const challenge = askChallenge();
+    const proof = await signSiwdAskProof({
+      challenge,
+      kid: restored.kid,
+      signer: restored.signer,
+    });
+    expect(await hostAcceptsAskProof(proof, challenge, restored.chain)).toBe(true);
+  });
+
+  it('refuses to restore a key that does not belong to the chain', async () => {
+    const minted = await mintSiwdClientIdentity();
+    const stranger = await mintSiwdClientIdentity();
+
+    await expect(
+      restoreSiwdClientIdentity({ privateKey: stranger.privateKey, chain: minted.chain }),
+    ).rejects.toThrow(/CURRENT authentication key/);
+  });
+
+  /*
+    Failing at restore, with the reason in hand, beats failing after a redirect:
+    a rotated-out key would sign an ask proof the host refuses.
+  */
+  it('refuses to restore a key the chain has rotated out', async () => {
+    const { chain, retired } = await rotatedOutChain();
+
+    // the same key restores fine against the chain that still names it
+    await expect(
+      restoreSiwdClientIdentity({ privateKey: retired.privateKey, chain: retired.chain }),
+    ).resolves.toMatchObject({ did: retired.did });
+
+    await expect(
+      restoreSiwdClientIdentity({ privateKey: retired.privateKey, chain }),
+    ).rejects.toThrow(/rotated-out key cannot restore/);
+  });
+
+  it('builds a loopback request carrying client_did, client_proof, and the chain', async () => {
+    const client = await mintSiwdClientIdentity();
+    const request = await createSiwdLoopbackLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      redirectUri: 'http://127.0.0.1:8976/cb',
+      scope: 'deposit',
+      statement: 'Let dfos-cli deposit on your behalf',
+      client,
+    });
+    const params = paramsOf(request.url);
+
+    expect(params.get('challenge')).toBe(request.challenge);
+    expect(params.get('redirect_uri')).toBe('http://127.0.0.1:8976/cb');
+    expect(params.get('scope')).toBe('deposit');
+    expect(params.get('client_did')).toBe(client.did);
+    expect(
+      JSON.parse(new TextDecoder().decode(base64urlDecode(params.get('client_chain') ?? ''))),
+    ).toEqual(client.chain);
+
+    // the proof covers the request's OWN challenge, byte for byte
+    const proof = params.get('client_proof') as string;
+    expect(proof.split('.')[1]).toBe(params.get('challenge'));
+    expect(
+      await hostAcceptsAskProof(proof, decodeSiwdChallenge(request.challenge), client.chain),
+    ).toBe(true);
+  });
+
+  /*
+    The port is not part of the binding — a local application cannot reserve
+    one — so SIWD.md pins the challenge domain to the BARE loopback host, which
+    is what the host compares literally against the redirect's host.
+  */
+  it.each([
+    ['http://127.0.0.1:8976/cb', '127.0.0.1'],
+    ['http://localhost:3000/', 'localhost'],
+    ['http://[::1]:8080/x', '::1'],
+  ])('derives the challenge domain from %s as the bare host', async (redirectUri, domain) => {
+    const client = await mintSiwdClientIdentity();
+    const request = await createSiwdLoopbackLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      redirectUri,
+      scope: 'identity',
+      client,
+    });
+
+    expect(decodeSiwdChallenge(request.challenge).domain).toBe(domain);
+    expect(request.expect.domain).toBe(domain);
+  });
+
+  it('omits client_chain for a DID already resident on the host', async () => {
+    const client = await mintSiwdClientIdentity();
+    const request = await createSiwdLoopbackLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      redirectUri: 'http://localhost:3000/cb',
+      scope: 'deposit',
+      client: { did: client.did, kid: client.kid, signer: client.signer },
+    });
+    const params = paramsOf(request.url);
+
+    expect(params.get('client_chain')).toBeNull();
+    expect(params.get('client_proof')).toBeTruthy();
+    expect(params.get('client_did')).toBe(client.did);
+  });
+
+  it('threads a subject binding and a supplied nonce into the signed bytes', async () => {
+    const client = await mintSiwdClientIdentity();
+    const subject = await buildIdentity();
+    const request = await createSiwdLoopbackLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      redirectUri: 'http://127.0.0.1:8976/cb',
+      scope: 'identity',
+      did: subject.did,
+      nonce: 'cli-minted-nonce',
+      client,
+    });
+
+    expect(decodeSiwdChallenge(request.challenge)).toEqual({
+      domain: '127.0.0.1',
+      nonce: 'cli-minted-nonce',
+      timestamp: request.timestamp,
+      did: subject.did,
+    });
+    expect(request.expect).toEqual({
+      domain: '127.0.0.1',
+      nonce: 'cli-minted-nonce',
+      did: subject.did,
+    });
+  });
+
+  it('refuses a redirectUri that is not a loopback target', async () => {
+    const client = await mintSiwdClientIdentity();
+    await expect(
+      createSiwdLoopbackLoginRequest({
+        authorizeUrl: AUTHORIZE,
+        redirectUri: 'https://3p.com/callback',
+        scope: 'deposit',
+        client,
+      }),
+    ).rejects.toThrow(/loopback/);
+
+    // the lookalike is a public domain, not a loopback target either
+    await expect(
+      createSiwdLoopbackLoginRequest({
+        authorizeUrl: AUTHORIZE,
+        redirectUri: 'https://127.0.0.1.evil.example/cb',
+        scope: 'deposit',
+        client,
+      }),
+    ).rejects.toThrow(/loopback/);
+  });
+
+  /*
+    SIWD.md defines the loopback interface as `http://` on those hosts. A
+    loopback NAME under another scheme is a misconfiguration, and this
+    entrypoint is where the claim "I am local software" is made.
+  */
+  it.each([['https://localhost:9/cb'], ['ftp://127.0.0.1/cb']])(
+    'refuses a non-http loopback scheme: %s',
+    async (redirectUri) => {
+      const client = await mintSiwdClientIdentity();
+      await expect(
+        createSiwdLoopbackLoginRequest({
+          authorizeUrl: AUTHORIZE,
+          redirectUri,
+          scope: 'deposit',
+          client,
+        }),
+      ).rejects.toThrow(/http:\/\/ loopback/);
+    },
+  );
+
+  it('refuses a kid that does not belong to the named client did', async () => {
+    const client = await mintSiwdClientIdentity();
+    const stranger = await mintSiwdClientIdentity();
+
+    await expect(
+      createSiwdLoopbackLoginRequest({
+        authorizeUrl: AUTHORIZE,
+        redirectUri: 'http://127.0.0.1:8976/cb',
+        scope: 'deposit',
+        client: { did: client.did, kid: stranger.kid, signer: stranger.signer },
+      }),
+    ).rejects.toThrow(/client\.kid/);
+  });
+
+  /*
+    The whole loop, mirroring the profile-A end-to-end test one describe up:
+    mint → compose → the host's checks → callback with a fragment credential →
+    verify. The nonce is CONSUMED, not compared: SIWD.md requires consumed
+    verification for every credential-returning scope, and a loopback verifier
+    is that discipline with a store of size one.
+  */
+  it('composes end to end: mint → ask → host checks → callback → verify', async () => {
+    const app = await mintSiwdClientIdentity();
+    const subject = await buildIdentity();
+
+    const request = await createSiwdLoopbackLoginRequest({
+      authorizeUrl: AUTHORIZE,
+      redirectUri: 'http://127.0.0.1:8976/cb',
+      scope: 'deposit',
+      client: app,
+    });
+    const params = paramsOf(request.url);
+
+    // — the host's half: verify the ask before rendering any consent —
+    const challenge = decodeSiwdChallenge(params.get('challenge') as string);
+    const carried = JSON.parse(
+      new TextDecoder().decode(base64urlDecode(params.get('client_chain') as string)),
+    ) as string[];
+    const carriedIdentity = await verifyIdentityChain({ didPrefix: 'did:dfos', log: carried });
+    expect(carriedIdentity.did).toBe(params.get('client_did'));
+    expect(
+      await hostAcceptsAskProof(params.get('client_proof') as string, challenge, carried),
+    ).toBe(true);
+
+    // consent granted: the subject signs, and the host returns a credential in
+    // the FRAGMENT and the sign-in JWS in the query
+    const jws = await signChallenge(subject.kid, subject.k.signer, challenge);
+    const callback = readSiwdCallback(
+      `http://127.0.0.1:8976/cb?jws=${encodeURIComponent(jws)}&did=${subject.did}` +
+        `#credential=${encodeURIComponent('cre.den.tial')}`,
+    );
+    expect(callback.kind).toBe('success');
+    if (callback.kind !== 'success') throw new Error('expected a success callback');
+    expect(callback.credential).toBe('cre.den.tial');
+
+    // — the client's half: a consumed store of size one —
+    let outstanding: string | undefined = request.expect.nonce;
+    const consumeNonce = (nonce: string): boolean => {
+      if (outstanding === undefined || nonce !== outstanding) return false;
+      outstanding = undefined;
+      return true;
+    };
+    // a fresh client per verification: a reused one answers the second call
+    // from its own warm cache, which auth refuses before it reaches the nonce
+    const subjectClient = () =>
+      createClient({
+        relays: [RELAY],
+        peerClient: fakePeerClient({ [RELAY]: { identities: { [subject.did]: subject.log } } }),
+      });
+
+    const session = await verifySiwd(subjectClient(), callback.jws, {
+      domain: request.expect.domain,
+      consumeNonce,
+    });
+    expect(session.ok).toBe(true);
+    expect(session.value?.did).toBe(subject.did);
+
+    // and the store of size one is spent — the replay finds nothing
+    const replay = await verifySiwd(subjectClient(), callback.jws, {
+      domain: request.expect.domain,
+      consumeNonce,
+    });
+    expect(replay.ok).toBe(false);
+    expect(replay.error).toMatch(/nonce/);
+  });
+});
+
 describe('readSiwdCallback', () => {
   it('reads a success callback', () => {
     expect(readSiwdCallback('https://3p.com/cb?jws=abc.def.ghi&did=did:dfos:xyz')).toEqual({
@@ -507,6 +1026,88 @@ describe('readSiwdCallback', () => {
 
   it('still throws on a string that is neither a URL nor a query', () => {
     expect(() => readSiwdCallback('not a url')).toThrow(/url/);
+  });
+
+  /*
+    A credential rides the FRAGMENT so it is never sent to a server — no access
+    log, no proxy log, no Referer. Reading it therefore takes the whole URL.
+  */
+  it('lifts a credential out of the fragment on a success callback', () => {
+    expect(
+      readSiwdCallback(
+        'https://3p.com/cb?jws=abc.def.ghi&did=did:dfos:xyz#credential=cre.den.tial',
+      ),
+    ).toEqual({
+      kind: 'success',
+      jws: 'abc.def.ghi',
+      did: 'did:dfos:xyz',
+      credential: 'cre.den.tial',
+    });
+
+    expect(
+      readSiwdCallback(
+        new URL('http://127.0.0.1:8976/cb?jws=a.b.c&did=did:dfos:xyz#credential=c.r.e&x=1'),
+      ),
+    ).toEqual({ kind: 'success', jws: 'a.b.c', did: 'did:dfos:xyz', credential: 'c.r.e' });
+  });
+
+  it('reads a success with no fragment, and an empty credential, as no credential', () => {
+    expect(readSiwdCallback('https://3p.com/cb?jws=a.b.c&did=did:dfos:xyz')).toEqual({
+      kind: 'success',
+      jws: 'a.b.c',
+      did: 'did:dfos:xyz',
+    });
+    expect(readSiwdCallback('https://3p.com/cb?jws=a.b.c&did=did:dfos:xyz#credential=')).toEqual({
+      kind: 'success',
+      jws: 'a.b.c',
+      did: 'did:dfos:xyz',
+    });
+  });
+
+  it('yields no credential from a query string that has no fragment', () => {
+    expect(readSiwdCallback('?jws=a.b.c&did=did:dfos:xyz')).toEqual({
+      kind: 'success',
+      jws: 'a.b.c',
+      did: 'did:dfos:xyz',
+    });
+  });
+
+  /*
+    `URLSearchParams` does not treat `#` as a delimiter, so a caller who
+    concatenated `location.search + location.hash` — the natural reach once the
+    docs say the credential is in the fragment — would otherwise read `did` as
+    `did:dfos:xyz#credential=…` and lose the credential entirely.
+  */
+  it('splits a bare `?query#fragment` string instead of corrupting did', () => {
+    expect(readSiwdCallback('?jws=a.b.c&did=did:dfos:xyz#credential=cre.den.tial')).toEqual({
+      kind: 'success',
+      jws: 'a.b.c',
+      did: 'did:dfos:xyz',
+      credential: 'cre.den.tial',
+    });
+
+    // an empty fragment is no fragment, and must not bleed into `did` either
+    expect(readSiwdCallback('?jws=a.b.c&did=did:dfos:xyz#')).toEqual({
+      kind: 'success',
+      jws: 'a.b.c',
+      did: 'did:dfos:xyz',
+    });
+  });
+
+  /*
+    The query half's verdict wins: a stray fragment on a non-callback load is
+    noise, not a session, and there is no half-callback state to promote.
+  */
+  it('does not let a fragment credential change a denied or none verdict', () => {
+    expect(readSiwdCallback('https://3p.com/cb?error=access_denied#credential=c.r.e')).toEqual({
+      kind: 'denied',
+      error: 'access_denied',
+    });
+    expect(readSiwdCallback('https://3p.com/cb#credential=c.r.e')).toEqual({ kind: 'none' });
+    expect(readSiwdCallback('https://3p.com/cb?jws=a.b.c#credential=c.r.e')).toEqual({
+      kind: 'denied',
+      error: 'malformed SIWD callback: missing did',
+    });
   });
 });
 

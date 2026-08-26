@@ -172,7 +172,54 @@ await verifySiwd(client, jws, {
 
 `consumeNonce` returns true iff **this** verifier minted the nonce and it was unspent — membership in verifier-minted state is what satisfies the spec's rule that the verifier MUST have minted the nonce it checks, and deleting it in the same operation is what makes it single-use. The atomicity is the caller's: a get-then-delete lets two concurrent replays both win, where a Redis `GETDEL` or a `DELETE … RETURNING` does not. Under either discipline the nonce check runs at most once, and only after every other check has passed, so an invalid presentation can never burn a nonce the user is still holding.
 
-`createSiwdLoginRequest` throws rather than returning an error on the two things that are RP misconfiguration: an `authorizeUrl` or `redirectUri` that is not an absolute URL, and any scope other than `identity` over a loopback redirect (a local port holds no `client_did` for a credential to be issued to — see [SIWD.md](../../specs/SIWD.md)).
+`createSiwdLoginRequest` throws rather than returning an error on the two things that are RP misconfiguration: an `authorizeUrl` or `redirectUri` that is not an absolute URL, and any scope other than `identity` over a loopback redirect that names no client identity.
+
+**Loopback redirects** — `http://localhost`, `http://127.0.0.1`, or `http://[::1]`, on any port — come in two shapes. The **anonymous** one is unchanged: no `client_did`, `scope=identity` only, and the consent screen shows the local delivery target and nothing else. The **key-proven** one is the [loopback credential tier](../../specs/SIWD.md#loopback-clients): the request carries a `client_did`, an ask proof over its own challenge bytes, and — unless the DID is already resident on the host — the client's identity chain. That is what lets local software receive a credential. It cannot prove where it came from, but it can prove it controls the keys, and the host's consent screen says exactly that. Credentials minted this way come back in the URL **fragment** and carry a hard expiry ceiling the host enforces; 14 days is the spec's recommendation.
+
+The fragment is what keeps the credential off every server, and it is also why a CLI needs one extra step: a browser does not send the fragment to your loopback listener either, so the request line your local server sees carries the query and nothing else. Answer it with a small page whose script reads `location.href` and posts the whole URL back to your server, then feed _that_ to `readSiwdCallback`. A browser relying party just passes `location.href`.
+
+```typescript
+import {
+  createSiwdLoopbackLoginRequest,
+  mintSiwdClientIdentity,
+  restoreSiwdClientIdentity,
+} from '@metalabel/dfos-client/siwd';
+
+// The one place this kit generates a key. Persist `privateKey` + `chain` and
+// restore them next run: a client that re-mints is a NEW did, so it re-consents
+// every time and orphans the credentials the last run earned.
+const app = saved
+  ? await restoreSiwdClientIdentity(saved) // { privateKey, chain }
+  : await mintSiwdClientIdentity();
+
+const request = await createSiwdLoopbackLoginRequest({
+  authorizeUrl: 'https://app.example.com/authorize',
+  redirectUri: 'http://127.0.0.1:8976/callback',
+  scope: 'read:profile',
+  client: app, // did + kid + signer, and the chain to carry
+});
+// open request.url, hold request.expect.nonce in memory, and read back the FULL
+// callback URL (see above — location.search alone would miss the credential).
+const result = readSiwdCallback(callbackUrl);
+if (result.kind === 'success') {
+  // Consumed verification, store of size one: a credential-returning scope
+  // requires it, and one outstanding nonce in memory IS the store. `client` is
+  // the resolver from the setup section, not the identity above.
+  let outstanding: string | undefined = request.expect.nonce;
+  const session = await verifySiwd(client, result.jws, {
+    domain: request.expect.domain,
+    consumeNonce: (nonce) => {
+      if (outstanding === undefined || nonce !== outstanding) return false;
+      outstanding = undefined;
+      return true;
+    },
+  });
+  if (session.ok) {
+    // only now is result.credential a credential you earned — store it, and
+    // send a per-request proof signed by app.signer when you spend it
+  }
+}
+```
 
 `siwdSigningInput(challenge)` is the pure byte contract both the signer and the verifier share (see [SIWD.md](../../specs/SIWD.md)); `createSiwdChallenge` mints a challenge on its own for a caller building its own redirect; `verifySiwd` is a no-throw verifier that accepts only a current `authKeys` entry of a non-deleted identity.
 
