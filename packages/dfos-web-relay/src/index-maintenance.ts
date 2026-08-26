@@ -53,11 +53,35 @@ import type { IngestionResult, RelayStore, StoredPublicCredential } from './type
  * fan-out triggers (a `chain:*` grant, and a wildcard / unresolvable
  * revocation). Both can flip publicRead across many rows without naming a
  * single content, so we recompute the bounded affected superset. Kept well
- * above any realistic in-memory corpus; the SQL twins do the equivalent as an
- * indexed `WHERE public_read` (revocation) or a full projection scan
- * (`chain:*`).
+ * above any realistic in-memory corpus.
+ *
+ * This store is in-memory: BOTH sweeps filter the row map linearly — there is no
+ * index to exploit. The Go/SQLite twin does the revocation sweep as an indexed
+ * `WHERE public_read = ?` (idx_index_content_public) and the `chain:*` sweep as
+ * a full projection scan.
  */
 const ENUMERATE_ALL_LIMIT = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Report an error a projection-maintenance fence swallowed.
+ *
+ * The projection is a non-authoritative hint plane, so maintenance must never
+ * fail an authoritative write — but swallowed is not the same as SILENT: a
+ * persistently failing projection looks exactly like a quiet one otherwise. One
+ * structured line per fence, in the house shape (see `logOpRejected` in
+ * sequencer.ts) and matching the Go twin's slog call so a single query works
+ * across implementations. Observability only — the swallow semantics are
+ * unchanged.
+ */
+const logIndexMaintenanceError = (site: string, error: unknown): void => {
+  console.warn(
+    JSON.stringify({
+      event: 'relay.index.maintenance_failed',
+      site,
+      reason: error instanceof Error ? error.message : String(error),
+    }),
+  );
+};
 
 /**
  * The rows one batch of accepted ops dirtied, collected across the batch and
@@ -244,8 +268,9 @@ export const collectIndexDirtyAfterOp = async (
         break;
       }
     }
-  } catch {
+  } catch (error) {
     // projection is a non-authoritative hint — never fail the write for it
+    logIndexMaintenanceError('collectIndexDirtyAfterOp', error);
   }
 };
 
@@ -277,8 +302,9 @@ export const flushIndexMaintenance = async (
     for (const did of dirty.identityDIDs) await recomputeIdentityRow(did, store);
     for (const row of dirty.countersigns) await store.putIndexCountersignatureRow(row);
     for (const row of dirty.artifacts) await store.putIndexArtifactRow(row);
-  } catch {
+  } catch (error) {
     // projection is a non-authoritative hint — never fail the write for it
+    logIndexMaintenanceError('flushIndexMaintenance', error);
   }
 };
 
@@ -296,7 +322,8 @@ export const maintainIndexAfterBlob = async (
   try {
     const contentIds = await store.getIndexContentIdsByDocumentCID(documentCID);
     for (const contentId of contentIds) await recomputeContentRow(contentId, store);
-  } catch {
+  } catch (error) {
     // projection is a non-authoritative hint — never fail the blob write for it
+    logIndexMaintenanceError('maintainIndexAfterBlob', error);
   }
 };

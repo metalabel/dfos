@@ -335,33 +335,36 @@ func TestDualRelayParity(t *testing.T) {
 		"/index/v0/countersignatures?witness=" + fix.QueryRevocationIssuerDID + "&limit=1000",
 		"/index/v0/credentials?resource=chain:*&limit=1000",
 	}
-	// REGRESSION GUARD (index fan-out fix): the content-row expectations below currently FAIL
-	// on BOTH twins, and the failure is a real shared relay defect, not a harness
-	// artifact. The fixture posts its ops as ONE batch. That batch contains user
-	// A's `chain:*` credential, which sets `allContent` on the batch dirty set; the
-	// flush then takes the `allContent` branch and DISCARDS the per-id
-	// `contentIds` collected from the content-ops in the same batch:
+	// REGRESSION GUARD (index fan-out). The content-row expectations below pin a
+	// real shared relay defect that this gate caught on its first run and that
+	// was FIXED in the same commit that added the guard (215fa14). Kept as a
+	// guard, not a bug report — the history is recorded here so a future failure
+	// is recognized as this regression rather than re-debugged from scratch.
 	//
-	//   TS: packages/dfos-web-relay/src/index-maintenance.ts:246-251
-	//   Go: packages/dfos-web-relay-go/index_maintenance.go:300-309
+	// The defect: the fixture posts its ops as ONE batch. That batch contains
+	// user A's `chain:*` credential, which sets `allContent` on the batch dirty
+	// set; the flush (flushIndexMaintenance in both twins) then took the
+	// `allContent` branch and DISCARDED the per-id `contentIds` collected from
+	// the content-ops in the same batch. The `allContent` sweep enumerates the
+	// MATERIALIZED PROJECTION (queryIndexContent → index_content /
+	// s.indexContentRows), not the authoritative chain table, so on a relay whose
+	// content rows had never been written it enumerated nothing and wrote
+	// nothing. Any batch carrying a `chain:*` grant alongside brand-new content
+	// ops therefore left those content rows permanently absent from
+	// /index/v0/content — nothing recovered them, including a later blob upload
+	// (maintainIndexAfterBlob also reads the projection). The sibling
+	// `allPublicContent` branch already unioned the per-id set; `allContent` did
+	// not.
 	//
-	// The `allContent` sweep enumerates the MATERIALIZED PROJECTION
-	// (queryIndexContent → index_content / s.indexContentRows), not the
-	// authoritative chain table, so on a relay whose content rows have never been
-	// written it enumerates nothing and writes nothing. Any batch that carries a
-	// `chain:*` grant alongside brand-new content ops therefore leaves those
-	// content rows PERMANENTLY absent from /index/v0/content — nothing recovers
-	// them, including a later blob upload (maintainIndexAfterBlob also reads the
-	// projection: store.ts:524). The sibling `allPublicContent` branch already
-	// unions the per-id set for exactly this reason; `allContent` does not.
+	// The fix: both flushes now ALWAYS run the per-id `contentIds` set, unioned
+	// with whichever sweep the batch selected.
 	//
-	// Repro: post the fixture ops split into two batches (content ops first,
-	// credentials second) and the rows appear; post them as one batch and they
-	// never do.
+	// Repro of the original bug: post the fixture ops split into two batches
+	// (content ops first, credentials second) and the rows appeared; post them as
+	// one batch and they never did.
 	//
-	// Do NOT weaken these assertions to make the gate green — they are correct and
-	// the relay is wrong. They pass once the flush unions `contentIds` into the
-	// `allContent` branch.
+	// Do NOT weaken these assertions to make the gate green — a failure here means
+	// the fan-out union has regressed.
 	expectedRows := map[string]string{
 		orderedContentRoute: fix.QueryContentID,
 		signerRoute:         fix.QueryContentID,
@@ -409,9 +412,9 @@ func TestDualRelayParity(t *testing.T) {
 		})
 	}
 
-	// REGRESSION GUARD (index fan-out fix): also currently fails — the walk requires >= 2
-	// non-empty pages, and the same missing content rows described above make
-	// every page empty. Same root cause, same fix.
+	// REGRESSION GUARD (index fan-out): the walk requires >= 2 non-empty pages, so
+	// it also failed under the defect described above — the missing content rows
+	// made every page empty. Same root cause, same fix (215fa14).
 	compareIndexCursorWalk(
 		t,
 		tsURL,

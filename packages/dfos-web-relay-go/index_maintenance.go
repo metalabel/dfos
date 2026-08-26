@@ -28,7 +28,10 @@ package relay
   The projection is a NON-AUTHORITATIVE hint plane. Maintenance therefore never
   fails an authoritative write: every entry point swallows its own errors (and
   recovers panics) so a projection hiccup can never reject an ingested op or a
-  stored blob.
+  stored blob. Swallowed is not SILENT, though: each fence logs what it caught
+  (see logIndexMaintenanceRecover), because a projection that is persistently
+  failing looks exactly like one that is merely quiet. The logging is
+  observability only — the swallow semantics are unchanged.
 
   A materialized row is a snapshot of standing authority AT LAST TOUCH. One input
   to publicRead — a standing credential's exp — is wall-clock-relative, so a row
@@ -50,13 +53,31 @@ import (
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
+// logIndexMaintenanceRecover reports a panic caught by a projection-maintenance
+// fence. Deferred as `defer logIndexMaintenanceRecover(site)` at each entry
+// point: it calls recover() itself, so the fence still swallows the panic and
+// the authoritative write still succeeds — it just stops being invisible.
+//
+// These are package-level functions with no relay receiver (the ingest choke
+// point is the package function IngestOperations), so they log through
+// slog.Default() — the same logger NewRelay falls back to when none is supplied.
+func logIndexMaintenanceRecover(site string) {
+	if rec := recover(); rec != nil {
+		slog.Default().Error("index projection maintenance panicked — projection row(s) may be stale",
+			"site", site, "recovered", rec)
+	}
+}
+
 // enumerateAllLimit is the upper bound for the maintenance-time enumerate-all
 // fallback used by the two fan-out triggers (a chain:* grant, and a wildcard /
 // unresolvable revocation). Both can flip publicRead across many rows without
 // naming a single content, so we recompute the bounded affected superset. Kept
-// well above any realistic corpus; the SQL store does the equivalent as an
-// indexed WHERE public_read = 1 (revocation) or a full projection scan
-// (chain:*).
+// well above any realistic corpus.
+//
+// In this (SQLite) store the revocation sweep is an indexed WHERE public_read = ?
+// — idx_index_content_public covers (public_read, content_id) — while the
+// chain:* sweep is a full projection scan. The TS twin's in-memory store filters
+// its row map linearly in both cases.
 const enumerateAllLimit = 1<<31 - 1
 
 // indexDirtySet is the rows one batch of accepted ops dirtied, collected across
@@ -218,7 +239,7 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 	if result.Status != "new" || result.Kind == "" {
 		return
 	}
-	defer func() { _ = recover() }()
+	defer logIndexMaintenanceRecover("collectIndexDirtyAfterOp")
 
 	switch result.Kind {
 	case "identity-op":
@@ -316,12 +337,29 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 // Non-authoritative: swallows its own errors and recovers panics so it never
 // fails the write.
 func flushIndexMaintenance(dirty *indexDirtySet, store Store) {
-	defer func() { _ = recover() }()
+	defer logIndexMaintenanceRecover("flushIndexMaintenance")
+
+	// Errors are still swallowed (the projection must never fail a write), but
+	// they are counted and reported once for the whole flush — one aggregate line
+	// instead of per-row spam on a fan-out sweep, and enough to see a projection
+	// that is persistently failing rather than merely idle.
+	failures := 0
+	swallow := func(err error) {
+		if err != nil {
+			failures++
+		}
+	}
+	defer func() {
+		if failures > 0 {
+			slog.Default().Warn("index projection maintenance had errors — rows may be stale",
+				"failures", failures)
+		}
+	}()
 
 	if dirty.allContent {
-		_ = recomputeAllContentRows(store)
+		swallow(recomputeAllContentRows(store))
 	} else if dirty.allPublicContent {
-		_ = recomputePublicReadContentRows(store)
+		swallow(recomputePublicReadContentRows(store))
 	}
 	// The per-id set ALWAYS runs: the sweeps above enumerate the materialized
 	// projection, so a content chain born in this very batch is invisible to
@@ -329,16 +367,16 @@ func flushIndexMaintenance(dirty *indexDirtySet, store Store) {
 	// the wildcard branch silently lost every chain co-batched with a chain:*
 	// credential (peer sync and the sequencer batch up to 10k ops).
 	for contentID := range dirty.contentIDs {
-		_ = recomputeContentRow(contentID, store)
+		swallow(recomputeContentRow(contentID, store))
 	}
 	for did := range dirty.identityDIDs {
-		_ = recomputeIdentityRow(did, store)
+		swallow(recomputeIdentityRow(did, store))
 	}
 	for _, row := range dirty.countersigns {
-		_ = store.PutIndexCountersignatureRow(row)
+		swallow(store.PutIndexCountersignatureRow(row))
 	}
 	for _, row := range dirty.artifacts {
-		_ = store.PutIndexArtifactRow(row)
+		swallow(store.PutIndexArtifactRow(row))
 	}
 }
 
@@ -483,12 +521,21 @@ func rebuildIndexProjectionRows(store Store, rebuildable RebuildableIndexStore, 
 // Non-authoritative: swallows its own errors and recovers panics so it never
 // fails the blob write.
 func maintainIndexAfterBlob(documentCID string, store Store) {
-	defer func() { _ = recover() }()
+	defer logIndexMaintenanceRecover("maintainIndexAfterBlob")
 	contentIds, err := store.GetIndexContentIDsByDocumentCID(documentCID)
 	if err != nil {
+		slog.Default().Warn("index projection: blob maintenance lookup failed — rows may be stale",
+			"documentCid", documentCID, "error", err)
 		return
 	}
+	failures := 0
 	for _, contentID := range contentIds {
-		_ = recomputeContentRow(contentID, store)
+		if err := recomputeContentRow(contentID, store); err != nil {
+			failures++
+		}
+	}
+	if failures > 0 {
+		slog.Default().Warn("index projection: blob maintenance had errors — rows may be stale",
+			"documentCid", documentCID, "failures", failures)
 	}
 }

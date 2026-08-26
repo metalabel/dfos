@@ -248,8 +248,26 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 
 	if hasBatch {
 		if err := batchable.CommitWriteBatch(); err != nil {
-			r.logger.Error("failed to commit write batch", "error", err)
+			// The batch's chain-state writes are GONE. Nothing this batch
+			// claimed to land is actually held, so the batch must neither be
+			// gossiped nor reported as landed — the same rule the per-op
+			// MarkOpsSequenced guard above enforces, applied to the whole batch.
+			// The raw ops were stored BEFORE the batch opened, so every op here
+			// stays pending and the sequencer retries it once the store is
+			// healthy; the results are rewritten to the retryable
+			// persistence-failure shape (persistError) to say exactly that.
+			// Permanent rejections are left alone: that verdict is a function of
+			// the op against the pre-batch state, which is the state a retry
+			// sees, so it remains true and claims nothing about what we hold.
+			r.logger.Error("failed to commit write batch — batch rolled back, not gossiped", "error", err, "ops", len(tokens))
 			batchable.RollbackWriteBatch()
+			newOps = nil
+			newCount, dupCount = 0, 0
+			for i, res := range results {
+				if res.Status == "new" || res.Status == "duplicate" {
+					results[i] = *persistError(res.CID, err)
+				}
+			}
 		}
 	}
 

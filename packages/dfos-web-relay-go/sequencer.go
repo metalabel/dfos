@@ -274,6 +274,30 @@ func persistError(cid string, err error) *IngestionResult {
 	}
 }
 
+// storeReadErrorPrefix marks a rejection caused by a store READ failing at an
+// authorization gate (revocation lookup, deleted-identity lookup). Distinct from
+// persistErrorPrefix so the two transient-store failure modes are separable in
+// logs, but the semantics are the same: a gate that cannot be evaluated FAILS
+// CLOSED — the op is not admitted — and stays pending for retry rather than
+// being durably rejected.
+const storeReadErrorPrefix = "storage read failed: "
+
+// storeReadError wraps a store read error at an authorization gate in a
+// retryable rejection. The alternative — treating a failed lookup as
+// "not revoked" / "not deleted" — fails OPEN and admits an operation the relay
+// has no evidence is authorized. Returns nil if err is nil.
+func storeReadError(cid string, err error) *IngestionResult {
+	if err == nil {
+		return nil
+	}
+	return &IngestionResult{
+		CID:               cid,
+		Status:            "rejected",
+		Error:             storeReadErrorPrefix + err.Error(),
+		DependencyMissing: true,
+	}
+}
+
 // isDependencyFailure returns true if a rejection is retryable — a missing
 // dependency that may arrive later via sync or gossip, OR a transient storage
 // write failure. Branches on the STRUCTURED DependencyMissing flag set by the
