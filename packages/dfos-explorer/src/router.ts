@@ -8,6 +8,7 @@
     #/documents        browse public documents
     #/artifacts        browse standalone signed artifacts
     #/did/<did>        identity
+    #/domain/<host>    an origin's app description document
     #/content/<id>     content chain
     #/op/<cid>         operation
     #/cred/<cid>       credential
@@ -34,6 +35,7 @@ export type Route =
   | { view: 'documents' }
   | { view: 'artifacts' }
   | { view: 'did'; id: string }
+  | { view: 'domain'; host: string }
   | { view: 'content'; id: string }
   | { view: 'op'; id: string }
   | { view: 'cred'; id: string };
@@ -56,6 +58,7 @@ export const parseRoute = (hash: string): Route => {
   if (head === 'documents') return { view: 'documents' };
   if (head === 'artifacts') return { view: 'artifacts' };
   if (head === 'did' && id) return { view: 'did', id };
+  if (head === 'domain' && id) return { view: 'domain', host: id };
   if (head === 'content' && id) return { view: 'content', id };
   if (head === 'op' && id) return { view: 'op', id };
   if (head === 'cred' && id) return { view: 'cred', id };

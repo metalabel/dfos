@@ -4,3 +4,8 @@ build
 .turbo
 pnpm-lock.yaml
 .playwright-mcp
+
+# ajv standalone output — byte-compared against a fresh codegen run by
+# packages/dfos-explorer/tests/schema-validator-drift.spec.ts, so reformatting it
+# would report drift on every check
+packages/dfos-explorer/src/lib/generated
