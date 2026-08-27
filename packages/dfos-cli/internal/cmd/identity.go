@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
@@ -39,6 +40,7 @@ func newIdentityCmd() *cobra.Command {
 	cmd.AddCommand(newIdentityPublishCmd())
 	cmd.AddCommand(newIdentityFetchCmd())
 	cmd.AddCommand(newIdentityRemoveCmd())
+	cmd.AddCommand(newIdentityForgetCmd())
 	return cmd
 }
 
@@ -1787,6 +1789,103 @@ func newIdentityRemoveCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+type identityForgetResult struct {
+	DID                  string   `json:"did"`
+	Name                 string   `json:"name,omitempty"`
+	RemovedContexts      []string `json:"removedContexts"`
+	ActiveContextCleared bool     `json:"activeContextCleared"`
+	CredentialRemoved    bool     `json:"credentialRemoved"`
+}
+
+func newIdentityForgetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "forget <name|did>",
+		Short: "Forget a local identity registration and cached login credential",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := forgetIdentityConfig(cfg, args[0])
+			if err != nil {
+				return err
+			}
+			if err := os.Remove(credentialPath(result.DID)); err == nil {
+				result.CredentialRemoved = true
+			} else if !os.IsNotExist(err) {
+				return fmt.Errorf("remove stored login credential for %s: %w", result.DID, err)
+			}
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+
+			if jsonFlag {
+				outputJSON(result)
+				return nil
+			}
+			if result.Name != "" {
+				fmt.Printf("Forgot local identity '%s' (%s).\n", result.Name, result.DID)
+			} else {
+				fmt.Printf("Forgot local references for %s.\n", result.DID)
+			}
+			if len(result.RemovedContexts) > 0 {
+				fmt.Printf("  Removed context(s): %s\n", strings.Join(result.RemovedContexts, ", "))
+			}
+			if result.ActiveContextCleared {
+				fmt.Println("  Active context cleared because it referenced the forgotten identity.")
+			}
+			if result.CredentialRemoved {
+				fmt.Println("  Stored login credential removed.")
+			}
+			fmt.Println("  Any private keys remain in the OS keystore; key lifecycle is managed separately.")
+			fmt.Println("  Public chain data remains in the local relay; use 'dfos relay gc' for space maintenance.")
+			return nil
+		},
+	}
+}
+
+func forgetIdentityConfig(target *config.Config, nameOrDID string) (identityForgetResult, error) {
+	result := identityForgetResult{RemovedContexts: []string{}}
+	if identity, ok := target.Identities[nameOrDID]; ok {
+		result.Name = nameOrDID
+		result.DID = identity.DID
+		delete(target.Identities, nameOrDID)
+	} else {
+		if !strings.HasPrefix(nameOrDID, "did:") {
+			return result, fmt.Errorf("identity '%s' not found in config; pass a bare DID to forget unregistered local references", nameOrDID)
+		}
+		if err := protocol.ValidateDID(nameOrDID); err != nil {
+			return result, fmt.Errorf("invalid identity DID: %w", err)
+		}
+		result.DID = nameOrDID
+	}
+
+	for name, context := range target.Contexts {
+		if context.Identity == result.DID || (result.Name != "" && context.Identity == result.Name) {
+			delete(target.Contexts, name)
+			result.RemovedContexts = append(result.RemovedContexts, name)
+		}
+	}
+	sort.Strings(result.RemovedContexts)
+
+	active := target.ActiveContext
+	clearActive := false
+	for _, removed := range result.RemovedContexts {
+		if active == removed {
+			clearActive = true
+			break
+		}
+	}
+	if result.Name != "" && (active == result.Name || strings.HasPrefix(active, result.Name+"@")) {
+		clearActive = true
+	}
+	if active == result.DID || strings.HasPrefix(active, result.DID+"@") {
+		clearActive = true
+	}
+	if clearActive {
+		target.ActiveContext = ""
+		result.ActiveContextCleared = true
+	}
+	return result, nil
 }
 
 // helpers

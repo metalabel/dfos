@@ -120,6 +120,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newIdentityCmd())
 	root.AddCommand(newContentCmd())
 	root.AddCommand(newCredentialCmd())
+	root.AddCommand(newCredsCmd())
 	root.AddCommand(newWitnessCmd())
 	root.AddCommand(newCountersigsCmd())
 	root.AddCommand(newOperationCmd())
@@ -229,10 +230,19 @@ func newVersionCmd() *cobra.Command {
 }
 
 func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var showStore bool
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show current context, identity, and relay status",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var store *localStoreStatus
+			if showStore {
+				var err error
+				store, err = readLocalStoreStatus()
+				if err != nil {
+					return err
+				}
+			}
 			ctx, ctxErr := resolveCtx()
 
 			// No usable identity: distinguish a BROKEN active context (something
@@ -245,15 +255,24 @@ func newStatusCmd() *cobra.Command {
 						reason = ctxErr.Error()
 					}
 					if jsonFlag {
-						outputJSON(map[string]any{"context": cfg.ActiveContext, "resolved": false, "error": reason})
+						out := map[string]any{"context": cfg.ActiveContext, "resolved": false, "error": reason}
+						if store != nil {
+							out["store"] = store
+						}
+						outputJSON(out)
 						return nil
 					}
 					fmt.Printf("Active context '%s' is set but cannot be resolved: %s\n", cfg.ActiveContext, reason)
 					fmt.Printf("Fix it with 'dfos use <identity[@peer]>', add the peer via 'dfos peer add <name> <url>', or run 'dfos identity list'.\n")
+					printLocalStoreStatus(store)
 					return nil
 				}
 				if jsonFlag {
-					outputJSON(map[string]any{"context": nil, "resolved": false, "identity": nil})
+					out := map[string]any{"context": nil, "resolved": false, "identity": nil}
+					if store != nil {
+						out["store"] = store
+					}
+					outputJSON(out)
 					return nil
 				}
 				if len(cfg.Identities) == 0 {
@@ -261,6 +280,7 @@ func newStatusCmd() *cobra.Command {
 				} else {
 					fmt.Println("No active context. Use 'dfos use <identity[@peer]>' (see 'dfos identity list').")
 				}
+				printLocalStoreStatus(store)
 				return nil
 			}
 
@@ -308,6 +328,9 @@ func newStatusCmd() *cobra.Command {
 					}
 					status["relay"] = relayObj
 				}
+				if store != nil {
+					status["store"] = store
+				}
 				outputJSON(status)
 				return nil
 			}
@@ -337,9 +360,59 @@ func newStatusCmd() *cobra.Command {
 					fmt.Printf("  Error:   %s\n", infoErr)
 				}
 			}
+			printLocalStoreStatus(store)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&showStore, "store", false, "Also show local relay store statistics")
+	return cmd
+}
+
+type localStoreStatus struct {
+	Path         string         `json:"path"`
+	SizeBytes    int64          `json:"sizeBytes"`
+	OpCount      int            `json:"opCount"`
+	CountsByKind map[string]int `json:"countsByKind"`
+	Unsequenced  int            `json:"unsequenced"`
+}
+
+func readLocalStoreStatus() (*localStoreStatus, error) {
+	lr, err := getRelay()
+	if err != nil {
+		return nil, err
+	}
+	stats, err := lr.Store.RelayStats()
+	if err != nil {
+		return nil, fmt.Errorf("read local relay stats: %w", err)
+	}
+	unsequenced, err := lr.Store.CountUnsequenced()
+	if err != nil {
+		return nil, fmt.Errorf("count pending local relay operations: %w", err)
+	}
+	info, err := os.Stat(lr.DBPath())
+	if err != nil {
+		return nil, fmt.Errorf("stat local relay database: %w", err)
+	}
+	return &localStoreStatus{
+		Path:         lr.DBPath(),
+		SizeBytes:    info.Size(),
+		OpCount:      stats.OpCount,
+		CountsByKind: stats.CountsByKind,
+		Unsequenced:  unsequenced,
+	}, nil
+}
+
+func printLocalStoreStatus(store *localStoreStatus) {
+	if store == nil {
+		return
+	}
+	fmt.Printf("Store:     %s\n", store.Path)
+	fmt.Printf("  Size:    %d byte(s)\n", store.SizeBytes)
+	fmt.Printf("  Ops:     %d operation(s)\n", store.OpCount)
+	fmt.Printf("  Pending: %d raw operation(s)\n", store.Unsequenced)
+	fmt.Printf("  Kinds:   identity=%d content=%d artifact=%d credential=%d countersign=%d revocation=%d\n",
+		store.CountsByKind["identity"], store.CountsByKind["content"], store.CountsByKind["artifact"],
+		store.CountsByKind["credential"], store.CountsByKind["countersign"], store.CountsByKind["revocation"])
 }
 
 func newUseCmd() *cobra.Command {

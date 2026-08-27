@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -24,7 +25,53 @@ func newPeerCmd() *cobra.Command {
 	cmd.AddCommand(newPeerRemoveCmd())
 	cmd.AddCommand(newPeerListCmd())
 	cmd.AddCommand(newPeerInfoCmd())
+	cmd.AddCommand(newRelayGCCmd())
 	return cmd
+}
+
+type relayGCResult struct {
+	Path       string `json:"path"`
+	SizeBefore int64  `json:"sizeBefore"`
+	SizeAfter  int64  `json:"sizeAfter"`
+}
+
+func newRelayGCCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "gc",
+		Short: "Reclaim revoked follower blobs and compact the local relay database",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			lr, err := getRelay()
+			if err != nil {
+				return err
+			}
+			before, err := os.Stat(lr.DBPath())
+			if err != nil {
+				return fmt.Errorf("stat local relay database before GC: %w", err)
+			}
+
+			// This is the same follower-blob GC sweep serve invokes. Its API does
+			// not report a removal count, and it is a no-op unless this relay was
+			// opened in eager content-follow mode.
+			lr.Relay.GCRevokedContent()
+			if err := lr.Vacuum(); err != nil {
+				return err
+			}
+
+			after, err := os.Stat(lr.DBPath())
+			if err != nil {
+				return fmt.Errorf("stat local relay database after GC: %w", err)
+			}
+			result := relayGCResult{Path: lr.DBPath(), SizeBefore: before.Size(), SizeAfter: after.Size()}
+			if jsonFlag {
+				outputJSON(result)
+			} else {
+				fmt.Printf("Local relay GC complete: %s\n", result.Path)
+				fmt.Printf("  Before: %d byte(s)\n", result.SizeBefore)
+				fmt.Printf("  After:  %d byte(s)\n", result.SizeAfter)
+			}
+			return nil
+		},
+	}
 }
 
 func newPeerAddCmd() *cobra.Command {

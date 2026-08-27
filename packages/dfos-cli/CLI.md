@@ -272,6 +272,24 @@ Notes:
 
 The CLI stores all chain data in a SQLite database at `~/.dfos/relay.db`. This is the same relay implementation that powers network relays via `dfos serve` — the CLI just runs it embedded, without HTTP.
 
+Inspect the local store alongside the normal context and peer status:
+
+```bash
+dfos status --store
+dfos status --store --json
+```
+
+The store block reports the database path and file size, total sequenced operations, counts by operation kind, and pending raw operations. It is entirely local and still works when the configured peer is unreachable.
+
+Compact the SQLite file and run the relay's revoked follower-blob cleanup in one shot:
+
+```bash
+dfos relay gc
+dfos relay gc --json
+```
+
+`relay gc` reports the database size before and after `VACUUM`. The blob sweep is a no-op unless content following is eager, and its current API does not report a removal count. GC never deletes operations, chains, or other proof-plane data.
+
 Identity chains, content chains, operations, countersignatures, and blobs all live in this single database. Local metadata (identity names, publish state) is tracked in `config.toml`.
 
 ### Fetching Remote Chains
@@ -284,6 +302,15 @@ dfos content fetch abc123 --peer prod
 ```
 
 Fetched identities appear in `identity list` with `KEYS 0/N` — visible public keys but no private material in the keychain. This enables local verification, credential checking, and countersigning against remote identities.
+
+To forget only this machine's registration for an identity:
+
+```bash
+dfos identity forget alice
+dfos identity forget did:dfos:xxx
+```
+
+This removes the named identity and its referencing contexts from config, clears an affected active context, and removes that DID's cached login credential. Private keys remain in the OS keystore, public chain data remains in the local relay, and no chain operation is signed or published. Use `relay gc` for local space maintenance.
 
 ---
 
@@ -517,6 +544,22 @@ dfos login alice --authorize-url https://app.example.com
 
 Credentials land in `~/.dfos/credentials/<did>.json` (mode `600`, directory `700`) alongside the client DID they were issued to. The summary printed on success is decoded from the artifact locally — no network call. `scope=identity` returns no credential, and that is a success too: the sign-in was verified, there was just nothing to store.
 
+The separate `creds` group manages these local login records (not protocol grants and revocations):
+
+```bash
+# subject DID, client DID, obtained time, expiry, and expired status
+dfos creds list
+
+# full stored record plus locally decoded, unverified payload claims
+dfos creds show alice
+dfos creds show did:dfos:xxx --json
+
+# remove the local cached record without a prompt
+dfos creds rm alice
+```
+
+`creds list` prints `-` when an expiry claim is absent or cannot be decoded; an empty store prints a friendly message (`[]` with `--json`). `creds show` resolves configured identity names and also accepts a bare DID. Decoding here is intentionally unsafe inspection: signature verification happens when a credential is presented, not while listing the local cache.
+
 | Flag              | Default    | Meaning                                                                 |
 | ----------------- | ---------- | ----------------------------------------------------------------------- |
 | `--scope`         | `identity` | Passed to the host verbatim; space-separate several. Never parsed here. |
@@ -617,6 +660,7 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `GET`  | `identity fetch <did\|name>`    | Download identity chain from relay                       |
 | `GET`  | `identity log <name\|did>`      | Show identity operation history                          |
 | `DEL`  | `identity remove <name>`        | Drop an identity name from config (data stays in relay)  |
+| `DEL`  | `identity forget <name\|did>`   | Forget local config + cached login credential            |
 | `GET`  | `content show <id>`             | Show content chain state                                 |
 | `GET`  | `content log <id>`              | Show operation history                                   |
 | `GET`  | `content download <id>`         | Download blob (stdout or file)                           |
@@ -634,6 +678,9 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `GET`  | `countersigs <cid>`             | Show countersignatures for an operation                  |
 | `GET`  | `operation show <cid>`          | Inspect a protocol operation                             |
 | `POST` | `login [name\|did]`             | Sign in via SIWD, store the credential (`--scope`)       |
+| `GET`  | `creds list`                    | List cached SIWD login credentials                       |
+| `GET`  | `creds show <name\|did>`        | Show a cached record + decoded claims                    |
+| `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                    |
 | `GET`  | `auth token`                    | Mint short-lived auth token (stdout)                     |
 | `GET`  | `auth status`                   | Show current auth state                                  |
 | `*`    | `api <METHOD> <path>`           | Raw HTTP to relay with optional `--auth`                 |
@@ -641,11 +688,12 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `GET`  | `peer info [name]`              | Show relay metadata                                      |
 | `POST` | `peer add <name> <url>`         | Register a named relay                                   |
 | `DEL`  | `peer remove <name>`            | Unregister a relay                                       |
+| `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store       |
 | `SET`  | `use <context>`                 | Set active context                                       |
 | `GET`  | `config list`                   | Show full configuration                                  |
 | `GET`  | `config get <key>`              | Read a single config value                               |
 | `SET`  | `config set <key> <value>`      | Write a config value                                     |
-| `GET`  | `status`                        | At-a-glance overview                                     |
+| `GET`  | `status [--store]`              | At-a-glance overview, optionally with local-store stats  |
 | `POST` | `sync`                          | Sync with all configured relays                          |
 | `*`    | `serve`                         | Run the local relay as an HTTP server                    |
 | `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`) |

@@ -1092,6 +1092,14 @@ func credentialFileName(did string) string {
 	return strings.ReplaceAll(did, ":", "_") + ".json"
 }
 
+func credentialStoreDir() string {
+	return filepath.Join(config.ConfigDir(), "credentials")
+}
+
+func credentialPath(did string) string {
+	return filepath.Join(credentialStoreDir(), credentialFileName(did))
+}
+
 // credentialJWSTyp is the registered typ of a DFOS credential artifact.
 const credentialJWSTyp = "did:dfos:credential"
 
@@ -1122,7 +1130,7 @@ func assertCredentialForClient(token, clientDID string) error {
 }
 
 func storeLoginCredential(subjectDID string, lc *loginClient, credential string) (string, error) {
-	dir := filepath.Join(config.ConfigDir(), "credentials")
+	dir := credentialStoreDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", dir, err)
 	}
@@ -1137,7 +1145,7 @@ func storeLoginCredential(subjectDID string, lc *loginClient, credential string)
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, credentialFileName(subjectDID))
+	path := credentialPath(subjectDID)
 	if err := writeFileAtomic(path, append(data, '\n')); err != nil {
 		return "", err
 	}
