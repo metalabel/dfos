@@ -93,7 +93,7 @@ holds identity state fetched on its own clock from an origin the application its
 controls, with no independent arbiter in the path. An identity whose `services` list
 names no relay has no order authority at all — while a carried chain that does name a
 `DfosRelay` still answers to that relay's committed order, however the chain was
-obtained (WEB-RELAY.md "Identity Linearity and Order Authority", `specs/WEB-RELAY.md`).
+obtained (PROTOCOL.md "Chain Validity" → Order authority, `specs/PROTOCOL.md`).
 The operational consequences are specified as the five carried-chain disciplines
 (SIWD.md "Carried identity chains", `specs/SIWD.md`):
 
@@ -327,8 +327,8 @@ state has none. Undeletion is the explicit
 `restore` operation, signed by a controller key of the deleted head state (WEB-RELAY.md
 "Deletion Semantics", `specs/WEB-RELAY.md`; DID-METHOD.md §5.5, `specs/DID-METHOD.md`).
 Ordering authority for an identity chain is its services-listed home relay — single-writer
-ordering with multi-relay read replication, arbitration rather than merge (WEB-RELAY.md
-"Identity Linearity and Order Authority", `specs/WEB-RELAY.md`); equivocation by the
+ordering with multi-relay read replication, arbitration rather than merge (PROTOCOL.md
+"Chain Validity" → Order authority, `specs/PROTOCOL.md`); equivocation by the
 holder is detectable and invalid rather than head-selected (DID-METHOD.md §6.3,
 `specs/DID-METHOD.md`).
 
@@ -353,8 +353,8 @@ These are known and deliberately accepted for v1.
   is not in the deleted state and cannot restore.)
 - **Home-relay write availability (single-writer identity ordering).** The subject's
   services-listed relay is the order authority for its identity chain; peers replicate
-  its committed order and refuse conflicting extensions (WEB-RELAY.md "Identity Linearity
-  and Order Authority", `specs/WEB-RELAY.md`). An identity write attempted during a
+  its committed order and refuse conflicting extensions (PROTOCOL.md "Chain Validity" →
+  Order authority, `specs/PROTOCOL.md`). An identity write attempted during a
   home-relay outage is at-risk-until-retry — never arbitrated in later by timestamp. This
   is the deliberate trade for a non-auctionable authority record: identity writes are rare,
   reads replicate everywhere, and arbitration beats auction for key state.
