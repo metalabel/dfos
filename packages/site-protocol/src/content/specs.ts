@@ -202,6 +202,18 @@ export const specs: SpecEntry[] = [
     nav: { label: 'Skill', tier: 'primary' },
   },
   {
+    slug: '/extensions',
+    title: 'Extension Registry',
+    tile: 'Every registered service type and JWS <code>typ</code> — one index, owner specs linked',
+    llms: 'The single index of registered names — service types under the open services namespace, and JWS typ values with their cid-header carriage — each linked to the spec that owns its semantics',
+    metaDescription:
+      'DFOS Extension Registry — the single index of registered service types and JWS typ values, each linked to the owner spec that defines its semantics.',
+    source: '../../specs/EXTENSIONS.md',
+    grid: 'specifications',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
     slug: '/threat-model',
     title: 'Threat Model',
     tile: 'Adversaries, trust boundaries, and what the proof/content separation defends',

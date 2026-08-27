@@ -20,7 +20,7 @@ The attestation shape deliberately copies the prior art that proved it at web sc
 { id: string, type: "DfosOrigin", domain: string }
 ```
 
-The entry is a [service entry](https://protocol.dfos.com/spec#services) under the core's open type namespace, registered by this spec the way [SIGNING](https://protocol.dfos.com/signing) and [API-AUTH](https://protocol.dfos.com/api-auth) register their credential resource forms: the core carries it, this document gives it meaning. To a core verifier it is an unrecognized type — preserved verbatim, never structurally validated. Structural validation is a consumer obligation under this spec.
+The entry is a [service entry](https://protocol.dfos.com/spec#services) under the core's open type namespace, registered by this spec (and indexed in the [extension registry](https://protocol.dfos.com/extensions)) the way [SIGNING](https://protocol.dfos.com/signing) and [API-AUTH](https://protocol.dfos.com/api-auth) register their credential resource forms: the core carries it, this document gives it meaning. To a core verifier it is an unrecognized type — preserved verbatim, never structurally validated. Structural validation is a consumer obligation under this spec.
 
 | Member   | Description                                                                                                                                                                                                                                            |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

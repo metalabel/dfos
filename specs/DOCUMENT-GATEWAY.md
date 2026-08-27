@@ -71,7 +71,7 @@ A reader finds a gateway through the identity's `services` vocabulary (see [PROT
 
 A resolver replays the identity chain to current state, reads the `DfosDocumentGateway` endpoint, and requests the document. `DfosProfile` dispatches by shape exactly as `ContentAnchor` does: a contentId resolves to a content chain (a living, updatable profile), a CIDv1 resolves to an artifact (an immutable snapshot). Both are just content the gateway serves under the same authorization rules — discovery and authorization stay orthogonal.
 
-Because these are open-namespace service types, a relay that does not recognize them preserves and ignores them; a gateway-aware client reads them. No coordinated upgrade is required.
+Because these are open-namespace service types, a relay that does not recognize them preserves and ignores them; a gateway-aware client reads them. No coordinated upgrade is required. Both types are indexed in the [extension registry](https://protocol.dfos.com/extensions).
 
 ---
 

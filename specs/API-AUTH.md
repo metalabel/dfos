@@ -22,7 +22,7 @@ This is the same shape the wider ecosystem converged on as [DPoP (RFC 9449)](htt
 
 - **Not a session.** There are no cookies, no server-side session state, no login. Every request is authenticated independently by its own proof. A browser application that cannot hold the audience key routes through its own backend, which holds the key and signs (see [Security Considerations](#security-considerations)).
 - **Not a bearer token.** The proof is worthless without the request it describes, and the credential is worthless without the proof. The `Authorization` scheme is deliberately not `Bearer` — nothing carried here is one.
-- **Not relay surface.** The proof is never ingested by a relay, never gossiped, never content-addressed for reference. It moves in an HTTP header to an API host and dies with the freshness window. It is registered in the [protocol `typ` registry](https://protocol.dfos.com/spec#typ-header) for routing only.
+- **Not relay surface.** The proof is never ingested by a relay, never gossiped, never content-addressed for reference. It moves in an HTTP header to an API host and dies with the freshness window. It is registered in the [extension registry](https://protocol.dfos.com/extensions) for routing only.
 - **Not a signing family.** `did:dfos:request-proof` is not a [SIGNING](https://protocol.dfos.com/signing) `payloadTyp`: the presenter signs proofs with its **own** key, continuously and mechanically — there is no other party to ask and nothing for a human to approve, so nothing to courier.
 
 ---

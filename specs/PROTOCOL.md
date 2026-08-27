@@ -141,23 +141,9 @@ Content chain verification requires a **valid EdDSA signature** and delegates ke
 
 ### `typ` Header
 
-The JWS `typ` header uses protocol-specific values (not IANA media types):
+The JWS `typ` header uses protocol-specific values (not IANA media types). Every `typ` value — this document's core operation families and every extension envelope — is registered in one place, the [extension registry](https://protocol.dfos.com/extensions), which names each value, the spec that owns it, and whether its envelope carries the [`cid` header](#cid-header). A new envelope family adds its row there, never a local name; registration is for `typ` routing and says nothing about ingestion (several registered families are document-plane artifacts no relay ever ingests — the registry's semantics column says which).
 
-| `typ` value              | Usage                                            |
-| ------------------------ | ------------------------------------------------ |
-| `did:dfos:identity-op`   | Identity chain operations                        |
-| `did:dfos:content-op`    | Content chain operations                         |
-| `did:dfos:artifact`      | Standalone signed inline documents               |
-| `did:dfos:countersign`   | Standalone witness attestations                  |
-| `did:dfos:revocation`    | Credential revocation artifacts                  |
-| `did:dfos:credential`    | DFOS authorization credentials                   |
-| `did:dfos:credit-claim`  | Document-plane credit claims (attribution)       |
-| `did:dfos:sign-request`  | Sign-request envelopes (SIGNING, `0.x`)          |
-| `did:dfos:siwd`          | Sign In With DFOS challenge proofs (SIWD, `0.x`) |
-| `did:dfos:request-proof` | API request proofs (API-AUTH, `0.x`)             |
-| `JWT`                    | Auth tokens (DID-signed relay authentication)    |
-
-Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions. See [CREDENTIALS.md](https://protocol.dfos.com/credentials) for credential `typ` values and format, and [CREDITS.md](https://protocol.dfos.com/credits) for the credit-claim envelope — a document-plane artifact that relays never see as a claim, so it appears in this registry but in no relay ingestion path. The sign-request envelope ([SIGNING.md](https://protocol.dfos.com/signing), an optional `0.x` capability) follows the same pattern: registered here so `typ`-routing verifiers know the value, but it moves through the optional signing-mailbox courier, never through `POST /proof/v1/operations`. The SIWD challenge proof ([SIWD.md](https://protocol.dfos.com/siwd), an optional `0.x` authentication seam) is likewise a document-plane artifact: registered here for `typ` routing, delivered by web redirect or the signing mailbox, and never relay-ingested. The API request proof ([API-AUTH.md](https://protocol.dfos.com/api-auth), an optional `0.x` capability) completes the pattern: registered here for `typ` routing only, it rides the `Authorization` header of a credential-gated API request — the auth token's request-bound sibling, never a proof-plane artifact and never relay-ingested.
+Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions.
 
 ### Operation Versioning
 
@@ -506,7 +492,7 @@ Every operation JWS (identity-op and content-op) includes a `cid` field in the p
 
 A CID mismatch between header and derived value immediately surfaces dag-cbor encoding disagreements across implementations.
 
-Note: JWT auth tokens do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). This field is present on operation JWS tokens, artifacts, countersignatures, credentials, revocations, credit claims ([CREDITS.md](https://protocol.dfos.com/credits)), and sign-request envelopes ([SIGNING.md](https://protocol.dfos.com/signing)).
+Note: JWT auth tokens do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). Which envelope families carry `cid` is inventoried per family in the [extension registry](https://protocol.dfos.com/extensions).
 
 ### CID Derivation
 
@@ -624,7 +610,9 @@ Every entry carries the common envelope `{ id, type }`. The namespace is **open*
 two types are recognized and structurally validated; any other `type` is an
 opaque extension that verifiers MUST preserve verbatim and otherwise ignore
 (MUST-ignore-unknown). New service types therefore never require a protocol or
-cross-language change.
+cross-language change. Every registered type — core and extension — is indexed
+in the [extension registry](https://protocol.dfos.com/extensions); a spec that
+registers one adds its row there.
 
 **Recognized types:**
 
