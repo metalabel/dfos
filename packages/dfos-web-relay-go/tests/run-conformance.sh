@@ -32,7 +32,9 @@ echo "Starting dfos serve on port $PORT (SQLite: $SQLITE_PATH)..."
 
 # use a temp config dir so we don't pollute the user's real config
 DFOS_CONFIG="$(mktemp -d)/config.toml"
-DFOS_CONFIG="$DFOS_CONFIG" SQLITE_PATH="$SQLITE_PATH" "$RELAY_DIR/dfos-test" serve --port "$PORT" --db "$SQLITE_PATH" &
+# --authority: authenticated routes 503 without one, and the suite signs its
+# identity proofs against the authority of the URL it dials.
+DFOS_CONFIG="$DFOS_CONFIG" SQLITE_PATH="$SQLITE_PATH" "$RELAY_DIR/dfos-test" serve --port "$PORT" --db "$SQLITE_PATH" --authority "localhost:$PORT" &
 RELAY_PID=$!
 
 # wait for the relay to be ready
