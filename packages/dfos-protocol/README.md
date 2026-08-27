@@ -29,7 +29,7 @@ import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-pr
 | Export                                 | Description                                                                                             |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `@metalabel/dfos-protocol/chain`       | Identity & content chains, services, artifacts, countersigns, revocations, credit claims, sign requests |
-| `@metalabel/dfos-protocol/credentials` | Auth tokens (DID-signed JWT) and DFOS credentials for authorization                                     |
+| `@metalabel/dfos-protocol/credentials` | DFOS credentials for authorization, and the API-AUTH request-proof / identity-proof envelopes           |
 | `@metalabel/dfos-protocol/crypto`      | Ed25519, JWS, JWT, dag-cbor, base64url, ID generation                                                   |
 | `@metalabel/dfos-protocol/fold`        | Canonical linearization and LWW-map folds for index documents                                           |
 

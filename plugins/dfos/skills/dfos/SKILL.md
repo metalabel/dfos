@@ -185,7 +185,7 @@ One line each — run `dfos <command> --help` for flags.
 
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
 **Peers** (`dfos peer …`, alias `relay`) — `add` · `remove` · `list` · `info`
-**Auth** (`dfos auth …`) — `token` · `status`
+**Auth** (`dfos auth …`) — `proof` · `status`
 **Config** (`dfos config …`) — `list` · `get` · `set`
 **Inspect & attest** — `dfos operation show <cid>` (alias `op`) · `dfos witness <opCID>` · `dfos countersigs <cid>`
 **Top-level** — `use` · `status` · `version` · `serve` · `sync` · `api` · `skill`

@@ -38,6 +38,13 @@ Set `signing: true` to enable the optional signing mailbox; it is disabled by de
 The store must implement the optional signing members or `createRelay` throws
 `signing capability requires a store implementing the signing members`.
 
+Set `authority` to the `host[:port]` callers reach this relay at. It is what every
+[API-AUTH](https://protocol.dfos.com/api-auth) identity proof is checked against, and
+it is configuration, never read from a request header — without it the authenticated
+routes answer 503. `ingestion` (`open` | `proof-required` | `closed`) and an injectable
+`admissionPolicy` set who may submit operations
+([Web Relay § Ingestion Admission](https://protocol.dfos.com/web-relay#ingestion-admission)).
+
 ### Standalone (Node.js)
 
 ```typescript
@@ -74,8 +81,8 @@ serve({ port: 4444 });
 | `GET`  | `/index/v0/countersignatures`               | Query countersignatures by witness (`index` capability)              |
 | `GET`  | `/index/v0/credentials`                     | Query credential projections (`index` capability)                    |
 | `GET`  | `/index/v0/credits`                         | Query credits on public head documents (`index` capability)          |
-| `PUT`  | `/content/:contentId/blob/:operationCID`    | Upload blob (auth required)                                          |
-| `GET`  | `/content/:contentId/blob`                  | Download blob at head (standing auth, or auth + credential)          |
+| `PUT`  | `/content/:contentId/blob/:operationCID`    | Upload blob (identity proof required)                                |
+| `GET`  | `/content/:contentId/blob`                  | Download blob at head (public grant, or identity proof + credential) |
 | `GET`  | `/content/:contentId/blob/:ref`             | Download blob at specific operation ref                              |
 
 ## Route Semantics
@@ -87,7 +94,7 @@ behind it are the spec's to define, not this README's. DID resolution
 (`/revocations/v1/*`) is specified in
 [Relay Contract § Revocation Status](https://protocol.dfos.com/relay-contract#revocation-status);
 blob upload/download authorization is
-[Web Relay § Content Plane Access](https://protocol.dfos.com/web-relay#content-plane-access).
+[Web Relay § Access](https://protocol.dfos.com/web-relay#access).
 
 ## Peering
 
