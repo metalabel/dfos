@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
@@ -67,13 +68,13 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
 
-	// build peer configs from config.toml relay entries + extra peers
-	peers := buildPeerConfigs(cfg)
-	for _, p := range opts.ExtraPeers {
-		if p.URL != "" {
-			peers = append(peers, p)
-		}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
+
+	// build peer configs from config.toml relay entries + extra peers
+	peers := mergePeerConfigs(buildPeerConfigs(cfg), opts.ExtraPeers, logger)
 
 	// wire up peer client if peers exist
 	var peerClient relay.PeerClient
@@ -183,4 +184,63 @@ func buildPeerConfigs(cfg *config.Config) []relay.PeerConfig {
 		}
 	}
 	return peers
+}
+
+// normalizePeerURL is the identity of a peer for dedup purposes. It matches the
+// normalization --peers / PEERS already applies (trim whitespace, then trailing
+// slashes), so the same relay named in config.toml and on the command line
+// resolves to one key regardless of which spelling each used.
+func normalizePeerURL(url string) string {
+	return strings.TrimRight(strings.TrimSpace(url), "/")
+}
+
+// mergePeerConfigs combines config.toml peers with explicitly supplied ones,
+// keeping at most one entry per peer URL.
+//
+// A duplicate is not merely redundant. Peer state is keyed purely by URL — the
+// sync cursor above all — so two entries for one relay share that cursor while
+// pulling against it independently, and every push, read-through, and reconcile
+// cadence tick for that relay happens twice. The duplicate is also the easiest
+// misconfiguration to produce: name a relay in config.toml, then name it again
+// in --peers to attach a per-peer flag to it.
+//
+// That last case is why the LATER definition wins: an explicitly supplied peer
+// carries flags (gossip / readThrough / sync) that a config.toml entry cannot
+// express, so keeping the config entry would silently discard the operator's
+// intent and leave every flag at its default.
+func mergePeerConfigs(configPeers, extraPeers []relay.PeerConfig, logger *slog.Logger) []relay.PeerConfig {
+	merged := make([]relay.PeerConfig, 0, len(configPeers)+len(extraPeers))
+	at := make(map[string]int, len(configPeers)+len(extraPeers))
+	from := make(map[string]string, len(configPeers)+len(extraPeers))
+
+	add := func(peer relay.PeerConfig, source string) {
+		key := normalizePeerURL(peer.URL)
+		if key == "" {
+			return
+		}
+		if i, seen := at[key]; seen {
+			logger.Warn("duplicate peer URL — the later definition wins",
+				"peer", key,
+				"dropped", from[key],
+				"kept", source,
+			)
+			merged[i] = peer
+			from[key] = source
+			return
+		}
+		at[key] = len(merged)
+		from[key] = source
+		merged = append(merged, peer)
+	}
+
+	for _, peer := range configPeers {
+		add(peer, "config")
+	}
+	for _, peer := range extraPeers {
+		add(peer, "explicit")
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
 }
