@@ -363,10 +363,10 @@ func TestSQLitePendingOpOriginPersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutRawOp("cid-peer", "token-peer", OpOriginPeer); err != nil {
+	if _, err := store.PutRawOp("cid-peer", "token-peer", OpOriginPeer); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutRawOp("cid-direct", "token-direct"); err != nil {
+	if _, err := store.PutRawOp("cid-direct", "token-direct"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

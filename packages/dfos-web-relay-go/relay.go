@@ -49,6 +49,20 @@ type Relay struct {
 	// stays correct.
 	reconcileMu    sync.Mutex
 	reconcileCycle map[string]int
+	// peerSync holds the per-peer sync-loop status served at stats.peerSync in
+	// the well-known. In-memory only, like reconcileCycle — it describes THIS
+	// process's loop, not durable state, and a restart honestly resets it.
+	// Seeded at construction with one entry per sync-eligible peer so a peer
+	// that has never been reached still appears (null timestamps) instead of
+	// being silently absent.
+	peerSyncMu sync.Mutex
+	peerSync   map[string]*PeerSyncStatus
+	// maxOpsPerSyncCycle is this relay's per-peer per-cycle fetch cap, defaulted
+	// from the package constant of the same name. A field rather than a bare
+	// const read so tests can lower it and exercise the backlog boundary (a
+	// backlog that ends on an exact multiple of the cap is the case the
+	// caught-up logging has to get right) without minting thousands of ops.
+	maxOpsPerSyncCycle int
 	// materializeMu coalesces content-follow sweeps: both the timer sweep and the
 	// trigger-kicked sweep (fired when the sequencer makes progress) call
 	// MaterializeFollowedContent, and a TryLock here makes a concurrent caller a
@@ -135,6 +149,16 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		}
 	}
 
+	// One status row per peer the sync loop will actually poll — an explicitly
+	// sync:false peer is configured for gossip only and has no sync state to report.
+	peerSync := make(map[string]*PeerSyncStatus, len(opts.Peers))
+	for _, p := range opts.Peers {
+		if p.Sync != nil && !*p.Sync {
+			continue
+		}
+		peerSync[p.URL] = &PeerSyncStatus{}
+	}
+
 	return &Relay{
 		store:              opts.Store,
 		readStore:          readStore,
@@ -152,6 +176,8 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		peerClient:         opts.PeerClient,
 		maxAuthTokenTTL:    maxAuthTokenTTL,
 		reconcileCycle:     make(map[string]int),
+		peerSync:           peerSync,
+		maxOpsPerSyncCycle: maxOpsPerSyncCycle,
 		materializeDirty:   newDirtyQueue(),
 		gcDirty:            newDirtyQueue(),
 	}, nil
@@ -305,18 +331,21 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 
 // maxOpsPerSyncCycle caps how many ops are fetched from a single peer in one
 // sync cycle. This prevents a large backlog from blocking the relay for
-// minutes — catch-up happens incrementally over multiple cycles.
+// minutes — catch-up happens incrementally over multiple cycles. Each relay
+// copies this into its own maxOpsPerSyncCycle field at construction; the sync
+// loop reads the field.
 const maxOpsPerSyncCycle = 5000
 
 // Bounded anti-entropy ("reconcile scrubber") — defense-in-depth for the
 // forward pull. The forward pull tracks a single high-water cursor and can only
 // move forward; if that cursor ever becomes stale or unusable against a peer,
 // the pull silently fetches nothing and the relay stops converging. That happens
-// in practice: a relay that persisted a cursor a peer no longer accepts (e.g. a
-// bare CID fabricated by the pre-fix pullPeerOps, which the production relay's
-// timestamp|cid pagination returns empty for), or any peer whose log ordering
-// can place an op behind an already-advanced cursor. The scrubber is a slow
-// SECOND cursor that re-walks the peer's log in bounded windows so the relay
+// in practice: a relay that persisted a cursor a peer no longer accepts or no
+// longer recognizes (e.g. a bare CID fabricated by the pre-fix pullPeerOps — see
+// the cursor-fabrication note in pullPeerOps for what real peers do with one),
+// or any peer whose log ordering can place an op behind an already-advanced
+// cursor. The scrubber is a slow SECOND
+// cursor that re-walks the peer's log in bounded windows so the relay
 // self-heals regardless of how the high-water cursor got wedged. Each sweep
 // re-fetches at most reconcileWindow ops (dedup makes the re-fetch cheap) and
 // advances a persisted trailing cursor; when it reaches the head it laps back to
@@ -350,19 +379,34 @@ func (r *Relay) SyncFromPeers() error {
 		if peer.Sync != nil && !*peer.Sync {
 			continue
 		}
+		attemptAt := time.Now()
 		// readStore for the cursor read — never races on the ingestion tx.
 		cursor, _ := r.readStore.GetPeerCursor(peer.URL)
-		fetched, reached, resetUnresolved := r.pullPeerOps(peer.URL, cursor, maxOpsPerSyncCycle, true)
-		if fetched > 0 {
-			r.logger.Info("peer sync fetched ops",
+		res := r.pullPeerOps(peer.URL, cursor, r.maxOpsPerSyncCycle, true)
+		// Caught up means the cycle ran to the end of the peer's log, which only
+		// a cycle that actually COMPLETED can claim: a failed pass and an
+		// unresolved cursor reset both receive nothing too, and reading a bare
+		// zero as "caught up" would paint a wedged peer green.
+		caughtUp := !res.failed && !res.resetUnresolved && res.received < r.maxOpsPerSyncCycle
+		wasCaughtUp := r.recordPeerSync(peer.URL, attemptAt, res, caughtUp)
+		// Log the work, and log the EDGE into caught-up. Logging every quiet
+		// cycle would bury the mesh in noise; logging only cycles that received
+		// something makes a caught-up relay indistinguishable from a dead sync
+		// goroutine, and never announces catch-up at all when the backlog ends on
+		// an exact multiple of the cap (that cycle receives a full cap's worth
+		// and reports caughtUp:false; the next receives nothing). The edge is
+		// what covers both.
+		if res.received > 0 || caughtUp != wasCaughtUp {
+			r.logger.Info("peer sync cycle",
 				"peer", peer.URL,
-				"ops", fetched,
-				"caughtUp", fetched < maxOpsPerSyncCycle,
+				"received", res.received,
+				"inserted", res.inserted,
+				"caughtUp", caughtUp,
 			)
 		}
 		// Bounded anti-entropy: self-heal a wedged/stale forward cursor.
-		if !resetUnresolved {
-			r.reconcilePeer(peer.URL, reached)
+		if !res.resetUnresolved {
+			r.reconcilePeer(peer.URL, res.cursor)
 		}
 	}
 
@@ -371,17 +415,36 @@ func (r *Relay) SyncFromPeers() error {
 	return nil
 }
 
+// pullResult reports one pass of pullPeerOps over a peer's log.
+type pullResult struct {
+	// received counts entries the peer served, duplicates included; inserted
+	// counts the rows that were genuinely new to the raw store. Every pass
+	// re-reads at least the final partial page, and the scrub sweep re-walks the
+	// log on purpose, so the two diverge routinely — reporting only received
+	// overstates the work done and hides a peer that is serving but adding nothing.
+	received int
+	inserted int
+	cursor   string // the cursor this pass reached
+	// resetUnresolved reports that a cursor reset was attempted this pass and
+	// never landed a page to persist it against.
+	resetUnresolved bool
+	// failed reports that a transport or store error ended the pass early, so
+	// received==0 does NOT mean "nothing left to fetch".
+	failed bool
+}
+
 // pullPeerOps fetches up to maxOps ops from peerURL starting at startCursor,
-// storing each op deduped by its locally-computed storage CID. It returns the
-// number of ops stored and the cursor reached. When persist is true the peer's
-// high-water cursor is advanced as each page commits (the normal forward pull);
-// when false the stored high-water cursor is left untouched and the caller owns
-// the cursor bookkeeping (the bounded scrub sweep). On a transient store failure
-// it stops without advancing, so the same page is re-fetched next cycle. The
-// third result reports whether a cursor reset remains unresolved this cycle.
-func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist bool) (int, string, bool) {
+// storing each op deduped by its locally-computed storage CID. When persist is
+// true the peer's high-water cursor is advanced as each page commits (the normal
+// forward pull); when false the stored high-water cursor is left untouched and
+// the caller owns the cursor bookkeeping (the bounded scrub sweep). On a
+// transient store failure it stops without advancing, so the same page is
+// re-fetched next cycle.
+func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist bool) pullResult {
 	cursor := startCursor
 	fetched := 0
+	inserted := 0
+	failed := false
 	resetAttempted := false
 	resetPending := false
 	for fetched < maxOps {
@@ -389,6 +452,7 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 		if errors.Is(err, ErrPeerInvalidCursor) {
 			if resetAttempted {
 				r.logger.Warn("peer sync: peer rejected cursor again after reset — aborting cycle", "peer", peerURL)
+				failed = true
 				break
 			}
 			// The peer no longer recognizes our persisted cursor (wiped/rebuilt
@@ -402,9 +466,14 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 		}
 		if err != nil {
 			r.logger.Error("peer sync failed", "peer", peerURL, "error", err)
+			failed = true
 			break
 		}
 		if page == nil {
+			// A peer that answers with neither a page nor an error told us
+			// nothing. Count it as a failed pass rather than an empty log —
+			// otherwise a peer stuck in this state reads as permanently caught up.
+			failed = true
 			break
 		}
 		if len(page.Entries) == 0 {
@@ -445,7 +514,8 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 				)
 				continue
 			}
-			if err := r.store.PutRawOp(cid, e.JWSToken, OpOriginPeer); err != nil {
+			isNew, err := r.store.PutRawOp(cid, e.JWSToken, OpOriginPeer)
+			if err != nil {
 				// Durability discipline (mirrors Ingest's "never advance past
 				// unpersisted work"): on a transient store failure, do NOT
 				// advance the cursor — otherwise the next cycle resumes AFTER
@@ -459,22 +529,38 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 				pageStoreFailed = true
 				break
 			}
+			if isNew {
+				inserted++
+			}
 		}
 		if pageStoreFailed {
+			failed = true
 			r.ingestMu.Unlock()
 			break
 		}
 		fetched += len(page.Entries)
 		if page.Resume() == nil {
 			// The peer signals no further pages from this cursor. Do NOT
-			// fabricate a resume cursor from the last entry's CID: a peer whose
-			// cursor format is not a bare CID — notably the production relay,
-			// which pages a timestamp|cid cursor and returns null on the final
-			// page — serves an EMPTY page for an unrecognized bare CID, which
-			// permanently stalls the forward pull at this point (the bug this
-			// fixes). Retain the last peer-supplied cursor (already persisted)
-			// so the next cycle resumes with a token the peer understands; it
-			// re-fetches the final partial page, which dedups cheaply. A relay
+			// fabricate a resume cursor from the last entry's CID — a cursor is
+			// the peer's to mint, and what a peer does with one we invented is
+			// not something we get to assume.
+			//
+			// Measured against relay.dfos.com on 2026-08-26: its log cursor is
+			// base64 of a plain decimal sequence integer, and an `after` value it
+			// does not recognize is answered with 200 and a full FROM-SCRATCH
+			// first page — not an empty page, and not the 400 this spec
+			// prescribes. So a fabricated bare CID does not wedge against that
+			// relay; it silently restarts the walk at the head of the log, which
+			// is self-correcting but re-streams the corpus on every cycle. A peer
+			// that answers an unrecognized cursor with an EMPTY page instead
+			// stalls the forward pull here permanently (the bug this fixes).
+			//
+			// One rule avoids both outcomes: never fabricate. Retain the last
+			// peer-supplied cursor (already persisted) so the next cycle resumes
+			// with a token the peer minted; it re-fetches the final partial page,
+			// which dedups cheaply. Only a spec-compliant 400 counts as the reset
+			// signal (ErrPeerInvalidCursor) — a 200 is progress, however odd its
+			// contents, and must never be read as "reset your cursor". A relay
 			// that already persisted a fabricated bare CID (pre-fix) self-heals
 			// via the bounded reconcile scrubber, which re-walks from the start.
 			if resetPending {
@@ -511,7 +597,13 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 		}
 		r.ingestMu.Unlock()
 	}
-	return fetched, cursor, resetPending
+	return pullResult{
+		received:        fetched,
+		inserted:        inserted,
+		cursor:          cursor,
+		resetUnresolved: resetPending,
+		failed:          failed,
+	}
 }
 
 // reconcilePeer advances the bounded anti-entropy scrubber for one peer. Every
@@ -533,16 +625,18 @@ func (r *Relay) reconcilePeer(peerURL, highWater string) {
 	r.reconcileCycle[peerURL] = 0
 	r.reconcileMu.Unlock()
 
+	sweptAt := time.Now()
 	rcKey := peerURL + reconcileCursorSuffix
 	anchor, _ := r.readStore.GetPeerCursor(rcKey)
-	fetched, reached, _ := r.pullPeerOps(peerURL, anchor, reconcileWindow, false)
+	res := r.pullPeerOps(peerURL, anchor, reconcileWindow, false)
 
 	// Advance the trailing cursor; lap back to the start once the scrub reaches
 	// the head (short page, or caught up to the forward high-water mark), so the
 	// next pass re-walks from the oldest op and no back-dated op is missed for
 	// more than one lap.
-	next := reached
-	if fetched < reconcileWindow || reached == "" || reached == highWater {
+	lapped := res.received < reconcileWindow || res.cursor == "" || res.cursor == highWater
+	next := res.cursor
+	if lapped {
 		next = ""
 	}
 	if err := r.store.SetPeerCursor(rcKey, next); err != nil {
@@ -551,12 +645,84 @@ func (r *Relay) reconcilePeer(peerURL, highWater string) {
 			"error", err,
 		)
 	}
-	if fetched > 0 {
-		r.logger.Info("peer reconcile swept ops",
-			"peer", peerURL,
-			"ops", fetched,
-		)
+	r.recordPeerReconcile(peerURL, sweptAt, res)
+	// One line per SWEEP, not per sweep that found something. The scrub already
+	// paces itself at one run per reconcileEveryCycles, so this is a
+	// low-frequency heartbeat rather than noise — and a sweep that finds nothing
+	// is exactly the case that has to be visible, because it is otherwise
+	// identical from the outside to a scrubber that has stopped running.
+	// received almost always exceeds inserted here: re-walking is the point.
+	r.logger.Info("peer reconcile sweep",
+		"peer", peerURL,
+		"received", res.received,
+		"inserted", res.inserted,
+		"lapped", lapped,
+		"failed", res.failed,
+	)
+}
+
+// recordPeerSync folds one forward-pull pass into the peer's status and returns
+// the caughtUp value it replaced, so the caller can log the edge into caught-up
+// rather than a line every quiet cycle.
+func (r *Relay) recordPeerSync(peerURL string, attemptAt time.Time, res pullResult, caughtUp bool) (wasCaughtUp bool) {
+	r.peerSyncMu.Lock()
+	defer r.peerSyncMu.Unlock()
+	st := r.peerStatusLocked(peerURL)
+	wasCaughtUp = st.CaughtUp
+	st.LastAttemptAt = telemetryTime(attemptAt)
+	st.LastReceived = res.received
+	st.LastInserted = res.inserted
+	st.CaughtUp = caughtUp
+	if res.failed {
+		st.ConsecutiveFailures++
+	} else {
+		st.ConsecutiveFailures = 0
+		st.LastSuccessAt = telemetryTime(attemptAt)
 	}
+	return wasCaughtUp
+}
+
+// recordPeerReconcile folds one anti-entropy sweep into the peer's status.
+func (r *Relay) recordPeerReconcile(peerURL string, sweptAt time.Time, res pullResult) {
+	r.peerSyncMu.Lock()
+	defer r.peerSyncMu.Unlock()
+	st := r.peerStatusLocked(peerURL)
+	st.LastReconcileAt = telemetryTime(sweptAt)
+	st.LastReconcileReceived = res.received
+	st.LastReconcileInserted = res.inserted
+}
+
+// peerStatusLocked returns the peer's status row, creating it if the peer was
+// not seeded at construction. Caller holds peerSyncMu.
+func (r *Relay) peerStatusLocked(peerURL string) *PeerSyncStatus {
+	st := r.peerSync[peerURL]
+	if st == nil {
+		st = &PeerSyncStatus{}
+		r.peerSync[peerURL] = st
+	}
+	return st
+}
+
+// PeerSyncStatuses returns a snapshot of per-peer sync status keyed by peer URL,
+// empty when no sync-eligible peer is configured. The values are copies; the
+// timestamp pointers they carry are shared with the live rows, which is safe
+// because the record* helpers always assign a FRESH pointer and never write
+// through an existing one.
+func (r *Relay) PeerSyncStatuses() map[string]PeerSyncStatus {
+	r.peerSyncMu.Lock()
+	defer r.peerSyncMu.Unlock()
+	out := make(map[string]PeerSyncStatus, len(r.peerSync))
+	for url, st := range r.peerSync {
+		out[url] = *st
+	}
+	return out
+}
+
+// telemetryTime formats t in the same timestamp grammar the well-known's
+// oldestOpAt uses, and returns a fresh pointer.
+func telemetryTime(t time.Time) *string {
+	s := t.UTC().Format("2006-01-02T15:04:05.000Z")
+	return &s
 }
 
 // ResetPeerCursors clears all sync cursors, forcing a full re-sync on next cycle.

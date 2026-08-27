@@ -255,6 +255,38 @@ type StatsProvider interface {
 	RelayStats() (*RelayStats, error)
 }
 
+// PeerSyncStatus is one peer's view of this process's sync loop — OPTIONAL
+// additive telemetry surfaced at stats.peerSync in the well-known. The other
+// stats say what this relay holds; none of them answer the two questions an
+// operator actually has when replication looks wrong: is the loop still running
+// at all, and is THIS peer converging. A caught-up relay is silent in the logs
+// by design, which makes a healthy steady state and a dead sync goroutine
+// indistinguishable from the outside without this.
+//
+// Timestamps are pointers WITHOUT omitempty so a peer that has never been
+// attempted serializes them as JSON null rather than dropping the key.
+type PeerSyncStatus struct {
+	LastAttemptAt *string `json:"lastAttemptAt"`
+	// LastSuccessAt is the last attempt that completed without a transport or
+	// store failure; it stays put while ConsecutiveFailures climbs.
+	LastSuccessAt *string `json:"lastSuccessAt"`
+	// LastReceived counts entries the peer served on the last cycle, duplicates
+	// included; LastInserted counts the ones genuinely new to the raw store.
+	// They diverge on every re-walk, so LastReceived alone is not a work signal.
+	LastReceived int `json:"lastReceived"`
+	LastInserted int `json:"lastInserted"`
+	// CaughtUp is false while a backlog remains (the cycle hit its op cap) and
+	// while a cycle fails outright — a failed cycle also receives nothing, and
+	// reading that as "caught up" would paint a wedged peer green.
+	CaughtUp            bool `json:"caughtUp"`
+	ConsecutiveFailures int  `json:"consecutiveFailures"`
+	// The trailing anti-entropy scrub (see reconcilePeer), which runs on its own
+	// slow cadence and is otherwise invisible.
+	LastReconcileAt       *string `json:"lastReconcileAt"`
+	LastReconcileReceived int     `json:"lastReconcileReceived"`
+	LastReconcileInserted int     `json:"lastReconcileInserted"`
+}
+
 // newKindCounts returns a countsByKind map pre-seeded with all six buckets at 0, so the
 // well-known always emits every key (parity with the TS object literal).
 func newKindCounts() map[string]int {
@@ -382,8 +414,14 @@ type Store interface {
 	GetPeerCursor(peerURL string) (string, error)
 	SetPeerCursor(peerURL string, cursor string) error
 
-	// raw ops — content-addressed store for all received operations
-	PutRawOp(cid string, jwsToken string, origin ...OpOrigin) error
+	// raw ops — content-addressed store for all received operations.
+	// PutRawOp is put-if-absent. It reports whether the row was NEWLY inserted;
+	// false means the CID was already stored, which is not an error. Peer sync
+	// re-reads the same ops constantly (a partial final page is re-fetched every
+	// cycle, and the anti-entropy scrub re-walks the log by design), so a caller
+	// that counts received entries instead of inserted rows overstates the work
+	// it did by an unbounded margin.
+	PutRawOp(cid string, jwsToken string, origin ...OpOrigin) (inserted bool, err error)
 	GetUnsequencedOps(limit int) ([]PendingOp, error) // returns JWS tokens + origins where status = 'pending'
 	MarkOpsSequenced(cids []string) error
 	MarkOpRejected(cid string, reason string) error

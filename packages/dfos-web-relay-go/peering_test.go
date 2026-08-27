@@ -1067,9 +1067,9 @@ func TestPullPeerOpsReportsOnlyUnresolvedResetState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, _, unresolved := r.pullPeerOps("peer", "old-peer-cursor", 100, false)
-			if unresolved != tc.wantUnresolved {
-				t.Fatalf("unresolved reset = %v, want %v", unresolved, tc.wantUnresolved)
+			res := r.pullPeerOps("peer", "old-peer-cursor", 100, false)
+			if res.resetUnresolved != tc.wantUnresolved {
+				t.Fatalf("unresolved reset = %v, want %v", res.resetUnresolved, tc.wantUnresolved)
 			}
 		})
 	}

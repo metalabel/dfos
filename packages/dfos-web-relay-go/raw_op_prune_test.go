@@ -7,7 +7,7 @@ import (
 
 // rawOpPruneStore is the slice of the store surface the R4 prune test exercises.
 type rawOpPruneStore interface {
-	PutRawOp(cid, jwsToken string, origin ...OpOrigin) error
+	PutRawOp(cid, jwsToken string, origin ...OpOrigin) (bool, error)
 	MarkOpRejected(cid, reason string) error
 	CountUnsequenced() (int, error)
 }
@@ -38,7 +38,7 @@ func assertPruneDeletes(t *testing.T, s rawOpPruneStore) {
 	t.Helper()
 	const cid = "bafyExampleRawOpPruneCID"
 
-	if err := s.PutRawOp(cid, "jws-token-1"); err != nil {
+	if _, err := s.PutRawOp(cid, "jws-token-1"); err != nil {
 		t.Fatalf("PutRawOp: %v", err)
 	}
 	if n, _ := s.CountUnsequenced(); n != 1 {
@@ -53,7 +53,7 @@ func assertPruneDeletes(t *testing.T, s rawOpPruneStore) {
 	}
 
 	// Re-put the SAME CID — only re-creates a pending row if the reject deleted it.
-	if err := s.PutRawOp(cid, "jws-token-2"); err != nil {
+	if _, err := s.PutRawOp(cid, "jws-token-2"); err != nil {
 		t.Fatalf("re-PutRawOp: %v", err)
 	}
 	if n, _ := s.CountUnsequenced(); n != 1 {

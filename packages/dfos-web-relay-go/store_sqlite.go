@@ -2036,17 +2036,28 @@ func (s *SQLiteStore) SetMeta(key string, value []byte) error {
 // ---------------------------------------------------------------------------
 
 // PutRawOp stores a JWS token in the content-addressed raw op store.
-// Idempotent — ignores duplicates.
-func (s *SQLiteStore) PutRawOp(cid string, jwsToken string, origins ...OpOrigin) error {
+// Idempotent — ignores duplicates, reporting inserted=false for them.
+func (s *SQLiteStore) PutRawOp(cid string, jwsToken string, origins ...OpOrigin) (bool, error) {
 	origin := OpOriginDirect
 	if len(origins) > 0 && origins[0] == OpOriginPeer {
 		origin = OpOriginPeer
 	}
-	_, err := s.writerDB().Exec(
+	res, err := s.writerDB().Exec(
 		"INSERT OR IGNORE INTO raw_ops (cid, jws_token, origin) VALUES (?, ?, ?)",
 		cid, jwsToken, origin,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	// INSERT OR IGNORE reports 1 affected row on a real insert and 0 when the CID
+	// was already present. A driver that cannot report it (err) is treated as
+	// "not new" — undercounting telemetry is safe, claiming work that may not
+	// have happened is not.
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, nil
+	}
+	return n > 0, nil
 }
 
 // GetUnsequencedOps returns JWS tokens for ops that haven't been sequenced yet.
