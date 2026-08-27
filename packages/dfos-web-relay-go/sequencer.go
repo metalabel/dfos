@@ -198,7 +198,7 @@ func (r *Relay) sequenceChunkLocked(tokens []string, opts []IngestOption) ([]str
 			newOps = append(newOps, tokens[i])
 			result.Sequenced++
 			progress = true
-			r.markContentFollowDirty(res)
+			r.markContentFollowDirty(res, tokens[i])
 		case res.Status == "duplicate":
 			sequencedCIDs = append(sequencedCIDs, rawCID)
 			progress = true

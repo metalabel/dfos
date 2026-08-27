@@ -266,28 +266,47 @@ func TestMaterializeFastPathGatedOnDirty(t *testing.T) {
 
 // TestMarkContentFollowDirtyRouting pins how newly-sequenced ops route into the
 // work queues: a content-op flags its own contentID for a targeted materialize, a
-// credential (unbounded blast radius) requests a full materialize scan, a
-// revocation requests a GC pass, and a non-eager relay marks nothing.
+// chain-scoped grant flags the chain it names, a wildcard grant escalates to a full
+// scan, a revocation drives GC over the chains whose grant it revoked, and a
+// non-eager relay marks nothing.
 func TestMarkContentFollowDirtyRouting(t *testing.T) {
 	r, err := NewRelay(RelayOptions{Store: NewMemoryStore(), ContentFollow: "eager"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	r.markContentFollowDirty(IngestionResult{Status: "new", Kind: "content-op", ChainID: "contentX"})
+	r.markContentFollowDirty(IngestionResult{Status: "new", Kind: "content-op", ChainID: "contentX"}, "")
 	ids, full := r.materializeDirty.take()
 	if full || len(ids) != 1 || ids[0] != "contentX" {
 		t.Fatalf("content-op should mark only its contentID dirty, got ids=%v full=%v", ids, full)
 	}
 
-	r.markContentFollowDirty(IngestionResult{Status: "new", Kind: "credential", ChainID: "did:dfos:issuer"})
-	if _, full := r.materializeDirty.take(); !full {
-		t.Fatal("a new credential should request a full materialize scan")
+	issuer := createTestIdentity(t)
+	r.markContentFollowDirty(
+		IngestionResult{Status: "new", Kind: "credential", ChainID: issuer.did},
+		testGrant(t, issuer, "chain:contentY"),
+	)
+	ids, full = r.materializeDirty.take()
+	if full || len(ids) != 1 || ids[0] != "contentY" {
+		t.Fatalf("a chain-scoped grant should mark only its chain, got ids=%v full=%v", ids, full)
 	}
 
-	r.markContentFollowDirty(IngestionResult{Status: "new", Kind: "revocation", ChainID: "did:dfos:issuer"})
-	if _, full := r.gcDirty.take(); !full {
-		t.Fatal("a revocation should request a GC pass")
+	r.markContentFollowDirty(
+		IngestionResult{Status: "new", Kind: "credential", ChainID: issuer.did},
+		testGrant(t, issuer, "chain:*"),
+	)
+	if _, full := r.materializeDirty.take(); !full {
+		t.Fatal("a chain:* grant should request a full materialize scan")
+	}
+
+	r.markContentFollowDirty(
+		IngestionResult{Status: "new", Kind: "revocation", ChainID: issuer.did,
+			RevokedGrant: &RevokedGrant{ContentIDs: []string{"contentZ"}}},
+		"",
+	)
+	ids, full = r.gcDirty.take()
+	if full || len(ids) != 1 || ids[0] != "contentZ" {
+		t.Fatalf("a chain-scoped revocation should GC only its chain, got ids=%v full=%v", ids, full)
 	}
 
 	// A non-eager relay must never mark work — content following is off.
@@ -295,9 +314,263 @@ func TestMarkContentFollowDirtyRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	off.markContentFollowDirty(IngestionResult{Status: "new", Kind: "content-op", ChainID: "c"})
+	off.markContentFollowDirty(IngestionResult{Status: "new", Kind: "content-op", ChainID: "c"}, "")
 	if !off.materializeDirty.empty() {
 		t.Fatal("a non-eager relay must not mark materialize work")
+	}
+}
+
+// testGrant signs a standing public grant over one resource. Only the att is read
+// by markContentFollowDirty (DecodeJWSUnsafe), but signing it properly keeps the
+// fixture a real credential rather than a shape that could drift from one.
+func testGrant(t *testing.T, issuer testIdentity, resource string) string {
+	t.Helper()
+	kid := issuer.did + "#" + issuer.auth.keyID
+	token, err := dfos.CreateCredential(issuer.did, "*", kid, resource, "read", time.Hour, issuer.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// testGrantResources signs a standing public grant over several resources at once —
+// the multi-`att` shape CreateCredential's single-resource helper can't build.
+func testGrantResources(t *testing.T, issuer testIdentity, resources ...string) string {
+	t.Helper()
+	att := make([]map[string]string, 0, len(resources))
+	for _, resource := range resources {
+		att = append(att, map[string]string{"resource": resource, "action": "read"})
+	}
+	return testGrantPayload(t, issuer, map[string]any{
+		"version": 1, "type": "DFOSCredential", "iss": issuer.did, "aud": "*",
+		"att": att, "prf": []string{}, "exp": time.Now().Add(time.Hour).Unix(),
+	})
+}
+
+// testGrantPayload signs an arbitrary credential payload, so a test can hand the
+// marker a token whose att is unreadable.
+func testGrantPayload(t *testing.T, issuer testIdentity, payload map[string]any) string {
+	t.Helper()
+	token, err := dfos.CreateJWS(dfos.JWSHeader{
+		Alg: "EdDSA", Typ: "did:dfos:credential", Kid: issuer.did + "#" + issuer.auth.keyID,
+	}, payload, issuer.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// TestCredentialFollowTriggerNarrowsToGrantedChains is the core of the narrowing:
+// the v1 credential resource grammar is closed on this axis, so a grant that names
+// chains marks exactly those chains and never the whole corpus. The escalation
+// cases are the other half of the contract — chain:* is genuinely unbounded, and
+// ANY token whose att we cannot read fails OPEN to the full scan rather than
+// silently skipping the work.
+func TestCredentialFollowTriggerNarrowsToGrantedChains(t *testing.T) {
+	issuer := createTestIdentity(t)
+	credential := IngestionResult{Status: "new", Kind: "credential", ChainID: issuer.did}
+
+	narrow := []struct {
+		name  string
+		token string
+		want  []string
+	}{
+		{"one chain", testGrant(t, issuer, "chain:contentA"), []string{"contentA"}},
+		{"several chains", testGrantResources(t, issuer, "chain:contentA", "chain:contentB"), []string{"contentA", "contentB"}},
+		// A grant over an additive non-chain resource form authorizes no content
+		// chain, so it warrants no materialize work at all — escalating it would
+		// reintroduce the full-scan-per-credential cost this narrowing removes.
+		{"no chain resources", testGrantResources(t, issuer, "api:api.example.com", "mailbox:mbx1"), nil},
+		{"chain resources beside a non-chain one", testGrantResources(t, issuer, "api:api.example.com", "chain:contentA"), []string{"contentA"}},
+	}
+	for _, tc := range narrow {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := NewRelay(RelayOptions{Store: NewMemoryStore(), ContentFollow: "eager"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.markContentFollowDirty(credential, tc.token)
+			ids, full := r.materializeDirty.take()
+			if full {
+				t.Fatalf("%s: requested a full scan; the whole point is that it should not", tc.name)
+			}
+			if !sameIDSet(ids, tc.want) {
+				t.Fatalf("%s: marked %v, want %v", tc.name, ids, tc.want)
+			}
+		})
+	}
+
+	failOpen := []struct {
+		name  string
+		token string
+	}{
+		{"chain:* wildcard", testGrant(t, issuer, "chain:*")},
+		{"wildcard beside a named chain", testGrantResources(t, issuer, "chain:contentA", "chain:*")},
+		{"undecodable token", "not-a-jws"},
+		{"att is not an array", testGrantPayload(t, issuer, map[string]any{"att": "chain:contentA"})},
+		{"att entry is not an object", testGrantPayload(t, issuer, map[string]any{"att": []any{"chain:contentA"}})},
+		{"att entry resource is not a string", testGrantPayload(t, issuer, map[string]any{
+			"att": []any{map[string]any{"resource": 42, "action": "read"}}})},
+	}
+	for _, tc := range failOpen {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := NewRelay(RelayOptions{Store: NewMemoryStore(), ContentFollow: "eager"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.markContentFollowDirty(credential, tc.token)
+			if _, full := r.materializeDirty.take(); !full {
+				t.Fatalf("%s: must fail OPEN to a full materialize scan", tc.name)
+			}
+		})
+	}
+}
+
+// TestRevocationFollowTriggerNarrowsToRevokedChains is the GC-side twin: the
+// revoked grant's scope was already resolved at ingest, so a chain-scoped
+// revocation reclaims only the chains that grant named. A wildcard grant, and a
+// revocation of a credential the relay does not hold (scope unknown), both fail
+// open to the corpus pass.
+func TestRevocationFollowTriggerNarrowsToRevokedChains(t *testing.T) {
+	cases := []struct {
+		name     string
+		grant    *RevokedGrant
+		wantFull bool
+		wantIDs  []string
+	}{
+		{"one chain", &RevokedGrant{ContentIDs: []string{"contentA"}}, false, []string{"contentA"}},
+		{"several chains", &RevokedGrant{ContentIDs: []string{"contentA", "contentB"}}, false, []string{"contentA", "contentB"}},
+		{"wildcard grant", &RevokedGrant{Wildcard: true, ContentIDs: []string{"contentA"}}, true, nil},
+		// Rarer than a credential op, so the fail-open margin is free here even
+		// where the credential side declines to pay it: an unheld grant's scope is
+		// genuinely unknown, and a held grant naming no chain still buys one scan.
+		{"grant not held", nil, true, nil},
+		{"grant names no chain", &RevokedGrant{ContentIDs: nil}, true, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := NewRelay(RelayOptions{Store: NewMemoryStore(), ContentFollow: "eager"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.markContentFollowDirty(IngestionResult{
+				Status: "new", Kind: "revocation", ChainID: "did:dfos:issuer", RevokedGrant: tc.grant,
+			}, "")
+			ids, full := r.gcDirty.take()
+			if full != tc.wantFull {
+				t.Fatalf("%s: full=%v, want %v", tc.name, full, tc.wantFull)
+			}
+			if !tc.wantFull && !sameIDSet(ids, tc.wantIDs) {
+				t.Fatalf("%s: marked %v, want %v", tc.name, ids, tc.wantIDs)
+			}
+		})
+	}
+}
+
+// sameIDSet compares two contentID sets order-independently (the dirty queue is a
+// map, so its drain order is not stable).
+func sameIDSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := map[string]struct{}{}
+	for _, id := range got {
+		seen[id] = struct{}{}
+	}
+	for _, id := range want {
+		if _, ok := seen[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// TestChainScopedGrantStillMaterializes is the end-to-end guard that the narrowing
+// didn't break the actual follow: a follower syncing a chain plus its chain-scoped
+// public-read grant marks only that chain — no full-corpus scan requested — and
+// still ends up holding the verified bytes.
+func TestChainScopedGrantStillMaterializes(t *testing.T) {
+	originStore, creator, contentID, docCID, _ := seedGrantedContentOrigin(t)
+	follower := newFollower(t, originStore, "eager") // sync + sequence marks the queue
+	key := BlobKey{CreatorDID: creator.did, DocumentCID: docCID}
+
+	// Inspect what the sync actually queued: the chain-scoped grant must have named
+	// its chain, not escalated to the corpus scan.
+	ids, full := follower.materializeDirty.take()
+	if full {
+		t.Fatal("a chain-scoped grant requested a full materialize scan — the trigger did not narrow")
+	}
+	if !sameIDSet(ids, []string{contentID}) {
+		t.Fatalf("marked %v, want just the granted chain %q", ids, contentID)
+	}
+
+	// Put the marks back and run the fast path: narrow marks alone must materialize.
+	for _, id := range ids {
+		follower.materializeDirty.markID(id)
+	}
+	follower.MaterializeFollowedContent()
+
+	got, err := follower.readStore.GetBlob(key)
+	if err != nil || got == nil {
+		t.Fatalf("narrow mark did not materialize the granted blob (err=%v)", err)
+	}
+	if err := verifyBlobBytes(got, docCID); err != nil {
+		t.Fatalf("materialized blob fails content-address verification: %v", err)
+	}
+}
+
+// TestGCReclaimsScopedRevokedContentBlob is the GC end-to-end twin of
+// TestGCReclaimsRevokedContentBlob: the revocation of a chain-scoped grant must
+// reclaim the blob through the NARROW path — no full-corpus mark — or the scoping
+// would be decorative, marking ids a consumer ignores.
+func TestGCReclaimsScopedRevokedContentBlob(t *testing.T) {
+	originStore, creator, contentID, docCID, credentialCID := seedGrantedContentOrigin(t)
+	follower := newFollower(t, originStore, "eager")
+	key := BlobKey{CreatorDID: creator.did, DocumentCID: docCID}
+
+	follower.ReconcileFollowedContent()
+	if b, _ := follower.readStore.GetBlob(key); b == nil {
+		t.Fatal("setup: blob was not materialized")
+	}
+	follower.gcDirty.take() // drain the reconcile's full mark — the revocation must stand alone
+
+	creatorKid := creator.did + "#" + creator.auth.keyID
+	revToken, _, err := dfos.SignRevocation(creator.did, credentialCID, creatorKid, creator.auth.priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin2, err := NewRelay(RelayOptions{Store: originStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := origin2.Ingest([]string{revToken}); r[0].Status != "new" {
+		t.Fatalf("expected revocation accepted, got %s (%s)", r[0].Status, r[0].Error)
+	}
+	origin2.RunSequencerAndGossip()
+
+	if err := follower.SyncFromPeers(); err != nil {
+		t.Fatal(err)
+	}
+	follower.RunSequencerAndGossip()
+	if hasPublicStandingAuth(contentID, "read", follower.readStore) {
+		t.Fatal("precondition: grant should be revoked on the follower")
+	}
+
+	// What the revocation queued must be the named chain, not the corpus.
+	ids, full := follower.gcDirty.take()
+	if full {
+		t.Fatal("a chain-scoped revocation requested a full GC scan — the trigger did not narrow")
+	}
+	if !sameIDSet(ids, []string{contentID}) {
+		t.Fatalf("GC marked %v, want just the revoked chain %q", ids, contentID)
+	}
+
+	for _, id := range ids {
+		follower.gcDirty.markID(id)
+	}
+	follower.GCRevokedContent()
+	if b, _ := follower.readStore.GetBlob(key); b != nil {
+		t.Fatal("the narrow GC path did not reclaim the revoked chain's blob")
 	}
 }
 

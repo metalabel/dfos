@@ -8,9 +8,9 @@ import "sync"
 // maintain a static set — the sequencer records the specific contentIDs touched by
 // ops that can change what needs (de)materializing, and the sweep drains just
 // those. A `fullScan` flag forces a convergent whole-corpus pass (boot catch-up, a
-// periodic backstop, or a broad/credential change whose blast radius is the whole
-// corpus). When the queue is empty the sweep is a near-instant no-op, so a
-// steady-state follower sits idle instead of burning a core.
+// periodic backstop, or a grant/revocation whose scope is genuinely the whole
+// corpus or could not be read). When the queue is empty the sweep is a near-instant
+// no-op, so a steady-state follower sits idle instead of burning a core.
 //
 // The convergence guarantee is preserved: the boot scan + the periodic full-scan
 // backstop still reconcile "all granted blobs materialized" regardless of op
