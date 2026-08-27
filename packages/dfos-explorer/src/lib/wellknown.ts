@@ -162,7 +162,7 @@ export const fetchAppDocument = async (host: string): Promise<FetchOutcome> => {
 
 /** The document members, per SIWD.md's closed registry. */
 export interface AppDescription {
-  name: string;
+  name?: string;
   redirect_uris: string[];
   client_did?: string;
   identity_chain?: string[];

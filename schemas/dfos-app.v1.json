@@ -4,12 +4,12 @@
   "title": "DFOS App Description",
   "description": "The `/.well-known/dfos-app.json` application description document for Sign In With DFOS — served over https from the application's own origin, where the domain vouches for itself. STRUCTURAL VALIDATION ONLY: this schema checks shape, not truth. It cannot verify that `identity_chain` folds into a valid identity chain, that `client_did` equals the DID derived from the chain's genesis operation, or that each carried operation respects the protocol's per-operation size cap — those are consumption-time checks defined by the SIWD specification (https://protocol.dfos.com/siwd), which remains normative. A document this schema accepts can still be invalid at consumption. The member set is closed (`additionalProperties: false`), making the spec's closed-registry rule mechanically checkable: a consumer MAY treat a document carrying unrecognized members as invalid.",
   "type": "object",
-  "required": ["name", "redirect_uris"],
+  "required": ["redirect_uris"],
   "properties": {
     "name": {
       "type": "string",
       "minLength": 1,
-      "description": "Display name — the application's own claim about itself. Nothing in the spec vouches for it; the serving domain remains the phishing-relevant binding."
+      "description": "Display name — the application's own claim about itself, and optional: nothing in the spec vouches for it, the serving domain remains the phishing-relevant binding, and a consumer with no name to render leads with the domain it already verified. Present-but-empty is malformed, not absent."
     },
     "redirect_uris": {
       "type": "array",

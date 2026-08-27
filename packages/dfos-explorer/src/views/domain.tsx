@@ -572,7 +572,13 @@ const AppPanel = (props: { app: AppDescription }) => (
     <div class="kv">
       <div class="k">name</div>
       <div class="v">
-        <span class="attr">{props.app.name}</span> <Badge state="warn">claimed</Badge>
+        {props.app.name !== undefined ? (
+          <>
+            <span class="attr">{props.app.name}</span> <Badge state="warn">claimed</Badge>
+          </>
+        ) : (
+          <span class="muted">not claimed — the domain leads</span>
+        )}
       </div>
       <div class="k">client_did</div>
       <div class="v">

@@ -1553,7 +1553,7 @@ func newIdentityWellKnownCmd() *cobra.Command {
 			if err != nil {
 				if os.IsNotExist(err) {
 					return fmt.Errorf(
-						"%s does not exist; create the app description at /.well-known/dfos-app.json first with name and redirect_uris",
+						"%s does not exist; create the app description at /.well-known/dfos-app.json first with redirect_uris",
 						patchPath,
 					)
 				}
