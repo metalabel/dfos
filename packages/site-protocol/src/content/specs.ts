@@ -24,8 +24,10 @@ export interface SpecEntry {
    * package root. Absent for pages whose content is site-local.
    */
   source?: string;
-  /** Landing-grid grouping; null = not on the grid. */
-  grid: 'specifications' | 'use' | null;
+  /** Landing-grid tier; null = not on the grid. */
+  grid: 'core' | 'auth' | 'reference' | 'companions' | 'use' | null;
+  /** Per-tile status chip on the landing grid; absent = no chip. */
+  chip?: string;
   /** llms.txt grouping. */
   llmsSection: 'specifications' | 'implementation';
   /** Nav presence/labels (every registry entry appears in the nav). */
@@ -42,7 +44,8 @@ export const specs: SpecEntry[] = [
     metaDescription:
       'Complete DFOS protocol specification — Ed25519 signed chain primitives, services, credentials, countersignatures, identity and content verification, with worked examples and test vectors.',
     source: '../../specs/PROTOCOL.md',
-    grid: 'specifications',
+    grid: 'core',
+    chip: 'frozen v1',
     llmsSection: 'specifications',
     nav: { shortLabel: 'Spec', tier: 'primary' },
   },
@@ -55,21 +58,10 @@ export const specs: SpecEntry[] = [
     metaDescription:
       'W3C DID Method specification for did:dfos — self-certifying, transport-agnostic decentralized identifiers built on Ed25519 identity chains.',
     source: '../../specs/DID-METHOD.md',
-    grid: 'specifications',
+    grid: 'core',
+    chip: 'frozen v1',
     llmsSection: 'specifications',
     nav: { label: 'DID Method', tier: 'secondary' },
-  },
-  {
-    slug: '/content-model',
-    title: 'Content Model',
-    tile: 'JSON Schema content types committed via content-addressed CIDs',
-    llms: 'Standard JSON Schema content types (post, profile)',
-    metaDescription:
-      'DFOS Content Model — standard JSON Schema content types (post, profile) committed via content-addressed CIDs.',
-    source: '../../specs/CONTENT-MODEL.md',
-    grid: 'specifications',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
   },
   {
     slug: '/credentials',
@@ -79,67 +71,8 @@ export const specs: SpecEntry[] = [
     metaDescription:
       'DFOS Credentials — UCAN-style authorization tokens for delegated content access, revocation, and standing authorization.',
     source: '../../specs/CREDENTIALS.md',
-    grid: 'specifications',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/credits',
-    title: 'Credits',
-    tile: 'Verifiable attribution &mdash; signed credit claims bound to the content they credit',
-    llms: 'Verifiable attribution — the credit-claim envelope, the two-way bind between a credits entry and a claimant signature, and the four verification states',
-    metaDescription:
-      'DFOS Credits — verifiable attribution via credit claims: the signed envelope, the two-way bind, and the four verification states.',
-    source: '../../specs/CREDITS.md',
-    grid: 'specifications',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/siwd',
-    title: 'Sign In With DFOS',
-    tile: 'Identity verification, consent scopes, and credential issuance for third-party applications',
-    llms: 'Cryptographic identity verification for third-party applications — one challenge artifact, two couriers (hosted web redirect, sign-request mailbox), verification with no DFOS server in the loop',
-    metaDescription:
-      'Sign In With DFOS (SIWD) — identity verification, consent scopes, and credential issuance for third-party applications on DFOS identities.',
-    source: '../../specs/SIWD.md',
-    grid: 'specifications',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/signing',
-    title: 'Signing',
-    tile: 'Sign-request envelopes, signer obligations, and relay-hosted mailboxes',
-    llms: 'Sign-request envelopes, signer obligations, and relay-hosted mailbox transport',
-    metaDescription:
-      'DFOS SIGNING — sign-request envelopes, signer obligations, and relay-hosted mailbox transport.',
-    source: '../../specs/SIGNING.md',
-    grid: 'specifications',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/api-auth',
-    title: 'API Authentication',
-    tile: 'Proof-of-possession request signing for credential-gated HTTP APIs',
-    llms: 'Proof-of-possession authentication for credential-gated HTTP APIs — the request-proof envelope and the api:<host> credential resource',
-    metaDescription:
-      'DFOS API authentication — request-proof envelopes, proof-of-possession verification, and the api:<host> credential resource.',
-    source: '../../specs/API-AUTH.md',
-    grid: 'specifications',
-    llmsSection: 'specifications',
-    nav: { label: 'API Auth', tier: 'secondary' },
-  },
-  {
-    slug: '/origin-binding',
-    title: 'Origin Binding',
-    tile: 'Bidirectional identity&harr;domain binding &mdash; chain-signed claim, domain attest-back',
-    llms: 'Bidirectional binding between a DFOS identity and a web domain — the DfosOrigin service entry, HTTPS/DNS attest-back, and the bound/stale/broken verification verdicts',
-    metaDescription:
-      'DFOS Origin Binding — bidirectional identity-to-domain binding via a chain-signed DfosOrigin service entry and HTTPS well-known or DNS TXT attestation, with three-state verification.',
-    source: '../../specs/ORIGIN-BINDING.md',
-    grid: 'specifications',
+    grid: 'core',
+    chip: 'frozen v1',
     llmsSection: 'specifications',
     nav: { tier: 'secondary' },
   },
@@ -151,7 +84,86 @@ export const specs: SpecEntry[] = [
     metaDescription:
       'DFOS Relay Contract — the frozen wire surface of a DFOS relay: proof-plane and revocation-status routes, request/response shapes, and the pagination envelope.',
     source: '../../specs/RELAY-CONTRACT.md',
-    grid: 'specifications',
+    grid: 'core',
+    chip: 'frozen v1',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
+    slug: '/content-model',
+    title: 'Content Model',
+    tile: 'JSON Schema content types committed via content-addressed CIDs',
+    llms: 'Standard JSON Schema content types (post, profile)',
+    metaDescription:
+      'DFOS Content Model — standard JSON Schema content types (post, profile) committed via content-addressed CIDs.',
+    source: '../../specs/CONTENT-MODEL.md',
+    grid: 'core',
+    chip: 'frozen v1',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
+    slug: '/credits',
+    title: 'Credits',
+    tile: 'Verifiable attribution &mdash; signed credit claims bound to the content they credit',
+    llms: 'Verifiable attribution — the credit-claim envelope, the two-way bind between a credits entry and a claimant signature, and the four verification states',
+    metaDescription:
+      'DFOS Credits — verifiable attribution via credit claims: the signed envelope, the two-way bind, and the four verification states.',
+    source: '../../specs/CREDITS.md',
+    grid: 'core',
+    chip: 'v1 · additive',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
+    slug: '/siwd',
+    title: 'Sign In With DFOS',
+    tile: 'Identity verification, consent scopes, and credential issuance for third-party applications',
+    llms: 'Cryptographic identity verification for third-party applications — one challenge artifact, two couriers (hosted web redirect, sign-request mailbox), verification with no DFOS server in the loop',
+    metaDescription:
+      'Sign In With DFOS (SIWD) — identity verification, consent scopes, and credential issuance for third-party applications on DFOS identities.',
+    source: '../../specs/SIWD.md',
+    grid: 'auth',
+    chip: '0.x',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
+    slug: '/api-auth',
+    title: 'API Authentication',
+    tile: 'Proof-of-possession request signing for credential-gated HTTP APIs',
+    llms: 'Proof-of-possession authentication for credential-gated HTTP APIs — the request-proof envelope and the api:<host> credential resource',
+    metaDescription:
+      'DFOS API authentication — request-proof envelopes, proof-of-possession verification, and the api:<host> credential resource.',
+    source: '../../specs/API-AUTH.md',
+    grid: 'auth',
+    chip: '0.x',
+    llmsSection: 'specifications',
+    nav: { label: 'API Auth', tier: 'secondary' },
+  },
+  {
+    slug: '/origin-binding',
+    title: 'Origin Binding',
+    tile: 'Bidirectional identity&harr;domain binding &mdash; chain-signed claim, domain attest-back',
+    llms: 'Bidirectional binding between a DFOS identity and a web domain — the DfosOrigin service entry, HTTPS/DNS attest-back, and the bound/stale/broken verification verdicts',
+    metaDescription:
+      'DFOS Origin Binding — bidirectional identity-to-domain binding via a chain-signed DfosOrigin service entry and HTTPS well-known or DNS TXT attestation, with three-state verification.',
+    source: '../../specs/ORIGIN-BINDING.md',
+    grid: 'auth',
+    chip: '0.x',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
+    slug: '/signing',
+    title: 'Signing',
+    tile: 'Sign-request envelopes, signer obligations, and relay-hosted mailboxes',
+    llms: 'Sign-request envelopes, signer obligations, and relay-hosted mailbox transport',
+    metaDescription:
+      'DFOS SIGNING — sign-request envelopes, signer obligations, and relay-hosted mailbox transport.',
+    source: '../../specs/SIGNING.md',
+    grid: 'auth',
+    chip: '0.x',
     llmsSection: 'specifications',
     nav: { tier: 'secondary' },
   },
@@ -163,9 +175,49 @@ export const specs: SpecEntry[] = [
     metaDescription:
       'DFOS Web Relay — verifying HTTP relay for identity chains, content chains, services, countersignatures, and content blobs.',
     source: '../../specs/WEB-RELAY.md',
-    grid: 'specifications',
+    grid: 'reference',
+    chip: '0.x',
     llmsSection: 'implementation',
     nav: { shortLabel: 'Relay', tier: 'primary' },
+  },
+  {
+    slug: '/conformance',
+    title: 'Conformance',
+    tile: 'Signer, verifier, and relay tiers with the test vectors that prove them',
+    llms: 'Conformance tiers (signer, verifier, relay), the normative MUST sets per tier, and the deterministic test vectors that prove them',
+    metaDescription:
+      'DFOS Protocol conformance — what it means to be a conformant signer, verifier, or relay, the normative MUST sets per tier, and the deterministic test vectors that prove it.',
+    source: '../../specs/CONFORMANCE.md',
+    grid: 'companions',
+    chip: 'companion',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
+    slug: '/threat-model',
+    title: 'Threat Model',
+    tile: 'Adversaries, trust boundaries, and what the proof/content separation defends',
+    llms: 'Adversary model, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol defends against',
+    metaDescription:
+      'DFOS Protocol threat model — adversaries, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol does and does not defend against.',
+    source: '../../specs/THREAT-MODEL.md',
+    grid: 'companions',
+    chip: 'companion',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
+    slug: '/extensions',
+    title: 'Extension Registry',
+    tile: 'Every registered service type and JWS <code>typ</code> — one index, owner specs linked',
+    llms: 'The single index of registered names — service types under the open services namespace, and JWS typ values with their cid-header carriage — each linked to the spec that owns its semantics',
+    metaDescription:
+      'DFOS Extension Registry — the single index of registered service types and JWS typ values, each linked to the owner spec that defines its semantics.',
+    source: '../../specs/EXTENSIONS.md',
+    grid: 'companions',
+    chip: 'companion',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
   },
   {
     slug: '/cli',
@@ -200,42 +252,6 @@ export const specs: SpecEntry[] = [
     grid: 'use',
     llmsSection: 'implementation',
     nav: { label: 'Skill', tier: 'primary' },
-  },
-  {
-    slug: '/extensions',
-    title: 'Extension Registry',
-    tile: 'Every registered service type and JWS <code>typ</code> — one index, owner specs linked',
-    llms: 'The single index of registered names — service types under the open services namespace, and JWS typ values with their cid-header carriage — each linked to the spec that owns its semantics',
-    metaDescription:
-      'DFOS Extension Registry — the single index of registered service types and JWS typ values, each linked to the owner spec that defines its semantics.',
-    source: '../../specs/EXTENSIONS.md',
-    grid: 'specifications',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/threat-model',
-    title: 'Threat Model',
-    tile: 'Adversaries, trust boundaries, and what the proof/content separation defends',
-    llms: 'Adversary model, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol defends against',
-    metaDescription:
-      'DFOS Protocol threat model — adversaries, trust boundaries between the public proof plane and the access-controlled content plane, and what the protocol does and does not defend against.',
-    source: '../../specs/THREAT-MODEL.md',
-    grid: 'specifications',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
-  },
-  {
-    slug: '/conformance',
-    title: 'Conformance',
-    tile: 'Signer, verifier, and relay tiers with the test vectors that prove them',
-    llms: 'Conformance tiers (signer, verifier, relay), the normative MUST sets per tier, and the deterministic test vectors that prove them',
-    metaDescription:
-      'DFOS Protocol conformance — what it means to be a conformant signer, verifier, or relay, the normative MUST sets per tier, and the deterministic test vectors that prove it.',
-    source: '../../specs/CONFORMANCE.md',
-    grid: 'specifications',
-    llmsSection: 'specifications',
-    nav: { tier: 'secondary' },
   },
 ];
 
