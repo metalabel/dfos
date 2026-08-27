@@ -323,7 +323,9 @@ export const canonicalExtraMembers = (
   const entries: [string, string][] = [];
   for (const name of Object.keys(extra)) {
     if (!EXTRA_MEMBER_NAME.test(name)) {
-      throw new Error(`invalid ${label}: additive member name ${JSON.stringify(name)} is not [A-Za-z0-9_.-]+`);
+      throw new Error(
+        `invalid ${label}: additive member name ${JSON.stringify(name)} is not [A-Za-z0-9_.-]+`,
+      );
     }
     if (CANONICAL_MEMBERS.has(name)) {
       throw new Error(`invalid ${label}: ${name} is a canonical member and cannot be added`);

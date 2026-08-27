@@ -21,7 +21,12 @@ import {
   verifyRequestProofEnvelope,
   type ProofEnvelopeInput,
 } from '../src/credentials';
-import { base64urlEncode, createNewEd25519Keypair, generateId, signPayloadEd25519 } from '../src/crypto';
+import {
+  base64urlEncode,
+  createNewEd25519Keypair,
+  generateId,
+  signPayloadEd25519,
+} from '../src/crypto';
 
 // =============================================================================
 // helpers
@@ -261,9 +266,7 @@ describe('identity proof envelope', () => {
       }),
     );
     const signingInput = `${header}.${payload}`;
-    const signature = base64urlEncode(
-      await id.signer(new TextEncoder().encode(signingInput)),
-    );
+    const signature = base64urlEncode(await id.signer(new TextEncoder().encode(signingInput)));
     await expect(
       verifyIdentityProofEnvelope(
         expectations({ proof: `${signingInput}.${signature}` }),

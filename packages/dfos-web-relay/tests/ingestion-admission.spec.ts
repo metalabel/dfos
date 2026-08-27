@@ -93,7 +93,9 @@ const submit = async (
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (signer) {
     const jti =
-      proofOverrides.jti === false ? undefined : (proofOverrides.jti ?? `admission-${(jtiCounter += 1)}`);
+      proofOverrides.jti === false
+        ? undefined
+        : (proofOverrides.jti ?? `admission-${(jtiCounter += 1)}`);
     const { proof } = await signApiIdentityRequest({
       method: 'POST',
       host: proofOverrides.host ?? AUTHORITY,

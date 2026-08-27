@@ -8,10 +8,7 @@ import {
   type IdentityOperation,
   type MultikeyPublicKey,
 } from '@metalabel/dfos-protocol/chain';
-import {
-  createDFOSCredential,
-  signApiIdentityRequest,
-} from '@metalabel/dfos-protocol/credentials';
+import { createDFOSCredential, signApiIdentityRequest } from '@metalabel/dfos-protocol/credentials';
 import {
   base64urlDecode,
   base64urlEncode,
@@ -269,10 +266,12 @@ describe('signing mailbox', () => {
       },
     }) as RelayStore;
 
-    await expect(createRelay({ store: nonSigningStore, authority: RELAY_AUTHORITY })).resolves.toBeDefined();
-    await expect(createRelay({ store: nonSigningStore, authority: RELAY_AUTHORITY, signing: true })).rejects.toThrow(
-      'signing capability requires a store implementing the signing members',
-    );
+    await expect(
+      createRelay({ store: nonSigningStore, authority: RELAY_AUTHORITY }),
+    ).resolves.toBeDefined();
+    await expect(
+      createRelay({ store: nonSigningStore, authority: RELAY_AUTHORITY, signing: true }),
+    ).rejects.toThrow('signing capability requires a store implementing the signing members');
   });
 
   it('defaults off, advertises false, and gates all five routes before parsing or auth', async () => {
@@ -608,9 +607,7 @@ describe('signing mailbox', () => {
     expect((await pollPath(`${SIGNING}/requests?limit=1001`)).status).toBe(200);
     expect((await pollPath(`${SIGNING}/requests?limit=wat`)).status).toBe(200);
     expect(store.limits).toEqual([1000, 100]);
-    expect(
-      (await pollPath(`${SIGNING}/requests?after=not-a-cursor`)).status,
-    ).toBe(400);
+    expect((await pollPath(`${SIGNING}/requests?after=not-a-cursor`)).status).toBe(400);
     expect(store.limits).toEqual([1000, 100, 100]);
   });
 
@@ -641,7 +638,11 @@ describe('signing mailbox', () => {
       }
     }
     const capacityStore = new CapacityStore();
-    const relay = await createRelay({ store: capacityStore, authority: RELAY_AUTHORITY, signing: true });
+    const relay = await createRelay({
+      store: capacityStore,
+      authority: RELAY_AUTHORITY,
+      signing: true,
+    });
     const f = await fixture(capacityStore);
     const response = await postJSON(relay.app, `${SIGNING}/requests`, {
       request: f.jwsToken,
@@ -753,7 +754,12 @@ describe('signing mailbox', () => {
   it('supports decline, isolation, expiry, and signing on a write-disabled relay', async () => {
     const store = new MemoryRelayStore();
     const f = await fixture(store, 'decline-expiry');
-    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true, write: false });
+    const relay = await createRelay({
+      store,
+      authority: RELAY_AUTHORITY,
+      signing: true,
+      write: false,
+    });
     expect(
       (
         await postJSON(relay.app, `${SIGNING}/requests`, {

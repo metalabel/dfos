@@ -309,7 +309,10 @@ describe('web relay', () => {
     });
     return req(path, {
       ...rest,
-      headers: { ...(headers as Record<string, string> | undefined), authorization: proofHeader(proof) },
+      headers: {
+        ...(headers as Record<string, string> | undefined),
+        authorization: proofHeader(proof),
+      },
     });
   };
 
@@ -1409,7 +1412,9 @@ describe('web relay', () => {
       });
 
       // download as reader with credential
-      const downloadRes = await reqAs(`/content/${contentId}/blob`, reader, { headers: { 'x-credential': readCredential } });
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, reader, {
+        headers: { 'x-credential': readCredential },
+      });
       expect(downloadRes.status).toBe(200);
       const downloaded = new Uint8Array(await downloadRes.arrayBuffer());
       expect(downloaded).toEqual(docBytes);
@@ -1460,7 +1465,9 @@ describe('web relay', () => {
       });
 
       // reader tries to download with attacker-issued credential
-      const res = await reqAs(`/content/${contentId}/blob`, reader, { headers: { 'x-credential': fakeCredential } });
+      const res = await reqAs(`/content/${contentId}/blob`, reader, {
+        headers: { 'x-credential': fakeCredential },
+      });
       expect(res.status).toBe(403);
     });
   });
@@ -1558,7 +1565,9 @@ describe('web relay', () => {
       await postOps([updateToken]);
 
       // reader uses credential signed with the OLD key — should still work
-      const downloadRes = await reqAs(`/content/${contentId}/blob`, reader, { headers: { 'x-credential': readCredential } });
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, reader, {
+        headers: { 'x-credential': readCredential },
+      });
       expect(downloadRes.status).toBe(200);
     });
   });
@@ -4371,12 +4380,7 @@ describe('web relay', () => {
       const contentId = (await json(ingestRes)).results[0].chainId;
       // upload the genesis blob
       const genesisBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      const genesisUpload = await putBlob(
-        contentId,
-        content.operationCID,
-        creator,
-        genesisBytes,
-      );
+      const genesisUpload = await putBlob(contentId, content.operationCID, creator, genesisBytes);
       expect(genesisUpload.status).toBe(200);
 
       // update the chain and upload the new head blob
@@ -4429,7 +4433,10 @@ describe('web relay', () => {
       expect(anonymousHeadRef.status).toBe(200);
       expect(new Uint8Array(await anonymousHeadRef.arrayBuffer())).toEqual(headBytes);
 
-      const creatorGenesis = await reqAs(`/content/${contentId}/blob/${content.operationCID}`, creator);
+      const creatorGenesis = await reqAs(
+        `/content/${contentId}/blob/${content.operationCID}`,
+        creator,
+      );
       expect(creatorGenesis.status).toBe(200);
       expect(new Uint8Array(await creatorGenesis.arrayBuffer())).toEqual(genesisBytes);
 
@@ -4445,7 +4452,11 @@ describe('web relay', () => {
       expect(strangerGenesis.status).toBe(403);
 
       // nor by replaying the public credential JWS as a per-request bearer.
-      const strangerGenesisWithCred = await reqAs(`/content/${contentId}/blob/${content.operationCID}`, stranger, { headers: { 'x-credential': publicCred  } });
+      const strangerGenesisWithCred = await reqAs(
+        `/content/${contentId}/blob/${content.operationCID}`,
+        stranger,
+        { headers: { 'x-credential': publicCred } },
+      );
       expect(strangerGenesisWithCred.status).toBe(403);
     });
 
@@ -4566,7 +4577,9 @@ describe('web relay', () => {
       });
 
       // verify child credential grants access — member can read blob
-      const downloadRes = await reqAs(`/content/${contentId}/blob`, member, { headers: { 'x-credential': childCredential } });
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, member, {
+        headers: { 'x-credential': childCredential },
+      });
       expect(downloadRes.status).toBe(200);
 
       // creator revokes the root credential
@@ -4581,7 +4594,9 @@ describe('web relay', () => {
       await postOps([revocationJws]);
 
       // child credential should no longer grant access
-      const downloadRes2 = await reqAs(`/content/${contentId}/blob`, member, { headers: { 'x-credential': childCredential } });
+      const downloadRes2 = await reqAs(`/content/${contentId}/blob`, member, {
+        headers: { 'x-credential': childCredential },
+      });
       expect(downloadRes2.status).toBe(403);
     });
   });
