@@ -39,6 +39,12 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 - **Not an encryption system.** Privacy comes from separation, not obscurity. The proof surface is fully public. The content surface is governed by application-layer access control. The protocol doesn't encrypt anything.
 - **Not coupled to the DFOS platform.** [DFOS](https://dfos.com) is one implementation. Any system implementing the same chain primitives produces interoperable, cross-verifiable proofs.
 
+## How It Compares
+
+**Blockchain identity** systems anchor trust in a shared ledger — verifying an identity means syncing with or querying the chain. The DFOS Protocol anchors trust in cryptographic signatures alone: no consensus layer, no gas fees, no chain state to maintain. Verification is a pure function — public key plus signed chain yields valid or invalid — and content-chain forks converge deterministically without coordination, which makes the protocol simpler, faster, and fully transport-agnostic.
+
+**AT Protocol** (Bluesky) shares foundations with DFOS — self-sovereign identity, signed data, content-addressed storage, DIDs — but differs in topology. AT Protocol is public-by-default: a data repository is a public document, posts are visible to the network, and federation relays ingest content openly. The DFOS Protocol inverts this, as described above — the proof surface is the only public surface, and that separation is an architectural choice, not a privacy setting. Identity resolution also differs: an AT Protocol \`did:plc\` resolves through plc.directory, a registry Bluesky operates, whereas a \`did:dfos\` derives from its genesis operation and needs no external directory to resolve. And AT Protocol is a full social networking protocol — federation, data repositories, application schemas — where the DFOS Protocol is narrower by design: cryptographic primitives only, agnostic to transport, federation, and application semantics.
+
 ## Design Principles
 
 - **Self-certifying.** Identity derives from cryptographic operations. The DID is a deterministic hash of the genesis operation. No external authority needed.
@@ -49,7 +55,7 @@ The reference implementation is in [TypeScript](https://www.npmjs.com/package/@m
 
 ## Status
 
-The protocol's v1 surface is **feature-complete and frozen** — the core wire (chain mechanics, DAG-CBOR encoding, identifier derivation, validity bounds) is settled and will not change in shape, while independent implementation experience accrues; the reference packages remain on their own \`0.x\` release line. It is open source under the [MIT license](https://github.com/metalabel/dfos/blob/main/LICENSE). The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, Docker, or a single curl command. The [DFOS platform](https://dfos.com) runs on this protocol in production.
+The protocol's v1 surface is **feature-complete and frozen** — the core wire (chain mechanics, DAG-CBOR encoding, identifier derivation, validity bounds) is settled and will not change in shape, while independent implementation experience accrues; the reference packages remain on their own \`0.x\` release line. It is open source under the [MIT license](https://github.com/metalabel/dfos/blob/main/LICENSE). The [CLI](https://protocol.dfos.com/cli) ships pre-built binaries for Linux, macOS, and Windows — installable via Homebrew, Docker, or a single curl command. The [DFOS platform](https://dfos.com) runs on this protocol in production. The specification has not been submitted to any formal standards body.
 
 Discussion happens in the [DFOS](https://nce.dfos.com) space. Read the [full specification](https://protocol.dfos.com/spec), explore the [FAQ](https://protocol.dfos.com/faq), or browse the [source on GitHub](https://github.com/metalabel/dfos).
 `;

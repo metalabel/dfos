@@ -22,6 +22,18 @@ jobs:
   test-matrix:
     uses: ./.github/workflows/test-matrix.yml
 
+  # skills/dfos/SKILL.md is canonical; the CLI-embedded and plugin copies must
+  # stay byte-identical (see scripts/sync-skill.sh).
+  skill-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify skill copies are in sync
+        run: ./scripts/sync-skill.sh --check
+
   # The examples are outside the pnpm workspace on purpose — each one is a
   # standalone npm project consuming the PUBLISHED packages from the registry
   # (at the versions pinned by its own lockfile), so this job also proves that
