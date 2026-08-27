@@ -152,7 +152,6 @@ describe('validateStructure', () => {
       'empty-name',
       'empty-redirect-uris',
       'malformed-client-did',
-      'missing-name',
       'missing-redirect-uris',
       'non-string-client-did',
       'unknown-member',
@@ -180,14 +179,21 @@ describe('validateStructure', () => {
 
   it('names the missing member', () => {
     const out = validateStructure(
-      readJson('schemas/dfos-app.v1.fixtures/invalid/missing-name.json'),
+      readJson('schemas/dfos-app.v1.fixtures/invalid/missing-redirect-uris.json'),
     );
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.errors.join(' ')).toMatch(/missing required member `name`/);
+    if (!out.ok) expect(out.errors.join(' ')).toMatch(/missing required member `redirect_uris`/);
+  });
+
+  // a nameless document is fully valid — the domain leads (SIWD.md: name is optional)
+  it('accepts a document with no name', () => {
+    expect(
+      validateStructure(readJson('schemas/dfos-app.v1.fixtures/valid/no-name.json')).ok,
+    ).toBe(true);
   });
 
   // presence-but-empty is malformed, not absent — SIWD.md is explicit
-  it('rejects a present-but-empty required member', () => {
+  it('rejects a present-but-empty member', () => {
     expect(validateStructure({ name: '', redirect_uris: ['https://x.com/cb'] }).ok).toBe(false);
     expect(validateStructure({ name: 'x', redirect_uris: [] }).ok).toBe(false);
   });
