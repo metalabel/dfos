@@ -279,7 +279,13 @@ export interface SiwdLoginRequestInput {
   domain: string;
   /** Exact redirect target; must match the RP's registered or served allowlist. */
   redirectUri: string;
-  /** Requested scope. `identity` is the only scope implemented today. */
+  /**
+   * Requested scope: a space-separated SET of scope tokens (the OAuth `scope`
+   * convention), each of which must be one specs/SIWD.md §Scopes and Credentials
+   * registers. A request naming an unregistered token is refused WHOLE rather
+   * than partially honored — a consent screen that silently dropped a token
+   * would describe something other than what was asked for.
+   */
   scope: string;
   /** Consent-screen prose. A host MAY decline to render it; see specs/SIWD.md. */
   statement?: string;
@@ -476,6 +482,14 @@ export const MAX_SIWD_CLIENT_CHAIN_OPS = 100;
  * FULL ordered operation log, genesis first, as base64url of its JSON array —
  * the same grammar as the `challenge` param, so one decoder shape serves both.
  *
+ * THIS IS THE LOOPBACK CARRIAGE FORM, and only that. An application that holds a
+ * domain encodes nothing: it publishes the very same log as the raw JSON array
+ * of the `identity_chain` member of its `/.well-known/dfos-app.json` app
+ * description (SIWD.md §`identity_chain` — chain carriage), where the origin
+ * serving the file is what associates the domain with the DID. Same chain, same
+ * carriage rules — a URL is simply the carrier available to software that holds
+ * no origin to publish from.
+ *
  * The DID derived from the genesis operation MUST equal the `client_did` the
  * request names; a request where the two disagree makes no claim at all and the
  * host refuses it WHOLE rather than ingesting the chain and ignoring the
@@ -516,7 +530,12 @@ export const encodeSiwdClientChain = (log: string[]): string => {
 
 export interface SiwdClientIdentity {
   did: string;
-  /** Verbatim identity-op JWS log, genesis first — feed to encodeSiwdClientChain. */
+  /**
+   * Verbatim identity-op JWS log, genesis first. A loopback client feeds it to
+   * `encodeSiwdClientChain` to carry on the authorize URL; an application that
+   * holds a domain serves this same array verbatim as the `identity_chain`
+   * member of its app description document.
+   */
   chain: string[];
   /** DID URL of the current auth key — feed to signSiwdAskProof. */
   kid: string;
@@ -526,11 +545,19 @@ export interface SiwdClientIdentity {
 }
 
 /**
- * Mint a fresh client identity for the loopback credential tier: one Ed25519
- * keypair and a single genesis `create` operation naming it as the auth,
- * assertion, and controller key. That is the whole identity a CLI needs to ask
- * under this tier — a DID it can prove control of, and a one-operation chain
- * small enough to carry on the request itself.
+ * Mint a fresh client identity: one Ed25519 keypair and a single genesis
+ * `create` operation naming it as the auth, assertion, and controller key. That
+ * is an entire application identity — a DID whose key control is provable, and a
+ * one-operation chain small enough to travel anywhere a chain has to travel.
+ *
+ * TIER-AGNOSTIC. What comes back is an ordinary DFOS identity, not a
+ * loopback-only artifact; the tier is a property of how the identity is
+ * PRESENTED, not of the identity itself. An application that holds a domain
+ * serves `chain` verbatim as the `identity_chain` member of its
+ * `/.well-known/dfos-app.json` app description and names `did` as its
+ * `client_did` there; a loopback client carries the same chain on the authorize
+ * request instead (`createSiwdLoopbackLoginRequest`), because it has no origin
+ * to publish from. Both are minted here.
  *
  * KEY CUSTODY IS THE CALLER'S, and the identity is only as durable as the
  * custody: persist `privateKey` and `chain` — an OS keychain, a file the caller
@@ -628,9 +655,11 @@ export interface SiwdLoopbackLoginRequestInput {
   /** Loopback redirect target — `http://` on localhost / 127.0.0.1 / [::1], any port/path. */
   redirectUri: string;
   /**
-   * Requested scope. Naming a client identity opens the tier, so every scope the
-   * HOST offers is available here — the `identity`-only bound belongs to the
-   * anonymous loopback shape, which has no `client_did` to issue a credential to.
+   * Requested scope, in the same space-separated set form as
+   * `SiwdLoginRequestInput.scope`. Naming a client identity opens the tier, so
+   * every scope the HOST offers is available here — the `identity`-only bound
+   * belongs to the anonymous loopback shape, which has no `client_did` to issue
+   * a credential to.
    */
   scope: string;
   /** Consent-screen prose. A host MAY decline to render it; see specs/SIWD.md. */
