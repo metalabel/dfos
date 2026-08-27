@@ -280,10 +280,10 @@ type putRawOpFaultStore struct {
 	calls      int
 }
 
-func (f *putRawOpFaultStore) PutRawOp(cid, jwsToken string, origin ...OpOrigin) error {
+func (f *putRawOpFaultStore) PutRawOp(cid, jwsToken string, origin ...OpOrigin) (bool, error) {
 	f.calls++
 	if f.failOnCall != 0 && f.calls == f.failOnCall {
-		return fmt.Errorf("injected raw-op write failure")
+		return false, fmt.Errorf("injected raw-op write failure")
 	}
 	return f.MemoryStore.PutRawOp(cid, jwsToken, origin...)
 }

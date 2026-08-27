@@ -834,7 +834,7 @@ func TestSequencerRejectionLogsCidAndReason(t *testing.T) {
 	if rawCID == "" {
 		t.Fatal("expected the corrupt op to carry a storage CID")
 	}
-	if err := store.PutRawOp(rawCID, corrupt); err != nil {
+	if _, err := store.PutRawOp(rawCID, corrupt); err != nil {
 		t.Fatal(err)
 	}
 

@@ -157,6 +157,15 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 			statsBlock["headCid"] = st.HeadCID
 		}
 	}
+	// Per-peer sync liveness, keyed by peer endpoint. Everything above describes
+	// what this relay HOLDS and says nothing about whether it is still pulling:
+	// a relay that is caught up and a relay whose sync goroutine died look
+	// identical in both the counters and (by design) the logs. Omitted entirely
+	// when no sync-eligible peer is configured — same optional-additive posture
+	// as countsByKind.
+	if peerSync := r.PeerSyncStatuses(); len(peerSync) > 0 {
+		statsBlock["peerSync"] = peerSync
+	}
 	peers := make([]RelayPeerInfo, 0, len(r.peers))
 	for _, p := range r.peers {
 		peers = append(peers, RelayPeerInfo{Endpoint: p.URL})

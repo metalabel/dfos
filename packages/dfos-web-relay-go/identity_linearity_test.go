@@ -56,7 +56,7 @@ func TestIdentityConflictingExtensionPermanentDirectAndPeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.PutRawOp(conflictCID, conflict, OpOriginPeer); err != nil {
+	if _, err := store.PutRawOp(conflictCID, conflict, OpOriginPeer); err != nil {
 		t.Fatal(err)
 	}
 	_, firstRun := relay.RunSequencer()

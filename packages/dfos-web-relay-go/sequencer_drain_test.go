@@ -51,7 +51,7 @@ func TestSequencerDrainsDivergentHeaderCID(t *testing.T) {
 		t.Fatal("expected a decodable storage CID")
 	}
 	// Stage the op exactly as Ingest/SyncFromPeers do: keyed by the recomputed CID.
-	if err := store.PutRawOp(storageCID, token); err != nil {
+	if _, err := store.PutRawOp(storageCID, token); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := store.CountUnsequenced(); n != 1 {
@@ -118,7 +118,7 @@ func TestSequencerDrainsEmptyHeaderCID(t *testing.T) {
 	if storageCID == "" {
 		t.Fatal("expected a decodable, non-empty storage CID")
 	}
-	if err := store.PutRawOp(storageCID, token); err != nil {
+	if _, err := store.PutRawOp(storageCID, token); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := store.CountUnsequenced(); n != 1 {
