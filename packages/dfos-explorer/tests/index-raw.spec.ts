@@ -3,6 +3,7 @@ import {
   nextCursor,
   toArtifactRows,
   toContentRows,
+  toCountersignatureRows,
   toCreditRows,
   toOperationRows,
 } from '../src/lib/index-raw';
@@ -214,6 +215,71 @@ describe('toContentRows — /index/v0/content page → rows', () => {
     expect(toContentRows(null)).toEqual([]);
     expect(toContentRows({})).toEqual([]);
     expect(toContentRows({ content: 'nope' })).toEqual([]);
+  });
+});
+
+describe('toCountersignatureRows — /index/v0/countersignatures page → rows', () => {
+  it('reads the documented row shape', () => {
+    expect(
+      toCountersignatureRows({
+        countersignatures: [
+          {
+            cid: 'bafyCounter',
+            targetCID: 'bafyTarget',
+            relation: 'approves',
+            jwsToken: 'eyJ.header.sig',
+          },
+        ],
+        next: null,
+      }),
+    ).toEqual([
+      {
+        cid: 'bafyCounter',
+        targetCID: 'bafyTarget',
+        relation: 'approves',
+        jwsToken: 'eyJ.header.sig',
+      },
+    ]);
+  });
+
+  it('an unrelated countersignature keeps the honest null', () => {
+    const [row] = toCountersignatureRows({
+      countersignatures: [{ cid: 'bafy1', targetCID: 'bafy2' }],
+    });
+    expect(row?.relation).toBeNull();
+  });
+
+  it('drops a row missing either operation — it names neither a signature nor a target', () => {
+    expect(
+      toCountersignatureRows({
+        countersignatures: [
+          { cid: 'bafy1' },
+          { targetCID: 'bafy2' },
+          { cid: '', targetCID: '' },
+          { cid: 'bafy1', targetCID: '' },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it('KEEPS a row whose jwsToken the relay withheld — the CIDs are the evidence', () => {
+    // the token is a shortcut, not the proof: the surface links both CIDs and
+    // folds by opening the op, so dropping the row would let a stingy relay erase
+    // a countersignature that demonstrably exists
+    const rows = toCountersignatureRows({
+      countersignatures: [
+        { cid: 'bafy1', targetCID: 'bafy2' },
+        { cid: 'bafy3', targetCID: 'bafy4', jwsToken: 42 },
+      ],
+    });
+    expect(rows.map((r) => r.cid)).toEqual(['bafy1', 'bafy3']);
+    expect(rows.map((r) => r.jwsToken)).toEqual(['', '']);
+  });
+
+  it('a body that is not a page yields no rows', () => {
+    expect(toCountersignatureRows(null)).toEqual([]);
+    expect(toCountersignatureRows({})).toEqual([]);
+    expect(toCountersignatureRows({ countersignatures: 'nope' })).toEqual([]);
   });
 });
 

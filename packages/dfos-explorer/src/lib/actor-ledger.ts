@@ -18,6 +18,11 @@
   id pill; `ledgerCounts` is how the surface says out loud how much of what it
   loaded is readable and how much is only listed.
 
+  The Witnessed lane's relation filter has the SAME SHAPE as the subtraction — a
+  row-local narrowing applied per page — and therefore the same hazard: a page
+  that narrows to nothing while the relay's cursor is still live is not an empty
+  listing, and only an exhausted cursor ever licenses that claim.
+
 */
 
 import type { IndexContentRow } from '@metalabel/dfos-client';
@@ -55,3 +60,53 @@ export const ledgerCounts = (rows: IndexContentRow[]): LedgerCounts => {
   const publicCount = rows.filter((r) => r.publicRead === true).length;
   return { total: rows.length, publicCount, gatedCount: rows.length - publicCount };
 };
+
+/**
+ * How a ledger lane names its own size. A lane with a live cursor holds a FLOOR,
+ * not a total, and says so in words rather than leaving the reader to infer it
+ * from a button; an exhausted cursor is the only thing that licenses the plain
+ * count. Every lane on the panel shares this phrasing so the four tabs mean the
+ * same thing by a number. Pure and total.
+ */
+export const ledgerCountPhrase = (total: number, noun: string, more: boolean): string =>
+  more ? `${total} loaded so far` : `${total} ${noun}${total === 1 ? '' : 's'}`;
+
+// -----------------------------------------------------------------------------
+// WITNESSED — the relation filter, which has the same shape as the Contributed
+// subtraction: a per-page narrowing that can empty a page while the relay still
+// holds more.
+// -----------------------------------------------------------------------------
+
+/** The fields the relation derivations read — every countersignature row has
+ *  them, and nothing here needs the rest. */
+export interface WitnessRelationRow {
+  relation: string | null;
+}
+
+/**
+ * Keep only the rows that answer the exact relation question. `relation=` is a
+ * SERVER-side filter, but a relay predating it ignores the param and answers
+ * unfiltered — so the page is re-filtered here and the surface never presents
+ * rows that do not answer what was asked (the index-point.ts rule). Row-local,
+ * so it applies per page and concatenating equals filtering the whole.
+ */
+export const witnessedFromPage = <T extends WitnessRelationRow>(
+  rows: T[],
+  relation: string | null,
+): T[] => (relation ? rows.filter((row) => row.relation === relation) : rows);
+
+/**
+ * The relation tags offered as filter buttons, merged across every UNFILTERED
+ * page loaded so far. The namespace is open, so the buttons can only ever be a
+ * sample of what exists — and a tag absent from the pages we hold is not offered
+ * rather than guessed at. Merging (not replacing) is what lets a load-more widen
+ * the button set instead of the second page silently narrowing it. Pure, total,
+ * and sorted so the row order a relay happens to serve never moves the buttons.
+ */
+export const mergeWitnessRelations = (known: string[], rows: WitnessRelationRow[]): string[] =>
+  [
+    ...new Set([
+      ...known,
+      ...rows.map((row) => row.relation).filter((relation): relation is string => !!relation),
+    ]),
+  ].sort();

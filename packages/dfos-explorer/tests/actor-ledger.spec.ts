@@ -1,6 +1,12 @@
 import type { IndexContentRow } from '@metalabel/dfos-client';
 import { describe, expect, it } from 'vitest';
-import { contributedFromSignerPage, ledgerCounts } from '../src/lib/actor-ledger';
+import {
+  contributedFromSignerPage,
+  ledgerCountPhrase,
+  ledgerCounts,
+  mergeWitnessRelations,
+  witnessedFromPage,
+} from '../src/lib/actor-ledger';
 
 const row = (contentId: string, creatorDID: string, publicRead = true): IndexContentRow => ({
   contentId,
@@ -77,5 +83,85 @@ describe('ledgerCounts — the loaded rows, split by read-visibility', () => {
     const counts = ledgerCounts(rows);
     expect(counts.publicCount + counts.gatedCount).toBe(counts.total);
     expect(counts.total).toBe(37);
+  });
+});
+
+describe('ledgerCountPhrase — a lane naming its own size', () => {
+  it('an exhausted cursor licenses the plain count', () => {
+    expect(ledgerCountPhrase(212, 'chain', false)).toBe('212 chains');
+    expect(ledgerCountPhrase(67, 'countersignature', false)).toBe('67 countersignatures');
+    expect(ledgerCountPhrase(0, 'credential', false)).toBe('0 credentials');
+  });
+
+  it('one row is singular', () => {
+    expect(ledgerCountPhrase(1, 'chain', false)).toBe('1 chain');
+    expect(ledgerCountPhrase(1, 'credential', false)).toBe('1 credential');
+  });
+
+  it('a LIVE cursor makes the number a floor, and says so instead of naming a total', () => {
+    // the relay's cursor says "more exists" and never "how many" — so the count
+    // must not read as the corpus, whatever the noun would have been
+    expect(ledgerCountPhrase(200, 'chain', true)).toBe('200 loaded so far');
+    expect(ledgerCountPhrase(1, 'countersignature', true)).toBe('1 loaded so far');
+    expect(ledgerCountPhrase(0, 'credential', true)).toBe('0 loaded so far');
+  });
+});
+
+describe('witnessedFromPage — the relation re-filter', () => {
+  const cs = (relation: string | null) => ({ relation });
+
+  it('an unfiltered lane keeps every row', () => {
+    const rows = [cs('approves'), cs(null), cs('endorses')];
+    expect(witnessedFromPage(rows, null)).toEqual(rows);
+  });
+
+  it('keeps only exact matches — a relay that IGNORED relation= answers unfiltered', () => {
+    const rows = [cs('approves'), cs('endorses'), cs(null), cs('approves')];
+    expect(witnessedFromPage(rows, 'approves')).toEqual([cs('approves'), cs('approves')]);
+  });
+
+  it('an unroled row never answers a relation question', () => {
+    expect(witnessedFromPage([cs(null)], 'approves')).toEqual([]);
+  });
+
+  it('is row-local, so per-page filtering equals filtering the whole', () => {
+    // same property the Contributed subtraction has, and the same thing it
+    // licenses: narrow each page, then append
+    const p1 = [cs('approves'), cs('endorses')];
+    const p2 = [cs(null), cs('approves')];
+    expect([...witnessedFromPage(p1, 'approves'), ...witnessedFromPage(p2, 'approves')]).toEqual(
+      witnessedFromPage([...p1, ...p2], 'approves'),
+    );
+  });
+});
+
+describe('mergeWitnessRelations — filter buttons across the pages loaded', () => {
+  const cs = (relation: string | null) => ({ relation });
+
+  it('harvests the distinct tags of a first page, sorted', () => {
+    expect(mergeWitnessRelations([], [cs('endorses'), cs('approves'), cs('endorses')])).toEqual([
+      'approves',
+      'endorses',
+    ]);
+  });
+
+  it('a later page WIDENS the set and never narrows it', () => {
+    // replacing would let page 2 silently drop a button page 1 had earned
+    expect(mergeWitnessRelations(['approves'], [cs('endorses')])).toEqual(['approves', 'endorses']);
+    expect(mergeWitnessRelations(['approves', 'endorses'], [cs('approves')])).toEqual([
+      'approves',
+      'endorses',
+    ]);
+  });
+
+  it('unroled rows offer no button', () => {
+    expect(mergeWitnessRelations([], [cs(null), cs(null)])).toEqual([]);
+  });
+
+  it('the order a relay happens to serve never moves the buttons', () => {
+    const a = mergeWitnessRelations([], [cs('c'), cs('a'), cs('b')]);
+    const b = mergeWitnessRelations([], [cs('b'), cs('c'), cs('a')]);
+    expect(a).toEqual(b);
+    expect(a).toEqual(['a', 'b', 'c']);
   });
 });

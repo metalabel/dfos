@@ -10,13 +10,15 @@
   sub-route — so they are raw fetches here, with the same first-reachable-relay
   failover the client does.
 
-  `/index/v0/content` is wrapped here TOO, for the second reason rather than the
-  first. The client seam's content read resolves `{ content: [], next: null }`
-  when every relay declines, which is a face-value lie a caller cannot detect:
-  indistinguishable from a served empty page, and — on a lane that PAGES — it
-  lands in the success branch and clears the live cursor, presenting a truncated
-  listing as a complete one. The actor ledger's Created/Contributed lanes read
-  through {@link fetchContentPage} so an outage is an outage.
+  `/index/v0/content` and `/index/v0/countersignatures` are wrapped here TOO, for
+  the second reason rather than the first. Their client-seam reads resolve an
+  EMPTY PAGE when every relay declines, which is a face-value lie a caller cannot
+  detect: indistinguishable from a served empty page, and — on a lane that PAGES
+  — it lands in the success branch and clears the live cursor, presenting a
+  truncated listing as a complete one. The actor ledger's Created, Contributed,
+  and Witnessed lanes read through {@link fetchContentPage} and
+  {@link fetchCountersignaturesPage} so an outage is an outage. (`indexCredentials`
+  already sets `throwOnDecline`, so the Issued lane stays on the client seam.)
 
   AN ALL-DECLINED SET THROWS, deliberately. A relay predating a route answers
   404/501, and folding that into `{ items: [] }` renders a false-empty
@@ -38,7 +40,7 @@
 
 */
 
-import type { IndexContentRow, IndexOrder } from '@metalabel/dfos-client';
+import type { IndexContentRow, IndexCountersignatureRow, IndexOrder } from '@metalabel/dfos-client';
 import {
   PAGE,
   ROUTE_ABSENT,
@@ -231,6 +233,41 @@ export const toContentRows = (body: unknown): IndexContentRow[] => {
 };
 
 /**
+ * Coerce an `/index/v0/countersignatures` page body into rows.
+ *
+ * A row is addressable when it names BOTH operations — the countersignature
+ * (`cid`) and what it countersigned (`targetCID`) — so an entry missing either
+ * is dropped; it could neither be linked nor folded. `relation` keeps the honest
+ * null (an unrelated countersignature is ordinary, not an error).
+ *
+ * `jwsToken` is COERCED to the empty string rather than dropping the row, which
+ * is the one judgment call in here. The token is a convenience the relay may
+ * include; the surface that renders these rows links the two CIDs and folds the
+ * proof by OPENING the op, never from this field. So a relay that withheld the
+ * token withheld a shortcut, not the evidence — and dropping the row would let
+ * that stinginess erase a countersignature that demonstrably exists, which is
+ * the omission this whole module exists to refuse. Pure, unit-tested.
+ */
+export const toCountersignatureRows = (body: unknown): IndexCountersignatureRow[] => {
+  const rows = (body as { countersignatures?: unknown } | null)?.countersignatures;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row): IndexCountersignatureRow[] => {
+    const r = row as Record<string, unknown>;
+    const cid = str(r['cid']);
+    const targetCID = str(r['targetCID']);
+    if (!cid || !targetCID) return [];
+    return [
+      {
+        cid,
+        targetCID,
+        relation: typeof r['relation'] === 'string' ? r['relation'] : null,
+        jwsToken: str(r['jwsToken']),
+      },
+    ];
+  });
+};
+
+/**
  * Coerce an `/index/v0/credits` page body into rows. A row needs both a
  * `contentId` and a `did` to mean anything — it names a credit OF someone ON
  * something — so an entry missing either is dropped rather than rendered as a
@@ -341,6 +378,35 @@ export const fetchContentPage = async (params: {
     getRelays(),
   );
   return { items: toContentRows(body), next: nextCursor(body) };
+};
+
+/**
+ * One page of the countersignatures-by-witness reverse lookup. Throws when every
+ * relay declines — same reason as {@link fetchContentPage}: the client seam
+ * resolves `{ countersignatures: [], next: null }` there, which a paging caller
+ * reads as "the enumeration ended" while dropping a live cursor.
+ *
+ * No `order=` is offered. `witness=` predates index iteration 2, so this lane
+ * must keep working on a relay that would 400 an ordering param — and the probe
+ * that would tell us otherwise gates a different set of surfaces.
+ */
+export const fetchCountersignaturesPage = async (params: {
+  witness: string;
+  relation?: string;
+  after?: string;
+  limit?: number;
+}): Promise<{ items: IndexCountersignatureRow[]; next: string | null }> => {
+  const body = await fetchIndexPage<unknown>(
+    'countersignatures',
+    {
+      witness: params.witness,
+      ...(params.relation ? { relation: params.relation } : {}),
+      ...(params.after ? { after: params.after } : {}),
+      limit: params.limit ?? PAGE,
+    },
+    getRelays(),
+  );
+  return { items: toCountersignatureRows(body), next: nextCursor(body) };
 };
 
 /** One page of the credit projection. Throws when no relay serves the route. */
