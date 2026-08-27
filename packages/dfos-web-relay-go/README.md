@@ -62,11 +62,11 @@ Advanced (JSON array with per-peer flags):
 PEERS='[{"url":"http://relay-b:8080"},{"url":"http://relay-c:8080","gossip":false}]'
 ```
 
-Per-peer flags (all default to `true`):
-
-- `gossip` — push new operations to this peer
-- `readThrough` — fetch from this peer on local 404
-- `sync` — poll this peer's `/log` for background sync
+Per-peer flags (all default to `true`): `gossip`, `readThrough`, `sync` — the
+three peering behaviors specified in
+[Web Relay § Peering](https://protocol.dfos.com/web-relay#peering). Operator
+guidance for peered deployments is at
+[protocol.dfos.com/deploy](https://protocol.dfos.com/deploy).
 
 A value starting with `[` must parse as JSON, every peer must be an absolute
 `http(s)` URL, and unknown per-peer fields are rejected: a bad peer config fails
@@ -74,25 +74,14 @@ at boot rather than degrading into peers that error on every sync tick.
 
 ### Content following
 
-The operation log federates the **proof plane** (identities, content chains,
-credentials, revocations — all pushed and gossiped). The **content plane** (the
-document _bytes_) is never gossiped: it's content-addressed and pulled behind a
-grant.
-
-Set `CONTENT_FOLLOW=eager` to turn this relay into a **content follower**. On
-each sync interval it sweeps the content chains it holds a standing public-read
-grant for and pulls any missing document blobs from its peers, verifying each
-against the committed `documentCID` before storing. The relay can then serve that
-public content independently of the origin — an edge cache, not just a proof
-mirror.
+`CONTENT_FOLLOW` controls whether this relay also pulls the document blobs it
+holds a standing public-read grant for, per
+[Web Relay § Content Following](https://protocol.dfos.com/web-relay#content-following):
 
 - `none` (default) — proof plane only; byte-identical to a non-following node.
-- `eager` — convergent sweep pulls granted public blobs.
+- `eager` — convergent sweep pulls granted public blobs on each sync interval.
 
-Pulling is gated by the same predicate as serving (a standing public-read grant),
-so a revoked grant stops a chain from being served and a non-public chain is never
-followed. Blobs are content-address-verified, so following from an untrusted peer
-is safe. (`lazy` read-through-on-404 is reserved for a future release.)
+(`lazy` read-through-on-404 is reserved for a future release.)
 
 ## Topology Testing
 

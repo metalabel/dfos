@@ -17,18 +17,6 @@ export const faqs: FaqEntry[] = [
       'An open protocol for cryptographic identity and verifiable content. <a href="/spec">Ed25519 signed chains</a> establish identity, commit content, and produce proofs that anyone can verify — offline, in any language, from any source. No platform, no blockchain, no trust assumption. Identity chains are strictly linear logs; content chains are directed acyclic graphs (DAGs) that converge deterministically across implementations without consensus.',
   },
   {
-    question: 'What problem does it solve?',
-    answer:
-      'Your identity and content are rented back to you by the platforms that own them. If a service shuts down or locks your account, everything disappears. The DFOS Protocol makes identity and content provenance self-sovereign — derived from cryptographic keys you control, verifiable by anyone with your public key and any standard EdDSA library.',
-  },
-  {
-    question: 'What does "dark forest" mean in this context?',
-    answer:
-      'The internet is a dark forest — most meaningful creative and social activity happens in access-controlled spaces, not on the public web. DFOS is designed for this reality: content lives in member-governed spaces, undisclosed by default, and the cryptographic proof layer is the only public surface. The proof is public; the content is access-controlled. The design and its limits — the protocol commits to content hashes and does not encrypt — are covered in Why and the Threat Model.',
-    answerHtml:
-      'The internet is a dark forest — most meaningful creative and social activity happens in access-controlled spaces, not on the public web. DFOS is designed for this reality: content lives in member-governed spaces, undisclosed by default, and the cryptographic proof layer is the only public surface. The proof is public; the content is access-controlled. The design and its limits — the protocol commits to content hashes and does not encrypt — are covered in <a href="/overview">Why</a> and the <a href="/threat-model">Threat Model</a>.',
-  },
-  {
     question: 'How do chains handle forks and conflicts?',
     answer:
       'It depends on the chain kind, and forks are permitted exactly where a merge function exists. Content chains are DAGs that converge to the same head deterministically on every implementation, with no consensus protocol; identity chains are strictly linear, and a conflicting extension is refused rather than arbitrated. The Protocol Specification defines the convergence rule, and Web Relay defines order authority for identity chains.',
@@ -51,18 +39,6 @@ export const faqs: FaqEntry[] = [
     question: 'What languages are supported?',
     answer: `The reference implementation is in TypeScript (available as @metalabel/dfos-protocol on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the protocol specification. The CLI is written in Go with pre-built binaries for ${CLI_PLATFORMS} — installable via Homebrew, curl, or Docker.`,
     answerHtml: `The reference implementation is in TypeScript (available as <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">@metalabel/dfos-protocol</a> on npm). Cross-language verification implementations exist in Go, Python, Rust, and Swift — all verifying the same deterministic test vectors from the <a href="/spec">protocol specification</a>. The <a href="/cli">CLI</a> is written in Go with pre-built binaries for ${CLI_PLATFORMS} — installable via Homebrew, curl, or Docker.`,
-  },
-  {
-    question: 'How is this different from blockchain-based identity?',
-    answer:
-      'Blockchain identity systems anchor trust in a shared ledger — you need to sync with or query the chain to verify identity. The DFOS Protocol anchors trust in cryptographic signatures alone. There is no consensus layer, no gas fees, no chain state to maintain. Verification is a pure function: public key + signed chain = valid or invalid. Content-chain forks converge deterministically without coordination. This makes it simpler, faster, and fully transport-agnostic.',
-  },
-  {
-    question: 'How does this compare to AT Protocol (Bluesky)?',
-    answer:
-      'AT Protocol and DFOS Protocol share foundations — self-sovereign identity, signed data, content-addressed storage, DIDs — but differ in topology. AT Protocol is public-by-default: your data repository is a public document, posts are visible to the network, and federation relays ingest content openly. The DFOS Protocol inverts this. Content is access-controlled — it lives in member-governed spaces, undisclosed by default and served only to participants. The cryptographic proof layer is the only public surface. This is an architectural choice, not a privacy setting (the protocol does not encrypt; confidentiality is enforced by whoever serves the space). Identity resolution also differs: an AT Protocol did:plc is resolved through plc.directory, a registry Bluesky operates, whereas a did:dfos derives from its genesis operation and needs no external directory to resolve. AT Protocol is also a full social networking protocol (federation, data repositories, application schemas); the DFOS Protocol is narrower by design — cryptographic primitives only, agnostic to transport, federation, and application semantics.',
-    answerHtml:
-      'AT Protocol and DFOS Protocol share foundations — self-sovereign identity, signed data, content-addressed storage, DIDs — but differ in topology. AT Protocol is public-by-default: your data repository is a public document, posts are visible to the network, and federation relays ingest content openly. The DFOS Protocol inverts this. Content is access-controlled — it lives in member-governed spaces, undisclosed by default and served only to participants. The cryptographic proof layer is the only public surface. This is an architectural choice, not a privacy setting (the protocol does not encrypt; confidentiality is enforced by whoever serves the space). Identity resolution also differs: an AT Protocol <code>did:plc</code> is resolved through plc.directory, a registry Bluesky operates, whereas a <code>did:dfos</code> derives from its genesis operation and needs no external directory to resolve. AT Protocol is also a full social networking protocol (federation, data repositories, application schemas); the DFOS Protocol is narrower by design — cryptographic primitives only, agnostic to transport, federation, and application semantics.',
   },
   {
     question: 'How do identity chains relate to DIDs?',
@@ -105,11 +81,6 @@ export const faqs: FaqEntry[] = [
       '@metalabel/dfos-client, the client-side kit for participating in the protocol — resolve, verify, prove — over an untrusted set of relays, with every cryptographic proof coming from @metalabel/dfos-protocol. It holds no keys: signing is always a callback the caller supplies. Its /siwd subpath carries the relying-party login kit, and its /api-auth subpath signs and verifies the per-request proofs for credential-gated APIs.',
     answerHtml:
       '<a href="https://www.npmjs.com/package/@metalabel/dfos-client">@metalabel/dfos-client</a>, the client-side kit for participating in the protocol — resolve, verify, prove — over an untrusted set of relays, with every cryptographic proof coming from @metalabel/dfos-protocol. It holds no keys: signing is always a callback the caller supplies. Its <code>/siwd</code> subpath carries the <a href="/siwd">relying-party login kit</a>, and its <code>/api-auth</code> subpath signs and verifies the per-request proofs for <a href="/api-auth">credential-gated APIs</a>.',
-  },
-  {
-    question: 'Is this production-ready?',
-    answer: `The protocol's v1 surface is feature-complete and frozen: the core wire is settled and will not change in shape, while the reference packages remain on their own 0.x release line. The TypeScript reference implementation is published and tested, with deterministic test vectors verified across five languages. The CLI ships pre-built binaries for ${CLI_PLATFORMS} via Homebrew, Docker, and direct download. The DFOS platform runs on this protocol in production. The specification has not been submitted to any formal standards body.`,
-    answerHtml: `The <a href="/spec">protocol's v1 surface</a> is feature-complete and frozen: the core wire is settled and will not change in shape, while the reference <a href="https://www.npmjs.com/package/@metalabel/dfos-protocol">packages</a> remain on their own 0.x release line. The TypeScript reference implementation is published and tested, with deterministic test vectors verified across five languages. The <a href="/cli">CLI</a> ships pre-built binaries for ${CLI_PLATFORMS} via Homebrew, Docker, and direct download. The <a href="https://dfos.com">DFOS platform</a> runs on this protocol in production. The specification has not been submitted to any formal standards body.`,
   },
   {
     question: 'Where can I discuss the protocol?',

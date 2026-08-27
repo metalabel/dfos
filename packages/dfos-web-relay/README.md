@@ -78,63 +78,24 @@ serve({ port: 4444 });
 | `GET`  | `/content/:contentId/blob`                  | Download blob at head (standing auth, or auth + credential)          |
 | `GET`  | `/content/:contentId/blob/:ref`             | Download blob at specific operation ref                              |
 
-## DID Resolution
+## Route Semantics
 
-`GET /1.0/identifiers/:did` resolves a `did:dfos` identifier into a
-[W3C DID Document](https://www.w3.org/TR/did-core/), following the
-[DIF Universal Resolver](https://dev.uniresolver.io/) HTTP binding. The response
-is a resolution result — `{ didDocument, didResolutionMetadata,
-didDocumentMetadata }` — with `contentType: application/did+ld+json`.
-
-Resolution is **read-only and self-certifying**: the relay serves the DID
-Document projection of the identity chain's verified terminal state
-(verification methods from the current key sets, `service` from the chain's
-services). A deactivated identity resolves with `deactivated: true` in the
-document metadata and an empty verification-method set. A malformed `did:dfos`
-returns `400 invalidDid`; an unknown identity returns `404 notFound`. Public and
-unauthenticated, like the proof plane. This route is **additive** — it rides the
-frozen v1 surface without touching the wire or the proof plane. See
-[DID-METHOD.md](../../specs/DID-METHOD.md) §4 for the normative mapping.
-
-## Revocation Status
-
-`GET /revocations/v1/credential/:credentialCID` answers whether the relay has
-ingested a revocation for a credential —
-`{ credentialCID, revoked, revocation? }` — and
-`GET /revocations/v1/issuer/:did` lists every revocation ingested for an issuer,
-sorted by `credentialCID` ascending and cursor-paginated with the standard
-`limit`/`after` query params and a `next` cursor in the response. The
-enumeration key is the cursor, so resumption is a strictly-greater keyset and a
-backdated `createdAt` can never be inserted behind a client's cursor;
-chronology is a client-side sort over the returned rows. The family is a
-**frozen `v1` contract** at the relay
-root on its own version clock; revocations still _enter_ through
-`POST /proof/v1/operations` as ordinary proof-plane operations.
-
-Every positive answer carries the **full revocation JWS**, so a zero-trust
-caller re-verifies the proof (signature, CID integrity, kid-DID == payload
-`did`, issuer-only rule) instead of trusting the relay's boolean.
-`revoked: false` is an honest known-nothing answer — the relay attests only to
-what it has ingested; absence is NOT proof of non-revocation (query a quorum of
-relays for stronger assurance). A malformed CID or DID returns `400`. Support is
-advertised via `capabilities.revocations` in the well-known (always `true` for
-this relay); a relay without the index returns `501` on these routes. See
-[WEB-RELAY.md](../../specs/WEB-RELAY.md) → Revocation Status for the full
-semantics.
-
-## Blob Authorization
-
-**Upload**: Auth token required. Caller must be the chain creator or the signer of the referenced operation (enables delegated upload).
-
-**Download**: If a public credential (`aud: *`) exists as a standing authorization, the blob is served without authentication. Otherwise, auth token required — chain creator can download directly, other identities must present a DFOS read credential (issued by the creator) in the `X-Credential` header.
+The route table above is the full surface this package serves; the semantics
+behind it are the spec's to define, not this README's. DID resolution
+(`/1.0/identifiers/:did`) follows the normative mapping in
+[DID-METHOD.md](https://protocol.dfos.com/did-method) §4; revocation status
+(`/revocations/v1/*`) is specified in
+[Web Relay § Revocation Status](https://protocol.dfos.com/web-relay#revocation-status-v1);
+blob upload/download authorization is
+[Web Relay § Content Plane Access](https://protocol.dfos.com/web-relay#content-plane-access).
 
 ## Peering
 
-Relays can replicate operations via three composable behaviors configured per-peer:
-
-- **Gossip-out**: push new operations to peers (fire-and-forget)
-- **Read-through**: fetch from peers on local 404
-- **Sync-in**: cursor-based log polling from peers
+Relays replicate operations via three composable per-peer behaviors —
+gossip-out, read-through, sync-in — specified in
+[Web Relay § Peering](https://protocol.dfos.com/web-relay#peering); operator
+guidance for running a peered relay is at
+[protocol.dfos.com/deploy](https://protocol.dfos.com/deploy).
 
 ```typescript
 import { createHttpPeerClient, createRelay, MemoryRelayStore } from '@metalabel/dfos-web-relay';
@@ -145,8 +106,6 @@ const relay = await createRelay({
   peers: [{ url: 'https://other-relay.example.com' }],
 });
 ```
-
-See [WEB-RELAY.md](../../specs/WEB-RELAY.md) for the full peering specification.
 
 ## Custom Store
 

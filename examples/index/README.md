@@ -17,13 +17,7 @@ See [`packages/dfos-protocol/schemas/index.v1.json`](../../packages/dfos-protoco
 
 ## Projection Rules
 
-Resolved index = **canonical fold** over the operations:
-
-1. **Linearize** all operations (every branch) into a deterministic total order: `createdAt` ascending, `operationCID` ascending as tiebreak.
-2. **Flatten** each `index/v1` document's `deltas` array in order.
-3. **Fold** the delta stream as an LWW-Map: `set` writes, `remove` deletes, the last delta touching a key wins.
-
-The fold is **branch-inclusive** — it folds every operation in the log, not just the selected-head branch, so concurrent forks converge instead of dropping a branch.
+The resolved index is the [canonical fold](https://protocol.dfos.com/content-model#canonical-fold) — the spec defines the linearization and its branch-inclusive convergence. What is `index/v1`-specific is the reduction: each document's `deltas` array is flattened in canonical order and folded as an LWW-Map — `set` writes, `remove` deletes, the last delta touching a key wins.
 
 ## Example Chain
 
@@ -48,7 +42,7 @@ See `projected-state.json` for the expected map.
 
 ## Fork Convergence
 
-Because linearization is a strict total order over operation `(createdAt, operationCID)` pairs — independent of the order operations were ingested — **any ingest order of the same operation set folds to the same map**. Two relays (or a relay and a client) that have seen the same operations compute an identical index, and the two concurrent branches here converge rather than one being dropped.
+This chain is the convergence property made concrete: fold `chain.json` in any ingest order and the two concurrent branches produce the same `projected-state.json` — branch A's `remove aaa` loses to branch B's later re-set rather than a branch being dropped.
 
 The **head** (sequence 4, the highest-`createdAt` tip) is a `set`, so the chain is live. Had the selected head branch been a `delete`, the chain would be deleted and the fold moot.
 

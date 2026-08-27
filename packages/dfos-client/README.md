@@ -77,7 +77,7 @@ import { indexedDbStore, memoryStore } from '@metalabel/dfos-client/store';
 
 ### `@metalabel/dfos-client/api-auth`
 
-API Authentication request proofs. A proof is a short-lived JWS, signed by the key a DFOS credential was issued to, that binds one exact HTTP request — method, host, path, body — to that credential. The credential says what its holder may do; the proof says the holder is the one doing it, and doing exactly this. See the [API-AUTH specification](https://protocol.dfos.com/api-auth).
+API Authentication request proofs — the per-request proof-of-possession envelope defined by the [API-AUTH specification](https://protocol.dfos.com/api-auth), which owns the semantics; this subpath signs and verifies it.
 
 **Spending a credential: a signing `fetch`.** Hand it to any API client with a fetch seam, and every request that client composes goes out credential-gated.
 
@@ -100,7 +100,7 @@ Three consequences worth knowing before you wire it up:
 - **It does not follow redirects** (`redirect: 'manual'`): a 3xx comes back to you as-is, because following it would re-issue the request at coordinates the proof does not cover and carry `X-Credential` to whatever authority the `Location` names.
 - **It buffers the request body before sending.** The proof covers the whole body, so there is nothing to sign until the last octet is in hand — size-bounded requests only. An unbounded or live stream cannot be proof-signed, in any implementation.
 
-**A backend that must not proxy uses the decomposed form.** A signing backend fronting a browser must authorize the coordinates it is about to sign against its own session, not sign whatever `{method, path, body}` the browser hands it — a backend that signs blindly is an oracle for every credential it holds ([Security Considerations](https://protocol.dfos.com/api-auth#security-considerations)). Such a backend describes the one request it is willing to make, so there is no `Request` for the adapter above to cover:
+**A backend that must not proxy uses the decomposed form.** A signing backend fronting a browser describes the one request it is willing to make — never signing coordinates the browser supplies ([API-AUTH § Security Considerations](https://protocol.dfos.com/api-auth#security-considerations)) — so there is no `Request` for the adapter above to cover:
 
 ```typescript
 import { buildApiAuthHeaders, signApiRequest } from '@metalabel/dfos-client/api-auth';
@@ -149,7 +149,7 @@ import {
 
 Sign In With DFOS. The three verbs above are the relying-party login kit, in the order a login uses them: `createSiwdLoginRequest` mints the challenge and builds the `/authorize` URL to redirect to, `readSiwdCallback` parses what comes back, and `verifySiwd` verifies it — mint → redirect, read → verify. The `expect` object `createSiwdLoginRequest` returns (nonce, domain, and the DID when the challenge is bound to one) is what `verifySiwd` checks against, so the relying party MUST persist it across the redirect: a verifier that takes its expectation from the callback has implemented the check and none of the protection. See [`examples/siwd-demo`](../../examples/siwd-demo) for the reference consumer.
 
-The `nonce`/`consumeNonce` pair on the expectation (supply exactly one) is the spec's [two replay disciplines](../../specs/SIWD.md#replay-prevention), one field each:
+The `nonce`/`consumeNonce` pair on the expectation (supply exactly one) maps one field each to the spec's two replay disciplines — which discipline a given scope obliges, and why, is [SIWD § Replay prevention](https://protocol.dfos.com/siwd#replay-prevention)'s argument to make:
 
 **`expect.nonce` — flow-bound login.** For a backend granting only a browser session (`scope=identity`), source the expected nonce from state you bound to that browser at mint time — a server-side session, or the nonce sealed under your own key in an `httpOnly` cookie — and compare:
 
@@ -159,9 +159,7 @@ The `nonce`/`consumeNonce` pair on the expectation (supply exactly one) is the s
 await verifySiwd(client, jws, { domain, nonce });
 ```
 
-The seal (or the session) is what makes this a defense at all: a _bare_ cookie value is presenter-supplied, and an attacker replaying a captured JWS can read the nonce out of the artifact and send it as the cookie. Never compare against anything the presenter could have authored.
-
-**`consumeNonce` — spend the nonce.** Required the moment success grants anything beyond a session with the presenting browser (a credential-returning scope, a portable token, a profile-B mailbox flow):
+**`consumeNonce` — spend the nonce.** Required the moment success grants anything beyond a session with the presenting browser (a credential-returning scope, a portable token, a profile-B mailbox flow). Return true iff **this** verifier minted the nonce and it was unspent, deleting it in the same atomic operation (a Redis `GETDEL`, a `DELETE … RETURNING` — never get-then-delete):
 
 ```typescript
 await verifySiwd(client, jws, {
@@ -170,13 +168,11 @@ await verifySiwd(client, jws, {
 });
 ```
 
-`consumeNonce` returns true iff **this** verifier minted the nonce and it was unspent — membership in verifier-minted state is what satisfies the spec's rule that the verifier MUST have minted the nonce it checks, and deleting it in the same operation is what makes it single-use. The atomicity is the caller's: a get-then-delete lets two concurrent replays both win, where a Redis `GETDEL` or a `DELETE … RETURNING` does not. Under either discipline the nonce check runs at most once, and only after every other check has passed, so an invalid presentation can never burn a nonce the user is still holding.
+Under either discipline `verifySiwd` checks the nonce at most once, and only after every other check has passed, so an invalid presentation can never burn a nonce the user is still holding.
 
 `createSiwdLoginRequest` throws rather than returning an error on the two things that are RP misconfiguration: an `authorizeUrl` or `redirectUri` that is not an absolute URL, and any scope other than `identity` over a loopback redirect that names no client identity.
 
-**Loopback redirects** — `http://localhost`, `http://127.0.0.1`, or `http://[::1]`, on any port — come in two shapes. The **anonymous** one is unchanged: no `client_did`, `scope=identity` only, and the consent screen shows the local delivery target and nothing else. The **key-proven** one is the [loopback credential tier](../../specs/SIWD.md#loopback-clients): the request carries a `client_did`, an ask proof over its own challenge bytes, and — unless the DID is already resident on the host — the client's identity chain. That is what lets local software receive a credential. It cannot prove where it came from, but it can prove it controls the keys, and the host's consent screen says exactly that. Credentials minted this way come back in the URL **fragment** and carry a hard expiry ceiling the host enforces; 14 days is the spec's recommendation.
-
-The fragment is what keeps the credential off every server, and it is also why a CLI needs one extra step: a browser does not send the fragment to your loopback listener either, so the request line your local server sees carries the query and nothing else. Answer it with a small page whose script reads `location.href` and posts the whole URL back to your server, then feed _that_ to `readSiwdCallback`. A browser relying party just passes `location.href`.
+**Loopback redirects** — `http://localhost`, `http://127.0.0.1`, or `http://[::1]`, on any port — come in two shapes: the **anonymous** one (no `client_did`, `scope=identity` only) and the **key-proven** one, the [loopback credential tier](https://protocol.dfos.com/siwd#loopback-clients), which is what lets local software receive a credential — the spec defines both. The one integration consequence to know: a credential comes back in the URL **fragment**, which a browser sends to no server — your loopback listener's request line included — so a CLI answers the callback with a small page whose script reads `location.href` and posts the whole URL back, then feeds _that_ to `readSiwdCallback`. A browser relying party just passes `location.href`.
 
 ```typescript
 import {

@@ -34,16 +34,20 @@ between a family that reads as part of the corpus and one that reads as bolted o
 3. **One pagination envelope.** List routes use `limit` (default 100, max 1000,
    clamp above max) + `after` + `next`, keyset where the cursor is the sort key,
    opaque tokens where the key is composite, and the relay-local/400 rule where the
-   order is positional (WEB-RELAY.md → Error Responses). No new shapes.
+   order is positional
+   ([WEB-RELAY.md → Error Responses](specs/WEB-RELAY.md#error-responses)). No new shapes.
 4. **Capability discipline.** Optional families are gated by a `capabilities.<name>`
    flag; absent reads `false` only for opt-in families; unsupported routes return
    **501, never 404**, with the gate firing before auth, body parsing, or store
-   lookups.
+   lookups
+   ([WEB-RELAY.md → Well-Known Endpoint](specs/WEB-RELAY.md#well-known-endpoint-get-well-knowndfos-relay)).
 5. **Uniform error body.** `{ "error": "<prose>" }`; callers branch on status codes.
-   Exceptions require their own contract (the DIF resolver envelope is the only one).
+   Exceptions require their own contract (the DIF resolver envelope is the only one)
+   ([WEB-RELAY.md → Error Responses](specs/WEB-RELAY.md#error-responses)).
 6. **Verdicts, not prose.** Verification failures split structurally into
    `invalid` vs `unverifiable` (typed reason / `errors.Is` sentinels) — never
-   string-matched messages.
+   string-matched messages
+   ([CONFORMANCE.md → Conformance Tiers](specs/CONFORMANCE.md#conformance-tiers)).
 7. **Sync the derivative docs.** CONFORMANCE.md (doc list + the tier bullets your
    MUST sets belong to), THREAT-MODEL.md (any new residual risk), WEB-RELAY.md's
    route/auth quick-start table, and the OpenAPI document — including its 501
