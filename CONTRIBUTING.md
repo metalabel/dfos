@@ -38,7 +38,7 @@ between a family that reads as part of the corpus and one that reads as bolted o
    clamp above max) + `after` + `next`, keyset where the cursor is the sort key,
    opaque tokens where the key is composite, and the relay-local/400 rule where the
    order is positional
-   ([WEB-RELAY.md → Error Responses](specs/WEB-RELAY.md#error-responses)). No new shapes.
+   ([RELAY-CONTRACT.md → Pagination Envelope](specs/RELAY-CONTRACT.md#pagination-envelope)). No new shapes.
 4. **Capability discipline.** Optional families are gated by a `capabilities.<name>`
    flag; absent reads `false` only for opt-in families; unsupported routes return
    **501, never 404**, with the gate firing before auth, body parsing, or store
@@ -46,7 +46,7 @@ between a family that reads as part of the corpus and one that reads as bolted o
    ([WEB-RELAY.md → Well-Known Endpoint](specs/WEB-RELAY.md#well-known-endpoint-get-well-knowndfos-relay)).
 5. **Uniform error body.** `{ "error": "<prose>" }`; callers branch on status codes.
    Exceptions require their own contract (the DIF resolver envelope is the only one)
-   ([WEB-RELAY.md → Error Responses](specs/WEB-RELAY.md#error-responses)).
+   ([RELAY-CONTRACT.md → Error Body](specs/RELAY-CONTRACT.md#error-body)).
 6. **Verdicts, not prose.** Verification failures split structurally into
    `invalid` vs `unverifiable` (typed reason / `errors.Is` sentinels) — never
    string-matched messages

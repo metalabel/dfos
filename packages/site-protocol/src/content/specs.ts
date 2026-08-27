@@ -144,6 +144,18 @@ export const specs: SpecEntry[] = [
     nav: { tier: 'secondary' },
   },
   {
+    slug: '/relay-contract',
+    title: 'Relay Contract',
+    tile: 'The frozen relay wire surface &mdash; routes, shapes, and the pagination envelope',
+    llms: 'The frozen relay wire surface — the /proof/v1 and /revocations/v1 routes, their request/response shapes, and the pagination envelope a client may hardcode against any conformant relay',
+    metaDescription:
+      'DFOS Relay Contract — the frozen wire surface of a DFOS relay: proof-plane and revocation-status routes, request/response shapes, and the pagination envelope.',
+    source: '../../specs/RELAY-CONTRACT.md',
+    grid: 'specifications',
+    llmsSection: 'specifications',
+    nav: { tier: 'secondary' },
+  },
+  {
     slug: '/web-relay',
     title: 'Web Relay',
     tile: 'Verifying HTTP relay with gossip, read-through, and sync peering',

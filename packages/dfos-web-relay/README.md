@@ -85,7 +85,7 @@ behind it are the spec's to define, not this README's. DID resolution
 (`/1.0/identifiers/:did`) follows the normative mapping in
 [DID-METHOD.md](https://protocol.dfos.com/did-method) §4; revocation status
 (`/revocations/v1/*`) is specified in
-[Web Relay § Revocation Status](https://protocol.dfos.com/web-relay#revocation-status-v1);
+[Relay Contract § Revocation Status](https://protocol.dfos.com/relay-contract#revocation-status);
 blob upload/download authorization is
 [Web Relay § Content Plane Access](https://protocol.dfos.com/web-relay#content-plane-access).
 
@@ -107,12 +107,106 @@ const relay = await createRelay({
 });
 ```
 
-## Custom Store
-
-Implement the `RelayStore` interface to use any persistence backend:
+The `PeerClient` is injected like the store — semantic per-resource methods,
+not raw HTTP. The default (`createHttpPeerClient`) uses HTTP; tests inject
+mocks that route directly to another relay's API in-process:
 
 ```typescript
-import type { RelayStore } from '@metalabel/dfos-web-relay';
+interface PeerClient {
+  getIdentityLog(
+    peerUrl: string,
+    did: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
+
+  getContentLog(
+    peerUrl: string,
+    contentId: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
+
+  // `null` = transport/peer failure; `'invalid-cursor'` = the peer explicitly
+  // rejected `after` (400) — the distinguished value the sync loop's self-heal
+  // requires. A client that collapses the 400 into `null` leaves the puller
+  // retrying a dead cursor forever after a peer wipes or rebuilds its log.
+  getOperationLog(
+    peerUrl: string,
+    params?: { after?: string; limit?: number },
+  ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
+
+  submitOperations(peerUrl: string, operations: string[]): Promise<void>;
+}
+```
+
+A `PeerLogEntry` is `{ cid: string; jwsToken: string }`. The
+`'invalid-cursor'` outcome (a peer's 400 cursor rejection, distinct from
+transport failure) is load-bearing for the sync loop's self-heal — see
+[Web Relay § Peering](https://protocol.dfos.com/web-relay#peering).
+
+## Custom Store
+
+Implement the `RelayStore` interface to use any persistence backend. The relay
+handles what to store and when; the store handles how:
+
+```typescript
+interface RelayStore {
+  getOperation(cid: string): Promise<StoredOperation | undefined>;
+  putOperation(op: StoredOperation): Promise<void>;
+
+  getIdentityChain(did: string): Promise<StoredIdentityChain | undefined>;
+  putIdentityChain(chain: StoredIdentityChain): Promise<void>;
+
+  getContentChain(contentId: string): Promise<StoredContentChain | undefined>;
+  putContentChain(chain: StoredContentChain): Promise<void>;
+
+  getBlob(key: BlobKey): Promise<Uint8Array | undefined>;
+  putBlob(key: BlobKey, data: Uint8Array): Promise<void>;
+
+  getCountersignatures(operationCID: string): Promise<string[]>;
+  addCountersignature(operationCID: string, jwsToken: string): Promise<void>;
+
+  appendToLog(entry: LogEntry): Promise<void>;
+  // `null` (the whole result, not the `next` field) = the store does not
+  // recognize `after` — the relay MUST answer 400, never an empty page. A
+  // store that cannot signal this would silently mask foreign cursors as
+  // caught-up, permanently stalling any peer that trusted the answer.
+  readLog(params: {
+    after?: string;
+    limit: number;
+  }): Promise<{ entries: LogEntry[]; next: string | null } | null>;
+
+  // chain state at arbitrary CID (content fork verification; identity historical state)
+  getIdentityStateAtCID(
+    did: string,
+    cid: string,
+  ): Promise<{ state: VerifiedIdentity; lastCreatedAt: string } | null>;
+  getContentStateAtCID(
+    contentId: string,
+    cid: string,
+  ): Promise<{ state: VerifiedContentChain; lastCreatedAt: string } | null>;
+
+  // peer sync cursors
+  getPeerCursor(peerUrl: string): Promise<string | undefined>;
+  setPeerCursor(peerUrl: string, cursor: string): Promise<void>;
+}
+```
+
+The `getIdentityStateAtCID` / `getContentStateAtCID` methods compute
+materialized chain state at an arbitrary operation CID — content-fork
+verification is the driving use. Implementations decide how: `MemoryRelayStore`
+replays from genesis; a SQL-backed store can use snapshot tables.
+
+Convergence (store-then-verify — [Web Relay § Convergence](https://protocol.dfos.com/web-relay#convergence))
+extends the interface with a content-addressed raw-operation buffer:
+
+```typescript
+// raw ops — content-addressed store for all received operations
+putRawOp(cid: string, jwsToken: string): Promise<void>;
+getUnsequencedOps(limit: number): Promise<string[]>;
+markOpsSequenced(cids: string[]): Promise<void>;
+markOpRejected(cid: string, reason: string): Promise<void>;
+countUnsequenced(): Promise<number>;
+resetSequencer(): Promise<void>;
 ```
 
 `MemoryRelayStore` is provided as a reference implementation and for testing.
