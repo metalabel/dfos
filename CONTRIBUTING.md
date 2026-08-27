@@ -28,9 +28,12 @@ between a family that reads as part of the corpus and one that reads as bolted o
 1. **Clock in the path.** An unfrozen (`0.x`) route family mounts at `v0`
    (`/index/v0`, `/signing/v0`); `v1` in a path is a freeze declaration
    (`/proof/v1`, `/revocations/v1`). The spec's status block and the path must agree.
-2. **Register the `typ`.** A new JWS envelope adds its row to PROTOCOL.md's `typ`
-   registry and to the `cid`-header inventory, even when relays never ingest it
-   (the credit-claim precedent — registered for typ-routing, no ingestion path).
+2. **Register the name.** A new JWS envelope adds its row — `typ`, owner spec,
+   `cid`-header carriage, one-sentence semantics — to the extension registry
+   ([`specs/EXTENSIONS.md`](specs/EXTENSIONS.md)), even when relays never ingest
+   it (the credit-claim precedent — registered for typ-routing, no ingestion
+   path). A new service type does the same in the registry's service-type table.
+   Names are never minted locally: the owner spec defines, the registry indexes.
 3. **One pagination envelope.** List routes use `limit` (default 100, max 1000,
    clamp above max) + `after` + `next`, keyset where the cursor is the sort key,
    opaque tokens where the key is composite, and the relay-local/400 rule where the
