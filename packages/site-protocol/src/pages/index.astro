@@ -2,6 +2,15 @@
 import Base from '../layouts/Base.astro';
 import { specs } from '../content/specs';
 import { navLinks, primaryNav, headerLabel } from '../data/nav';
+
+// The spec wall, grouped by the registry's tier taxonomy. Reading order is the
+// order here; within a tier, tiles keep the registry's canonical array order.
+const specTiers = [
+  { grid: 'core', label: 'Frozen core' },
+  { grid: 'auth', label: 'Auth & sign-in' },
+  { grid: 'reference', label: 'Reference behavior' },
+  { grid: 'companions', label: 'Companions' },
+] as const;
 ---
 
 <Base
@@ -172,18 +181,26 @@ dfos serve`} /></pre>
     <span class="section-label">S P E C I F I C A T I O N S</span>
     <h2>Read the protocol</h2>
 
-    <div class="spec-links spec-links--quad">
-      {
-        specs.filter((spec) => spec.grid === 'specifications').map(({ slug, title, listTitle, tile }) => (
-          <a href={slug} class="spec-link">
-            <span class="spec-link-title">{listTitle ?? title}</span>
-            <span class="spec-link-desc" set:html={tile} />
-          </a>
-        ))
-      }
-    </div>
+    {
+      specTiers.map((tier) => (
+        <Fragment>
+          <span class="spec-tier-label">{tier.label}</span>
+          <div class="spec-links spec-links--quad spec-links--tier">
+            {specs.filter((spec) => spec.grid === tier.grid).map(({ slug, title, listTitle, tile, chip }) => (
+              <a href={slug} class="spec-link">
+                <span class="spec-link-title">
+                  {listTitle ?? title}
+                  {chip && <span class="spec-chip">{chip}</span>}
+                </span>
+                <span class="spec-link-desc" set:html={tile} />
+              </a>
+            ))}
+          </div>
+        </Fragment>
+      ))
+    }
 
-    <span class="section-label" style="margin-top: 3rem;">U S E &nbsp; I T</span>
+    <span class="section-label section-label--spaced">U S E &nbsp; I T</span>
 
     <div class="spec-links">
       {

@@ -345,6 +345,11 @@ img {
   display: block;
 }
 
+/* A second top-level label inside a section needs air above it. */
+.section-label--spaced {
+  margin-top: 3rem;
+}
+
 /* ═══ Hero ═══ */
 
 .hero {
@@ -1295,14 +1300,40 @@ a.card:hover {
   padding-left: 2rem;
 }
 
+/* Flex so an optional .spec-chip rides the far end of the title row; a title
+   with no chip is a lone item and still sits flush left. */
 .spec-link-title {
   font-family: var(--font-heading);
   font-weight: 400;
   font-size: 1.1rem;
   letter-spacing: 0;
   color: var(--green);
-  display: block;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 0.25rem;
+}
+
+/* Status chip from the spec's own status block — quiet, never competing with
+   the title it trails. */
+.spec-chip {
+  flex: none;
+  font-family: var(--font-body);
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  color: var(--teal-dim);
+  border: 1px solid var(--surface-border);
+  border-radius: 2px;
+  padding: 0.15em 0.5em;
+  white-space: nowrap;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.spec-link:hover .spec-chip {
+  color: var(--teal);
+  border-color: var(--teal-dim);
 }
 
 .spec-link-desc {
@@ -1568,6 +1599,32 @@ a.card:hover {
   grid-column: 1 / -1;
   padding-right: 0;
   border-right: none;
+}
+
+/* ═══ Spec Tier Groups ═══ */
+
+/* Subordinate to .section-label — the tiers read as sub-groups of
+   SPECIFICATIONS, not as new page sections. */
+.spec-tier-label {
+  font-family: var(--font-body);
+  font-weight: 400;
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--teal-dim);
+  opacity: 0.8;
+  display: block;
+  margin-bottom: 0.85rem;
+}
+
+/* Tier grids sit closer together than the 3rem that separates top-level
+   groups, and the label supplies the gap above each one. */
+.spec-links--tier {
+  margin-bottom: 2rem;
+}
+
+.spec-links--tier + .spec-tier-label {
+  margin-top: 2.25rem;
 }
 
 /* ═══ Responsive ═══ */
