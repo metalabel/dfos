@@ -2,21 +2,33 @@
 
   @metalabel/dfos-client/api-auth
 
-  API-AUTH — the request proof. A short-lived JWS, signed by the key of the party
-  a DFOS credential was issued to, that binds ONE exact HTTP request (method,
-  host, path, body) to that credential, right now. The credential says what its
-  holder may do; the proof says the holder is the one doing it, and doing exactly
-  this. See specs/API-AUTH.md.
+  API-AUTH — ONE ENVELOPE FAMILY WITH AN OPTIONAL CREDENTIAL.
+
+  A REQUEST PROOF is a short-lived JWS, signed by the key of the party a DFOS
+  credential was issued to, that binds ONE exact HTTP request (method, host,
+  path, body) to that credential, right now. The credential says what its holder
+  may do; the proof says the holder is the one doing it, and doing exactly this.
+
+  An IDENTITY PROOF is the same envelope minus `credentialCID`: it binds the same
+  exact request to a bare DID, proving only WHO IS ASKING. Authentication with no
+  grant attached, for surfaces whose own policy decides what a proven identity may
+  do. Same canonical-bytes machinery, same freshness bounds, same host binding,
+  same current-state key resolution — the `credentialCID` member and the
+  credential walk are the whole delta, and the `typ` gate keeps the two claims
+  distinct on the wire. See specs/API-AUTH.md.
 
   As with SIWD, the load-bearing piece is NOT the fat verifier: it is
-  `apiRequestSigningInput`, the PURE byte contract both halves share. It lives in
-  exactly ONE place per language (this file, and `ApiRequestSigningInput` in
-  dfos-protocol-go), so a TS signer and a Go signer emit identical proofs from
-  identical inputs.
+  `apiRequestSigningInput` / `apiIdentitySigningInput`, the PURE byte contract
+  both halves share. There is exactly ONE canonical-bytes implementation per
+  language (this file, and its byte-twin in dfos-protocol-go), parameterized by
+  the one member that differs, so a TS signer and a Go signer emit identical
+  proofs from identical inputs.
 
-  `verifyApiRequest` is the other half, and it lives HERE rather than in an API
-  host's middleware so that middleware is a thin adapter over the kit rather than
-  a second, drifting implementation of the eleven-step algorithm.
+  `verifyApiRequest` and `verifyApiIdentityRequest` are the other half, and they
+  live HERE rather than in an API host's middleware so that middleware is a thin
+  adapter over the kit rather than a second, drifting implementation of the
+  algorithm. They share one proof-phase implementation; the request-proof verifier
+  is that phase plus the credential walk.
 
 */
 
@@ -51,6 +63,18 @@ import type { Client } from './types';
  * typ-routing dispatchers tell a proof apart from credentials and chain ops.
  */
 export const REQUEST_PROOF_JWS_TYP = 'did:dfos:request-proof';
+
+/**
+ * The normative JWS header `typ` for an identity proof (API-AUTH.md) — the
+ * request proof's credential-less sibling.
+ *
+ * THE TYP GATE IS ABSOLUTE, IN BOTH DIRECTIONS. "Possession of a grant's
+ * audience key" and "possession of a bare identity's key" are different claims,
+ * so a route requiring a credential rejects an identity proof at the header gate
+ * and a route requiring bare identity rejects a request proof at the same gate.
+ * No verifier ambiguity, no downgrade.
+ */
+export const IDENTITY_PROOF_JWS_TYP = 'did:dfos:identity-proof';
 
 /**
  * The digest of zero octets. A request with no body hashes the empty string —
@@ -104,6 +128,61 @@ export interface RequestProofPayload {
   iat: number;
 }
 
+/**
+ * The identity proof's payload: the request proof's five members MINUS
+ * `credentialCID`. All five are required, under the SAME member rules — there is
+ * no relaxation here, only one fewer member.
+ */
+export interface IdentityProofPayload {
+  /** The HTTP method, uppercase. */
+  method: string;
+  /** The API's lowercase authority — `host` on 443, `host:port` otherwise. */
+  host: string;
+  /** The exact origin-form request target — path plus query string, byte for byte. */
+  path: string;
+  /** Canonical unpadded base64url of the SHA-256 of the raw request body octets. */
+  bodyHash: string;
+  /** Issued-at — unix seconds (positive integer). */
+  iat: number;
+}
+
+/**
+ * The two artifacts of this family, as the INTERNALS see them. One member rules
+ * implementation, one canonical-bytes implementation, and one proof-phase
+ * implementation serve both — parameterized by the single member that differs
+ * (`credentialCID`) and by the `typ` that keeps the two claims distinct.
+ */
+interface ProofShape {
+  /** Diagnostic label — "request proof" / "identity proof". */
+  label: string;
+  /** The normative header `typ`. Verifiers gate on it absolutely. */
+  typ: string;
+  /** Whether `credentialCID` is a member of this artifact's payload. */
+  credentialed: boolean;
+}
+
+const REQUEST_PROOF_SHAPE: ProofShape = {
+  label: 'request proof',
+  typ: REQUEST_PROOF_JWS_TYP,
+  credentialed: true,
+};
+
+const IDENTITY_PROOF_SHAPE: ProofShape = {
+  label: 'identity proof',
+  typ: IDENTITY_PROOF_JWS_TYP,
+  credentialed: false,
+};
+
+/** The internal union of both payloads; `credentialCID` is present iff credentialed. */
+interface ParsedProofPayload {
+  method: string;
+  host: string;
+  path: string;
+  bodyHash: string;
+  credentialCID?: string;
+  iat: number;
+}
+
 const encoder = new TextEncoder();
 const EMPTY_BODY = new Uint8Array(0);
 
@@ -120,39 +199,46 @@ const CTL_OR_SPACE = /[\u0000-\u0020\u007f]/;
 // 32 digest bytes are exactly 43 canonical unpadded base64url characters.
 const BASE64URL_32 = /^[A-Za-z0-9_-]{43}$/;
 
-const assertNoLoneSurrogate = (value: string, field: string): void => {
+const assertNoLoneSurrogate = (value: string, field: string, label: string): void => {
   if (LONE_SURROGATE.test(value)) {
-    throw new Error(`invalid request proof: ${field} must be well-formed Unicode`);
+    throw new Error(`invalid ${label}: ${field} must be well-formed Unicode`);
   }
 };
 
 /**
- * Validate a request-proof payload against API-AUTH.md's step-3 schema. Unknown
- * members are IGNORED (the protocol's MUST-ignore-unknown rule) — the canonical
- * rebuild below drops them rather than refusing them, so a future additive
- * member never makes today's verifier reject a well-formed proof.
+ * Validate a payload against API-AUTH.md's step-3 schema — the SAME member rules
+ * for both artifacts, with `credentialCID` required iff the shape is
+ * credentialed. Unknown members are IGNORED (the protocol's MUST-ignore-unknown
+ * rule) — the canonical rebuild below drops them rather than refusing them, so a
+ * future additive member never makes today's verifier reject a well-formed
+ * proof. That is also why a stray `credentialCID` on an identity proof is
+ * ignored rather than refused: the `typ` gate, not member sniffing, is what tells
+ * the two artifacts apart.
  */
-const validateRequestProofPayload = (value: unknown): RequestProofPayload => {
+const validateProofPayload = (value: unknown, shape: ProofShape): ParsedProofPayload => {
+  const label = shape.label;
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('invalid request proof: expected a JSON object');
+    throw new Error(`invalid ${label}: expected a JSON object`);
   }
   const raw = value as Record<string, unknown>;
 
-  for (const field of ['method', 'host', 'path', 'bodyHash', 'credentialCID'] as const) {
+  const stringFields = ['method', 'host', 'path', 'bodyHash'];
+  if (shape.credentialed) stringFields.push('credentialCID');
+  for (const field of stringFields) {
     if (typeof raw[field] !== 'string' || raw[field] === '') {
-      throw new Error(`invalid request proof: ${field} must be a non-empty string`);
+      throw new Error(`invalid ${label}: ${field} must be a non-empty string`);
     }
-    assertNoLoneSurrogate(raw[field] as string, field);
+    assertNoLoneSurrogate(raw[field] as string, field, label);
   }
 
   const method = raw['method'] as string;
   if (!UPPERCASE_METHOD.test(method)) {
-    throw new Error('invalid request proof: method must be an uppercase HTTP method token');
+    throw new Error(`invalid ${label}: method must be an uppercase HTTP method token`);
   }
 
   const host = raw['host'] as string;
   if (host !== host.toLowerCase() || /[\s/\\?#]/.test(host)) {
-    throw new Error('invalid request proof: host must be a lowercase authority, without a scheme');
+    throw new Error(`invalid ${label}: host must be a lowercase authority, without a scheme`);
   }
 
   // The wire string, not a normalization: no percent-decoding, no query
@@ -160,15 +246,13 @@ const validateRequestProofPayload = (value: unknown): RequestProofPayload => {
   // never have ridden an origin-form request line are refused.
   const path = raw['path'] as string;
   if (!path.startsWith('/')) {
-    throw new Error('invalid request proof: path must begin with /');
+    throw new Error(`invalid ${label}: path must begin with /`);
   }
   if (path.includes('#')) {
-    throw new Error('invalid request proof: path must not carry a fragment');
+    throw new Error(`invalid ${label}: path must not carry a fragment`);
   }
   if (CTL_OR_SPACE.test(path)) {
-    throw new Error(
-      'invalid request proof: path must not contain whitespace or control characters',
-    );
+    throw new Error(`invalid ${label}: path must not contain whitespace or control characters`);
   }
 
   // The bodyHash is compared as a STRING against the verifier's own re-encoding,
@@ -178,52 +262,97 @@ const validateRequestProofPayload = (value: unknown): RequestProofPayload => {
   const bodyHash = raw['bodyHash'] as string;
   if (!BASE64URL_32.test(bodyHash) || base64urlEncode(base64urlDecode(bodyHash)) !== bodyHash) {
     throw new Error(
-      'invalid request proof: bodyHash must be the canonical unpadded base64url of 32 bytes',
+      `invalid ${label}: bodyHash must be the canonical unpadded base64url of 32 bytes`,
     );
   }
 
   const iat = raw['iat'];
   if (typeof iat !== 'number' || !Number.isSafeInteger(iat) || iat <= 0) {
-    throw new Error('invalid request proof: iat must be a positive integer');
+    throw new Error(`invalid ${label}: iat must be a positive integer`);
   }
 
+  return shape.credentialed
+    ? { method, host, path, bodyHash, credentialCID: raw['credentialCID'] as string, iat }
+    : { method, host, path, bodyHash, iat };
+};
+
+const validateRequestProofPayload = (value: unknown): RequestProofPayload => {
+  const parsed = validateProofPayload(value, REQUEST_PROOF_SHAPE);
   return {
-    method,
-    host,
-    path,
-    bodyHash,
-    credentialCID: raw['credentialCID'] as string,
-    iat,
+    method: parsed.method,
+    host: parsed.host,
+    path: parsed.path,
+    bodyHash: parsed.bodyHash,
+    credentialCID: parsed.credentialCID as string,
+    iat: parsed.iat,
+  };
+};
+
+const validateIdentityProofPayload = (value: unknown): IdentityProofPayload => {
+  const parsed = validateProofPayload(value, IDENTITY_PROOF_SHAPE);
+  return {
+    method: parsed.method,
+    host: parsed.host,
+    path: parsed.path,
+    bodyHash: parsed.bodyHash,
+    iat: parsed.iat,
   };
 };
 
 /**
- * THE BYTE CONTRACT. Serializes a payload to the canonical bytes that ARE the
- * JWS payload segment — a fixed key order (method, host, path, bodyHash,
- * credentialCID, iat) with no insignificant whitespace, and `iat` as a bare JSON
- * integer.
+ * THE BYTE CONTRACT, in ONE place for both artifacts. Serializes a validated
+ * payload to the canonical bytes that ARE the JWS payload segment — a fixed key
+ * order with no insignificant whitespace, and `iat` as a bare JSON integer. The
+ * request proof's order is `method, host, path, bodyHash, credentialCID, iat`;
+ * the identity proof's is the same with `credentialCID` elided, so the two forms
+ * cannot drift apart on anything but that member.
  *
  * HTML ESCAPING IS OFF, by construction: `path` routinely carries `&` and admits
  * `<` and `>`, and `JSON.stringify` emits all three literally. The Go byte-twin
- * hand-rolls the same serialization (`ApiRequestSigningInput`) precisely because
+ * hand-rolls the same serialization precisely because
  * `encoding/json` would emit `\u0026` / `\u003c` / `\u003e` instead and silently fork
  * the signed bytes.
+ */
+const proofSigningInput = (parsed: ParsedProofPayload, shape: ProofShape): Uint8Array =>
+  encoder.encode(
+    JSON.stringify(
+      shape.credentialed
+        ? {
+            method: parsed.method,
+            host: parsed.host,
+            path: parsed.path,
+            bodyHash: parsed.bodyHash,
+            credentialCID: parsed.credentialCID,
+            iat: parsed.iat,
+          }
+        : {
+            method: parsed.method,
+            host: parsed.host,
+            path: parsed.path,
+            bodyHash: parsed.bodyHash,
+            iat: parsed.iat,
+          },
+    ),
+  );
+
+/**
+ * The request proof's canonical signing input — six members, in the fixed order
+ * `method, host, path, bodyHash, credentialCID, iat`.
  *
  * PURE and clientless: import it in a signing backend and in a verifier alike.
  */
-export const apiRequestSigningInput = (payload: RequestProofPayload): Uint8Array => {
-  const parsed = validateRequestProofPayload(payload);
-  return encoder.encode(
-    JSON.stringify({
-      method: parsed.method,
-      host: parsed.host,
-      path: parsed.path,
-      bodyHash: parsed.bodyHash,
-      credentialCID: parsed.credentialCID,
-      iat: parsed.iat,
-    }),
-  );
-};
+export const apiRequestSigningInput = (payload: RequestProofPayload): Uint8Array =>
+  proofSigningInput(validateProofPayload(payload, REQUEST_PROOF_SHAPE), REQUEST_PROOF_SHAPE);
+
+/**
+ * The identity proof's canonical signing input — five members, in the fixed
+ * order `method, host, path, bodyHash, iat`: the request proof's bytes minus
+ * `credentialCID`, from the same encoder, under the same member rules.
+ *
+ * PURE and clientless: import it in a signing backend and in a verifier alike.
+ */
+export const apiIdentitySigningInput = (payload: IdentityProofPayload): Uint8Array =>
+  proofSigningInput(validateProofPayload(payload, IDENTITY_PROOF_SHAPE), IDENTITY_PROOF_SHAPE);
 
 /**
  * The `bodyHash` member: canonical unpadded base64url of the SHA-256 of the
@@ -301,6 +430,66 @@ export const signApiRequest = async (
   return { proof, payload };
 };
 
+export interface SignApiIdentityRequestInput {
+  /** The HTTP method, uppercase. */
+  method: string;
+  /** The API's lowercase authority — `host` on 443, `host:port` otherwise. */
+  host: string;
+  /** The exact origin-form request target this proof will ride. */
+  path: string;
+  /** Application body octets; omitted or empty hashes to `EMPTY_BODY_SHA256`. */
+  body?: Uint8Array;
+  /**
+   * The signing key's DID URL. Its DID portion IS THE PRINCIPAL — the identity
+   * proof names no other party, and nothing is looked up from it.
+   */
+  kid: string;
+  /** Raw Ed25519 signer over the JWS signing input. */
+  sign: (message: Uint8Array) => Promise<Uint8Array>;
+  /** Issued-at override — unix seconds. Default `Math.floor(Date.now() / 1000)`. */
+  iat?: number;
+}
+
+/**
+ * Sign one request as a BARE IDENTITY — `signApiRequest`'s input minus the
+ * credential material, and its payload minus `credentialCID`. The producer half
+ * of the identity proof's byte contract.
+ *
+ * The emitted payload segment is EXACTLY `apiIdentitySigningInput(payload)`, the
+ * same construction-by-fixed-order the request proof uses, and pinned by a test
+ * rather than assumed.
+ */
+export const signApiIdentityRequest = async (
+  input: SignApiIdentityRequestInput,
+): Promise<{ proof: string; payload: IdentityProofPayload }> => {
+  const payload = validateIdentityProofPayload({
+    method: input.method,
+    host: input.host,
+    path: input.path,
+    bodyHash: sha256BodyHash(input.body ?? EMPTY_BODY),
+    iat: input.iat ?? Math.floor(Date.now() / 1000),
+  });
+  if (!input.kid.includes('#')) {
+    throw new Error('invalid identity proof: kid must be a DID URL');
+  }
+
+  const proof = await createJws({
+    header: { alg: 'EdDSA', typ: IDENTITY_PROOF_JWS_TYP, kid: input.kid },
+    payload: {
+      method: payload.method,
+      host: payload.host,
+      path: payload.path,
+      bodyHash: payload.bodyHash,
+      iat: payload.iat,
+    },
+    sign: input.sign,
+  });
+  if (proof.length > MAX_REQUEST_PROOF_SIZE) {
+    throw new Error(`identity proof exceeds max size: ${proof.length} > ${MAX_REQUEST_PROOF_SIZE}`);
+  }
+  return { proof, payload };
+};
+
 /**
  * The two headers a credential-gated request carries. The `Authorization` scheme
  * is the token `DFOS`, deliberately NOT `Bearer`: nothing carried here is a
@@ -313,6 +502,17 @@ export const buildApiAuthHeaders = (input: {
 }): { Authorization: string; 'X-Credential': string } => ({
   Authorization: `DFOS ${input.proof}`,
   'X-Credential': input.credential,
+});
+
+/**
+ * The ONE header an identity-proven request carries — the same `Authorization:
+ * DFOS <jws>` and NO `X-Credential`. The absent header and the `typ` agree about
+ * which artifact this is; a request carrying both is malformed (401), and a
+ * verifier MUST NOT pick one. That header-layer refusal is the middleware's, not
+ * this kit's: the kit is handed a proof, never a header bag.
+ */
+export const buildApiIdentityHeaders = (input: { proof: string }): { Authorization: string } => ({
+  Authorization: `DFOS ${input.proof}`,
 });
 
 export interface CreateApiAuthFetchOptions {
@@ -606,6 +806,180 @@ const discoverChainRoot = (leafToken: string): string => {
 };
 
 /**
+ * What the PROOF PHASE needs, and nothing more — the subset of both verifier
+ * inputs that steps 1–7 read. `VerifyApiRequestInput` and
+ * `VerifyApiIdentityRequestInput` both satisfy it structurally.
+ */
+interface ProofEnvelopeInput {
+  proof: string;
+  host: string;
+  method: string;
+  path: string;
+  body?: Uint8Array;
+  maxBodyBytes?: number;
+  windowSeconds?: number;
+  skewSeconds?: number;
+  allowStale?: boolean;
+  now?: () => number;
+}
+
+/**
+ * THE PROOF PHASE — API-AUTH.md steps 1–7, shared verbatim by both artifacts:
+ * size cap, the Signature Verification Profile header gates with THIS shape's
+ * `typ`, payload schema, freshness, request binding against the verifier's own
+ * configured authority, current-state presenter resolution, signature.
+ *
+ * For the identity proof this IS the whole algorithm. For the request proof it is
+ * the gate to steps 8–11: that work is unbounded and network-touching, and a
+ * well-formed proof with a bad signature must not buy it.
+ *
+ * One implementation, so a check tightened for one artifact is tightened for
+ * both — and so the `typ` gate is provably the only place they diverge.
+ */
+const verifyProofEnvelope = async (
+  client: Client,
+  input: ProofEnvelopeInput,
+  shape: ProofShape,
+): Promise<{ payload: ParsedProofPayload; presenterDID: string; now: number }> => {
+  // 4 (config half). Checked FIRST: a deployment whose window is out of bounds
+  // must never verify anything, not merely fail some proofs.
+  const window = input.windowSeconds ?? DEFAULT_PROOF_WINDOW_SECONDS;
+  const skew = input.skewSeconds ?? DEFAULT_PROOF_SKEW_SECONDS;
+  for (const [name, value] of [
+    ['windowSeconds', window],
+    ['skewSeconds', skew],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw misconfigured(`${name} must be a non-negative integer`);
+    }
+  }
+  if (window + skew > MAX_PROOF_FRESHNESS_SPAN_SECONDS) {
+    throw misconfigured(
+      `${shape.label} freshness span W + S exceeds ${MAX_PROOF_FRESHNESS_SPAN_SECONDS} seconds: ` +
+        `${window} + ${skew}`,
+    );
+  }
+  const maxBodyBytes = input.maxBodyBytes ?? MAX_BODY_BYTES;
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) {
+    throw misconfigured('maxBodyBytes must be a non-negative integer');
+  }
+
+  // 1. Size — the proof half, before any decode. A DoS guard at the header layer.
+  if (input.proof.length > MAX_REQUEST_PROOF_SIZE) {
+    throw invalidProof(
+      `${shape.label} exceeds max size: ${input.proof.length} > ${MAX_REQUEST_PROOF_SIZE}`,
+    );
+  }
+
+  // 2. Decode + Signature Verification Profile header gates.
+  const decoded = decodeJwsUnsafe(input.proof);
+  if (!decoded) throw invalidProof(`failed to decode ${shape.label} JWS`);
+  const rawHeader = decoded.header as unknown;
+  if (typeof rawHeader !== 'object' || rawHeader === null || Array.isArray(rawHeader)) {
+    throw invalidProof(`${shape.label} protected header must be an object`);
+  }
+  assertJwsProfile(rawHeader as Record<string, unknown>, invalidProof);
+  // THE TYP GATE, ABSOLUTE IN BOTH DIRECTIONS. A request proof presented where an
+  // identity proof is required dies here, and so does the reverse: "possession of
+  // a grant's audience key" and "possession of a bare identity's key" are
+  // different claims, and one must never be spendable as the other.
+  if (decoded.header.typ !== shape.typ) {
+    throw invalidProof(`invalid typ: expected ${shape.typ}, got ${decoded.header.typ}`);
+  }
+  const kid = decoded.header.kid;
+  if (typeof kid !== 'string' || !kid.includes('#')) {
+    throw invalidProof(`${shape.label} kid must be a DID URL`);
+  }
+  const presenterDID = kid.substring(0, kid.indexOf('#'));
+  const presenterKeyId = kid.substring(kid.indexOf('#') + 1);
+
+  // 3. Payload schema. Parsed from the ORIGINAL payload octets, not
+  // decodeJwsUnsafe's lossy view — but NOT re-canonicalized: the presenter
+  // self-signs and the signature covers the received bytes, so there is no
+  // third-party byte substitution to defend against. The canonical rule binds
+  // PRODUCERS (see specs/API-AUTH.md, Canonical Signing Input).
+  const payloadSegment = input.proof.split('.')[1];
+  if (payloadSegment === undefined) throw invalidProof(`failed to decode ${shape.label} payload`);
+  let payload: ParsedProofPayload;
+  try {
+    const source = new TextDecoder('utf-8', { fatal: true }).decode(
+      base64urlDecode(payloadSegment),
+    );
+    payload = validateProofPayload(JSON.parse(source), shape);
+  } catch (err) {
+    throw invalidProof(err instanceof Error ? err.message : `invalid ${shape.label} payload`);
+  }
+
+  // 4. Freshness — integer Unix seconds on both sides, so the boundary does not
+  // turn on sub-second precision. AGE and FORWARD SKEW are separate bounds:
+  // a symmetric |now - iat| <= W would make a fully forward-dated proof
+  // replayable for 2W, which is exactly what the W + S ceiling above prices.
+  const now = Math.floor((input.now ? input.now() : Date.now()) / 1000);
+  if (now - payload.iat > window) throw invalidProof(`${shape.label} is stale`);
+  if (payload.iat - now > skew) {
+    throw invalidProof(`${shape.label} iat is beyond the clock-skew allowance`);
+  }
+
+  // 5. Request binding — the non-body half first (ordering rule b), then the body
+  // hash last and only up to the cap, so an over-cap body is refused (413) before
+  // the SHA-256 rather than hashed to discover it does not match.
+  if (payload.method !== input.method) throw invalidProof(`${shape.label} method mismatch`);
+  if (payload.host !== input.host) throw invalidProof(`${shape.label} host mismatch`);
+  if (payload.path !== input.path) throw invalidProof(`${shape.label} path mismatch`);
+  const body = input.body ?? EMPTY_BODY;
+  if (body.length > maxBodyBytes) {
+    throw new ApiRequestVerifyError(
+      'invalid',
+      'proof',
+      413,
+      `request body exceeds max size: ${body.length} > ${maxBodyBytes}`,
+    );
+  }
+  if (payload.bodyHash !== sha256BodyHash(body)) {
+    throw invalidProof(`${shape.label} bodyHash mismatch`);
+  }
+
+  // 6. Resolve the presenter to its CURRENT identity state, failing CLOSED when
+  // the tip could not be verified. Rotation is how a presenter whose key is
+  // compromised stops that key minting proofs in its name; "current keys" read
+  // from a stale cache would take that lever away.
+  let resolved: Awaited<ReturnType<Client['identity']>>;
+  try {
+    resolved = await client.identity(presenterDID);
+  } catch (err) {
+    throw unverifiableProof(
+      `failed to resolve ${shape.label} presenter: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const axes = resolved.trust.unverifiable ?? [];
+  if (!input.allowStale && (axes.includes('tip') || resolved.provenance.fromCache)) {
+    throw unverifiableProof(
+      'presenter identity resolution is stale (tip unverified) — refusing to authenticate ' +
+        'against a cached identity state; pass allowStale: true to accept the risk',
+    );
+  }
+  const state = resolved.value;
+  if (state.isDeleted) throw invalidProof(`${shape.label} presenter identity is deleted`);
+
+  // Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
+  // current-state") — auth, assert, or controller. This is wider than SIWD,
+  // which is authKeys-only by its own spec.
+  const key = [...state.authKeys, ...state.assertKeys, ...state.controllerKeys].find(
+    (candidate) => candidate.id === presenterKeyId,
+  );
+  if (!key) throw invalidProof(`${shape.label} signing key is not a current key of the presenter`);
+
+  // 7. Signature.
+  try {
+    verifyJws({ token: input.proof, publicKey: decodeMultikey(key.publicKeyMultibase).keyBytes });
+  } catch (err) {
+    throw invalidProof(err instanceof Error ? err.message : `invalid ${shape.label} signature`);
+  }
+
+  return { payload, presenterDID, now };
+};
+
+/**
  * Verify a credential-gated request — API-AUTH.md's eleven steps, in an order
  * that honors both load-bearing ordering rules: the proof signature gates every
  * credential-chain step, and body hashing runs after the cheaper binding checks.
@@ -643,24 +1017,6 @@ export const verifyApiRequest = async (
   client: Client,
   input: VerifyApiRequestInput,
 ): Promise<VerifiedRequestProof> => {
-  // 4 (config half). Checked FIRST: a deployment whose window is out of bounds
-  // must never verify anything, not merely fail some proofs.
-  const window = input.windowSeconds ?? DEFAULT_PROOF_WINDOW_SECONDS;
-  const skew = input.skewSeconds ?? DEFAULT_PROOF_SKEW_SECONDS;
-  for (const [name, value] of [
-    ['windowSeconds', window],
-    ['skewSeconds', skew],
-  ] as const) {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw misconfigured(`${name} must be a non-negative integer`);
-    }
-  }
-  if (window + skew > MAX_PROOF_FRESHNESS_SPAN_SECONDS) {
-    throw misconfigured(
-      `request proof freshness span W + S exceeds ${MAX_PROOF_FRESHNESS_SPAN_SECONDS} seconds: ` +
-        `${window} + ${skew}`,
-    );
-  }
   // The route's required action is deployment config, so it is validated HERE with
   // the other config — before any network work — not at the coverage step. An
   // action canonicalizing to the empty set is a subset of every grant's action
@@ -670,125 +1026,26 @@ export const verifyApiRequest = async (
   if (action.split(',').every((token) => token.trim() === '')) {
     throw misconfigured('required action must name a non-empty token');
   }
-  const maxBodyBytes = input.maxBodyBytes ?? MAX_BODY_BYTES;
-  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) {
-    throw misconfigured('maxBodyBytes must be a non-negative integer');
-  }
 
-  // 1. Size — both tokens, before any decode. A DoS guard at the header layer.
-  if (input.proof.length > MAX_REQUEST_PROOF_SIZE) {
-    throw invalidProof(
-      `request proof exceeds max size: ${input.proof.length} > ${MAX_REQUEST_PROOF_SIZE}`,
-    );
-  }
+  // 1. Size — the CREDENTIAL half, before any decode. (The proof half, and the
+  // rest of the config validation, are the envelope's, immediately below.)
   if (input.credential.length > MAX_CREDENTIAL_SIZE) {
     throw invalidProof(
       `credential exceeds max size: ${input.credential.length} > ${MAX_CREDENTIAL_SIZE}`,
     );
   }
 
-  // 2. Decode + Signature Verification Profile header gates.
-  const decoded = decodeJwsUnsafe(input.proof);
-  if (!decoded) throw invalidProof('failed to decode request proof JWS');
-  const rawHeader = decoded.header as unknown;
-  if (typeof rawHeader !== 'object' || rawHeader === null || Array.isArray(rawHeader)) {
-    throw invalidProof('request proof protected header must be an object');
-  }
-  assertJwsProfile(rawHeader as Record<string, unknown>, invalidProof);
-  if (decoded.header.typ !== REQUEST_PROOF_JWS_TYP) {
-    throw invalidProof(`invalid typ: expected ${REQUEST_PROOF_JWS_TYP}, got ${decoded.header.typ}`);
-  }
-  const kid = decoded.header.kid;
-  if (typeof kid !== 'string' || !kid.includes('#')) {
-    throw invalidProof('request proof kid must be a DID URL');
-  }
-  const presenterDID = kid.substring(0, kid.indexOf('#'));
-  const presenterKeyId = kid.substring(kid.indexOf('#') + 1);
-
-  // 3. Payload schema. Parsed from the ORIGINAL payload octets, not
-  // decodeJwsUnsafe's lossy view — but NOT re-canonicalized: the presenter
-  // self-signs and the signature covers the received bytes, so there is no
-  // third-party byte substitution to defend against. The canonical rule binds
-  // PRODUCERS (see specs/API-AUTH.md, Canonical Signing Input).
-  const payloadSegment = input.proof.split('.')[1];
-  if (payloadSegment === undefined) throw invalidProof('failed to decode request proof payload');
-  let payload: RequestProofPayload;
-  try {
-    const source = new TextDecoder('utf-8', { fatal: true }).decode(
-      base64urlDecode(payloadSegment),
-    );
-    payload = validateRequestProofPayload(JSON.parse(source));
-  } catch (err) {
-    throw invalidProof(err instanceof Error ? err.message : 'invalid request proof payload');
-  }
-
-  // 4. Freshness — integer Unix seconds on both sides, so the boundary does not
-  // turn on sub-second precision. AGE and FORWARD SKEW are separate bounds:
-  // a symmetric |now - iat| <= W would make a fully forward-dated proof
-  // replayable for 2W, which is exactly what the W + S ceiling above prices.
-  const now = Math.floor((input.now ? input.now() : Date.now()) / 1000);
-  if (now - payload.iat > window) throw invalidProof('request proof is stale');
-  if (payload.iat - now > skew) {
-    throw invalidProof('request proof iat is beyond the clock-skew allowance');
-  }
-
-  // 5. Request binding — the non-body half first (ordering rule b), then the body
-  // hash last and only up to the cap, so an over-cap body is refused (413) before
-  // the SHA-256 rather than hashed to discover it does not match.
-  if (payload.method !== input.method) throw invalidProof('request proof method mismatch');
-  if (payload.host !== input.host) throw invalidProof('request proof host mismatch');
-  if (payload.path !== input.path) throw invalidProof('request proof path mismatch');
-  const body = input.body ?? EMPTY_BODY;
-  if (body.length > maxBodyBytes) {
-    throw new ApiRequestVerifyError(
-      'invalid',
-      'proof',
-      413,
-      `request body exceeds max size: ${body.length} > ${maxBodyBytes}`,
-    );
-  }
-  if (payload.bodyHash !== sha256BodyHash(body)) {
-    throw invalidProof('request proof bodyHash mismatch');
-  }
-
-  // 6. Resolve the presenter to its CURRENT identity state, failing CLOSED when
-  // the tip could not be verified. Rotation is how a presenter whose key is
-  // compromised stops that key minting proofs in its name; "current keys" read
-  // from a stale cache would take that lever away.
-  let resolved: Awaited<ReturnType<Client['identity']>>;
-  try {
-    resolved = await client.identity(presenterDID);
-  } catch (err) {
-    throw unverifiableProof(
-      `failed to resolve request proof presenter: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  const axes = resolved.trust.unverifiable ?? [];
-  if (!input.allowStale && (axes.includes('tip') || resolved.provenance.fromCache)) {
-    throw unverifiableProof(
-      'presenter identity resolution is stale (tip unverified) — refusing to authenticate ' +
-        'against a cached identity state; pass allowStale: true to accept the risk',
-    );
-  }
-  const state = resolved.value;
-  if (state.isDeleted) throw invalidProof('request proof presenter identity is deleted');
-
-  // Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
-  // current-state") — auth, assert, or controller. This is wider than SIWD,
-  // which is authKeys-only by its own spec.
-  const key = [...state.authKeys, ...state.assertKeys, ...state.controllerKeys].find(
-    (candidate) => candidate.id === presenterKeyId,
+  // 1–7. The proof phase, shared byte for byte with the identity proof. A valid
+  // proof signature is THE GATE to every step below: the credential work is
+  // unbounded and network-touching, and a well-formed proof with a bad signature
+  // must not buy it.
+  const { payload, presenterDID, now } = await verifyProofEnvelope(
+    client,
+    input,
+    REQUEST_PROOF_SHAPE,
   );
-  if (!key) throw invalidProof('request proof signing key is not a current key of the presenter');
-
-  // 7. Signature. THE GATE to every step below: the credential work is unbounded
-  // and network-touching, and a well-formed proof with a bad signature must not
-  // buy it.
-  try {
-    verifyJws({ token: input.proof, publicKey: decodeMultikey(key.publicKeyMultibase).keyBytes });
-  } catch (err) {
-    throw invalidProof(err instanceof Error ? err.message : 'invalid request proof signature');
-  }
+  // Present by construction: the request-proof shape requires it in step 3.
+  const proofCredentialCID = payload.credentialCID as string;
 
   // 8. Credential chain — verified IN FULL by the protocol's own verifier
   // (signatures, schema, CID integrity, linear delegation, depth, audience
@@ -824,7 +1081,7 @@ export const verifyApiRequest = async (
   }
 
   // 9. Credential binding, and NO PUBLIC AUDIENCE ANYWHERE.
-  if (leaf.credentialCID !== payload.credentialCID) {
+  if (leaf.credentialCID !== proofCredentialCID) {
     throw invalidCredential('request proof credentialCID does not match the presented credential');
   }
   // The public-audience scan runs BEFORE the audience-equality check so that a
@@ -865,4 +1122,92 @@ export const verifyApiRequest = async (
     iat: payload.iat,
     credentialCID: leaf.credentialCID,
   };
+};
+
+export interface VerifyApiIdentityRequestInput {
+  /** The identity-proof JWS — the `Authorization: DFOS <token>` token, scheme stripped. */
+  proof: string;
+
+  /**
+   * THE VERIFIER'S OWN CONFIGURED AUTHORITY for the route being served — a value
+   * the deployment holds, NEVER one read from the request. `Host`,
+   * `X-Forwarded-Host`, and the request URL's authority are all attacker-supplied:
+   * a verifier that compared the proof's `host` against a request header would
+   * have no host binding at all. Include the port when it is not 443.
+   */
+  host: string;
+  /** The received request's method. */
+  method: string;
+  /** The received origin-form request target — path plus query string, byte for byte. */
+  path: string;
+  /** The received application body octets, post-content-decoding. Omitted = no body. */
+  body?: Uint8Array;
+  /**
+   * Cap on the decoded body this verifier will hash, in bytes. Default
+   * `MAX_BODY_BYTES`. A body over the cap is refused BEFORE the SHA-256 (a
+   * proof-layer `413`). As in `verifyApiRequest`, aborting DECODE at the cap
+   * remains a middleware obligation upstream — a decompression bomb inflates
+   * before this helper sees a buffered `Uint8Array`.
+   */
+  maxBodyBytes?: number;
+
+  /** Acceptance window `W`, seconds. Default 60. `W + S` MUST NOT exceed 300. */
+  windowSeconds?: number;
+  /** Clock-skew allowance `S`, seconds. Default 60. `W + S` MUST NOT exceed 300. */
+  skewSeconds?: number;
+
+  /**
+   * Accept a presenter resolution whose tip could not be verified (cache-only or
+   * empty-delta-against-cache). Default FALSE: key resolution is CURRENT-STATE,
+   * and a rotated-out key must not keep minting proofs against a stale cache.
+   */
+  allowStale?: boolean;
+  /** Clock injection (unix ms). Default `Date.now()`. */
+  now?: () => number;
+}
+
+export interface VerifiedIdentityProof {
+  /**
+   * THE PRINCIPAL — the `kid`'s DID, which is who the request is from. What that
+   * DID may do is the resource's local policy (quotas, reputation, self-access
+   * rules, admission tiers); this kit deliberately says nothing about it.
+   * Authentication travels on the wire; authorization stays home.
+   */
+  presenterDID: string;
+  /** The authority the binding names — the verifier's own configured value. */
+  host: string;
+  /** The proof's issued-at, unix seconds. */
+  iat: number;
+}
+
+/**
+ * Verify an identity-proven request — API-AUTH.md's PROOF PHASE (steps 1–7) with
+ * the identity `typ`, and nothing more. Steps 8–11 do not exist for this
+ * artifact: there is no credential to walk, so there is no chain, no revocation
+ * lookup, and no attenuation coverage.
+ *
+ * The verdicts are therefore two, not three: `invalid` → 401, `unverifiable` →
+ * 503 (plus `config` → 500 for a deployment whose `W + S` is out of bounds).
+ * NOTHING credential-shaped can fail, so there is no 403 tier.
+ *
+ * A REQUEST PROOF PRESENTED HERE IS REJECTED at the header gate, and an identity
+ * proof presented to `verifyApiRequest` is rejected at the same gate. The typ
+ * scoping is what keeps a grant-bearing claim from ever being spent as a bare
+ * one, or the reverse.
+ *
+ * The header-layer rule this helper cannot see: a request carrying
+ * `X-Credential` alongside an identity proof is MALFORMED (401) — the headers
+ * assert two different claims at once and a verifier MUST NOT pick one. That
+ * refusal belongs to the middleware, which is the only layer holding the header
+ * bag.
+ *
+ * Throws `ApiRequestVerifyError`; branch on `reason`/`phase`/`status`, never on
+ * message text. `phase` is always `'proof'` or `'config'` here.
+ */
+export const verifyApiIdentityRequest = async (
+  client: Client,
+  input: VerifyApiIdentityRequestInput,
+): Promise<VerifiedIdentityProof> => {
+  const { payload, presenterDID } = await verifyProofEnvelope(client, input, IDENTITY_PROOF_SHAPE);
+  return { presenterDID, host: input.host, iat: payload.iat };
 };

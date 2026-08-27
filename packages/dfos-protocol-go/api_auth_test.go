@@ -20,6 +20,14 @@ const apiAuthVectorCanonicalQuery = `{"method":"GET","host":"api.dfos.com","path
 const apiAuthVectorCanonicalHTML = `{"method":"GET","host":"api.dfos.com","path":"/v0/profile?q=<a>&b=2","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","credentialCID":"bafyreicoghvjznvliuloxxmbf54tpzqwahnqpilk7ncxepjinedpkga3ne","iat":1772841600}`
 const apiAuthVectorJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlcXVlc3QtcHJvb2YiLCJraWQiOiJkaWQ6ZGZvczpuemtmODM4ZWZyNDI0NDMzcm4ycnprZHY4aDd0OWFlI2tleV9hcGlfYXV0aF92ZWN0b3IifQ.eyJtZXRob2QiOiJHRVQiLCJob3N0IjoiYXBpLmRmb3MuY29tIiwicGF0aCI6Ii92MC9wcm9maWxlIiwiYm9keUhhc2giOiI0N0RFUXBqOEhCU2EtX1RJbVctNUpDZXVRZVJrbTVOTXBKV1pHM2hTdUZVIiwiY3JlZGVudGlhbENJRCI6ImJhZnlyZWljb2dodmp6bnZsaXVsb3h4bWJmNTR0cHpxd2FobnFwaWxrN25jeGVwamluZWRwa2dhM25lIiwiaWF0IjoxNzcyODQxNjAwfQ.K2TZ7NC4ad9VRF2GM0J3YTNBl3DGdFMmYA6rqgJFGKXjd5WDU5zlqHZzhnWZO1tuplfq8tOeQ75upK_kGxQ2BA"
 
+// The identity proof's half of the SAME fixture: the same seed, kid, iat, host,
+// and paths, with credentialCID absent. Five members, canonical order
+// method, host, path, bodyHash, iat.
+const apiAuthIdentityCanonical = `{"method":"GET","host":"api.dfos.com","path":"/v0/profile","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","iat":1772841600}`
+const apiAuthIdentityCanonicalQuery = `{"method":"GET","host":"api.dfos.com","path":"/v0/profile?a=1&b=2","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","iat":1772841600}`
+const apiAuthIdentityCanonicalHTML = `{"method":"GET","host":"api.dfos.com","path":"/v0/profile?q=<a>&b=2","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","iat":1772841600}`
+const apiAuthIdentityJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LXByb29mIiwia2lkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6a2R2OGg3dDlhZSNrZXlfYXBpX2F1dGhfdmVjdG9yIn0.eyJtZXRob2QiOiJHRVQiLCJob3N0IjoiYXBpLmRmb3MuY29tIiwicGF0aCI6Ii92MC9wcm9maWxlIiwiYm9keUhhc2giOiI0N0RFUXBqOEhCU2EtX1RJbVctNUpDZXVRZVJrbTVOTXBKV1pHM2hTdUZVIiwiaWF0IjoxNzcyODQxNjAwfQ.rfajvn-hrPlzQex_UwiMNzO5D5k0PR_TaGxxpl_t4PBUTeoZKGL9CLUX6TtPKyRm8D_JYP0wpQH8EGZORpMkCw"
+
 // The digest of `{"a":1}` — the body-bearing vector, pinned in both languages.
 const apiAuthVectorBodyHash = "AVq9f1zFei3ZS3WQ8ErYCEJzkF7jPsXOvq5iJ2qX-GI"
 
@@ -27,6 +35,13 @@ func apiAuthVectorPayload(path string) RequestProofPayload {
 	return RequestProofPayload{
 		Method: "GET", Host: "api.dfos.com", Path: path,
 		BodyHash: EmptyBodySHA256, CredentialCID: apiAuthVectorCID, Iat: apiAuthVectorIat,
+	}
+}
+
+func apiAuthIdentityPayload(path string) IdentityProofPayload {
+	return IdentityProofPayload{
+		Method: "GET", Host: "api.dfos.com", Path: path,
+		BodyHash: EmptyBodySHA256, Iat: apiAuthVectorIat,
 	}
 }
 
@@ -357,9 +372,253 @@ func TestVerifyRequestProofIgnoresUnknownMembers(t *testing.T) {
 	}
 }
 
-// signRawRequestProof assembles a proof from EXACT header and payload strings so
-// adversarial vectors can carry bytes the builder would never emit.
+// signRawRequestProof assembles a proof of EITHER shape from EXACT header and
+// payload strings, so adversarial vectors can carry bytes the builder would
+// never emit.
 func signRawRequestProof(privateKey ed25519.PrivateKey, header, payload string) string {
 	signingInput := Base64urlEncodeString(header) + "." + Base64urlEncodeString(payload)
 	return signingInput + "." + Base64urlEncode(ed25519.Sign(privateKey, []byte(signingInput)))
+}
+
+// -----------------------------------------------------------------------------
+// the identity proof — the same fixture, minus the credential
+// -----------------------------------------------------------------------------
+
+func TestApiIdentitySharedCanonicalAndSignedVectors(t *testing.T) {
+	for _, vector := range []struct{ path, want string }{
+		{"/v0/profile", apiAuthIdentityCanonical},
+		{"/v0/profile?a=1&b=2", apiAuthIdentityCanonicalQuery},
+		{"/v0/profile?q=<a>&b=2", apiAuthIdentityCanonicalHTML},
+	} {
+		got, err := ApiIdentitySigningInput(apiAuthIdentityPayload(vector.path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != vector.want {
+			t.Fatalf("identity canonical bytes:\n got %s\nwant %s", got, vector.want)
+		}
+	}
+
+	// The delta is EXACTLY the credentialCID member — the doctrine claim, pinned.
+	if want := strings.Replace(apiAuthVectorCanonical,
+		`,"credentialCID":"`+apiAuthVectorCID+`"`, "", 1); want != apiAuthIdentityCanonical {
+		t.Fatalf("identity canonical is not the request canonical minus credentialCID:\n got %s\nwant %s",
+			apiAuthIdentityCanonical, want)
+	}
+
+	token, err := BuildIdentityProof("GET", "api.dfos.com", "/v0/profile", apiAuthVectorKid,
+		apiAuthVectorKey(), IdentityProofOptions{Iat: apiAuthVectorIat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != apiAuthIdentityJWS {
+		t.Fatalf("signed identity-proof vector:\n got %s\nwant %s", token, apiAuthIdentityJWS)
+	}
+
+	segment, err := Base64urlDecode(strings.Split(token, ".")[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(segment) != apiAuthIdentityCanonical {
+		t.Fatalf("payload segment is not the canonical signing input: %s", segment)
+	}
+}
+
+// The five-member form takes the SAME escaping rule: `&`, `<`, and `>` ride the
+// signed bytes literally, or a Go implementation reaching for encoding/json
+// forks away from its TS twin.
+func TestApiIdentitySigningInputLeavesHTMLCharactersLiteral(t *testing.T) {
+	got, err := ApiIdentitySigningInput(apiAuthIdentityPayload("/v0/profile?q=<a>&b=2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := string(got)
+	if !strings.Contains(canonical, `"path":"/v0/profile?q=<a>&b=2"`) {
+		t.Fatalf("canonical bytes do not carry the literal path: %s", canonical)
+	}
+	for _, escaped := range []string{`\u0026`, `\u003c`, `\u003e`} {
+		if strings.Contains(canonical, escaped) {
+			t.Fatalf("canonical bytes carry an HTML escape %s: %s", escaped, canonical)
+		}
+	}
+	if strings.Contains(canonical, "credentialCID") {
+		t.Fatalf("identity canonical bytes carry a credentialCID member: %s", canonical)
+	}
+}
+
+// The member rules are the SAME rules — one fewer member, not a relaxation.
+func TestApiIdentitySigningInputRejectsSchemaViolations(t *testing.T) {
+	base := apiAuthIdentityPayload("/v0/profile")
+	mutate := func(f func(p *IdentityProofPayload)) IdentityProofPayload {
+		p := base
+		f(&p)
+		return p
+	}
+	vectors := []struct {
+		name    string
+		payload IdentityProofPayload
+	}{
+		{"lowercase method", mutate(func(p *IdentityProofPayload) { p.Method = "get" })},
+		{"empty method", mutate(func(p *IdentityProofPayload) { p.Method = "" })},
+		{"uppercase host", mutate(func(p *IdentityProofPayload) { p.Host = "API.dfos.com" })},
+		{"host with scheme", mutate(func(p *IdentityProofPayload) { p.Host = "https://api.dfos.com" })},
+		{"relative path", mutate(func(p *IdentityProofPayload) { p.Path = "v0/profile" })},
+		{"path with fragment", mutate(func(p *IdentityProofPayload) { p.Path = "/v0/profile#top" })},
+		{"path with space", mutate(func(p *IdentityProofPayload) { p.Path = "/v0/pro file" })},
+		{"padded bodyHash", mutate(func(p *IdentityProofPayload) { p.BodyHash = EmptyBodySHA256 + "=" })},
+		{"non-canonical bodyHash spelling", mutate(func(p *IdentityProofPayload) {
+			p.BodyHash = EmptyBodySHA256[:len(EmptyBodySHA256)-1] + "V"
+		})},
+		{"zero iat", mutate(func(p *IdentityProofPayload) { p.Iat = 0 })},
+		{"negative iat", mutate(func(p *IdentityProofPayload) { p.Iat = -1 })},
+	}
+	for _, vector := range vectors {
+		if _, err := ApiIdentitySigningInput(vector.payload); err == nil {
+			t.Errorf("schema violation accepted: %s", vector.name)
+		}
+	}
+}
+
+func TestVerifyIdentityProofAcceptsTheVector(t *testing.T) {
+	key := apiAuthVectorKey()
+	payload, err := VerifyIdentityProof(apiAuthIdentityJWS, IdentityProofExpectations{
+		Method: "GET", Host: "api.dfos.com", Path: "/v0/profile",
+	}, apiAuthVectorResolver(key), time.Unix(apiAuthVectorIat+10, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.Iat != apiAuthVectorIat || payload.Path != "/v0/profile" {
+		t.Fatalf("unexpected verified payload: %+v", payload)
+	}
+}
+
+// THE TYP GATE, IN BOTH DIRECTIONS. "Possession of a grant's audience key" and
+// "possession of a bare identity's key" are different claims, and neither
+// verifier may accept the other's artifact.
+func TestVerifyProofTypConfusionRejectsBothDirections(t *testing.T) {
+	key := apiAuthVectorKey()
+	resolve := apiAuthVectorResolver(key)
+	fresh := time.Unix(apiAuthVectorIat+10, 0)
+	expect := RequestProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile"}
+
+	if _, err := VerifyIdentityProof(apiAuthVectorJWS, expect, resolve, fresh); !errors.Is(err, ErrIdentityProofInvalid) {
+		t.Errorf("a request proof presented to the identity verifier: got %v", err)
+	}
+	if _, err := VerifyRequestProof(apiAuthIdentityJWS, expect, resolve, fresh); !errors.Is(err, ErrRequestProofInvalid) {
+		t.Errorf("an identity proof presented to the request verifier: got %v", err)
+	}
+
+	// And the confusion is not rescuable by swapping only the typ: the header is
+	// signed, so a re-typed proof dies at the payload schema (no credentialCID)
+	// and, were it to get past that, at the signature.
+	parts := strings.Split(apiAuthIdentityJWS, ".")
+	retyped := Base64urlEncodeString(
+		`{"alg":"EdDSA","typ":"`+RequestProofJWSTyp+`","kid":"`+apiAuthVectorKid+`"}`) +
+		"." + parts[1] + "." + parts[2]
+	if _, err := VerifyRequestProof(retyped, expect, resolve, fresh); !errors.Is(err, ErrRequestProofInvalid) {
+		t.Errorf("a re-typed identity proof: got %v", err)
+	}
+}
+
+func TestVerifyIdentityProofAdversarialVectors(t *testing.T) {
+	key := apiAuthVectorKey()
+	resolve := apiAuthVectorResolver(key)
+	fresh := time.Unix(apiAuthVectorIat+10, 0)
+	ok := IdentityProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile"}
+	header := `{"alg":"EdDSA","typ":"` + IdentityProofJWSTyp + `","kid":"` + apiAuthVectorKid + `"}`
+
+	queryProof, err := BuildIdentityProof("GET", "api.dfos.com", "/v0/profile?a=1&b=2",
+		apiAuthVectorKid, key, IdentityProofOptions{Iat: apiAuthVectorIat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyProof, err := BuildIdentityProof("POST", "api.dfos.com", "/v0/profile",
+		apiAuthVectorKid, key, IdentityProofOptions{Iat: apiAuthVectorIat, Body: []byte(`{"a":1}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Signed bytes the builder would never emit.
+	padded := signRawRequestProof(key, header,
+		strings.Replace(apiAuthIdentityCanonical, EmptyBodySHA256, EmptyBodySHA256[:42]+"U=", 1))
+	nonCanonical := signRawRequestProof(key, header,
+		strings.Replace(apiAuthIdentityCanonical, EmptyBodySHA256, EmptyBodySHA256[:len(EmptyBodySHA256)-1]+"V", 1))
+	missing := signRawRequestProof(key, header,
+		`{"method":"GET","host":"api.dfos.com","path":"/v0/profile","iat":1772841600}`)
+	quoted := signRawRequestProof(key, header,
+		strings.Replace(apiAuthIdentityCanonical, `"iat":1772841600`, `"iat":"1772841600"`, 1))
+	crit := signRawRequestProof(key,
+		`{"alg":"EdDSA","typ":"`+IdentityProofJWSTyp+`","kid":"`+apiAuthVectorKid+`","crit":["x"]}`,
+		apiAuthIdentityCanonical)
+	bareKid := signRawRequestProof(key,
+		`{"alg":"EdDSA","typ":"`+IdentityProofJWSTyp+`","kid":"did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae"}`,
+		apiAuthIdentityCanonical)
+
+	vectors := []struct {
+		name   string
+		token  string
+		expect IdentityProofExpectations
+		now    time.Time
+		reason error
+	}{
+		{"wrong-case method", apiAuthIdentityJWS,
+			IdentityProofExpectations{Method: "get", Host: ok.Host, Path: ok.Path}, fresh, ErrIdentityProofInvalid},
+		{"method mismatch", apiAuthIdentityJWS,
+			IdentityProofExpectations{Method: "POST", Host: ok.Host, Path: ok.Path}, fresh, ErrIdentityProofInvalid},
+		{"host mismatch", apiAuthIdentityJWS,
+			IdentityProofExpectations{Method: "GET", Host: "api.example.org", Path: ok.Path}, fresh, ErrIdentityProofInvalid},
+		{"host port mismatch", apiAuthIdentityJWS,
+			IdentityProofExpectations{Method: "GET", Host: "api.dfos.com:8443", Path: ok.Path}, fresh, ErrIdentityProofInvalid},
+		{"query-string mismatch", queryProof, ok, fresh, ErrIdentityProofInvalid},
+		{"trailing-slash mismatch", apiAuthIdentityJWS,
+			IdentityProofExpectations{Method: "GET", Host: ok.Host, Path: "/v0/profile/"}, fresh, ErrIdentityProofInvalid},
+		{"body-hash mismatch (body arrived, proof says empty)", apiAuthIdentityJWS,
+			IdentityProofExpectations{Method: "GET", Host: ok.Host, Path: ok.Path, Body: []byte(`{"a":1}`)}, fresh, ErrIdentityProofInvalid},
+		{"body-hash mismatch (body dropped)", bodyProof,
+			IdentityProofExpectations{Method: "POST", Host: ok.Host, Path: ok.Path}, fresh, ErrIdentityProofInvalid},
+		{"stale iat", apiAuthIdentityJWS, ok, time.Unix(apiAuthVectorIat+61, 0), ErrIdentityProofInvalid},
+		{"forward-dated iat", apiAuthIdentityJWS, ok, time.Unix(apiAuthVectorIat-61, 0), ErrIdentityProofInvalid},
+		{"padded bodyHash", padded, ok, fresh, ErrIdentityProofInvalid},
+		{"non-canonical bodyHash spelling", nonCanonical, ok, fresh, ErrIdentityProofInvalid},
+		{"missing member", missing, ok, fresh, ErrIdentityProofInvalid},
+		{"quoted iat", quoted, ok, fresh, ErrIdentityProofInvalid},
+		{"crit header", crit, ok, fresh, ErrIdentityProofInvalid},
+		{"kid without fragment", bareKid, ok, fresh, ErrIdentityProofInvalid},
+		{"tampered signature", apiAuthIdentityJWS[:len(apiAuthIdentityJWS)-2] + "AA", ok, fresh, ErrIdentityProofInvalid},
+		{"not a JWS", "not-a-jws", ok, fresh, ErrIdentityProofInvalid},
+		{"oversize proof", strings.Repeat("a", MaxRequestProofSize+1), ok, fresh, ErrIdentityProofInvalid},
+		{"W + S over the ceiling", apiAuthIdentityJWS,
+			IdentityProofExpectations{Method: "GET", Host: ok.Host, Path: ok.Path,
+				WindowSeconds: Int64Ptr(240), SkewSeconds: Int64Ptr(61)}, fresh, ErrIdentityProofConfig},
+	}
+	for _, vector := range vectors {
+		_, err := VerifyIdentityProof(vector.token, vector.expect, resolve, vector.now)
+		if err == nil || !errors.Is(err, vector.reason) {
+			t.Errorf("adversarial vector %q: got %v, want %v", vector.name, err, vector.reason)
+		}
+	}
+
+	// An unresolvable presenter is UNVERIFIABLE, never invalid — and there is no
+	// 403 tier here to confuse it with.
+	unresolvable := func(string) (ed25519.PublicKey, error) { return nil, errors.New("relays unreachable") }
+	if _, err := VerifyIdentityProof(apiAuthIdentityJWS, ok, unresolvable, fresh); !errors.Is(err, ErrIdentityProofUnverifiable) {
+		t.Errorf("unresolvable presenter: got %v", err)
+	}
+}
+
+// Unknown top-level members are IGNORED, including a stray credentialCID: the
+// typ gate, not member sniffing, is what tells the two artifacts apart.
+func TestVerifyIdentityProofIgnoresUnknownMembers(t *testing.T) {
+	key := apiAuthVectorKey()
+	header := `{"alg":"EdDSA","typ":"` + IdentityProofJWSTyp + `","kid":"` + apiAuthVectorKid + `"}`
+	ok := IdentityProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile"}
+	fresh := time.Unix(apiAuthVectorIat+10, 0)
+
+	for _, extra := range []string{`"jti":"abc"`, `"credentialCID":"` + apiAuthVectorCID + `"`} {
+		token := signRawRequestProof(key, header,
+			strings.TrimSuffix(apiAuthIdentityCanonical, "}")+`,`+extra+`}`)
+		if _, err := VerifyIdentityProof(token, ok, apiAuthVectorResolver(key), fresh); err != nil {
+			t.Errorf("unknown member %s rejected: %v", extra, err)
+		}
+	}
 }

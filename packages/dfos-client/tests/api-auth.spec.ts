@@ -21,17 +21,23 @@ import {
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  apiIdentitySigningInput,
   apiRequestSigningInput,
   ApiRequestVerifyError,
   buildApiAuthHeaders,
+  buildApiIdentityHeaders,
   createApiAuthFetch,
   DEFAULT_API_ACTION,
   EMPTY_BODY_SHA256,
+  IDENTITY_PROOF_JWS_TYP,
   MAX_REQUEST_PROOF_SIZE,
   REQUEST_PROOF_JWS_TYP,
   sha256BodyHash,
+  signApiIdentityRequest,
   signApiRequest,
+  verifyApiIdentityRequest,
   verifyApiRequest,
+  type IdentityProofPayload,
   type RequestProofPayload,
 } from '../src/api-auth';
 import { createClient } from '../src/client';
@@ -59,6 +65,18 @@ const VECTOR_CANONICAL_HTML =
 const VECTOR_JWS =
   'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOnJlcXVlc3QtcHJvb2YiLCJraWQiOiJkaWQ6ZGZvczpuemtmODM4ZWZyNDI0NDMzcm4ycnprZHY4aDd0OWFlI2tleV9hcGlfYXV0aF92ZWN0b3IifQ.eyJtZXRob2QiOiJHRVQiLCJob3N0IjoiYXBpLmRmb3MuY29tIiwicGF0aCI6Ii92MC9wcm9maWxlIiwiYm9keUhhc2giOiI0N0RFUXBqOEhCU2EtX1RJbVctNUpDZXVRZVJrbTVOTXBKV1pHM2hTdUZVIiwiY3JlZGVudGlhbENJRCI6ImJhZnlyZWljb2dodmp6bnZsaXVsb3h4bWJmNTR0cHpxd2FobnFwaWxrN25jeGVwamluZWRwa2dhM25lIiwiaWF0IjoxNzcyODQxNjAwfQ.K2TZ7NC4ad9VRF2GM0J3YTNBl3DGdFMmYA6rqgJFGKXjd5WDU5zlqHZzhnWZO1tuplfq8tOeQ75upK_kGxQ2BA';
 
+// The identity proof's half of the SAME fixture: the same seed, kid, iat, host,
+// and paths, with credentialCID absent. Five members, canonical order
+// method, host, path, bodyHash, iat.
+const VECTOR_IDENTITY_CANONICAL =
+  '{"method":"GET","host":"api.dfos.com","path":"/v0/profile","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","iat":1772841600}';
+const VECTOR_IDENTITY_CANONICAL_QUERY =
+  '{"method":"GET","host":"api.dfos.com","path":"/v0/profile?a=1&b=2","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","iat":1772841600}';
+const VECTOR_IDENTITY_CANONICAL_HTML =
+  '{"method":"GET","host":"api.dfos.com","path":"/v0/profile?q=<a>&b=2","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","iat":1772841600}';
+const VECTOR_IDENTITY_JWS =
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LXByb29mIiwia2lkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6a2R2OGg3dDlhZSNrZXlfYXBpX2F1dGhfdmVjdG9yIn0.eyJtZXRob2QiOiJHRVQiLCJob3N0IjoiYXBpLmRmb3MuY29tIiwicGF0aCI6Ii92MC9wcm9maWxlIiwiYm9keUhhc2giOiI0N0RFUXBqOEhCU2EtX1RJbVctNUpDZXVRZVJrbTVOTXBKV1pHM2hTdUZVIiwiaWF0IjoxNzcyODQxNjAwfQ.rfajvn-hrPlzQex_UwiMNzO5D5k0PR_TaGxxpl_t4PBUTeoZKGL9CLUX6TtPKyRm8D_JYP0wpQH8EGZORpMkCw';
+
 /** The digest of `{"a":1}` — the body-bearing vector, pinned in both languages. */
 const VECTOR_BODY_HASH = 'AVq9f1zFei3ZS3WQ8ErYCEJzkF7jPsXOvq5iJ2qX-GI';
 
@@ -68,6 +86,14 @@ const vectorPayload = (path: string): RequestProofPayload => ({
   path,
   bodyHash: EMPTY_BODY_SHA256,
   credentialCID: VECTOR_CID,
+  iat: VECTOR_IAT,
+});
+
+const vectorIdentityPayload = (path: string): IdentityProofPayload => ({
+  method: 'GET',
+  host: 'api.dfos.com',
+  path,
+  bodyHash: EMPTY_BODY_SHA256,
   iat: VECTOR_IAT,
 });
 
@@ -175,6 +201,120 @@ describe('api-auth byte contract', () => {
     expect(() =>
       apiRequestSigningInput({ ...vectorPayload('/v0/profile'), bodyHash: nonCanonical }),
     ).toThrow(/canonical/);
+  });
+});
+
+describe('api-auth identity byte contract', () => {
+  it('pins the shared canonical signing input, including the query-bearing paths', () => {
+    expect(decoder.decode(apiIdentitySigningInput(vectorIdentityPayload('/v0/profile')))).toBe(
+      VECTOR_IDENTITY_CANONICAL,
+    );
+    expect(
+      decoder.decode(apiIdentitySigningInput(vectorIdentityPayload('/v0/profile?a=1&b=2'))),
+    ).toBe(VECTOR_IDENTITY_CANONICAL_QUERY);
+    expect(
+      decoder.decode(apiIdentitySigningInput(vectorIdentityPayload('/v0/profile?q=<a>&b=2'))),
+    ).toBe(VECTOR_IDENTITY_CANONICAL_HTML);
+  });
+
+  it('is the request proof’s bytes MINUS credentialCID, and nothing else', () => {
+    // The doctrine claim of "one envelope, optional credential", pinned as bytes.
+    expect(VECTOR_CANONICAL.replace(`,"credentialCID":"${VECTOR_CID}"`, '')).toBe(
+      VECTOR_IDENTITY_CANONICAL,
+    );
+    expect(VECTOR_IDENTITY_CANONICAL).not.toContain('credentialCID');
+  });
+
+  it('emits &, < and > LITERALLY in the five-member form too', () => {
+    const canonical = decoder.decode(
+      apiIdentitySigningInput(vectorIdentityPayload('/v0/profile?q=<a>&b=2')),
+    );
+    expect(canonical).toContain('"path":"/v0/profile?q=<a>&b=2"');
+    for (const escape of ['\\u0026', '\\u003c', '\\u003e']) {
+      expect(canonical).not.toContain(escape);
+    }
+  });
+
+  it('pins the signed identity-proof vector, and the payload segment IS the signing input', async () => {
+    const { proof } = await signApiIdentityRequest({
+      method: 'GET',
+      host: 'api.dfos.com',
+      path: '/v0/profile',
+      kid: VECTOR_KID,
+      sign: vectorSigner(),
+      iat: VECTOR_IAT,
+    });
+    expect(proof).toBe(VECTOR_IDENTITY_JWS);
+    expect(proof.split('.')[1]).toBe(
+      base64urlEncode(apiIdentitySigningInput(vectorIdentityPayload('/v0/profile'))),
+    );
+    // The header carries the identity typ, and the two vectors are NOT the same
+    // token: the typ is under the signature.
+    const header = JSON.parse(decoder.decode(base64urlDecode(proof.split('.')[0]!))) as Record<
+      string,
+      unknown
+    >;
+    expect(header['typ']).toBe(IDENTITY_PROOF_JWS_TYP);
+    expect(proof).not.toBe(VECTOR_JWS);
+  });
+
+  it('applies the SAME member rules — one fewer member, not a relaxation', () => {
+    const base = vectorIdentityPayload('/v0/profile');
+    const vectors: Array<[string, IdentityProofPayload]> = [
+      ['lowercase method', { ...base, method: 'get' }],
+      ['mixed-case method', { ...base, method: 'GeT' }],
+      ['empty method', { ...base, method: '' }],
+      ['uppercase host', { ...base, host: 'API.dfos.com' }],
+      ['host with scheme', { ...base, host: 'https://api.dfos.com' }],
+      ['relative path', { ...base, path: 'v0/profile' }],
+      ['path with fragment', { ...base, path: '/v0/profile#top' }],
+      ['path with a space', { ...base, path: '/v0/pro file' }],
+      ['padded bodyHash', { ...base, bodyHash: `${EMPTY_BODY_SHA256}=` }],
+      ['short bodyHash', { ...base, bodyHash: EMPTY_BODY_SHA256.slice(0, 42) }],
+      [
+        'non-canonical bodyHash spelling',
+        { ...base, bodyHash: `${EMPTY_BODY_SHA256.slice(0, -1)}V` },
+      ],
+      ['zero iat', { ...base, iat: 0 }],
+      ['negative iat', { ...base, iat: -1 }],
+      ['fractional iat', { ...base, iat: 1772841600.5 }],
+    ];
+    for (const [name, payload] of vectors) {
+      expect(() => apiIdentitySigningInput(payload), name).toThrow();
+    }
+  });
+});
+
+describe('signApiIdentityRequest', () => {
+  it('hashes the body, defaults iat to now, and refuses a kid that is not a DID URL', async () => {
+    const signed = await signApiIdentityRequest({
+      method: 'POST',
+      host: 'api.dfos.com',
+      path: '/v0/profile',
+      body: encoder.encode('{"a":1}'),
+      kid: VECTOR_KID,
+      sign: vectorSigner(),
+    });
+    expect(signed.payload.bodyHash).toBe(VECTOR_BODY_HASH);
+    expect(signed.payload.iat).toBeGreaterThan(1_700_000_000);
+    expect(signed.proof.length).toBeLessThanOrEqual(MAX_REQUEST_PROOF_SIZE);
+
+    await expect(
+      signApiIdentityRequest({
+        method: 'GET',
+        host: 'api.dfos.com',
+        path: '/v0/profile',
+        kid: 'did:dfos:nzkf838efr424433rn2rzkdv8h7t9ae',
+        sign: vectorSigner(),
+      }),
+    ).rejects.toThrow(/DID URL/);
+  });
+
+  it('builds the ONE carriage header — no X-Credential rides an identity proof', () => {
+    const headers = buildApiIdentityHeaders({ proof: VECTOR_IDENTITY_JWS });
+    expect(headers.Authorization).toBe(`DFOS ${VECTOR_IDENTITY_JWS}`);
+    expect(headers.Authorization).not.toMatch(/Bearer/);
+    expect(Object.keys(headers)).toEqual(['Authorization']);
   });
 });
 
@@ -961,6 +1101,282 @@ describe('verifyApiRequest', () => {
       action: 'read:posts',
     });
     expect(result.action).toBe('read:posts');
+  });
+});
+
+// -----------------------------------------------------------------------------
+// verify — the identity proof: the proof phase, and nothing after it
+// -----------------------------------------------------------------------------
+
+/** One identity, one proof over the canonical request. No credential anywhere. */
+const buildIdentityProof = async (
+  overrides: { host?: string; path?: string; iat?: number } = {},
+): Promise<{ signer: Identity; proof: string }> => {
+  const signer = await buildIdentity();
+  const { proof } = await signApiIdentityRequest({
+    method: 'GET',
+    host: overrides.host ?? HOST,
+    path: overrides.path ?? '/v0/profile',
+    kid: signer.kid,
+    sign: signer.k.signer,
+    iat: overrides.iat ?? NOW,
+  });
+  return { signer, proof };
+};
+
+describe('verifyApiIdentityRequest', () => {
+  it('verifies a bare identity and returns the SIGNER as the principal', async () => {
+    const { signer, proof } = await buildIdentityProof();
+    const result = await verifyApiIdentityRequest(clientFor([signer]), {
+      ...baseInput(),
+      proof,
+    });
+    expect(result.presenterDID).toBe(signer.did);
+    expect(result.host).toBe(HOST);
+    expect(result.iat).toBe(NOW);
+  });
+
+  it('REJECTS a request proof presented here, and an identity proof presented to verifyApiRequest', async () => {
+    // The typ gate, in both directions. "Possession of a grant's audience key" and
+    // "possession of a bare identity's key" are different claims, and neither
+    // verifier may accept the other's artifact.
+    const grant = await buildGrant();
+    expect(
+      await reasonOf(
+        verifyApiIdentityRequest(clientFor([grant.user, grant.rp]), {
+          ...baseInput(),
+          proof: grant.proof,
+        }),
+      ),
+    ).toBe('invalid');
+    await expect(
+      verifyApiIdentityRequest(clientFor([grant.user, grant.rp]), {
+        ...baseInput(),
+        proof: grant.proof,
+      }),
+    ).rejects.toThrow(/invalid typ/);
+
+    const identity = await buildIdentityProof();
+    const attempt = verifyApiRequest(clientFor([identity.signer, grant.user, grant.rp]), {
+      ...baseInput(),
+      proof: identity.proof,
+      credential: grant.credential,
+    });
+    expect(await reasonOf(attempt)).toBe('invalid');
+    await expect(attempt).rejects.toThrow(/invalid typ/);
+  });
+
+  it('carries the proof phase and its 401 — there is no 403 tier here', async () => {
+    const { signer, proof } = await buildIdentityProof();
+    const err = await errorOf(
+      verifyApiIdentityRequest(clientFor([signer]), {
+        ...baseInput(),
+        proof,
+        now: () => (NOW + 61) * 1000,
+      }),
+    );
+    expect(err?.reason).toBe('invalid');
+    expect(err?.phase).toBe('proof');
+    expect(err?.status).toBe(401);
+  });
+
+  it('rejects the envelope, freshness, and binding adversarial set', async () => {
+    const { signer, proof } = await buildIdentityProof();
+    const client = () => clientFor([signer]);
+    const signRaw = async (header: Record<string, unknown>, payload: string): Promise<string> => {
+      const signingInput = `${base64urlEncode(JSON.stringify(header))}.${base64urlEncode(payload)}`;
+      const signature = await signer.k.signer(encoder.encode(signingInput));
+      return `${signingInput}.${base64urlEncode(signature)}`;
+    };
+    const canonical = decoder.decode(
+      apiIdentitySigningInput({
+        method: 'GET',
+        host: HOST,
+        path: '/v0/profile',
+        bodyHash: EMPTY_BODY_SHA256,
+        iat: NOW,
+      }),
+    );
+    const good = { alg: 'EdDSA', typ: IDENTITY_PROOF_JWS_TYP, kid: signer.kid };
+
+    const queryProof = (
+      await signApiIdentityRequest({
+        method: 'GET',
+        host: HOST,
+        path: '/v0/profile?a=1&b=2',
+        kid: signer.kid,
+        sign: signer.k.signer,
+        iat: NOW,
+      })
+    ).proof;
+    const bodyProof = (
+      await signApiIdentityRequest({
+        method: 'POST',
+        host: HOST,
+        path: '/v0/profile',
+        body: encoder.encode('{"a":1}'),
+        kid: signer.kid,
+        sign: signer.k.signer,
+        iat: NOW,
+      })
+    ).proof;
+
+    const vectors: Array<[string, Parameters<typeof verifyApiIdentityRequest>[1]]> = [
+      ['oversize proof', { ...baseInput(), proof: 'a'.repeat(MAX_REQUEST_PROOF_SIZE + 1) }],
+      ['not a JWS', { ...baseInput(), proof: 'not-a-jws' }],
+      ['wrong-case method', { ...baseInput(), method: 'get', proof }],
+      ['method mismatch', { ...baseInput(), method: 'POST', proof }],
+      ['host mismatch', { ...baseInput('api.evil.example'), proof }],
+      ['host port mismatch', { ...baseInput('api.dfos.com:8443'), proof }],
+      ['query-string mismatch', { ...baseInput(), proof: queryProof }],
+      [
+        'query-parameter reordering is not equivalence',
+        { ...baseInput(), path: '/v0/profile?b=2&a=1', proof: queryProof },
+      ],
+      ['trailing-slash mismatch', { ...baseInput(), path: '/v0/profile/', proof }],
+      [
+        'body arrived but the proof says empty',
+        { ...baseInput(), body: encoder.encode('{"a":1}'), proof },
+      ],
+      [
+        'body dropped from a body-bearing proof',
+        { ...baseInput(), method: 'POST', proof: bodyProof },
+      ],
+      ['stale iat', { ...baseInput(), proof, now: () => (NOW + 61) * 1000 }],
+      ['forward-dated iat', { ...baseInput(), proof, now: () => (NOW - 61) * 1000 }],
+      ['wrong alg', { ...baseInput(), proof: await signRaw({ ...good, alg: 'HS256' }, canonical) }],
+      [
+        'crit header',
+        { ...baseInput(), proof: await signRaw({ ...good, crit: ['x'] }, canonical) },
+      ],
+      [
+        'embedded jwk',
+        { ...baseInput(), proof: await signRaw({ ...good, jwk: { kty: 'OKP' } }, canonical) },
+      ],
+      [
+        'kid without a fragment',
+        { ...baseInput(), proof: await signRaw({ ...good, kid: signer.did }, canonical) },
+      ],
+      [
+        'padded bodyHash spelling',
+        {
+          ...baseInput(),
+          proof: await signRaw(
+            good,
+            canonical.replace(EMPTY_BODY_SHA256, `${EMPTY_BODY_SHA256.slice(0, 42)}U=`),
+          ),
+        },
+      ],
+      [
+        'non-canonical bodyHash spelling',
+        {
+          ...baseInput(),
+          proof: await signRaw(
+            good,
+            canonical.replace(EMPTY_BODY_SHA256, `${EMPTY_BODY_SHA256.slice(0, -1)}V`),
+          ),
+        },
+      ],
+      [
+        'quoted iat',
+        {
+          ...baseInput(),
+          proof: await signRaw(good, canonical.replace(`"iat":${NOW}`, `"iat":"${NOW}"`)),
+        },
+      ],
+      [
+        'missing member',
+        {
+          ...baseInput(),
+          proof: await signRaw(good, canonical.replace(`,"bodyHash":"${EMPTY_BODY_SHA256}"`, '')),
+        },
+      ],
+      ['tampered signature', { ...baseInput(), proof: tamperOneChar(proof, proof.length - 10) }],
+    ];
+
+    for (const [name, input] of vectors) {
+      expect(await reasonOf(verifyApiIdentityRequest(client(), input)), name).toBe('invalid');
+    }
+  });
+
+  it('IGNORES unknown members, a stray credentialCID included', async () => {
+    // The typ gate, not member sniffing, is what tells the two artifacts apart —
+    // and the `jti` write-path seam must not make today's verifier reject.
+    const { signer } = await buildIdentityProof();
+    const canonical = decoder.decode(
+      apiIdentitySigningInput({
+        method: 'GET',
+        host: HOST,
+        path: '/v0/profile',
+        bodyHash: EMPTY_BODY_SHA256,
+        iat: NOW,
+      }),
+    );
+    for (const extra of ['"jti":"abc"', `"credentialCID":"${VECTOR_CID}"`]) {
+      const signingInput = `${base64urlEncode(
+        JSON.stringify({ alg: 'EdDSA', typ: IDENTITY_PROOF_JWS_TYP, kid: signer.kid }),
+      )}.${base64urlEncode(`${canonical.slice(0, -1)},${extra}}`)}`;
+      const proof = `${signingInput}.${base64urlEncode(
+        await signer.k.signer(encoder.encode(signingInput)),
+      )}`;
+      await expect(
+        verifyApiIdentityRequest(clientFor([signer]), { ...baseInput(), proof }),
+        extra,
+      ).resolves.toBeTruthy();
+    }
+  });
+
+  it('rejects a key that is not current, and reports an unresolvable presenter as unverifiable', async () => {
+    const { signer, proof } = await buildIdentityProof();
+    const stranger = makeKey();
+    const strangerProof = (
+      await signApiIdentityRequest({
+        method: 'GET',
+        host: HOST,
+        path: '/v0/profile',
+        kid: `${signer.did}#${stranger.keyId}`,
+        sign: stranger.signer,
+        iat: NOW,
+      })
+    ).proof;
+    expect(
+      await reasonOf(
+        verifyApiIdentityRequest(clientFor([signer]), { ...baseInput(), proof: strangerProof }),
+      ),
+    ).toBe('invalid');
+
+    // A presenter no relay can serve is the SERVER's condition, not the caller's —
+    // and 503 is the only non-401 verdict this artifact has.
+    const err = await errorOf(verifyApiIdentityRequest(clientFor([]), { ...baseInput(), proof }));
+    expect(err?.reason).toBe('unverifiable');
+    expect(err?.status).toBe(503);
+  });
+
+  it('bounds AGE and FORWARD SKEW separately, and refuses W + S over the ceiling', async () => {
+    const { signer, proof } = await buildIdentityProof();
+    const at = (offset: number) => ({
+      ...baseInput(),
+      proof,
+      windowSeconds: 30,
+      skewSeconds: 5,
+      now: () => (NOW + offset) * 1000,
+    });
+    await expect(verifyApiIdentityRequest(clientFor([signer]), at(20))).resolves.toBeTruthy();
+    expect(await reasonOf(verifyApiIdentityRequest(clientFor([signer]), at(-20)))).toBe('invalid');
+    await expect(verifyApiIdentityRequest(clientFor([signer]), at(30))).resolves.toBeTruthy();
+    await expect(verifyApiIdentityRequest(clientFor([signer]), at(-5))).resolves.toBeTruthy();
+
+    const err = await errorOf(
+      verifyApiIdentityRequest(clientFor([signer]), {
+        ...baseInput(),
+        proof,
+        windowSeconds: 240,
+        skewSeconds: 61,
+      }),
+    );
+    expect(err?.reason).toBe('config');
+    expect(err?.status).toBe(500);
+    expect(err?.message).toMatch(/300 seconds/);
   });
 });
 
