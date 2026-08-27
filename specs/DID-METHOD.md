@@ -173,7 +173,7 @@ endpoint) and `DfosProfile` (a contentId-or-CID profile anchor); a relay that
 does not recognize them preserves and ignores them. SIWD adds
 `DfosAuthorizationServer` (an authorize origin; a relay that maps it projects
 `endpoint` → `serviceEndpoint` exactly as for `DfosRelay`). See
-[DOCUMENT-GATEWAY.md → Discovery](https://protocol.dfos.com/document-gateway#discovery)
+[WEB-RELAY.md → Content Plane Discovery](https://protocol.dfos.com/web-relay#discovery)
 and [SIWD.md → Finding the authorize endpoint](https://protocol.dfos.com/siwd#finding-the-authorize-endpoint--the-dfosauthorizationserver-entry).
 
 ```json

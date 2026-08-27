@@ -104,7 +104,7 @@ const LINK_REWRITES: Array<[RegExp, string]> = [
   [/href="(?:\.\/|\.\.\/dfos-protocol\/)DID-METHOD\.md"/g, 'href="/did-method"'],
   [/href="(?:\.\/|\.\.\/dfos-protocol\/)CONTENT-MODEL\.md"/g, 'href="/content-model"'],
   [/href="(?:\.\/WEB-RELAY|\.\/RELAY|\.\.\/dfos-web-relay\/RELAY)\.md"/g, 'href="/web-relay"'],
-  [/href="\.\/DOCUMENT-GATEWAY\.md"/g, 'href="/document-gateway"'],
+  [/href="\.\/DOCUMENT-GATEWAY\.md"/g, 'href="/web-relay#content-plane--document-gateway"'],
   [/href="\.\/CREDENTIALS\.md"/g, 'href="/credentials"'],
   [/href="\.\/SIWD\.md"/g, 'href="/siwd"'],
   [/href="\.\/SIGNING\.md"/g, 'href="/signing"'],
