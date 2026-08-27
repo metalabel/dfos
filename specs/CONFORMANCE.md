@@ -8,6 +8,7 @@ points at the normative MUST sets already specified in
 [PROTOCOL.md](https://protocol.dfos.com/spec),
 [CREDENTIALS.md](https://protocol.dfos.com/credentials),
 [CREDITS.md](https://protocol.dfos.com/credits),
+[RELAY-CONTRACT.md](https://protocol.dfos.com/relay-contract),
 [WEB-RELAY.md](https://protocol.dfos.com/web-relay),
 [DID-METHOD.md](https://protocol.dfos.com/did-method),
 [SIGNING.md](https://protocol.dfos.com/signing) (`0.x`),
@@ -114,10 +115,11 @@ A relay ingests, sequences, and serves. It implements:
   dependency sort, per-type verification, store-then-verify convergence (WEB-RELAY.md
   "Operation Ingestion" / "Convergence", `specs/WEB-RELAY.md`, `specs/WEB-RELAY.md`).
 - **Sequencing & fork handling** — content-chain fork acceptance and deterministic head
-  selection, identity-chain linearity (permanent refusal of conflicting extensions),
-  ingestion statuses, deletion + restore semantics (WEB-RELAY.md "Fork Acceptance" /
-  "Identity Linearity and Order Authority" / "Ingestion Statuses" / "Deletion Semantics",
-  `specs/WEB-RELAY.md`).
+  selection, identity-chain linearity and order authority (permanent refusal of
+  conflicting extensions — normative in PROTOCOL.md "Chain Validity",
+  `specs/PROTOCOL.md`), ingestion statuses (RELAY-CONTRACT.md "Submission",
+  `specs/RELAY-CONTRACT.md`), deletion + restore semantics (WEB-RELAY.md
+  "Fork Acceptance" / "Deletion Semantics", `specs/WEB-RELAY.md`).
 - **Capability / feature flags + 501 semantics** — the well-known response advertises
   capabilities; unsupported optional features return **501 Not Implemented** (not 404)
   (WEB-RELAY.md "Well-Known Endpoint", `specs/WEB-RELAY.md`; "Two Planes",
@@ -142,8 +144,8 @@ A relay ingests, sequences, and serves. It implements:
   cursor pages.
 - **List-route pagination envelope** — `limit` (default 100, max 1000, clamp above max) +
   `after` + `next`, with the per-route cursor behavior (relay-local 400 / transparent
-  keyset / opaque token) as specified per route (WEB-RELAY.md "Error Responses" and each
-  route's section, `specs/WEB-RELAY.md`).
+  keyset / opaque token) as specified per route (RELAY-CONTRACT.md "Error Body" /
+  "Pagination Envelope", `specs/RELAY-CONTRACT.md`, and each route's section).
 
 **The content plane is OPTIONAL.** A compliant relay **always** serves the proof plane
 (`capabilities.proof: false` is not a valid value); when `capabilities.content: false`,
