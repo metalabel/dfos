@@ -168,18 +168,6 @@ export const specs: SpecEntry[] = [
     nav: { shortLabel: 'Relay', tier: 'primary' },
   },
   {
-    slug: '/document-gateway',
-    title: 'Document Gateway',
-    tile: 'Stateless blob storage authorized live from the proof plane',
-    llms: 'Stateless content-addressed blob store (0.1) — the content plane, with authorization re-derived live from the proof plane',
-    metaDescription:
-      'DFOS Document Gateway (0.1) — a stateless, content-addressed blob store whose authorization is re-derived live from the proof plane.',
-    source: '../../specs/DOCUMENT-GATEWAY.md',
-    grid: 'specifications',
-    llmsSection: 'implementation',
-    nav: { tier: 'secondary' },
-  },
-  {
     slug: '/cli',
     title: 'CLI',
     tile: `Identities, content chains, credentials, relays &mdash; ${CLI_PLATFORMS}`,

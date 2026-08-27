@@ -5,7 +5,7 @@ Verifiable identity and content chains — Ed25519 signatures, content-addressed
 > **Status — Protocol v1: feature-complete and frozen.** The v1 surface is **frozen**: the core primitives — chain mechanics, canonical DAG-CBOR encoding, identifier derivation, and the validity bounds — are settled and will not change in shape. Build on the wire as specified. v1 is frozen but not yet declared final, and changes from here are limited and disciplined:
 >
 > - **Clarifications** — where the prose was ambiguous but conformant implementations already agree — are corrected in place.
-> - **Additive** capability — new optional fields, new service types, the [document gateway](https://protocol.dfos.com/document-gateway) — lands atop frozen v1, never as a break.
+> - **Additive** capability — new optional fields, new service types, the [content plane / document gateway](https://protocol.dfos.com/web-relay#content-plane--document-gateway) — lands atop frozen v1, never as a break.
 > - A genuine **breaking** change to a frozen field is never a silent v1 edit; it becomes v1.1 or v2.
 >
 > v1 is declared final once independent implementations confirm the spec verifies byte-for-byte from the prose alone. The protocol version is independent of the reference packages: the `@metalabel/dfos-protocol` and `dfos-protocol-go` releases stay on their own `0.x` semver line, so freezing v1 commits the **wire**, not yet a library API. Discuss in the [DFOS](https://nce.dfos.com) space.
@@ -1276,7 +1276,7 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [Sign In With DFOS](https://protocol.dfos.com/siwd) — Cryptographic identity verification for third-party applications
 - [Signing](https://protocol.dfos.com/signing) — A transport-agnostic way for one party to ask another to produce a DFOS signature
 - [Web Relay](https://protocol.dfos.com/web-relay) — HTTP relay specification for ingestion, state, and content plane
-- [Document Gateway](https://protocol.dfos.com/document-gateway) — A stateless, content-addressed blob store with authorization derived from the proof plane
+- [Content Plane / Document Gateway](https://protocol.dfos.com/web-relay#content-plane--document-gateway) — A stateless, content-addressed blob store with authorization derived from the proof plane
 - [Threat Model](https://protocol.dfos.com/threat-model) — A consolidated map of the DFOS adversary model and trust boundaries
 - [Conformance](https://protocol.dfos.com/conformance) — Conformance tiers and their proving corpora
 

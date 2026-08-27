@@ -30,7 +30,7 @@ All proof plane routes are unauthenticated. The operations themselves carry thei
 
 Raw content blobs — the actual documents that content chains commit to via `documentCID`. The content plane never **gossips**: blobs are never pushed on the operation log the way proof-plane operations are. A blob enters a relay one of two ways — it is uploaded to the relay that holds the chain, or it is **pulled** by a relay that is authorized to read it (content-addressed, behind a grant; see [Content Following](#content-following)). Either way a blob is served only to authorized readers, and its integrity is its `documentCID`, so a pulled blob is verified by hash regardless of where it came from.
 
-A relay's content plane **is** a document gateway — the same surface named as a standalone service on its own `0.x` clock. See [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway) for the gateway contract: a stateless, content-addressed blob store whose authorization is re-derived live from the proof plane. The served blob is the document itself — whether terminal (the bytes _are_ the content) or referential (the document points at external bytes, e.g. `ipfs://` or a signed-CDN reference). The relay never resolves a referential pointer; delivery of referenced media is out of protocol.
+A relay's content plane **is** a document gateway — a stateless, content-addressed blob store whose authorization is re-derived live from the proof plane; the full contract is [below](#content-plane--document-gateway). The served blob is the document itself — whether terminal (the bytes _are_ the content) or referential (the document points at external bytes, e.g. `ipfs://` or a signed-CDN reference). The relay never resolves a referential pointer; delivery of referenced media is out of protocol.
 
 Content plane access requires two credentials:
 
@@ -50,7 +50,7 @@ Every proof plane route is namespaced under a single prefix, **`/proof/v1`** —
 Six route families deliberately stay at the root, on their own clocks:
 
 - **`GET /.well-known/dfos-relay`** — discovery (RFC 8615) lives at the root by convention; it announces the base and the relay's own release version.
-- **Content plane routes** (`/content/:contentId/blob[/:ref]`) — these belong to the **[document gateway](https://protocol.dfos.com/document-gateway)**, an optional service on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to the gateway's `0.x` clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
+- **Content plane routes** (`/content/:contentId/blob[/:ref]`) — these belong to the **[content plane / document gateway](#content-plane--document-gateway)**, an optional surface on a `0.x` clock independent of the protocol freeze. They remain at the root under `/content/:contentId` because they belong to that clock, not the frozen proof plane. Note the resulting split: the proof node owns the bare chain-state paths `GET /proof/v1/content/:contentId` and `/proof/v1/content/:contentId/log`; the document gateway owns the `/content/:contentId/blob*` sub-paths. They are distinct namespaces that a reverse proxy can fan by prefix when the planes are split across origins.
 - **Universal resolver** (`GET /1.0/identifiers/:did`) — the DID-core / DIF Universal Resolver binding on its own `1.0` clock (the DIF driver interface version, [DID-METHOD.md](https://protocol.dfos.com/did-method) §5.2.4). It is an additive, read-only projection of the same self-certified terminal state the proof plane serves at `/proof/v1/identities/:did`, rendered as a W3C DID Document. It stays at the root because it tracks the DIF driver clock, not the frozen proof plane.
 - **Revocation status** (`GET /revocations/v1/credential/:credentialCID`, `GET /revocations/v1/issuer/:did`) — an indexed, read-only projection of the relay's revocation set on its own frozen `v1` clock. Revocations still _enter_ through the frozen proof plane (`POST /proof/v1/operations`); this family only exposes a read over the index the relay already maintains for its own credential enforcement. See [Revocation Status](#revocation-status-v1).
 - **Index** (`GET /index/v0/*`) — an optional, non-authoritative query surface over the current-state projections the relay already folds: enumerate identities, filter content chains, reverse-look-up countersignatures by witness. On its own unfrozen `0.x` clock, gated by `capabilities.index`. See [Index (v0)](#index-v0).
@@ -355,15 +355,59 @@ The relay maintains a global append-only operation log: every successfully inges
 
 ## Identity and Content State
 
-The state endpoints return projected state — the computed result of replaying the chain — without embedding the full operation log; shapes per [RELAY-CONTRACT.md](https://protocol.dfos.com/relay-contract#identity-state-get-proofv1identitiesdid). Two behavior notes: resolved identity state includes the identity's `services` projected from the winning head ([Services](https://protocol.dfos.com/spec#services)), and read-through and sync replicate the underlying operations, so a peer that fetches a chain recomputes the same projection deterministically. The content-state response deliberately carries no derived authorization material — public-read discovery (surfacing the `aud: "*"` credentials that currently authorize `read` on a chain) is a **document gateway** concern on the `0.x` clock, kept off the frozen route so the ergonomic can evolve without touching the locked contract ([DOCUMENT-GATEWAY.md → Public-read discovery](https://protocol.dfos.com/document-gateway#public-read-discovery-0x)).
+The state endpoints return projected state — the computed result of replaying the chain — without embedding the full operation log; shapes per [RELAY-CONTRACT.md](https://protocol.dfos.com/relay-contract#identity-state-get-proofv1identitiesdid). Two behavior notes: resolved identity state includes the identity's `services` projected from the winning head ([Services](https://protocol.dfos.com/spec#services)), and read-through and sync replicate the underlying operations, so a peer that fetches a chain recomputes the same projection deterministically. The content-state response deliberately carries no derived authorization material — public-read discovery (surfacing the `aud: "*"` credentials that currently authorize `read` on a chain) is a **document gateway** concern on the `0.x` clock, kept off the frozen route so the ergonomic can evolve without touching the locked contract (see [Public-read discovery](#public-read-discovery-0x)).
 
 ---
 
-## Content Plane Access
+## Content Plane — Document Gateway
 
-This section describes the content plane as the relay serves it. The standalone gateway contract — the stateless, proof-plane-derived authorization model, where authority is re-derived live every request and any materialized public-credential index is a non-authoritative cache — is specified in [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway).
+> A relay's content plane **is** the document gateway — one surface, one contract. This section is that contract (it absorbs the retired standalone DOCUMENT-GATEWAY spec; the old `/document-gateway` URL redirects here).
 
-Content plane requests carry a self-signed **auth token** in the `Bearer` header to prove caller identity (verified against the issuer's _current_ identity state — a rotated-out key cannot mint one; see [Key Resolution](#key-resolution)).
+The content plane is the relay's read/write face for document bytes — the **preimages** of the `documentCID`s content chains commit to. It is deliberately dumber than the proof plane: no chains of its own, no signatures of its own, no gossip, no operation log. It does exactly two things — **stores bytes** addressed by a committed `documentCID`, and **serves bytes** to readers it can verify are authorized, where "authorized" is a judgment re-derived live from the proof plane on every request, never trusted from a stored flag. Everything that gives a document _meaning_ — which chain it belongs to, who committed it, who may read it — lives in the proof plane, and the governance invariant runs one way: capability flows up from frozen primitives; the protocol never reaches down to the content plane.
+
+A reverse proxy can split the planes across origins — the proof node owns `GET /proof/v1/content/:contentId` and `/log`; the content plane owns the `/content/:contentId/blob*` sub-paths. Performance is a deployment question, not an architectural one: co-located, proof-plane reads are local; split across origins they ride the network, optionally fronted by a **TTL cache** with bounded, stated staleness — a performance optimization that is always re-verifiable and never authoritative state.
+
+### Terminal and referential documents
+
+A document the content plane serves is either **terminal** — the `{ $schema, … }` blob _is_ the content — or **referential** — a document that describes _how to fetch_ external bytes: an `ipfs://` CID, or an opaque `attachment://<id>` resolved by an out-of-protocol signed-CDN API, optionally carrying a hash of the target bytes so a consumer can re-bind delivery to the committed reference. The relay serves the document blob either way and **never resolves a referential pointer** — dereferencing is _delivery_, and delivery lives outside the protocol. There is no media server here: no range requests, no partial content, no streaming surface, no minting of CDN URLs. Media is a content-schema convention ([CONTENT-MODEL.md → Media object](https://protocol.dfos.com/content-model#media-object)), never a relay primitive.
+
+### Discovery
+
+A reader finds a content-plane host through the identity's `services` vocabulary ([PROTOCOL.md → Services](https://protocol.dfos.com/spec#services)). Two open-namespace service types serve it — additive, requiring no protocol or relay change, both indexed in the [extension registry](https://protocol.dfos.com/extensions):
+
+| Service `type`        | Fields           | Meaning                                                                                         |
+| --------------------- | ---------------- | ----------------------------------------------------------------------------------------------- |
+| `DfosDocumentGateway` | `endpoint` (URL) | Base URL of a content-plane host serving this identity's content                                |
+| `DfosProfile`         | `anchor`         | The identity's profile document — a 31-char contentId (living chain) or a `baf…` CID (artifact) |
+
+A resolver replays the identity chain to current state, reads the `DfosDocumentGateway` endpoint, and requests the document. `DfosProfile` dispatches by shape exactly as `ContentAnchor` does: a contentId resolves to a content chain (a living, updatable profile), a CIDv1 resolves to an artifact (an immutable snapshot). Discovery and authorization stay orthogonal.
+
+### Statelessness
+
+The content plane holds **no authoritative authorization state**: every decision is re-derived live from the proof plane, so nothing it stores can be served stale. This is read-coupling, not state-coupling, and the coupling is correct — you cannot decouple a verifier from the source of the mutable, revocable keys it verifies against; decoupling would mean either caching authority (drift) or ignoring mutability (honoring rotated-out keys and revoked grants). A relay MAY keep a materialized index of ingested public grants as a **performance optimization** — an O(1) candidate lookup whose every candidate is re-verified live before it can authorize anything; a stale or revoked entry cannot grant access, because the live re-verify rejects it. The index is a cache over the proof-plane op log, fully re-derivable from it — never a source of truth.
+
+### The unified verifier
+
+Authorization is **one routine**. Both the public path and the delegated path reduce to the same verification — the only difference is _where the credential came from_:
+
+```
+verify(credential, resource, action):
+  resolve issuer keys from the proof plane      # required for any signature check
+  check the credential signature
+  check the delegation chain roots at the content creator
+  check not expired
+  check not revoked — for EVERY link in the prf delegation chain
+  → authorized iff all checks pass
+```
+
+- **Public path.** The reader presents no credential. The relay derives the public credentials (`aud: "*"`) covering the chain from the proof plane it already reads — public credentials are ordinary proof-plane operations, so no separate grant table is authority — and runs each through the verifier. A surviving public grant authorizes the read. Crucially, the relay works from the **credentials themselves**, never a pre-chewed `publiclyReadable: true`: the proof plane provides _data_; the verifier makes the _decision_.
+- **Delegated path.** The reader presents a DFOS credential in the `X-Credential` header. The same verifier runs over it, including the same per-link revocation check.
+
+A public grant may name `chain:<contentId>` (this chain) or `chain:*` (all of the issuer's chains); either way it MUST root at the content creator to authorize. Public credentials SHOULD be read-scoped — a public `write` grant is a world-writable bearer token ([CREDENTIALS.md](https://protocol.dfos.com/credentials#security-aud-quotquot--write--a-world-writable-bearer-grant)).
+
+### Access
+
+Non-public content plane requests carry a self-signed **auth token** in the `Bearer` header to prove caller identity (verified against the issuer's _current_ identity state — a rotated-out key cannot mint one; see [Key Resolution](#key-resolution)).
 
 **Auth-token lifetime ceiling**: the relay rejects an auth token whose declared lifetime (`exp − iat`) exceeds a configured maximum (default **24 hours**), returning `401`. Auth tokens are ephemeral by design (minutes); this ceiling stops a buggy or malicious signer from minting an effectively-permanent bearer token. It applies only to auth tokens — DFOS credentials (read/write/standing) are verified on a separate path and may carry hours-to-months lifetimes. Setting the maximum to `≤ 0` disables the ceiling.
 
@@ -402,7 +446,7 @@ There is deliberately no relay-side document list route — it would only be a r
 
 Instead of presenting a read credential on every request, a DFOS credential with `aud: "*"` (public) can be ingested by the relay as a **standing authorization** — once ingested, matching content plane requests are authorized without an `X-Credential` header. Credential ingestion uses `POST /proof/v1/operations`: DFOS credentials are submitted as JWS tokens alongside other proof plane operations and stored in the op log like any other operation (addressable by CID, carried in the global log as `kind: "credential"`).
 
-**Authority is re-derived live, not read from a stored flag.** On every content plane access the relay re-verifies the standing credential against current proof-plane state — signature, issuer-key resolution, temporal validity, **revocation**, and a delegation chain rooted at the content creator — through the **same verifier the per-request (`X-Credential`) path uses**. The two paths differ only in where the credential came from and an audience check that public (`aud: "*"`) credentials skip; revocation is checked **symmetrically** on both, at every link of the delegation chain. See [DOCUMENT-GATEWAY.md → The unified verifier](https://protocol.dfos.com/document-gateway#the-unified-verifier).
+**Authority is re-derived live, not read from a stored flag.** On every content plane access the relay re-verifies the standing credential against current proof-plane state — signature, issuer-key resolution, temporal validity, **revocation**, and a delegation chain rooted at the content creator — through the **same verifier the per-request (`X-Credential`) path uses**. The two paths differ only in where the credential came from and an audience check that public (`aud: "*"`) credentials skip; revocation is checked **symmetrically** on both, at every link of the delegation chain. See [The unified verifier](#the-unified-verifier).
 
 A relay MAY keep a materialized index of ingested public credentials (resource → candidate credentials) to make standing-auth lookup O(1). **That index is a performance optimization, not authority** — every candidate it yields is re-verified live before it can authorize, so a stale or revoked entry cannot grant access. It is a re-verified, non-authoritative cache over the op log, fully re-derivable from it.
 
@@ -427,6 +471,19 @@ Revocation is permanent and immediate. See [CREDENTIALS.md](https://protocol.dfo
 
 **Ingest asks freshness; re-verification asks validity.** Points 2–4 are all **acceptance** decisions, answered from what the relay currently knows: a relay MUST refuse a new operation authorized by a credential it already holds a revocation for, **whatever that operation's `createdAt` claims** — otherwise backdating would buy a revoked delegate an indefinite write window. Re-verifying operations the relay has **already committed** is the other question, and it is answered **as of each operation's own `createdAt`** per CREDENTIALS.md ["Acceptance vs Validity"](https://protocol.dfos.com/credentials#acceptance-vs-validity-normative). Concretely, a relay replaying a chain's history (for example to compute content-chain state at a fork point, or to re-verify a synced log) MUST NOT reject an operation because a credential in its history was revoked **later** — that operation was authorized when it was signed, and rejecting it would make legitimately committed history fail re-verification. The two rules coexist without tension: acceptance is local and timely, and the ingest verdict never enters the replicated log; historical validity is deterministic and therefore identical on every relay, forever.
 
+### Trust and security model
+
+A `200` from the content plane is an **endorsement**: "I, a cooperating host, verified against the live proof plane that a grant authorizes this read." Every input to that decision is public and re-derivable — the chain head and `documentCID` from the proof plane, the grants as signed CID-addressable objects, revocation as a proof-plane query — so a zero-trust caller MAY re-run the unified verifier itself and arrive at the same yes independently.
+
+| Property                | Guarantee                                                                                                                                                                                                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Can't forge**         | A reader checks served bytes against the known `documentCID` by re-canonicalizing (decode-JSON → dag-cbor → sha-256), not by hashing the served bytes directly; wrong bytes fail content-addressing. Integrity is cryptographic **even against a malicious host**. |
+| **Can withhold / leak** | The host holds plaintext. Content-plane access control is **host-cooperative** — it protects an _honest_ host from mis-serving. It is not a cryptographic vault.                                                                                                   |
+
+What is not re-verifiable is the host's **serve discipline** — whether an honest host actually withholds bytes from an unauthorized reader. That is unprovable for _any_ content host, and it is the one place the model is host-cooperative rather than cryptographic. Anything that must stay confidential against a _hostile_ host is withheld or encrypted **above** the protocol ([THREAT-MODEL.md](https://protocol.dfos.com/threat-model)).
+
+**Blobs are unsigned, and that is correct.** A blob's integrity _is_ its CID, and the CID is already signed in the proof plane — re-signing the bytes here would be redundant. The proof plane provides legitimacy and authorization; content-addressing provides integrity. Note the byte encoding: stored and served blob bytes are the bytes **as received** (canonically a JSON document), NOT a re-canonicalized form — a naive `sha256(servedBytes)` will NOT equal `documentCID`; a verifier re-canonicalizes through the same decode → dag-cbor path the upload check uses.
+
 ### Content Following
 
 The operation log federates the **proof plane**: identity chains, content chains, public-read credentials, and revocations are all pushed and gossiped between peers. The **content plane** — the document _bytes_ — is deliberately not on that wire. A relay MAY nonetheless make those bytes available locally by **following**: pulling the documents of the content chains it is authorized to read, content-addressed and gated by the grant. This turns a relay from a proof mirror into a true edge cache that serves public content **independently of the origin** that authored it.
@@ -436,9 +493,15 @@ Following is a per-relay, optional behavior on the content plane's own `0.x` clo
 - **Pull, not push.** A follower fetches blobs from its peers over the existing public blob route (`GET /content/:contentId/blob[/:ref]`). Blobs are never gossiped; there is no new endpoint.
 - **The materialize gate is the serve gate.** A follower materializes a chain's bytes only while a standing public-read grant authorizes anonymous read of it — the same predicate (`hasPublicStandingAuth`) the serve path checks. So a chain that is private, revoked, or deleted is never followed.
 - **Verified by hash, trustless in source.** Every pulled blob is checked against the `documentCID` the chain committed (its content address) before it is stored. A follower may therefore pull from any peer; a byte that does not hash to its committed CID is rejected.
-- **Eventually consistent.** Authorization arrives instantly (the grant rides the log); the bytes arrive asynchronously. Between the two, a follower that is authorized but has not yet materialized a blob returns `404 blob not found` on `GET /content/:contentId/blob[/:ref]` — the **honest "authorized-but-not-yet-materialized" state**, not an error. A conforming follower converges to serving the bytes; it need not do so instantaneously. See [DOCUMENT-GATEWAY.md → Follower materialization](https://protocol.dfos.com/document-gateway#follower-materialization-0x).
+- **Eventually consistent.** Authorization arrives instantly (the grant rides the log); the bytes arrive asynchronously. Between the two, a follower that is authorized but has not yet materialized a blob returns `404 blob not found` on `GET /content/:contentId/blob[/:ref]` — the **honest "authorized-but-not-yet-materialized" state**, not an error. A conforming follower converges to serving the bytes; it need not do so instantaneously. A conformance test asserts eventual materialization (poll until served), never instantaneous.
 - **Convergent, ordering-immune.** Following is driven by a sweep over the chains the follower already holds in local state, so it cannot be raced by op-ingest ordering (a credential op sequences before the content op it grants). The sweep is the correctness backbone; low-latency triggers, if any, are an optimization over it.
 - **Revoke is correctness-free; GC is reclamation.** When a grant is revoked, the per-request serve gate immediately makes any cached bytes unreachable — correctness needs nothing more. Reclaiming the now-orphaned bytes (deleting them) is a separate, convergent garbage-collection pass keyed on the same gate, and is purely a storage concern.
+
+### Public-read discovery (0.x)
+
+> **Status: design — shape, not bytes.** This ergonomic is specified by shape only: it is **not** part of the reference relay and is deliberately under-specified at the wire level — the framing fixes the _shape_ of the answer; an implementor picks the exact bytes.
+
+A zero-trust public-read caller wants two things at once: the document bytes, _and_ the `aud: "*"` credentials that authorized the read, so it can re-verify the grant itself instead of trusting "the relay let me in." The grants do **not** ride `GET /proof/v1/content/:contentId` — that route is [contract-frozen](https://protocol.dfos.com/relay-contract) and carries pure chain state — and they do not ride response headers (a delegation chain of credential JWS tokens can run to many kilobytes). The shape: on the public blob path, when a public grant authorized the read, the relay hands back — alongside or wrapping the blob — the **authorizing credentials themselves**, in a response envelope. Constraints that fix the shape: the inlined grant set is bounded at **≤ 256 KiB** of credential material (past that the relay MAY refuse to inline, and the caller falls back to fetching credentials by CID off the proof plane); only grants that survived the live verifier are inlined; revocation currency remains the caller's option (the envelope is a head-start, never a substitute for the caller's own proof-plane reads); and the exact wire shape — JSON wrapper, multipart, or a `Link`-discoverable sidecar — is the implementor's. This adds zero proof-plane surface, and the grants are public credentials, so surfacing them discloses nothing private.
 
 ---
 
@@ -460,7 +523,7 @@ Index responses are **discovery hints, never authority**. Every row carries the 
 
 - **The index cannot lie by assertion.** Every claim in a row is verifiable against the proof plane. A fabricated row fails the client's fold.
 - **The index CAN lie by omission.** A relay can be behind, partitioned, or adversarially withholding rows — and a light client cannot detect a recall gap. Absence of a row is NOT proof of absence. A caller that needs stronger recall queries a quorum of independent relays, or replays `GET /proof/v1/log` and folds locally — the full-log replay remains the audit posture that keeps every index honest.
-- **Index output MUST NOT be used as an authorization input.** The `publicRead` field is a discovery hint; content plane access is always re-derived live by the gateway's unified verifier (see [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway)).
+- **Index output MUST NOT be used as an authorization input.** The `publicRead` field is a discovery hint; content plane access is always re-derived live by [the unified verifier](#the-unified-verifier).
 
 ### The Structural Seam
 
@@ -877,3 +940,5 @@ Reference stores extend their interface with a content-addressed raw-operation b
 - **Rate limiting / anti-spam**: Operational concern, not protocol concern
 - **Blob size limits**: No protocol enforcement — deployments add limits at the middleware layer
 - **Artifact `$schema` registry**: Schema names are free-form strings — no formal registry or validation beyond structural checks
+- **Content-plane index chains**: a chain enumerating an identity's documents is pure discovery — the [`index/v1`](https://protocol.dfos.com/content-model) content schema, an ordinary content chain gated by the same rules; no content-plane primitive
+- **Credentials-by-resource query**: reverse discovery ("what can DID X read") serves no part of the read path

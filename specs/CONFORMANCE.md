@@ -151,7 +151,7 @@ A relay ingests, sequences, and serves. It implements:
 (`capabilities.proof: false` is not a valid value); when `capabilities.content: false`,
 all content-plane routes return 501 (WEB-RELAY.md "Well-Known Endpoint",
 `specs/WEB-RELAY.md`). Proof-plane-only is a fully conformant relay. The content plane is
-the [document gateway](https://protocol.dfos.com/document-gateway), an optional service on
+the [content plane / document gateway](https://protocol.dfos.com/web-relay#content-plane--document-gateway), an optional surface on
 its own `0.x` clock — outside the v1 conformance tiers.
 
 **Writes are OPTIONAL too.** A lite (pull-only) proof node MAY advertise
