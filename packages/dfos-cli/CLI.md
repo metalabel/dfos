@@ -121,7 +121,6 @@ did = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
 did = "did:dfos:cv7n8vkvr64cctf3294h9k4eanhff8z"
 
 [defaults]
-auth_token_ttl = "5m"
 credential_ttl = "24h"
 ```
 
@@ -333,6 +332,9 @@ dfos serve --port 4444 --peers https://relay.example.com
 | `--no-write`       | `false`            | —                | LITE pull-only node: reject `POST /operations`, sync from peers only    |
 | `--no-index`       | `false`            | `INDEX=false`    | Disable `/index/v0`: advertise `index: false` and return 501            |
 | `--content-follow` | `none`             | `CONTENT_FOLLOW` | Materialize granted public content blobs from peers (`none` \| `eager`) |
+| `--authority`      | —                  | `AUTHORITY`      | This relay's own `host[:port]` — the host identity proofs bind          |
+| `--ingestion`      | `open`             | `INGESTION`      | Admission for `POST /operations` (`open` \| `proof-required` \| `closed`) |
+| `--gossip-proof`   | `false`            | `GOSSIP_PROOF=true` | Sign gossip-out pushes with this relay's own identity proof          |
 
 Peers accept three forms. Comma-separated URLs and a JSON array of URLs configure
 every peer with defaults; a JSON array of objects sets the per-peer switches
@@ -356,6 +358,21 @@ duplicate would otherwise pull twice against a single shared cursor. The dropped
 duplicate is logged.
 
 `--no-write` is the pull-only posture: the node ingests exclusively through peer sync and refuses submissions outright, so its served state is entirely derived from relays it chose to follow.
+
+`--authority` is the host callers reach this relay at, and it is what every
+identity proof is checked against. It is configuration, never read from a request
+header or URL — a relay that took the host from the request would have no host
+binding at all. Without it, the authenticated routes (blob upload, non-public blob
+download, the mailbox poll) answer 503 rather than blaming the caller for the
+operator's omission. Behind TLS on 443 that is the bare hostname
+(`relay.example.com`); locally it includes the port (`localhost:4444`).
+
+`--ingestion` sets who may submit operations. `open` (the default) accepts
+anonymous submissions; `proof-required` refuses them with 403 and admits only a
+submission carrying an identity proof; `closed` presents no ingestion surface at
+all and answers 501. `--no-write` forces `closed` regardless. The mode is
+advertised in the well-known as `ingestion`, so a client can see the posture
+before it submits.
 
 ---
 
@@ -603,14 +620,14 @@ This catches relay corruption, data tampering, and implementation bugs (includin
 
 ## Raw API Access
 
-`dfos api` is the escape hatch for agents and power users — raw HTTP to the relay with automatic auth token injection:
+`dfos api` is the escape hatch for agents and power users — raw HTTP to the relay, with `--auth` signing the request:
 
 ```bash
 # unauthenticated
 dfos api GET /.well-known/dfos-relay
 dfos api GET /proof/v1/identities/did:dfos:xxx
 
-# with auto auth (mints a fresh JWT, injects Authorization header)
+# with auto auth (signs an identity proof for this request, injects Authorization)
 dfos api GET /content/abc123/blob --auth
 
 # POST with body
@@ -623,7 +640,21 @@ dfos api PUT /content/abc123/blob/bafyop... --auth -H "Content-Type: application
 dfos api GET /proof/v1/identities/did:dfos:xxx -i
 ```
 
-The `--auth` flag resolves the active identity, loads the auth key from the keychain, fetches the relay's DID from well-known, mints a short-lived JWT, and injects it. One flag replaces the entire auth token lifecycle.
+The `--auth` flag resolves the active identity, loads the auth key from the keychain, and signs an identity proof bound to this exact request — its method, the peer's host, the path as sent, and the body bytes. The proof always carries a `jti`, which the write-shaped routes require and the read-shaped ones ignore, so one flag is correct on every route.
+
+### Signing a proof by hand
+
+`dfos auth proof` prints a proof for scripting — a `curl` call, a test fixture, a request the CLI has no command for:
+
+```bash
+dfos auth proof GET /signing/v0/requests
+dfos auth proof POST /proof/v1/operations --body ops.json --jti
+dfos auth proof GET '/index/v0/content?limit=10' --peer prod
+```
+
+It prints the JWS on the first line and a ready-to-paste `Authorization: DFOS <jws>` header on the second (`--json` gives both as fields).
+
+A proof authorizes one request and nothing else: it binds that method, that host, that path — query string included, byte for byte — and that body, and the relay accepts it only within about a minute of signing. Sign one per request, at the moment you make it. `--jti` adds the per-request uniqueness member that the write-shaped surfaces (`POST /proof/v1/operations`, `PUT` blob) require and that makes a second presentation of the same proof a 401.
 
 ---
 
@@ -681,7 +712,7 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 | `GET`  | `creds list`                    | List cached SIWD login credentials                       |
 | `GET`  | `creds show <name\|did>`        | Show a cached record + decoded claims                    |
 | `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                    |
-| `GET`  | `auth token`                    | Mint short-lived auth token (stdout)                     |
+| `GET`  | `auth proof <METHOD> <path>`    | Sign an identity proof for one request (`--body`, `--jti`) |
 | `GET`  | `auth status`                   | Show current auth state                                  |
 | `*`    | `api <METHOD> <path>`           | Raw HTTP to relay with optional `--auth`                 |
 | `GET`  | `peer list`                     | List configured relays (alias: `relay`)                  |

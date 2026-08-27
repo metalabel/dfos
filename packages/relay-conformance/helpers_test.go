@@ -3,13 +3,16 @@ package conformance
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
-	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -22,6 +25,87 @@ func relayURL(t *testing.T) string {
 		t.Skip("RELAY_URL not set — skipping conformance test")
 	}
 	return url
+}
+
+// ---------------------------------------------------------------------------
+// identity proofs
+// ---------------------------------------------------------------------------
+
+// relayAuthority is the host an identity proof must bind for requests to base.
+//
+// It is the relay's OWN configured authority, not anything read off a request,
+// so a relay reached through a proxy or a tunnel is served by a host string the
+// test cannot derive from the URL it dials. RELAY_AUTHORITY names that host
+// explicitly; the default — the URL's own authority — is right for a relay
+// dialed directly, which is every harness in this package.
+func relayAuthority(t *testing.T, base string) string {
+	t.Helper()
+	if v := os.Getenv("RELAY_AUTHORITY"); v != "" {
+		return strings.ToLower(v)
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		t.Fatalf("relay URL %q has no authority to bind a proof to", base)
+	}
+	return strings.ToLower(u.Host)
+}
+
+// proofSigner is the key material a request signs its identity proof with.
+//
+// THERE IS NO TOKEN TO MINT ONCE. An identity proof binds one (method, host,
+// path, bodyHash, iat), so every authenticated request signs its own — these
+// helpers carry the key, not a reusable artifact.
+type proofSigner struct {
+	kid  string
+	priv ed25519.PrivateKey
+}
+
+// signerFor returns the signer for an identity's current auth key.
+func signerFor(id identity) *proofSigner {
+	return signerForKey(id, id.auth)
+}
+
+// signerForKey returns a signer for a specific key of an identity — including
+// one that has been rotated out, which is how the rotation tests prove a
+// non-current key stops authenticating.
+func signerForKey(id identity, kp keypair) *proofSigner {
+	return &proofSigner{kid: id.did + "#" + kp.keyID, priv: kp.priv}
+}
+
+// newJTI returns a fresh per-request uniqueness member.
+func newJTI(t *testing.T) string {
+	t.Helper()
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		t.Fatalf("generate jti: %v", err)
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// buildProof signs one identity proof for an exact request. target is the
+// origin-form request target — path plus query, byte for byte as it will be
+// sent. jti is attached when non-empty; write-shaped surfaces require it.
+func buildProof(t *testing.T, base string, s *proofSigner, method, target string, body []byte, jti string) string {
+	t.Helper()
+	opts := dfos.IdentityProofOptions{Body: body}
+	if jti != "" {
+		opts.ExtraMembers = dfos.ProofExtraMembers{"jti": jti}
+	}
+	proof, err := dfos.BuildIdentityProof(method, relayAuthority(t, base), target, s.kid, s.priv, opts)
+	if err != nil {
+		t.Fatalf("BuildIdentityProof(%s %s): %v", method, target, err)
+	}
+	return proof
+}
+
+// signRequest attaches an identity proof to req, binding req's own method,
+// target, and body. A nil signer leaves the request anonymous.
+func signRequest(t *testing.T, base string, req *http.Request, s *proofSigner, body []byte, jti string) {
+	t.Helper()
+	if s == nil {
+		return
+	}
+	req.Header.Set("authorization", "DFOS "+buildProof(t, base, s, req.Method, req.URL.RequestURI(), body, jti))
 }
 
 // keypair holds a fresh ed25519 keypair and its derived identifiers.
@@ -121,30 +205,6 @@ func createContent(t *testing.T, base string, id identity) contentChain {
 	}
 }
 
-// authToken creates an auth token for the identity targeting the relay.
-func authToken(t *testing.T, base string, id identity) string {
-	t.Helper()
-	relayDID := getRelayDID(t, base)
-	kid := id.did + "#" + id.auth.keyID
-	token, err := dfos.CreateAuthToken(id.did, relayDID, kid, 5*time.Minute, id.auth.priv)
-	if err != nil {
-		t.Fatalf("CreateAuthToken: %v", err)
-	}
-	return token
-}
-
-// authTokenWithKey creates an auth token using a specific key.
-func authTokenWithKey(t *testing.T, base string, id identity, kp keypair) string {
-	t.Helper()
-	relayDID := getRelayDID(t, base)
-	kid := id.did + "#" + kp.keyID
-	token, err := dfos.CreateAuthToken(id.did, relayDID, kid, 5*time.Minute, kp.priv)
-	if err != nil {
-		t.Fatalf("CreateAuthToken: %v", err)
-	}
-	return token
-}
-
 // getRelayDID fetches the relay DID from /.well-known/dfos-relay.
 func getRelayDID(t *testing.T, base string) string {
 	t.Helper()
@@ -192,12 +252,13 @@ func getJSON(t *testing.T, url string, v any) *http.Response {
 	return resp
 }
 
-// putBlob uploads a blob.
-func putBlob(t *testing.T, base, contentID, operationCID, authTok string, data []byte) *http.Response {
+// putBlob uploads a blob. Blob upload is WRITE-SHAPED, so its proof carries a
+// fresh jti; a nil signer sends the request anonymous.
+func putBlob(t *testing.T, base, contentID, operationCID string, s *proofSigner, data []byte) *http.Response {
 	t.Helper()
 	url := fmt.Sprintf("%s/content/%s/blob/%s", base, contentID, operationCID)
 	req, _ := http.NewRequest("PUT", url, bytes.NewReader(data))
-	req.Header.Set("authorization", "Bearer "+authTok)
+	signRequest(t, base, req, s, data, newJTI(t))
 	req.Header.Set("content-type", "application/octet-stream")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -206,15 +267,33 @@ func putBlob(t *testing.T, base, contentID, operationCID, authTok string, data [
 	return resp
 }
 
-// getBlob downloads a blob. Optional ref is a path segment (operation CID).
-func getBlob(t *testing.T, base, contentID, authTok string, ref ...string) *http.Response {
+// putBlobWithProof uploads a blob under an ALREADY-BUILT proof, so a test can
+// present the same proof twice and watch the replay cache refuse the second.
+func putBlobWithProof(t *testing.T, base, contentID, operationCID, proof string, data []byte) *http.Response {
+	t.Helper()
+	url := fmt.Sprintf("%s/content/%s/blob/%s", base, contentID, operationCID)
+	req, _ := http.NewRequest("PUT", url, bytes.NewReader(data))
+	if proof != "" {
+		req.Header.Set("authorization", "DFOS "+proof)
+	}
+	req.Header.Set("content-type", "application/octet-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT blob: %v", err)
+	}
+	return resp
+}
+
+// getBlob downloads a blob. Optional ref is a path segment (operation CID). A
+// blob read is READ-SHAPED — the freshness window alone, no jti.
+func getBlob(t *testing.T, base, contentID string, s *proofSigner, ref ...string) *http.Response {
 	t.Helper()
 	url := fmt.Sprintf("%s/content/%s/blob", base, contentID)
 	if len(ref) > 0 && ref[0] != "" {
 		url += "/" + ref[0]
 	}
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("authorization", "Bearer "+authTok)
+	signRequest(t, base, req, s, nil, "")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET blob: %v", err)
@@ -222,12 +301,14 @@ func getBlob(t *testing.T, base, contentID, authTok string, ref ...string) *http
 	return resp
 }
 
-// getBlobWithCred downloads a blob with an auth token and a read credential.
-func getBlobWithCred(t *testing.T, base, contentID, authTok, credential string) *http.Response {
+// getBlobWithCred downloads a blob under an identity proof plus a read
+// credential — the AuthN half and the authorization half, not two competing
+// claims.
+func getBlobWithCred(t *testing.T, base, contentID string, s *proofSigner, credential string) *http.Response {
 	t.Helper()
 	url := fmt.Sprintf("%s/content/%s/blob", base, contentID)
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("authorization", "Bearer "+authTok)
+	signRequest(t, base, req, s, nil, "")
 	req.Header.Set("x-credential", credential)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -12,6 +12,13 @@ RELAY_URL=http://localhost:4444 go test -v -count=1 ./...
 ./scripts/run-conformance.sh
 ```
 
+Authenticated requests sign an identity proof bound to the relay's own configured
+authority, so the target must be booted with one (`authority` /
+`RelayOptions.Authority` / `dfos serve --authority`) or every authenticated route
+answers 503. The suite binds proofs to the authority of the URL it dials; set
+`RELAY_AUTHORITY` when the relay is configured for a different host than the one
+you reach it at, as behind a proxy or a tunnel.
+
 ## Coverage
 
 Tests covering:
@@ -26,7 +33,9 @@ Tests covering:
 - Delegated content operations (write credentials, delegated blob upload, delegated delete)
 - Credentials (expiry, scope mismatch, type enforcement, deleted issuer behavior)
 - Signature verification (tampered signature, wrong signing key)
-- Auth edge cases (wrong audience, expired token, rotated-out key)
+- Identity-proof authentication (the gate on write-shaped and read-shaped routes, jti replay refusal, proofs bound to another request or other bytes, a non-DFOS scheme, and the well-known `ingestion` advertisement)
+- Auth edge cases (wrong host, stale proof, rotated-out key)
+- Proof-required ingestion (anonymous submission refused 403 at the admission ladder; the same batch admitted under a proof)
 - Batch processing (3-step dependency sort, content-identity sort, large batch, dedup, mixed valid/invalid, multi-chain)
 - Input validation (malformed JSON, empty operations, invalid JWS)
 - Future timestamp guard (reject identity/content ops >24h ahead)
@@ -47,10 +56,12 @@ The test suite depends on [`dfos-protocol-go`](../dfos-protocol-go) for protocol
 | `scripts/run-conformance.sh`      | Start a TS relay on a random port, run the full suite, clean up            |
 | `scripts/run-index-disabled.sh`   | Run index-disabled conformance against the TS and Go relays                |
 | `scripts/run-parity.sh`           | Run dual-relay proof-plane parity against the TS and Go relays             |
+| `scripts/run-proof-required.sh`   | Run proof-required ingestion conformance against the TS relay              |
 | `scripts/run-signing.sh`          | Run SIGNING 0.1 conformance against the TS and Go relays                   |
 | `scripts/run-write-disabled.sh`   | Run write-disabled conformance against the TS and Go relays                |
 | `scripts/serve-conformance.ts`    | Start a TS relay with `MemoryRelayStore` for testing                       |
 | `scripts/serve-index-disabled.ts` | Start a TS relay with the `/index/v0` family disabled (501 on every route) |
+| `scripts/serve-proof-required.ts` | Start a proof-required TS relay, plus an open seed door on the next port   |
 | `scripts/serve-signing.ts`        | Start a signing-enabled TS relay for conformance testing                   |
 | `scripts/serve-write-disabled.ts` | Start a seeded, write-disabled TS relay for read-only conformance testing  |
 

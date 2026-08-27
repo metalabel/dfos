@@ -151,7 +151,6 @@ url = "https://relay.dfos.com"
 did = "did:dfos:..."
 
 [defaults]
-auth_token_ttl = "5m"
 credential_ttl = "24h"
 ```
 
@@ -297,13 +296,17 @@ dfos identity publish alice --peer prod
 dfos content publish <contentId> --peer prod
 ```
 
-### Raw API & auth tokens (escape hatch)
+### Raw API & identity proofs (escape hatch)
 
 ```bash
-TOKEN=$(dfos auth token)                        # mint short-lived JWT (default 5m)
 dfos api GET /.well-known/dfos-relay
 dfos api POST /proof/v1/operations --body-file ops.json --auth
+dfos auth proof PUT /content/abc/blob/bafy... --body doc.json --jti   # print a proof for curl
 ```
+
+`--auth` signs an identity proof bound to that one request — method, host, path,
+and body. There is no reusable token: a proof authorizes the request it was signed
+for and goes stale in about a minute, so sign one per call.
 
 ## Destructive operations & key survival
 

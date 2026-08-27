@@ -2,10 +2,11 @@ package cmd
 
 import (
 	"fmt"
-	"time"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
-	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/spf13/cobra"
 )
 
@@ -15,25 +16,66 @@ func newAuthCmd() *cobra.Command {
 		Short:   "Authentication management",
 		GroupID: "auth",
 	}
-	cmd.AddCommand(newAuthTokenCmd())
+	cmd.AddCommand(newAuthProofCmd())
 	cmd.AddCommand(newAuthStatusCmd())
 	return cmd
 }
 
-func newAuthTokenCmd() *cobra.Command {
-	var ttl string
+func newAuthProofCmd() *cobra.Command {
+	var bodyFile string
+	var peerName string
+	var jti bool
 
 	cmd := &cobra.Command{
-		Use:   "token",
-		Short: "Mint a short-lived auth token (stdout)",
+		Use:   "proof <METHOD> <path>",
+		Short: "Sign an identity proof for one request (stdout)",
+		Long: `Sign an identity proof for ONE exact request against a peer and print it.
+
+A proof binds one method, host, path, and body, and the relay accepts it only
+within a short window of its issued-at — so it authorizes that request and
+nothing else, and it goes stale in about a minute. Sign one per request, at the
+moment you make it.
+
+The path must be exactly what goes on the request line, query string included:
+"/signing/v0/requests?limit=10" and "/signing/v0/requests" are different
+requests and need different proofs.
+
+Write-shaped surfaces — POST /proof/v1/operations and PUT blob — require --jti.`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			method := strings.ToUpper(args[0])
+			path := args[1]
+			if !strings.HasPrefix(path, "/") {
+				return fmt.Errorf("path must begin with / (got %q)", path)
+			}
+
 			ctx, chain, err := requireIdentity()
 			if err != nil {
 				return err
 			}
 
-			if ctx.RelayURL == "" {
-				return fmt.Errorf("no peer configured for auth token audience")
+			peerURL := ctx.RelayURL
+			if peerName != "" {
+				peer, ok := cfg.Relays[peerName]
+				if !ok {
+					return fmt.Errorf("unknown peer: %s", peerName)
+				}
+				peerURL = peer.URL
+			}
+			if peerURL == "" {
+				return fmt.Errorf("no peer configured — a proof binds the peer's host, so pass --peer <name>")
+			}
+
+			var body []byte
+			if bodyFile != "" {
+				if bodyFile == "-" {
+					body, err = io.ReadAll(os.Stdin)
+				} else {
+					body, err = os.ReadFile(bodyFile)
+				}
+				if err != nil {
+					return fmt.Errorf("read body: %w", err)
+				}
 			}
 
 			kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
@@ -45,34 +87,26 @@ func newAuthTokenCmd() *cobra.Command {
 				return err
 			}
 
-			dur, err := time.ParseDuration(ttl)
-			if err != nil {
-				return fmt.Errorf("invalid --ttl %q: %w (use Go duration units like 5m, 1h, 24h — note day units like \"1d\" are not supported)", ttl, err)
-			}
-			if dur <= 0 {
-				return fmt.Errorf("--ttl must be positive, got %q (a non-positive TTL mints an already-expired token)", ttl)
-			}
-
-			c := client.New(ctx.RelayURL)
-			info, err := c.GetRelayInfo()
-			if err != nil {
-				return fmt.Errorf("get peer info: %w", err)
-			}
-
-			token, err := protocol.CreateAuthToken(chain.DID, info.DID, kid, dur, privKey)
+			c := client.New(peerURL)
+			authorization, err := c.AuthorizationFor(
+				&client.Signer{Kid: kid, PrivateKey: privKey}, method, path, body, jti)
 			if err != nil {
 				return err
 			}
+			proof := strings.TrimPrefix(authorization, "DFOS ")
 
 			if jsonFlag {
-				outputJSON(map[string]string{"token": token})
+				outputJSON(map[string]string{"proof": proof, "authorization": authorization})
 			} else {
-				fmt.Print(token)
+				fmt.Println(proof)
+				fmt.Printf("Authorization: %s\n", authorization)
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&ttl, "ttl", "5m", "Token TTL (e.g., 5m, 1h)")
+	cmd.Flags().StringVar(&bodyFile, "body", "", "Request body from file (use - for stdin)")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to bind the proof to (default: the active context's peer)")
+	cmd.Flags().BoolVar(&jti, "jti", false, "Attach a random jti — required on write-shaped surfaces")
 	return cmd
 }
 

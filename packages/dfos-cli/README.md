@@ -52,8 +52,8 @@ dfos content show <contentId>
 # download content blob
 dfos content download <contentId>
 
-# mint an auth token (for scripting)
-dfos auth token
+# sign an identity proof for one request (for scripting)
+dfos auth proof GET /signing/v0/requests
 
 # raw HTTP to the relay (with auto auth)
 dfos api GET /proof/v1/identities/did:dfos:xxx
@@ -188,7 +188,7 @@ dfos content publish <id> --peer prod   # submit when ready
 | `content verify`            | Re-verify chain integrity                               |
 | `witness`                   | Countersign (solemnize) an operation                    |
 | `login`                     | Sign in via SIWD, store the credential                  |
-| `auth token`                | Mint auth token (stdout)                                |
+| `auth proof`                | Sign an identity proof for one request (stdout)         |
 | `auth status`               | Show auth state                                         |
 | `api`                       | Raw HTTP to relay                                       |
 | `peer add/remove/list/info` | Manage relays (alias: `relay`)                          |

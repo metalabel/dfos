@@ -179,9 +179,9 @@ func TestRevocationBlocksCredentialUse(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload blob as creator
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// create reader and issue read credential
 	reader := createIdentity(t, base)
@@ -195,8 +195,8 @@ func TestRevocationBlocksCredentialUse(t *testing.T) {
 	}
 
 	// verify blob access works with credential
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 	if dlRes.StatusCode != 200 {
 		body := readBody(t, dlRes)
 		t.Fatalf("expected blob access with credential to succeed: status %d, body: %s", dlRes.StatusCode, body)
@@ -218,7 +218,7 @@ func TestRevocationBlocksCredentialUse(t *testing.T) {
 	}
 
 	// verify blob access is now denied
-	dlRes2 := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	dlRes2 := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 	if dlRes2.StatusCode == 200 {
 		t.Fatal("expected rejection after credential revocation")
 	}
@@ -331,9 +331,9 @@ func TestPerRequestCredentialAfterKeyRotation(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload blob as creator
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// issue a read credential to a reader, signed with CURRENT auth key
 	reader := createIdentity(t, base)
@@ -363,8 +363,8 @@ func TestPerRequestCredentialAfterKeyRotation(t *testing.T) {
 	postOperations(t, base, []string{rotateToken}).Body.Close()
 
 	// reader uses credential signed with the OLD key — should still work
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 	if dlRes.StatusCode != 200 {
 		dlBody := readBody(t, dlRes)
 		t.Fatalf("credential signed with rotated-out key should grant access: status %d, body: %s", dlRes.StatusCode, dlBody)
@@ -382,9 +382,9 @@ func TestStandingAuthorizationViaPublicCredential(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload blob as creator
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// issue and submit public read credential (aud: "*")
 	kid := id.did + "#" + id.auth.keyID
@@ -397,10 +397,10 @@ func TestStandingAuthorizationViaPublicCredential(t *testing.T) {
 
 	// create a second identity (reader) — no per-request credential issued
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
+	readerSigner := signerFor(reader)
 
 	// reader should be able to access blob via standing authorization (no x-credential header)
-	dlRes := getBlob(t, base, cc.contentID, readerTok)
+	dlRes := getBlob(t, base, cc.contentID, readerSigner)
 	if dlRes.StatusCode != 200 {
 		dlBody := readBody(t, dlRes)
 		t.Fatalf("expected standing auth to grant read access: status %d, body: %s", dlRes.StatusCode, dlBody)
@@ -415,11 +415,11 @@ func TestStandingAuthorizationServesOnlyCurrentHead(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 
 	// upload the genesis blob
 	genesisBlob, _ := json.Marshal(cc.document)
-	genesisUpload := putBlob(t, base, cc.contentID, cc.genCID, tok, genesisBlob)
+	genesisUpload := putBlob(t, base, cc.contentID, cc.genCID, signer, genesisBlob)
 	if genesisUpload.StatusCode != 200 {
 		body := readBody(t, genesisUpload)
 		t.Fatalf("upload genesis blob: status %d, body: %s", genesisUpload.StatusCode, body)
@@ -446,7 +446,7 @@ func TestStandingAuthorizationServesOnlyCurrentHead(t *testing.T) {
 	}
 
 	headBlob, _ := json.Marshal(headDocument)
-	headUpload := putBlob(t, base, cc.contentID, headOperationCID, tok, headBlob)
+	headUpload := putBlob(t, base, cc.contentID, headOperationCID, signer, headBlob)
 	if headUpload.StatusCode != 200 {
 		body := readBody(t, headUpload)
 		t.Fatalf("upload head blob: status %d, body: %s", headUpload.StatusCode, body)
@@ -497,7 +497,7 @@ func TestStandingAuthorizationServesOnlyCurrentHead(t *testing.T) {
 		t.Fatal("anonymous head-ref blob does not match uploaded data")
 	}
 
-	creatorGenesis := getBlob(t, base, cc.contentID, tok, cc.genCID)
+	creatorGenesis := getBlob(t, base, cc.contentID, signer, cc.genCID)
 	creatorGenesisBody := readBody(t, creatorGenesis)
 	if creatorGenesis.StatusCode != 200 {
 		t.Fatalf("creator genesis-ref read: status %d, body: %s", creatorGenesis.StatusCode, creatorGenesisBody)
@@ -506,21 +506,23 @@ func TestStandingAuthorizationServesOnlyCurrentHead(t *testing.T) {
 		t.Fatal("creator genesis-ref blob does not match uploaded data")
 	}
 
-	// A stranger holding only their own auth token must NOT reach the non-head
+	// A stranger holding only their own identity must NOT reach the non-head
 	// revision: the standing public grant conveys head-only publicness, so the
 	// authenticated path denies the genesis ref.
 	stranger := createIdentity(t, base)
-	strangerTok := authToken(t, base, stranger)
-	strangerGenesis := getBlob(t, base, cc.contentID, strangerTok, cc.genCID)
+	strangerSigner := signerFor(stranger)
+	strangerGenesis := getBlob(t, base, cc.contentID, strangerSigner, cc.genCID)
 	strangerGenesisBody := readBody(t, strangerGenesis)
 	if strangerGenesis.StatusCode != 403 {
 		t.Fatalf("stranger genesis-ref read: expected 403, got %d, body: %s", strangerGenesis.StatusCode, strangerGenesisBody)
 	}
 
-	// nor by replaying the public credential JWS as a per-request bearer.
+	// nor by presenting the public credential JWS as their own per-request
+	// authorization. The identity proof authenticates the stranger just fine;
+	// what fails is the credential, which grants nothing off the head.
 	replayURL := fmt.Sprintf("%s/content/%s/blob/%s", base, cc.contentID, cc.genCID)
 	replayReq, _ := http.NewRequest("GET", replayURL, nil)
-	replayReq.Header.Set("authorization", "Bearer "+strangerTok)
+	signRequest(t, base, replayReq, strangerSigner, nil, "")
 	replayReq.Header.Set("x-credential", credToken)
 	replayRes, err := http.DefaultClient.Do(replayReq)
 	if err != nil {
@@ -583,9 +585,9 @@ func TestChainWildcardStandingAuth(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload blob as creator
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// issue and submit public credential with chain:* (covers all content)
 	kid := id.did + "#" + id.auth.keyID
@@ -599,20 +601,20 @@ func TestChainWildcardStandingAuth(t *testing.T) {
 	// create a second content chain (different from cc)
 	cc2 := createContent(t, base, id)
 	blobData2, _ := json.Marshal(cc2.document)
-	putBlob(t, base, cc2.contentID, cc2.genCID, tok, blobData2).Body.Close()
+	putBlob(t, base, cc2.contentID, cc2.genCID, signer, blobData2).Body.Close()
 
 	// reader should be able to access both content chains via chain:* standing auth
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
+	readerSigner := signerFor(reader)
 
-	dlRes1 := getBlob(t, base, cc.contentID, readerTok)
+	dlRes1 := getBlob(t, base, cc.contentID, readerSigner)
 	if dlRes1.StatusCode != 200 {
 		dlBody := readBody(t, dlRes1)
 		t.Fatalf("chain:* should grant access to first content: status %d, body: %s", dlRes1.StatusCode, dlBody)
 	}
 	dlRes1.Body.Close()
 
-	dlRes2 := getBlob(t, base, cc2.contentID, readerTok)
+	dlRes2 := getBlob(t, base, cc2.contentID, readerSigner)
 	if dlRes2.StatusCode != 200 {
 		dlBody := readBody(t, dlRes2)
 		t.Fatalf("chain:* should grant access to second content: status %d, body: %s", dlRes2.StatusCode, dlBody)
@@ -630,9 +632,9 @@ func TestChainWildcardPerRequestCredential(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload blob
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// issue a chain:* read credential to a specific reader
 	reader := createIdentity(t, base)
@@ -642,8 +644,8 @@ func TestChainWildcardPerRequestCredential(t *testing.T) {
 	cred := createCustomCredential(t, id.did, reader.did, issuerKid, att, []string{}, exp, id.auth.priv)
 
 	// reader uses chain:* credential to access specific content
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 	if dlRes.StatusCode != 200 {
 		dlBody := readBody(t, dlRes)
 		t.Fatalf("chain:* credential should grant access: status %d, body: %s", dlRes.StatusCode, dlBody)
@@ -661,9 +663,9 @@ func TestAudienceMismatchRejection(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload blob
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// issue credential to a specific reader
 	reader := createIdentity(t, base)
@@ -679,8 +681,8 @@ func TestAudienceMismatchRejection(t *testing.T) {
 	}
 
 	// interloper tries to use credential meant for reader — should be rejected
-	interloperTok := authToken(t, base, interloper)
-	dlRes := getBlobWithCred(t, base, cc.contentID, interloperTok, cred)
+	interloperSigner := signerFor(interloper)
+	dlRes := getBlobWithCred(t, base, cc.contentID, interloperSigner, cred)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("credential with wrong audience should be rejected")
 	}
@@ -697,9 +699,9 @@ func TestCascadingRevocationBlocksDelegatedAccess(t *testing.T) {
 	cc := createContent(t, base, creator)
 
 	// upload blob
-	tok := authToken(t, base, creator)
+	signer := signerFor(creator)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// create a delegate who will receive a delegated credential
 	delegate := createIdentity(t, base)
@@ -718,8 +720,8 @@ func TestCascadingRevocationBlocksDelegatedAccess(t *testing.T) {
 	leafCred := createCustomCredential(t, delegate.did, reader.did, delegateKid, leafAtt, []string{rootCred}, leafExp, delegate.auth.priv)
 
 	// reader should be able to access blob via delegated credential
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, leafCred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, leafCred)
 	if dlRes.StatusCode != 200 {
 		dlBody := readBody(t, dlRes)
 		t.Fatalf("delegated credential should grant access: status %d, body: %s", dlRes.StatusCode, dlBody)
@@ -739,7 +741,7 @@ func TestCascadingRevocationBlocksDelegatedAccess(t *testing.T) {
 	}
 
 	// reader's delegated credential should now be rejected (parent is revoked)
-	dlRes2 := getBlobWithCred(t, base, cc.contentID, readerTok, leafCred)
+	dlRes2 := getBlobWithCred(t, base, cc.contentID, readerSigner, leafCred)
 	if dlRes2.StatusCode == 200 {
 		t.Fatal("delegated credential should be rejected after parent revocation")
 	}
@@ -756,9 +758,9 @@ func TestDelegationExpiryBoundsRejection(t *testing.T) {
 	cc := createContent(t, base, creator)
 
 	// upload blob
-	tok := authToken(t, base, creator)
+	signer := signerFor(creator)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	delegate := createIdentity(t, base)
 
@@ -776,8 +778,8 @@ func TestDelegationExpiryBoundsRejection(t *testing.T) {
 	leafCred := createCustomCredential(t, delegate.did, reader.did, delegateKid, leafAtt, []string{rootCred}, leafExp, delegate.auth.priv)
 
 	// reader tries to use — should be rejected due to expiry violation
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, leafCred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, leafCred)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("delegated credential with exp exceeding parent should be rejected")
 	}
@@ -797,11 +799,11 @@ func TestAttenuationViolationRejection(t *testing.T) {
 	cc2 := createContent(t, base, creator)
 
 	// upload blobs
-	tok := authToken(t, base, creator)
+	signer := signerFor(creator)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 	blobData2, _ := json.Marshal(cc2.document)
-	putBlob(t, base, cc2.contentID, cc2.genCID, tok, blobData2).Body.Close()
+	putBlob(t, base, cc2.contentID, cc2.genCID, signer, blobData2).Body.Close()
 
 	delegate := createIdentity(t, base)
 
@@ -819,8 +821,8 @@ func TestAttenuationViolationRejection(t *testing.T) {
 	leafCred := createCustomCredential(t, delegate.did, reader.did, delegateKid, leafAtt, []string{rootCred}, leafExp, delegate.auth.priv)
 
 	// reader tries to access cc2 — should be rejected (scope widening)
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc2.contentID, readerTok, leafCred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc2.contentID, readerSigner, leafCred)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("delegated credential with widened scope should be rejected")
 	}
@@ -837,9 +839,9 @@ func TestDelegationGapRejection(t *testing.T) {
 	cc := createContent(t, base, creator)
 
 	// upload blob
-	tok := authToken(t, base, creator)
+	signer := signerFor(creator)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// creator issues root credential to "delegate"
 	delegate := createIdentity(t, base)
@@ -857,8 +859,8 @@ func TestDelegationGapRejection(t *testing.T) {
 	leafCred := createCustomCredential(t, outsider.did, reader.did, outsiderKid, leafAtt, []string{rootCred}, leafExp, outsider.auth.priv)
 
 	// reader tries to use — should fail because outsider is not root's audience
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, leafCred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, leafCred)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("delegated credential with delegation gap should be rejected")
 	}
@@ -875,9 +877,9 @@ func TestMultiHopDelegationChain(t *testing.T) {
 	cc := createContent(t, base, creator)
 
 	// upload blob
-	tok := authToken(t, base, creator)
+	signer := signerFor(creator)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// creator → delegateA
 	delegateA := createIdentity(t, base)
@@ -897,8 +899,8 @@ func TestMultiHopDelegationChain(t *testing.T) {
 	credLeaf := createCustomCredential(t, delegateB.did, reader.did, delegateBKid, att, []string{credB}, exp-100, delegateB.auth.priv)
 
 	// reader uses the 3-hop delegated credential
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, credLeaf)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, credLeaf)
 	if dlRes.StatusCode != 200 {
 		dlBody := readBody(t, dlRes)
 		t.Fatalf("3-hop delegation chain should grant access: status %d, body: %s", dlRes.StatusCode, dlBody)
@@ -919,9 +921,9 @@ func TestDelegationRootMismatchRejection(t *testing.T) {
 	cc := createContent(t, base, creator)
 
 	// upload blob
-	tok := authToken(t, base, creator)
+	signer := signerFor(creator)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// non-creator issues a root credential (they don't own the content)
 	nonCreator := createIdentity(t, base)
@@ -932,8 +934,8 @@ func TestDelegationRootMismatchRejection(t *testing.T) {
 	cred := createCustomCredential(t, nonCreator.did, reader.did, nonCreatorKid, att, []string{}, exp, nonCreator.auth.priv)
 
 	// reader tries to use — should fail because chain roots at nonCreator, not creator
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("credential not rooted at content creator should be rejected")
 	}
@@ -950,9 +952,9 @@ func TestPublicStandingAuthAnonymousRead(t *testing.T) {
 	cc := createContent(t, base, alice)
 
 	// upload blob as creator
-	tok := authToken(t, base, alice)
+	signer := signerFor(alice)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// issue and submit public credential (aud: "*")
 	kid := alice.did + "#" + alice.auth.keyID
@@ -1015,7 +1017,7 @@ func TestAnonymousBlobReadDeniedWithoutStandingGrant(t *testing.T) {
 	cc := createContent(t, base, creator)
 
 	blobData, _ := json.Marshal(cc.document)
-	upload := putBlob(t, base, cc.contentID, cc.genCID, authToken(t, base, creator), blobData)
+	upload := putBlob(t, base, cc.contentID, cc.genCID, signerFor(creator), blobData)
 	if upload.StatusCode != 200 {
 		t.Fatalf("upload blob: status %d, body: %s", upload.StatusCode, readBody(t, upload))
 	}
@@ -1040,7 +1042,7 @@ func TestExpiredStandingAuthorizationDeniesAnonymousRead(t *testing.T) {
 	cc := createContent(t, base, creator)
 
 	blobData, _ := json.Marshal(cc.document)
-	upload := putBlob(t, base, cc.contentID, cc.genCID, authToken(t, base, creator), blobData)
+	upload := putBlob(t, base, cc.contentID, cc.genCID, signerFor(creator), blobData)
 	if upload.StatusCode != 200 {
 		t.Fatalf("upload blob: status %d, body: %s", upload.StatusCode, readBody(t, upload))
 	}
@@ -1088,7 +1090,7 @@ func TestNonCreatorRootedStandingAuthorizationDeniesAnonymousRead(t *testing.T) 
 	cc := createContent(t, base, creator)
 
 	blobData, _ := json.Marshal(cc.document)
-	upload := putBlob(t, base, cc.contentID, cc.genCID, authToken(t, base, creator), blobData)
+	upload := putBlob(t, base, cc.contentID, cc.genCID, signerFor(creator), blobData)
 	if upload.StatusCode != 200 {
 		t.Fatalf("upload blob: status %d, body: %s", upload.StatusCode, readBody(t, upload))
 	}
@@ -1121,7 +1123,7 @@ func TestDeletedIssuerStandingAuthorizationDeniesAnonymousRead(t *testing.T) {
 	cc := createContent(t, base, creator)
 
 	blobData, _ := json.Marshal(cc.document)
-	upload := putBlob(t, base, cc.contentID, cc.genCID, authToken(t, base, creator), blobData)
+	upload := putBlob(t, base, cc.contentID, cc.genCID, signerFor(creator), blobData)
 	if upload.StatusCode != 200 {
 		t.Fatalf("upload blob: status %d, body: %s", upload.StatusCode, readBody(t, upload))
 	}
@@ -1180,9 +1182,9 @@ func TestRevokedStandingAuthDeniesAuthedRead(t *testing.T) {
 	cc := createContent(t, base, alice)
 
 	// upload blob as creator
-	tok := authToken(t, base, alice)
+	signer := signerFor(alice)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// issue and submit public read credential (aud: "*")
 	kid := alice.did + "#" + alice.auth.keyID
@@ -1193,8 +1195,8 @@ func TestRevokedStandingAuthDeniesAuthedRead(t *testing.T) {
 
 	// reader with an auth token but NO x-credential — relies purely on standing auth
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
-	if dlRes := getBlob(t, base, cc.contentID, readerTok); dlRes.StatusCode != 200 {
+	readerSigner := signerFor(reader)
+	if dlRes := getBlob(t, base, cc.contentID, readerSigner); dlRes.StatusCode != 200 {
 		t.Fatalf("expected standing auth to grant authed read: status %d, body: %s", dlRes.StatusCode, readBody(t, dlRes))
 	}
 
@@ -1209,7 +1211,7 @@ func TestRevokedStandingAuthDeniesAuthedRead(t *testing.T) {
 	}
 
 	// authed-but-standing read must now be denied
-	dlRes2 := getBlob(t, base, cc.contentID, readerTok)
+	dlRes2 := getBlob(t, base, cc.contentID, readerSigner)
 	dlRes2.Body.Close()
 	if dlRes2.StatusCode == 200 {
 		t.Fatal("expected authed standing-auth read to be denied after revocation")
@@ -1228,9 +1230,9 @@ func TestRevokedWildcardStandingAuthDeniesRead(t *testing.T) {
 	alice := createIdentity(t, base)
 	cc := createContent(t, base, alice)
 
-	tok := authToken(t, base, alice)
+	signer := signerFor(alice)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// chain:* wildcard public grant (contentID "*")
 	kid := alice.did + "#" + alice.auth.keyID
@@ -1240,8 +1242,8 @@ func TestRevokedWildcardStandingAuthDeniesRead(t *testing.T) {
 	}
 
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
-	if dlRes := getBlob(t, base, cc.contentID, readerTok); dlRes.StatusCode != 200 {
+	readerSigner := signerFor(reader)
+	if dlRes := getBlob(t, base, cc.contentID, readerSigner); dlRes.StatusCode != 200 {
 		t.Fatalf("expected wildcard standing auth to grant read: status %d, body: %s", dlRes.StatusCode, readBody(t, dlRes))
 	}
 
@@ -1254,7 +1256,7 @@ func TestRevokedWildcardStandingAuthDeniesRead(t *testing.T) {
 		t.Fatalf("revocation submit: status %d, body: %s", revRes.StatusCode, readBody(t, revRes))
 	}
 
-	dlRes2 := getBlob(t, base, cc.contentID, readerTok)
+	dlRes2 := getBlob(t, base, cc.contentID, readerSigner)
 	dlRes2.Body.Close()
 	if dlRes2.StatusCode == 200 {
 		t.Fatal("expected wildcard standing-auth read to be denied after revocation")

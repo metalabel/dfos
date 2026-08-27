@@ -827,9 +827,9 @@ func TestCountersignatureResponseDedup(t *testing.T) {
 	for _, row := range csResult.Countersignatures {
 		seen[row.JWSToken]++
 	}
-	for tok, n := range seen {
+	for signer, n := range seen {
 		if n > 1 {
-			t.Fatalf("countersig token returned %d times (expected unique): %.60s...", n, tok)
+			t.Fatalf("countersig token returned %d times (expected unique): %.60s...", n, signer)
 		}
 	}
 	if len(csResult.Countersignatures) != 1 {
@@ -973,11 +973,11 @@ func TestBlobUploadDownload(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
 
 	// upload
-	res := putBlob(t, base, cc.contentID, cc.genCID, tok, blobData)
+	res := putBlob(t, base, cc.contentID, cc.genCID, signer, blobData)
 	if res.StatusCode != 200 {
 		body := readBody(t, res)
 		t.Fatalf("blob upload: status %d, body: %s", res.StatusCode, body)
@@ -985,7 +985,7 @@ func TestBlobUploadDownload(t *testing.T) {
 	res.Body.Close()
 
 	// download
-	dlRes := getBlob(t, base, cc.contentID, tok)
+	dlRes := getBlob(t, base, cc.contentID, signer)
 	if dlRes.StatusCode != 200 {
 		body := readBody(t, dlRes)
 		t.Fatalf("blob download: status %d, body: %s", dlRes.StatusCode, body)
@@ -1001,10 +1001,10 @@ func TestBlobRejectMismatch(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	wrongData := []byte("this does not match the documentCID")
 
-	res := putBlob(t, base, cc.contentID, cc.genCID, tok, wrongData)
+	res := putBlob(t, base, cc.contentID, cc.genCID, signer, wrongData)
 	if res.StatusCode == 200 {
 		t.Fatal("expected rejection for mismatched blob data")
 	}
@@ -1037,9 +1037,9 @@ func TestBlobDownloadWithCredential(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload as creator
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// create reader identity with read credential
 	reader := createIdentity(t, base)
@@ -1053,8 +1053,8 @@ func TestBlobDownloadWithCredential(t *testing.T) {
 	}
 
 	// reader needs their own auth token + the credential in x-credential header
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 	if dlRes.StatusCode != 200 {
 		body := readBody(t, dlRes)
 		t.Fatalf("credential download: status %d, body: %s", dlRes.StatusCode, body)
@@ -1068,14 +1068,14 @@ func TestBlobRejectWithoutCredential(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// random identity tries to download without credential
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlob(t, base, cc.contentID, readerTok)
+	readerSigner := signerFor(reader)
+	dlRes := getBlob(t, base, cc.contentID, readerSigner)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("expected rejection for download without read credential")
 	}
@@ -1088,9 +1088,9 @@ func TestBlobRejectCredentialFromNonCreator(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// imposter issues read credential
 	imposter := createIdentity(t, base)
@@ -1101,8 +1101,8 @@ func TestBlobRejectCredentialFromNonCreator(t *testing.T) {
 		5*time.Minute, imposter.auth.priv,
 	)
 
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("expected rejection for credential from non-creator")
 	}
@@ -1217,9 +1217,9 @@ func TestDelegatedBlobUpload(t *testing.T) {
 	postOperations(t, base, []string{updateToken}).Body.Close()
 
 	// delegate uploads blob via their operation CID
-	delegateTok := authToken(t, base, delegate)
+	delegateSigner := signerFor(delegate)
 	blobData, _ := json.Marshal(doc2)
-	res := putBlob(t, base, cc.contentID, updateCID, delegateTok, blobData)
+	res := putBlob(t, base, cc.contentID, updateCID, delegateSigner, blobData)
 	if res.StatusCode != 200 {
 		body := readBody(t, res)
 		t.Fatalf("delegated blob upload: status %d, body: %s", res.StatusCode, body)
@@ -1234,10 +1234,10 @@ func TestBlobUploadRejectNonSigner(t *testing.T) {
 
 	// third party tries to upload via creator's operation CID
 	thirdParty := createIdentity(t, base)
-	thirdPartyTok := authToken(t, base, thirdParty)
+	thirdPartySigner := signerFor(thirdParty)
 	blobData, _ := json.Marshal(cc.document)
 
-	res := putBlob(t, base, cc.contentID, cc.genCID, thirdPartyTok, blobData)
+	res := putBlob(t, base, cc.contentID, cc.genCID, thirdPartySigner, blobData)
 	if res.StatusCode == 200 {
 		t.Fatal("expected rejection for blob upload by non-signer")
 	}
@@ -1248,37 +1248,54 @@ func TestBlobUploadRejectNonSigner(t *testing.T) {
 // auth edge cases
 // ===================================================================
 
-func TestAuthWrongAudience(t *testing.T) {
+// TestAuthWrongHost proves the host binding: a proof signed for a DIFFERENT
+// authority is refused here, which is what stops a proof harvested by one host
+// from being spent against another.
+func TestAuthWrongHost(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	// auth token with wrong audience
-	kid := id.did + "#" + id.auth.keyID
-	wrongTok, _ := dfos.CreateAuthToken(id.did, "did:dfos:wrongrelay", kid, 5*time.Minute, id.auth.priv)
-
 	blobData, _ := json.Marshal(cc.document)
-	res := putBlob(t, base, cc.contentID, cc.genCID, wrongTok, blobData)
-	if res.StatusCode == 200 {
-		t.Fatal("expected rejection for wrong audience")
+	target := fmt.Sprintf("/content/%s/blob/%s", cc.contentID, cc.genCID)
+	wrongHost, err := dfos.BuildIdentityProof(http.MethodPut, "elsewhere.example", target,
+		id.did+"#"+id.auth.keyID, id.auth.priv,
+		dfos.IdentityProofOptions{Body: blobData, ExtraMembers: dfos.ProofExtraMembers{"jti": newJTI(t)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := putBlobWithProof(t, base, cc.contentID, cc.genCID, wrongHost, blobData)
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("proof bound to another authority: status %d, want 401", res.StatusCode)
 	}
 	res.Body.Close()
 }
 
-func TestAuthExpiredToken(t *testing.T) {
+// TestAuthStaleProof proves the freshness bound: an iat outside the acceptance
+// window is refused, so a captured proof stops working within about a minute
+// rather than for its signer's chosen lifetime.
+func TestAuthStaleProof(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	// create an already-expired token
-	relayDID := getRelayDID(t, base)
-	kid := id.did + "#" + id.auth.keyID
-	expiredTok, _ := dfos.CreateAuthToken(id.did, relayDID, kid, -1*time.Hour, id.auth.priv)
-
 	blobData, _ := json.Marshal(cc.document)
-	res := putBlob(t, base, cc.contentID, cc.genCID, expiredTok, blobData)
-	if res.StatusCode == 200 {
-		t.Fatal("expected rejection for expired token")
+	target := fmt.Sprintf("/content/%s/blob/%s", cc.contentID, cc.genCID)
+	stale, err := dfos.BuildIdentityProof(http.MethodPut, relayAuthority(t, base), target,
+		id.did+"#"+id.auth.keyID, id.auth.priv,
+		dfos.IdentityProofOptions{
+			Body:         blobData,
+			Iat:          time.Now().UTC().Add(-1 * time.Hour).Unix(),
+			ExtraMembers: dfos.ProofExtraMembers{"jti": newJTI(t)},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := putBlobWithProof(t, base, cc.contentID, cc.genCID, stale, blobData)
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("stale proof: status %d, want 401", res.StatusCode)
 	}
 	res.Body.Close()
 }
@@ -1308,9 +1325,9 @@ func TestAuthRotatedOutKey(t *testing.T) {
 	postOperations(t, base, []string{updateToken}).Body.Close()
 
 	// try to use old auth key
-	oldTok := authTokenWithKey(t, base, id, oldAuth)
+	oldSigner := signerForKey(id, oldAuth)
 	blobData, _ := json.Marshal(cc.document)
-	res := putBlob(t, base, cc.contentID, cc.genCID, oldTok, blobData)
+	res := putBlob(t, base, cc.contentID, cc.genCID, oldSigner, blobData)
 	if res.StatusCode == 200 {
 		t.Fatal("expected rejection for rotated-out auth key")
 	}
@@ -1327,12 +1344,12 @@ func TestBlobDownloadAtRef(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload initial blob
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// download at specific ref
-	dlRes := getBlob(t, base, cc.contentID, tok, cc.genCID)
+	dlRes := getBlob(t, base, cc.contentID, signer, cc.genCID)
 	if dlRes.StatusCode != 200 {
 		body := readBody(t, dlRes)
 		t.Fatalf("download at ref: status %d, body: %s", dlRes.StatusCode, body)
@@ -1348,12 +1365,12 @@ func TestBlobDownloadAtHead(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// download at head (no ref)
-	dlRes := getBlob(t, base, cc.contentID, tok)
+	dlRes := getBlob(t, base, cc.contentID, signer)
 	if dlRes.StatusCode != 200 {
 		body := readBody(t, dlRes)
 		t.Fatalf("download at head: status %d, body: %s", dlRes.StatusCode, body)
@@ -1370,16 +1387,16 @@ func TestBlobDownloadDeletedContent(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload, then delete
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	kid := id.did + "#" + id.auth.keyID
 	delToken, _, _ := dfos.SignContentDelete(id.did, cc.genCID, kid, "", id.auth.priv)
 	postOperations(t, base, []string{delToken}).Body.Close()
 
 	// download at head should 404
-	dlRes := getBlob(t, base, cc.contentID, tok)
+	dlRes := getBlob(t, base, cc.contentID, signer)
 	if dlRes.StatusCode != 404 {
 		t.Fatalf("expected 404 for deleted content blob, got %d", dlRes.StatusCode)
 	}

@@ -70,7 +70,7 @@ func TestContentDisabledRoutes501(t *testing.T) {
 	// not required — but using a real authed request proves the 501 is the gate
 	// firing, not an auth (401) or routing (404) artifact masquerading as one.
 	id := createIdentity(t, base)
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 
 	// A syntactically valid 31-char content id that does not (and need not) exist
 	// on the relay — the capability gate precedes existence checks.
@@ -78,17 +78,17 @@ func TestContentDisabledRoutes501(t *testing.T) {
 	const opCID = "bafyreib4dsummyopcidforthe501gatetestxxxxxxxxxxxxxxxxx"
 
 	t.Run("GET /content/{id}/blob (head)", func(t *testing.T) {
-		resp := getBlob(t, base, contentID, tok)
+		resp := getBlob(t, base, contentID, signer)
 		assert501(t, "GET /content/{id}/blob", resp)
 	})
 
 	t.Run("GET /content/{id}/blob/{ref}", func(t *testing.T) {
-		resp := getBlob(t, base, contentID, tok, opCID)
+		resp := getBlob(t, base, contentID, signer, opCID)
 		assert501(t, "GET /content/{id}/blob/{ref}", resp)
 	})
 
 	t.Run("PUT /content/{id}/blob/{operationCID}", func(t *testing.T) {
-		resp := putBlob(t, base, contentID, opCID, tok, []byte("payload"))
+		resp := putBlob(t, base, contentID, opCID, signer, []byte("payload"))
 		assert501(t, "PUT /content/{id}/blob/{operationCID}", resp)
 	})
 }

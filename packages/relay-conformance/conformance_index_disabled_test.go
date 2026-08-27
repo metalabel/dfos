@@ -91,13 +91,13 @@ func TestIndexDisabledAdjacentSurfacesUnaffected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal content blob: %v", err)
 	}
-	upload := putBlob(t, base, cc.contentID, cc.genCID, authToken(t, base, creator), blobData)
+	upload := putBlob(t, base, cc.contentID, cc.genCID, signerFor(creator), blobData)
 	if upload.StatusCode != http.StatusOK {
 		t.Fatalf("PUT content blob with index disabled: status %d, body: %s", upload.StatusCode, readBody(t, upload))
 	}
 	upload.Body.Close()
 
-	download := getBlob(t, base, cc.contentID, authToken(t, base, creator))
+	download := getBlob(t, base, cc.contentID, signerFor(creator))
 	downloaded := readBody(t, download)
 	if download.StatusCode != http.StatusOK {
 		t.Fatalf("GET content blob with index disabled: status %d, body: %s", download.StatusCode, downloaded)

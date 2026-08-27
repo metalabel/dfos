@@ -64,7 +64,7 @@ func TestCredentialAttCardinalityCap(t *testing.T) {
 	creator, cc, _ := credContentFixture(t, base)
 
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
+	readerSigner := signerFor(reader)
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	exp := time.Now().Unix() + 300
 	grant := map[string]string{"resource": "chain:" + cc.contentID, "action": "read"}
@@ -75,7 +75,7 @@ func TestCredentialAttCardinalityCap(t *testing.T) {
 		att32[i] = grant
 	}
 	ok := signCredentialV(t, 1, creator.did, reader.did, creatorKid, att32, []string{}, exp, creator.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, ok); r.StatusCode != 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, ok); r.StatusCode != 200 {
 		b := readBody(t, r)
 		t.Fatalf("positive control: 32-att credential should grant access, got %d: %s", r.StatusCode, b)
 	} else {
@@ -88,7 +88,7 @@ func TestCredentialAttCardinalityCap(t *testing.T) {
 		att33[i] = grant
 	}
 	bad := signCredentialV(t, 1, creator.did, reader.did, creatorKid, att33, []string{}, exp, creator.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, bad); r.StatusCode == 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, bad); r.StatusCode == 200 {
 		t.Fatal("33-att credential (over cap) should be rejected")
 	} else {
 		r.Body.Close()
@@ -128,12 +128,12 @@ func TestUnknownEnvelopeKeyTolerated(t *testing.T) {
 		t.Fatalf("DagCborCID: %v", err)
 	}
 	header := dfos.JWSHeader{Alg: "EdDSA", Typ: "did:dfos:content-op", Kid: kid, CID: cidStr}
-	tok, err := dfos.CreateJWS(header, payload, id.auth.priv)
+	signer, err := dfos.CreateJWS(header, payload, id.auth.priv)
 	if err != nil {
 		t.Fatalf("CreateJWS: %v", err)
 	}
 
-	if st, msg := postStatus(t, base, tok); st != "new" {
+	if st, msg := postStatus(t, base, signer); st != "new" {
 		t.Fatalf("operation with an unknown top-level field should be accepted, got status %q (%s)", st, msg)
 	}
 }
