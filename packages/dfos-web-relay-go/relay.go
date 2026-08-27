@@ -255,7 +255,7 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 				// runSequencerLocked pass below, which then sees them as duplicates), so
 				// without this an eager follower would only materialize them on the slow
 				// reconcile backstop. Mirrors the sequencer-loop marking.
-				r.markContentFollowDirty(res)
+				r.markContentFollowDirty(res, tokens[i])
 			}
 		case res.Status == "duplicate":
 			if err := r.store.MarkOpsSequenced([]string{rawCID}); err != nil {

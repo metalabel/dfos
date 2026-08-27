@@ -55,11 +55,30 @@ func verifyBlobBytes(bytes []byte, wantDocumentCID string) error {
 //     mark that contentID for a targeted materialize. A delete leaves stale blobs,
 //     but GC is correctness-free and revocation/delete are rare, so reclamation
 //     rides the periodic GC backstop rather than decoding every content-op here.
-//   - credential: a new public grant's blast radius is unbounded (a broad grant can
-//     authorize many chains), so request a full materialize scan rather than guess
-//     the resource — credentials are rare relative to content-ops.
-//   - revocation: may orphan materialized blobs — request a GC pass.
-func (r *Relay) markContentFollowDirty(res IngestionResult) {
+//   - credential: read the grant's scope from its att. The v1 resource grammar is
+//     closed on this axis (`chain:<contentId>` exact vs `chain:*` wildcard), so a
+//     chain-scoped grant marks exactly the chains it names and only a wildcard pays
+//     the whole-corpus scan. On real federated corpora credentials are NOT rare
+//     relative to content-ops, and the overwhelming majority of them are
+//     chain-scoped — marking every one of them full made the fast path re-run the
+//     O(corpus) sweep on effectively every sync cycle, starving proof-plane
+//     catch-up.
+//   - revocation: may orphan materialized blobs. The revoked grant's scope was
+//     resolved at ingest (IngestionResult.RevokedGrant), so a chain-scoped
+//     revocation GCs just those chains.
+//
+// Both narrowings FAIL OPEN: any scope we cannot read exactly — an undecodable
+// credential token, a revocation of a credential we do not hold — falls back to the
+// full scan. A narrow mark is never allowed to be the reason work goes undone.
+//
+// The two cases differ on a fully-read-but-empty chain scope (a grant naming only
+// non-`chain:` resources, e.g. the additive `mailbox:` / `api:` forms). A credential
+// like that authorizes no content chain, and treating it as a full scan would
+// recreate the very defect above once such grants are common — so it marks nothing.
+// A revocation like that is rare enough that the margin is free, so it still pays a
+// scan. Frequency of the op is what decides how much fail-open margin is worth
+// buying, not a preference for symmetry.
+func (r *Relay) markContentFollowDirty(res IngestionResult, jwsToken string) {
 	if r.contentFollow != contentFollowEager {
 		return
 	}
@@ -67,9 +86,23 @@ func (r *Relay) markContentFollowDirty(res IngestionResult) {
 	case "content-op":
 		r.materializeDirty.markID(res.ChainID) // ChainID is the contentID for content-ops
 	case "credential":
-		r.materializeDirty.markFull()
+		wildcard, contentIDs, parsed := contentIdsFromCredentialToken(jwsToken)
+		if wildcard || !parsed {
+			r.materializeDirty.markFull()
+			return
+		}
+		for _, contentID := range contentIDs {
+			r.materializeDirty.markID(contentID)
+		}
 	case "revocation":
-		r.gcDirty.markFull()
+		grant := res.RevokedGrant
+		if grant == nil || grant.Wildcard || len(grant.ContentIDs) == 0 {
+			r.gcDirty.markFull()
+			return
+		}
+		for _, contentID := range grant.ContentIDs {
+			r.gcDirty.markID(contentID)
+		}
 	}
 }
 
@@ -291,11 +324,12 @@ func (r *Relay) clearBlobSource(peerURL string) {
 	r.blobSourceCooldown.Delete(peerURL)
 }
 
-// GCRevokedContent runs one convergent reclamation pass: for every content chain
-// that is NO LONGER publicly readable (its standing grant was revoked, or the
-// chain was deleted/sealed), delete any document blobs the follower had
-// materialized for it. Idempotent and coalesced (gcMu); a no-op unless
-// ContentFollow == "eager".
+// GCRevokedContent drains the GC work queue: for each content chain it covers that
+// is NO LONGER publicly readable (its standing grant was revoked, or the chain was
+// deleted/sealed), delete any document blobs the follower had materialized for it.
+// Covers the chains a chain-scoped revocation named, or — on a full-scan request —
+// the whole corpus. Idempotent and coalesced (gcMu); a no-op unless ContentFollow
+// == "eager".
 //
 // This is the GC complement to MaterializeFollowedContent — same convergent shape,
 // opposite direction, same gate. Correctness never depends on it (a revoked
@@ -311,27 +345,59 @@ func (r *Relay) GCRevokedContent() {
 	}
 	defer r.gcMu.Unlock()
 
-	// GC only ever has whole-corpus work (a revocation or delete can orphan blobs
-	// anywhere), and revocation/delete are rare — so the queue is a single "a scan
-	// is warranted" flag. Nothing flagged since the last pass → skip the corpus
-	// scan entirely (the common case). Reclamation is correctness-free, so even if a
-	// mark is missed the periodic backstop catches it.
-	if _, full := r.gcDirty.take(); !full {
-		return
+	// Same drain shape as MaterializeFollowedContent: a full-scan request covers
+	// the whole corpus and therefore supersedes any pending ids, while a set of
+	// ids (a chain-scoped revocation) is reclaimed one chain at a time. Nothing
+	// flagged since the last pass → return without touching the store (the common
+	// case — that idle path is the whole point of the queue). Reclamation is
+	// correctness-free, so even if a mark is missed the periodic backstop catches
+	// it.
+	for {
+		ids, full := r.gcDirty.take()
+		if full {
+			r.gcAllUnreadableChains()
+			return
+		}
+		if len(ids) == 0 {
+			return
+		}
+		for _, contentID := range ids {
+			r.gcOneChain(contentID)
+		}
 	}
+}
 
+// gcAllUnreadableChains is the convergent whole-corpus reclamation pass: drop the
+// materialized blobs of every chain that is no longer publicly readable. O(corpus)
+// — reserved for the periodic backstop and for revocations whose scope could not be
+// narrowed, NOT the per-tick path.
+func (r *Relay) gcAllUnreadableChains() {
 	chains, err := r.readStore.ListContentChains()
 	if err != nil {
 		r.logger.Warn("gc: list content chains failed", "error", err)
 		return
 	}
 	for _, chain := range chains {
-		publiclyReadable := !chain.State.IsDeleted && hasPublicStandingAuth(chain.ContentID, "read", r.readStore)
-		if publiclyReadable {
+		if !chain.State.IsDeleted && hasPublicStandingAuth(chain.ContentID, "read", r.readStore) {
 			continue
 		}
 		r.gcChainBlobs(chain)
 	}
+}
+
+// gcOneChain is the targeted fast path: load one chain by contentID, apply the SAME
+// readability gate the corpus pass applies, and reclaim its blobs if it fails.
+// O(1) chains — driven by a chain-scoped revocation's dirty marks so a revoke
+// reclaims within a tick without a whole-corpus scan.
+func (r *Relay) gcOneChain(contentID string) {
+	chain, err := r.readStore.GetContentChain(contentID)
+	if err != nil || chain == nil {
+		return
+	}
+	if !chain.State.IsDeleted && hasPublicStandingAuth(chain.ContentID, "read", r.readStore) {
+		return
+	}
+	r.gcChainBlobs(*chain)
 }
 
 // gcChainBlobs deletes any materialized document blobs for a chain that is no

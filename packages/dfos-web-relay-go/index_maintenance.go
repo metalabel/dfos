@@ -188,28 +188,40 @@ func contentIdsFromCredential(credential StoredPublicCredential) (wildcard bool,
 	return wildcard, contentIds
 }
 
-func contentIdsFromCredentialToken(jwsToken string) (wildcard bool, contentIds []string) {
+// contentIdsFromCredentialToken is the same read against an undecoded credential
+// op. parsed reports whether every resource in the token was actually readable —
+// false when the JWS didn't decode, when `att` isn't an array, or when any entry
+// was unreadable and therefore could have named a resource this returned scope
+// omits. The two callers deliberately differ on what to do about it: the index
+// projection is a non-authoritative hint plane, so it ignores parsed and just
+// dirties what it could read, while markContentFollowDirty fails open to a full
+// scan rather than silently skip content-follow work.
+func contentIdsFromCredentialToken(jwsToken string) (wildcard bool, contentIds []string, parsed bool) {
 	_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 	if err != nil || payload == nil {
-		return false, nil
+		return false, nil, false
 	}
 	att, ok := payload["att"].([]any)
 	if !ok {
-		return false, nil
+		return false, nil, false
 	}
+	parsed = true
 	credential := StoredPublicCredential{}
 	for _, entry := range att {
 		m, ok := entry.(map[string]any)
 		if !ok {
+			parsed = false
 			continue
 		}
 		resource, ok := m["resource"].(string)
 		if !ok {
+			parsed = false
 			continue
 		}
 		credential.Att = append(credential.Att, AttenuationPair{Resource: resource})
 	}
-	return contentIdsFromCredential(credential)
+	wildcard, contentIds = contentIdsFromCredential(credential)
+	return wildcard, contentIds, parsed
 }
 
 // collectIndexDirtyAfterOp collects the rows ONE accepted operation dirties into
@@ -276,7 +288,7 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 			}
 		}
 	case "credential":
-		wildcard, contentIds := contentIdsFromCredentialToken(jwsToken)
+		wildcard, contentIds, _ := contentIdsFromCredentialToken(jwsToken)
 		if wildcard {
 			dirty.allContent = true
 		} else {
