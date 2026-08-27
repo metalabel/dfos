@@ -183,9 +183,12 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 			"index":       r.indexEnabled,
 			"signing":     r.signingEnabled,
 		},
-		"profile": r.profileArtifactJWS,
-		"peers":   peers,
-		"stats":   statsBlock,
+		// The admission-mode HINT, so a client knows before attempting. The policy
+		// decision is still the authority.
+		"ingestion": r.ingestionMode,
+		"profile":   r.profileArtifactJWS,
+		"peers":     peers,
+		"stats":     statsBlock,
 	})
 }
 
@@ -193,41 +196,55 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 // operations
 // ---------------------------------------------------------------------------
 
+// handlePostOperations submits operations for ingestion.
+//
+// THE ADMISSION LADDER IS NORMATIVE, CHEAPEST FIRST (WEB-RELAY.md, Ingestion
+// Admission): structural caps (400/413) -> proof verification when one is
+// presented (401 invalid / 503 unverifiable) -> admission policy over
+// (principal | anonymous), a request-level 403 -> full per-item verification.
+// The expensive step is never spent on a submission policy refuses, and a
+// refusal produces NO per-item results.
+//
+// Peers are not special: gossip-in, client submission, and open deposit are one
+// door with one grammar.
 func (r *Relay) handlePostOperations(w http.ResponseWriter, req *http.Request) {
-	// LITE pull-only node: writes (and therefore peer gossip-in, which posts
-	// here too) are disabled by role. 501 matches the content-disabled
-	// convention — the well-known advertises write:false so clients/peers know
-	// in advance. Such a node still ingests by pulling from peers.
+	// 0. Capability gates, BEFORE anything else. LITE pull-only nodes (and a relay
+	// whose ingestion is configured "closed") present no ingestion surface at all;
+	// the well-known advertises both so clients/peers know in advance.
 	if !r.writeEnabled {
 		writeError(w, 501, "this relay is pull-only; writes are disabled")
 		return
 	}
-	// DoS cap: oversized transport bodies are distinct from malformed JSON.
+	if r.ingestionMode == IngestionClosed {
+		writeError(w, 501, "this relay does not accept external ingestion")
+		return
+	}
+
+	// 1. Structural caps. The body is buffered rather than streamed because an
+	// identity proof binds bodyHash: the exact octets have to be in hand before
+	// the request can be authenticated at all.
 	if req.ContentLength > maxRequestBodyBytes {
 		writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
 		return
 	}
 	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
-	var body struct {
-		Operations []string `json:"operations"`
-	}
-	decoder := json.NewDecoder(req.Body)
-	if err := decoder.Decode(&body); err != nil {
+	raw, readErr := io.ReadAll(req.Body)
+	if readErr != nil {
 		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if errors.As(readErr, &tooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
 		} else {
 			writeJSON(w, 400, map[string]string{"error": "invalid JSON body"})
 		}
 		return
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
-		} else {
-			writeJSON(w, 400, map[string]string{"error": "invalid JSON body"})
-		}
+	var body struct {
+		Operations []string `json:"operations"`
+	}
+	// json.Unmarshal rejects trailing content after the top-level value, which is
+	// the same refusal the previous second-Decode pass made.
+	if err := json.Unmarshal(raw, &body); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid JSON body"})
 		return
 	}
 	if len(body.Operations) == 0 || len(body.Operations) > 100 {
@@ -238,6 +255,41 @@ func (r *Relay) handlePostOperations(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	// 2. Proof verification, when a proof is presented. An identity proof here is
+	// OPTIONAL — anonymous is a valid admission mode — but presenting an invalid
+	// one is a 401, not a downgrade to anonymous. jti is REQUIRED: this is a
+	// write-shaped surface, and policy runs before full verification, so the relay
+	// grants admission-layer effects before it knows the payload is a duplicate.
+	auth := r.authenticateIdentityProof(req, raw, true)
+	if auth.Status != 0 {
+		writeError(w, auth.Status, auth.Error)
+		return
+	}
+	principal := ""
+	if auth.Principal != nil {
+		principal = auth.Principal.DID
+	}
+
+	// 3. Admission policy over (principal | anonymous). A refusal is REQUEST-LEVEL:
+	// nothing in the batch is examined further and no per-item results are
+	// produced. A policy that cannot be evaluated FAILS CLOSED — the server's
+	// condition, not a judgment on the caller.
+	if r.ingestionMode == IngestionProofRequired && principal == "" {
+		writeError(w, http.StatusForbidden, "ingestion requires an identity proof")
+		return
+	}
+	admitted, policyErr := r.admissionPolicy(principal)
+	if policyErr != nil {
+		writeError(w, http.StatusServiceUnavailable, "admission policy could not be evaluated")
+		return
+	}
+	if !admitted {
+		writeError(w, http.StatusForbidden, "submission refused by admission policy")
+		return
+	}
+
+	// 4. Full verification — the per-item chain and signature work, only for
+	// admitted submissions.
 	results := r.Ingest(body.Operations)
 	writeJSON(w, 200, map[string]any{"results": results})
 }
@@ -756,10 +808,31 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 	contentID := req.PathValue("contentId")
 	operationCID := req.PathValue("operationCID")
 
-	// authenticate — use readStore so the auth read never races on the
-	// ingestion store's active write transaction (tx aliasing).
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore, r.maxAuthTokenTTL)
-	if auth == nil {
+	// Read the blob bytes FIRST (capped at 16 MB, shared with POST /operations):
+	// an identity proof binds bodyHash, so the bytes have to be in hand before the
+	// request can be authenticated at all.
+	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
+	bytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			writeError(w, 400, "failed to read body")
+		}
+		return
+	}
+
+	// Authenticate with an identity proof. Blob upload is WRITE-SHAPED, so the
+	// proof MUST carry jti and is recorded against the replay cache. Key
+	// resolution runs on readStore so it never races on the ingestion store's
+	// active write transaction (tx aliasing).
+	auth := r.authenticateIdentityProof(req, bytes, true)
+	if auth.Status != 0 {
+		writeError(w, auth.Status, auth.Error)
+		return
+	}
+	if auth.Principal == nil {
 		writeError(w, 401, "authentication required")
 		return
 	}
@@ -797,22 +870,8 @@ func (r *Relay) handlePutBlob(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// authorize: caller must be chain creator or the operation signer
-	if auth.Iss != chain.State.CreatorDID && auth.Iss != operationSignerDID {
+	if auth.Principal.DID != chain.State.CreatorDID && auth.Principal.DID != operationSignerDID {
 		writeError(w, 403, "not authorized — must be chain creator or operation signer")
-		return
-	}
-
-	// read blob bytes (capped at 16 MB, shared with POST /operations) and verify
-	// they match documentCID
-	req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
-	bytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
-		} else {
-			writeError(w, 400, "failed to read body")
-		}
 		return
 	}
 
@@ -872,15 +931,27 @@ func (r *Relay) authorizeRead(w http.ResponseWriter, req *http.Request, contentI
 	if publicAccess {
 		return true
 	}
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore, r.maxAuthTokenTTL)
-	if auth == nil {
+	// The AuthN half: an identity proof. A blob read is READ-SHAPED, so it relies
+	// on the freshness window alone — no jti (API-AUTH's accepted within-window
+	// replay bound: a replay is a re-read returning the same bytes).
+	//
+	// An accompanying X-Credential is NOT malformed here, unlike on an api:<host>
+	// surface: the identity proof is the AuthN half and the DFOS credential is a
+	// separate authorization artifact (WEB-RELAY.md, Authentication) — two halves
+	// of one answer, not two competing claims.
+	auth := r.authenticateIdentityProof(req, nil, false)
+	if auth.Status != 0 {
+		writeError(w, auth.Status, auth.Error)
+		return false
+	}
+	if auth.Principal == nil {
 		writeError(w, 401, "authentication required")
 		return false
 	}
 	credHeader := req.Header.Get("X-Credential")
 	// public grants convey head-only publicness; a non-head read needs the
 	// creator or an audience-scoped credential.
-	if errMsg := r.verifyContentAccess(auth.Iss, creatorDID, "chain:"+contentID, "read", credHeader, isHeadRef); errMsg != "" {
+	if errMsg := r.verifyContentAccess(auth.Principal.DID, creatorDID, "chain:"+contentID, "read", credHeader, isHeadRef); errMsg != "" {
 		writeError(w, 403, errMsg)
 		return false
 	}

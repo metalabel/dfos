@@ -67,6 +67,15 @@ paths:
                       signing:
                         type: boolean
                         description: Whether the optional SIGNING 0.1 mailbox courier is enabled
+                  ingestion:
+                    type: string
+                    enum: [open, proof-required, closed]
+                    description: |
+                      Admission-mode hint for POST /proof/v1/operations. `open` — anonymous
+                      submissions admitted, subject to policy; `proof-required` — anonymous
+                      refused at the policy step (403); `closed` — no external ingestion (501).
+                      Absent derives from capabilities.write. Advertisement is a hint; the
+                      relay-local admission policy is the authority.
                   profile:
                     type: string
                     description: The relay's profile artifact as a compact JWS token
@@ -175,7 +184,7 @@ paths:
       description: Returns only the authenticated subject's unexpired, unanswered requests in oldest-first order.
       tags: [Signing Mailbox]
       security:
-        - BearerAuth: []
+        - IdentityProof: []
       parameters:
         - name: after
           in: query
@@ -297,7 +306,17 @@ paths:
         Accept a batch of JWS tokens — identity operations, content operations,
         and countersignatures. The relay classifies, dependency-sorts,
         verifies, and stores each token.
+
+        Admission is a ladder, cheapest first: structural caps (400/413), then
+        proof verification when an identity proof is presented (401 invalid /
+        503 unverifiable), then the relay-local admission policy over
+        (principal | anonymous) — a refusal is a request-level 403 with no
+        per-item results — then full per-item verification. An identity proof is
+        OPTIONAL here and, when presented, MUST carry `jti` (write-shaped).
       tags: [Proof Plane]
+      security:
+        - {}
+        - IdentityProof: []
       requestBody:
         required: true
         content:
@@ -328,6 +347,16 @@ paths:
                       $ref: '#/components/schemas/IngestionResult'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          description: An identity proof was presented and is invalid (bad signature, stale, wrong binding, missing or replayed jti)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Refused by the relay-local admission policy — request-level, no per-item results
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '413':
           description: Aggregate request body exceeds 16 MiB
           content:
@@ -335,6 +364,11 @@ paths:
               schema: { $ref: '#/components/schemas/Error' }
         '501':
           $ref: '#/components/responses/NotImplemented'
+        '503':
+          description: The presenter could not be resolved, the relay has no configured authority, or the admission policy could not be evaluated (fail closed)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 
   /proof/v1/operations/{cid}:
     get:
@@ -1399,12 +1433,13 @@ paths:
       summary: Upload a content blob
       description: |
         Upload raw bytes for a document referenced by a content chain operation.
-        Requires auth token. Caller must be the chain creator or the signer of the
-        referenced operation. For PUT, `ref` MUST be the operation CID whose
-        `documentCID` this blob satisfies.
+        Requires an identity proof carrying `jti` (this is a write-shaped route).
+        The proven DID must be the chain creator or the signer of the referenced
+        operation. For PUT, `ref` MUST be the operation CID whose `documentCID`
+        this blob satisfies.
       tags: [Content Plane]
       security:
-        - BearerAuth: []
+        - IdentityProof: []
       parameters:
         - name: contentId
           in: path
@@ -1467,7 +1502,7 @@ paths:
       tags: [Content Plane]
       security:
         - {}
-        - BearerAuth: []
+        - IdentityProof: []
       parameters:
         - name: contentId
           in: path
@@ -1514,12 +1549,13 @@ paths:
       description: |
         Download the raw bytes of the current document at chain head.
         Anonymous access is legal when a standing public-read grant authorizes
-        it. Otherwise an auth token is required, and non-creators must present a
-        DFOS read credential.
+        it. Otherwise an identity proof is required (the AuthN half), and
+        non-creators must also present a DFOS read credential in `X-Credential`
+        (the AuthZ half). A read-shaped proof carries no `jti`.
       tags: [Content Plane]
       security:
         - {}
-        - BearerAuth: []
+        - IdentityProof: []
       parameters:
         - name: contentId
           in: path
@@ -1808,10 +1844,18 @@ paths:
 
 components:
   securitySchemes:
-    BearerAuth:
+    IdentityProof:
       type: http
-      scheme: bearer
-      description: DID-signed auth token JWT
+      scheme: DFOS
+      description: |
+        An API-AUTH identity proof — `Authorization: DFOS <did:dfos:identity-proof JWS>`.
+        The scheme token is `DFOS`, matched case-insensitively; it is deliberately
+        NOT `Bearer`, because nothing carried here is a bearer token. The proof
+        binds one exact request (method, the relay's own configured authority,
+        origin-form path, body hash) inside a freshness window the relay owns, and
+        resolves the signer's key against CURRENT identity state. On a write-shaped
+        route (blob upload, operation ingestion) the proof MUST also carry a `jti`
+        member, recorded in the relay's replay cache.
 
   schemas:
     SigningDepositResponse:

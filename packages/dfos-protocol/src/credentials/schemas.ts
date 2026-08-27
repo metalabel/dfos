@@ -57,20 +57,3 @@ export const DFOSCredentialPayload = z.looseObject({
   iat: z.number().int().positive(),
 });
 export type DFOSCredentialPayload = z.infer<typeof DFOSCredentialPayload>;
-
-// --- auth token ---
-
-/** Claims for a DID-signed auth token (relay AuthN) */
-export const AuthTokenClaims = z.looseObject({
-  /** Issuer — the DID proving identity */
-  iss: z.string(),
-  /** Subject — same as iss for auth tokens */
-  sub: z.string(),
-  /** Audience — target relay hostname (prevents cross-relay replay) */
-  aud: z.string(),
-  /** Expiration — unix seconds, short-lived (minutes) */
-  exp: z.number().int().positive(),
-  /** Issued at — unix seconds */
-  iat: z.number().int().positive(),
-});
-export type AuthTokenClaims = z.infer<typeof AuthTokenClaims>;

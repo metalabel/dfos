@@ -40,7 +40,6 @@ type ContextConfig struct {
 }
 
 type DefaultsConfig struct {
-	AuthTokenTTL  string `toml:"auth_token_ttl,omitempty" json:"auth_token_ttl,omitempty"`
 	CredentialTTL string `toml:"credential_ttl,omitempty" json:"credential_ttl,omitempty"`
 }
 

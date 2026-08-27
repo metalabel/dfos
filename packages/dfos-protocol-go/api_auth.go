@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +94,19 @@ var (
 	ErrRequestProofConfig       = errors.New("api auth verifier misconfigured")
 )
 
+// ErrProofPresenterInvalid lets a KeyResolver classify its OWN failure as a
+// judgment about the presenter rather than an outage.
+//
+// The resolver seam cannot otherwise tell the two apart: "this DID's current
+// state says deleted" and "the store is unreachable" both arrive as an error,
+// and mapping every failure to unverifiable would report a DELETED presenter —
+// the terminal off-switch — as a 503 the caller should retry. A resolver wraps
+// this sentinel for the cases it has actually CHECKED (a non-canonical DID, a
+// deleted identity, a key absent from current state) and returns a bare error
+// for the ones it could not check. Byte-twin of the TS rule that a resolver may
+// throw an already-classified ApiRequestVerifyError.
+var ErrProofPresenterInvalid = errors.New("identity proof presenter is invalid")
+
 // The identity proof reuses the family's verdict set — the SAME error values, so
 // errors.Is branching is identical whichever artifact a route consumes. These
 // names exist so an identity-proof consumer never has to name the request proof
@@ -160,6 +174,67 @@ func (p RequestProofPayload) internal() proofPayload {
 func (p IdentityProofPayload) internal() proofPayload {
 	return proofPayload{Method: p.Method, Host: p.Host, Path: p.Path,
 		BodyHash: p.BodyHash, Iat: p.Iat}
+}
+
+// ProofExtraMembers carries ADDITIVE members, appended AFTER the canonical
+// order.
+//
+// API-AUTH.md's growth rule is additive members on this envelope, never a new
+// envelope: "additional members register additively, appended to the canonical
+// order". jti — the per-request uniqueness member a write-gating deployment
+// requires — is the named one.
+//
+// TWO RULES MAKE THIS A BYTE-TWIN of the TS emitter. (1) Extra members are
+// emitted AFTER every canonical member, so a verifier that ignores them still
+// reconstructs the same prefix. (2) Among themselves they are emitted in
+// LEXICOGRAPHIC ORDER OF MEMBER NAME — not insertion order, because Go map
+// iteration is randomized and a TS signer and a Go signer must emit identical
+// bytes from identical inputs.
+//
+// Values are strings. The registered member (jti) is a string, and restricting
+// the type keeps the two encoders from disagreeing about number formatting.
+type ProofExtraMembers map[string]string
+
+// extraMemberNameRe restricts additive member names to a conservative ASCII set
+// so lexicographic ordering is IDENTICAL in Go (bytes) and TS (UTF-16 units).
+var extraMemberNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// canonicalMembers are the members an additive member may never shadow.
+var canonicalMembers = map[string]struct{}{
+	"method": {}, "host": {}, "path": {}, "bodyHash": {}, "credentialCID": {}, "iat": {},
+}
+
+type extraMember struct {
+	name  string
+	value string
+}
+
+// canonicalExtraMembers validates additive members and returns them in their
+// canonical emission order: lexicographic by name, after every canonical member.
+// A nil/empty map returns nil, so the bytes are unchanged from the five/six-member
+// form when nothing additive is asked for.
+func canonicalExtraMembers(extra ProofExtraMembers, label string) ([]extraMember, error) {
+	if len(extra) == 0 {
+		return nil, nil
+	}
+	out := make([]extraMember, 0, len(extra))
+	for name, value := range extra {
+		if !extraMemberNameRe.MatchString(name) {
+			return nil, fmt.Errorf("invalid %s: additive member name %q is not [A-Za-z0-9_.-]+", label, name)
+		}
+		if _, clash := canonicalMembers[name]; clash {
+			return nil, fmt.Errorf("invalid %s: %s is a canonical member and cannot be added", label, name)
+		}
+		if value == "" {
+			return nil, fmt.Errorf("invalid %s: additive member %s must be a non-empty string", label, name)
+		}
+		if !utf8.ValidString(value) {
+			return nil, fmt.Errorf("invalid %s: additive member %s must be well-formed Unicode", label, name)
+		}
+		out = append(out, extraMember{name: name, value: value})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out, nil
 }
 
 // An HTTP method token per RFC 9110 tchar, with the lowercase letters removed:
@@ -244,7 +319,7 @@ func validateProofPayload(payload proofPayload, shape proofShape) error {
 // proof's order is method, host, path, bodyHash, credentialCID, iat; the identity
 // proof's is the same with credentialCID elided, so the two forms cannot drift
 // apart on anything but that member.
-func proofSigningInput(payload proofPayload, shape proofShape) ([]byte, error) {
+func proofSigningInput(payload proofPayload, shape proofShape, extra []extraMember) ([]byte, error) {
 	if err := validateProofPayload(payload, shape); err != nil {
 		return nil, err
 	}
@@ -263,6 +338,14 @@ func proofSigningInput(payload proofPayload, shape proofShape) ([]byte, error) {
 	}
 	b.WriteString(`,"iat":`)
 	b.WriteString(strconv.FormatInt(payload.Iat, 10))
+	// Additive members LAST, lexicographically — the canonical prefix above is
+	// byte-identical whether or not any are present.
+	for _, member := range extra {
+		b.WriteByte(',')
+		b.WriteString(jsonStringifyString(member.name))
+		b.WriteByte(':')
+		b.WriteString(jsonStringifyString(member.value))
+	}
 	b.WriteByte('}')
 	return []byte(b.String()), nil
 }
@@ -270,16 +353,24 @@ func proofSigningInput(payload proofPayload, shape proofShape) ([]byte, error) {
 // ApiRequestSigningInput returns the request proof's canonical signing input —
 // six members, method, host, path, bodyHash, credentialCID, iat. Byte-for-byte
 // identical to the TS apiRequestSigningInput.
-func ApiRequestSigningInput(payload RequestProofPayload) ([]byte, error) {
-	return proofSigningInput(payload.internal(), requestProofShape)
+func ApiRequestSigningInput(payload RequestProofPayload, extra ProofExtraMembers) ([]byte, error) {
+	members, err := canonicalExtraMembers(extra, requestProofShape.label)
+	if err != nil {
+		return nil, err
+	}
+	return proofSigningInput(payload.internal(), requestProofShape, members)
 }
 
 // ApiIdentitySigningInput returns the identity proof's canonical signing input —
 // five members, method, host, path, bodyHash, iat: the request proof's bytes
 // minus credentialCID, from the same encoder, under the same member rules.
 // Byte-for-byte identical to the TS apiIdentitySigningInput.
-func ApiIdentitySigningInput(payload IdentityProofPayload) ([]byte, error) {
-	return proofSigningInput(payload.internal(), identityProofShape)
+func ApiIdentitySigningInput(payload IdentityProofPayload, extra ProofExtraMembers) ([]byte, error) {
+	members, err := canonicalExtraMembers(extra, identityProofShape.label)
+	if err != nil {
+		return nil, err
+	}
+	return proofSigningInput(payload.internal(), identityProofShape, members)
 }
 
 // Sha256BodyHash returns the bodyHash member: canonical unpadded base64url of
@@ -296,6 +387,11 @@ type RequestProofOptions struct {
 	Body []byte
 	// Iat overrides the issued-at, unix seconds; zero means now.
 	Iat int64
+	// ExtraMembers are ADDITIVE members, appended after the canonical order in
+	// lexicographic name order. {"jti": ...} is the registered one, and a
+	// WRITE-SHAPED surface — relay ingestion, blob upload — REQUIRES it
+	// (WEB-RELAY.md, Authentication).
+	ExtraMembers ProofExtraMembers
 }
 
 // IdentityProofOptions is the same optional build inputs, under the name an
@@ -309,11 +405,15 @@ type IdentityProofOptions = RequestProofOptions
 // would sort nothing but would HTML-escape the path and marshal from a map in a
 // shape this contract does not permit.
 func buildProof(payload proofPayload, shape proofShape, kid string,
-	privateKey ed25519.PrivateKey) (string, error) {
+	privateKey ed25519.PrivateKey, extra ProofExtraMembers) (string, error) {
 	if !strings.Contains(kid, "#") {
 		return "", fmt.Errorf("invalid %s: kid must be a DID URL", shape.label)
 	}
-	signingInputBytes, err := proofSigningInput(payload, shape)
+	members, err := canonicalExtraMembers(extra, shape.label)
+	if err != nil {
+		return "", err
+	}
+	signingInputBytes, err := proofSigningInput(payload, shape, members)
 	if err != nil {
 		return "", err
 	}
@@ -346,7 +446,7 @@ func BuildRequestProof(method, host, path, credentialCID, kid string,
 	return buildProof(proofPayload{
 		Method: method, Host: host, Path: path,
 		BodyHash: Sha256BodyHash(opts.Body), CredentialCID: credentialCID, Iat: proofIat(opts.Iat),
-	}, requestProofShape, kid, privateKey)
+	}, requestProofShape, kid, privateKey, opts.ExtraMembers)
 }
 
 // BuildIdentityProof signs one request as a BARE IDENTITY — BuildRequestProof
@@ -360,7 +460,7 @@ func BuildIdentityProof(method, host, path, kid string,
 	return buildProof(proofPayload{
 		Method: method, Host: host, Path: path,
 		BodyHash: Sha256BodyHash(opts.Body), Iat: proofIat(opts.Iat),
-	}, identityProofShape, kid, privateKey)
+	}, identityProofShape, kid, privateKey, opts.ExtraMembers)
 }
 
 // RequestProofExpectations is what the VERIFIER holds about the request it is
@@ -449,12 +549,26 @@ func (e RequestProofExpectations) bounds() (window, skew int64, err error) {
 // resolveKey MUST perform CURRENT-STATE-ONLY resolution: rotated-out keys and
 // deleted identities fail resolution. Rotation is how a presenter whose key is
 // compromised stops that key minting proofs in its name, so a resolver answering
-// from historical state would remove the only lever there is. Because the
-// resolver cannot reveal whether failure means absent key, deleted identity, or
-// transport outage, every resolver failure honestly maps to
-// ErrRequestProofUnverifiable.
+// from historical state would remove the only lever there is. A resolver failure
+// maps to ErrRequestProofUnverifiable unless it wraps ErrProofPresenterInvalid,
+// which is how a resolver says: I checked, and the answer is no.
+// verifiedEnvelope is what a verified proof phase hands back: the validated
+// canonical members, the DECODED payload (unknown members included), and the
+// AUTHENTICATED PRINCIPAL.
+//
+// The principal is returned rather than discarded because it is the whole point
+// of the identity proof — "the signer IS the principal" — and a consumer that
+// had to re-decode the token to learn who signed would be re-deriving, outside
+// the verifier, a fact the verifier already proved.
+type verifiedEnvelope struct {
+	payload      proofPayload
+	rawPayload   map[string]any
+	presenterDID string
+	kid          string
+}
+
 func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, shape proofShape,
-	resolveKey KeyResolver, now time.Time) (result *proofPayload, err error) {
+	resolveKey KeyResolver, now time.Time) (result *verifiedEnvelope, err error) {
 	// An unexpected panic is inability to complete verification, never evidence
 	// that the proof itself is malformed.
 	defer func() {
@@ -515,6 +629,24 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 	payloadBytes, decodeErr := Base64urlDecode(parts[1])
 	if decodeErr != nil {
 		return nil, fmt.Errorf("%w: failed to decode %s payload", ErrRequestProofInvalid, shape.label)
+	}
+	// MALFORMED UTF-8 IS AN INVALID PROOF, NOT A LENIENT DECODE. encoding/json
+	// silently substitutes U+FFFD for an invalid byte, where the TS twin decodes
+	// with TextDecoder('utf-8', {fatal:true}) and throws. Without this gate a
+	// hand-signed proof carrying a malformed byte in an unknown member (jti is the
+	// live case) authenticates here and 401s there — the same octets, two verdicts.
+	// Only the payload is gated: the TS twin's HEADER decode is non-fatal, and the
+	// twins must agree on leniency as exactly as they agree on strictness.
+	if !utf8.Valid(payloadBytes) {
+		return nil, fmt.Errorf("%w: %s payload is not valid UTF-8", ErrRequestProofInvalid, shape.label)
+	}
+	// The DECODED payload, unknown members included. ADDITIVE MEMBERS ARE READ
+	// FROM HERE, at the consuming layer, AFTER verification — the signature
+	// already covers them and the canonical member set stays closed. jti is the
+	// case this exists for.
+	var rawPayload map[string]any
+	if err := json.Unmarshal(payloadBytes, &rawPayload); err != nil {
+		return nil, fmt.Errorf("%w: %s payload is not valid JSON", ErrRequestProofInvalid, shape.label)
 	}
 	var raw struct {
 		Method        *string          `json:"method"`
@@ -592,6 +724,11 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 	// proof there is nothing after it — this IS the whole algorithm.
 	publicKey, resolveErr := resolveKey(header.Kid)
 	if resolveErr != nil {
+		// A resolver that already CHECKED and rejected keeps its verdict; anything
+		// else is a resolution failure, which is the server's condition.
+		if errors.Is(resolveErr, ErrProofPresenterInvalid) {
+			return nil, fmt.Errorf("%w: %s", ErrRequestProofInvalid, resolveErr)
+		}
 		return nil, fmt.Errorf("%w: failed to resolve current %s key: %s",
 			ErrRequestProofUnverifiable, shape.label, resolveErr)
 	}
@@ -599,7 +736,40 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 		return nil, fmt.Errorf("%w: invalid %s signature", ErrRequestProofInvalid, shape.label)
 	}
 
-	return &payload, nil
+	return &verifiedEnvelope{
+		payload:      payload,
+		rawPayload:   rawPayload,
+		presenterDID: header.Kid[:strings.Index(header.Kid, "#")],
+		kid:          header.Kid,
+	}, nil
+}
+
+// VerifiedRequestProof is a verified request proof: its canonical members, the
+// decoded payload (unknown members included), and the AUTHENTICATED PRESENTER.
+type VerifiedRequestProof struct {
+	Payload RequestProofPayload
+	// RawPayload is the decoded payload object, unknown members included — where
+	// a consumer reads an ADDITIVE member (jti) the envelope verifier ignored.
+	RawPayload map[string]any
+	// PresenterDID is the kid's DID portion.
+	PresenterDID string
+	// Kid is the full DID URL that signed, key fragment included.
+	Kid string
+}
+
+// VerifiedIdentityProof is a verified identity proof. PresenterDID is THE
+// PRINCIPAL — the identity proof's entire point — so it is returned here rather
+// than left for the consumer to re-decode out of the token.
+type VerifiedIdentityProof struct {
+	Payload IdentityProofPayload
+	// RawPayload is the decoded payload object, unknown members included — where
+	// a consumer reads an ADDITIVE member (jti) the envelope verifier ignored.
+	RawPayload map[string]any
+	// PresenterDID is the kid's DID portion: WHO the request is from. What that
+	// DID may do is the resource's local policy.
+	PresenterDID string
+	// Kid is the full DID URL that signed, key fragment included.
+	Kid string
 }
 
 // VerifyRequestProof verifies the request proof's ENVELOPE in API-AUTH.md's
@@ -610,14 +780,19 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 // A proof carrying any other typ — an identity proof included — is rejected at
 // the header gate.
 func VerifyRequestProof(proofToken string, expect RequestProofExpectations,
-	resolveKey KeyResolver, now time.Time) (*RequestProofPayload, error) {
-	payload, err := verifyProofEnvelope(proofToken, expect, requestProofShape, resolveKey, now)
+	resolveKey KeyResolver, now time.Time) (*VerifiedRequestProof, error) {
+	env, err := verifyProofEnvelope(proofToken, expect, requestProofShape, resolveKey, now)
 	if err != nil {
 		return nil, err
 	}
-	return &RequestProofPayload{
-		Method: payload.Method, Host: payload.Host, Path: payload.Path,
-		BodyHash: payload.BodyHash, CredentialCID: payload.CredentialCID, Iat: payload.Iat,
+	return &VerifiedRequestProof{
+		Payload: RequestProofPayload{
+			Method: env.payload.Method, Host: env.payload.Host, Path: env.payload.Path,
+			BodyHash: env.payload.BodyHash, CredentialCID: env.payload.CredentialCID, Iat: env.payload.Iat,
+		},
+		RawPayload:   env.rawPayload,
+		PresenterDID: env.presenterDID,
+		Kid:          env.kid,
 	}, nil
 }
 
@@ -645,13 +820,43 @@ func VerifyRequestProof(proofToken string, expect RequestProofExpectations,
 // refusal belongs to the middleware, which is the only layer holding the header
 // bag.
 func VerifyIdentityProof(proofToken string, expect IdentityProofExpectations,
-	resolveKey KeyResolver, now time.Time) (*IdentityProofPayload, error) {
-	payload, err := verifyProofEnvelope(proofToken, expect, identityProofShape, resolveKey, now)
+	resolveKey KeyResolver, now time.Time) (*VerifiedIdentityProof, error) {
+	env, err := verifyProofEnvelope(proofToken, expect, identityProofShape, resolveKey, now)
 	if err != nil {
 		return nil, err
 	}
-	return &IdentityProofPayload{
-		Method: payload.Method, Host: payload.Host, Path: payload.Path,
-		BodyHash: payload.BodyHash, Iat: payload.Iat,
+	return &VerifiedIdentityProof{
+		Payload: IdentityProofPayload{
+			Method: env.payload.Method, Host: env.payload.Host, Path: env.payload.Path,
+			BodyHash: env.payload.BodyHash, Iat: env.payload.Iat,
+		},
+		RawPayload:   env.rawPayload,
+		PresenterDID: env.presenterDID,
+		Kid:          env.kid,
 	}, nil
+}
+
+// ParseDFOSAuthorization parses an "Authorization: DFOS <token>" header and
+// returns the bare token.
+//
+// The scheme is matched CASE-INSENSITIVELY per RFC 9110 s11.1 (DFOS, dfos, Dfos
+// are one scheme), separated from the token by one or more spaces, with
+// surrounding optional whitespace ignored. The token itself is case-sensitive
+// and is not further decoded here. Returns "" for an absent, differently
+// schemed, or empty-token header — a Bearer header is NOT this family and never
+// was.
+func ParseDFOSAuthorization(header string) string {
+	trimmed := strings.TrimSpace(header)
+	space := strings.IndexAny(trimmed, " \t")
+	if space < 0 {
+		return ""
+	}
+	if !strings.EqualFold(trimmed[:space], "DFOS") {
+		return ""
+	}
+	token := strings.TrimSpace(trimmed[space:])
+	if token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return ""
+	}
+	return token
 }

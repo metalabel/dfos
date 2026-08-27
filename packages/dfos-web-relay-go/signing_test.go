@@ -121,23 +121,31 @@ func signingRequest(t *testing.T, r *Relay, method, path string, body any, auth 
 	req := httptest.NewRequest(method, path, reader)
 	req.Header.Set("content-type", "application/json")
 	if auth != "" {
-		req.Header.Set("authorization", "Bearer "+auth)
+		// The full header value: an identity proof rides the DFOS scheme, and the
+		// caller minted it for exactly this method and origin-form target.
+		req.Header.Set("authorization", auth)
 	}
 	w := httptest.NewRecorder()
 	r.Handler().ServeHTTP(w, req)
 	return w
 }
 
-func signingAuthToken(t *testing.T, r *Relay, id testIdentity) string {
+// signingPollAuth is the Authorization header for a mailbox poll of `path`.
+//
+// THE SUBJECT OF THE POLL IS THE PROOF'S kid DID — there is no audience claim
+// naming the relay any more; the host binding does that job, and it comes from
+// the relay's own configuration. The poll is READ-SHAPED, so no jti. The path
+// includes the query string byte for byte: the poller signs the request it
+// actually makes.
+func signingPollAuth(t *testing.T, id testIdentity, path string) string {
 	t.Helper()
-	token, err := dfos.CreateAuthToken(
-		id.did, r.did, id.did+"#"+id.auth.keyID, 5*time.Minute,
-		ed25519.PrivateKey(id.auth.priv),
-	)
+	proof, err := dfos.BuildIdentityProof(http.MethodGet, testAuthority, path,
+		id.did+"#"+id.auth.keyID, ed25519.PrivateKey(id.auth.priv),
+		dfos.IdentityProofOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return token
+	return "DFOS " + proof
 }
 
 func signingRawResponse(t *testing.T, did, keyID, typ string, payload []byte, privateKey []byte) string {
@@ -188,7 +196,7 @@ func signingCustomRequest(t *testing.T, requester testIdentity, subject string, 
 }
 
 func TestSigningDisabledByDefault(t *testing.T) {
-	r, err := NewRelay(RelayOptions{Store: NewMemoryStore()})
+	r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: NewMemoryStore()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,11 +221,11 @@ func TestSigningDisabledByDefault(t *testing.T) {
 
 func TestSigningStoreRequiredOnlyWhenEnabled(t *testing.T) {
 	store := nonSigningTestStore{Store: NewMemoryStore()}
-	if _, err := NewRelay(RelayOptions{Store: store}); err != nil {
+	if _, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store}); err != nil {
 		t.Fatalf("signing-disabled relay rejected non-signing store: %v", err)
 	}
 	enabled := true
-	if _, err := NewRelay(RelayOptions{Store: store, Signing: &enabled}); err == nil || !strings.Contains(err.Error(), "SigningStore") {
+	if _, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store, Signing: &enabled}); err == nil || !strings.Contains(err.Error(), "SigningStore") {
 		t.Fatalf("signing-enabled relay accepted non-signing store: %v", err)
 	}
 }
@@ -251,7 +259,7 @@ func forEachSigningStore(t *testing.T, test func(*testing.T, signingTestStore)) 
 func TestSigningHappyPathBothStores(t *testing.T) {
 	forEachSigningStore(t, func(t *testing.T, store signingTestStore) {
 		enabled := true
-		r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+		r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store, Signing: &enabled})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -266,7 +274,7 @@ func TestSigningHappyPathBothStores(t *testing.T) {
 		if got := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests", nil, ""); got.Code != http.StatusUnauthorized {
 			t.Fatalf("unauthenticated poll: %d", got.Code)
 		}
-		auth := signingAuthToken(t, r, f.subject)
+		auth := signingPollAuth(t, f.subject, signingBasePath+"/requests")
 		poll := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests", nil, auth)
 		if poll.Code != http.StatusOK || !bytes.Contains(poll.Body.Bytes(), []byte(f.cid)) {
 			t.Fatalf("poll: %d %s", poll.Code, poll.Body.String())
@@ -298,7 +306,7 @@ func TestSigningDepositAuthorizationAndEnvelopeGates(t *testing.T) {
 
 func testSigningDepositAuthorizationAndEnvelopeGates(t *testing.T, store signingTestStore) {
 	enabled := true
-	r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+	r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store, Signing: &enabled})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +391,7 @@ func testSigningDepositAuthorizationAndEnvelopeGates(t *testing.T, store signing
 func TestSigningDeletedSubjectDepositAndPoll(t *testing.T) {
 	forEachSigningStore(t, func(t *testing.T, store signingTestStore) {
 		enabled := true
-		r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+		r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store, Signing: &enabled})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -392,7 +400,7 @@ func TestSigningDeletedSubjectDepositAndPoll(t *testing.T) {
 		if got := signingRequest(t, r, http.MethodPost, signingBasePath+"/requests", deposit, ""); got.Code != http.StatusCreated {
 			t.Fatalf("deposit before delete: %d %s", got.Code, got.Body.String())
 		}
-		auth := signingAuthToken(t, r, f.subject)
+		auth := signingPollAuth(t, f.subject, signingBasePath+"/requests")
 		deleted, _, err := dfos.SignIdentityDelete(f.subject.opCID, f.subject.did+"#"+f.subject.controller.keyID, f.subject.controller.priv)
 		if err != nil {
 			t.Fatal(err)
@@ -413,7 +421,7 @@ func TestSigningPollLimitAndMalformedCursor(t *testing.T) {
 	base := NewMemoryStore()
 	store := &limitCapturingSigningStore{Store: base, SigningStore: base}
 	enabled := true
-	r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+	r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store, Signing: &enabled})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,11 +429,13 @@ func TestSigningPollLimitAndMalformedCursor(t *testing.T) {
 	if result := IngestOperations([]string{subject.token}, store)[0]; result.Status != "new" {
 		t.Fatalf("seed subject: %+v", result)
 	}
-	auth := signingAuthToken(t, r, subject)
+	// A proof binds the ORIGIN-FORM target byte for byte, query string included —
+	// so each of these polls needs its own proof, signed for the exact path.
 	for _, path := range []string{
 		signingBasePath + "/requests?limit=1001",
 		signingBasePath + "/requests?limit=wat",
 	} {
+		auth := signingPollAuth(t, subject, path)
 		if got := signingRequest(t, r, http.MethodGet, path, nil, auth); got.Code != http.StatusOK {
 			t.Fatalf("poll %s: %d %s", path, got.Code, got.Body.String())
 		}
@@ -433,7 +443,9 @@ func TestSigningPollLimitAndMalformedCursor(t *testing.T) {
 	if !slices.Equal(store.limits, []int{1000, 100}) {
 		t.Fatalf("poll limits = %v, want [1000 100]", store.limits)
 	}
-	if got := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests?after=not-a-cursor", nil, auth); got.Code != http.StatusBadRequest {
+	cursorPath := signingBasePath + "/requests?after=not-a-cursor"
+	if got := signingRequest(t, r, http.MethodGet, cursorPath, nil,
+		signingPollAuth(t, subject, cursorPath)); got.Code != http.StatusBadRequest {
 		t.Fatalf("malformed cursor: %d %s", got.Code, got.Body.String())
 	}
 	if !slices.Equal(store.limits, []int{1000, 100, 100}) {
@@ -447,7 +459,7 @@ func TestSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T) {
 
 func testSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T, store signingTestStore) {
 	enabled, disabled := true, false
-	r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled, Write: &disabled})
+	r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store, Signing: &enabled, Write: &disabled})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +541,7 @@ func testSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T, store 
 	if !bytes.Contains(fetch.Body.Bytes(), []byte(`"status":"declined"`)) {
 		t.Fatalf("declined fetch: %s", fetch.Body.String())
 	}
-	declinedAuth := signingAuthToken(t, r, declineFixture.subject)
+	declinedAuth := signingPollAuth(t, declineFixture.subject, signingBasePath+"/requests")
 	declinedPoll := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests", nil, declinedAuth)
 	if !bytes.Contains(declinedPoll.Body.Bytes(), []byte(`"declined":true`)) {
 		t.Fatalf("declined subject poll: %s", declinedPoll.Body.String())
@@ -538,10 +550,10 @@ func testSigningResponseDeclineExpiryIsolationAndWriteFalse(t *testing.T, store 
 		t.Fatalf("response after decline: %d %s", got.Code, got.Body.String())
 	}
 
-	auth := signingAuthToken(t, r, declineFixture.subject)
+	auth := signingPollAuth(t, declineFixture.subject, signingBasePath+"/requests")
 	other := createTestIdentity(t)
 	IngestOperations([]string{other.token}, store)
-	otherPoll := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests", nil, signingAuthToken(t, r, other))
+	otherPoll := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests", nil, signingPollAuth(t, other, signingBasePath+"/requests"))
 	if !bytes.Contains(otherPoll.Body.Bytes(), []byte(`"requests":[]`)) {
 		t.Fatalf("mailbox isolation: %s", otherPoll.Body.String())
 	}
@@ -654,7 +666,7 @@ func TestSigningMailboxCapAndIdempotentRedeposit(t *testing.T) {
 func TestSigningDepositReturns429AtMailboxCap(t *testing.T) {
 	store := NewMemoryStore()
 	enabled := true
-	r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+	r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store, Signing: &enabled})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +694,7 @@ func TestSigningDepositReturns429AtMailboxCap(t *testing.T) {
 func TestSigningPollRejectsCrossSubjectCursor(t *testing.T) {
 	forEachSigningStore(t, func(t *testing.T, store signingTestStore) {
 		enabled := true
-		r, err := NewRelay(RelayOptions{Store: store, Signing: &enabled})
+		r, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store, Signing: &enabled})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -705,7 +717,9 @@ func TestSigningPollRejectsCrossSubjectCursor(t *testing.T) {
 		if err != nil || cursor == "" {
 			t.Fatalf("mint cursor: %q %v", cursor, err)
 		}
-		got := signingRequest(t, r, http.MethodGet, signingBasePath+"/requests?after="+url.QueryEscape(cursor), nil, signingAuthToken(t, r, subjectB))
+		cursorPath := signingBasePath + "/requests?after=" + url.QueryEscape(cursor)
+		got := signingRequest(t, r, http.MethodGet, cursorPath, nil,
+			signingPollAuth(t, subjectB, cursorPath))
 		if got.Code != http.StatusBadRequest || !bytes.Contains(got.Body.Bytes(), []byte(`"error":"invalid cursor"`)) {
 			t.Fatalf("cross-subject cursor: %d %s", got.Code, got.Body.String())
 		}
@@ -723,7 +737,7 @@ func TestNewRelayPrunesExpiredSigningRowsWhenCapabilityDisabled(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := NewRelay(RelayOptions{Store: store}); err != nil {
+		if _, err := NewRelay(RelayOptions{Authority: testAuthority, Store: store}); err != nil {
 			t.Fatal(err)
 		}
 		assertSigningRequestPruned(t, store, "startup-expired")

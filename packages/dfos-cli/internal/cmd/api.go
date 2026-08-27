@@ -6,11 +6,9 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
-	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
@@ -25,7 +23,7 @@ func newAPICmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "api <METHOD> <path>",
 		Short: "Raw HTTP request to peer",
-		Long:  "Make raw HTTP requests to the active peer. Use --auth to auto-inject auth tokens.",
+		Long:  "Make raw HTTP requests to the active peer. Use --auth to sign an identity proof for the request.",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			method := strings.ToUpper(args[0])
@@ -52,33 +50,6 @@ func newAPICmd() *cobra.Command {
 				}
 			}
 
-			if auth {
-				chain, err := resolveIdentityForAPI(ctx)
-				if err != nil {
-					return err
-				}
-
-				kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
-				if err != nil {
-					return err
-				}
-				privKey, err := keys.GetPrivateKey(kid)
-				if err != nil {
-					return err
-				}
-
-				info, err := c.GetRelayInfo()
-				if err != nil {
-					return err
-				}
-
-				token, err := protocol.CreateAuthToken(chain.DID, info.DID, kid, 5*time.Minute, privKey)
-				if err != nil {
-					return err
-				}
-				headers["Authorization"] = "Bearer " + token
-			}
-
 			var bodyBytes []byte
 			if body != "" {
 				bodyBytes = []byte(body)
@@ -98,6 +69,33 @@ func newAPICmd() *cobra.Command {
 				if _, ok := headers["Content-Type"]; !ok {
 					headers["Content-Type"] = "application/json"
 				}
+			}
+
+			// The proof binds THIS request — its method, path, and body — so it is
+			// signed after the body is in hand, never before. A jti always rides
+			// along: write-shaped routes require it, read-shaped routes ignore it,
+			// so attaching one keeps --auth correct on every route.
+			if auth {
+				chain, err := resolveIdentityForAPI(ctx)
+				if err != nil {
+					return err
+				}
+
+				kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
+				if err != nil {
+					return err
+				}
+				privKey, err := keys.GetPrivateKey(kid)
+				if err != nil {
+					return err
+				}
+
+				authorization, err := c.AuthorizationFor(
+					&client.Signer{Kid: kid, PrivateKey: privKey}, method, path, bodyBytes, true)
+				if err != nil {
+					return err
+				}
+				headers["Authorization"] = authorization
 			}
 
 			status, respHeaders, respBody, err := c.DoRaw(method, path, bodyBytes, headers)
@@ -133,7 +131,7 @@ func newAPICmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().BoolVar(&auth, "auth", false, "Auto-inject auth token")
+	cmd.Flags().BoolVar(&auth, "auth", false, "Sign an identity proof for this request")
 	cmd.Flags().StringVar(&body, "body", "", "Request body (JSON string)")
 	cmd.Flags().StringVar(&bodyFile, "body-file", "", "Request body from file (use - for stdin)")
 	cmd.Flags().BoolVarP(&includeHeaders, "include", "i", false, "Include response headers")

@@ -30,6 +30,9 @@ const fixture = JSON.parse(readFileSync(fixturePath, 'utf8')) as {
 
 const relay = await createRelay({
   store: new MemoryRelayStore(),
+  // The relay's OWN configured authority — the host binding every identity
+  // proof is checked against. Configuration, never read from the request.
+  authority: `localhost:${port}`,
   identity: {
     did: fixture.relayDid,
     profileArtifactJws: fixture.relayProfileJws,

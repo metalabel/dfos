@@ -68,9 +68,12 @@ func main() {
 
 	// --- serve write-disabled (POST → 501; reads serve the seeded chain) ---
 	writeDisabled := false
+	// The relay's OWN configured authority — the host binding every identity
+	// proof is checked against. Configuration, never read from the request.
 	r, err := relay.NewRelay(relay.RelayOptions{
-		Store: store,
-		Write: &writeDisabled,
+		Store:     store,
+		Authority: "localhost:" + port,
+		Write:     &writeDisabled,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "new relay: %v\n", err)

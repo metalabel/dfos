@@ -22,9 +22,12 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	indexDisabled := false
+	// The relay's OWN configured authority — the host binding every identity
+	// proof is checked against. Configuration, never read from the request.
 	r, err := relay.NewRelay(relay.RelayOptions{
-		Store: relay.NewMemoryStore(),
-		Index: &indexDisabled,
+		Store:     relay.NewMemoryStore(),
+		Authority: "localhost:" + port,
+		Index:     &indexDisabled,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "new relay: %v\n", err)

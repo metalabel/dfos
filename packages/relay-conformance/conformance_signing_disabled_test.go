@@ -42,19 +42,19 @@ func TestSigningDisabledRoutes501(t *testing.T) {
 	base := signingDisabledBase(t)
 	cid := "caaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-	assertSigning501(t, "POST /signing/v0/requests", signingPost(t, base+"/signing/v0/requests", map[string]string{"request": "invalid"}, ""))
+	assertSigning501(t, "POST /signing/v0/requests", signingPost(t, base+"/signing/v0/requests", map[string]string{"request": "invalid"}))
 	resp, err := http.Get(base + "/signing/v0/requests")
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertSigning501(t, "GET /signing/v0/requests", resp)
-	assertSigning501(t, "POST /signing/v0/requests/{cid}/response", signingPost(t, base+"/signing/v0/requests/"+cid+"/response", map[string]string{"response": "invalid"}, ""))
+	assertSigning501(t, "POST /signing/v0/requests/{cid}/response", signingPost(t, base+"/signing/v0/requests/"+cid+"/response", map[string]string{"response": "invalid"}))
 	resp, err = http.Get(base + "/signing/v0/requests/" + cid + "/response")
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertSigning501(t, "GET /signing/v0/requests/{cid}/response", resp)
-	assertSigning501(t, "POST /signing/v0/requests/{cid}/decline", signingPost(t, base+"/signing/v0/requests/"+cid+"/decline", nil, ""))
+	assertSigning501(t, "POST /signing/v0/requests/{cid}/decline", signingPost(t, base+"/signing/v0/requests/"+cid+"/decline", nil))
 }
 
 func TestSigningDisabledProofRoutesUnaffected(t *testing.T) {

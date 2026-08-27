@@ -32,6 +32,27 @@ var ErrBlobNotFound = errors.New("peer does not have this blob")
 // instead of stalling on the dead cursor forever.
 var ErrPeerInvalidCursor = errors.New("peer rejected log cursor")
 
+// normalizeAuthority is the `host` member API-AUTH binds: the lowercase
+// authority with the port OMITTED when it is the scheme's default (https:443,
+// http:80) and carried otherwise.
+//
+// The default-port drop is not cosmetic. The TS twin derives its host from
+// WHATWG `URL.host`, which already drops :443 and :80, and a relay compares a
+// proof's `host` byte for byte against its own configured authority. A Go signer
+// that kept the explicit default port would therefore sign a host no normally
+// configured relay matches — a 401 the two stacks disagree about, from a peer
+// URL spelling the operator is entitled to use.
+func normalizeAuthority(scheme, hostport string) string {
+	host := strings.ToLower(hostport)
+	switch strings.ToLower(scheme) {
+	case "https":
+		return strings.TrimSuffix(host, ":443")
+	case "http":
+		return strings.TrimSuffix(host, ":80")
+	}
+	return host
+}
+
 // HttpPeerClient implements PeerClient using HTTP requests.
 type HttpPeerClient struct {
 	client *http.Client
@@ -143,11 +164,42 @@ func (c *HttpPeerClient) GetOperationLog(peerURL string, after string, limit int
 }
 
 func (c *HttpPeerClient) SubmitOperations(peerURL string, operations []string) error {
+	return c.SubmitOperationsSigned(peerURL, operations, nil)
+}
+
+// SubmitOperationsSigned pushes operations, optionally carrying an identity proof
+// signed by the pushing relay's own DID.
+//
+// Gossip-out authenticates like any client: anonymously, or with an identity
+// proof (WEB-RELAY.md, Relay Identity). The signer is a callback because the
+// proof binds bodyHash — the body is serialized ONCE here and both hashed and
+// sent, since re-serializing for the wire would sign one string and send another.
+// A signer that fails leaves the push anonymous rather than dropping it: gossip
+// is best-effort, and sync is the consistency backstop.
+func (c *HttpPeerClient) SubmitOperationsSigned(peerURL string, operations []string,
+	sign GossipProofSigner) error {
 	body, err := json.Marshal(map[string]any{"operations": operations})
 	if err != nil {
 		return err
 	}
-	resp, err := c.client.Post(peerURL+proofBasePath+"/operations", "application/json", bytes.NewReader(body))
+	endpoint := peerURL + proofBasePath + "/operations"
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if sign != nil {
+		// The authority from the parsed URL, normalized: a non-default port rides
+		// along, a default one is dropped. The peer compares it byte for byte
+		// against its OWN configured authority.
+		if parsed, parseErr := url.Parse(endpoint); parseErr == nil {
+			host := normalizeAuthority(parsed.Scheme, parsed.Host)
+			if proof, signErr := sign(http.MethodPost, host, parsed.RequestURI(), body); signErr == nil && proof != "" {
+				request.Header.Set("Authorization", "DFOS "+proof)
+			}
+		}
+	}
+	resp, err := c.client.Do(request)
 	if err != nil {
 		return err
 	}

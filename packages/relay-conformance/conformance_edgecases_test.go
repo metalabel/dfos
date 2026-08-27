@@ -204,9 +204,9 @@ func TestWriteCredentialCannotRead(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	reader := createIdentity(t, base)
 	issuerKid := id.did + "#" + id.auth.keyID
@@ -215,8 +215,8 @@ func TestWriteCredentialCannotRead(t *testing.T) {
 		5*time.Minute, id.auth.priv,
 	)
 
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("write credential should not grant read access")
 	}
@@ -272,17 +272,17 @@ func TestBlobUploadIdempotent(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
 
-	res1 := putBlob(t, base, cc.contentID, cc.genCID, tok, blobData)
+	res1 := putBlob(t, base, cc.contentID, cc.genCID, signer, blobData)
 	if res1.StatusCode != 200 {
 		body := readBody(t, res1)
 		t.Fatalf("first upload: status %d, body: %s", res1.StatusCode, body)
 	}
 	res1.Body.Close()
 
-	res2 := putBlob(t, base, cc.contentID, cc.genCID, tok, blobData)
+	res2 := putBlob(t, base, cc.contentID, cc.genCID, signer, blobData)
 	if res2.StatusCode != 200 {
 		body := readBody(t, res2)
 		t.Fatalf("second upload (idempotent): status %d, body: %s", res2.StatusCode, body)
@@ -290,7 +290,7 @@ func TestBlobUploadIdempotent(t *testing.T) {
 	res2.Body.Close()
 
 	// verify blob is still correct after double upload
-	dlRes := getBlob(t, base, cc.contentID, tok)
+	dlRes := getBlob(t, base, cc.contentID, signer)
 	if dlRes.StatusCode != 200 {
 		t.Fatalf("download after double upload: status %d", dlRes.StatusCode)
 	}
@@ -306,9 +306,9 @@ func TestBlobUploadNonExistentContent(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	res := putBlob(t, base, "nonexistent_content_id",
-		"bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", tok, []byte("test"))
+		"bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", signer, []byte("test"))
 	if res.StatusCode == 200 {
 		t.Fatal("expected rejection for blob upload to non-existent content")
 	}
@@ -321,8 +321,8 @@ func TestBlobDownloadNonExistentContent(t *testing.T) {
 	base := relayURL(t)
 	id := createIdentity(t, base)
 
-	tok := authToken(t, base, id)
-	res := getBlob(t, base, "nonexistent_content_id", tok)
+	signer := signerFor(id)
+	res := getBlob(t, base, "nonexistent_content_id", signer)
 	if res.StatusCode != 404 {
 		t.Fatalf("expected 404 for non-existent content blob, got %d", res.StatusCode)
 	}
@@ -490,9 +490,9 @@ func TestCredentialFromDeletedIssuer(t *testing.T) {
 	cc := createContent(t, base, creator)
 
 	// upload blob
-	tok := authToken(t, base, creator)
+	signer := signerFor(creator)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// issue credential while creator is alive
 	reader := createIdentity(t, base)
@@ -511,8 +511,8 @@ func TestCredentialFromDeletedIssuer(t *testing.T) {
 	postOperations(t, base, []string{delToken}).Body.Close()
 
 	// reader tries to download with credential from deleted issuer — should fail
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 
 	// Identity deletion revokes all authority, including outstanding credentials.
 	// The credential was validly issued but the issuer is now deleted.

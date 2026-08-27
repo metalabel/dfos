@@ -65,11 +65,6 @@ func newConfigSetCmd() *cobra.Command {
 			switch key {
 			case "active_context":
 				cfg.ActiveContext = value
-			case "defaults.auth_token_ttl":
-				if cfg.Defaults == nil {
-					cfg.Defaults = &config.DefaultsConfig{}
-				}
-				cfg.Defaults.AuthTokenTTL = value
 			case "defaults.credential_ttl":
 				if cfg.Defaults == nil {
 					cfg.Defaults = &config.DefaultsConfig{}

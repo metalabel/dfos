@@ -18,9 +18,12 @@ func main() {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	enabled := true
+	// The relay's OWN configured authority — the host binding every identity
+	// proof is checked against. Configuration, never read from the request.
 	r, err := relay.NewRelay(relay.RelayOptions{
-		Store:   relay.NewMemoryStore(),
-		Signing: &enabled,
+		Store:     relay.NewMemoryStore(),
+		Authority: "localhost:" + os.Args[1],
+		Signing:   &enabled,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "new relay: %v\n", err)

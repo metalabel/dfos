@@ -69,7 +69,9 @@ const seededDID = deriveChainIdentifier(encoded.cid.bytes, 'did:dfos');
 const store = new MemoryRelayStore();
 await ingestOperations([jwsToken], store);
 
-const relay = await createRelay({ store, write: false });
+// `authority` is the relay's OWN host — the host binding every identity proof is
+// checked against. Configuration, never read from the request.
+const relay = await createRelay({ store, authority: `localhost:${port}`, write: false });
 
 serve(relay.app, { port });
 // printed last so the runner can grep it after the listener is up

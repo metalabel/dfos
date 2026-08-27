@@ -2,18 +2,31 @@ import { describe, expect, it } from 'vitest';
 import { encodeEd25519Multikey } from '../src/chain';
 import type { VerifiedIdentity } from '../src/chain';
 import {
-  AuthTokenVerificationError,
-  createAuthToken,
+  apiIdentitySigningInput,
+  ApiRequestVerifyError,
   createDFOSCredential,
   CredentialVerificationError,
   decodeDFOSCredentialUnsafe,
+  EMPTY_BODY_SHA256,
+  IDENTITY_PROOF_JWS_TYP,
   isAttenuated,
   matchesResource,
-  verifyAuthToken,
+  MAX_REQUEST_PROOF_SIZE,
+  parseDfosAuthorization,
+  signApiIdentityRequest,
+  signApiRequest,
   verifyDelegationChain,
   verifyDFOSCredential,
+  verifyIdentityProofEnvelope,
+  verifyRequestProofEnvelope,
+  type ProofEnvelopeInput,
 } from '../src/credentials';
-import { createNewEd25519Keypair, generateId, signPayloadEd25519 } from '../src/crypto';
+import {
+  base64urlEncode,
+  createNewEd25519Keypair,
+  generateId,
+  signPayloadEd25519,
+} from '../src/crypto';
 
 // =============================================================================
 // helpers
@@ -46,231 +59,366 @@ const identityMap = new Map<string, VerifiedIdentity>();
 const resolveIdentity = async (did: string) => identityMap.get(did);
 
 // =============================================================================
-// auth tokens
+// identity proof envelope (API-AUTH)
 // =============================================================================
 
-describe('auth token', () => {
+// The identity proof replaced the DID-signed auth-token JWT as the relay's (and
+// every DFOS-gated surface's) AuthN artifact. Each case below carries forward a
+// rule the auth-token suite asserted — expiry became the freshness window,
+// audience became the host binding, kid/iss agreement became "the signer IS the
+// principal" — plus the rules the envelope adds (typ scoping, the config
+// verdict, additive members).
+
+const proofPresenter = (id: ReturnType<typeof makeIdentity>, isDeleted = false) => ({
+  isDeleted,
+  keys: id.identity.authKeys,
+});
+
+const resolverFor =
+  (states: Record<string, { isDeleted: boolean; keys: VerifiedIdentity['authKeys'] }>) =>
+  async (did: string) =>
+    states[did] ?? null;
+
+const signIdentityProof = async (
+  id: ReturnType<typeof makeIdentity>,
+  overrides: Partial<Parameters<typeof signApiIdentityRequest>[0]> = {},
+) =>
+  signApiIdentityRequest({
+    method: 'GET',
+    host: 'relay.example.com',
+    path: '/signing/v0/requests',
+    kid: id.kid,
+    sign: id.signer,
+    ...overrides,
+  });
+
+const expectations = (overrides: Partial<ProofEnvelopeInput> = {}): ProofEnvelopeInput => ({
+  proof: '',
+  method: 'GET',
+  host: 'relay.example.com',
+  path: '/signing/v0/requests',
+  ...overrides,
+});
+
+describe('identity proof envelope', () => {
   it('should create and verify round-trip', async () => {
     const id = makeIdentity();
-    const token = await createAuthToken({
-      iss: id.did,
-      aud: 'relay.example.com',
-      exp: futureUnix(5),
-      kid: id.kid,
-      sign: id.signer,
-    });
-
-    expect(token).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
-
-    const result = verifyAuthToken({
-      token,
-      publicKey: id.keypair.publicKey,
-      audience: 'relay.example.com',
-    });
-
-    expect(result.iss).toBe(id.did);
-    expect(result.aud).toBe('relay.example.com');
-    expect(result.kid).toBe(id.kid);
+    const { proof } = await signIdentityProof(id);
+    const verified = await verifyIdentityProofEnvelope(
+      expectations({ proof }),
+      resolverFor({ [id.did]: proofPresenter(id) }),
+    );
+    expect(verified.presenterDID).toBe(id.did);
+    expect(verified.kid).toBe(id.kid);
+    expect(verified.payload.host).toBe('relay.example.com');
   });
 
-  it('should reject expired token', async () => {
+  // The auth token's `exp` is gone: the VERIFIER owns the freshness window, so
+  // a presenter can never widen its own replay window.
+  it('should reject a proof older than the acceptance window', async () => {
     const id = makeIdentity();
-    const token = await createAuthToken({
-      iss: id.did,
-      aud: 'relay.example.com',
-      exp: pastUnix(5),
-      kid: id.kid,
-      sign: id.signer,
-    });
-
-    expect(() =>
-      verifyAuthToken({
-        token,
-        publicKey: id.keypair.publicKey,
-        audience: 'relay.example.com',
-      }),
-    ).toThrow(/expired/i);
+    const { proof } = await signIdentityProof(id, { iat: pastUnix(5) });
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', phase: 'proof', status: 401 });
   });
 
-  it('should reject wrong audience', async () => {
+  // The auth token's `aud` became the host binding — and the value compared
+  // against is the VERIFIER'S OWN configured authority, never a request header.
+  it('should reject a host mismatch', async () => {
     const id = makeIdentity();
-    const token = await createAuthToken({
-      iss: id.did,
-      aud: 'relay.example.com',
-      exp: futureUnix(5),
-      kid: id.kid,
-      sign: id.signer,
-    });
-
-    expect(() =>
-      verifyAuthToken({
-        token,
-        publicKey: id.keypair.publicKey,
-        audience: 'other-relay.example.com',
-      }),
-    ).toThrow(/audience/i);
+    const { proof } = await signIdentityProof(id, { host: 'other.example.com' });
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
   });
 
-  it('should reject wrong signing key', async () => {
+  it('should reject a method or path mismatch — the proof binds ONE request', async () => {
     const id = makeIdentity();
-    const wrong = createNewEd25519Keypair();
-    const token = await createAuthToken({
-      iss: id.did,
-      aud: 'relay.example.com',
-      exp: futureUnix(5),
-      kid: id.kid,
-      sign: id.signer,
-    });
+    const { proof } = await signIdentityProof(id);
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof, method: 'POST' }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof, path: '/signing/v0/requests?limit=1' }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
+  });
 
-    expect(() =>
-      verifyAuthToken({
-        token,
-        publicKey: wrong.publicKey,
-        audience: 'relay.example.com',
-      }),
-    ).toThrow(/signature/i);
+  it('should reject a body-hash mismatch', async () => {
+    const id = makeIdentity();
+    const body = new TextEncoder().encode('{"operations":[]}');
+    const { proof } = await signIdentityProof(id, { method: 'POST', path: '/x', body });
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({
+          proof,
+          method: 'POST',
+          path: '/x',
+          body: new TextEncoder().encode('{"operations":["a"]}'),
+        }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
+  });
+
+  it('should reject a wrong signing key', async () => {
+    const id = makeIdentity();
+    const other = makeIdentity();
+    const { proof } = await signIdentityProof(id);
+    // Same kid, a DIFFERENT key registered as current state → signature fails.
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof }),
+        resolverFor({
+          [id.did]: { isDeleted: false, keys: [{ ...other.identity.authKeys[0]!, id: id.keyId }] },
+        }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
+  });
+
+  it('should reject a key that is not in the presenter CURRENT state', async () => {
+    const id = makeIdentity();
+    const { proof } = await signIdentityProof(id);
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof }),
+        resolverFor({ [id.did]: { isDeleted: false, keys: [] } }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
   });
 
   it('should reject kid without DID URL format', async () => {
     const id = makeIdentity();
+    await expect(signIdentityProof(id, { kid: 'not-a-did-url' })).rejects.toThrow(
+      'kid must be a DID URL',
+    );
+  });
+
+  // The auth token asserted kid-DID === iss. The identity proof has no `iss`:
+  // THE SIGNER IS THE PRINCIPAL, so the two can no longer disagree — and the
+  // rule that replaces it is the deleted-presenter off-switch.
+  it('should reject a deleted presenter (401 — checked and failed)', async () => {
+    const id = makeIdentity();
+    const { proof } = await signIdentityProof(id);
     await expect(
-      createAuthToken({
-        iss: id.did,
-        aud: 'relay.example.com',
-        exp: futureUnix(5),
-        kid: 'bare_key_id',
-        sign: id.signer,
-      }),
-    ).rejects.toThrow(/DID URL/i);
+      verifyIdentityProofEnvelope(
+        expectations({ proof }),
+        resolverFor({ [id.did]: proofPresenter(id, true) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
   });
 
-  it('should reject kid DID mismatch with iss', async () => {
+  it('should report an unresolvable presenter as unverifiable (503, not 401)', async () => {
     const id = makeIdentity();
-    const other = makeIdentity();
+    const { proof } = await signIdentityProof(id);
     await expect(
-      createAuthToken({
-        iss: id.did,
-        aud: 'relay.example.com',
-        exp: futureUnix(5),
-        kid: other.kid,
-        sign: id.signer,
-      }),
-    ).rejects.toThrow(/does not match/i);
+      verifyIdentityProofEnvelope(expectations({ proof }), resolverFor({})),
+    ).rejects.toMatchObject({ reason: 'unverifiable', phase: 'proof', status: 503 });
   });
 
-  it('should respect currentTime override', async () => {
+  it('should respect the now() override', async () => {
     const id = makeIdentity();
-    const token = await createAuthToken({
-      iss: id.did,
-      aud: 'relay.example.com',
-      exp: 1000,
+    const iat = pastUnix(120);
+    const { proof } = await signIdentityProof(id, { iat });
+    const verified = await verifyIdentityProofEnvelope(
+      expectations({ proof, now: () => iat * 1000 }),
+      resolverFor({ [id.did]: proofPresenter(id) }),
+    );
+    expect(verified.payload.iat).toBe(iat);
+  });
+
+  it('should reject a proof forward-dated beyond the clock-skew allowance', async () => {
+    const id = makeIdentity();
+    const { proof } = await signIdentityProof(id, { iat: futureUnix(5) });
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
+  });
+
+  it('should throw ApiRequestVerifyError on an invalid payload', async () => {
+    const id = makeIdentity();
+    // A hand-built proof whose payload fails the step-3 schema (iat <= 0).
+    const header = base64urlEncode(
+      JSON.stringify({ alg: 'EdDSA', typ: IDENTITY_PROOF_JWS_TYP, kid: id.kid }),
+    );
+    const payload = base64urlEncode(
+      JSON.stringify({
+        method: 'GET',
+        host: 'relay.example.com',
+        path: '/signing/v0/requests',
+        bodyHash: EMPTY_BODY_SHA256,
+        iat: 0,
+      }),
+    );
+    const signingInput = `${header}.${payload}`;
+    const signature = base64urlEncode(await id.signer(new TextEncoder().encode(signingInput)));
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof: `${signingInput}.${signature}` }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toBeInstanceOf(ApiRequestVerifyError);
+  });
+
+  it('should ignore unknown members (forward-compat, MUST-ignore-unknown)', async () => {
+    const id = makeIdentity();
+    const { proof } = await signIdentityProof(id, {
+      extraMembers: { 'x-future': 'whatever' },
+    });
+    const verified = await verifyIdentityProofEnvelope(
+      expectations({ proof }),
+      resolverFor({ [id.did]: proofPresenter(id) }),
+    );
+    expect(verified.presenterDID).toBe(id.did);
+    expect(verified.rawPayload['x-future']).toBe('whatever');
+  });
+
+  // --- typ scoping, both directions ---
+
+  it('should reject a request proof presented where an identity proof is required', async () => {
+    const id = makeIdentity();
+    const { proof } = await signApiRequest({
+      method: 'GET',
+      host: 'relay.example.com',
+      path: '/signing/v0/requests',
+      credentialCID: 'bafyreiexample',
       kid: id.kid,
-      iat: 100,
       sign: id.signer,
     });
-
-    // passes with time between iat and exp
-    const result = verifyAuthToken({
-      token,
-      publicKey: id.keypair.publicKey,
-      audience: 'relay.example.com',
-      currentTime: 500,
-    });
-    expect(result.iss).toBe(id.did);
-
-    // fails with time after expiry
-    expect(() =>
-      verifyAuthToken({
-        token,
-        publicKey: id.keypair.publicKey,
-        audience: 'relay.example.com',
-        currentTime: 2000,
-      }),
-    ).toThrow(/expired/i);
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
   });
 
-  it('should reject auth token issued in the future (iat > currentTime)', async () => {
+  it('should reject an identity proof presented where a request proof is required', async () => {
     const id = makeIdentity();
-    const token = await createAuthToken({
-      iss: id.did,
-      aud: 'relay.example.com',
-      exp: 10000,
-      kid: id.kid,
-      iat: 5000,
-      sign: id.signer,
-    });
-
-    // currentTime before iat — should reject
-    expect(() =>
-      verifyAuthToken({
-        token,
-        publicKey: id.keypair.publicKey,
-        audience: 'relay.example.com',
-        currentTime: 3000,
-      }),
-    ).toThrow(/not yet valid/i);
-
-    // currentTime at iat — should pass
-    const result = verifyAuthToken({
-      token,
-      publicKey: id.keypair.publicKey,
-      audience: 'relay.example.com',
-      currentTime: 5000,
-    });
-    expect(result.iss).toBe(id.did);
+    const { proof } = await signIdentityProof(id);
+    await expect(
+      verifyRequestProofEnvelope(
+        expectations({ proof }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'invalid', status: 401 });
   });
 
-  it('should throw AuthTokenVerificationError on invalid claims', async () => {
-    const id = makeIdentity();
-    // manually create a JWT that passes the JWT temporal layer (future exp) but
-    // fails the AuthTokenClaims schema — a non-positive iat.
-    const { createJwt } = await import('../src/crypto');
-    const token = await createJwt({
-      header: { alg: 'EdDSA', typ: 'JWT', kid: id.kid },
-      payload: {
-        iss: id.did,
-        sub: id.did,
-        aud: 'relay.example.com',
-        exp: futureUnix(5),
-        iat: -5,
-      },
-      sign: id.signer,
-    });
+  // --- the config verdict, and its ORDER ---
 
-    expect(() =>
-      verifyAuthToken({
-        token,
-        publicKey: id.keypair.publicKey,
-        audience: 'relay.example.com',
-      }),
-    ).toThrow(AuthTokenVerificationError);
+  it('should report a W + S over the ceiling as config (500), not invalid', async () => {
+    const id = makeIdentity();
+    const { proof } = await signIdentityProof(id);
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof, windowSeconds: 200, skewSeconds: 200 }),
+        resolverFor({ [id.did]: proofPresenter(id) }),
+      ),
+    ).rejects.toMatchObject({ reason: 'config', phase: 'config', status: 500 });
   });
 
-  it('should ignore unknown claims (forward-compat, MUST-ignore-unknown)', async () => {
-    const id = makeIdentity();
-    // an unknown extra field is preserved-and-ignored, not rejected — the
-    // schemas are looseObject so old verifiers tolerate new fields.
-    const { createJwt } = await import('../src/crypto');
-    const token = await createJwt({
-      header: { alg: 'EdDSA', typ: 'JWT', kid: id.kid },
-      payload: {
-        iss: id.did,
-        sub: id.did,
-        aud: 'relay.example.com',
-        exp: futureUnix(5),
-        iat: Math.floor(Date.now() / 1000),
-        futureField: 'tolerated',
-      },
-      sign: id.signer,
-    });
+  it('should report config BEFORE the token-size gate — request data never masks a deployment bug', async () => {
+    const oversized = 'a'.repeat(MAX_REQUEST_PROOF_SIZE + 1);
+    await expect(
+      verifyIdentityProofEnvelope(
+        expectations({ proof: oversized, windowSeconds: 200, skewSeconds: 200 }),
+        resolverFor({}),
+      ),
+    ).rejects.toMatchObject({ reason: 'config', status: 500 });
+  });
 
-    const result = verifyAuthToken({
-      token,
-      publicKey: id.keypair.publicKey,
-      audience: 'relay.example.com',
-      currentTime: Math.floor(Date.now() / 1000),
+  // --- additive members (the jti seam) ---
+
+  it('should append additive members AFTER the canonical order', () => {
+    const payload = {
+      method: 'POST',
+      host: 'relay.example.com',
+      path: '/proof/v1/operations',
+      bodyHash: EMPTY_BODY_SHA256,
+      iat: 1772841600,
+    };
+    const bytes = new TextDecoder().decode(
+      apiIdentitySigningInput(payload, { jti: 'jti-fixed-0001' }),
+    );
+    expect(bytes).toBe(
+      '{"method":"POST","host":"relay.example.com","path":"/proof/v1/operations",' +
+        `"bodyHash":"${EMPTY_BODY_SHA256}","iat":1772841600,"jti":"jti-fixed-0001"}`,
+    );
+  });
+
+  it('should order additive members lexicographically, not by insertion', () => {
+    const payload = {
+      method: 'POST',
+      host: 'relay.example.com',
+      path: '/proof/v1/operations',
+      bodyHash: EMPTY_BODY_SHA256,
+      iat: 1772841600,
+    };
+    const one = apiIdentitySigningInput(payload, { zeta: 'z', alpha: 'a' });
+    const two = apiIdentitySigningInput(payload, { alpha: 'a', zeta: 'z' });
+    expect(new TextDecoder().decode(one)).toBe(new TextDecoder().decode(two));
+    expect(new TextDecoder().decode(one)).toContain('"alpha":"a","zeta":"z"}');
+  });
+
+  it('should refuse an additive member that shadows a canonical one', () => {
+    expect(() =>
+      apiIdentitySigningInput(
+        {
+          method: 'GET',
+          host: 'relay.example.com',
+          path: '/x',
+          bodyHash: EMPTY_BODY_SHA256,
+          iat: 1772841600,
+        },
+        { iat: '1' },
+      ),
+    ).toThrow('canonical member');
+  });
+
+  it('should emit a payload segment equal to the canonical signing input', async () => {
+    const id = makeIdentity();
+    const { proof, payload } = await signIdentityProof(id, {
+      iat: 1772841600,
+      extraMembers: { jti: 'jti-fixed-0001' },
     });
-    expect(result.iss).toBe(id.did);
+    const segment = proof.split('.')[1]!;
+    expect(segment).toBe(
+      base64urlEncode(apiIdentitySigningInput(payload, { jti: 'jti-fixed-0001' })),
+    );
+  });
+});
+
+// =============================================================================
+// the DFOS authorization scheme
+// =============================================================================
+
+describe('parseDfosAuthorization', () => {
+  it('matches the scheme case-insensitively and returns the bare token', () => {
+    expect(parseDfosAuthorization('DFOS abc.def.ghi')).toBe('abc.def.ghi');
+    expect(parseDfosAuthorization('dfos abc.def.ghi')).toBe('abc.def.ghi');
+    expect(parseDfosAuthorization('  Dfos   abc.def.ghi  ')).toBe('abc.def.ghi');
+  });
+
+  it('refuses every other scheme — Bearer is not this family', () => {
+    expect(parseDfosAuthorization('Bearer abc.def.ghi')).toBeNull();
+    expect(parseDfosAuthorization('DFOS')).toBeNull();
+    expect(parseDfosAuthorization('DFOS ')).toBeNull();
+    expect(parseDfosAuthorization(undefined)).toBeNull();
   });
 });
 

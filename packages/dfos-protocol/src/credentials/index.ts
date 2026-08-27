@@ -1,3 +1,3 @@
 export * from './schemas';
-export * from './auth-token';
+export * from './api-auth';
 export * from './dfos-credential';

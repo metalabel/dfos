@@ -262,9 +262,9 @@ func TestCredentialExpired(t *testing.T) {
 	cc := createContent(t, base, id)
 
 	// upload blob as creator
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobData, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobData).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobData).Body.Close()
 
 	// create reader with already-expired credential
 	reader := createIdentity(t, base)
@@ -277,8 +277,8 @@ func TestCredentialExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, cc.contentID, readerTok, cred)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, cc.contentID, readerSigner, cred)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("expected rejection for expired credential")
 	}
@@ -294,11 +294,11 @@ func TestCredentialScopeMismatch(t *testing.T) {
 	ccB := createContent(t, base, id)
 
 	// upload blobs for both
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 	blobA, _ := json.Marshal(ccA.document)
-	putBlob(t, base, ccA.contentID, ccA.genCID, tok, blobA).Body.Close()
+	putBlob(t, base, ccA.contentID, ccA.genCID, signer, blobA).Body.Close()
 	blobB, _ := json.Marshal(ccB.document)
-	putBlob(t, base, ccB.contentID, ccB.genCID, tok, blobB).Body.Close()
+	putBlob(t, base, ccB.contentID, ccB.genCID, signer, blobB).Body.Close()
 
 	// issue read credential scoped to content A
 	reader := createIdentity(t, base)
@@ -312,8 +312,8 @@ func TestCredentialScopeMismatch(t *testing.T) {
 	}
 
 	// try to download content B using credential scoped to A
-	readerTok := authToken(t, base, reader)
-	dlRes := getBlobWithCred(t, base, ccB.contentID, readerTok, credA)
+	readerSigner := signerFor(reader)
+	dlRes := getBlobWithCred(t, base, ccB.contentID, readerSigner, credA)
 	if dlRes.StatusCode == 200 {
 		t.Fatal("expected rejection for credential scoped to different content")
 	}
@@ -375,11 +375,11 @@ func TestBlobMultiVersion(t *testing.T) {
 	id := createIdentity(t, base)
 	cc := createContent(t, base, id)
 
-	tok := authToken(t, base, id)
+	signer := signerFor(id)
 
 	// upload v1 blob
 	blobV1, _ := json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blobV1).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blobV1).Body.Close()
 
 	// update content chain
 	doc2 := map[string]any{"type": "post", "title": "version 2", "body": "updated"}
@@ -393,10 +393,10 @@ func TestBlobMultiVersion(t *testing.T) {
 
 	// upload v2 blob
 	blobV2, _ := json.Marshal(doc2)
-	putBlob(t, base, cc.contentID, updateCID, tok, blobV2).Body.Close()
+	putBlob(t, base, cc.contentID, updateCID, signer, blobV2).Body.Close()
 
 	// download v1 at ref
-	dlV1 := getBlob(t, base, cc.contentID, tok, cc.genCID)
+	dlV1 := getBlob(t, base, cc.contentID, signer, cc.genCID)
 	if dlV1.StatusCode != 200 {
 		body := readBody(t, dlV1)
 		t.Fatalf("download v1: status %d, body: %s", dlV1.StatusCode, body)
@@ -407,7 +407,7 @@ func TestBlobMultiVersion(t *testing.T) {
 	}
 
 	// download v2 at ref
-	dlV2 := getBlob(t, base, cc.contentID, tok, updateCID)
+	dlV2 := getBlob(t, base, cc.contentID, signer, updateCID)
 	if dlV2.StatusCode != 200 {
 		body := readBody(t, dlV2)
 		t.Fatalf("download v2: status %d, body: %s", dlV2.StatusCode, body)
@@ -418,7 +418,7 @@ func TestBlobMultiVersion(t *testing.T) {
 	}
 
 	// head should return v2
-	dlHead := getBlob(t, base, cc.contentID, tok)
+	dlHead := getBlob(t, base, cc.contentID, signer)
 	if dlHead.StatusCode != 200 {
 		body := readBody(t, dlHead)
 		t.Fatalf("download head: status %d, body: %s", dlHead.StatusCode, body)

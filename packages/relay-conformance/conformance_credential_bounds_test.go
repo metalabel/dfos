@@ -54,9 +54,9 @@ func credContentFixture(t *testing.T, base string) (creator identity, cc content
 	t.Helper()
 	creator = createIdentity(t, base)
 	cc = createContent(t, base, creator)
-	tok := authToken(t, base, creator)
+	signer := signerFor(creator)
 	blob, _ = json.Marshal(cc.document)
-	putBlob(t, base, cc.contentID, cc.genCID, tok, blob).Body.Close()
+	putBlob(t, base, cc.contentID, cc.genCID, signer, blob).Body.Close()
 	return creator, cc, blob
 }
 
@@ -65,14 +65,14 @@ func TestCredentialRejectsWrongVersion(t *testing.T) {
 	creator, cc, _ := credContentFixture(t, base)
 
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
+	readerSigner := signerFor(reader)
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	att := []map[string]string{{"resource": "chain:" + cc.contentID, "action": "read"}}
 	exp := time.Now().Unix() + 300
 
 	// positive control: a version-1 root credential grants access.
 	ok := signCredentialV(t, 1, creator.did, reader.did, creatorKid, att, []string{}, exp, creator.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, ok); r.StatusCode != 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, ok); r.StatusCode != 200 {
 		b := readBody(t, r)
 		t.Fatalf("positive control: version-1 credential should grant access, got %d: %s", r.StatusCode, b)
 	} else {
@@ -81,7 +81,7 @@ func TestCredentialRejectsWrongVersion(t *testing.T) {
 
 	// version != 1 → rejected.
 	bad := signCredentialV(t, 2, creator.did, reader.did, creatorKid, att, []string{}, exp, creator.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, bad); r.StatusCode == 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, bad); r.StatusCode == 200 {
 		t.Fatal("credential with version != 1 should be rejected")
 	} else {
 		r.Body.Close()
@@ -94,7 +94,7 @@ func TestCredentialRejectsMultiParentPrf(t *testing.T) {
 
 	delegate := createIdentity(t, base)
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
+	readerSigner := signerFor(reader)
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	delegateKid := delegate.did + "#" + delegate.auth.keyID
 	att := []map[string]string{{"resource": "chain:" + cc.contentID, "action": "read"}}
@@ -105,7 +105,7 @@ func TestCredentialRejectsMultiParentPrf(t *testing.T) {
 
 	// positive control: a single-parent leaf grants access.
 	okLeaf := signCredentialV(t, 1, delegate.did, reader.did, delegateKid, att, []string{rootCred}, leafExp, delegate.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, okLeaf); r.StatusCode != 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, okLeaf); r.StatusCode != 200 {
 		b := readBody(t, r)
 		t.Fatalf("positive control: single-parent delegation should grant access, got %d: %s", r.StatusCode, b)
 	} else {
@@ -114,7 +114,7 @@ func TestCredentialRejectsMultiParentPrf(t *testing.T) {
 
 	// two parents (prf length > 1) → rejected: delegation is linear.
 	badLeaf := signCredentialV(t, 1, delegate.did, reader.did, delegateKid, att, []string{rootCred, rootCred}, leafExp, delegate.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, badLeaf); r.StatusCode == 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, badLeaf); r.StatusCode == 200 {
 		t.Fatal("multi-parent credential (prf > 1) should be rejected")
 	} else {
 		r.Body.Close()
@@ -127,7 +127,7 @@ func TestDelegationRejectsActionWidening(t *testing.T) {
 
 	delegate := createIdentity(t, base)
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
+	readerSigner := signerFor(reader)
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	delegateKid := delegate.did + "#" + delegate.auth.keyID
 	rootExp := time.Now().Unix() + 300
@@ -139,7 +139,7 @@ func TestDelegationRejectsActionWidening(t *testing.T) {
 
 	// positive control: child with the same (read) action grants access.
 	okLeaf := signCredentialV(t, 1, delegate.did, reader.did, delegateKid, rootAtt, []string{rootCred}, leafExp, delegate.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, okLeaf); r.StatusCode != 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, okLeaf); r.StatusCode != 200 {
 		b := readBody(t, r)
 		t.Fatalf("positive control: non-widened action should grant access, got %d: %s", r.StatusCode, b)
 	} else {
@@ -149,7 +149,7 @@ func TestDelegationRejectsActionWidening(t *testing.T) {
 	// child widens the action set (read,write ⊋ read) → rejected.
 	wideAtt := []map[string]string{{"resource": "chain:" + cc.contentID, "action": "read,write"}}
 	badLeaf := signCredentialV(t, 1, delegate.did, reader.did, delegateKid, wideAtt, []string{rootCred}, leafExp, delegate.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, badLeaf); r.StatusCode == 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, badLeaf); r.StatusCode == 200 {
 		t.Fatal("delegated credential widening the action set should be rejected")
 	} else {
 		r.Body.Close()
@@ -162,7 +162,7 @@ func TestDelegationRejectsChainWildcardWidening(t *testing.T) {
 
 	delegate := createIdentity(t, base)
 	reader := createIdentity(t, base)
-	readerTok := authToken(t, base, reader)
+	readerSigner := signerFor(reader)
 	creatorKid := creator.did + "#" + creator.auth.keyID
 	delegateKid := delegate.did + "#" + delegate.auth.keyID
 	rootExp := time.Now().Unix() + 300
@@ -174,7 +174,7 @@ func TestDelegationRejectsChainWildcardWidening(t *testing.T) {
 
 	// positive control: child scoped to the same specific chain grants access.
 	okLeaf := signCredentialV(t, 1, delegate.did, reader.did, delegateKid, rootAtt, []string{rootCred}, leafExp, delegate.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, okLeaf); r.StatusCode != 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, okLeaf); r.StatusCode != 200 {
 		b := readBody(t, r)
 		t.Fatalf("positive control: non-widened resource should grant access, got %d: %s", r.StatusCode, b)
 	} else {
@@ -184,7 +184,7 @@ func TestDelegationRejectsChainWildcardWidening(t *testing.T) {
 	// child widens chain:<id> → chain:* → rejected.
 	wideAtt := []map[string]string{{"resource": "chain:*", "action": "read"}}
 	badLeaf := signCredentialV(t, 1, delegate.did, reader.did, delegateKid, wideAtt, []string{rootCred}, leafExp, delegate.auth.priv)
-	if r := getBlobWithCred(t, base, cc.contentID, readerTok, badLeaf); r.StatusCode == 200 {
+	if r := getBlobWithCred(t, base, cc.contentID, readerSigner, badLeaf); r.StatusCode == 200 {
 		t.Fatal("delegated credential widening chain:<id> to chain:* should be rejected")
 	} else {
 		r.Body.Close()

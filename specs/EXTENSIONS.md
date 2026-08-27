@@ -35,7 +35,6 @@ Every DFOS JWS envelope is typ-scoped: the protected header names exactly one re
 | `did:dfos:siwd-ask`       | [SIWD](https://protocol.dfos.com/siwd#the-ask-proof)  | no    | Loopback client ask proofs — the client's key-control proof over its own authorize request.                                   |
 | `did:dfos:request-proof`  | [API-AUTH](https://protocol.dfos.com/api-auth)        | no    | API request proofs — ride the `Authorization` header of a credential-gated API request and die with the freshness window.     |
 | `did:dfos:identity-proof` | [API-AUTH](https://protocol.dfos.com/api-auth)        | no    | API identity proofs — the request proof's credential-less sibling: bind one exact request to a bare DID, authentication only. |
-| `JWT`                     | [WEB-RELAY](https://protocol.dfos.com/web-relay)      | no    | DID-signed relay auth tokens (the one IANA-conventional `typ`).                                                               |
 
 ## Registries That Live in Their Owner Spec
 

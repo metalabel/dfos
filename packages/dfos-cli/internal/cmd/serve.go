@@ -37,6 +37,9 @@ func newServeCmd() *cobra.Command {
 	var noWrite bool
 	var noIndex bool
 	var contentFollow string
+	var authority string
+	var ingestion string
+	var gossipProof bool
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -44,8 +47,14 @@ func newServeCmd() *cobra.Command {
 		Long: `Expose your local relay over HTTP so other peers can sync with you.
 Your machine becomes a reachable node in the DFOS network.
 
+Authenticated routes — blob upload, non-public blob download, the mailbox poll —
+consume an identity proof bound to this relay's own host. Set --authority to the
+host callers reach you at, or those routes answer 503: the binding is yours to
+declare and is never read off a request.
+
 All flags support environment variable fallbacks for container deployment:
-  PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, SYNC_INTERVAL, CONTENT_FOLLOW, INDEX`,
+  PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, SYNC_INTERVAL, CONTENT_FOLLOW,
+  INDEX, AUTHORITY, INGESTION, GOSSIP_PROOF`,
 		// A long-lived daemon must not hold the process-wide state lock (it
 		// would block every other dfos invocation for its entire run).
 		Annotations: map[string]string{annNoStateLock: "true"},
@@ -91,10 +100,33 @@ All flags support environment variable fallbacks for container deployment:
 					noIndex = true
 				}
 			}
+			if !cmd.Flags().Changed("authority") {
+				if v := os.Getenv("AUTHORITY"); v != "" {
+					authority = v
+				}
+			}
+			if !cmd.Flags().Changed("ingestion") {
+				if v := os.Getenv("INGESTION"); v != "" {
+					ingestion = v
+				}
+			}
+			if !cmd.Flags().Changed("gossip-proof") {
+				if os.Getenv("GOSSIP_PROOF") == "true" {
+					gossipProof = true
+				}
+			}
 
 			interval, err := time.ParseDuration(syncInterval)
 			if err != nil {
 				return fmt.Errorf("invalid sync interval: %w", err)
+			}
+
+			// Reject an unknown admission mode loudly rather than silently
+			// serving a different one than the operator asked for.
+			switch ingestion {
+			case "", relay.IngestionOpen, relay.IngestionProofRequired, relay.IngestionClosed:
+			default:
+				return fmt.Errorf("invalid --ingestion %q (expected: open|proof-required|closed)", ingestion)
 			}
 
 			// content-follow accepts none|eager today ("lazy" is reserved). Reject
@@ -123,6 +155,11 @@ All flags support environment variable fallbacks for container deployment:
 				ProfileName:   relayName,
 				ExtraPeers:    extraPeers,
 				ContentFollow: contentFollow,
+				Authority:     authority,
+				Ingestion:     ingestion,
+			}
+			if gossipProof {
+				opts.GossipIdentityProof = &gossipProof
 			}
 			// LITE pull-only node: reject POST /operations, sync from peers only.
 			if noWrite {
@@ -157,6 +194,14 @@ All flags support environment variable fallbacks for container deployment:
 			fmt.Printf("  DID:    %s\n", lr.Relay.DID())
 			fmt.Printf("  Port:   %s\n", port)
 			fmt.Printf("  Sync:   every %s\n", interval)
+			if authority != "" {
+				fmt.Printf("  Host:   %s\n", authority)
+			} else {
+				fmt.Printf("  Host:   (unset — authenticated routes answer 503; pass --authority)\n")
+			}
+			if ingestion != "" {
+				fmt.Printf("  Ingest: %s\n", ingestion)
+			}
 
 			peerCount := len(cfg.Relays) + len(extraPeers)
 			if peerCount > 0 {
@@ -287,6 +332,9 @@ All flags support environment variable fallbacks for container deployment:
 	cmd.Flags().BoolVar(&noWrite, "no-write", false, "LITE pull-only node: reject POST /operations, sync from peers only")
 	cmd.Flags().BoolVar(&noIndex, "no-index", false, "Disable /index/v0 routes: advertise index:false and return 501 (env: INDEX=false)")
 	cmd.Flags().StringVar(&contentFollow, "content-follow", "none", "Materialize granted public content blobs from peers: none|eager (env: CONTENT_FOLLOW)")
+	cmd.Flags().StringVar(&authority, "authority", "", "This relay's own host[:port] — the host identity proofs bind (env: AUTHORITY; unset: authenticated routes answer 503)")
+	cmd.Flags().StringVar(&ingestion, "ingestion", "", "Admission mode for POST /operations: open|proof-required|closed (env: INGESTION, default: open, or closed with --no-write)")
+	cmd.Flags().BoolVar(&gossipProof, "gossip-proof", false, "Sign gossip-out pushes with this relay's identity proof (env: GOSSIP_PROOF)")
 	return cmd
 }
 

@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
@@ -125,6 +124,7 @@ func newContentCreateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				c.Signer = &client.Signer{Kid: kid, PrivateKey: privKey}
 				if err := publishIdentityIfNeeded(chain, rn, c); err != nil {
 					return err
 				}
@@ -137,15 +137,7 @@ func newContentCreateCmd() *cobra.Command {
 				}
 
 				// upload blob to peer
-				info, err := c.GetRelayInfo()
-				if err != nil {
-					return fmt.Errorf("get peer info: %w", err)
-				}
-				authToken, err := protocol.CreateAuthToken(chain.DID, info.DID, kid, 5*time.Minute, privKey)
-				if err != nil {
-					return fmt.Errorf("create auth token: %w", err)
-				}
-				if err := c.UploadBlob(contentID, opCID, canonicalBytes, authToken); err != nil {
+				if err := c.UploadBlob(contentID, opCID, canonicalBytes); err != nil {
 					return fmt.Errorf("upload blob: %w", err)
 				}
 
@@ -339,16 +331,9 @@ func newContentDownloadCmd() *cobra.Command {
 				return fmt.Errorf("auth key not in keychain: %w", err)
 			}
 
-			info, err := c.GetRelayInfo()
-			if err != nil {
-				return err
-			}
-			authToken, err := protocol.CreateAuthToken(chain.DID, info.DID, kid, 5*time.Minute, privKey)
-			if err != nil {
-				return err
-			}
+			c.Signer = &client.Signer{Kid: kid, PrivateKey: privKey}
 
-			blob, _, err := c.DownloadBlob(contentID, authToken, credential, ref)
+			blob, _, err := c.DownloadBlob(contentID, credential, ref)
 			if err != nil {
 				return fmt.Errorf("download: %w", err)
 			}
@@ -399,6 +384,19 @@ func newContentPublishCmd() *cobra.Command {
 				return err
 			}
 
+			// The blob upload below needs an identity proof, and so may the
+			// submission if this peer's admission is proof-required; resolve the
+			// key once, up front, and let the client sign whatever it must.
+			kid, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
+			if err != nil {
+				return err
+			}
+			privKey, err := keys.GetPrivateKey(kid)
+			if err != nil {
+				return fmt.Errorf("auth key not in keychain: %w", err)
+			}
+			c.Signer = &client.Signer{Kid: kid, PrivateKey: privKey}
+
 			if err := publishIdentityIfNeeded(idChain, rn, c); err != nil {
 				return err
 			}
@@ -420,23 +418,7 @@ func newContentPublishCmd() *cobra.Command {
 					DocumentCID: *contentChain.State.CurrentDocumentCID,
 				})
 				if blob != nil {
-					kid, err := selectHeldKey(idChain.DID, idChain.State.AuthKeys, "auth")
-					if err != nil {
-						return err
-					}
-					privKey, err := keys.GetPrivateKey(kid)
-					if err != nil {
-						return fmt.Errorf("auth key not in keychain for blob upload: %w", err)
-					}
-					info, err := c.GetRelayInfo()
-					if err != nil {
-						return fmt.Errorf("get peer info for blob upload: %w", err)
-					}
-					authToken, err := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
-					if err != nil {
-						return fmt.Errorf("create blob upload auth token: %w", err)
-					}
-					if err := c.UploadBlob(contentID, contentChain.State.HeadCID, blob, authToken); err != nil {
+					if err := c.UploadBlob(contentID, contentChain.State.HeadCID, blob); err != nil {
 						return fmt.Errorf("upload blob: %w", err)
 					}
 				}
@@ -697,6 +679,7 @@ func newContentUpdateCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				c.Signer = &client.Signer{Kid: kid, PrivateKey: privKey}
 				peerResults, err := c.SubmitOperations([]string{jwsToken})
 				if err != nil {
 					return err
@@ -704,15 +687,7 @@ func newContentUpdateCmd() *cobra.Command {
 				if len(peerResults) > 0 && peerResults[0].Status == "rejected" {
 					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
-				info, err := c.GetRelayInfo()
-				if err != nil {
-					return fmt.Errorf("peer relay info: %w", err)
-				}
-				authToken, err := protocol.CreateAuthToken(idChain.DID, info.DID, kid, 5*time.Minute, privKey)
-				if err != nil {
-					return fmt.Errorf("peer auth token: %w", err)
-				}
-				if err := c.UploadBlob(contentID, opCID, canonicalBytes, authToken); err != nil {
+				if err := c.UploadBlob(contentID, opCID, canonicalBytes); err != nil {
 					return fmt.Errorf("peer blob upload: %w", err)
 				}
 			}

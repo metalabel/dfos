@@ -12,508 +12,107 @@
   An IDENTITY PROOF is the same envelope minus `credentialCID`: it binds the same
   exact request to a bare DID, proving only WHO IS ASKING. Authentication with no
   grant attached, for surfaces whose own policy decides what a proven identity may
-  do. Same canonical-bytes machinery, same freshness bounds, same host binding,
-  same current-state key resolution — the `credentialCID` member and the
-  credential walk are the whole delta, and the `typ` gate keeps the two claims
-  distinct on the wire. See specs/API-AUTH.md.
+  do. See specs/API-AUTH.md.
 
-  As with SIWD, the load-bearing piece is NOT the fat verifier: it is
-  `apiRequestSigningInput` / `apiIdentitySigningInput`, the PURE byte contract
-  both halves share. There is exactly ONE canonical-bytes implementation per
-  language (this file, and its byte-twin in dfos-protocol-go), parameterized by
-  the one member that differs, so a TS signer and a Go signer emit identical
-  proofs from identical inputs.
+  WHERE THE BYTE CONTRACT LIVES. `apiRequestSigningInput` /
+  `apiIdentitySigningInput`, the producer half, and the PROOF PHASE (API-AUTH
+  steps 1–7) now live in `@metalabel/dfos-protocol/credentials` — because the
+  reference relay consumes the identity proof too, and this package
+  peer-depends on the relay, so a relay importing from here would close a
+  dependency CYCLE. There is still exactly ONE canonical-bytes implementation per
+  language; this module RE-EXPORTS it so every existing importer is unaffected.
 
-  `verifyApiRequest` and `verifyApiIdentityRequest` are the other half, and they
-  live HERE rather than in an API host's middleware so that middleware is a thin
-  adapter over the kit rather than a second, drifting implementation of the
-  algorithm. They share one proof-phase implementation; the request-proof verifier
-  is that phase plus the credential walk.
+  What stays here is what needs a `Client`: the resolver adapter (current-state
+  identity resolution with the stale-cache refusal), the credential walk
+  (API-AUTH steps 8–11), and the signing `fetch`.
 
 */
 
-import { decodeMultikey } from '@metalabel/dfos-protocol/chain';
 import {
+  apiIdentitySigningInput,
+  apiRequestSigningInput,
+  ApiRequestVerifyError,
+  assertProofVerifierConfig,
+  buildApiAuthHeaders,
+  buildApiIdentityHeaders,
   CredentialVerificationError,
   decodeDFOSCredentialUnsafe,
+  DEFAULT_PROOF_SKEW_SECONDS,
+  DEFAULT_PROOF_WINDOW_SECONDS,
+  DFOS_AUTH_SCHEME,
+  EMPTY_BODY_SHA256,
+  IDENTITY_PROOF_JWS_TYP,
   matchesResource,
+  MAX_BODY_BYTES,
   MAX_CREDENTIAL_SIZE,
+  MAX_PROOF_FRESHNESS_SPAN_SECONDS,
+  MAX_REQUEST_PROOF_SIZE,
+  parseDfosAuthorization,
+  REQUEST_PROOF_JWS_TYP,
+  sha256BodyHash,
+  signApiIdentityRequest,
+  signApiRequest,
   verifyDelegationChain,
   verifyDFOSCredential,
+  verifyIdentityProofEnvelope,
+  verifyRequestProofEnvelope,
+  type IdentityProofPayload,
+  type ProofEnvelopeInput,
+  type ProofExtraMembers,
+  type ProofPresenterState,
+  type RequestProofFailurePhase,
+  type RequestProofFailureReason,
+  type RequestProofPayload,
+  type ResolveProofPresenter,
+  type SignApiIdentityRequestInput,
+  type SignApiRequestInput,
   type VerifiedDFOSCredential,
 } from '@metalabel/dfos-protocol/credentials';
-import {
-  assertJwsProfile,
-  base64urlDecode,
-  base64urlEncode,
-  createJws,
-  decodeJwsUnsafe,
-  sha256,
-  verifyJws,
-} from '@metalabel/dfos-protocol/crypto';
+import { decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import type { Client } from './types';
 
 // -----------------------------------------------------------------------------
-// the byte contract
+// the byte contract — re-exported from the protocol package (see header)
 // -----------------------------------------------------------------------------
 
-/**
- * The normative JWS header `typ` for a request proof (API-AUTH.md). Signers MUST
- * set it; `verifyApiRequest` rejects anything else — it is also what lets
- * typ-routing dispatchers tell a proof apart from credentials and chain ops.
- */
-export const REQUEST_PROOF_JWS_TYP = 'did:dfos:request-proof';
-
-/**
- * The normative JWS header `typ` for an identity proof (API-AUTH.md) — the
- * request proof's credential-less sibling.
- *
- * THE TYP GATE IS ABSOLUTE, IN BOTH DIRECTIONS. "Possession of a grant's
- * audience key" and "possession of a bare identity's key" are different claims,
- * so a route requiring a credential rejects an identity proof at the header gate
- * and a route requiring bare identity rejects a request proof at the same gate.
- * No verifier ambiguity, no downgrade.
- */
-export const IDENTITY_PROOF_JWS_TYP = 'did:dfos:identity-proof';
-
-/**
- * The digest of zero octets. A request with no body hashes the empty string —
- * there is deliberately no absent-member form for bodyless requests, so every
- * proof is checked the same way.
- */
-export const EMPTY_BODY_SHA256 = '47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU';
-
-/** Size cap on the serialized proof token, checked BEFORE any decode. */
-export const MAX_REQUEST_PROOF_SIZE = 4096;
-
-/** RECOMMENDED acceptance window `W` — how old a proof may be, in seconds. */
-export const DEFAULT_PROOF_WINDOW_SECONDS = 60;
-
-/** RECOMMENDED clock-skew allowance `S` — how forward-dated a proof may be. */
-export const DEFAULT_PROOF_SKEW_SECONDS = 60;
-
-/**
- * The binding cap on `W + S`: the total span over which any one proof is
- * accepted, and therefore its worst-case replay window. A configuration
- * exceeding it is refused rather than clamped — a deployment that silently got a
- * 10-minute replay window it did not ask for is the failure this forbids.
- */
-export const MAX_PROOF_FRESHNESS_SPAN_SECONDS = 300;
+export {
+  apiIdentitySigningInput,
+  apiRequestSigningInput,
+  ApiRequestVerifyError,
+  assertProofVerifierConfig,
+  buildApiAuthHeaders,
+  buildApiIdentityHeaders,
+  DEFAULT_PROOF_SKEW_SECONDS,
+  DEFAULT_PROOF_WINDOW_SECONDS,
+  DFOS_AUTH_SCHEME,
+  EMPTY_BODY_SHA256,
+  IDENTITY_PROOF_JWS_TYP,
+  MAX_BODY_BYTES,
+  MAX_PROOF_FRESHNESS_SPAN_SECONDS,
+  MAX_REQUEST_PROOF_SIZE,
+  parseDfosAuthorization,
+  REQUEST_PROOF_JWS_TYP,
+  sha256BodyHash,
+  signApiIdentityRequest,
+  signApiRequest,
+  type IdentityProofPayload,
+  type ProofExtraMembers,
+  type RequestProofFailurePhase,
+  type RequestProofFailureReason,
+  type RequestProofPayload,
+  type SignApiIdentityRequestInput,
+  type SignApiRequestInput,
+};
 
 /** The v0 action registry's only token. */
 export const DEFAULT_API_ACTION = 'read:profile';
 
-/**
- * Default cap on the decoded body a verifier will hash, in bytes (1 MiB). The v0
- * action registry is bodyless, so this never binds today; it is the defensive
- * ceiling for the first body-bearing action, overridable per verifier.
- */
-export const MAX_BODY_BYTES = 1_048_576;
-
 /** Linear delegation depth ceiling — the protocol's own chain-walk bound. */
 const MAX_DELEGATION_DEPTH = 16;
 
-export interface RequestProofPayload {
-  /** The HTTP method, uppercase. */
-  method: string;
-  /** The API's lowercase authority — `host` on 443, `host:port` otherwise. */
-  host: string;
-  /** The exact origin-form request target — path plus query string, byte for byte. */
-  path: string;
-  /** Canonical unpadded base64url of the SHA-256 of the raw request body octets. */
-  bodyHash: string;
-  /** CID of the leaf credential presented alongside this proof. */
-  credentialCID: string;
-  /** Issued-at — unix seconds (positive integer). */
-  iat: number;
-}
-
-/**
- * The identity proof's payload: the request proof's five members MINUS
- * `credentialCID`. All five are required, under the SAME member rules — there is
- * no relaxation here, only one fewer member.
- */
-export interface IdentityProofPayload {
-  /** The HTTP method, uppercase. */
-  method: string;
-  /** The API's lowercase authority — `host` on 443, `host:port` otherwise. */
-  host: string;
-  /** The exact origin-form request target — path plus query string, byte for byte. */
-  path: string;
-  /** Canonical unpadded base64url of the SHA-256 of the raw request body octets. */
-  bodyHash: string;
-  /** Issued-at — unix seconds (positive integer). */
-  iat: number;
-}
-
-/**
- * The two artifacts of this family, as the INTERNALS see them. One member rules
- * implementation, one canonical-bytes implementation, and one proof-phase
- * implementation serve both — parameterized by the single member that differs
- * (`credentialCID`) and by the `typ` that keeps the two claims distinct.
- */
-interface ProofShape {
-  /** Diagnostic label — "request proof" / "identity proof". */
-  label: string;
-  /** The normative header `typ`. Verifiers gate on it absolutely. */
-  typ: string;
-  /** Whether `credentialCID` is a member of this artifact's payload. */
-  credentialed: boolean;
-}
-
-const REQUEST_PROOF_SHAPE: ProofShape = {
-  label: 'request proof',
-  typ: REQUEST_PROOF_JWS_TYP,
-  credentialed: true,
-};
-
-const IDENTITY_PROOF_SHAPE: ProofShape = {
-  label: 'identity proof',
-  typ: IDENTITY_PROOF_JWS_TYP,
-  credentialed: false,
-};
-
-/** The internal union of both payloads; `credentialCID` is present iff credentialed. */
-interface ParsedProofPayload {
-  method: string;
-  host: string;
-  path: string;
-  bodyHash: string;
-  credentialCID?: string;
-  iat: number;
-}
-
-const encoder = new TextEncoder();
-const EMPTY_BODY = new Uint8Array(0);
-
-// An HTTP method token per RFC 9110 `tchar`, with the lowercase letters removed:
-// the member is normatively uppercase, and "get" MUST NOT verify against "GET".
-const UPPERCASE_METHOD = /^[A-Z0-9!#$%&'*+.^_`|~-]+$/;
-// A lone surrogate has no convergent serialization: `JSON.stringify` round-trips
-// it to a `\uXXXX` escape that the Go byte-twin's UTF-8 strings cannot hold, so
-// it is refused on both sides rather than signable on one. (Mirrors siwd.ts.)
-const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-// ASCII space, the C0 controls, and DEL — none of which can ride an origin-form
-// request line, so a `path` carrying one was never a real request target.
-const CTL_OR_SPACE = /[\u0000-\u0020\u007f]/;
-// 32 digest bytes are exactly 43 canonical unpadded base64url characters.
-const BASE64URL_32 = /^[A-Za-z0-9_-]{43}$/;
-
-const assertNoLoneSurrogate = (value: string, field: string, label: string): void => {
-  if (LONE_SURROGATE.test(value)) {
-    throw new Error(`invalid ${label}: ${field} must be well-formed Unicode`);
-  }
-};
-
-/**
- * Validate a payload against API-AUTH.md's step-3 schema — the SAME member rules
- * for both artifacts, with `credentialCID` required iff the shape is
- * credentialed. Unknown members are IGNORED (the protocol's MUST-ignore-unknown
- * rule) — the canonical rebuild below drops them rather than refusing them, so a
- * future additive member never makes today's verifier reject a well-formed
- * proof. That is also why a stray `credentialCID` on an identity proof is
- * ignored rather than refused: the `typ` gate, not member sniffing, is what tells
- * the two artifacts apart.
- */
-const validateProofPayload = (value: unknown, shape: ProofShape): ParsedProofPayload => {
-  const label = shape.label;
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`invalid ${label}: expected a JSON object`);
-  }
-  const raw = value as Record<string, unknown>;
-
-  const stringFields = ['method', 'host', 'path', 'bodyHash'];
-  if (shape.credentialed) stringFields.push('credentialCID');
-  for (const field of stringFields) {
-    if (typeof raw[field] !== 'string' || raw[field] === '') {
-      throw new Error(`invalid ${label}: ${field} must be a non-empty string`);
-    }
-    assertNoLoneSurrogate(raw[field] as string, field, label);
-  }
-
-  const method = raw['method'] as string;
-  if (!UPPERCASE_METHOD.test(method)) {
-    throw new Error(`invalid ${label}: method must be an uppercase HTTP method token`);
-  }
-
-  const host = raw['host'] as string;
-  if (host !== host.toLowerCase() || /[\s/\\?#]/.test(host)) {
-    throw new Error(`invalid ${label}: host must be a lowercase authority, without a scheme`);
-  }
-
-  // The wire string, not a normalization: no percent-decoding, no query
-  // reordering, no trailing-slash equivalence. Only the two things that could
-  // never have ridden an origin-form request line are refused.
-  const path = raw['path'] as string;
-  if (!path.startsWith('/')) {
-    throw new Error(`invalid ${label}: path must begin with /`);
-  }
-  if (path.includes('#')) {
-    throw new Error(`invalid ${label}: path must not carry a fragment`);
-  }
-  if (CTL_OR_SPACE.test(path)) {
-    throw new Error(`invalid ${label}: path must not contain whitespace or control characters`);
-  }
-
-  // The bodyHash is compared as a STRING against the verifier's own re-encoding,
-  // so a padded or otherwise non-canonical spelling of the right bytes must be
-  // rejected here, not normalized. Re-encoding the decoded bytes and comparing is
-  // the only check that catches non-zero trailing bits.
-  const bodyHash = raw['bodyHash'] as string;
-  if (!BASE64URL_32.test(bodyHash) || base64urlEncode(base64urlDecode(bodyHash)) !== bodyHash) {
-    throw new Error(
-      `invalid ${label}: bodyHash must be the canonical unpadded base64url of 32 bytes`,
-    );
-  }
-
-  const iat = raw['iat'];
-  if (typeof iat !== 'number' || !Number.isSafeInteger(iat) || iat <= 0) {
-    throw new Error(`invalid ${label}: iat must be a positive integer`);
-  }
-
-  return shape.credentialed
-    ? { method, host, path, bodyHash, credentialCID: raw['credentialCID'] as string, iat }
-    : { method, host, path, bodyHash, iat };
-};
-
-const validateRequestProofPayload = (value: unknown): RequestProofPayload => {
-  const parsed = validateProofPayload(value, REQUEST_PROOF_SHAPE);
-  return {
-    method: parsed.method,
-    host: parsed.host,
-    path: parsed.path,
-    bodyHash: parsed.bodyHash,
-    credentialCID: parsed.credentialCID as string,
-    iat: parsed.iat,
-  };
-};
-
-const validateIdentityProofPayload = (value: unknown): IdentityProofPayload => {
-  const parsed = validateProofPayload(value, IDENTITY_PROOF_SHAPE);
-  return {
-    method: parsed.method,
-    host: parsed.host,
-    path: parsed.path,
-    bodyHash: parsed.bodyHash,
-    iat: parsed.iat,
-  };
-};
-
-/**
- * THE BYTE CONTRACT, in ONE place for both artifacts. Serializes a validated
- * payload to the canonical bytes that ARE the JWS payload segment — a fixed key
- * order with no insignificant whitespace, and `iat` as a bare JSON integer. The
- * request proof's order is `method, host, path, bodyHash, credentialCID, iat`;
- * the identity proof's is the same with `credentialCID` elided, so the two forms
- * cannot drift apart on anything but that member.
- *
- * HTML ESCAPING IS OFF, by construction: `path` routinely carries `&` and admits
- * `<` and `>`, and `JSON.stringify` emits all three literally. The Go byte-twin
- * hand-rolls the same serialization precisely because
- * `encoding/json` would emit `\u0026` / `\u003c` / `\u003e` instead and silently fork
- * the signed bytes.
- */
-const proofSigningInput = (parsed: ParsedProofPayload, shape: ProofShape): Uint8Array =>
-  encoder.encode(
-    JSON.stringify(
-      shape.credentialed
-        ? {
-            method: parsed.method,
-            host: parsed.host,
-            path: parsed.path,
-            bodyHash: parsed.bodyHash,
-            credentialCID: parsed.credentialCID,
-            iat: parsed.iat,
-          }
-        : {
-            method: parsed.method,
-            host: parsed.host,
-            path: parsed.path,
-            bodyHash: parsed.bodyHash,
-            iat: parsed.iat,
-          },
-    ),
-  );
-
-/**
- * The request proof's canonical signing input — six members, in the fixed order
- * `method, host, path, bodyHash, credentialCID, iat`.
- *
- * PURE and clientless: import it in a signing backend and in a verifier alike.
- */
-export const apiRequestSigningInput = (payload: RequestProofPayload): Uint8Array =>
-  proofSigningInput(validateProofPayload(payload, REQUEST_PROOF_SHAPE), REQUEST_PROOF_SHAPE);
-
-/**
- * The identity proof's canonical signing input — five members, in the fixed
- * order `method, host, path, bodyHash, iat`: the request proof's bytes minus
- * `credentialCID`, from the same encoder, under the same member rules.
- *
- * PURE and clientless: import it in a signing backend and in a verifier alike.
- */
-export const apiIdentitySigningInput = (payload: IdentityProofPayload): Uint8Array =>
-  proofSigningInput(validateProofPayload(payload, IDENTITY_PROOF_SHAPE), IDENTITY_PROOF_SHAPE);
-
-/**
- * The `bodyHash` member: canonical unpadded base64url of the SHA-256 of the
- * APPLICATION body octets — the bytes the sender handed its HTTP client, which a
- * verifier obtains after reversing transfer encoding and content encoding. Zero
- * octets hash to `EMPTY_BODY_SHA256`.
- */
-export const sha256BodyHash = (body: Uint8Array): string => base64urlEncode(sha256(body));
-
 // -----------------------------------------------------------------------------
-// produce
+// the signing fetch
 // -----------------------------------------------------------------------------
-
-export interface SignApiRequestInput {
-  /** The HTTP method, uppercase. */
-  method: string;
-  /** The API's lowercase authority — `host` on 443, `host:port` otherwise. */
-  host: string;
-  /** The exact origin-form request target this proof will ride. */
-  path: string;
-  /** Application body octets; omitted or empty hashes to `EMPTY_BODY_SHA256`. */
-  body?: Uint8Array;
-  /** CID of the leaf credential presented alongside this proof. */
-  credentialCID: string;
-  /**
-   * The signing key's DID URL. Its DID portion MUST be the leaf credential's
-   * `aud` — that equality IS the possession being proven.
-   */
-  kid: string;
-  /** Raw Ed25519 signer over the JWS signing input. */
-  sign: (message: Uint8Array) => Promise<Uint8Array>;
-  /** Issued-at override — unix seconds. Default `Math.floor(Date.now() / 1000)`. */
-  iat?: number;
-}
-
-/**
- * Sign one request. The producer half of the byte contract.
- *
- * `createJws` serializes the payload with `JSON.stringify`, so passing the
- * fixed-order object makes the emitted payload segment EXACTLY
- * `apiRequestSigningInput(payload)` — the equivalence is pinned by a test rather
- * than assumed, because it is the whole reason there is one byte contract and
- * not two.
- */
-export const signApiRequest = async (
-  input: SignApiRequestInput,
-): Promise<{ proof: string; payload: RequestProofPayload }> => {
-  const payload = validateRequestProofPayload({
-    method: input.method,
-    host: input.host,
-    path: input.path,
-    bodyHash: sha256BodyHash(input.body ?? EMPTY_BODY),
-    credentialCID: input.credentialCID,
-    iat: input.iat ?? Math.floor(Date.now() / 1000),
-  });
-  if (!input.kid.includes('#')) {
-    throw new Error('invalid request proof: kid must be a DID URL');
-  }
-
-  const proof = await createJws({
-    header: { alg: 'EdDSA', typ: REQUEST_PROOF_JWS_TYP, kid: input.kid },
-    payload: {
-      method: payload.method,
-      host: payload.host,
-      path: payload.path,
-      bodyHash: payload.bodyHash,
-      credentialCID: payload.credentialCID,
-      iat: payload.iat,
-    },
-    sign: input.sign,
-  });
-  if (proof.length > MAX_REQUEST_PROOF_SIZE) {
-    throw new Error(`request proof exceeds max size: ${proof.length} > ${MAX_REQUEST_PROOF_SIZE}`);
-  }
-  return { proof, payload };
-};
-
-export interface SignApiIdentityRequestInput {
-  /** The HTTP method, uppercase. */
-  method: string;
-  /** The API's lowercase authority — `host` on 443, `host:port` otherwise. */
-  host: string;
-  /** The exact origin-form request target this proof will ride. */
-  path: string;
-  /** Application body octets; omitted or empty hashes to `EMPTY_BODY_SHA256`. */
-  body?: Uint8Array;
-  /**
-   * The signing key's DID URL. Its DID portion IS THE PRINCIPAL — the identity
-   * proof names no other party, and nothing is looked up from it.
-   */
-  kid: string;
-  /** Raw Ed25519 signer over the JWS signing input. */
-  sign: (message: Uint8Array) => Promise<Uint8Array>;
-  /** Issued-at override — unix seconds. Default `Math.floor(Date.now() / 1000)`. */
-  iat?: number;
-}
-
-/**
- * Sign one request as a BARE IDENTITY — `signApiRequest`'s input minus the
- * credential material, and its payload minus `credentialCID`. The producer half
- * of the identity proof's byte contract.
- *
- * The emitted payload segment is EXACTLY `apiIdentitySigningInput(payload)`, the
- * same construction-by-fixed-order the request proof uses, and pinned by a test
- * rather than assumed.
- */
-export const signApiIdentityRequest = async (
-  input: SignApiIdentityRequestInput,
-): Promise<{ proof: string; payload: IdentityProofPayload }> => {
-  const payload = validateIdentityProofPayload({
-    method: input.method,
-    host: input.host,
-    path: input.path,
-    bodyHash: sha256BodyHash(input.body ?? EMPTY_BODY),
-    iat: input.iat ?? Math.floor(Date.now() / 1000),
-  });
-  if (!input.kid.includes('#')) {
-    throw new Error('invalid identity proof: kid must be a DID URL');
-  }
-
-  const proof = await createJws({
-    header: { alg: 'EdDSA', typ: IDENTITY_PROOF_JWS_TYP, kid: input.kid },
-    payload: {
-      method: payload.method,
-      host: payload.host,
-      path: payload.path,
-      bodyHash: payload.bodyHash,
-      iat: payload.iat,
-    },
-    sign: input.sign,
-  });
-  if (proof.length > MAX_REQUEST_PROOF_SIZE) {
-    throw new Error(`identity proof exceeds max size: ${proof.length} > ${MAX_REQUEST_PROOF_SIZE}`);
-  }
-  return { proof, payload };
-};
-
-/**
- * The two headers a credential-gated request carries. The `Authorization` scheme
- * is the token `DFOS`, deliberately NOT `Bearer`: nothing carried here is a
- * bearer token, and naming it one invites bearer handling (logging, caching,
- * forwarding) that this artifact exists to make useless.
- */
-export const buildApiAuthHeaders = (input: {
-  proof: string;
-  credential: string;
-}): { Authorization: string; 'X-Credential': string } => ({
-  Authorization: `DFOS ${input.proof}`,
-  'X-Credential': input.credential,
-});
-
-/**
- * The ONE header an identity-proven request carries — the same `Authorization:
- * DFOS <jws>` and NO `X-Credential`. The absent header and the `typ` agree about
- * which artifact this is; a request carrying both is malformed (401), and a
- * verifier MUST NOT pick one. That header-layer refusal is the middleware's, not
- * this kit's: the kit is handed a proof, never a header bag.
- */
-export const buildApiIdentityHeaders = (input: { proof: string }): { Authorization: string } => ({
-  Authorization: `DFOS ${input.proof}`,
-});
 
 export interface CreateApiAuthFetchOptions {
   /**
@@ -657,59 +256,51 @@ export const createApiAuthFetch = (options: CreateApiAuthFetchOptions): typeof f
 // verify
 // -----------------------------------------------------------------------------
 
-/**
- * The verdict class. Branch on `reason`, never on message text.
- *
- * - `invalid` — checked and failed.
- * - `unverifiable` — could not check (an unresolvable presenter, an unreachable
- *   revocation source). A transient resolution failure is the server's
- *   condition, not the caller's.
- * - `config` — the DEPLOYMENT is misconfigured (a `W + S` over the 300-second
- *   ceiling, or an empty required action). Not a judgment about the artifact.
- */
-export type RequestProofFailureReason = 'invalid' | 'unverifiable' | 'config';
-
-/**
- * The verification phase a failure arose in. Load-bearing for HTTP mapping: an
- * `invalid` proof-layer failure is a 401 (with a `WWW-Authenticate: DFOS`
- * challenge), an `invalid` credential-layer failure is a 403. `status` carries
- * the recommended code directly so middleware never has to re-derive it.
- */
-export type RequestProofFailurePhase = 'proof' | 'credential' | 'config';
-
-/** Branch on `reason`/`phase`/`status`, never on message text. */
-export class ApiRequestVerifyError extends Error {
-  readonly reason: RequestProofFailureReason;
-  readonly phase: RequestProofFailurePhase;
-  /** Recommended HTTP status: 401 proof-invalid, 403 credential-invalid, 503 unverifiable, 500 config. */
-  readonly status: number;
-
-  constructor(
-    reason: RequestProofFailureReason,
-    phase: RequestProofFailurePhase,
-    status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'ApiRequestVerifyError';
-    this.reason = reason;
-    this.phase = phase;
-    this.status = status;
-  }
-}
-
-// invalid, split by phase so the 401-vs-403 mapping needs no message parsing.
+// invalid/unverifiable at the CREDENTIAL layer. The proof layer's factories live
+// with the envelope in the protocol package; these are the two verdicts only a
+// credential walk can produce.
 const invalidProof = (message: string) =>
   new ApiRequestVerifyError('invalid', 'proof', 401, message);
 const invalidCredential = (message: string) =>
   new ApiRequestVerifyError('invalid', 'credential', 403, message);
-// unverifiable is 503 in either phase; `phase` records where it arose.
 const unverifiableProof = (message: string) =>
   new ApiRequestVerifyError('unverifiable', 'proof', 503, message);
 const unverifiableCredential = (message: string) =>
   new ApiRequestVerifyError('unverifiable', 'credential', 503, message);
 const misconfigured = (message: string) =>
   new ApiRequestVerifyError('config', 'config', 500, message);
+
+/**
+ * The `Client`-backed presenter resolver — the one thing the proof phase cannot
+ * supply itself, because "current identity state" is a network judgment here and
+ * a local store lookup on a relay.
+ *
+ * It FAILS CLOSED on a stale tip. Key resolution is CURRENT-STATE: rotation is
+ * how a presenter whose key is compromised stops that key minting proofs in its
+ * name, and "current keys" read from a cache whose tip could not be verified
+ * would take that lever away. `allowStale` is the deployment's explicit
+ * acceptance of that risk.
+ */
+const clientPresenterResolver =
+  (client: Client, allowStale: boolean): ResolveProofPresenter =>
+  async (did: string): Promise<ProofPresenterState> => {
+    const resolved = await client.identity(did);
+    const axes = resolved.trust.unverifiable ?? [];
+    if (!allowStale && (axes.includes('tip') || resolved.provenance.fromCache)) {
+      throw unverifiableProof(
+        'presenter identity resolution is stale (tip unverified) — refusing to authenticate ' +
+          'against a cached identity state; pass allowStale: true to accept the risk',
+      );
+    }
+    const state = resolved.value;
+    // Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
+    // current-state") — auth, assert, or controller. This is wider than SIWD,
+    // which is authKeys-only by its own spec.
+    return {
+      isDeleted: state.isDeleted,
+      keys: [...state.authKeys, ...state.assertKeys, ...state.controllerKeys],
+    };
+  };
 
 export interface VerifyApiRequestInput {
   /** The request-proof JWS — the `Authorization: DFOS <token>` token, scheme stripped. */
@@ -806,180 +397,6 @@ const discoverChainRoot = (leafToken: string): string => {
 };
 
 /**
- * What the PROOF PHASE needs, and nothing more — the subset of both verifier
- * inputs that steps 1–7 read. `VerifyApiRequestInput` and
- * `VerifyApiIdentityRequestInput` both satisfy it structurally.
- */
-interface ProofEnvelopeInput {
-  proof: string;
-  host: string;
-  method: string;
-  path: string;
-  body?: Uint8Array;
-  maxBodyBytes?: number;
-  windowSeconds?: number;
-  skewSeconds?: number;
-  allowStale?: boolean;
-  now?: () => number;
-}
-
-/**
- * THE PROOF PHASE — API-AUTH.md steps 1–7, shared verbatim by both artifacts:
- * size cap, the Signature Verification Profile header gates with THIS shape's
- * `typ`, payload schema, freshness, request binding against the verifier's own
- * configured authority, current-state presenter resolution, signature.
- *
- * For the identity proof this IS the whole algorithm. For the request proof it is
- * the gate to steps 8–11: that work is unbounded and network-touching, and a
- * well-formed proof with a bad signature must not buy it.
- *
- * One implementation, so a check tightened for one artifact is tightened for
- * both — and so the `typ` gate is provably the only place they diverge.
- */
-const verifyProofEnvelope = async (
-  client: Client,
-  input: ProofEnvelopeInput,
-  shape: ProofShape,
-): Promise<{ payload: ParsedProofPayload; presenterDID: string; now: number }> => {
-  // 4 (config half). Checked FIRST: a deployment whose window is out of bounds
-  // must never verify anything, not merely fail some proofs.
-  const window = input.windowSeconds ?? DEFAULT_PROOF_WINDOW_SECONDS;
-  const skew = input.skewSeconds ?? DEFAULT_PROOF_SKEW_SECONDS;
-  for (const [name, value] of [
-    ['windowSeconds', window],
-    ['skewSeconds', skew],
-  ] as const) {
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw misconfigured(`${name} must be a non-negative integer`);
-    }
-  }
-  if (window + skew > MAX_PROOF_FRESHNESS_SPAN_SECONDS) {
-    throw misconfigured(
-      `${shape.label} freshness span W + S exceeds ${MAX_PROOF_FRESHNESS_SPAN_SECONDS} seconds: ` +
-        `${window} + ${skew}`,
-    );
-  }
-  const maxBodyBytes = input.maxBodyBytes ?? MAX_BODY_BYTES;
-  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) {
-    throw misconfigured('maxBodyBytes must be a non-negative integer');
-  }
-
-  // 1. Size — the proof half, before any decode. A DoS guard at the header layer.
-  if (input.proof.length > MAX_REQUEST_PROOF_SIZE) {
-    throw invalidProof(
-      `${shape.label} exceeds max size: ${input.proof.length} > ${MAX_REQUEST_PROOF_SIZE}`,
-    );
-  }
-
-  // 2. Decode + Signature Verification Profile header gates.
-  const decoded = decodeJwsUnsafe(input.proof);
-  if (!decoded) throw invalidProof(`failed to decode ${shape.label} JWS`);
-  const rawHeader = decoded.header as unknown;
-  if (typeof rawHeader !== 'object' || rawHeader === null || Array.isArray(rawHeader)) {
-    throw invalidProof(`${shape.label} protected header must be an object`);
-  }
-  assertJwsProfile(rawHeader as Record<string, unknown>, invalidProof);
-  // THE TYP GATE, ABSOLUTE IN BOTH DIRECTIONS. A request proof presented where an
-  // identity proof is required dies here, and so does the reverse: "possession of
-  // a grant's audience key" and "possession of a bare identity's key" are
-  // different claims, and one must never be spendable as the other.
-  if (decoded.header.typ !== shape.typ) {
-    throw invalidProof(`invalid typ: expected ${shape.typ}, got ${decoded.header.typ}`);
-  }
-  const kid = decoded.header.kid;
-  if (typeof kid !== 'string' || !kid.includes('#')) {
-    throw invalidProof(`${shape.label} kid must be a DID URL`);
-  }
-  const presenterDID = kid.substring(0, kid.indexOf('#'));
-  const presenterKeyId = kid.substring(kid.indexOf('#') + 1);
-
-  // 3. Payload schema. Parsed from the ORIGINAL payload octets, not
-  // decodeJwsUnsafe's lossy view — but NOT re-canonicalized: the presenter
-  // self-signs and the signature covers the received bytes, so there is no
-  // third-party byte substitution to defend against. The canonical rule binds
-  // PRODUCERS (see specs/API-AUTH.md, Canonical Signing Input).
-  const payloadSegment = input.proof.split('.')[1];
-  if (payloadSegment === undefined) throw invalidProof(`failed to decode ${shape.label} payload`);
-  let payload: ParsedProofPayload;
-  try {
-    const source = new TextDecoder('utf-8', { fatal: true }).decode(
-      base64urlDecode(payloadSegment),
-    );
-    payload = validateProofPayload(JSON.parse(source), shape);
-  } catch (err) {
-    throw invalidProof(err instanceof Error ? err.message : `invalid ${shape.label} payload`);
-  }
-
-  // 4. Freshness — integer Unix seconds on both sides, so the boundary does not
-  // turn on sub-second precision. AGE and FORWARD SKEW are separate bounds:
-  // a symmetric |now - iat| <= W would make a fully forward-dated proof
-  // replayable for 2W, which is exactly what the W + S ceiling above prices.
-  const now = Math.floor((input.now ? input.now() : Date.now()) / 1000);
-  if (now - payload.iat > window) throw invalidProof(`${shape.label} is stale`);
-  if (payload.iat - now > skew) {
-    throw invalidProof(`${shape.label} iat is beyond the clock-skew allowance`);
-  }
-
-  // 5. Request binding — the non-body half first (ordering rule b), then the body
-  // hash last and only up to the cap, so an over-cap body is refused (413) before
-  // the SHA-256 rather than hashed to discover it does not match.
-  if (payload.method !== input.method) throw invalidProof(`${shape.label} method mismatch`);
-  if (payload.host !== input.host) throw invalidProof(`${shape.label} host mismatch`);
-  if (payload.path !== input.path) throw invalidProof(`${shape.label} path mismatch`);
-  const body = input.body ?? EMPTY_BODY;
-  if (body.length > maxBodyBytes) {
-    throw new ApiRequestVerifyError(
-      'invalid',
-      'proof',
-      413,
-      `request body exceeds max size: ${body.length} > ${maxBodyBytes}`,
-    );
-  }
-  if (payload.bodyHash !== sha256BodyHash(body)) {
-    throw invalidProof(`${shape.label} bodyHash mismatch`);
-  }
-
-  // 6. Resolve the presenter to its CURRENT identity state, failing CLOSED when
-  // the tip could not be verified. Rotation is how a presenter whose key is
-  // compromised stops that key minting proofs in its name; "current keys" read
-  // from a stale cache would take that lever away.
-  let resolved: Awaited<ReturnType<Client['identity']>>;
-  try {
-    resolved = await client.identity(presenterDID);
-  } catch (err) {
-    throw unverifiableProof(
-      `failed to resolve ${shape.label} presenter: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  const axes = resolved.trust.unverifiable ?? [];
-  if (!input.allowStale && (axes.includes('tip') || resolved.provenance.fromCache)) {
-    throw unverifiableProof(
-      'presenter identity resolution is stale (tip unverified) — refusing to authenticate ' +
-        'against a cached identity state; pass allowStale: true to accept the risk',
-    );
-  }
-  const state = resolved.value;
-  if (state.isDeleted) throw invalidProof(`${shape.label} presenter identity is deleted`);
-
-  // Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
-  // current-state") — auth, assert, or controller. This is wider than SIWD,
-  // which is authKeys-only by its own spec.
-  const key = [...state.authKeys, ...state.assertKeys, ...state.controllerKeys].find(
-    (candidate) => candidate.id === presenterKeyId,
-  );
-  if (!key) throw invalidProof(`${shape.label} signing key is not a current key of the presenter`);
-
-  // 7. Signature.
-  try {
-    verifyJws({ token: input.proof, publicKey: decodeMultikey(key.publicKeyMultibase).keyBytes });
-  } catch (err) {
-    throw invalidProof(err instanceof Error ? err.message : `invalid ${shape.label} signature`);
-  }
-
-  return { payload, presenterDID, now };
-};
-
-/**
  * Verify a credential-gated request — API-AUTH.md's eleven steps, in an order
  * that honors both load-bearing ordering rules: the proof signature gates every
  * credential-chain step, and body hashing runs after the cheaper binding checks.
@@ -1017,18 +434,25 @@ export const verifyApiRequest = async (
   client: Client,
   input: VerifyApiRequestInput,
 ): Promise<VerifiedRequestProof> => {
-  // The route's required action is deployment config, so it is validated HERE with
-  // the other config — before any network work — not at the coverage step. An
-  // action canonicalizing to the empty set is a subset of every grant's action
-  // set, so a misconfigured route would authorize any api:<host> holder; a broken
-  // route must fail fast and deterministically (500), never return 401/403.
+  // ALL CONFIG FIRST, BEFORE ANY REQUEST-DEPENDENT GATE. A misconfigured
+  // deployment must be reported AS a misconfiguration, and never masked by a
+  // judgment about the artifact: an out-of-bounds W + S paired with an oversized
+  // credential once answered 401, which told the operator the caller was at
+  // fault when the deployment was. The envelope re-checks the freshness half
+  // (it is entered directly for identity proofs); running it here too is cheap
+  // and makes the ORDER the property, not a coincidence of call sites.
+  assertProofVerifierConfig(input);
+  // The route's required action is deployment config too. An action canonicalizing
+  // to the empty set is a subset of every grant's action set, so a misconfigured
+  // route would authorize any api:<host> holder; a broken route must fail fast
+  // and deterministically (500), never return 401/403.
   const action = input.action ?? DEFAULT_API_ACTION;
   if (action.split(',').every((token) => token.trim() === '')) {
     throw misconfigured('required action must name a non-empty token');
   }
 
-  // 1. Size — the CREDENTIAL half, before any decode. (The proof half, and the
-  // rest of the config validation, are the envelope's, immediately below.)
+  // 1. Size — the CREDENTIAL half, before any decode. (The proof half is the
+  // envelope's, immediately below.)
   if (input.credential.length > MAX_CREDENTIAL_SIZE) {
     throw invalidProof(
       `credential exceeds max size: ${input.credential.length} > ${MAX_CREDENTIAL_SIZE}`,
@@ -1039,10 +463,9 @@ export const verifyApiRequest = async (
   // proof signature is THE GATE to every step below: the credential work is
   // unbounded and network-touching, and a well-formed proof with a bad signature
   // must not buy it.
-  const { payload, presenterDID, now } = await verifyProofEnvelope(
-    client,
-    input,
-    REQUEST_PROOF_SHAPE,
+  const { payload, presenterDID, now } = await verifyRequestProofEnvelope(
+    input as ProofEnvelopeInput,
+    clientPresenterResolver(client, input.allowStale === true),
   );
   // Present by construction: the request-proof shape requires it in step 3.
   const proofCredentialCID = payload.credentialCID as string;
@@ -1174,10 +597,18 @@ export interface VerifiedIdentityProof {
    * Authentication travels on the wire; authorization stays home.
    */
   presenterDID: string;
+  /** The full `kid` DID URL that signed, key fragment included. */
+  kid: string;
   /** The authority the binding names — the verifier's own configured value. */
   host: string;
   /** The proof's issued-at, unix seconds. */
   iat: number;
+  /**
+   * The DECODED payload, unknown members included — where a caller reads an
+   * ADDITIVE member (`jti`) the envelope verifier ignored. The signature already
+   * covers it; the canonical member set stays closed.
+   */
+  rawPayload: Record<string, unknown>;
 }
 
 /**
@@ -1195,11 +626,13 @@ export interface VerifiedIdentityProof {
  * scoping is what keeps a grant-bearing claim from ever being spent as a bare
  * one, or the reverse.
  *
- * The header-layer rule this helper cannot see: a request carrying
- * `X-Credential` alongside an identity proof is MALFORMED (401) — the headers
- * assert two different claims at once and a verifier MUST NOT pick one. That
- * refusal belongs to the middleware, which is the only layer holding the header
- * bag.
+ * The header-layer rule this helper cannot see: on an `api:<host>` surface a
+ * request carrying `X-Credential` alongside an identity proof is MALFORMED (401)
+ * — the headers assert two different claims at once and a verifier MUST NOT pick
+ * one. That refusal belongs to the middleware, which is the only layer holding
+ * the header bag. (A relay content-plane read is a different surface: there the
+ * identity proof is the AuthN half and a DFOS credential presentation is the
+ * separate authorization artifact.)
  *
  * Throws `ApiRequestVerifyError`; branch on `reason`/`phase`/`status`, never on
  * message text. `phase` is always `'proof'` or `'config'` here.
@@ -1208,6 +641,9 @@ export const verifyApiIdentityRequest = async (
   client: Client,
   input: VerifyApiIdentityRequestInput,
 ): Promise<VerifiedIdentityProof> => {
-  const { payload, presenterDID } = await verifyProofEnvelope(client, input, IDENTITY_PROOF_SHAPE);
-  return { presenterDID, host: input.host, iat: payload.iat };
+  const { payload, rawPayload, presenterDID, kid } = await verifyIdentityProofEnvelope(
+    input as ProofEnvelopeInput,
+    clientPresenterResolver(client, input.allowStale === true),
+  );
+  return { presenterDID, kid, host: input.host, iat: payload.iat, rawPayload };
 };

@@ -18,8 +18,8 @@ package share one Zod install.
 ```ts
 // Chain verification
 import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protocol/chain';
-// Credentials (auth tokens + DFOS credentials)
-import { createAuthToken, createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
+// Credentials (DFOS credentials) and the API-AUTH proof envelope
+import { createDFOSCredential, signApiIdentityRequest } from '@metalabel/dfos-protocol/credentials';
 // Crypto primitives
 import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-protocol/crypto';
 ```

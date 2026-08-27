@@ -1,6 +1,8 @@
 package relay
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -312,7 +314,7 @@ func (r *Relay) gossipOps(tokens []string) {
 			chunk := tokens[start:end]
 			peerURL := peer.URL
 			go func() {
-				err := r.peerClient.SubmitOperations(peerURL, chunk)
+				err := r.submitGossip(peerURL, chunk)
 				if err == nil {
 					return
 				}
@@ -329,6 +331,41 @@ func (r *Relay) gossipOps(tokens []string) {
 			}()
 		}
 	}
+}
+
+// submitGossip pushes one chunk, carrying an identity proof of the relay's OWN
+// DID when the relay holds a signing key and the transport can take one.
+//
+// A PeerClient that does not implement SigningPeerClient gossips anonymously —
+// which every in-process test mock does, unchanged. A default-open peer admits
+// an anonymous push anyway; the proof is what lets a peer whose policy is
+// proof-required or allowlist-based admit this relay at all.
+func (r *Relay) submitGossip(peerURL string, chunk []string) error {
+	signer, ok := r.peerClient.(SigningPeerClient)
+	if !ok || !r.gossipProofSigned {
+		return r.peerClient.SubmitOperations(peerURL, chunk)
+	}
+	return signer.SubmitOperationsSigned(peerURL, chunk, r.signGossipProof)
+}
+
+// signGossipProof mints an identity proof over the exact gossip request.
+//
+// POST /operations is WRITE-SHAPED, so the proof MUST carry jti. A fresh random
+// value per push: the receiver's replay cache is keyed (jti, presenter), so a
+// re-gossip of the same ops is a new request, not a replay.
+func (r *Relay) signGossipProof(method, host, path string, body []byte) (string, error) {
+	if r.privateKey == nil || r.keyID == "" {
+		return "", nil
+	}
+	jti := make([]byte, 16)
+	if _, err := rand.Read(jti); err != nil {
+		return "", err
+	}
+	return dfos.BuildIdentityProof(method, host, path, r.did+"#"+r.keyID, r.privateKey,
+		dfos.IdentityProofOptions{
+			Body:         body,
+			ExtraMembers: dfos.ProofExtraMembers{"jti": hex.EncodeToString(jti)},
+		})
 }
 
 // computeOpCID derives the operation CID from a JWS token.

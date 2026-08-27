@@ -35,6 +35,17 @@ type Options struct {
 	// chains this relay holds a standing public-read grant for (a follower / cache
 	// node). "" or "none" = off (default). See relay.RelayOptions.ContentFollow.
 	ContentFollow string
+	// Authority is this relay's OWN host[:port] — the host binding every identity
+	// proof is checked against. Empty leaves authenticated routes answering 503:
+	// the binding is the operator's to supply and must never be read off a
+	// request. See relay.RelayOptions.Authority.
+	Authority string
+	// Ingestion is the advertised admission mode for POST /operations:
+	// "open" (default), "proof-required", or "closed".
+	Ingestion string
+	// GossipIdentityProof: true = sign gossip-out pushes with this relay's own
+	// identity proof. nil/false = push anonymously.
+	GossipIdentityProof *bool
 }
 
 // Open opens (or creates) the local relay database and bootstraps the relay
@@ -85,14 +96,17 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 	}
 
 	r, err := relay.NewRelay(relay.RelayOptions{
-		Store:         store,
-		Identity:      identity,
-		Peers:         peers,
-		PeerClient:    peerClient,
-		Write:         opts.Write,
-		Index:         opts.Index,
-		Logger:        opts.Logger,
-		ContentFollow: opts.ContentFollow,
+		Store:               store,
+		Identity:            identity,
+		Peers:               peers,
+		PeerClient:          peerClient,
+		Write:               opts.Write,
+		Index:               opts.Index,
+		Logger:              opts.Logger,
+		ContentFollow:       opts.ContentFollow,
+		Authority:           opts.Authority,
+		Ingestion:           opts.Ingestion,
+		GossipIdentityProof: opts.GossipIdentityProof,
 	})
 	if err != nil {
 		store.Close()
@@ -165,10 +179,15 @@ func bootstrapPersistent(store *relay.SQLiteStore, profileName string) (*relay.R
 			store.SetMeta("relay_profile_jws", []byte(identity.ProfileArtifactJWS))
 			return identity, nil
 		}
+		// PrivateKey rides along: it is what lets the relay mint an identity proof
+		// of its own DID on gossip-out. Omitting it here left --gossip-proof inert
+		// on every boot after the first — the flag reads as on, and the pushes go
+		// anonymously.
 		return &relay.RelayIdentity{
 			DID:                string(didBytes),
 			KeyID:              string(keyIDBytes),
 			ProfileArtifactJWS: profileJWS,
+			PrivateKey:         ed25519.PrivateKey(privBytes),
 		}, nil
 	}
 

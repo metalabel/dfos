@@ -32,12 +32,12 @@ Raw content blobs — the actual documents that content chains commit to via `do
 
 A relay's content plane **is** a document gateway — a stateless, content-addressed blob store whose authorization is re-derived live from the proof plane; the full contract is [below](#content-plane--document-gateway). The served blob is the document itself — whether terminal (the bytes _are_ the content) or referential (the document points at external bytes, e.g. `ipfs://` or a signed-CDN reference). The relay never resolves a referential pointer; delivery of referenced media is out of protocol.
 
-Content plane access requires two credentials:
+Content plane access separates authentication from authorization:
 
-- **Auth token**: A DID-signed JWT proving the caller controls an identity (AuthN)
+- **Identity proof** ([API-AUTH](https://protocol.dfos.com/api-auth#the-identity-proof)): a request-bound `did:dfos:identity-proof` JWS proving the caller controls an identity (AuthN)
 - **Read credential** (for non-creators): A DFOS credential with `action: "read"` attenuations, issued by the content creator (or delegated via chain), granting the caller read access (AuthZ). Can be presented per-request or ingested as a standing authorization (see [Standing Authorization](#standing-authorization) below)
 
-The content creator (the DID that signed the genesis content operation) can always read their own blobs with just an auth token.
+The content creator (the DID that signed the genesis content operation) can always read their own blobs with just an identity proof.
 
 Content plane support is optional per relay. When disabled (`capabilities.content: false` in the well-known response), all content plane routes return **501 Not Implemented** — not 404 (resource doesn't exist), but 501 (capability not supported).
 
@@ -62,9 +62,38 @@ The uniform error body (`{ "error": "<prose>" }`, status codes contractual, mess
 
 ---
 
+## Authentication
+
+The relay owns **no authentication grammar**. Every authenticated request consumes the [API-AUTH](https://protocol.dfos.com/api-auth) envelope family — the request-bound possession proofs any DFOS-gated HTTP surface uses — and every route sits in exactly one of three tiers:
+
+| Tier               | Wire                                                       | Routes                                                                                                                                                                            |
+| ------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Public**         | nothing                                                    | every [RELAY-CONTRACT](https://protocol.dfos.com/relay-contract) read, index and revocation reads, publicly-granted blob reads, sign-response collect (CID knowledge) and decline |
+| **Identity proof** | `Authorization: DFOS <did:dfos:identity-proof JWS>`        | creator's own blob reads, blob upload, the mailbox poll, the AuthN half of non-public blob reads — and optionally [ingestion](#ingestion-admission), per admission policy         |
+| **Credential**     | `X-Credential` presentation, or an ingested standing grant | non-creator blob reads (alongside the identity proof), mailbox deposit ([SIGNING](https://protocol.dfos.com/signing)) — the ordinary credential machinery, unchanged              |
+
+Verification is API-AUTH's, verbatim: the relay's **own configured authority** is the `host` binding (a relay serving several hostnames selects the expected one from its own configuration, never from a request header), presenter resolution is current-state against the relay's local store, and the freshness window is the relay's to own. A route that requires a credential rejects an identity proof at the typ gate and vice versa; nothing here re-specifies the envelope.
+
+**The `jti` replay cache is REQUIRED on every write-shaped proof.** An identity proof presented to a write-shaped surface — [ingestion](#ingestion-admission), blob upload — MUST carry the `jti` member, recorded by the relay with API-AUTH's atomic insert-if-absent discipline and expired with the freshness window. The reason is the [admission ladder](#ingestion-admission): policy runs **before** full verification, so the relay grants admission-layer effects (quota spend, reputation attribution) before it knows whether the payload is a harmless duplicate — a write-shaped surface never borrows its replay posture from downstream idempotency. Read-shaped proofs (blob reads, the mailbox poll) rely on the freshness window alone, per API-AUTH's accepted bound.
+
+---
+
 ## Operation Ingestion
 
 All proof plane operations enter through a single endpoint: `POST /proof/v1/operations` — request/response shapes, batch caps, and the three ingestion statuses are [RELAY-CONTRACT.md → Submission](https://protocol.dfos.com/relay-contract#submission-post-proofv1operations). Identity operations, content operations, artifacts, and countersignatures mix freely in one batch; gossiping peers chunk larger runs to stay within the caps. This section is the behavior behind the endpoint: how a relay classifies, sorts, verifies, and routes what arrives.
+
+### Ingestion Admission
+
+Who may ingest is a **policy axis**, not a fixed rule — and peers are not special: gossip-in, client submission, and open deposit are one door with one grammar. A submission arrives in one of two **admission modes** — **anonymous** (no proof) or **identity-proven** (an [identity proof](#authentication) signed by the submitting party's own DID, `jti` required) — and the relay evaluates a **relay-local admission policy** over what it now knows: a proven principal, or anonymity. Policy MAY refuse either mode. Policy _content_ is operator-defined and out of this spec: one relay admits only DIDs its operator recognizes, another is open-anonymous under quotas, another is allowlist-only; "my peers" is one possible policy set, not a separate authentication scheme.
+
+**The evaluation ladder is normative, cheapest first:**
+
+1. **Structural caps** — batch size, body size, token shape. Failures are **400**/**413**.
+2. **Proof verification**, when a proof is presented — one signature plus a current-state key resolution. An invalid proof is **401**; an unresolvable presenter is **503**.
+3. **Admission policy** over (principal | anonymous). A refusal is **403** with the ordinary error body — _policy-refused_, distinguishable from malformed (400), from an invalid proof (401), from unverifiable (503), and from capability-off (501). Refusal is request-level: nothing in the batch is examined further, and no per-item results are produced. A policy that cannot be evaluated fails **closed** (503 — the server's condition, not a judgment on the caller).
+4. **Full verification** — the per-item chain and signature work of the sections below, only for admitted submissions. The expensive step is never spent on a submission policy refuses.
+
+The well-known's [`ingestion` member](#well-known-endpoint-get-well-knowndfos-relay) advertises the mode so a client knows before attempting: `"open"` (anonymous submissions admitted, subject to policy), `"proof-required"` (anonymous refused at step 3), or `"closed"` (no external ingestion — `POST /proof/v1/operations` answers 501, as under `capabilities.write: false`). Advertisement is a hint; the policy decision is the authority.
 
 ### Classification
 
@@ -244,8 +273,7 @@ One route serves countersignature data — `GET /proof/v1/countersignatures/:cid
 
 Every relay has a DID that resolves on its own proof plane. The relay DID serves as:
 
-- **Auth token audience**: Auth tokens are scoped to a specific relay via the JWT `aud` claim, preventing cross-relay token replay
-- **Peer identity**: When relays gossip proof plane data to each other, the relay DID identifies the peer
+- **Peer identity**: When relays gossip proof plane data to each other, the relay DID identifies the peer — on the wire, a gossiping peer authenticates like any client: anonymously, or with an identity proof signed by its own DID (see [Authentication](#authentication))
 - **Self-proof anchor**: The relay's identity chain lives in its own store, verifiable by anyone querying the relay
 
 ### Relay Profile
@@ -300,28 +328,29 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 }
 ```
 
-| Field                      | Type           | Description                                                                                                                                                                                                                       |
-| -------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `did`                      | string         | The relay's DID, resolvable on this relay's proof plane                                                                                                                                                                           |
-| `protocol`                 | string         | Protocol identifier, always `"dfos-web-relay"`                                                                                                                                                                                    |
-| `version`                  | string         | The relay's own release version (semver), independent of the frozen proof-plane clock — the proof version lives in the `/proof/v1` path prefix, not here                                                                          |
-| `capabilities`             | object         | Capability flags for optional features                                                                                                                                                                                            |
-| `capabilities.proof`       | boolean        | MUST be `true`. A relay without proof plane capability is not a relay                                                                                                                                                             |
-| `capabilities.write`       | boolean        | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                                                                                                  |
-| `capabilities.content`     | boolean        | Whether the relay supports the content plane (blob upload/download)                                                                                                                                                               |
-| `capabilities.log`         | boolean        | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                                                                                               |
-| `capabilities.revocations` | boolean        | Whether the [revocation status](#revocation-status) index is served (`GET /revocations/v1/*`). Reference relays serve it by default; a relay MAY disable it (501). An absent flag reads as `true` (the family predates the flag)  |
-| `capabilities.index`       | boolean        | Whether the [index](#index-v0) query family is served (`GET /index/v0/*`). An absent flag (a relay predating the family) reads as `false`                                                                                         |
-| `capabilities.signing`     | boolean        | Whether the [signing mailbox](https://protocol.dfos.com/signing) courier is served (`/signing/v0/*`). Opt-in: reference relays default it off, and an absent flag reads as `false`                                                |
-| `profile`                  | string         | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                                                                                        |
-| `peers`                    | array          | OPTIONAL additive telemetry. Configured peer relays surfaced for mesh discovery; reference relays emit `[]` when no peers are configured                                                                                          |
-| `peers[].endpoint`         | string         | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                                                                                                         |
-| `stats`                    | object         | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                                                                                                      |
-| `stats.opCount`            | number         | OPTIONAL additive telemetry. Total entries in the global operation log                                                                                                                                                            |
-| `stats.countsByKind`       | object         | OPTIONAL additive telemetry. Global-log counts by primitive kind; reference relays emit `identity`, `content`, `artifact`, `credential`, `countersign`, `revocation`                                                              |
-| `stats.oldestOpAt`         | string \| null | OPTIONAL additive telemetry. `createdAt` of the oldest-position global-log entry, or `null` when the log is empty                                                                                                                 |
-| `stats.headCid`            | string \| null | OPTIONAL additive telemetry. CID of the global-log tip, or `null` when the log is empty                                                                                                                                           |
-| `stats.peerSync`           | object         | OPTIONAL additive telemetry. Per-peer sync state keyed by endpoint: `lastAttemptAt`, `lastSuccessAt`, `lastReceived`, `lastInserted`, `caughtUp`, `consecutiveFailures`, `lastReconcile*`; absent when no sync peer is configured |
+| Field                      | Type           | Description                                                                                                                                                                                                                                                       |
+| -------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `did`                      | string         | The relay's DID, resolvable on this relay's proof plane                                                                                                                                                                                                           |
+| `protocol`                 | string         | Protocol identifier, always `"dfos-web-relay"`                                                                                                                                                                                                                    |
+| `version`                  | string         | The relay's own release version (semver), independent of the frozen proof-plane clock — the proof version lives in the `/proof/v1` path prefix, not here                                                                                                          |
+| `capabilities`             | object         | Capability flags for optional features                                                                                                                                                                                                                            |
+| `capabilities.proof`       | boolean        | MUST be `true`. A relay without proof plane capability is not a relay                                                                                                                                                                                             |
+| `capabilities.write`       | boolean        | Whether the relay accepts writes via `POST /proof/v1/operations`                                                                                                                                                                                                  |
+| `capabilities.content`     | boolean        | Whether the relay supports the content plane (blob upload/download)                                                                                                                                                                                               |
+| `capabilities.log`         | boolean        | Whether the global operation log is available (`GET /proof/v1/log`)                                                                                                                                                                                               |
+| `capabilities.revocations` | boolean        | Whether the [revocation status](#revocation-status) index is served (`GET /revocations/v1/*`). Reference relays serve it by default; a relay MAY disable it (501). An absent flag reads as `true` (the family predates the flag)                                  |
+| `capabilities.index`       | boolean        | Whether the [index](#index-v0) query family is served (`GET /index/v0/*`). An absent flag (a relay predating the family) reads as `false`                                                                                                                         |
+| `capabilities.signing`     | boolean        | Whether the [signing mailbox](https://protocol.dfos.com/signing) courier is served (`/signing/v0/*`). Opt-in: reference relays default it off, and an absent flag reads as `false`                                                                                |
+| `ingestion`                | string         | [Admission-mode](#ingestion-admission) hint: `"open"` (anonymous submissions admitted, subject to policy), `"proof-required"` (identity proof required), or `"closed"`. Absent derives from `capabilities.write`: `true` reads as `"open"`, `false` as `"closed"` |
+| `profile`                  | string         | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                                                                                                                        |
+| `peers`                    | array          | OPTIONAL additive telemetry. Configured peer relays surfaced for mesh discovery; reference relays emit `[]` when no peers are configured                                                                                                                          |
+| `peers[].endpoint`         | string         | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                                                                                                                                         |
+| `stats`                    | object         | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                                                                                                                                      |
+| `stats.opCount`            | number         | OPTIONAL additive telemetry. Total entries in the global operation log                                                                                                                                                                                            |
+| `stats.countsByKind`       | object         | OPTIONAL additive telemetry. Global-log counts by primitive kind; reference relays emit `identity`, `content`, `artifact`, `credential`, `countersign`, `revocation`                                                                                              |
+| `stats.oldestOpAt`         | string \| null | OPTIONAL additive telemetry. `createdAt` of the oldest-position global-log entry, or `null` when the log is empty                                                                                                                                                 |
+| `stats.headCid`            | string \| null | OPTIONAL additive telemetry. CID of the global-log tip, or `null` when the log is empty                                                                                                                                                                           |
+| `stats.peerSync`           | object         | OPTIONAL additive telemetry. Per-peer sync state keyed by endpoint: `lastAttemptAt`, `lastSuccessAt`, `lastReceived`, `lastInserted`, `caughtUp`, `consecutiveFailures`, `lastReconcile*`; absent when no sync peer is configured                                 |
 
 `capabilities.proof: false` is not a valid value. A compliant relay always serves the proof plane. When `capabilities.log: false`, `GET /proof/v1/log` returns **501 Not Implemented**. Per-chain logs are always available regardless of this setting. When `capabilities.content: false`, all content plane routes return **501 Not Implemented**. When `capabilities.revocations: false`, the `/revocations/v1/*` routes return **501 Not Implemented** — the same capability-not-supported semantics. When `capabilities.index` is `false` or absent, the `/index/v0/*` routes return **501 Not Implemented**. When `capabilities.signing` is `false` or absent, the `/signing/v0/*` routes return **501 Not Implemented**. Credential and revocation ingestion are always enabled on the proof plane — they enter through `POST /proof/v1/operations` like all other operation types.
 
@@ -407,9 +436,7 @@ A public grant may name `chain:<contentId>` (this chain) or `chain:*` (all of th
 
 ### Access
 
-Non-public content plane requests carry a self-signed **auth token** in the `Bearer` header to prove caller identity (verified against the issuer's _current_ identity state — a rotated-out key cannot mint one; see [Key Resolution](#key-resolution)).
-
-**Auth-token lifetime ceiling**: the relay rejects an auth token whose declared lifetime (`exp − iat`) exceeds a configured maximum (default **24 hours**), returning `401`. Auth tokens are ephemeral by design (minutes); this ceiling stops a buggy or malicious signer from minting an effectively-permanent bearer token. It applies only to auth tokens — DFOS credentials (read/write/standing) are verified on a separate path and may carry hours-to-months lifetimes. Setting the maximum to `≤ 0` disables the ceiling.
+Non-public content plane requests carry an **identity proof** in the `Authorization: DFOS` header — the [API-AUTH](https://protocol.dfos.com/api-auth#the-identity-proof) request-bound possession proof, verified against the presenter's _current_ identity state (a rotated-out key cannot mint one) with the relay's own configured authority as the `host` binding; see [Authentication](#authentication). There is no lifetime knob to configure: a proof lives inside the verifier-owned freshness window, seconds not hours, and binds one exact request.
 
 ### Blob Upload (`PUT /content/:contentId/blob/:ref`)
 
@@ -417,7 +444,7 @@ The upload path mirrors the download path — the operation CID identifies which
 
 Requirements:
 
-- Valid auth token (Bearer header)
+- A valid identity proof (`Authorization: DFOS` — see [Authentication](#authentication))
 - The operation CID must reference an operation in this content chain that has a `documentCID`
 - The authenticated DID must be either the chain creator OR the signer of the referenced operation (enabling delegated uploads)
 - The uploaded bytes must hash to the operation's `documentCID` (dag-cbor + sha-256 verification)
@@ -428,8 +455,8 @@ Blobs are stored by `(creatorDID, documentCID)` — always keyed to the chain cr
 
 Requirements:
 
-- If a standing authorization exists for the content (a public credential with `aud: "*"` covering the resource): access is granted without any auth token or per-request credential
-- Otherwise, a valid auth token (Bearer header) is required, plus:
+- If a standing authorization exists for the content (a public credential with `aud: "*"` covering the resource): access is granted anonymously — no proof, no per-request credential
+- Otherwise, a valid identity proof (`Authorization: DFOS`) is required, plus:
   - If the caller is the chain creator: no further credentials needed
   - If the caller is not the creator: must present a DFOS credential with `action: "read"` in the `X-Credential` header, with a delegation chain rooting at the creator
 
@@ -784,11 +811,11 @@ Every row is amber and assertion-tier: it restates the current public head docum
 The relay uses two key resolution strategies:
 
 - **Historical resolver** (for chain re-verification): searches all keys that have ever appeared in an identity chain's log, including rotated-out keys. This is necessary because re-verifying a full content chain from genesis must resolve keys from operations signed before a key rotation.
-- **Current-state resolver** (for live authentication): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for auth tokens. This prevents a compromised rotated-out key from being used to authenticate new requests. A **deleted** identity has no live-authentication standing at all: a relay MUST reject an auth token whose issuer's current state is deleted, however valid its signature — deletion is the terminal off-switch, and live authentication is exactly the question deletion answers. (Re-verification of committed history is untouched, per the historical resolver above.)
+- **Current-state resolver** (for live authentication): only resolves keys in the identity's current state. After a key rotation, the old key immediately stops working for identity proofs. This prevents a compromised rotated-out key from being used to authenticate new requests. A **deleted** identity has no live-authentication standing at all: a relay MUST reject an identity proof whose presenter's current state is deleted, however valid its signature — deletion is the terminal off-switch, and live authentication is exactly the question deletion answers. (Re-verification of committed history is untouched, per the historical resolver above.)
 
 **Which primitive uses which resolver:**
 
-- **Current-state resolver** — auth tokens. A rotated-out key cannot mint an auth token, preventing stale-key auth.
+- **Current-state resolver** — identity proofs ([API-AUTH](https://protocol.dfos.com/api-auth#the-identity-proof)'s own rule). A rotated-out key cannot mint one, preventing stale-key auth.
 - **Historical resolver** — identity and content chain re-verification, artifacts, revocations, and countersignatures **once committed**. These are historical facts whose signing key may since have rotated out, so re-verifying them must resolve against every key that ever appeared in the chain's head lineage; re-verifying them under current state would break sync of honest operations after any rotation. Their invalidation mechanism is revocation or deletion, not key rotation.
 - **Historical resolution governs re-verification and peer sync, not first admission.** This split is core protocol, normative in [PROTOCOL.md → Admission and Re-Verification](https://protocol.dfos.com/spec#admission-and-re-verification): first admission of a new artifact, countersignature, or content-chain operation is **current-state** (a freshly-signed operation from a rotated-out key is refused at the door, whatever its `createdAt` claims); once committed — accepted here, or ingested from a peer's committed log — an operation is a historical fact that re-verifies historically forever, the admission verdict never enters the replicated log, and peer-log ingestion inherits the **peer's** admission discipline (choosing peers is a trust decision). Credentials and credit claims stay on historical resolution per their own specs' MUST — revocation, not rotation, invalidates them.
 - **Credentials are the exception to the auth grouping.** Although a credential proves authorization, it uses the **historical** resolver and survives key rotation — a credential signed before a rotation remains valid afterward. Revocation (not key rotation) is the invalidation mechanism for credentials. See [CREDENTIALS.md](https://protocol.dfos.com/credentials).
@@ -799,34 +826,34 @@ The relay uses two key resolution strategies:
 
 The full surface of a reference relay, frozen and optional families together. Construction, storage, and peer-client interfaces are package documentation ([`@metalabel/dfos-web-relay` README](https://github.com/metalabel/dfos/tree/main/packages/dfos-web-relay)).
 
-| Method | Path                                        | Plane       | Auth                                      |
-| ------ | ------------------------------------------- | ----------- | ----------------------------------------- |
-| `GET`  | `/.well-known/dfos-relay`                   | meta        | none                                      |
-| `POST` | `/proof/v1/operations`                      | proof       | none                                      |
-| `GET`  | `/proof/v1/operations/:cid`                 | proof       | none                                      |
-| `GET`  | `/proof/v1/countersignatures/:cid`          | proof       | none                                      |
-| `GET`  | `/proof/v1/identities/:did`                 | proof       | none                                      |
-| `GET`  | `/proof/v1/identities/:did/log`             | proof       | none                                      |
-| `GET`  | `/proof/v1/content/:contentId`              | proof       | none                                      |
-| `GET`  | `/proof/v1/content/:contentId/log`          | proof       | none                                      |
-| `GET`  | `/proof/v1/log`                             | proof       | none                                      |
-| `GET`  | `/1.0/identifiers/:did`                     | meta        | none                                      |
-| `GET`  | `/revocations/v1/credential/:credentialCID` | revocations | none                                      |
-| `GET`  | `/revocations/v1/issuer/:did`               | revocations | none                                      |
-| `GET`  | `/index/v0/operations`                      | index       | none                                      |
-| `GET`  | `/index/v0/identities`                      | index       | none                                      |
-| `GET`  | `/index/v0/content`                         | index       | none                                      |
-| `GET`  | `/index/v0/artifacts`                       | index       | none                                      |
-| `GET`  | `/index/v0/countersignatures`               | index       | none                                      |
-| `GET`  | `/index/v0/credentials`                     | index       | none                                      |
-| `GET`  | `/index/v0/credits`                         | index       | none                                      |
-| `POST` | `/signing/v0/requests`                      | signing     | deposit credential (in body)              |
-| `GET`  | `/signing/v0/requests`                      | signing     | auth token                                |
-| `POST` | `/signing/v0/requests/:cid/response`        | signing     | none — validity is the auth               |
-| `GET`  | `/signing/v0/requests/:cid/response`        | signing     | none — CID knowledge                      |
-| `POST` | `/signing/v0/requests/:cid/decline`         | signing     | none — advisory                           |
-| `PUT`  | `/content/:contentId/blob/:ref`             | content     | auth token                                |
-| `GET`  | `/content/:contentId/blob[/:ref]`           | content     | standing auth, or auth token + credential |
+| Method | Path                                        | Plane       | Auth                                           |
+| ------ | ------------------------------------------- | ----------- | ---------------------------------------------- |
+| `GET`  | `/.well-known/dfos-relay`                   | meta        | none                                           |
+| `POST` | `/proof/v1/operations`                      | proof       | admission policy — anonymous or identity proof |
+| `GET`  | `/proof/v1/operations/:cid`                 | proof       | none                                           |
+| `GET`  | `/proof/v1/countersignatures/:cid`          | proof       | none                                           |
+| `GET`  | `/proof/v1/identities/:did`                 | proof       | none                                           |
+| `GET`  | `/proof/v1/identities/:did/log`             | proof       | none                                           |
+| `GET`  | `/proof/v1/content/:contentId`              | proof       | none                                           |
+| `GET`  | `/proof/v1/content/:contentId/log`          | proof       | none                                           |
+| `GET`  | `/proof/v1/log`                             | proof       | none                                           |
+| `GET`  | `/1.0/identifiers/:did`                     | meta        | none                                           |
+| `GET`  | `/revocations/v1/credential/:credentialCID` | revocations | none                                           |
+| `GET`  | `/revocations/v1/issuer/:did`               | revocations | none                                           |
+| `GET`  | `/index/v0/operations`                      | index       | none                                           |
+| `GET`  | `/index/v0/identities`                      | index       | none                                           |
+| `GET`  | `/index/v0/content`                         | index       | none                                           |
+| `GET`  | `/index/v0/artifacts`                       | index       | none                                           |
+| `GET`  | `/index/v0/countersignatures`               | index       | none                                           |
+| `GET`  | `/index/v0/credentials`                     | index       | none                                           |
+| `GET`  | `/index/v0/credits`                         | index       | none                                           |
+| `POST` | `/signing/v0/requests`                      | signing     | deposit credential (in body)                   |
+| `GET`  | `/signing/v0/requests`                      | signing     | identity proof                                 |
+| `POST` | `/signing/v0/requests/:cid/response`        | signing     | none — validity is the auth                    |
+| `GET`  | `/signing/v0/requests/:cid/response`        | signing     | none — CID knowledge                           |
+| `POST` | `/signing/v0/requests/:cid/decline`         | signing     | none — advisory                                |
+| `PUT`  | `/content/:contentId/blob/:ref`             | content     | identity proof                                 |
+| `GET`  | `/content/:contentId/blob[/:ref]`           | content     | standing auth, or identity proof + credential  |
 
 ---
 

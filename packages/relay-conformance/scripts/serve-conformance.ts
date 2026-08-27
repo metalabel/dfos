@@ -13,6 +13,9 @@ const port = parseInt(process.argv[2] || '4444', 10);
 
 const relay = await createRelay({
   store: new MemoryRelayStore(),
+  // The relay's OWN configured authority — the host binding every identity
+  // proof is checked against. Configuration, never read from the request.
+  authority: `localhost:${port}`,
 });
 
 serve(relay.app, { port });

@@ -295,14 +295,22 @@ func (r *Relay) handleSigningPoll(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusNotImplemented, "signing mailbox not available")
 		return
 	}
-	auth := AuthenticateRequest(req.Header.Get("Authorization"), r.did, r.readStore, r.maxAuthTokenTTL)
-	if auth == nil {
+	// THE SUBJECT IS THE PROOF'S kid DID. A mailbox poll is READ-SHAPED, so it
+	// relies on the freshness window alone — no jti. The origin-form target
+	// INCLUDES the query string (?after=, ?limit=), byte for byte: the poller
+	// signed the request it actually made.
+	auth := r.authenticateIdentityProof(req, nil, false)
+	if auth.Status != 0 {
+		writeError(w, auth.Status, auth.Error)
+		return
+	}
+	if auth.Principal == nil {
 		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	after := req.URL.Query().Get("after")
 	limit := parseLimit(req, 100, 1000)
-	requests, nextCursor, err := r.signingMailboxStore().ListPendingSignRequests(auth.Iss, after, limit, time.Now())
+	requests, nextCursor, err := r.signingMailboxStore().ListPendingSignRequests(auth.Principal.DID, after, limit, time.Now())
 	if errors.Is(err, ErrInvalidSigningCursor) {
 		writeError(w, http.StatusBadRequest, "invalid cursor")
 		return

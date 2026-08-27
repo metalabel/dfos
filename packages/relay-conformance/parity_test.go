@@ -14,8 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
 // ===========================================================================
@@ -205,7 +203,11 @@ func normalizeVolatileFields(v any, volatile map[string]bool) any {
 	}
 }
 
-func putParityBlobs(t *testing.T, base string, fix parityFixture, authToken string) {
+// putParityBlobs uploads the fixture blobs to one relay. Each upload signs its
+// OWN identity proof — bound to that relay's authority, that blob's path, and
+// that blob's bytes — so the same fixture lands on both twins without anything
+// reusable crossing between them.
+func putParityBlobs(t *testing.T, base string, fix parityFixture, signer *proofSigner) {
 	t.Helper()
 	for _, blob := range fix.Blobs {
 		u := fmt.Sprintf("%s/content/%s/blob/%s", base, blob.ContentID, blob.OperationCID)
@@ -213,7 +215,7 @@ func putParityBlobs(t *testing.T, base string, fix parityFixture, authToken stri
 		if err != nil {
 			t.Fatalf("build PUT %s: %v", u, err)
 		}
-		req.Header.Set("authorization", "Bearer "+authToken)
+		signRequest(t, base, req, signer, blob.Body, newJTI(t))
 		req.Header.Set("content-type", "application/octet-stream")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -355,19 +357,12 @@ func TestDualRelayParity(t *testing.T) {
 	// index filters positive parity cases while keeping the operation fixture
 	// byte-pinned.
 	seed := bytes.Repeat([]byte{2}, ed25519.SeedSize)
-	queryPrivateKey := ed25519.NewKeyFromSeed(seed)
-	queryAuthToken, err := dfos.CreateAuthToken(
-		fix.QueryDID,
-		fix.RelayDID,
-		fix.QueryDID+"#"+fix.QueryAuthKeyID,
-		time.Hour,
-		queryPrivateKey,
-	)
-	if err != nil {
-		t.Fatalf("create parity fixture auth token: %v", err)
+	querySigner := &proofSigner{
+		kid:  fix.QueryDID + "#" + fix.QueryAuthKeyID,
+		priv: ed25519.NewKeyFromSeed(seed),
 	}
-	putParityBlobs(t, tsURL, fix, queryAuthToken)
-	putParityBlobs(t, goURL, fix, queryAuthToken)
+	putParityBlobs(t, tsURL, fix, querySigner)
+	putParityBlobs(t, goURL, fix, querySigner)
 
 	orderedContentRoute := "/index/v0/content?order=genesisAt.desc&limit=1000"
 	signerRoute := "/index/v0/content?signer=" + url.QueryEscape(fix.QueryDID) + "&limit=1000"

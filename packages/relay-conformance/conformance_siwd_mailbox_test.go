@@ -202,10 +202,10 @@ func TestSiwdMailboxProfile(t *testing.T) {
 		t.Fatalf("issue mailbox deposit credential: %v", err)
 	}
 	deposit := map[string]string{"request": request, "credential": credential}
-	assertSigningStatus(t, signingPost(t, base+"/signing/v0/requests", deposit, ""), http.StatusCreated)
+	assertSigningStatus(t, signingPost(t, base+"/signing/v0/requests", deposit), http.StatusCreated)
 
 	pollRequest, _ := http.NewRequest(http.MethodGet, base+"/signing/v0/requests", nil)
-	pollRequest.Header.Set("authorization", "Bearer "+authToken(t, base, subject))
+	signRequest(t, base, pollRequest, signerFor(subject), nil, "")
 	pollResponse, err := http.DefaultClient.Do(pollRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +243,7 @@ func TestSiwdMailboxProfile(t *testing.T) {
 	)
 	assertSiwdErrorResponse(
 		t,
-		signingPost(t, responseURL, map[string]string{"response": wrongTyp}, ""),
+		signingPost(t, responseURL, map[string]string{"response": wrongTyp}),
 		http.StatusBadRequest,
 	)
 
@@ -253,7 +253,7 @@ func TestSiwdMailboxProfile(t *testing.T) {
 	)
 	assertSigningStatus(
 		t,
-		signingPost(t, responseURL, map[string]string{"response": artifact}, ""),
+		signingPost(t, responseURL, map[string]string{"response": artifact}),
 		http.StatusCreated,
 	)
 	var fetched struct {

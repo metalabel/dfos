@@ -59,7 +59,7 @@ func createContentWithDocument(t *testing.T, base string, id identity, doc map[s
 		if err != nil {
 			t.Fatalf("Marshal document: %v", err)
 		}
-		resp := putBlob(t, base, contentID, opCID, authToken(t, base, id), body)
+		resp := putBlob(t, base, contentID, opCID, signerFor(id), body)
 		if resp.StatusCode != 200 {
 			t.Fatalf("upload content blob: status %d, body: %s", resp.StatusCode, readBody(t, resp))
 		}
@@ -1191,7 +1191,7 @@ func TestIndexOrderTitleAndSignerIteration2(t *testing.T) {
 	}
 	res.Body.Close()
 	updateBytes, _ := json.Marshal(updateDoc)
-	resp = putBlob(t, base, post.contentID, updateOpCID, authToken(t, base, delegate), updateBytes)
+	resp = putBlob(t, base, post.contentID, updateOpCID, signerFor(delegate), updateBytes)
 	if resp.StatusCode != 200 {
 		t.Fatalf("upload delegate update blob: status %d body %s", resp.StatusCode, readBody(t, resp))
 	}

@@ -121,7 +121,6 @@ did = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
 did = "did:dfos:cv7n8vkvr64cctf3294h9k4eanhff8z"
 
 [defaults]
-auth_token_ttl = "5m"
 credential_ttl = "24h"
 ```
 
@@ -322,17 +321,20 @@ This removes the named identity and its referencing contexts from config, clears
 dfos serve --port 4444 --peers https://relay.example.com
 ```
 
-| Flag               | Default            | Env              | Purpose                                                                 |
-| ------------------ | ------------------ | ---------------- | ----------------------------------------------------------------------- |
-| `--port`           | `4444`             | `PORT`           | Port to listen on                                                       |
-| `--db`             | `~/.dfos/relay.db` | `SQLITE_PATH`    | Database path                                                           |
-| `--name`           | `DFOS Relay`       | `RELAY_NAME`     | Relay profile name in the well-known                                    |
-| `--peers`          | —                  | `PEERS`          | Peer URLs: comma-separated, a JSON array, or per-peer objects           |
-| `--sync-interval`  | `30s`              | `SYNC_INTERVAL`  | Peer sync interval                                                      |
-| `--resync`         | `false`            | `RESYNC=true`    | Reset peer cursors for a full re-sync on boot                           |
-| `--no-write`       | `false`            | —                | LITE pull-only node: reject `POST /operations`, sync from peers only    |
-| `--no-index`       | `false`            | `INDEX=false`    | Disable `/index/v0`: advertise `index: false` and return 501            |
-| `--content-follow` | `none`             | `CONTENT_FOLLOW` | Materialize granted public content blobs from peers (`none` \| `eager`) |
+| Flag               | Default            | Env                 | Purpose                                                                   |
+| ------------------ | ------------------ | ------------------- | ------------------------------------------------------------------------- |
+| `--port`           | `4444`             | `PORT`              | Port to listen on                                                         |
+| `--db`             | `~/.dfos/relay.db` | `SQLITE_PATH`       | Database path                                                             |
+| `--name`           | `DFOS Relay`       | `RELAY_NAME`        | Relay profile name in the well-known                                      |
+| `--peers`          | —                  | `PEERS`             | Peer URLs: comma-separated, a JSON array, or per-peer objects             |
+| `--sync-interval`  | `30s`              | `SYNC_INTERVAL`     | Peer sync interval                                                        |
+| `--resync`         | `false`            | `RESYNC=true`       | Reset peer cursors for a full re-sync on boot                             |
+| `--no-write`       | `false`            | —                   | LITE pull-only node: reject `POST /operations`, sync from peers only      |
+| `--no-index`       | `false`            | `INDEX=false`       | Disable `/index/v0`: advertise `index: false` and return 501              |
+| `--content-follow` | `none`             | `CONTENT_FOLLOW`    | Materialize granted public content blobs from peers (`none` \| `eager`)   |
+| `--authority`      | —                  | `AUTHORITY`         | This relay's own `host[:port]` — the host identity proofs bind            |
+| `--ingestion`      | `open`             | `INGESTION`         | Admission for `POST /operations` (`open` \| `proof-required` \| `closed`) |
+| `--gossip-proof`   | `false`            | `GOSSIP_PROOF=true` | Sign gossip-out pushes with this relay's own identity proof               |
 
 Peers accept three forms. Comma-separated URLs and a JSON array of URLs configure
 every peer with defaults; a JSON array of objects sets the per-peer switches
@@ -356,6 +358,21 @@ duplicate would otherwise pull twice against a single shared cursor. The dropped
 duplicate is logged.
 
 `--no-write` is the pull-only posture: the node ingests exclusively through peer sync and refuses submissions outright, so its served state is entirely derived from relays it chose to follow.
+
+`--authority` is the host callers reach this relay at, and it is what every
+identity proof is checked against. It is configuration, never read from a request
+header or URL — a relay that took the host from the request would have no host
+binding at all. Without it, the authenticated routes (blob upload, non-public blob
+download, the mailbox poll) answer 503 rather than blaming the caller for the
+operator's omission. Behind TLS on 443 that is the bare hostname
+(`relay.example.com`); locally it includes the port (`localhost:4444`).
+
+`--ingestion` sets who may submit operations. `open` (the default) accepts
+anonymous submissions; `proof-required` refuses them with 403 and admits only a
+submission carrying an identity proof; `closed` presents no ingestion surface at
+all and answers 501. `--no-write` forces `closed` regardless. The mode is
+advertised in the well-known as `ingestion`, so a client can see the posture
+before it submits.
 
 ---
 
@@ -603,14 +620,14 @@ This catches relay corruption, data tampering, and implementation bugs (includin
 
 ## Raw API Access
 
-`dfos api` is the escape hatch for agents and power users — raw HTTP to the relay with automatic auth token injection:
+`dfos api` is the escape hatch for agents and power users — raw HTTP to the relay, with `--auth` signing the request:
 
 ```bash
 # unauthenticated
 dfos api GET /.well-known/dfos-relay
 dfos api GET /proof/v1/identities/did:dfos:xxx
 
-# with auto auth (mints a fresh JWT, injects Authorization header)
+# with auto auth (signs an identity proof for this request, injects Authorization)
 dfos api GET /content/abc123/blob --auth
 
 # POST with body
@@ -623,7 +640,21 @@ dfos api PUT /content/abc123/blob/bafyop... --auth -H "Content-Type: application
 dfos api GET /proof/v1/identities/did:dfos:xxx -i
 ```
 
-The `--auth` flag resolves the active identity, loads the auth key from the keychain, fetches the relay's DID from well-known, mints a short-lived JWT, and injects it. One flag replaces the entire auth token lifecycle.
+The `--auth` flag resolves the active identity, loads the auth key from the keychain, and signs an identity proof bound to this exact request — its method, the peer's host, the path as sent, and the body bytes. The proof always carries a `jti`, which the write-shaped routes require and the read-shaped ones ignore, so one flag is correct on every route.
+
+### Signing a proof by hand
+
+`dfos auth proof` prints a proof for scripting — a `curl` call, a test fixture, a request the CLI has no command for:
+
+```bash
+dfos auth proof GET /signing/v0/requests
+dfos auth proof POST /proof/v1/operations --body ops.json --jti
+dfos auth proof GET '/index/v0/content?limit=10' --peer prod
+```
+
+It prints the JWS on the first line and a ready-to-paste `Authorization: DFOS <jws>` header on the second (`--json` gives both as fields).
+
+A proof authorizes one request and nothing else: it binds that method, that host, that path — query string included, byte for byte — and that body, and the relay accepts it only within about a minute of signing. Sign one per request, at the moment you make it. `--jti` adds the per-request uniqueness member that the write-shaped surfaces (`POST /proof/v1/operations`, `PUT` blob) require and that makes a second presentation of the same proof a 401.
 
 ---
 
@@ -642,61 +673,61 @@ The `--auth` flag resolves the active identity, loads the auth key from the keyc
 
 ## Commands
 
-| Method | Command                         | Description                                              |
-| ------ | ------------------------------- | -------------------------------------------------------- |
-| `GET`  | `identity list`                 | List all known identities (owned + fetched)              |
-| `GET`  | `identity show [name\|did]`     | Show identity state                                      |
-| `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                   |
-| `GET`  | `identity services [name\|did]` | Show resolved discovery services                         |
-| `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)               |
-| `POST` | `identity update`               | Rotate keys / set services (`--service`)                 |
-| `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey              |
-| `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)                     |
-| `POST` | `identity bind-domain <domain>` | Claim a domain in the chain (`DfosOrigin`, `--id`)       |
-| `GET`  | `identity verify-binding [t]`   | Verify a binding (exit: bound 0 / broken 1 / stale 2)    |
-| `POST` | `identity delete`               | Delete identity (restorable)                             |
-| `POST` | `identity restore`              | Restore a deleted identity                               |
-| `POST` | `identity publish [name\|did]`  | Submit identity chain to a relay                         |
-| `GET`  | `identity fetch <did\|name>`    | Download identity chain from relay                       |
-| `GET`  | `identity log <name\|did>`      | Show identity operation history                          |
-| `DEL`  | `identity remove <name>`        | Drop an identity name from config (data stays in relay)  |
-| `DEL`  | `identity forget <name\|did>`   | Forget local config + cached login credential            |
-| `GET`  | `content show <id>`             | Show content chain state                                 |
-| `GET`  | `content log <id>`              | Show operation history                                   |
-| `GET`  | `content download <id>`         | Download blob (stdout or file)                           |
-| `POST` | `content create <file\|->`      | Create content chain                                     |
-| `POST` | `content update <id> <file\|->` | Update content chain (supports delegation)               |
-| `POST` | `content delete <id>`           | Permanently delete content chain                         |
-| `DEL`  | `content remove <id>`           | Explain that local content cannot be un-ingested         |
-| `POST` | `content publish <id>`          | Submit content chain + blob to a relay                   |
-| `GET`  | `content fetch <id>`            | Download content chain from relay                        |
-| `GET`  | `content list`                  | List locally stored content chains                       |
-| `POST` | `credential grant <id> <did>`   | Issue read/write credential                              |
-| `POST` | `credential revoke <cid>`       | Revoke a credential                                      |
-| `GET`  | `content verify <id>`           | Re-verify chain integrity locally                        |
-| `POST` | `witness <cid>`                 | Countersign an operation (`--relation`)                  |
-| `GET`  | `countersigs <cid>`             | Show countersignatures for an operation                  |
-| `GET`  | `operation show <cid>`          | Inspect a protocol operation                             |
-| `POST` | `login [name\|did]`             | Sign in via SIWD, store the credential (`--scope`)       |
-| `GET`  | `creds list`                    | List cached SIWD login credentials                       |
-| `GET`  | `creds show <name\|did>`        | Show a cached record + decoded claims                    |
-| `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                    |
-| `GET`  | `auth token`                    | Mint short-lived auth token (stdout)                     |
-| `GET`  | `auth status`                   | Show current auth state                                  |
-| `*`    | `api <METHOD> <path>`           | Raw HTTP to relay with optional `--auth`                 |
-| `GET`  | `peer list`                     | List configured relays (alias: `relay`)                  |
-| `GET`  | `peer info [name]`              | Show relay metadata                                      |
-| `POST` | `peer add <name> <url>`         | Register a named relay                                   |
-| `DEL`  | `peer remove <name>`            | Unregister a relay                                       |
-| `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store       |
-| `SET`  | `use <context>`                 | Set active context                                       |
-| `GET`  | `config list`                   | Show full configuration                                  |
-| `GET`  | `config get <key>`              | Read a single config value                               |
-| `SET`  | `config set <key> <value>`      | Write a config value                                     |
-| `GET`  | `status [--store]`              | At-a-glance overview, optionally with local-store stats  |
-| `POST` | `sync`                          | Sync with all configured relays                          |
-| `*`    | `serve`                         | Run the local relay as an HTTP server                    |
-| `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`) |
+| Method | Command                         | Description                                                |
+| ------ | ------------------------------- | ---------------------------------------------------------- |
+| `GET`  | `identity list`                 | List all known identities (owned + fetched)                |
+| `GET`  | `identity show [name\|did]`     | Show identity state                                        |
+| `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                     |
+| `GET`  | `identity services [name\|did]` | Show resolved discovery services                           |
+| `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)                 |
+| `POST` | `identity update`               | Rotate keys / set services (`--service`)                   |
+| `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey                |
+| `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)                       |
+| `POST` | `identity bind-domain <domain>` | Claim a domain in the chain (`DfosOrigin`, `--id`)         |
+| `GET`  | `identity verify-binding [t]`   | Verify a binding (exit: bound 0 / broken 1 / stale 2)      |
+| `POST` | `identity delete`               | Delete identity (restorable)                               |
+| `POST` | `identity restore`              | Restore a deleted identity                                 |
+| `POST` | `identity publish [name\|did]`  | Submit identity chain to a relay                           |
+| `GET`  | `identity fetch <did\|name>`    | Download identity chain from relay                         |
+| `GET`  | `identity log <name\|did>`      | Show identity operation history                            |
+| `DEL`  | `identity remove <name>`        | Drop an identity name from config (data stays in relay)    |
+| `DEL`  | `identity forget <name\|did>`   | Forget local config + cached login credential              |
+| `GET`  | `content show <id>`             | Show content chain state                                   |
+| `GET`  | `content log <id>`              | Show operation history                                     |
+| `GET`  | `content download <id>`         | Download blob (stdout or file)                             |
+| `POST` | `content create <file\|->`      | Create content chain                                       |
+| `POST` | `content update <id> <file\|->` | Update content chain (supports delegation)                 |
+| `POST` | `content delete <id>`           | Permanently delete content chain                           |
+| `DEL`  | `content remove <id>`           | Explain that local content cannot be un-ingested           |
+| `POST` | `content publish <id>`          | Submit content chain + blob to a relay                     |
+| `GET`  | `content fetch <id>`            | Download content chain from relay                          |
+| `GET`  | `content list`                  | List locally stored content chains                         |
+| `POST` | `credential grant <id> <did>`   | Issue read/write credential                                |
+| `POST` | `credential revoke <cid>`       | Revoke a credential                                        |
+| `GET`  | `content verify <id>`           | Re-verify chain integrity locally                          |
+| `POST` | `witness <cid>`                 | Countersign an operation (`--relation`)                    |
+| `GET`  | `countersigs <cid>`             | Show countersignatures for an operation                    |
+| `GET`  | `operation show <cid>`          | Inspect a protocol operation                               |
+| `POST` | `login [name\|did]`             | Sign in via SIWD, store the credential (`--scope`)         |
+| `GET`  | `creds list`                    | List cached SIWD login credentials                         |
+| `GET`  | `creds show <name\|did>`        | Show a cached record + decoded claims                      |
+| `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                      |
+| `GET`  | `auth proof <METHOD> <path>`    | Sign an identity proof for one request (`--body`, `--jti`) |
+| `GET`  | `auth status`                   | Show current auth state                                    |
+| `*`    | `api <METHOD> <path>`           | Raw HTTP to relay with optional `--auth`                   |
+| `GET`  | `peer list`                     | List configured relays (alias: `relay`)                    |
+| `GET`  | `peer info [name]`              | Show relay metadata                                        |
+| `POST` | `peer add <name> <url>`         | Register a named relay                                     |
+| `DEL`  | `peer remove <name>`            | Unregister a relay                                         |
+| `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store         |
+| `SET`  | `use <context>`                 | Set active context                                         |
+| `GET`  | `config list`                   | Show full configuration                                    |
+| `GET`  | `config get <key>`              | Read a single config value                                 |
+| `SET`  | `config set <key> <value>`      | Write a config value                                       |
+| `GET`  | `status [--store]`              | At-a-glance overview, optionally with local-store stats    |
+| `POST` | `sync`                          | Sync with all configured relays                            |
+| `*`    | `serve`                         | Run the local relay as an HTTP server                      |
+| `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`)   |
 
 ---
 

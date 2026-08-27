@@ -69,7 +69,7 @@ func TestApiRequestSharedCanonicalAndSignedVectors(t *testing.T) {
 		{"/v0/profile?a=1&b=2", apiAuthVectorCanonicalQuery},
 		{"/v0/profile?q=<a>&b=2", apiAuthVectorCanonicalHTML},
 	} {
-		got, err := ApiRequestSigningInput(apiAuthVectorPayload(vector.path))
+		got, err := ApiRequestSigningInput(apiAuthVectorPayload(vector.path), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -102,7 +102,7 @@ func TestApiRequestSharedCanonicalAndSignedVectors(t *testing.T) {
 // signed bytes LITERALLY. A Go implementation that reached for encoding/json
 // would emit \u0026 / \u003c / \u003e and produce a proof no TS verifier accepts.
 func TestApiRequestSigningInputLeavesHTMLCharactersLiteral(t *testing.T) {
-	got, err := ApiRequestSigningInput(apiAuthVectorPayload("/v0/profile?q=<a>&b=2"))
+	got, err := ApiRequestSigningInput(apiAuthVectorPayload("/v0/profile?q=<a>&b=2"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestApiRequestSigningInputRejectsSchemaViolations(t *testing.T) {
 		{"negative iat", mutate(func(p *RequestProofPayload) { p.Iat = -1 })},
 	}
 	for _, vector := range vectors {
-		if _, err := ApiRequestSigningInput(vector.payload); err == nil {
+		if _, err := ApiRequestSigningInput(vector.payload, nil); err == nil {
 			t.Errorf("schema violation accepted: %s", vector.name)
 		}
 	}
@@ -175,7 +175,7 @@ func TestApiRequestNonCanonicalBodyHashSpellingRejects(t *testing.T) {
 	nonCanonical := EmptyBodySHA256[:len(EmptyBodySHA256)-1] + "V"
 	payload := apiAuthVectorPayload("/v0/profile")
 	payload.BodyHash = nonCanonical
-	if _, err := ApiRequestSigningInput(payload); err == nil {
+	if _, err := ApiRequestSigningInput(payload, nil); err == nil {
 		t.Fatalf("non-canonical bodyHash spelling accepted: %s", nonCanonical)
 	}
 }
@@ -188,8 +188,16 @@ func TestVerifyRequestProofAcceptsTheVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.CredentialCID != apiAuthVectorCID || payload.Iat != apiAuthVectorIat {
+	if payload.Payload.CredentialCID != apiAuthVectorCID || payload.Payload.Iat != apiAuthVectorIat {
 		t.Fatalf("unexpected verified payload: %+v", payload)
+	}
+	// The AUTHENTICATED PRINCIPAL comes back from the verifier — a consumer never
+	// re-decodes the token to learn who signed.
+	if payload.Kid != apiAuthVectorKid {
+		t.Fatalf("verified kid: got %q, want %q", payload.Kid, apiAuthVectorKid)
+	}
+	if want := apiAuthVectorKid[:strings.Index(apiAuthVectorKid, "#")]; payload.PresenterDID != want {
+		t.Fatalf("verified presenter: got %q, want %q", payload.PresenterDID, want)
 	}
 }
 
@@ -390,7 +398,7 @@ func TestApiIdentitySharedCanonicalAndSignedVectors(t *testing.T) {
 		{"/v0/profile?a=1&b=2", apiAuthIdentityCanonicalQuery},
 		{"/v0/profile?q=<a>&b=2", apiAuthIdentityCanonicalHTML},
 	} {
-		got, err := ApiIdentitySigningInput(apiAuthIdentityPayload(vector.path))
+		got, err := ApiIdentitySigningInput(apiAuthIdentityPayload(vector.path), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -428,7 +436,7 @@ func TestApiIdentitySharedCanonicalAndSignedVectors(t *testing.T) {
 // signed bytes literally, or a Go implementation reaching for encoding/json
 // forks away from its TS twin.
 func TestApiIdentitySigningInputLeavesHTMLCharactersLiteral(t *testing.T) {
-	got, err := ApiIdentitySigningInput(apiAuthIdentityPayload("/v0/profile?q=<a>&b=2"))
+	got, err := ApiIdentitySigningInput(apiAuthIdentityPayload("/v0/profile?q=<a>&b=2"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +481,7 @@ func TestApiIdentitySigningInputRejectsSchemaViolations(t *testing.T) {
 		{"negative iat", mutate(func(p *IdentityProofPayload) { p.Iat = -1 })},
 	}
 	for _, vector := range vectors {
-		if _, err := ApiIdentitySigningInput(vector.payload); err == nil {
+		if _, err := ApiIdentitySigningInput(vector.payload, nil); err == nil {
 			t.Errorf("schema violation accepted: %s", vector.name)
 		}
 	}
@@ -487,8 +495,17 @@ func TestVerifyIdentityProofAcceptsTheVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload.Iat != apiAuthVectorIat || payload.Path != "/v0/profile" {
+	if payload.Payload.Iat != apiAuthVectorIat || payload.Payload.Path != "/v0/profile" {
 		t.Fatalf("unexpected verified payload: %+v", payload)
+	}
+	// THE SIGNER IS THE PRINCIPAL, and the verifier says so: a consumer that had
+	// to re-decode the token to learn who signed would be re-deriving, outside
+	// the verifier, a fact the verifier already proved.
+	if want := apiAuthVectorKid[:strings.Index(apiAuthVectorKid, "#")]; payload.PresenterDID != want {
+		t.Fatalf("verified presenter: got %q, want %q", payload.PresenterDID, want)
+	}
+	if payload.Kid != apiAuthVectorKid {
+		t.Fatalf("verified kid: got %q, want %q", payload.Kid, apiAuthVectorKid)
 	}
 }
 
@@ -620,5 +637,91 @@ func TestVerifyIdentityProofIgnoresUnknownMembers(t *testing.T) {
 		if _, err := VerifyIdentityProof(token, ok, apiAuthVectorResolver(key), fresh); err != nil {
 			t.Errorf("unknown member %s rejected: %v", extra, err)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// additive members — the jti seam
+// ---------------------------------------------------------------------------
+
+// The jti-bearing half of the SAME fixture: same seed, kid, iat, host, and path,
+// with the registered additive member appended AFTER the canonical five. Pinned
+// byte-identically in packages/dfos-client/tests/api-auth.spec.ts.
+const apiAuthIdentityJti = "jti-api-auth-vector-0001"
+const apiAuthIdentityCanonicalJti = `{"method":"GET","host":"api.dfos.com","path":"/v0/profile","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","iat":1772841600,"jti":"jti-api-auth-vector-0001"}`
+const apiAuthIdentityJtiJWS = "eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LXByb29mIiwia2lkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6a2R2OGg3dDlhZSNrZXlfYXBpX2F1dGhfdmVjdG9yIn0.eyJtZXRob2QiOiJHRVQiLCJob3N0IjoiYXBpLmRmb3MuY29tIiwicGF0aCI6Ii92MC9wcm9maWxlIiwiYm9keUhhc2giOiI0N0RFUXBqOEhCU2EtX1RJbVctNUpDZXVRZVJrbTVOTXBKV1pHM2hTdUZVIiwiaWF0IjoxNzcyODQxNjAwLCJqdGkiOiJqdGktYXBpLWF1dGgtdmVjdG9yLTAwMDEifQ.T4Qx70-sj-Ons_HUlLQDYOCS2roISjh9bzHG42QAVvM_-7xxTEByKAJsf-TNYsXepFTRsWOmgv1gdkn4fw06Dg"
+
+func TestApiIdentityJtiVector(t *testing.T) {
+	got, err := ApiIdentitySigningInput(apiAuthIdentityPayload("/v0/profile"),
+		ProofExtraMembers{"jti": apiAuthIdentityJti})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != apiAuthIdentityCanonicalJti {
+		t.Fatalf("canonical bytes:\n got %s\nwant %s", got, apiAuthIdentityCanonicalJti)
+	}
+
+	token, err := BuildIdentityProof("GET", "api.dfos.com", "/v0/profile", apiAuthVectorKid,
+		apiAuthVectorKey(), IdentityProofOptions{Iat: apiAuthVectorIat,
+			ExtraMembers: ProofExtraMembers{"jti": apiAuthIdentityJti}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != apiAuthIdentityJtiJWS {
+		t.Fatalf("signed token:\n got %s\nwant %s", token, apiAuthIdentityJtiJWS)
+	}
+
+	// The envelope IGNORES jti (MUST-ignore-unknown) — and hands the decoded
+	// payload back so the write-gating layer above can read it.
+	verified, err := VerifyIdentityProof(apiAuthIdentityJtiJWS,
+		IdentityProofExpectations{Method: "GET", Host: "api.dfos.com", Path: "/v0/profile"},
+		apiAuthVectorResolver(apiAuthVectorKey()), time.Unix(apiAuthVectorIat+10, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.RawPayload["jti"] != apiAuthIdentityJti {
+		t.Fatalf("raw jti: got %v, want %s", verified.RawPayload["jti"], apiAuthIdentityJti)
+	}
+}
+
+// Additive members are emitted lexicographically, NOT in map order — Go map
+// iteration is randomized, so insertion order could never be the byte contract.
+func TestApiIdentityExtraMembersAreLexicographic(t *testing.T) {
+	for i := 0; i < 16; i++ {
+		got, err := ApiIdentitySigningInput(apiAuthIdentityPayload("/v0/profile"),
+			ProofExtraMembers{"zeta": "z", "alpha": "a"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasSuffix(string(got), `,"alpha":"a","zeta":"z"}`) {
+			t.Fatalf("extra members out of order: %s", got)
+		}
+	}
+}
+
+func TestApiIdentityExtraMembersRefuseCanonicalShadow(t *testing.T) {
+	if _, err := ApiIdentitySigningInput(apiAuthIdentityPayload("/v0/profile"),
+		ProofExtraMembers{"iat": "1"}); err == nil {
+		t.Fatal("expected a canonical-member shadow to be refused")
+	}
+	if _, err := ApiIdentitySigningInput(apiAuthIdentityPayload("/v0/profile"),
+		ProofExtraMembers{"bad name": "x"}); err == nil {
+		t.Fatal("expected a non-conforming member name to be refused")
+	}
+}
+
+// ORDER IS LOAD-BEARING: a deployment whose W + S is out of bounds must be
+// reported AS a misconfiguration, never masked by a judgment about the artifact.
+// An oversized token paired with a bad config must still answer config.
+func TestVerifyIdentityProofReportsConfigBeforeTokenSize(t *testing.T) {
+	oversized := strings.Repeat("a", MaxRequestProofSize+1)
+	expect := IdentityProofExpectations{
+		Method: "GET", Host: "api.dfos.com", Path: "/v0/profile",
+		WindowSeconds: Int64Ptr(240), SkewSeconds: Int64Ptr(61),
+	}
+	unresolvable := func(string) (ed25519.PublicKey, error) { return nil, errors.New("unused") }
+	_, err := VerifyIdentityProof(oversized, expect, unresolvable, time.Unix(apiAuthVectorIat, 0))
+	if !errors.Is(err, ErrIdentityProofConfig) {
+		t.Fatalf("bad config + oversized token: got %v, want the config verdict", err)
 	}
 }

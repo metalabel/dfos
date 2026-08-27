@@ -499,7 +499,7 @@ func TestLiteNodeRejectsBlobUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer fake")
+	req.Header.Set("Authorization", "DFOS fake")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("PUT blob: %v", err)

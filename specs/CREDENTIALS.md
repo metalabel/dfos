@@ -123,7 +123,7 @@ The credential is signed as a JWS Compact Serialization token (`header.payload.s
 
 **Key resolution:** The signing key is resolved from the issuer's identity chain using **historical key resolution** — all keys that have ever appeared in the identity chain's create and update operations are considered valid signing keys, not just the current state. This means credentials survive key rotation: a credential signed before a key rotation remains valid even after the signing key is no longer in the issuer's current state. Revocation (not key rotation) is the invalidation mechanism for credentials. Any key role (auth, assert, controller) is accepted — the protocol does not restrict which key role may sign credentials.
 
-This is distinct from auth tokens, which use **current-state-only** key resolution (rotated-out keys are immediately rejected). The difference reflects the different lifetimes: auth tokens are ephemeral (minutes), while credentials are long-lived (hours to months) and their validity is managed through explicit revocation.
+This is distinct from live authentication ([API-AUTH](https://protocol.dfos.com/api-auth)'s identity and request proofs), which uses **current-state-only** key resolution (rotated-out keys are immediately rejected). The difference reflects the different lifetimes: proofs are ephemeral (seconds), while credentials are long-lived (hours to months) and their validity is managed through explicit revocation.
 
 ---
 
@@ -461,28 +461,28 @@ Deletion is absolute, not permanent: it is the identity chain's **deleted state*
 
 ---
 
-## Relationship to Auth Tokens
+## Relationship to Request Authentication
 
-The credential system serves a different purpose than auth tokens. Both are DID-signed JWTs using Ed25519, but they answer different questions.
+The credential system serves a different purpose than the request-authentication proofs of [API-AUTH](https://protocol.dfos.com/api-auth). All are DID-signed Ed25519 JWS artifacts, but they answer different questions.
 
-| Concern           | Auth Token                           | DFOS Credential                             |
-| ----------------- | ------------------------------------ | ------------------------------------------- |
-| Question answered | "Does this caller control this DID?" | "Does this DID have permission to do this?" |
-| Role              | AuthN (authentication)               | AuthZ (authorization)                       |
-| JWS `typ`         | `JWT`                                | `did:dfos:credential`                       |
-| Lifetime          | Short (minutes)                      | Long (hours to months)                      |
-| Audience          | Relay hostname (prevents replay)     | Specific DID or `"*"`                       |
-| Content-addressed | No (`cid` not in header)             | Yes (`cid` in header)                       |
-| Revocable         | No (short-lived, expires naturally)  | Yes (via revocation artifact)               |
-| Delegation        | None                                 | Via `prf` chains                            |
-| Key resolution    | Current-state only                   | Historical (survives key rotation)          |
+| Concern           | API-AUTH proof (identity / request)                  | DFOS Credential                             |
+| ----------------- | ---------------------------------------------------- | ------------------------------------------- |
+| Question answered | "Is this DID making exactly this request, now?"      | "Does this DID have permission to do this?" |
+| Role              | AuthN (authentication)                               | AuthZ (authorization)                       |
+| JWS `typ`         | `did:dfos:identity-proof` / `did:dfos:request-proof` | `did:dfos:credential`                       |
+| Lifetime          | Seconds (the verifier-owned freshness window)        | Long (hours to months)                      |
+| Binding           | One exact request at one host                        | Specific DID or `"*"` audience              |
+| Content-addressed | No (`cid` not in header)                             | Yes (`cid` in header)                       |
+| Revocable         | No (expires in seconds)                              | Yes (via revocation artifact)               |
+| Delegation        | None                                                 | Via `prf` chains                            |
+| Key resolution    | Current-state only                                   | Historical (survives key rotation)          |
 
-A typical relay request flow:
+A typical gated relay request:
 
-1. **Auth token** proves the caller controls a DID (AuthN).
-2. **Credential** proves the DID has access to the requested resource (AuthZ).
+1. An **identity proof** proves the caller controls a DID (AuthN).
+2. A **credential** proves the DID has access to the requested resource (AuthZ).
 
-Auth tokens are ephemeral session tokens -- they establish identity. Credentials are durable authorization grants -- they establish access rights.
+Proofs are ephemeral request bindings — they establish identity for one exact request. Credentials are durable authorization grants — they establish access rights.
 
 ---
 
@@ -582,6 +582,6 @@ A space DID issues a public read credential for a content chain. Any DID can rea
 }
 ```
 
-This credential is ingested by the relay as a standing authorization. When any caller requests read access to `chain:cv7n8vkvr64cctf3294h9k4eanhff8z`, the relay matches it against stored public credentials — no auth token or per-request credential needed.
+This credential is ingested by the relay as a standing authorization. When any caller requests read access to `chain:cv7n8vkvr64cctf3294h9k4eanhff8z`, the relay matches it against stored public credentials — no identity proof or per-request credential needed.
 
 Because `aud` is `"*"`, any DID can also use this credential as a parent in a delegation chain -- e.g., to issue a narrower credential to a specific collaborator with a shorter expiry.

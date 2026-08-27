@@ -1,7 +1,9 @@
 package relay
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,7 +34,7 @@ type testContent struct {
 func indexRelay(t *testing.T) (*Relay, *MemoryStore) {
 	t.Helper()
 	store := NewMemoryStore()
-	r, err := NewRelay(RelayOptions{Store: store})
+	r, err := NewRelay(RelayOptions{Store: store, Authority: testAuthority})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +54,7 @@ func (s *indexCountingStore) PutIndexContentRow(row indexContentRow) error {
 func countingIndexRelay(t *testing.T) (*Relay, *indexCountingStore) {
 	t.Helper()
 	store := &indexCountingStore{MemoryStore: NewMemoryStore()}
-	r, err := NewRelay(RelayOptions{Store: store})
+	r, err := NewRelay(RelayOptions{Store: store, Authority: testAuthority})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,16 +208,27 @@ func revokeGrant(t *testing.T, r *Relay, id testIdentity, credentialCID string) 
 // uploadBlobViaRoute PUTs a document blob through the relay's content-plane route
 // (authenticated as the content creator), which fires maintainIndexAfterBlob —
 // unlike a direct store.PutBlob, this exercises the late-arrival recompute hook.
+var indexBlobJti int
+
 func uploadBlobViaRoute(t *testing.T, r *Relay, id testIdentity, c testContent) {
 	t.Helper()
 	kid := id.did + "#" + id.auth.keyID
-	authToken, err := dfos.CreateAuthToken(id.did, r.DID(), kid, time.Minute, id.auth.priv)
+	body, _ := json.Marshal(c.document)
+	path := "/content/" + c.contentID + "/blob/" + c.operationCID
+	// An identity proof binds THIS request: method, the relay's own configured
+	// authority, the origin-form path, and the body hash. Blob upload is
+	// write-shaped, so it also carries a jti.
+	indexBlobJti++
+	proof, err := dfos.BuildIdentityProof("PUT", testAuthority, path, kid,
+		ed25519.PrivateKey(id.auth.priv), dfos.IdentityProofOptions{
+			Body:         body,
+			ExtraMembers: dfos.ProofExtraMembers{"jti": fmt.Sprintf("index-blob-%d", indexBlobJti)},
+		})
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(c.document)
-	req := httptest.NewRequest("PUT", "http://localhost/content/"+c.contentID+"/blob/"+c.operationCID, strings.NewReader(string(body)))
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	req := httptest.NewRequest("PUT", "http://"+testAuthority+path, strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "DFOS "+proof)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	rec := httptest.NewRecorder()
 	r.Handler().ServeHTTP(rec, req)
@@ -676,7 +689,7 @@ func TestIndexReceiptStampIsSingleSourced(t *testing.T) {
 				defer sqliteStore.Close()
 				store = sqliteStore
 			}
-			r, err := NewRelay(RelayOptions{Store: store})
+			r, err := NewRelay(RelayOptions{Store: store, Authority: testAuthority})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1815,7 +1828,7 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 	}
 	defer store.Close()
 
-	r, err := NewRelay(RelayOptions{Store: store})
+	r, err := NewRelay(RelayOptions{Store: store, Authority: testAuthority})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1875,8 +1888,9 @@ func TestIndexRebuildOnVersionBump(t *testing.T) {
 	// Boot a fresh relay on the SAME store (same identity ⇒ no re-bootstrap). The
 	// version mismatch (0 != IndexProjectionVersion) triggers a synchronous rebuild.
 	r2, err := NewRelay(RelayOptions{
-		Store:    store,
-		Identity: &RelayIdentity{DID: r.DID(), ProfileArtifactJWS: r.ProfileArtifactJWS()},
+		Store:     store,
+		Authority: testAuthority,
+		Identity:  &RelayIdentity{DID: r.DID(), ProfileArtifactJWS: r.ProfileArtifactJWS()},
 	})
 	if err != nil {
 		t.Fatal(err)

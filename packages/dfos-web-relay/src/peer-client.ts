@@ -115,12 +115,34 @@ export const createHttpPeerClient = (options?: { fetch?: typeof fetch }): PeerCl
       return { entries: data.entries, next: data.next ?? data.cursor ?? null };
     },
 
-    async submitOperations(peerUrl, operations) {
+    async submitOperations(peerUrl, operations, options) {
       try {
-        const res = await fetchImpl(new URL(`${PROOF_BASE_PATH}/operations`, peerUrl).toString(), {
+        const url = new URL(`${PROOF_BASE_PATH}/operations`, peerUrl);
+        // The body is serialized ONCE and both hashed and sent: an identity
+        // proof binds `bodyHash`, so re-serializing for the wire would sign one
+        // string and send another.
+        const body = new TextEncoder().encode(JSON.stringify({ operations }));
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        // Gossip-out authenticates like any client: anonymously, or with an
+        // identity proof signed by the relay's own DID. A signer that fails or
+        // is absent leaves the push anonymous — a default-open peer admits it,
+        // and sync is the consistency backstop either way.
+        if (options?.signProof) {
+          const proof = await options.signProof({
+            method: 'POST',
+            // `host`, never `hostname`: the authority carries the port when
+            // there is one, and the peer compares it byte for byte against its
+            // OWN configured authority.
+            host: url.host,
+            path: url.pathname + url.search,
+            body,
+          });
+          if (proof) headers['Authorization'] = `DFOS ${proof}`;
+        }
+        const res = await fetchImpl(url.toString(), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ operations }),
+          headers,
+          body,
         });
         // Check the status: a non-2xx (e.g. the receiver 400s an over-100 batch)
         // means the whole gossip push was dropped. Log it so a silent drop is

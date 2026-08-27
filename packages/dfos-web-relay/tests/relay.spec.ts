@@ -14,9 +14,9 @@ import {
   type ServiceEntry,
 } from '@metalabel/dfos-protocol/chain';
 import {
-  createAuthToken,
   createDFOSCredential,
   decodeDFOSCredentialUnsafe,
+  signApiIdentityRequest,
 } from '@metalabel/dfos-protocol/credentials';
 import {
   createNewEd25519Keypair,
@@ -113,22 +113,57 @@ const createContentOp = async (
   return { jwsToken, operationCID, documentCID, document };
 };
 
-/** Create an auth token for a given identity targeting the test relay */
-const createTestAuthToken = async (
+/**
+ * THE RELAY'S OWN CONFIGURED AUTHORITY in these tests. Every request goes to
+ * `http://localhost/...`, so the authority a proof must bind to is `localhost`.
+ * It is configuration, never read from the request (see RelayOptions.authority).
+ */
+const RELAY_AUTHORITY = 'localhost';
+
+let jtiCounter = 0;
+
+/**
+ * Sign an API-AUTH identity proof for ONE exact request against the test relay.
+ *
+ * Unlike the auth token it replaces, a proof is not reusable across requests: it
+ * binds the method, the relay's authority, the origin-form path, and the body
+ * hash. Write-shaped routes (blob upload, ingestion) additionally require a
+ * `jti`, which the caller opts into with `jti: true`.
+ */
+const identityProof = async (
   identity: Awaited<ReturnType<typeof createIdentity>>,
-  keyOverride?: { keyId: string; signer: (msg: Uint8Array) => Promise<Uint8Array> },
-) => {
-  const now = Math.floor(Date.now() / 1000);
-  const key = keyOverride ?? identity.authKey;
-  return createAuthToken({
-    iss: identity.did,
-    aud: RELAY_DID,
-    exp: now + 300,
+  request: {
+    method: string;
+    path: string;
+    body?: Uint8Array;
+    jti?: boolean | string;
+    iat?: number;
+    keyOverride?: { keyId: string; signer: (msg: Uint8Array) => Promise<Uint8Array> };
+    host?: string;
+  },
+): Promise<string> => {
+  const key = request.keyOverride ?? identity.authKey;
+  const jti =
+    typeof request.jti === 'string'
+      ? request.jti
+      : request.jti
+        ? `jti-${(jtiCounter += 1)}`
+        : undefined;
+  const { proof } = await signApiIdentityRequest({
+    method: request.method,
+    host: request.host ?? RELAY_AUTHORITY,
+    path: request.path,
+    ...(request.body ? { body: request.body } : {}),
     kid: `${identity.did}#${key.keyId}`,
-    iat: now,
     sign: key.signer,
+    ...(request.iat !== undefined ? { iat: request.iat } : {}),
+    ...(jti !== undefined ? { extraMembers: { jti } } : {}),
   });
+  return proof;
 };
+
+/** The `Authorization` header an identity-proven request carries. */
+const proofHeader = (proof: string) => `DFOS ${proof}`;
 
 // =============================================================================
 // relay-backed mock peer client
@@ -221,7 +256,7 @@ describe('web relay', () => {
     store = new MemoryRelayStore();
     RELAY_IDENTITY = await bootstrapRelayIdentity(store);
     RELAY_DID = RELAY_IDENTITY.did;
-    app = await createRelay({ store, identity: RELAY_IDENTITY });
+    app = await createRelay({ store, identity: RELAY_IDENTITY, authority: RELAY_AUTHORITY });
   });
 
   const req = (path: string, init?: RequestInit) =>
@@ -237,13 +272,59 @@ describe('web relay', () => {
       body: JSON.stringify({ operations }),
     });
 
-  const putBlob = (contentId: string, operationCID: string, authToken: string, body: Uint8Array) =>
-    req(`/content/${contentId}/blob/${operationCID}`, {
-      method: 'PUT',
+  /**
+   * `req`, with an API-AUTH identity proof minted for EXACTLY this request.
+   *
+   * The proof is per-request by construction — there is no reusable token to
+   * hand around, which is the whole point of what replaced the auth-token JWT.
+   */
+  const reqAs = async (
+    path: string,
+    identity: Awaited<ReturnType<typeof createIdentity>>,
+    init: RequestInit & {
+      keyOverride?: { keyId: string; signer: (msg: Uint8Array) => Promise<Uint8Array> };
+      jti?: boolean | string;
+      iat?: number;
+      host?: string;
+    } = {},
+  ) => {
+    const { keyOverride, jti, iat, host, headers, ...rest } = init;
+    const method = (rest.method ?? 'GET').toUpperCase();
+    const body =
+      rest.body instanceof Uint8Array
+        ? rest.body
+        : typeof rest.body === 'string'
+          ? new TextEncoder().encode(rest.body)
+          : undefined;
+    const proof = await identityProof(identity, {
+      method,
+      path,
+      ...(body ? { body } : {}),
+      // Write-shaped routes REQUIRE jti; read-shaped ones must not be given one
+      // gratuitously, so the default follows the method.
+      jti: jti ?? (method === 'PUT' || method === 'POST'),
+      ...(iat !== undefined ? { iat } : {}),
+      ...(keyOverride ? { keyOverride } : {}),
+      ...(host !== undefined ? { host } : {}),
+    });
+    return req(path, {
+      ...rest,
       headers: {
-        authorization: `Bearer ${authToken}`,
-        'content-type': 'application/octet-stream',
+        ...(headers as Record<string, string> | undefined),
+        authorization: proofHeader(proof),
       },
+    });
+  };
+
+  const putBlob = (
+    contentId: string,
+    operationCID: string,
+    uploader: Awaited<ReturnType<typeof createIdentity>>,
+    body: Uint8Array,
+  ) =>
+    reqAs(`/content/${contentId}/blob/${operationCID}`, uploader, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/octet-stream' },
       body,
     });
 
@@ -336,7 +417,7 @@ describe('web relay', () => {
       const liteRelay = await createRelay({ store, identity: RELAY_IDENTITY, write: false });
       const res = await liteRelay.app.request('http://localhost/content/someid/blob/somecid', {
         method: 'PUT',
-        headers: { 'content-type': 'application/octet-stream', authorization: 'Bearer fake' },
+        headers: { 'content-type': 'application/octet-stream', authorization: 'DFOS fake' },
         body: new Uint8Array([1, 2, 3]),
       });
       expect(res.status).toBe(501);
@@ -1254,19 +1335,16 @@ describe('web relay', () => {
       const contentId = (await json(chainLookup)).results[0].chainId;
 
       // create auth token
-      const authToken = await createTestAuthToken(identity);
 
       // encode the document as the blob (must match documentCID)
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
 
       // upload
-      const uploadRes = await putBlob(contentId, content.operationCID, authToken, docBytes);
+      const uploadRes = await putBlob(contentId, content.operationCID, identity, docBytes);
       expect(uploadRes.status).toBe(200);
 
       // download as creator (no credential needed)
-      const downloadRes = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${authToken}` },
-      });
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, identity);
       expect(downloadRes.status).toBe(200);
       const downloaded = new Uint8Array(await downloadRes.arrayBuffer());
       expect(downloaded).toEqual(docBytes);
@@ -1281,13 +1359,11 @@ describe('web relay', () => {
       const chainLookup = await postOps([content.jwsToken]);
       const contentId = (await json(chainLookup)).results[0].chainId;
 
-      const authToken = await createTestAuthToken(identity);
-
       // upload wrong bytes — doesn't match documentCID
       const uploadRes = await putBlob(
         contentId,
         content.operationCID,
-        authToken,
+        identity,
         new TextEncoder().encode('completely wrong data'),
       );
       expect(uploadRes.status).toBe(400);
@@ -1320,9 +1396,8 @@ describe('web relay', () => {
       const contentId = (await json(chainLookup)).results[0].chainId;
 
       // upload blob as creator (encode doc as blob to match CID)
-      const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+      await putBlob(contentId, content.operationCID, creator, docBytes);
 
       // create a read credential from creator to reader
       const now = Math.floor(Date.now() / 1000);
@@ -1337,12 +1412,8 @@ describe('web relay', () => {
       });
 
       // download as reader with credential
-      const readerToken = await createTestAuthToken(reader);
-      const downloadRes = await req(`/content/${contentId}/blob`, {
-        headers: {
-          authorization: `Bearer ${readerToken}`,
-          'x-credential': readCredential,
-        },
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, reader, {
+        headers: { 'x-credential': readCredential },
       });
       expect(downloadRes.status).toBe(200);
       const downloaded = new Uint8Array(await downloadRes.arrayBuffer());
@@ -1359,15 +1430,11 @@ describe('web relay', () => {
       const contentId = (await json(chainLookup)).results[0].chainId;
 
       // upload blob (encode doc to match CID)
-      const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+      await putBlob(contentId, content.operationCID, creator, docBytes);
 
       // try to download as reader without credential
-      const readerToken = await createTestAuthToken(reader);
-      const res = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${readerToken}` },
-      });
+      const res = await reqAs(`/content/${contentId}/blob`, reader);
       expect(res.status).toBe(403);
     });
 
@@ -1382,9 +1449,8 @@ describe('web relay', () => {
       const contentId = (await json(chainLookup)).results[0].chainId;
 
       // upload blob as creator
-      const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+      await putBlob(contentId, content.operationCID, creator, docBytes);
 
       // attacker issues a read credential to reader (not the creator!)
       const now = Math.floor(Date.now() / 1000);
@@ -1399,12 +1465,8 @@ describe('web relay', () => {
       });
 
       // reader tries to download with attacker-issued credential
-      const readerToken = await createTestAuthToken(reader);
-      const res = await req(`/content/${contentId}/blob`, {
-        headers: {
-          authorization: `Bearer ${readerToken}`,
-          'x-credential': fakeCredential,
-        },
+      const res = await reqAs(`/content/${contentId}/blob`, reader, {
+        headers: { 'x-credential': fakeCredential },
       });
       expect(res.status).toBe(403);
     });
@@ -1444,22 +1506,17 @@ describe('web relay', () => {
       });
       await postOps([updateToken]);
 
-      // create an auth token with the OLD (rotated-out) key
-      const oldAuthToken = await createTestAuthToken(identity); // uses identity.authKey (the old one)
-
-      // try to access content plane with old auth token — should be 401
-      // because the old key is no longer in current state
-      const chainLookup = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${oldAuthToken}` },
-      });
+      // A proof signed by the OLD (rotated-out) key is 401: key resolution for an
+      // identity proof is CURRENT-STATE, which is exactly how rotation revokes a
+      // compromised key's ability to speak in the identity's name.
+      const chainLookup = await reqAs(`/content/${contentId}/blob`, identity);
       expect(chainLookup.status).toBe(401);
 
-      // create auth token with the NEW key — should work (404 because no blob, but not 401)
-      const newAuthToken = await createTestAuthToken(identity, newAuthKey);
-      const newAuthRes = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${newAuthToken}` },
+      // The NEW key authenticates (404 because no blob is stored, not 401).
+      const newAuthRes = await reqAs(`/content/${contentId}/blob`, identity, {
+        keyOverride: newAuthKey,
       });
-      expect(newAuthRes.status).toBe(404); // 404 = authenticated but no blob stored
+      expect(newAuthRes.status).toBe(404);
     });
 
     it('should accept per-request credential signed with rotated-out key', async () => {
@@ -1472,9 +1529,8 @@ describe('web relay', () => {
       const contentId = (await json(chainLookup)).results[0].chainId;
 
       // upload blob as creator
-      const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+      await putBlob(contentId, content.operationCID, creator, docBytes);
 
       // issue read credential with CURRENT auth key
       const now = Math.floor(Date.now() / 1000);
@@ -1509,12 +1565,8 @@ describe('web relay', () => {
       await postOps([updateToken]);
 
       // reader uses credential signed with the OLD key — should still work
-      const readerToken = await createTestAuthToken(reader);
-      const downloadRes = await req(`/content/${contentId}/blob`, {
-        headers: {
-          authorization: `Bearer ${readerToken}`,
-          'x-credential': readCredential,
-        },
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, reader, {
+        headers: { 'x-credential': readCredential },
       });
       expect(downloadRes.status).toBe(200);
     });
@@ -1533,14 +1585,8 @@ describe('web relay', () => {
         (result: { kind: string }) => result.kind === 'content-op',
       ).chainId;
 
-      const authenticatedReadStatus = async () => {
-        const token = await createTestAuthToken(identity);
-        return (
-          await req(`/content/${contentId}/blob`, {
-            headers: { authorization: `Bearer ${token}` },
-          })
-        ).status;
-      };
+      const authenticatedReadStatus = async () =>
+        (await reqAs(`/content/${contentId}/blob`, identity)).status;
       expect(await authenticatedReadStatus()).toBe(404);
 
       const deleteOp: IdentityOperation = {
@@ -1760,9 +1806,8 @@ describe('web relay', () => {
       const contentId = (await json(ingestRes)).results[0].chainId;
 
       // upload blob while content is alive
-      const authToken = await createTestAuthToken(identity);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, authToken, docBytes);
+      await putBlob(contentId, content.operationCID, identity, docBytes);
 
       // delete the content
       const deleteOp: ContentOperation = {
@@ -1782,9 +1827,7 @@ describe('web relay', () => {
       await postOps([deleteToken]);
 
       // downloading at head should 404 — currentDocumentCID is null after delete
-      const downloadRes = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${authToken}` },
-      });
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, identity);
       expect(downloadRes.status).toBe(404);
     });
   });
@@ -2200,16 +2243,12 @@ describe('web relay', () => {
       await postOps([updateToken]);
 
       // delegate uploads blob for their own operation
-      const delegateAuthToken = await createTestAuthToken(delegate);
       const newDocBytes = new TextEncoder().encode(JSON.stringify(newDoc));
-      const uploadRes = await putBlob(contentId, updateCID, delegateAuthToken, newDocBytes);
+      const uploadRes = await putBlob(contentId, updateCID, delegate, newDocBytes);
       expect(uploadRes.status).toBe(200);
 
       // verify download works at the delegate's operation ref
-      const creatorAuthToken = await createTestAuthToken(creator);
-      const downloadRes = await req(`/content/${contentId}/blob/${updateCID}`, {
-        headers: { authorization: `Bearer ${creatorAuthToken}` },
-      });
+      const downloadRes = await reqAs(`/content/${contentId}/blob/${updateCID}`, creator);
       expect(downloadRes.status).toBe(200);
       const downloaded = new Uint8Array(await downloadRes.arrayBuffer());
       expect(downloaded).toEqual(newDocBytes);
@@ -2225,107 +2264,208 @@ describe('web relay', () => {
       const contentId = (await json(ingestRes)).results[0].chainId;
 
       // bystander tries to upload blob for creator's operation
-      const bystanderToken = await createTestAuthToken(bystander);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      const uploadRes = await putBlob(contentId, content.operationCID, bystanderToken, docBytes);
+      const uploadRes = await putBlob(contentId, content.operationCID, bystander, docBytes);
       expect(uploadRes.status).toBe(403);
     });
   });
 
   // ---------------------------------------------------------------------------
-  // auth token edge cases
+  // identity proof edge cases
+  //
+  // The rules the retired auth token asserted, carried forward: its `aud` became
+  // the HOST BINDING, its `exp` became the RELAY-OWNED freshness window, and its
+  // lifetime ceiling became unnecessary — a presenter can no longer choose how
+  // long its own credential lives.
   // ---------------------------------------------------------------------------
 
-  describe('auth token edge cases', () => {
-    it('should reject auth token with wrong audience', async () => {
+  describe('identity proof edge cases', () => {
+    const seedBlob = async () => {
       const identity = await createIdentity();
       const content = await createContentOp(identity);
       await postOps([identity.jwsToken, content.jwsToken]);
-
       const ingestRes = await postOps([content.jwsToken]);
       const contentId = (await json(ingestRes)).results[0].chainId;
-
-      // upload blob first with valid token
-      const authToken = await createTestAuthToken(identity);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, authToken, docBytes);
+      await putBlob(contentId, content.operationCID, identity, docBytes);
+      return { identity, content, contentId, docBytes };
+    };
 
-      // create auth token targeting WRONG relay DID
-      const wrongAudToken = await createAuthToken({
-        iss: identity.did,
-        aud: 'did:dfos:wrongrelaydid000000000',
-        exp: Math.floor(Date.now() / 1000) + 300,
-        kid: `${identity.did}#${identity.authKey.keyId}`,
-        iat: Math.floor(Date.now() / 1000),
-        sign: identity.authKey.signer,
-      });
-
-      const res = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${wrongAudToken}` },
+    it('rejects a proof bound to a DIFFERENT authority', async () => {
+      const { identity, contentId } = await seedBlob();
+      const res = await reqAs(`/content/${contentId}/blob`, identity, {
+        host: 'other-relay.example.com',
       });
       expect(res.status).toBe(401);
     });
 
-    it('should reject expired auth token', async () => {
-      const identity = await createIdentity();
-      const content = await createContentOp(identity);
-      await postOps([identity.jwsToken, content.jwsToken]);
-
-      const ingestRes = await postOps([content.jwsToken]);
-      const contentId = (await json(ingestRes)).results[0].chainId;
-
-      // create auth token that's already expired
-      const now = Math.floor(Date.now() / 1000);
-      const expiredToken = await createAuthToken({
-        iss: identity.did,
-        aud: RELAY_DID,
-        exp: now - 60, // expired 1 minute ago
-        kid: `${identity.did}#${identity.authKey.keyId}`,
-        iat: now - 120,
-        sign: identity.authKey.signer,
-      });
-
-      const res = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${expiredToken}` },
+    it('rejects a proof older than the relay-owned acceptance window', async () => {
+      const { identity, contentId } = await seedBlob();
+      const res = await reqAs(`/content/${contentId}/blob`, identity, {
+        iat: Math.floor(Date.now() / 1000) - 3600,
       });
       expect(res.status).toBe(401);
     });
 
-    it('should reject an auth token whose lifetime exceeds the ceiling, accept one within', async () => {
+    it('rejects a proof forward-dated beyond the clock-skew allowance', async () => {
+      const { identity, contentId } = await seedBlob();
+      const res = await reqAs(`/content/${contentId}/blob`, identity, {
+        iat: Math.floor(Date.now() / 1000) + 3600,
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects a proof bound to a DIFFERENT path — one proof, one request', async () => {
+      const { identity, contentId, content } = await seedBlob();
+      // Signed for the head path, presented at the ref path.
+      const proof = await identityProof(identity, {
+        method: 'GET',
+        path: `/content/${contentId}/blob`,
+      });
+      const res = await req(`/content/${contentId}/blob/${content.operationCID}`, {
+        headers: { authorization: proofHeader(proof) },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects a Bearer token — the relay owns no other authentication grammar', async () => {
+      const { contentId } = await seedBlob();
+      const res = await req(`/content/${contentId}/blob`, {
+        headers: { authorization: 'Bearer anything-at-all' },
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('accepts the DFOS scheme case-insensitively (RFC 9110)', async () => {
+      const { identity, contentId } = await seedBlob();
+      const proof = await identityProof(identity, {
+        method: 'GET',
+        path: `/content/${contentId}/blob`,
+      });
+      const res = await req(`/content/${contentId}/blob`, {
+        headers: { authorization: `dfos ${proof}` },
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('answers 503 — never 401, never a header fallback — when no authority is configured', async () => {
+      const { identity, contentId } = await seedBlob();
+      const unconfigured = await createRelay({ store, identity: RELAY_IDENTITY });
+      const proof = await identityProof(identity, {
+        method: 'GET',
+        path: `/content/${contentId}/blob`,
+      });
+      const res = await unconfigured.app.request(`http://localhost/content/${contentId}/blob`, {
+        headers: { authorization: proofHeader(proof) },
+      });
+      // The operator omitted the host binding; blaming the caller (401) would be
+      // a lie, and reading the authority off the request would remove the binding.
+      expect(res.status).toBe(503);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // jti replay discipline (write-shaped surfaces)
+  // ---------------------------------------------------------------------------
+
+  describe('jti on write-shaped proofs', () => {
+    const seedChain = async () => {
       const identity = await createIdentity();
       const content = await createContentOp(identity);
       await postOps([identity.jwsToken, content.jwsToken]);
       const ingestRes = await postOps([content.jwsToken]);
       const contentId = (await json(ingestRes)).results[0].chainId;
-
-      // upload the blob with a valid short token so the creator can read it back
-      const uploadToken = await createTestAuthToken(identity);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, uploadToken, docBytes);
+      return { identity, content, contentId, docBytes };
+    };
 
-      const now = Math.floor(Date.now() / 1000);
-      const mk = (ttlSec: number) =>
-        createAuthToken({
-          iss: identity.did,
-          aud: RELAY_DID,
-          exp: now + ttlSec,
-          kid: `${identity.did}#${identity.authKey.keyId}`,
-          iat: now,
-          sign: identity.authKey.signer,
-        });
-
-      // within the default 24h ceiling → authenticates; creator reads own blob → 200
-      const okRes = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${await mk(3600)}` },
+    it('rejects a blob upload whose proof carries NO jti', async () => {
+      const { identity, content, contentId, docBytes } = await seedChain();
+      const res = await reqAs(`/content/${contentId}/blob/${content.operationCID}`, identity, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: docBytes,
+        jti: false,
       });
-      expect(okRes.status).toBe(200);
+      expect(res.status).toBe(401);
+    });
 
-      // exceeds the 24h ceiling → rejected at the auth layer → 401. (The ceiling
-      // is auth-token-only; standing/DFOS credentials are verified elsewhere.)
-      const longRes = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${await mk(25 * 3600)}` },
+    it('rejects a REPLAYED jti on blob upload, and accepts a fresh one', async () => {
+      const { identity, content, contentId, docBytes } = await seedChain();
+      const path = `/content/${contentId}/blob/${content.operationCID}`;
+      const proof = await identityProof(identity, {
+        method: 'PUT',
+        path,
+        body: docBytes,
+        jti: 'replay-me-once',
       });
-      expect(longRes.status).toBe(401);
+      const headers = {
+        authorization: proofHeader(proof),
+        'content-type': 'application/octet-stream',
+      };
+      const first = await req(path, { method: 'PUT', headers, body: docBytes });
+      expect(first.status).toBe(200);
+
+      // The byte-identical request inside the freshness window is a REPLAY: the
+      // relay recorded (presenter, jti) with insert-if-absent, and the second
+      // insert fails. Ingestion being idempotent does not make this free — the
+      // admission layer already spent on it.
+      const replay = await req(path, { method: 'PUT', headers, body: docBytes });
+      expect(replay.status).toBe(401);
+
+      // A fresh jti over the same bytes is a new request, not a replay.
+      const fresh = await reqAs(path, identity, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: docBytes,
+      });
+      expect(fresh.status).toBe(200);
+    });
+
+    it('rejects a jti over the 256-byte cap', async () => {
+      const { identity, content, contentId, docBytes } = await seedChain();
+      const res = await reqAs(`/content/${contentId}/blob/${content.operationCID}`, identity, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: docBytes,
+        jti: 'x'.repeat(257),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('expires cache entries with the freshness window, so a stale jti is reusable', async () => {
+      // The entry's whole job is to cover the window in which the PROOF is still
+      // acceptable; past that the proof is stale on its own. Two proofs a full
+      // window apart may therefore share a jti — which this asserts by reusing
+      // one after the first proof has aged out of acceptance.
+      const { identity, content, contentId, docBytes } = await seedChain();
+      const path = `/content/${contentId}/blob/${content.operationCID}`;
+      const stale = await identityProof(identity, {
+        method: 'PUT',
+        path,
+        body: docBytes,
+        jti: 'shared-across-windows',
+        iat: Math.floor(Date.now() / 1000) - 3600,
+      });
+      const staleRes = await req(path, {
+        method: 'PUT',
+        headers: {
+          authorization: proofHeader(stale),
+          'content-type': 'application/octet-stream',
+        },
+        body: docBytes,
+      });
+      // Refused for staleness — and, crucially, the jti was NOT recorded, since
+      // freshness is checked before the cache is touched.
+      expect(staleRes.status).toBe(401);
+
+      const fresh = await reqAs(path, identity, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: docBytes,
+        jti: 'shared-across-windows',
+      });
+      expect(fresh.status).toBe(200);
     });
   });
 
@@ -2343,14 +2483,11 @@ describe('web relay', () => {
       const contentId = (await json(ingestRes)).results[0].chainId;
 
       // upload blob for v1
-      const authToken = await createTestAuthToken(identity);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, authToken, docBytes);
+      await putBlob(contentId, content.operationCID, identity, docBytes);
 
       // download at the genesis operation CID ref
-      const refRes = await req(`/content/${contentId}/blob/${content.operationCID}`, {
-        headers: { authorization: `Bearer ${authToken}` },
-      });
+      const refRes = await reqAs(`/content/${contentId}/blob/${content.operationCID}`, identity);
       expect(refRes.status).toBe(200);
       const refBody = new Uint8Array(await refRes.arrayBuffer());
       expect(refBody).toEqual(docBytes);
@@ -2364,13 +2501,10 @@ describe('web relay', () => {
       const ingestRes = await postOps([content.jwsToken]);
       const contentId = (await json(ingestRes)).results[0].chainId;
 
-      const authToken = await createTestAuthToken(identity);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, authToken, docBytes);
+      await putBlob(contentId, content.operationCID, identity, docBytes);
 
-      const res = await req(`/content/${contentId}/blob/head`, {
-        headers: { authorization: `Bearer ${authToken}` },
-      });
+      const res = await reqAs(`/content/${contentId}/blob/head`, identity);
       expect(res.status).toBe(200);
     });
   });
@@ -2546,7 +2680,10 @@ describe('web relay', () => {
       // every op gossiped at least once
       const totalGossiped = batches.reduce((a, b) => a + b, 0);
       expect(totalGossiped).toBeGreaterThanOrEqual(250);
-    });
+      // 250 real Ed25519 identity genesis operations, verified for real. That is
+      // seconds of honest work, and it sits right on the 5s default when the
+      // suite runs its files in parallel — an explicit budget, not a slower test.
+    }, 30_000);
 
     it('submitOperations logs a non-2xx response without throwing', async () => {
       // The real HTTP peer client must observe a dropped batch (res.ok check)
@@ -3006,7 +3143,7 @@ describe('web relay', () => {
         method: 'PUT',
         headers: {
           'content-type': 'application/octet-stream',
-          authorization: 'Bearer fake',
+          authorization: 'DFOS fake',
         },
         body: new Uint8Array([1, 2, 3]),
       });
@@ -3017,7 +3154,7 @@ describe('web relay', () => {
       const noContentRelay = await createRelay({ store, identity: RELAY_IDENTITY, content: false });
 
       const res = await noContentRelay.app.request('http://localhost/content/someid/blob', {
-        headers: { authorization: 'Bearer fake' },
+        headers: { authorization: 'DFOS fake' },
       });
       expect(res.status).toBe(501);
     });
@@ -4241,16 +4378,9 @@ describe('web relay', () => {
 
       const ingestRes = await postOps([content.jwsToken]);
       const contentId = (await json(ingestRes)).results[0].chainId;
-      const creatorToken = await createTestAuthToken(creator);
-
       // upload the genesis blob
       const genesisBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      const genesisUpload = await putBlob(
-        contentId,
-        content.operationCID,
-        creatorToken,
-        genesisBytes,
-      );
+      const genesisUpload = await putBlob(contentId, content.operationCID, creator, genesisBytes);
       expect(genesisUpload.status).toBe(200);
 
       // update the chain and upload the new head blob
@@ -4276,7 +4406,7 @@ describe('web relay', () => {
       await postOps([updateToken]);
 
       const headBytes = new TextEncoder().encode(JSON.stringify(headDocument));
-      const headUpload = await putBlob(contentId, headOperationCID, creatorToken, headBytes);
+      const headUpload = await putBlob(contentId, headOperationCID, creator, headBytes);
       expect(headUpload.status).toBe(200);
 
       // mint a standing public read grant
@@ -4303,27 +4433,29 @@ describe('web relay', () => {
       expect(anonymousHeadRef.status).toBe(200);
       expect(new Uint8Array(await anonymousHeadRef.arrayBuffer())).toEqual(headBytes);
 
-      const creatorGenesis = await req(`/content/${contentId}/blob/${content.operationCID}`, {
-        headers: { authorization: `Bearer ${creatorToken}` },
-      });
+      const creatorGenesis = await reqAs(
+        `/content/${contentId}/blob/${content.operationCID}`,
+        creator,
+      );
       expect(creatorGenesis.status).toBe(200);
       expect(new Uint8Array(await creatorGenesis.arrayBuffer())).toEqual(genesisBytes);
 
-      // a stranger holding only their own auth token must NOT reach the non-head
+      // a stranger proving only their own identity must NOT reach the non-head
       // revision: the standing public grant conveys head-only publicness, so the
       // authenticated path denies the genesis ref (403).
       const stranger = await createIdentity();
       await postOps([stranger.jwsToken]);
-      const strangerToken = await createTestAuthToken(stranger);
-      const strangerGenesis = await req(`/content/${contentId}/blob/${content.operationCID}`, {
-        headers: { authorization: `Bearer ${strangerToken}` },
-      });
+      const strangerGenesis = await reqAs(
+        `/content/${contentId}/blob/${content.operationCID}`,
+        stranger,
+      );
       expect(strangerGenesis.status).toBe(403);
 
       // nor by replaying the public credential JWS as a per-request bearer.
-      const strangerGenesisWithCred = await req(
+      const strangerGenesisWithCred = await reqAs(
         `/content/${contentId}/blob/${content.operationCID}`,
-        { headers: { authorization: `Bearer ${strangerToken}`, 'x-credential': publicCred } },
+        stranger,
+        { headers: { 'x-credential': publicCred } },
       );
       expect(strangerGenesisWithCred.status).toBe(403);
     });
@@ -4338,9 +4470,8 @@ describe('web relay', () => {
       const contentId = (await json(ingestRes)).results[0].chainId;
 
       // upload blob as creator
-      const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+      await putBlob(contentId, content.operationCID, creator, docBytes);
 
       // ingest public credential from creator
       const now = Math.floor(Date.now() / 1000);
@@ -4356,10 +4487,7 @@ describe('web relay', () => {
       await postOps([publicCred]);
 
       // reader can download WITHOUT per-request credential (standing auth)
-      const readerToken = await createTestAuthToken(reader);
-      const downloadRes = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${readerToken}` },
-      });
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, reader);
       expect(downloadRes.status).toBe(200);
     });
 
@@ -4373,9 +4501,8 @@ describe('web relay', () => {
       const contentId = (await json(ingestRes)).results[0].chainId;
 
       // upload blob
-      const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+      await putBlob(contentId, content.operationCID, creator, docBytes);
 
       // ingest public credential
       const now = Math.floor(Date.now() / 1000);
@@ -4402,10 +4529,7 @@ describe('web relay', () => {
       await postOps([revocationJws]);
 
       // reader should now be denied
-      const readerToken = await createTestAuthToken(reader);
-      const downloadRes = await req(`/content/${contentId}/blob`, {
-        headers: { authorization: `Bearer ${readerToken}` },
-      });
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, reader);
       expect(downloadRes.status).toBe(403);
     });
   });
@@ -4425,9 +4549,8 @@ describe('web relay', () => {
       const contentId = (await json(ingestRes)).results[0].chainId;
 
       // upload blob as creator
-      const creatorToken = await createTestAuthToken(creator);
       const docBytes = new TextEncoder().encode(JSON.stringify(content.document));
-      await putBlob(contentId, content.operationCID, creatorToken, docBytes);
+      await putBlob(contentId, content.operationCID, creator, docBytes);
 
       // creator issues root credential to member granting read access
       const now = Math.floor(Date.now() / 1000);
@@ -4454,12 +4577,8 @@ describe('web relay', () => {
       });
 
       // verify child credential grants access — member can read blob
-      const memberToken = await createTestAuthToken(member);
-      const downloadRes = await req(`/content/${contentId}/blob`, {
-        headers: {
-          authorization: `Bearer ${memberToken}`,
-          'x-credential': childCredential,
-        },
+      const downloadRes = await reqAs(`/content/${contentId}/blob`, member, {
+        headers: { 'x-credential': childCredential },
       });
       expect(downloadRes.status).toBe(200);
 
@@ -4475,11 +4594,8 @@ describe('web relay', () => {
       await postOps([revocationJws]);
 
       // child credential should no longer grant access
-      const downloadRes2 = await req(`/content/${contentId}/blob`, {
-        headers: {
-          authorization: `Bearer ${memberToken}`,
-          'x-credential': childCredential,
-        },
+      const downloadRes2 = await reqAs(`/content/${contentId}/blob`, member, {
+        headers: { 'x-credential': childCredential },
       });
       expect(downloadRes2.status).toBe(403);
     });
@@ -4501,9 +4617,8 @@ describe('web relay', () => {
       const ingest1 = await postOps([content1.jwsToken]);
       const contentId1 = (await json(ingest1)).results[0].chainId;
 
-      const creatorToken = await createTestAuthToken(creator);
       const docBytes1 = new TextEncoder().encode(JSON.stringify(content1.document));
-      await putBlob(contentId1, content1.operationCID, creatorToken, docBytes1);
+      await putBlob(contentId1, content1.operationCID, creator, docBytes1);
 
       // ingest public credential with chain:* from creator
       const now = Math.floor(Date.now() / 1000);
@@ -4526,19 +4641,14 @@ describe('web relay', () => {
       const contentId2 = (await json(ingest2)).results[0].chainId;
 
       const docBytes2 = new TextEncoder().encode(JSON.stringify(content2.document));
-      await putBlob(contentId2, content2.operationCID, creatorToken, docBytes2);
+      await putBlob(contentId2, content2.operationCID, creator, docBytes2);
 
       // reader can download blob from first content chain (standing auth)
-      const readerToken = await createTestAuthToken(reader);
-      const dl1 = await req(`/content/${contentId1}/blob`, {
-        headers: { authorization: `Bearer ${readerToken}` },
-      });
+      const dl1 = await reqAs(`/content/${contentId1}/blob`, reader);
       expect(dl1.status).toBe(200);
 
       // reader can download blob from second content chain (standing auth)
-      const dl2 = await req(`/content/${contentId2}/blob`, {
-        headers: { authorization: `Bearer ${readerToken}` },
-      });
+      const dl2 = await reqAs(`/content/${contentId2}/blob`, reader);
       expect(dl2.status).toBe(200);
     });
   });

@@ -19,7 +19,11 @@ import {
   isValidEd25519Signature,
 } from '@metalabel/dfos-protocol/crypto';
 import { Hono, type Context } from 'hono';
-import { authenticateRequest, DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS } from './auth';
+import {
+  authenticateIdentityProof,
+  DEFAULT_PROOF_SKEW_SECONDS,
+  DEFAULT_PROOF_WINDOW_SECONDS,
+} from './auth';
 import { createHistoricalIdentityResolver, mergeHistoricalIdentity } from './ingest';
 import type { RelayStore, SigningStore, StoredSignRequest } from './types';
 
@@ -165,7 +169,14 @@ export const registerSigningRoutes = (options: {
   relayDID: string;
   basePath: string;
   enabled: boolean;
-  maxAuthTokenTTLSeconds?: number;
+  /**
+   * THE RELAY'S OWN CONFIGURED AUTHORITY — the host binding for the mailbox
+   * poll's identity proof. When unset the poll answers 503: the relay cannot
+   * authenticate anything, and never invents a binding from a request header.
+   */
+  authority: string | undefined;
+  proofWindowSeconds?: number;
+  proofSkewSeconds?: number;
 }): void => {
   const { app, store, relayDID, basePath, enabled } = options;
   const signingStore = store as SigningStore;
@@ -270,17 +281,28 @@ export const registerSigningRoutes = (options: {
 
   app.get(`${basePath}/requests`, async (c) => {
     if (!enabled) return unavailable(c);
-    const auth = await authenticateRequest(
-      c.req.header('authorization'),
-      relayDID,
+    // THE SUBJECT IS THE PROOF'S kid DID. A mailbox poll is READ-SHAPED, so it
+    // relies on the freshness window alone — no jti. The origin-form target
+    // INCLUDES the query string (`?after=`, `?limit=`), byte for byte: the
+    // poller signed the request it actually made.
+    const url = new URL(c.req.url);
+    const auth = await authenticateIdentityProof({
+      authHeader: c.req.header('authorization'),
+      method: c.req.method,
+      path: url.pathname + url.search,
+      body: new Uint8Array(),
+      authority: options.authority,
       store,
-      options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS,
-    );
-    if (!auth) return c.json({ error: 'authentication required' }, 401);
+      requireJti: false,
+      windowSeconds: options.proofWindowSeconds ?? DEFAULT_PROOF_WINDOW_SECONDS,
+      skewSeconds: options.proofSkewSeconds ?? DEFAULT_PROOF_SKEW_SECONDS,
+    });
+    if (!auth.ok) return c.json({ error: auth.error }, auth.status as 401 | 503);
+    if (!auth.principal) return c.json({ error: 'authentication required' }, 401);
     const after = c.req.query('after');
     const limit = parseSigningLimit(c.req.query('limit'));
     const result = await signingStore.listPendingSignRequests({
-      subjectDID: auth.iss,
+      subjectDID: auth.principal.did,
       ...(after ? { after } : {}),
       limit,
       now: Date.now(),

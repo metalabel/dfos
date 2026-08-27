@@ -73,7 +73,7 @@ A verifier consumes signed objects and decides accept/reject. It implements:
   the 8192-byte token cap checked before any decode, the profile header gates, `typ`
   exactly `did:dfos:sign-request`, payload schema, unpadded-base64url target bytes
   (non-empty, ≤ 4096), `kid`-DID equal to payload `did`, **current-state** requester
-  resolution (the auth-token rule, not the credential rule — deliberate), signature, CID
+  resolution (the live-authentication rule, not the credential rule — deliberate), signature, CID
   integrity, the ≤ 7-day temporal window, and the same structural `invalid` vs
   `unverifiable` verdict split (SIGNING.md "Verification Algorithm", `specs/SIGNING.md`).
 
@@ -88,7 +88,8 @@ A signer emits well-formed envelopes that a Tier-1 verifier accepts. It implemen
   DID URL (PROTOCOL.md "kid Rules", `specs/PROTOCOL.md`).
 - **`cid` header** — present on every operation JWS, artifacts, countersignatures,
   credentials, revocations, credit claims, and sign-request envelopes; absent on
-  auth-token JWTs (PROTOCOL.md "`cid` Header", `specs/PROTOCOL.md`).
+  API-AUTH's request and identity proofs (PROTOCOL.md "`cid` Header",
+  `specs/PROTOCOL.md`).
 - **Credit-claim emission** (if it signs attribution) — derive `kid` from the claimant DID
   so a `kid`↔`did` mismatch is unrepresentable, bind to the chain's 31-char `contentId`
   (never a `documentCID` or head CID), omit `asOfDocumentCID` rather than emitting it empty,
