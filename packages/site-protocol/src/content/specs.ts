@@ -132,9 +132,9 @@ export const specs: SpecEntry[] = [
     slug: '/api-auth',
     title: 'API Authentication',
     tile: 'Proof-of-possession request signing for credential-gated HTTP APIs',
-    llms: 'Proof-of-possession authentication for credential-gated HTTP APIs — the request-proof envelope and the api:<host> credential resource',
+    llms: 'Proof-of-possession authentication for HTTP APIs — the request-proof and identity-proof envelopes and the api:<host> credential resource',
     metaDescription:
-      'DFOS API authentication — request-proof envelopes, proof-of-possession verification, and the api:<host> credential resource.',
+      'DFOS API authentication — request-proof and identity-proof envelopes, proof-of-possession verification, and the api:<host> credential resource.',
     source: '../../specs/API-AUTH.md',
     grid: 'auth',
     chip: '0.x',
