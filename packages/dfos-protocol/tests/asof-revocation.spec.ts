@@ -133,7 +133,12 @@ const buildDelegatedChain = async (opts?: {
   // Credential(s): creator → [middle →] delegate. The [iat, exp) window spans
   // hours, not minutes, so it comfortably contains every op placement the fixtures
   // use — a window that merely touched the op's createdAt would flake on a
-  // one-second clock tick between the two calls.
+  // one-second clock tick between the two calls. The window is computed ONCE and
+  // shared by every credential in the chain for the same reason: a child whose
+  // exp is recomputed a tick after its parent's exceeds it by a second, and the
+  // delegation rule (child exp ≤ parent exp) rejects the chain.
+  const credIat = unix(-240);
+  const credExp = unix(240);
   const att = [{ resource: `chain:${genesis.contentId}`, action: 'write' }];
   let leaf: string;
   let parent: string | undefined;
@@ -142,30 +147,30 @@ const buildDelegatedChain = async (opts?: {
       issuerDID: creator.did,
       audienceDID: middle.did,
       att,
-      exp: unix(240),
+      exp: credExp,
       signer: creator.signer,
       keyId: creator.keyId,
-      iat: unix(-240),
+      iat: credIat,
     });
     leaf = await createDFOSCredential({
       issuerDID: middle.did,
       audienceDID: delegate.did,
       att,
       prf: [parent],
-      exp: unix(240),
+      exp: credExp,
       signer: middle.signer,
       keyId: middle.keyId,
-      iat: unix(-240),
+      iat: credIat,
     });
   } else {
     leaf = await createDFOSCredential({
       issuerDID: creator.did,
       audienceDID: delegate.did,
       att,
-      exp: unix(240),
+      exp: credExp,
       signer: creator.signer,
       keyId: creator.keyId,
-      iat: unix(-240),
+      iat: credIat,
     });
   }
 
