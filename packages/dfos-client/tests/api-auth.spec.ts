@@ -12,7 +12,11 @@
 
 */
 
-import { createDFOSCredential, type Attenuation } from '@metalabel/dfos-protocol/credentials';
+import {
+  createDFOSCredential,
+  MAX_CREDENTIAL_SIZE,
+  type Attenuation,
+} from '@metalabel/dfos-protocol/credentials';
 import {
   base64urlDecode,
   base64urlEncode,
@@ -76,6 +80,15 @@ const VECTOR_IDENTITY_CANONICAL_HTML =
   '{"method":"GET","host":"api.dfos.com","path":"/v0/profile?q=<a>&b=2","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","iat":1772841600}';
 const VECTOR_IDENTITY_JWS =
   'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LXByb29mIiwia2lkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6a2R2OGg3dDlhZSNrZXlfYXBpX2F1dGhfdmVjdG9yIn0.eyJtZXRob2QiOiJHRVQiLCJob3N0IjoiYXBpLmRmb3MuY29tIiwicGF0aCI6Ii92MC9wcm9maWxlIiwiYm9keUhhc2giOiI0N0RFUXBqOEhCU2EtX1RJbVctNUpDZXVRZVJrbTVOTXBKV1pHM2hTdUZVIiwiaWF0IjoxNzcyODQxNjAwfQ.rfajvn-hrPlzQex_UwiMNzO5D5k0PR_TaGxxpl_t4PBUTeoZKGL9CLUX6TtPKyRm8D_JYP0wpQH8EGZORpMkCw';
+
+// The jti-bearing half of the SAME fixture: same seed, kid, iat, host, and path,
+// with the registered ADDITIVE member appended AFTER the canonical five. Pinned
+// byte-identically in packages/dfos-protocol-go/api_auth_test.go.
+const VECTOR_IDENTITY_JTI = 'jti-api-auth-vector-0001';
+const VECTOR_IDENTITY_CANONICAL_JTI =
+  '{"method":"GET","host":"api.dfos.com","path":"/v0/profile","bodyHash":"47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU","iat":1772841600,"jti":"jti-api-auth-vector-0001"}';
+const VECTOR_IDENTITY_JTI_JWS =
+  'eyJhbGciOiJFZERTQSIsInR5cCI6ImRpZDpkZm9zOmlkZW50aXR5LXByb29mIiwia2lkIjoiZGlkOmRmb3M6bnprZjgzOGVmcjQyNDQzM3JuMnJ6a2R2OGg3dDlhZSNrZXlfYXBpX2F1dGhfdmVjdG9yIn0.eyJtZXRob2QiOiJHRVQiLCJob3N0IjoiYXBpLmRmb3MuY29tIiwicGF0aCI6Ii92MC9wcm9maWxlIiwiYm9keUhhc2giOiI0N0RFUXBqOEhCU2EtX1RJbVctNUpDZXVRZVJrbTVOTXBKV1pHM2hTdUZVIiwiaWF0IjoxNzcyODQxNjAwLCJqdGkiOiJqdGktYXBpLWF1dGgtdmVjdG9yLTAwMDEifQ.T4Qx70-sj-Ons_HUlLQDYOCS2roISjh9bzHG42QAVvM_-7xxTEByKAJsf-TNYsXepFTRsWOmgv1gdkn4fw06Dg';
 
 /** The digest of `{"a":1}` — the body-bearing vector, pinned in both languages. */
 const VECTOR_BODY_HASH = 'AVq9f1zFei3ZS3WQ8ErYCEJzkF7jPsXOvq5iJ2qX-GI';
@@ -527,6 +540,38 @@ describe('verifyApiRequest', () => {
   // ---------------------------------------------------------------------------
   // configuration
   // ---------------------------------------------------------------------------
+
+  // ORDER IS LOAD-BEARING. A misconfigured deployment must be reported AS a
+  // misconfiguration and never masked by a judgment about the request: an
+  // out-of-bounds W + S paired with an oversized CREDENTIAL once answered 401,
+  // which told the operator the caller was at fault when the deployment was.
+  it('reports config BEFORE the credential and proof size gates', async () => {
+    const grant = await buildGrant();
+    const client = clientFor([grant.user, grant.rp]);
+    const oversizedCredential = 'a'.repeat(MAX_CREDENTIAL_SIZE + 1);
+    expect(
+      await reasonOf(
+        verifyApiRequest(client, {
+          ...baseInput(),
+          proof: grant.proof,
+          credential: oversizedCredential,
+          windowSeconds: 240,
+          skewSeconds: 61,
+        }),
+      ),
+    ).toBe('config');
+    // And with a sane config the oversized credential IS the verdict — so the
+    // gate itself did not go missing.
+    expect(
+      await reasonOf(
+        verifyApiRequest(clientFor([grant.user, grant.rp]), {
+          ...baseInput(),
+          proof: grant.proof,
+          credential: oversizedCredential,
+        }),
+      ),
+    ).toBe('invalid');
+  });
 
   it('REFUSES a W + S over the 300-second ceiling as a config error, not a verdict', async () => {
     const grant = await buildGrant();
@@ -1719,5 +1764,51 @@ describe('createApiAuthFetch', () => {
     expect(() =>
       createApiAuthFetch({ credential: 'not-a-jws', kid: grant.rp.kid, sign: grant.rp.k.signer }),
     ).toThrow(/decode/);
+  });
+});
+
+// =============================================================================
+// additive members — the jti seam
+// =============================================================================
+
+describe('additive members (jti)', () => {
+  it('pins the cross-language jti vector — canonical bytes and signed token', async () => {
+    expect(
+      decoder.decode(
+        apiIdentitySigningInput(vectorIdentityPayload('/v0/profile'), {
+          jti: VECTOR_IDENTITY_JTI,
+        }),
+      ),
+    ).toBe(VECTOR_IDENTITY_CANONICAL_JTI);
+
+    const { proof } = await signApiIdentityRequest({
+      method: 'GET',
+      host: 'api.dfos.com',
+      path: '/v0/profile',
+      kid: VECTOR_KID,
+      sign: vectorSigner(),
+      iat: VECTOR_IAT,
+      extraMembers: { jti: VECTOR_IDENTITY_JTI },
+    });
+    expect(proof).toBe(VECTOR_IDENTITY_JTI_JWS);
+    // The canonical five are byte-identical up to the appended member: an
+    // additive member never disturbs the prefix a jti-less verifier reads.
+    expect(VECTOR_IDENTITY_CANONICAL_JTI.startsWith(VECTOR_IDENTITY_CANONICAL.slice(0, -1))).toBe(
+      true,
+    );
+  });
+
+  it('orders additive members lexicographically, not by insertion', () => {
+    const base = vectorIdentityPayload('/v0/profile');
+    const one = decoder.decode(apiIdentitySigningInput(base, { zeta: 'z', alpha: 'a' }));
+    const two = decoder.decode(apiIdentitySigningInput(base, { alpha: 'a', zeta: 'z' }));
+    expect(one).toBe(two);
+    expect(one.endsWith(',"alpha":"a","zeta":"z"}')).toBe(true);
+  });
+
+  it('refuses a member that shadows a canonical one, or a non-conforming name', () => {
+    const base = vectorIdentityPayload('/v0/profile');
+    expect(() => apiIdentitySigningInput(base, { iat: '1' })).toThrow(/canonical member/);
+    expect(() => apiIdentitySigningInput(base, { 'bad name': 'x' })).toThrow();
   });
 });

@@ -12,9 +12,9 @@ import {
   type ServiceEntry,
 } from '@metalabel/dfos-protocol/chain';
 import {
-  createAuthToken,
   createDFOSCredential,
   decodeDFOSCredentialUnsafe,
+  signApiIdentityRequest,
 } from '@metalabel/dfos-protocol/credentials';
 import {
   createNewEd25519Keypair,
@@ -78,7 +78,7 @@ describe('index v0', () => {
     store = new MemoryRelayStore();
     relayIdentity = await bootstrapRelayIdentity(store);
     relayDID = relayIdentity.did;
-    relay = await createRelay({ store, identity: relayIdentity });
+    relay = await createRelay({ store, identity: relayIdentity, authority: 'localhost' });
   });
 
   const req = (path: string, init?: RequestInit) =>
@@ -228,17 +228,7 @@ describe('index v0', () => {
     return credential;
   };
 
-  const authToken = async (identity: TestIdentity) => {
-    const now = Math.floor(Date.now() / 1000);
-    return createAuthToken({
-      iss: identity.did,
-      aud: relayDID,
-      exp: now + 300,
-      kid: `${identity.did}#${identity.authKey.keyId}`,
-      iat: now,
-      sign: identity.authKey.signer,
-    });
-  };
+  let jtiCounter = 0;
 
   const uploadBlob = async (
     identity: TestIdentity,
@@ -246,14 +236,27 @@ describe('index v0', () => {
     operationCID: string,
     document: Record<string, unknown>,
   ) => {
-    const token = await authToken(identity);
-    const res = await req(`/content/${contentId}/blob/${operationCID}`, {
+    const path = `/content/${contentId}/blob/${operationCID}`;
+    const body = new TextEncoder().encode(JSON.stringify(document));
+    // An identity proof binds THIS request: method, the relay's own configured
+    // authority, the origin-form path, and the body hash. Blob upload is
+    // write-shaped, so it also carries a jti.
+    const { proof } = await signApiIdentityRequest({
+      method: 'PUT',
+      host: 'localhost',
+      path,
+      body,
+      kid: `${identity.did}#${identity.authKey.keyId}`,
+      sign: identity.authKey.signer,
+      extraMembers: { jti: `index-spec-${(jtiCounter += 1)}` },
+    });
+    const res = await req(path, {
       method: 'PUT',
       headers: {
-        authorization: `Bearer ${token}`,
+        authorization: `DFOS ${proof}`,
         'content-type': 'application/octet-stream',
       },
-      body: new TextEncoder().encode(JSON.stringify(document)),
+      body,
     });
     expect(res.status).toBe(200);
   };

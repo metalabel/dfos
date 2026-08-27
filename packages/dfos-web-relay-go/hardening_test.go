@@ -417,7 +417,7 @@ func TestPostOperationsAcceptsNormalBody(t *testing.T) {
 
 func TestPutBlobRejectsOversizedBodyWith413(t *testing.T) {
 	store := NewMemoryStore()
-	r, err := NewRelay(RelayOptions{Store: store})
+	r, err := NewRelay(RelayOptions{Store: store, Authority: testAuthority})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,14 +426,15 @@ func TestPutBlobRejectsOversizedBodyWith413(t *testing.T) {
 	if results := r.Ingest([]string{creator.token, contentToken}); results[0].Status != "new" || results[1].Status != "new" {
 		t.Fatalf("seed content: %+v", results)
 	}
-	auth, err := dfos.CreateAuthToken(creator.did, r.did, creator.did+"#"+creator.auth.keyID, time.Minute, creator.auth.priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req := httptest.NewRequest(http.MethodPut, "/content/x/blob/y", strings.NewReader(strings.Repeat("x", maxRequestBodyBytes+1)))
+	// The body cap fires while READING the body, before the proof over it can be
+	// checked at all — so the proof here need only be well formed.
+	body := strings.Repeat("x", maxRequestBodyBytes+1)
+	req := httptest.NewRequest(http.MethodPut, "/content/x/blob/y", strings.NewReader(body))
 	req.SetPathValue("contentId", contentID)
 	req.SetPathValue("operationCID", operationCID)
-	req.Header.Set("Authorization", "Bearer "+auth)
+	req.Header.Set("Authorization", proofFor(t, creator, http.MethodPut, "/content/x/blob/y",
+		[]byte(body), dfos.IdentityProofOptions{
+			ExtraMembers: dfos.ProofExtraMembers{"jti": "hardening-oversized"}}))
 	recorder := httptest.NewRecorder()
 	r.handlePutBlob(recorder, req)
 	if recorder.Code != http.StatusRequestEntityTooLarge {

@@ -22,12 +22,50 @@ var ErrInvalidSigningCursor = errors.New("invalid signing cursor")
 var Version = "dev"
 
 // RelayIdentity holds the relay's DID, profile artifact, and key material.
+//
+// PrivateKey and KeyID are produced by bootstrap and RETAINED on the Relay, for
+// exactly one purpose: signing an IDENTITY PROOF of the relay's own DID so
+// gossip-out announces itself as a named peer rather than anonymously
+// (WEB-RELAY.md, Relay Identity). A relay constructed from a DID and a profile
+// alone still runs; it simply gossips anonymously.
 type RelayIdentity struct {
 	DID                string
 	ProfileArtifactJWS string
-	PrivateKey         ed25519.PrivateKey // only set during bootstrap, not stored on Relay
-	KeyID              string             // only set during bootstrap
+	PrivateKey         ed25519.PrivateKey
+	KeyID              string
 }
+
+// IngestionMode is the advertised ingestion admission mode (WEB-RELAY.md,
+// Ingestion Admission).
+//
+//   - "open"           anonymous submissions admitted, subject to policy
+//   - "proof-required" anonymous refused at the policy step (403)
+//   - "closed"         no external ingestion; POST /proof/v1/operations answers
+//     501, exactly as under capabilities.write: false
+//
+// Advertisement is a HINT; the policy decision is the authority.
+type IngestionMode = string
+
+const (
+	IngestionOpen          IngestionMode = "open"
+	IngestionProofRequired IngestionMode = "proof-required"
+	IngestionClosed        IngestionMode = "closed"
+)
+
+// AdmissionPolicy is the relay-local admission policy — step 3 of the ingestion
+// ladder.
+//
+// Called with the identity-proven principal DID, or "" for an anonymous
+// submission. Returning false is a request-level refusal (403): nothing in the
+// batch is examined further and no per-item results are produced. Returning an
+// ERROR is a policy that could not be evaluated, which FAILS CLOSED (503 — the
+// server's condition, not a judgment on the caller).
+//
+// Policy CONTENT is operator-defined and out of the spec: one relay admits only
+// DIDs its operator recognizes, another is open-anonymous under quotas, another
+// is allowlist-only. "My peers" is one possible policy set, not a separate
+// authentication scheme.
+type AdmissionPolicy func(principal string) (bool, error)
 
 // RelayOptions configures a new Relay instance.
 type RelayOptions struct {
@@ -48,10 +86,58 @@ type RelayOptions struct {
 	Peers        []PeerConfig
 	PeerClient   PeerClient // injected peer transport (nil = no peering)
 	ResyncOnBoot bool       // if true, reset peer cursors + sequencer on startup
-	// MaxAuthTokenTTL caps the lifetime (exp-iat) honored on a self-signed auth
-	// token. Zero = default (24h); a negative value disables the ceiling. Applies
-	// only to auth tokens, never to DFOS credentials.
-	MaxAuthTokenTTL time.Duration
+	// Authority is THE RELAY'S OWN CONFIGURED AUTHORITY — the host an identity
+	// proof must bind to ("relay.example.com", or "host:port" on a non-default
+	// port).
+	//
+	// IT IS NEVER READ FROM A REQUEST. Host, X-Forwarded-Host, and the request
+	// URL's authority are all attacker-supplied; a relay that compared a proof's
+	// host against a request header would have no host binding at all.
+	//
+	// MULTI-AUTHORITY DEPLOYMENTS. A relay serving several hostnames "selects the
+	// expected one from its own configuration" (WEB-RELAY.md, Authentication).
+	// This field is that selection, made at construction: run one relay instance
+	// per authority, or have the front door route each authority to the instance
+	// configured for it. There is deliberately no accept-any-of-these list —
+	// accepting a proof bound to authority A on a request served as authority B is
+	// exactly the cross-origin replay the binding exists to stop.
+	//
+	// WHEN EMPTY, every authenticated route answers 503: the relay cannot
+	// authenticate anything, and says so rather than blaming the caller (401) or
+	// inventing a binding from the request.
+	Authority string
+	// ProofWindowSeconds is the acceptance window W for identity proofs (zero =
+	// 60). The freshness window is the relay's to own; W + S MUST NOT exceed 300.
+	ProofWindowSeconds int64
+	// ProofSkewSeconds is the clock-skew allowance S (zero = 60).
+	ProofSkewSeconds int64
+	// Ingestion is the advertised admission mode. Empty derives from Write: true
+	// reads as "open", false as "closed".
+	Ingestion IngestionMode
+	// AdmissionPolicy is evaluated at step 3 of the ingestion ladder. nil admits
+	// everything (today's behavior, stated as a policy rather than the absence of
+	// one).
+	AdmissionPolicy AdmissionPolicy
+	// GossipIdentityProof controls whether gossip-out attaches an identity proof
+	// signed by the relay's OWN DID (WEB-RELAY.md, Relay Identity: "a gossiping
+	// peer authenticates like any client: anonymously, or with an identity proof
+	// signed by its own DID").
+	//
+	// nil = OFF, deliberately — and this is the one place the obvious default is
+	// the wrong one. Signing looks free because a default-open peer admits
+	// anonymous submissions anyway, so a proof "can only help". It cannot: a
+	// presented proof is no longer optional to the receiver. A peer that has never
+	// ingested this relay's identity chain answers 503 (unresolvable presenter),
+	// and a peer with no configured authority answers 503 as well — so turning
+	// this on unilaterally converts pushes that were being ACCEPTED into pushes
+	// that are refused, against exactly the peers least likely to know us.
+	// Anonymous is the interoperable default; a named peer is a deliberate
+	// pairing between operators who have already made each other resolvable.
+	//
+	// Requires the relay to hold its signing key, which the JIT bootstrap
+	// produces; without one the flag is inert and gossip stays anonymous.
+	// Sync-in and read-through are READS and stay public — nothing to sign.
+	GossipIdentityProof *bool
 	// ContentFollow controls whether this relay eagerly materializes the document
 	// BYTES of content chains it holds a standing public-read grant for. The op
 	// log federates the authz plane (grants are pushed + gossiped); the bytes are
@@ -75,6 +161,23 @@ type PeerConfig struct {
 type PeerLogEntry struct {
 	CID      string `json:"cid"`
 	JWSToken string `json:"jwsToken"`
+}
+
+// GossipProofSigner signs an identity proof over the exact request a gossip push
+// is about to make. It returns the compact JWS, or "" when the relay holds no
+// signing key.
+type GossipProofSigner func(method, host, path string, body []byte) (string, error)
+
+// SigningPeerClient is the OPTIONAL half of PeerClient that can carry an
+// identity proof on a gossip push.
+//
+// It is a separate interface, and the signer is a CALLBACK rather than a header,
+// for one reason: the proof binds bodyHash, so only the transport knows the exact
+// octets it is about to send, and only the transport can ask for a proof over
+// them. A PeerClient that does not implement this gossips anonymously — which is
+// what every mock in the test suite does, unchanged.
+type SigningPeerClient interface {
+	SubmitOperationsSigned(peerURL string, operations []string, sign GossipProofSigner) error
 }
 
 // PeerClient is the injected peer transport — the relay expresses intent,

@@ -44,7 +44,23 @@ export {
   createHistoricalIdentityResolver,
 } from './ingest';
 export { sequenceOps, isDependencyFailure, computeOpCID } from './sequencer';
+export {
+  authenticateIdentityProof,
+  createCurrentStateProofResolver,
+  createJtiReplayCache,
+  hasPublicStandingAuth,
+  verifyContentAccess,
+  DEFAULT_PROOF_SKEW_SECONDS,
+  DEFAULT_PROOF_WINDOW_SECONDS,
+  MAX_JTI_BYTES,
+  type AuthenticatedPrincipal,
+  type IdentityProofOutcome,
+  type JtiReplayCache,
+} from './auth';
 export type {
+  AdmissionPolicy,
+  GossipProofSigner,
+  IngestionMode,
   RelayIdentity,
   RelayOptions,
   RelayStore,

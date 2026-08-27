@@ -5,12 +5,14 @@
   Hono app factory — createRelay(options) returns a portable Hono application
   implementing the DFOS web relay HTTP interface.
 
-  Proof plane routes are public. Content plane routes require authentication
-  via DID-signed auth tokens and DFOS credentials for authorization.
+  Proof plane READS are public. Authenticated routes consume the API-AUTH
+  identity proof (`Authorization: DFOS <jws>`) for AuthN and DFOS credentials for
+  AuthZ; ingestion sits behind the admission ladder (WEB-RELAY.md, Ingestion
+  Admission).
 
 */
 
-import type { VerifiedAuthToken } from '@metalabel/dfos-protocol/credentials';
+import { signApiIdentityRequest } from '@metalabel/dfos-protocol/credentials';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -21,10 +23,14 @@ import { z } from 'zod';
 // module init). The JSON import survives both native ESM and CJS re-bundling.
 import { version as RELAY_VERSION } from '../package.json';
 import {
-  authenticateRequest,
-  DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS,
+  authenticateIdentityProof,
+  createJtiReplayCache,
+  DEFAULT_PROOF_SKEW_SECONDS,
+  DEFAULT_PROOF_WINDOW_SECONDS,
   hasPublicStandingAuth,
   verifyContentAccess,
+  type AuthenticatedPrincipal,
+  type JtiReplayCache,
 } from './auth';
 import { bootstrapRelayIdentity } from './bootstrap';
 import { isValidDfosDid, resolveDidDocument } from './did-document';
@@ -52,6 +58,9 @@ import { computeOpCID, sequenceOps } from './sequencer';
 import { registerSigningRoutes } from './signing';
 import { PROOF_BASE_PATH } from './types';
 import type {
+  AdmissionPolicy,
+  GossipProofSigner,
+  IngestionMode,
   PeerClient,
   PeerConfig,
   RelayOptions,
@@ -161,6 +170,20 @@ const readCappedBytes = async (
   return { ok: true, bytes };
 };
 
+/**
+ * The ORIGIN-FORM request target — path plus query string, byte for byte, as the
+ * request line carried it.
+ *
+ * This is what an identity proof's `path` binds, and it is deliberately NOT a
+ * route template and NOT a normalization: no percent-decoding, no query
+ * reordering, no trailing-slash equivalence. The signer built the request and
+ * the proof from the same string, so byte equality is free for the honest party.
+ */
+export const originFormTarget = (requestUrl: string): string => {
+  const url = new URL(requestUrl);
+  return url.pathname + url.search;
+};
+
 // -----------------------------------------------------------------------------
 // query helpers
 // -----------------------------------------------------------------------------
@@ -227,8 +250,20 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   if (typeof store.pruneExpiredSignRequests === 'function') {
     await store.pruneExpiredSignRequests(Date.now());
   }
-  const maxAuthTokenTTLSeconds =
-    options.maxAuthTokenTTLSeconds ?? DEFAULT_MAX_AUTH_TOKEN_TTL_SECONDS;
+  // THE RELAY'S OWN CONFIGURED AUTHORITY — the host binding for every identity
+  // proof. Never read from a request; see RelayOptions.authority.
+  const authority = options.authority;
+  const proofWindowSeconds = options.proofWindowSeconds ?? DEFAULT_PROOF_WINDOW_SECONDS;
+  const proofSkewSeconds = options.proofSkewSeconds ?? DEFAULT_PROOF_SKEW_SECONDS;
+  const replayCache: JtiReplayCache = createJtiReplayCache();
+
+  // Ingestion admission. Explicit wins; absent derives from the write capability
+  // (WEB-RELAY.md, well-known `ingestion`). A relay with writes off is closed
+  // whatever it asked for — the capability gate fires first and answers 501.
+  const ingestionMode: IngestionMode = !writeEnabled ? 'closed' : (options.ingestion ?? 'open');
+  // Default policy: ADMIT EVERYTHING — today's behavior, stated as a policy
+  // rather than as the absence of one.
+  const admissionPolicy: AdmissionPolicy = options.admissionPolicy ?? (() => true);
 
   // peer configuration
   const peers = options.peers ?? [];
@@ -246,11 +281,49 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // endpoint (which 400s any batch over MAX_OPERATIONS_PER_BATCH items) never
   // silently drops the whole gossip run. Mirrors the Go twin's maxGossipBatch
   // chunking in sequencer.go.
+  // Gossip-out can announce this relay as a NAMED peer by signing an identity
+  // proof of its own DID — OPT-IN, because a presented proof is not optional to
+  // the receiver: a peer that has never ingested this relay's identity chain
+  // answers 503, so signing unilaterally would refuse pushes that were being
+  // accepted. See RelayOptions.gossipIdentityProof.
+  const relaySigner = identity.sign;
+  const relayKeyId = identity.keyId;
+  const gossipProofEnabled =
+    options.gossipIdentityProof === true && relaySigner !== undefined && relayKeyId !== undefined;
+
+  const signGossipProof: GossipProofSigner | undefined = gossipProofEnabled
+    ? async ({ method, host, path, body }) => {
+        try {
+          const { proof } = await signApiIdentityRequest({
+            method,
+            host,
+            path,
+            body,
+            kid: `${relayDID}#${relayKeyId}`,
+            sign: relaySigner!,
+            // POST /operations is WRITE-SHAPED, so the proof MUST carry jti.
+            // A fresh random value per push: the receiver's replay cache is
+            // keyed (jti, presenter), so a re-gossip of the same ops is a new
+            // request, not a replay.
+            extraMembers: { jti: crypto.randomUUID() },
+          });
+          return proof;
+        } catch {
+          // A relay that cannot sign gossips anonymously rather than dropping
+          // the push: gossip is best-effort, and sync is the consistency
+          // backstop.
+          return null;
+        }
+      }
+    : undefined;
+
   const gossip = (ops: string[]) => {
     if (ops.length === 0 || gossipPeers.length === 0 || !peerClient) return;
     for (const peer of gossipPeers) {
       for (const chunk of chunkOps(ops, MAX_GOSSIP_BATCH)) {
-        peerClient.submitOperations(peer.url, chunk).catch(() => {});
+        peerClient
+          .submitOperations(peer.url, chunk, signGossipProof ? { signProof: signGossipProof } : {})
+          .catch(() => {});
       }
     }
   };
@@ -380,6 +453,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
         index: indexEnabled,
         signing: signingEnabled,
       },
+      // The admission-mode HINT, so a client knows before attempting. The policy
+      // decision is still the authority.
+      ingestion: ingestionMode,
       profile: profileArtifactJws,
       peers: peerInfos,
       stats: {
@@ -395,24 +471,41 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     relayDID,
     basePath: SIGNING_BASE_PATH,
     enabled: signingEnabled,
-    maxAuthTokenTTLSeconds,
+    authority,
+    proofWindowSeconds,
+    proofSkewSeconds,
   });
 
   // -------------------------------------------------------------------------
   // proof plane — public routes
   // -------------------------------------------------------------------------
 
-  /** Submit operations for ingestion */
+  /**
+   * Submit operations for ingestion.
+   *
+   * THE ADMISSION LADDER IS NORMATIVE, CHEAPEST FIRST (WEB-RELAY.md, Ingestion
+   * Admission): structural caps (400/413) -> proof verification when one is
+   * presented (401 invalid / 503 unverifiable) -> admission policy over
+   * (principal | anonymous), a request-level 403 -> full per-item verification.
+   * The expensive step is never spent on a submission policy refuses, and a
+   * refusal produces NO per-item results.
+   *
+   * Peers are not special: gossip-in, client submission, and open deposit are
+   * one door with one grammar.
+   */
   app.post(`${PROOF_BASE_PATH}/operations`, async (c) => {
-    // LITE pull-only node: writes (and therefore peer gossip-in, which posts
-    // here too) are disabled by role. 501 matches the content-disabled
-    // convention — the well-known advertises write:false so clients/peers know
-    // in advance. Such a node still ingests by pulling from peers.
+    // 0. Capability gates, BEFORE anything else. LITE pull-only nodes (and a
+    // relay whose ingestion is configured `closed`) present no ingestion surface
+    // at all; the well-known advertises both so clients/peers know in advance.
     if (!writeEnabled) {
       return c.json({ error: 'this relay is pull-only; writes are disabled' }, 501);
     }
-    // Enforce the route cap while consuming the stream. Content-Length is a
-    // cheap early rejection, but chunked/direct Fetch requests are bounded too.
+    if (ingestionMode === 'closed') {
+      return c.json({ error: 'this relay does not accept external ingestion' }, 501);
+    }
+
+    // 1. Structural caps. Enforced while consuming the stream: Content-Length is
+    // a cheap early rejection, but chunked/direct Fetch requests are bounded too.
     const read = await readCappedBytes(c.req.raw, MAX_BODY_BYTES);
     if (!read.ok && read.tooLarge) return c.json({ error: 'request body too large' }, 413);
     if (!read.ok) return c.json({ error: 'invalid JSON body' }, 400);
@@ -429,6 +522,44 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'invalid request', details: parsed.error.issues }, 400);
     }
 
+    // 2. Proof verification, when a proof is presented. An identity proof here is
+    // OPTIONAL — anonymous is a valid admission mode — but presenting an invalid
+    // one is a 401, not a downgrade to anonymous. jti is REQUIRED: this is a
+    // write-shaped surface, and policy runs before full verification, so the
+    // relay grants admission-layer effects before it knows the payload is a
+    // duplicate.
+    const auth = await authenticateIdentityProof({
+      authHeader: c.req.header('authorization'),
+      method: c.req.method,
+      path: originFormTarget(c.req.url),
+      body: read.bytes,
+      authority,
+      store,
+      requireJti: true,
+      replayCache,
+      windowSeconds: proofWindowSeconds,
+      skewSeconds: proofSkewSeconds,
+    });
+    if (!auth.ok) return c.json({ error: auth.error }, auth.status as 401 | 503);
+    const principal = auth.principal?.did ?? null;
+
+    // 3. Admission policy over (principal | anonymous). A refusal is
+    // REQUEST-LEVEL: nothing in the batch is examined further and no per-item
+    // results are produced. A policy that cannot be evaluated FAILS CLOSED — the
+    // server's condition, not a judgment on the caller.
+    if (ingestionMode === 'proof-required' && principal === null) {
+      return c.json({ error: 'ingestion requires an identity proof' }, 403);
+    }
+    let admitted: boolean;
+    try {
+      admitted = await admissionPolicy(principal);
+    } catch {
+      return c.json({ error: 'admission policy could not be evaluated' }, 503);
+    }
+    if (!admitted) return c.json({ error: 'submission refused by admission policy' }, 403);
+
+    // 4. Full verification — the per-item chain and signature work, only for
+    // admitted submissions.
     const results = await ingestWithGossip(parsed.data.operations);
     return c.json({ results });
   });
@@ -1013,14 +1144,23 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (!read.ok && read.tooLarge) return c.json({ error: 'request body too large' }, 413);
     if (!read.ok) return c.json({ error: 'blob bytes do not match documentCID' }, 400);
 
-    // authenticate
-    const auth = await authenticateRequest(
-      c.req.header('authorization'),
-      relayDID,
+    // Authenticate with an identity proof. Blob upload is WRITE-SHAPED, so the
+    // proof MUST carry jti and is recorded against the replay cache.
+    const auth = await authenticateIdentityProof({
+      authHeader: c.req.header('authorization'),
+      method: c.req.method,
+      path: originFormTarget(c.req.url),
+      body: read.bytes,
+      authority,
       store,
-      maxAuthTokenTTLSeconds,
-    );
-    if (!auth) return c.json({ error: 'authentication required' }, 401);
+      requireJti: true,
+      replayCache,
+      windowSeconds: proofWindowSeconds,
+      skewSeconds: proofSkewSeconds,
+    });
+    if (!auth.ok) return c.json({ error: auth.error }, auth.status as 401 | 503);
+    if (!auth.principal) return c.json({ error: 'authentication required' }, 401);
+    const uploaderDID = auth.principal.did;
 
     // verify chain exists
     const chain = await store.getContentChain(contentId);
@@ -1044,7 +1184,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
 
     // authorize: caller must be chain creator or the operation signer
-    if (auth.iss !== chain.state.creatorDID && auth.iss !== operationSignerDID) {
+    if (uploaderDID !== chain.state.creatorDID && uploaderDID !== operationSignerDID) {
       return c.json({ error: 'not authorized — must be chain creator or operation signer' }, 403);
     }
 
@@ -1077,9 +1217,12 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       ref: 'head',
       authHeader: c.req.header('authorization'),
       credHeader: c.req.header('x-credential'),
-      relayDID,
+      method: c.req.method,
+      path: originFormTarget(c.req.url),
+      authority,
       store,
-      maxAuthTokenTTLSeconds,
+      proofWindowSeconds,
+      proofSkewSeconds,
     });
   });
 
@@ -1090,9 +1233,12 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       ref: c.req.param('ref'),
       authHeader: c.req.header('authorization'),
       credHeader: c.req.header('x-credential'),
-      relayDID,
+      method: c.req.method,
+      path: originFormTarget(c.req.url),
+      authority,
       store,
-      maxAuthTokenTTLSeconds,
+      proofWindowSeconds,
+      proofSkewSeconds,
     });
   });
 
@@ -1176,12 +1322,14 @@ const readBlob = async (params: {
   ref: string;
   authHeader: string | undefined;
   credHeader: string | undefined;
-  relayDID: string;
+  method: string;
+  path: string;
+  authority: string | undefined;
   store: RelayStore;
-  maxAuthTokenTTLSeconds: number;
+  proofWindowSeconds: number;
+  proofSkewSeconds: number;
 }): Promise<Response> => {
-  const { contentId, ref, authHeader, credHeader, relayDID, store, maxAuthTokenTTLSeconds } =
-    params;
+  const { contentId, ref, authHeader, credHeader, store } = params;
 
   // look up chain
   const chain = await store.getContentChain(contentId);
@@ -1215,12 +1363,38 @@ const readBlob = async (params: {
   const isHeadRef = documentCID === chain.state.currentDocumentCID;
   const publicAccess = isHeadRef && (await hasPublicStandingAuth(contentId, 'read', store));
   if (!publicAccess) {
-    // require auth token
-    const auth = await authenticateRequest(authHeader, relayDID, store, maxAuthTokenTTLSeconds);
-    if (!auth) return jsonResponse({ error: 'authentication required' }, 401);
+    // The AuthN half: an identity proof. A blob read is READ-SHAPED, so it relies
+    // on the freshness window alone — no jti (API-AUTH's accepted within-window
+    // replay bound: a replay is a re-read returning the same bytes).
+    //
+    // An accompanying `X-Credential` is NOT malformed here, unlike on an
+    // `api:<host>` surface: the identity proof is the AuthN half and the DFOS
+    // credential is a separate authorization artifact (WEB-RELAY.md,
+    // Authentication) — two halves of one answer, not two competing claims.
+    const auth = await authenticateIdentityProof({
+      authHeader,
+      method: params.method,
+      path: params.path,
+      body: new Uint8Array(),
+      authority: params.authority,
+      store,
+      requireJti: false,
+      windowSeconds: params.proofWindowSeconds,
+      skewSeconds: params.proofSkewSeconds,
+    });
+    if (!auth.ok) return jsonResponse({ error: auth.error }, auth.status);
+    if (!auth.principal) return jsonResponse({ error: 'authentication required' }, 401);
 
-    // verify read credential — unless the caller is the chain creator
-    const credError = await verifyReadAccess(auth, chain, contentId, credHeader, store, isHeadRef);
+    // The AuthZ half — unless the caller is the chain creator, who can always
+    // read their own blobs with just an identity proof.
+    const credError = await verifyReadAccess(
+      auth.principal,
+      chain,
+      contentId,
+      credHeader,
+      store,
+      isHeadRef,
+    );
     if (credError) return credError;
   }
 
@@ -1237,7 +1411,7 @@ const readBlob = async (params: {
 
 /** Verify read access — delegates to verifyContentAccess. Returns an error Response or null. */
 const verifyReadAccess = async (
-  auth: VerifiedAuthToken,
+  principal: AuthenticatedPrincipal,
   chain: StoredContentChain,
   contentId: string,
   credHeader: string | undefined,
@@ -1250,7 +1424,7 @@ const verifyReadAccess = async (
     action: 'read',
     store,
     creatorDID: chain.state.creatorDID,
-    requesterDID: auth.iss,
+    requesterDID: principal.did,
     // public grants convey head-only publicness; a non-head read needs the
     // creator or an audience-scoped credential.
     allowPublicGrant: isHeadRef,

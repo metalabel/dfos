@@ -41,7 +41,47 @@ export interface RelayIdentity {
   did: string;
   /** Profile artifact JWS token (signed by the relay DID) */
   profileArtifactJws: string;
+  /**
+   * The relay's own signing key id, and a signer over raw bytes.
+   *
+   * OPTIONAL, and the only thing they enable is the relay signing an IDENTITY
+   * PROOF of its own — gossip-out announces itself as a named peer rather than
+   * anonymously (WEB-RELAY.md, Relay Identity: "a gossiping peer authenticates
+   * like any client: anonymously, or with an identity proof signed by its own
+   * DID"). A relay constructed from a DID and a profile alone still runs; it
+   * simply gossips anonymously.
+   */
+  keyId?: string;
+  sign?: (message: Uint8Array) => Promise<Uint8Array>;
 }
+
+/**
+ * The advertised ingestion admission mode (WEB-RELAY.md, Ingestion Admission).
+ *
+ * - `open` — anonymous submissions admitted, subject to policy.
+ * - `proof-required` — anonymous refused at the policy step (403).
+ * - `closed` — no external ingestion; `POST /proof/v1/operations` answers 501,
+ *   exactly as under `capabilities.write: false`.
+ *
+ * Advertisement is a HINT; the policy decision is the authority.
+ */
+export type IngestionMode = 'open' | 'proof-required' | 'closed';
+
+/**
+ * The relay-local admission policy — step 3 of the ingestion ladder.
+ *
+ * Called with the identity-proven principal DID, or `null` for an anonymous
+ * submission. Returning false is a request-level refusal (403): nothing in the
+ * batch is examined further and no per-item results are produced. THROWING is a
+ * policy that could not be evaluated, which FAILS CLOSED (503 — the server's
+ * condition, not a judgment on the caller).
+ *
+ * Policy CONTENT is operator-defined and out of the spec: one relay admits only
+ * DIDs its operator recognizes, another is open-anonymous under quotas, another
+ * is allowlist-only. "My peers" is one possible policy set, not a separate
+ * authentication scheme.
+ */
+export type AdmissionPolicy = (principal: string | null) => boolean | Promise<boolean>;
 
 export interface RelayOptions {
   /** Storage backend */
@@ -70,11 +110,67 @@ export interface RelayOptions {
   /** Injected peer client — if omitted, a default HTTP implementation is used */
   peerClient?: PeerClient;
   /**
-   * Max lifetime (exp-iat, seconds) honored on a self-signed auth token.
-   * Default 86400 (24h); a value <= 0 disables the ceiling. Applies only to auth
-   * tokens, never to DFOS credentials.
+   * THE RELAY'S OWN CONFIGURED AUTHORITY — the `host` an identity proof must
+   * bind to (`relay.example.com`, or `host:port` on a non-default port).
+   *
+   * IT IS NEVER READ FROM A REQUEST. `Host`, `X-Forwarded-Host`, and the request
+   * URL's authority are all attacker-supplied; a relay that compared a proof's
+   * `host` against a request header would have no host binding at all.
+   *
+   * MULTI-AUTHORITY DEPLOYMENTS. A relay serving several hostnames "selects the
+   * expected one from its own configuration" (WEB-RELAY.md, Authentication).
+   * This option is that selection, made at construction: front the origins with
+   * one relay instance per authority, or have the front door route each
+   * authority to the instance configured for it. There is deliberately no
+   * accept-any-of-these list — accepting a proof bound to authority A on a
+   * request served as authority B is exactly the cross-origin replay the binding
+   * exists to stop.
+   *
+   * WHEN UNSET, every authenticated route answers 503: the relay cannot
+   * authenticate anything, and says so rather than blaming the caller (401) or
+   * inventing a binding from the request.
    */
-  maxAuthTokenTTLSeconds?: number;
+  authority?: string;
+  /**
+   * Acceptance window `W` for identity proofs, seconds (default 60). The
+   * freshness window is the relay's to own; `W + S` MUST NOT exceed 300.
+   */
+  proofWindowSeconds?: number;
+  /** Clock-skew allowance `S` for identity proofs, seconds (default 60). */
+  proofSkewSeconds?: number;
+  /**
+   * The advertised ingestion admission mode. Explicit wins; when absent it
+   * derives from `write` — `true` reads as `"open"`, `false` as `"closed"`.
+   * `"closed"` makes `POST /proof/v1/operations` answer 501.
+   */
+  ingestion?: IngestionMode;
+  /**
+   * The relay-local admission policy evaluated at step 3 of the ingestion
+   * ladder. Default: admit everything (today's behavior).
+   */
+  admissionPolicy?: AdmissionPolicy;
+  /**
+   * Whether gossip-out attaches an identity proof signed by the relay's OWN DID
+   * (WEB-RELAY.md, Relay Identity: "a gossiping peer authenticates like any
+   * client: anonymously, or with an identity proof signed by its own DID").
+   *
+   * DEFAULT OFF, deliberately — and this is the one place the obvious default is
+   * the wrong one. Signing looks free because a default-open peer admits
+   * anonymous submissions anyway, so a proof "can only help". It cannot: a
+   * presented proof is no longer optional to the receiver. A peer that has never
+   * ingested this relay's identity chain answers **503** (unresolvable
+   * presenter), and a peer with no configured authority answers 503 as well — so
+   * turning this on unilaterally converts pushes that were being ACCEPTED into
+   * pushes that are refused, against exactly the peers least likely to know us.
+   * Anonymous is the interoperable default; a named peer is a deliberate pairing
+   * between operators who have already made each other resolvable.
+   *
+   * Requires a signing key (`identity.sign`), which the JIT bootstrap produces;
+   * without one the flag is inert and gossip stays anonymous.
+   *
+   * Sync-in and read-through are READS and stay public — nothing to sign.
+   */
+  gossipIdentityProof?: boolean;
 }
 
 // -----------------------------------------------------------------------------
@@ -109,6 +205,17 @@ export interface PeerLogEntry {
   chainId?: string;
 }
 
+/**
+ * Sign an identity proof over the exact request a gossip push is about to make.
+ * Returns the compact JWS, or null when the relay holds no signing key.
+ */
+export type GossipProofSigner = (request: {
+  method: string;
+  host: string;
+  path: string;
+  body: Uint8Array;
+}) => Promise<string | null>;
+
 /** Injected peer transport — the relay expresses intent, the caller decides transport */
 export interface PeerClient {
   /** Fetch identity chain log from a peer */
@@ -137,8 +244,20 @@ export interface PeerClient {
     params?: { after?: string; limit?: number },
   ): Promise<{ entries: PeerLogEntry[]; next: string | null } | 'invalid-cursor' | null>;
 
-  /** Push operations to a peer (fire-and-forget) */
-  submitOperations(peerUrl: string, operations: string[]): Promise<void>;
+  /**
+   * Push operations to a peer (fire-and-forget).
+   *
+   * `signProof`, when supplied, mints the identity proof this push rides with.
+   * It is a CALLBACK rather than a header because the proof binds `bodyHash`:
+   * only the transport knows the exact octets it is about to send, so only the
+   * transport can ask for a proof over them. A client that ignores it gossips
+   * anonymously, which is what every mock in the test suite does.
+   */
+  submitOperations(
+    peerUrl: string,
+    operations: string[],
+    options?: { signProof?: GossipProofSigner },
+  ): Promise<void>;
 }
 
 // -----------------------------------------------------------------------------

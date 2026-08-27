@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -33,8 +34,27 @@ type Relay struct {
 	logger             *slog.Logger
 	peers              []PeerConfig
 	peerClient         PeerClient
-	maxAuthTokenTTL    time.Duration // ceiling on self-signed auth-token lifetime (exp-iat)
-	ingestMu           sync.Mutex    // serializes all chain-state mutations (ingest + sequencer)
+	// authority is THE RELAY'S OWN CONFIGURED AUTHORITY — the host binding for
+	// every identity proof. Never read from a request; see RelayOptions.Authority.
+	// Empty makes every authenticated route answer 503.
+	authority          string
+	proofWindowSeconds int64
+	proofSkewSeconds   int64
+	// jtiCache is the replay cache for write-shaped proofs (ingestion, blob
+	// upload). In-memory and per-process; the type is what a store-backed
+	// implementation replaces.
+	jtiCache *JtiReplayCache
+	// ingestionMode is the advertised admission mode; admissionPolicy is step 3
+	// of the ingestion ladder.
+	ingestionMode   IngestionMode
+	admissionPolicy AdmissionPolicy
+	// privateKey / keyID are the relay's OWN signing material, retained for the
+	// single purpose of minting an identity proof on gossip-out. Nil = gossip
+	// anonymously.
+	privateKey        ed25519.PrivateKey
+	keyID             string
+	gossipProofSigned bool
+	ingestMu          sync.Mutex // serializes all chain-state mutations (ingest + sequencer)
 	// gossipDisabled holds peer URLs that rejected a gossip push as pull-only
 	// (HTTP 501, write-disabled). Pushing to them is guaranteed to 501, so once
 	// a peer rejects we suppress all further gossip to it for the process
@@ -134,10 +154,39 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		}
 	}
 
-	maxAuthTokenTTL := opts.MaxAuthTokenTTL
-	if maxAuthTokenTTL == 0 {
-		maxAuthTokenTTL = DefaultMaxAuthTokenTTL
+	proofWindow := opts.ProofWindowSeconds
+	if proofWindow == 0 {
+		proofWindow = DefaultProofWindowSeconds
 	}
+	proofSkew := opts.ProofSkewSeconds
+	if proofSkew == 0 {
+		proofSkew = DefaultProofSkewSeconds
+	}
+
+	// Ingestion admission. Explicit wins; absent derives from the write capability
+	// (WEB-RELAY.md, well-known `ingestion`). A relay with writes off is closed
+	// whatever it asked for — the capability gate fires first and answers 501.
+	ingestionMode := opts.Ingestion
+	if ingestionMode == "" {
+		ingestionMode = IngestionOpen
+	}
+	if !writeEnabled {
+		ingestionMode = IngestionClosed
+	}
+	// Default policy: ADMIT EVERYTHING — today's behavior, stated as a policy
+	// rather than as the absence of one.
+	admissionPolicy := opts.AdmissionPolicy
+	if admissionPolicy == nil {
+		admissionPolicy = func(string) (bool, error) { return true, nil }
+	}
+
+	// Gossip-out can announce this relay as a NAMED peer by signing an identity
+	// proof of its own DID — OPT-IN, because a presented proof is not optional to
+	// the receiver: a peer that has never ingested this relay's identity chain
+	// answers 503, so signing unilaterally would refuse pushes that were being
+	// accepted. See RelayOptions.GossipIdentityProof.
+	gossipProofSigned := opts.GossipIdentityProof != nil && *opts.GossipIdentityProof &&
+		identity.PrivateKey != nil && identity.KeyID != ""
 
 	// Index projection startup rebuild: when index is enabled and a durable store
 	// carries a stale (or unstamped) projection_version, rebuild all projection
@@ -174,7 +223,15 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		logger:             logger,
 		peers:              opts.Peers,
 		peerClient:         opts.PeerClient,
-		maxAuthTokenTTL:    maxAuthTokenTTL,
+		authority:          opts.Authority,
+		proofWindowSeconds: proofWindow,
+		proofSkewSeconds:   proofSkew,
+		jtiCache:           NewJtiReplayCache(),
+		ingestionMode:      ingestionMode,
+		admissionPolicy:    admissionPolicy,
+		privateKey:         identity.PrivateKey,
+		keyID:              identity.KeyID,
+		gossipProofSigned:  gossipProofSigned,
 		reconcileCycle:     make(map[string]int),
 		peerSync:           peerSync,
 		maxOpsPerSyncCycle: maxOpsPerSyncCycle,

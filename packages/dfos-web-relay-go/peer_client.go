@@ -143,11 +143,40 @@ func (c *HttpPeerClient) GetOperationLog(peerURL string, after string, limit int
 }
 
 func (c *HttpPeerClient) SubmitOperations(peerURL string, operations []string) error {
+	return c.SubmitOperationsSigned(peerURL, operations, nil)
+}
+
+// SubmitOperationsSigned pushes operations, optionally carrying an identity proof
+// signed by the pushing relay's own DID.
+//
+// Gossip-out authenticates like any client: anonymously, or with an identity
+// proof (WEB-RELAY.md, Relay Identity). The signer is a callback because the
+// proof binds bodyHash — the body is serialized ONCE here and both hashed and
+// sent, since re-serializing for the wire would sign one string and send another.
+// A signer that fails leaves the push anonymous rather than dropping it: gossip
+// is best-effort, and sync is the consistency backstop.
+func (c *HttpPeerClient) SubmitOperationsSigned(peerURL string, operations []string,
+	sign GossipProofSigner) error {
 	body, err := json.Marshal(map[string]any{"operations": operations})
 	if err != nil {
 		return err
 	}
-	resp, err := c.client.Post(peerURL+proofBasePath+"/operations", "application/json", bytes.NewReader(body))
+	endpoint := peerURL + proofBasePath + "/operations"
+	request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if sign != nil {
+		// `Host` from the parsed URL, so a non-default port rides along: the peer
+		// compares it byte for byte against its OWN configured authority.
+		if parsed, parseErr := url.Parse(endpoint); parseErr == nil {
+			if proof, signErr := sign(http.MethodPost, parsed.Host, parsed.RequestURI(), body); signErr == nil && proof != "" {
+				request.Header.Set("Authorization", "DFOS "+proof)
+			}
+		}
+	}
+	resp, err := c.client.Do(request)
 	if err != nil {
 		return err
 	}

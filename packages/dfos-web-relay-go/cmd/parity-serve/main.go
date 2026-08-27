@@ -65,8 +65,11 @@ func main() {
 		store = relay.NewMemoryStore()
 	}
 
+	// The relay's OWN configured authority — the host binding every identity
+	// proof is checked against. Configuration, never read from the request.
 	r, err := relay.NewRelay(relay.RelayOptions{
-		Store: store,
+		Store:     store,
+		Authority: "localhost:" + port,
 		Identity: &relay.RelayIdentity{
 			DID:                f.RelayDID,
 			ProfileArtifactJWS: f.RelayProfileJWS,

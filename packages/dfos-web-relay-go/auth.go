@@ -1,76 +1,262 @@
 package relay
 
 import (
+	"crypto/ed25519"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
 
-// DefaultMaxAuthTokenTTL bounds the lifetime (exp-iat) the relay honors on a
-// self-signed auth token. Auth tokens are ephemeral (the spec describes them as
-// "minutes"); this ceiling caps a buggy or malicious signer minting an
-// effectively-permanent bearer token. It applies ONLY to auth tokens — DFOS
-// credentials (read/write/standing) are verified on a separate path
-// (verifyCredentialForAccess) and never reach AuthenticateRequest, so their
-// hours-to-months lifetimes are unaffected. A value <= 0 disables the ceiling.
-const DefaultMaxAuthTokenTTL = 24 * time.Hour
-
-// AuthenticateRequest extracts a Bearer token from the Authorization header,
-// resolves the signing key from stored identity chains, and verifies the token
-// against the relay's DID as audience.
+// IDENTITY-PROOF AUTHENTICATION (AuthN) and DFOS credential verification (AuthZ)
+// for relay requests.
 //
-// Uses current-state key resolution only — rotated-out keys are rejected. The
-// token's declared lifetime (exp-iat) must not exceed maxAuthTokenTTL (pass <= 0
-// to disable). Returns nil if authentication fails for any reason.
-func AuthenticateRequest(authHeader string, relayDID string, store Store, maxAuthTokenTTL time.Duration) *dfos.VerifiedAuthToken {
-	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-		return nil
-	}
+// THE RELAY OWNS NO AUTHENTICATION GRAMMAR. Every authenticated request consumes
+// the API-AUTH envelope family — "Authorization: DFOS <did:dfos:identity-proof
+// JWS>" — verified by the reference helpers in dfos-protocol-go. The DID-signed
+// JWT auth token this file used to carry is GONE: a bearer JWT with a
+// self-chosen lifetime was a replayable credential for any request to any route,
+// where an identity proof binds ONE method, host, path, and body inside a window
+// the RELAY owns.
+//
+// Byte twin of packages/dfos-web-relay/src/auth.ts. See specs/WEB-RELAY.md
+// "Authentication" and specs/API-AUTH.md "The Identity Proof".
 
-	token := authHeader[7:]
+const (
+	// DefaultProofWindowSeconds is the acceptance window W — how old an identity
+	// proof may be. "The freshness window is the relay's to own."
+	DefaultProofWindowSeconds int64 = 60
+	// DefaultProofSkewSeconds is the clock-skew allowance S.
+	DefaultProofSkewSeconds int64 = 60
+	// MaxJtiBytes caps the jti member.
+	//
+	// A replay cache keyed on a caller-chosen string is a caller-controlled memory
+	// allocation, so the key needs a bound. 256 bytes is generous for any UUID,
+	// ULID, or random token and is enforced IDENTICALLY by the TS twin — a jti one
+	// relay accepts and the other refuses would fork the admission decision.
+	MaxJtiBytes = 256
+)
+
+// ---------------------------------------------------------------------------
+// current-state key resolution
+// ---------------------------------------------------------------------------
+
+// CreateCurrentStateProofResolver resolves an identity proof's kid to a CURRENT
+// key of the presenter, from THIS relay's local store.
+//
+// CURRENT-STATE ONLY, deliberately (WEB-RELAY.md, Key Resolution): after a key
+// rotation the old key immediately stops authenticating, which is how a
+// presenter whose key is compromised revokes that key's ability to speak in its
+// name. A deleted identity has no live-authentication standing at all.
+//
+// The verdict split is load-bearing. A non-canonical DID, a deleted identity,
+// and a key absent from current state are all things this resolver CHECKED, so
+// they wrap dfos.ErrProofPresenterInvalid and surface as 401. An unknown chain
+// or a failed store read are things it could NOT check, so they stay bare and
+// surface as 503 — the server's condition, never a judgment on the caller.
+func CreateCurrentStateProofResolver(store Store) dfos.KeyResolver {
+	return func(kid string) (ed25519.PublicKey, error) {
+		hash := strings.Index(kid, "#")
+		if hash < 0 {
+			return nil, fmt.Errorf("%w: kid must be a DID URL", dfos.ErrProofPresenterInvalid)
+		}
+		did := kid[:hash]
+		// Refused BEFORE the store read: a flood of garbage kids costs a regex,
+		// never a lookup per request.
+		if !isValidDfosDid(did) {
+			return nil, fmt.Errorf("%w: kid does not name a canonical did:dfos",
+				dfos.ErrProofPresenterInvalid)
+		}
+		identity, err := store.GetIdentityChain(did)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read identity chain: %w", err)
+		}
+		if identity == nil {
+			return nil, fmt.Errorf("unknown identity: %s", did)
+		}
+		if identity.State.IsDeleted {
+			return nil, fmt.Errorf("%w: presenter identity is deleted", dfos.ErrProofPresenterInvalid)
+		}
+		// Any CURRENT key role may sign a proof (API-AUTH.md, "Key resolution is
+		// current-state") — auth, assert, or controller. keyFromState searches
+		// exactly those three sets of the CURRENT state.
+		publicKey, err := keyFromState(identity.State, kid[hash+1:])
+		if err != nil {
+			return nil, fmt.Errorf("%w: signing key is not a current key of the presenter",
+				dfos.ErrProofPresenterInvalid)
+		}
+		return publicKey, nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// jti replay cache
+// ---------------------------------------------------------------------------
+
+// JtiReplayCache records (presenter, jti) pairs — REQUIRED on every write-shaped
+// proof (WEB-RELAY.md, Authentication).
+//
+// WHY A WRITE-SHAPED SURFACE CANNOT BORROW ITS REPLAY POSTURE FROM DOWNSTREAM
+// IDEMPOTENCY: the admission ladder runs POLICY before full verification, so the
+// relay grants admission-layer effects (quota spend, reputation attribution)
+// before it knows whether the payload is a harmless duplicate. Ingestion being
+// idempotent does not make a replayed submission free.
+//
+// The primitive is ATOMIC INSERT-IF-ABSENT (accept iff newly inserted), not the
+// check-and-delete a server-minted nonce would use — the verifier never held the
+// client-chosen jti beforehand. Entries expire after the freshness window
+// (W + S): past that the proof itself is stale, so the entry protects nothing.
+//
+// In-memory and per-process. A store-backed implementation replaces this type
+// without touching a route.
+type JtiReplayCache struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+func NewJtiReplayCache() *JtiReplayCache {
+	return &JtiReplayCache{seen: make(map[string]time.Time)}
+}
+
+// InsertIfAbsent records (presenterDID, jti) if absent. It returns true when
+// newly inserted (the proof is fresh) and false when the pair was already seen
+// within its lifetime (a replay).
+func (c *JtiReplayCache) InsertIfAbsent(presenterDID, jti string, now time.Time, ttl time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Prune before the lookup, so an expired entry never reports a replay. The
+	// map is small by construction (one window's worth of write-shaped proofs).
+	for key, expiresAt := range c.seen {
+		if !expiresAt.After(now) {
+			delete(c.seen, key)
+		}
+	}
+	// Newline-joined: a DID cannot contain one, so no (did, jti) pair can be
+	// spelled two ways or collide with another pair's concatenation.
+	key := presenterDID + "\n" + jti
+	if expiresAt, exists := c.seen[key]; exists && expiresAt.After(now) {
+		return false
+	}
+	c.seen[key] = now.Add(ttl)
+	return true
+}
+
+// ---------------------------------------------------------------------------
+// identity-proof authentication
+// ---------------------------------------------------------------------------
+
+// AuthenticatedPrincipal is a verified identity proof, as the routes consume it.
+type AuthenticatedPrincipal struct {
+	// DID is THE PRINCIPAL — the proof's kid DID. Who the request is from.
+	DID string
+	// Kid is the full DID URL, key fragment included.
+	Kid string
+	// Iat is the proof's issued-at, unix seconds.
+	Iat int64
+}
+
+// authOutcome is what a route needs to decide: a principal, anonymity, or a
+// refusal with its status and message.
+type authOutcome struct {
+	// Principal is nil for an anonymous request (no Authorization header).
+	Principal *AuthenticatedPrincipal
+	// Status is 0 when the request is authenticated or legitimately anonymous.
+	Status int
+	Error  string
+}
+
+// authenticateIdentityProof authenticates one request against the API-AUTH
+// identity proof.
+//
+// It returns an anonymous outcome when NO Authorization header is present —
+// anonymity is a valid admission mode on ingestion, and the caller decides
+// whether its route permits it. A header that is present but not this family (a
+// stale Bearer JWT, say) is a 401: the relay owns no other authentication
+// grammar, and silently treating it as anonymous would hide a client that thinks
+// it is authenticated from a relay that disagrees.
+//
+// requireJti marks a WRITE-SHAPED surface (ingestion, blob upload). Read-shaped
+// surfaces (blob reads, the mailbox poll) rely on the freshness window alone,
+// per API-AUTH's accepted within-window replay bound.
+func (r *Relay) authenticateIdentityProof(req *http.Request, body []byte, requireJti bool) authOutcome {
+	header := req.Header.Get("Authorization")
+	if strings.TrimSpace(header) == "" {
+		return authOutcome{}
+	}
+	token := dfos.ParseDFOSAuthorization(header)
 	if token == "" {
-		return nil
+		return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
+	}
+	if r.authority == "" {
+		// A 503, never a 401 or a fallback: the host binding is the deployment's to
+		// supply, and a relay that cannot supply it cannot authenticate ANYTHING.
+		// Answering 401 would blame the caller for the operator's omission, and
+		// reading the authority off the request would remove the binding entirely.
+		return authOutcome{Status: http.StatusServiceUnavailable,
+			Error: "relay authority is not configured; authenticated routes are unavailable"}
 	}
 
-	// decode JWS header to extract kid
-	header, _, err := dfos.DecodeJWSUnsafe(token)
-	if err != nil || header == nil {
-		return nil
-	}
-
-	kid := header.Kid
-	if kid == "" || !strings.Contains(kid, "#") {
-		return nil
-	}
-	did := kid[:strings.Index(kid, "#")]
-	if err := dfos.ValidateDID(did); err != nil {
-		return nil
-	}
-	identity, err := store.GetIdentityChain(did)
-	if err != nil || identity == nil || identity.State.IsDeleted {
-		return nil
-	}
-
-	keyID := kid[strings.Index(kid, "#")+1:]
-	publicKey, err := keyFromState(identity.State, keyID)
+	window, skew := r.proofWindowSeconds, r.proofSkewSeconds
+	verified, err := dfos.VerifyIdentityProof(token, dfos.IdentityProofExpectations{
+		Method:        req.Method,
+		Host:          r.authority,
+		Path:          originFormTarget(req),
+		Body:          body,
+		WindowSeconds: dfos.Int64Ptr(window),
+		SkewSeconds:   dfos.Int64Ptr(skew),
+	}, CreateCurrentStateProofResolver(r.readStore), time.Now())
 	if err != nil {
-		return nil
+		if errors.Is(err, dfos.ErrIdentityProofInvalid) {
+			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
+		}
+		// unverifiable and config both answer 503: neither is a judgment about the
+		// caller, and a config verdict is the operator's condition to fix.
+		return authOutcome{Status: http.StatusServiceUnavailable, Error: "authentication unavailable"}
 	}
 
-	result, err := dfos.VerifyAuthToken(token, publicKey, relayDID)
-	if err != nil {
-		return nil
+	if requireJti {
+		// jti is an UNKNOWN member to the envelope verifier (MUST-ignore-unknown),
+		// read here, AFTER verification, off the decoded payload the signature
+		// already covers. The canonical member set stays closed.
+		jti, ok := verified.RawPayload["jti"].(string)
+		if !ok || jti == "" || len(jti) > MaxJtiBytes {
+			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
+		}
+		ttl := time.Duration(window+skew) * time.Second
+		if !r.jtiCache.InsertIfAbsent(verified.PresenterDID, jti, time.Now(), ttl) {
+			return authOutcome{Status: http.StatusUnauthorized, Error: "authentication required"}
+		}
 	}
 
-	// enforce the auth-token lifetime ceiling (auth tokens only — credentials are
-	// verified on a different path and never reach here).
-	if maxAuthTokenTTL > 0 && result.Exp-result.Iat > int64(maxAuthTokenTTL.Seconds()) {
-		return nil
-	}
+	return authOutcome{Principal: &AuthenticatedPrincipal{
+		DID: verified.PresenterDID,
+		Kid: verified.Kid,
+		Iat: verified.Payload.Iat,
+	}}
+}
 
-	return result
+// originFormTarget returns the ORIGIN-FORM request target — path plus query
+// string, byte for byte, as the request line carried it.
+//
+// This is what an identity proof's `path` binds, and it is deliberately NOT a
+// route template and NOT a normalization: no percent-decoding, no query
+// reordering, no trailing-slash equivalence. req.RequestURI is the raw target
+// the server read off the wire and is preferred for exactly that reason;
+// URL.RequestURI() is the fallback for a request built in-process (httptest's
+// NewRequest leaves RequestURI empty).
+func originFormTarget(req *http.Request) string {
+	// Only an ORIGIN-FORM RequestURI is usable: it is the raw target the server
+	// read off the wire, which is exactly what the signer bound. Anything else
+	// (absolute-form, as a proxy or an in-process test request may carry) is
+	// re-derived from the parsed URL, which yields the same origin-form string.
+	if strings.HasPrefix(req.RequestURI, "/") {
+		return req.RequestURI
+	}
+	return req.URL.RequestURI()
 }
 
 // ---------------------------------------------------------------------------

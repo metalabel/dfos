@@ -8,7 +8,10 @@ import {
   type IdentityOperation,
   type MultikeyPublicKey,
 } from '@metalabel/dfos-protocol/chain';
-import { createAuthToken, createDFOSCredential } from '@metalabel/dfos-protocol/credentials';
+import {
+  createDFOSCredential,
+  signApiIdentityRequest,
+} from '@metalabel/dfos-protocol/credentials';
 import {
   base64urlDecode,
   base64urlEncode,
@@ -176,16 +179,29 @@ const nonCanonicalSignatureSpelling = (token: string): string => {
   return parts.join('.');
 };
 
-const authFor = async (relayDID: string, subject: TestIdentity) => {
-  const now = Math.floor(Date.now() / 1000);
-  return createAuthToken({
-    iss: subject.did,
-    aud: relayDID,
-    exp: now + 300,
-    iat: now,
+/**
+ * THE RELAY'S OWN CONFIGURED AUTHORITY in these tests. `relay.app.request` with
+ * a bare path resolves against `http://localhost/`, so the authority a mailbox
+ * poll's proof must bind to is `localhost`.
+ */
+const RELAY_AUTHORITY = 'localhost';
+
+/**
+ * The `Authorization` header for a mailbox poll of `path`.
+ *
+ * The subject of the poll IS the proof's `kid` DID — there is no audience claim
+ * naming the relay any more; the host binding does that job, and it comes from
+ * the relay's own configuration. The poll is READ-SHAPED, so no jti.
+ */
+const pollAuth = async (subject: TestIdentity, path = `${SIGNING}/requests`) => {
+  const { proof } = await signApiIdentityRequest({
+    method: 'GET',
+    host: RELAY_AUTHORITY,
+    path,
     kid: `${subject.did}#${subject.auth.keyId}`,
     sign: subject.auth.signer,
   });
+  return `DFOS ${proof}`;
 };
 
 const rawResponse = async (
@@ -253,14 +269,14 @@ describe('signing mailbox', () => {
       },
     }) as RelayStore;
 
-    await expect(createRelay({ store: nonSigningStore })).resolves.toBeDefined();
-    await expect(createRelay({ store: nonSigningStore, signing: true })).rejects.toThrow(
+    await expect(createRelay({ store: nonSigningStore, authority: RELAY_AUTHORITY })).resolves.toBeDefined();
+    await expect(createRelay({ store: nonSigningStore, authority: RELAY_AUTHORITY, signing: true })).rejects.toThrow(
       'signing capability requires a store implementing the signing members',
     );
   });
 
   it('defaults off, advertises false, and gates all five routes before parsing or auth', async () => {
-    const relay = await createRelay({ store: new MemoryRelayStore() });
+    const relay = await createRelay({ store: new MemoryRelayStore(), authority: RELAY_AUTHORITY });
     const metadata = await relay.app.request('/.well-known/dfos-relay');
     expect(
       ((await metadata.json()) as { capabilities: { signing: boolean } }).capabilities.signing,
@@ -278,16 +294,15 @@ describe('signing mailbox', () => {
 
   it('runs deposit → authenticated poll → respond → requester fetch idempotently', async () => {
     const store = new MemoryRelayStore();
-    const relay = await createRelay({ store, signing: true });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true });
     const f = await fixture(store);
     const deposit = { request: f.jwsToken, credential: f.credential };
     expect((await postJSON(relay.app, `${SIGNING}/requests`, deposit)).status).toBe(201);
     expect((await postJSON(relay.app, `${SIGNING}/requests`, deposit)).status).toBe(200);
 
     expect((await relay.app.request(`${SIGNING}/requests`)).status).toBe(401);
-    const token = await authFor(relay.did, f.subject);
     const poll = await relay.app.request(`${SIGNING}/requests`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: await pollAuth(f.subject) },
     });
     expect(poll.status).toBe(200);
     const pollBody = (await poll.json()) as Record<string, unknown>;
@@ -305,14 +320,14 @@ describe('signing mailbox', () => {
       response: f.response,
     });
     const emptyPoll = await relay.app.request(`${SIGNING}/requests`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: await pollAuth(f.subject) },
     });
     expect(((await emptyPoll.json()) as { requests: unknown[] }).requests).toEqual([]);
   });
 
   it('enforces root, audience, exact resource, action, expiry, and revocation', async () => {
     const store = new MemoryRelayStore();
-    const relay = await createRelay({ store, signing: true });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true });
     const f = await fixture(store, 'credential-gates');
     const third = await identity();
     await seed(store, third);
@@ -399,7 +414,7 @@ describe('signing mailbox', () => {
 
   it('accepts open-mailbox grants and ephemeral identity bundles without ingesting them', async () => {
     const store = new MemoryRelayStore();
-    const relay = await createRelay({ store, signing: true });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true });
     const f = await fixture(store, 'open-mailbox');
     const open = await credential(f.subject, '*', mailbox(f.subject));
     expect(
@@ -436,7 +451,7 @@ describe('signing mailbox', () => {
 
   it('rejects invalid envelope windows/sizes, unknown subjects, and oversized bodies in order', async () => {
     const store = new MemoryRelayStore();
-    const relay = await createRelay({ store, signing: true });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true });
     const f = await fixture(store, 'envelope-gates');
     const now = Date.now();
     const expired = await customRequest(
@@ -508,12 +523,10 @@ describe('signing mailbox', () => {
       }
     }
     const store = new CountingStore();
-    const relay = await createRelay({ store, signing: true });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true });
     const f = await fixture(store, 'deleted-subject');
     const deposit = { request: f.jwsToken, credential: f.credential };
     expect((await postJSON(relay.app, `${SIGNING}/requests`, deposit)).status).toBe(201);
-    const token = await authFor(relay.did, f.subject);
-
     await deleteIdentity(store, f.subject);
 
     expect((await postJSON(relay.app, `${SIGNING}/requests`, deposit)).status).toBe(404);
@@ -521,14 +534,14 @@ describe('signing mailbox', () => {
     expect(
       (
         await relay.app.request(`${SIGNING}/requests`, {
-          headers: { authorization: `Bearer ${token}` },
+          headers: { authorization: await pollAuth(f.subject) },
         })
       ).status,
     ).toBe(401);
     expect(store.identityReads).toBe(1);
   });
 
-  it('validates auth-token DIDs before lookup and loads a valid current chain once', async () => {
+  it('validates proof kid DIDs before lookup and loads a valid current chain once', async () => {
     class CountingStore extends MemoryRelayStore {
       identityReads = 0;
 
@@ -538,26 +551,25 @@ describe('signing mailbox', () => {
       }
     }
     const store = new CountingStore();
-    const relay = await createRelay({ store, signing: true });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true });
     const subject = await identity();
     await seed(store, subject);
     store.identityReads = 0;
-    const valid = await authFor(relay.did, subject);
     expect(
       (
         await relay.app.request(`${SIGNING}/requests`, {
-          headers: { authorization: `Bearer ${valid}` },
+          headers: { authorization: await pollAuth(subject) },
         })
       ).status,
     ).toBe(200);
     expect(store.identityReads).toBe(1);
 
-    const now = Math.floor(Date.now() / 1000);
-    const malformed = await createAuthToken({
-      iss: 'did:dfos:not-canonical',
-      aud: relay.did,
-      exp: now + 300,
-      iat: now,
+    // A kid whose DID is not a canonical did:dfos is refused BEFORE the store
+    // read: a flood of garbage kids costs a regex, never a lookup per request.
+    const { proof: malformed } = await signApiIdentityRequest({
+      method: 'GET',
+      host: RELAY_AUTHORITY,
+      path: `${SIGNING}/requests`,
       kid: 'did:dfos:not-canonical#attacker-key',
       sign: subject.auth.signer,
     });
@@ -565,7 +577,7 @@ describe('signing mailbox', () => {
     expect(
       (
         await relay.app.request(`${SIGNING}/requests`, {
-          headers: { authorization: `Bearer ${malformed}` },
+          headers: { authorization: `DFOS ${malformed}` },
         })
       ).status,
     ).toBe(401);
@@ -585,21 +597,19 @@ describe('signing mailbox', () => {
     }
 
     const store = new LimitCapturingStore();
-    const relay = await createRelay({ store, signing: true });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true });
     const subject = await identity();
     await seed(store, subject);
-    const token = await authFor(relay.did, subject);
-    const headers = { authorization: `Bearer ${token}` };
+    // A proof binds the ORIGIN-FORM target byte for byte, query string included —
+    // so each of these polls needs its own proof, signed for the exact path.
+    const pollPath = async (path: string) =>
+      relay.app.request(path, { headers: { authorization: await pollAuth(subject, path) } });
 
-    expect((await relay.app.request(`${SIGNING}/requests?limit=1001`, { headers })).status).toBe(
-      200,
-    );
-    expect((await relay.app.request(`${SIGNING}/requests?limit=wat`, { headers })).status).toBe(
-      200,
-    );
+    expect((await pollPath(`${SIGNING}/requests?limit=1001`)).status).toBe(200);
+    expect((await pollPath(`${SIGNING}/requests?limit=wat`)).status).toBe(200);
     expect(store.limits).toEqual([1000, 100]);
     expect(
-      (await relay.app.request(`${SIGNING}/requests?after=not-a-cursor`, { headers })).status,
+      (await pollPath(`${SIGNING}/requests?after=not-a-cursor`)).status,
     ).toBe(400);
     expect(store.limits).toEqual([1000, 100, 100]);
   });
@@ -631,7 +641,7 @@ describe('signing mailbox', () => {
       }
     }
     const capacityStore = new CapacityStore();
-    const relay = await createRelay({ store: capacityStore, signing: true });
+    const relay = await createRelay({ store: capacityStore, authority: RELAY_AUTHORITY, signing: true });
     const f = await fixture(capacityStore);
     const response = await postJSON(relay.app, `${SIGNING}/requests`, {
       request: f.jwsToken,
@@ -655,13 +665,13 @@ describe('signing mailbox', () => {
       depositedAt: new Date(Date.now() - 2_000).toISOString(),
       declined: false,
     });
-    await createRelay({ store, signing: false });
+    await createRelay({ store, authority: RELAY_AUTHORITY, signing: false });
     expect(internal.signRequests.has('expired')).toBe(false);
   });
 
   it('validates responses and keeps the response slot first-write-wins across enrolled keys', async () => {
     const store = new MemoryRelayStore();
-    const relay = await createRelay({ store, signing: true });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true });
     const f = await fixture(store, 'response-gates');
     expect(
       (
@@ -743,7 +753,7 @@ describe('signing mailbox', () => {
   it('supports decline, isolation, expiry, and signing on a write-disabled relay', async () => {
     const store = new MemoryRelayStore();
     const f = await fixture(store, 'decline-expiry');
-    const relay = await createRelay({ store, signing: true, write: false });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true, write: false });
     expect(
       (
         await postJSON(relay.app, `${SIGNING}/requests`, {
@@ -766,18 +776,16 @@ describe('signing mailbox', () => {
     expect(
       await (await relay.app.request(`${SIGNING}/requests/${f.requestCID}/response`)).json(),
     ).toEqual({ status: 'declined' });
-    const token = await authFor(relay.did, f.subject);
     const poll = await relay.app.request(`${SIGNING}/requests`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: await pollAuth(f.subject) },
     });
     expect(
       ((await poll.json()) as { requests: { declined: boolean }[] }).requests[0]!.declined,
     ).toBe(true);
     const stranger = await identity();
     await seed(store, stranger);
-    const strangerToken = await authFor(relay.did, stranger);
     const strangerPoll = await relay.app.request(`${SIGNING}/requests`, {
-      headers: { authorization: `Bearer ${strangerToken}` },
+      headers: { authorization: await pollAuth(stranger) },
     });
     expect(((await strangerPoll.json()) as { requests: unknown[] }).requests).toEqual([]);
     expect(
@@ -815,7 +823,7 @@ describe('signing mailbox', () => {
     ).toBe(201);
     await new Promise((resolve) => setTimeout(resolve, Math.max(0, expiresMs - Date.now() + 25)));
     const afterExpiry = await relay.app.request(`${SIGNING}/requests`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: await pollAuth(f.subject) },
     });
     expect(((await afterExpiry.json()) as { requests: unknown[] }).requests).toEqual([]);
     expect(
@@ -898,7 +906,7 @@ describe('signing mailbox', () => {
 
   it('returns 400 when a poll cursor is reused across subject mailboxes', async () => {
     const store = new MemoryRelayStore();
-    const relay = await createRelay({ store, signing: true });
+    const relay = await createRelay({ store, authority: RELAY_AUTHORITY, signing: true });
     const firstSubject = await identity();
     const secondSubject = await identity();
     await seed(store, firstSubject, secondSubject);
@@ -922,11 +930,10 @@ describe('signing mailbox', () => {
       limit: 1,
       now,
     });
-    const secondToken = await authFor(relay.did, secondSubject);
-    const response = await relay.app.request(
-      `${SIGNING}/requests?after=${encodeURIComponent(page!.next!)}`,
-      { headers: { authorization: `Bearer ${secondToken}` } },
-    );
+    const cursorPath = `${SIGNING}/requests?after=${encodeURIComponent(page!.next!)}`;
+    const response = await relay.app.request(cursorPath, {
+      headers: { authorization: await pollAuth(secondSubject, cursorPath) },
+    });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'invalid cursor' });
   });

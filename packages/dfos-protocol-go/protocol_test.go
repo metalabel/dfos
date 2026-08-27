@@ -361,68 +361,6 @@ func TestJWSDecodeUnsafe(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 13. CreateAuthToken — create and decode
-// ---------------------------------------------------------------------------
-
-func TestCreateAuthToken(t *testing.T) {
-	priv1, pub1 := refKey1()
-	iss := "did:dfos:testdid"
-	aud := "https://relay.example.com"
-	kid := "key_test"
-	ttl := 1 * time.Hour
-
-	token, err := CreateAuthToken(iss, aud, kid, ttl, priv1)
-	if err != nil {
-		t.Fatalf("CreateAuthToken: %v", err)
-	}
-
-	// Verify signature
-	_, p, err := VerifyJWS(token, pub1)
-	if err != nil {
-		t.Fatalf("VerifyJWS auth token: %v", err)
-	}
-
-	if p["iss"] != iss {
-		t.Fatalf("iss: got %v, want %s", p["iss"], iss)
-	}
-	if p["sub"] != iss {
-		t.Fatalf("sub: got %v, want %s", p["sub"], iss)
-	}
-	if p["aud"] != aud {
-		t.Fatalf("aud: got %v, want %s", p["aud"], aud)
-	}
-
-	// Decode via JWT helper
-	hm, pm, err := DecodeJWTUnsafe(token)
-	if err != nil {
-		t.Fatalf("DecodeJWTUnsafe: %v", err)
-	}
-	if hm["alg"] != "EdDSA" {
-		t.Fatal("wrong alg")
-	}
-	if hm["typ"] != "JWT" {
-		t.Fatalf("wrong typ: %s", hm["typ"])
-	}
-	if hm["kid"] != kid {
-		t.Fatalf("wrong kid: %s", hm["kid"])
-	}
-
-	// exp should be in the future
-	exp, ok := pm["exp"].(float64)
-	if !ok {
-		// might be int64 after normalization
-		if expInt, ok2 := pm["exp"].(int64); ok2 {
-			exp = float64(expInt)
-		} else {
-			t.Fatalf("exp type: %T", pm["exp"])
-		}
-	}
-	if int64(exp) <= time.Now().Unix() {
-		t.Fatal("exp should be in the future")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // 14. CreateCredential — DFOS credential structure
 // ---------------------------------------------------------------------------
 
@@ -1262,7 +1200,13 @@ func TestVerifyJWSErrors(t *testing.T) {
 func TestDecodeJWTUnsafeEdgeCases(t *testing.T) {
 	// valid token without cid in header
 	priv1, _ := refKey1()
-	token, _ := CreateAuthToken("did:dfos:test", "aud", "key_1", 1*time.Hour, priv1)
+	// A cid-less JWT, hand-built: the auth-token JWT that used to stand in here
+	// is gone (identity proofs replaced it), but DecodeJWTUnsafe still has to
+	// handle a header without a cid.
+	jwtHeader := Base64urlEncode([]byte(`{"alg":"EdDSA","typ":"JWT","kid":"key_1"}`))
+	jwtPayload := Base64urlEncode([]byte(`{"iss":"did:dfos:test","aud":"aud"}`))
+	jwtSigningInput := jwtHeader + "." + jwtPayload
+	token := jwtSigningInput + "." + Base64urlEncode(ed25519.Sign(priv1, []byte(jwtSigningInput)))
 	h, p, err := DecodeJWTUnsafe(token)
 	if err != nil {
 		t.Fatalf("DecodeJWTUnsafe: %v", err)

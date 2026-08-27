@@ -143,5 +143,8 @@ const bootstrapWithKeyMaterial = async (
     );
   }
 
-  return { did, profileArtifactJws };
+  // The signer rides back with the identity so the relay can mint an IDENTITY
+  // PROOF of its own — the one thing a relay needs its own key for after
+  // bootstrap (gossip-out announcing itself as a named peer).
+  return { did, profileArtifactJws, keyId, sign: signer };
 };
