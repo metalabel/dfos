@@ -18,7 +18,7 @@ import type {
 import type { ServiceEntry, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { classifyAnchor } from '@metalabel/dfos-protocol/chain';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { Check, Checks, type CheckState } from '../components/checks';
 import { ContentChip } from '../components/content-chip';
 import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
@@ -41,7 +41,7 @@ import {
   TROUBLESHOOTING_GUIDE,
   TruncId,
 } from '../components/ui';
-import { contributedFromSignerPage } from '../lib/actor-ledger';
+import { contributedFromSignerPage, ledgerCounts } from '../lib/actor-ledger';
 import { getClient } from '../lib/client';
 import { useIndexRowLabel } from '../lib/content-labels';
 import type { ExplorerOp } from '../lib/db';
@@ -92,6 +92,29 @@ import { NotFound } from './not-found';
  *  cost a red chip we would otherwise have shown, never paint a false green. */
 const LOCAL_REVOCATION_SCAN = 5000;
 
+/** Rows per page for the two accumulating actor-ledger content lanes. Large
+ *  enough that most identities land whole in one round trip; a space with
+ *  hundreds of chains pages through the relay's own cursor instead. */
+const LEDGER_PAGE = 200;
+
+/**
+ * One accumulating content lane of the actor ledger (Created / Contributed).
+ *
+ * `rows === null` is "nothing asked yet / still in flight"; `err` is "a lookup
+ * REJECTED", which is never the same statement as a served empty page. `next` is
+ * the relay's own cursor — its statement that more exists, which replaced the old
+ * "did this page come back exactly `limit` long" guess. It survives a failed
+ * load-more on purpose, so the button stays a retry rather than reading as an end.
+ */
+interface ContentLane {
+  rows: IndexContentRow[] | null;
+  err: boolean;
+  next: string | null;
+  loadingMore: boolean;
+}
+
+const emptyLane = (): ContentLane => ({ rows: null, err: false, next: null, loadingMore: false });
+
 interface IdentityClaimState {
   isDeleted?: boolean;
   authKeys?: { id: string; publicKeyMultibase: string }[];
@@ -126,17 +149,18 @@ export const Identity = (props: { did: string }) => {
   const [witnessRelations, setWitnessRelations] = useState<string[]>([]);
   // content chains this identity CREATED (creator=did) and CONTRIBUTED to
   // (signer=did minus the rows it created — the client-side subtraction the spec
-  // prescribes). Both are index-only reverse lookups, so they key on [did, indexed].
-  const [created, setCreated] = useState<IndexContentRow[] | null>(null);
-  const [contributed, setContributed] = useState<IndexContentRow[] | null>(null);
-  // per-lane error flags: an index-only reverse lookup that REJECTED (relay
-  // unreachable / route declined) must render as an honest error, never a
-  // confirmed-empty — absence is not proof of absence (the index can lie by
-  // omission). `contributedTruncated` keys the "first 200" note off the RAW
-  // signer page length, before the creator-subtraction shrinks the array.
-  const [createdErr, setCreatedErr] = useState(false);
-  const [contributedErr, setContributedErr] = useState(false);
-  const [contributedTruncated, setContributedTruncated] = useState(false);
+  // prescribes). Both are index-only reverse lookups, so they key on [did, indexed],
+  // and both ACCUMULATE pages off the relay's cursor (see ContentLane). Their
+  // error flags say a lookup REJECTED (relay unreachable / route declined), which
+  // must render as an honest error and never a confirmed-empty — absence is not
+  // proof of absence (the index can lie by omission).
+  const [created, setCreated] = useState<ContentLane>(emptyLane);
+  const [contributed, setContributed] = useState<ContentLane>(emptyLane);
+  // generation token for those two lanes. A load-more is fired from a button, not
+  // from the effect, so the effect's `dead` closure cannot reach it — this ref is
+  // what a landing page compares against before appending, so a page requested
+  // for one DID can never append into another's lane.
+  const laneRun = useRef(0);
   const [witnessedErr, setWitnessedErr] = useState(false);
   const [error, setError] = useState('');
 
@@ -263,69 +287,114 @@ export const Identity = (props: { did: string }) => {
     };
   }, [props.did, indexed, witnessRelation]);
 
-  // separate index lane: public-read content chains CREATED and CONTRIBUTED TO
-  // by this DID. Created is `creator=did` (predates iteration 2 — always fetched).
-  // Contributed is `signer=did` (branch-inclusive "has signed in this chain")
-  // minus the rows this DID created — the spec's client-side subtraction — and
-  // `signer=` exists ONLY on an iteration-2 relay: an older relay IGNORES it and
-  // returns an unfiltered page, so on `iter2 !== true` we do NOT fetch it (the tab
-  // renders an honest note instead). Keyed [did, indexed, iter2].
+  // separate index lane: EVERY content chain this DID CREATED (`creator=did`) and
+  // CONTRIBUTED TO (`signer=did` minus the rows it created — the spec's
+  // client-side subtraction), gated chains INCLUDED.
+  //
+  // The relay index already answers the actor axis in full, and answers it
+  // honestly: a gated row comes back with `publicRead: false` and no projected
+  // title, and `useIndexRowLabel` holds it to a bare id pill with no name, no
+  // snippet, no bytes. Passing `publicRead: true` here was the EXPLORER hiding
+  // what the index tells truthfully — a creator with hundreds of chains reading
+  // as the handful it made public. So the filter is gone: on an actor-centric
+  // listing, the existence of a chain someone signed is not the secret. What is
+  // gated stays gated, and authorship of a WORK is obscured by the credits living
+  // inside the content hash, never by omitting the row.
+  //
+  // Both lanes ACCUMULATE off the relay's `next` cursor (load-more below) rather
+  // than stopping at one page. `signer=` exists ONLY on an iteration-2 relay: an
+  // older relay IGNORES it and returns an unfiltered page, so on `iter2 !== true`
+  // we do NOT fetch it (the tab renders an honest note instead).
+  // Keyed [did, indexed, iter2].
   useEffect(() => {
     let dead = false;
-    setCreated(null);
-    setContributed(null);
-    setCreatedErr(false);
-    setContributedErr(false);
-    setContributedTruncated(false);
-    if (indexed !== true) return;
+    const cleanup = (): void => {
+      dead = true;
+      laneRun.current += 1; // and cancel any load-more still in flight
+    };
+    setCreated(emptyLane());
+    setContributed(emptyLane());
+    if (indexed !== true) return cleanup;
     const client = getClient();
     // order= combines with creator=/signer= on an iteration-2 relay (the store
     // filters, then orders) — so newest-first, but ONLY where honoured; a
     // pre-iteration-2 relay would 400 on order=, so gate it on iter2.
     const newest = iter2 === true ? ({ order: 'genesisAt.desc' } as const) : {};
     void client
-      .indexContent({ creator: props.did, publicRead: true, limit: 200, ...newest })
+      .indexContent({ creator: props.did, limit: LEDGER_PAGE, ...newest })
       .then((p) => {
-        if (!dead) setCreated(p.content);
+        if (!dead) setCreated({ rows: p.content, err: false, next: p.next, loadingMore: false });
       })
       .catch(() => {
         // rejected (unreachable / declined) — an error, NOT a confirmed-empty
-        if (!dead) {
-          setCreatedErr(true);
-          setCreated([]);
-        }
+        if (!dead) setCreated({ rows: [], err: true, next: null, loadingMore: false });
       });
-    if (iter2 !== true) {
-      // no signer support — leave `contributed` null; the tab shows the note.
-      return () => {
-        dead = true;
-      };
-    }
+    // no signer support — leave `contributed` unasked (rows null); the tab shows
+    // the note rather than a page the relay would have fabricated.
+    if (iter2 !== true) return cleanup;
     void client
       // this branch runs only when iter2 === true (guarded above), so order= is safe
       .indexContent({
         signer: props.did,
-        publicRead: true,
-        limit: 200,
+        limit: LEDGER_PAGE,
         order: 'genesisAt.desc',
       })
       .then((p) => {
         if (dead) return;
-        // subtract the DID's own creations; truncation keys off the RAW page
-        const page = contributedFromSignerPage(p.content, props.did, 200);
-        setContributedTruncated(page.truncated);
-        setContributed(page.rows);
+        // subtract the DID's own creations — row-local, so it applies per page
+        setContributed({
+          rows: contributedFromSignerPage(p.content, props.did),
+          err: false,
+          next: p.next,
+          loadingMore: false,
+        });
       })
       .catch(() => {
-        if (!dead) {
-          setContributedErr(true);
-          setContributed([]);
-        }
+        if (!dead) setContributed({ rows: [], err: true, next: null, loadingMore: false });
       });
-    return () => {
-      dead = true;
-    };
+    return cleanup;
   }, [props.did, indexed, iter2]);
+
+  /**
+   * Append the next page of an actor-ledger content lane. One appender serves
+   * both: the lane carries its own cursor, and `derive` is the only difference
+   * (identity for Created, the creator-subtraction for Contributed — which is
+   * row-local, so filtering each page and concatenating equals filtering the
+   * concatenation).
+   *
+   * A page that REJECTS raises the lane's error flag and keeps both the rows
+   * already loaded and the cursor: a failed reach says nothing about whether more
+   * exists, so the button stays a retry rather than quietly becoming an end.
+   */
+  const loadMoreLane = (
+    lane: ContentLane,
+    setLane: (update: (lane: ContentLane) => ContentLane) => void,
+    params: { creator: string } | { signer: string },
+    derive: (rows: IndexContentRow[]) => IndexContentRow[],
+  ): void => {
+    const after = lane.next;
+    if (!after || lane.loadingMore) return;
+    const run = laneRun.current;
+    setLane((l) => ({ ...l, loadingMore: true }));
+    // same iter2 gate as the first page — a cursor minted under one ordering is
+    // only ever handed back under that same query
+    const newest = iter2 === true ? ({ order: 'genesisAt.desc' } as const) : {};
+    void getClient()
+      .indexContent({ ...params, after, limit: LEDGER_PAGE, ...newest })
+      .then((p) => {
+        if (run !== laneRun.current) return;
+        setLane((l) => ({
+          rows: [...(l.rows ?? []), ...derive(p.content)],
+          err: false,
+          next: p.next,
+          loadingMore: false,
+        }));
+      })
+      .catch(() => {
+        if (run !== laneRun.current) return;
+        setLane((l) => ({ ...l, err: true, loadingMore: false }));
+      });
+  };
 
   // separate index lane: credentials ISSUED by this DID (iss === did) — a relay
   // reverse lookup that exists only on an index-capable relay, so it keys on
@@ -500,10 +569,15 @@ export const Identity = (props: { did: string }) => {
         indexed={indexed}
         iter2={iter2}
         created={created}
-        createdErr={createdErr}
+        onLoadMoreCreated={() =>
+          loadMoreLane(created, setCreated, { creator: props.did }, (rows) => rows)
+        }
         contributed={contributed}
-        contributedErr={contributedErr}
-        contributedTruncated={contributedTruncated}
+        onLoadMoreContributed={() =>
+          loadMoreLane(contributed, setContributed, { signer: props.did }, (rows) =>
+            contributedFromSignerPage(rows, props.did),
+          )
+        }
         witnessed={witnessed}
         witnessedErr={witnessedErr}
         witnessRelation={witnessRelation}
@@ -719,6 +793,13 @@ const CreditedOn = (props: { did: string; indexed: boolean | null }) => {
 // attributed: content rows green as the tab folds their chain, credentials and
 // countersignatures fold on open. Empty states are omission-aware — "none the
 // relay holds," never "none exist" (the index can lie by omission).
+//
+// The two content lanes list EVERY chain on their axis, gated ones included, and
+// say so under the table: a gated row is a bare id with a `gated` marker and no
+// title, which is the index's own posture rather than a softening of it. The
+// counts are of rows LOADED — the relay's cursor says "more exists", never "how
+// many" — so a lane still holding a cursor reads "loaded so far" and offers to
+// walk further.
 // -----------------------------------------------------------------------------
 
 type LedgerTab = 'created' | 'contributed' | 'witnessed' | 'issued';
@@ -729,12 +810,21 @@ type LedgerTab = 'created' | 'contributed' | 'witnessed' | 'issued';
  *  `useIndexRowLabel`) — short id → amber projected title → verified label —
  *  which also puts this row behind the public-read honesty rule it used to sit
  *  outside of: it passed the relay's `title` through ungated, so a non-public
- *  chain on an unupgraded relay could surface one. */
+ *  chain on an unupgraded relay could surface one. That rule is what lets these
+ *  lanes list gated chains at all — a gated row is a bare id pill and stays one.
+ *
+ *  The `gated` marker is the browse/home grammar verbatim, and it asks the WIDER
+ *  question of the two on this panel: "can a projected title render here at all",
+ *  which an untyped row fails too (the index projects `title` only for a typed
+ *  public chain). The count line under the table asks the narrower one —
+ *  `publicRead` alone — so an untyped public chain can carry the marker while
+ *  counting as public. Both are true; neither is worth collapsing into the other. */
 const LedgerContentRow = (props: { row: IndexContentRow }) => {
   const { row } = props;
   const ref = useVerifyOnVisible<HTMLTableRowElement>('content', row.contentId, row.opCount);
   const rec = useVerifyStatus('content', row.contentId);
   const opCount = rec.facts?.opCount ?? row.opCount;
+  const gated = !(row.docSchema && row.publicRead);
   const { label, tier } = useIndexRowLabel(row, rec.status !== 'attributed');
   return (
     <tr ref={ref} onClick={() => (location.hash = `#/content/${row.contentId}`)}>
@@ -748,6 +838,7 @@ const LedgerContentRow = (props: { row: IndexContentRow }) => {
         ) : (
           <span class="muted">untyped</span>
         )}
+        {gated ? <span class="err"> gated</span> : null}
       </td>
       <td class="n">{fmtAge(row.headAt)}</td>
       <td class="n">{opCount}</td>
@@ -758,21 +849,28 @@ const LedgerContentRow = (props: { row: IndexContentRow }) => {
 /** A content-chain ledger table (Created / Contributed tabs) over relay-index
  *  rows. Distinguishes a REJECTED lookup (honest "couldn't reach") from a genuine
  *  200-with-zero-rows (the confirmed-empty `empty` copy) — a rejection labelled
- *  empty would violate the omission-can-lie posture. `truncated` keys the
- *  first-200 note off the raw page (the Contributed array is post-subtraction). */
+ *  empty would violate the omission-can-lie posture.
+ *
+ *  Under the table sits the count line, which says how many rows are LOADED (not
+ *  how many exist — the relay's cursor only ever says "more"), and how that
+ *  splits public/gated. It replaces the old "showing the first 200" heuristic:
+ *  a lane with a live cursor says so and offers `load more`, and one without has
+ *  walked the whole listing the relay serves. */
 const LedgerContentTable = (props: {
-  rows: IndexContentRow[] | null;
+  lane: ContentLane;
   indexed: boolean | null;
-  error: boolean;
-  truncated: boolean;
+  onLoadMore: () => void;
   empty: string;
 }) => {
+  const { lane } = props;
   if (props.indexed === null) return <span class="muted">checking relay capabilities…</span>;
   if (props.indexed !== true) return <span class="muted">requires an index-capable relay.</span>;
-  const state = indexListState(props.rows === null, props.error, props.rows?.length ?? 0);
+  const state = indexListState(lane.rows === null, lane.err, lane.rows?.length ?? 0);
   if (state === 'loading') return <span class="muted">reading relay index…</span>;
   if (state === 'error') return <span class="muted">couldn’t reach the relay index.</span>;
   if (state === 'empty') return <span class="muted">{props.empty}</span>;
+  const counts = ledgerCounts(lane.rows!);
+  const more = lane.next !== null;
   return (
     <>
       <table>
@@ -785,15 +883,31 @@ const LedgerContentTable = (props: {
           </tr>
         </thead>
         <tbody>
-          {props.rows!.map((row) => (
+          {lane.rows!.map((row) => (
             <LedgerContentRow key={row.contentId} row={row} />
           ))}
         </tbody>
       </table>
       <div class="ck-note" style={{ marginTop: 8 }}>
-        relay-asserted index hints — open a chain to fold its proof.
-        {props.truncated ? ' showing the first 200 the relay index surfaces.' : ''}
+        {more
+          ? `${counts.total} loaded so far`
+          : `${counts.total} chain${counts.total === 1 ? '' : 's'}`}{' '}
+        — {counts.publicCount} public · {counts.gatedCount} gated. relay-asserted index hints — open
+        a chain to fold its proof.
       </div>
+      {more ? (
+        <div style={{ marginTop: 8 }}>
+          <button onClick={props.onLoadMore} disabled={lane.loadingMore}>
+            {lane.loadingMore ? 'loading…' : 'load more'}
+          </button>{' '}
+          <span class="lbl">the relay index surfaces more beyond these</span>
+          {/* a page that REJECTED is not an end: the rows above stand, the cursor
+              stands, and the button above is the retry. */}
+          {lane.err ? (
+            <span class="err"> · couldn’t reach the relay index for the next page.</span>
+          ) : null}
+        </div>
+      ) : null}
     </>
   );
 };
@@ -801,11 +915,10 @@ const LedgerContentTable = (props: {
 const ActorLedger = (props: {
   indexed: boolean | null;
   iter2: boolean | null;
-  created: IndexContentRow[] | null;
-  createdErr: boolean;
-  contributed: IndexContentRow[] | null;
-  contributedErr: boolean;
-  contributedTruncated: boolean;
+  created: ContentLane;
+  onLoadMoreCreated: () => void;
+  contributed: ContentLane;
+  onLoadMoreContributed: () => void;
   witnessed: IndexCountersignatureRow[] | null;
   witnessedErr: boolean;
   witnessRelation: string | null;
@@ -816,20 +929,28 @@ const ActorLedger = (props: {
   revoked: RevocationView;
 }) => {
   const [tab, setTab] = useState<LedgerTab>('created');
-  // suppress the count while loading (rows null) OR errored (rows []) so a tab
-  // never reads "contributed 0" over an unreachable relay — a false-empty too.
+  // suppress the count while loading (rows null) OR when the lane errored holding
+  // nothing (rows []) so a tab never reads "contributed 0" over an unreachable
+  // relay — a false-empty too. A lane that errored on a LATER page still knows
+  // exactly how many rows it holds, so it keeps its count.
   const cnt = (rows: unknown[] | null, err = false): string =>
-    err || !rows ? '' : ` ${rows.length}`;
+    !rows || (err && rows.length === 0) ? '' : ` ${rows.length}`;
+  // a content lane counts what it has LOADED, and `+` says the relay's cursor is
+  // still live — the count is a floor, never a corpus total.
+  const laneCnt = (lane: ContentLane): string => {
+    const n = cnt(lane.rows, lane.err);
+    return n && lane.next !== null ? `${n}+` : n;
+  };
   const rightLabel =
     tab === 'issued' && !props.credFromRelayIndex ? 'from local index' : 'relay index · attributed';
   return (
     <Panel title="actor ledger" right={<span class="lbl">{rightLabel}</span>}>
       <div class="filters" style={{ marginBottom: 10 }}>
         <button class={tab === 'created' ? 'on' : ''} onClick={() => setTab('created')}>
-          created{cnt(props.created, props.createdErr)}
+          created{laneCnt(props.created)}
         </button>
         <button class={tab === 'contributed' ? 'on' : ''} onClick={() => setTab('contributed')}>
-          contributed{cnt(props.contributed, props.contributedErr)}
+          contributed{laneCnt(props.contributed)}
         </button>
         <button class={tab === 'witnessed' ? 'on' : ''} onClick={() => setTab('witnessed')}>
           witnessed{cnt(props.witnessed, props.witnessedErr)}
@@ -841,19 +962,17 @@ const ActorLedger = (props: {
 
       {tab === 'created' ? (
         <LedgerContentTable
-          rows={props.created}
+          lane={props.created}
           indexed={props.indexed}
-          error={props.createdErr}
-          truncated={(props.created?.length ?? 0) === 200}
+          onLoadMore={props.onLoadMoreCreated}
           empty="no content chains this identity created that the relay index holds."
         />
       ) : tab === 'contributed' ? (
         props.indexed !== true ? (
           <LedgerContentTable
-            rows={props.contributed}
+            lane={props.contributed}
             indexed={props.indexed}
-            error={props.contributedErr}
-            truncated={props.contributedTruncated}
+            onLoadMore={props.onLoadMoreContributed}
             empty="no chains this identity signed but did not create that the relay index holds."
           />
         ) : props.iter2 === null ? (
@@ -867,10 +986,9 @@ const ActorLedger = (props: {
           </span>
         ) : (
           <LedgerContentTable
-            rows={props.contributed}
+            lane={props.contributed}
             indexed={props.indexed}
-            error={props.contributedErr}
-            truncated={props.contributedTruncated}
+            onLoadMore={props.onLoadMoreContributed}
             empty="no chains this identity signed but did not create that the relay index holds."
           />
         )
