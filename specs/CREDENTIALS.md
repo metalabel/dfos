@@ -437,7 +437,7 @@ Honoring that promise requires separating two questions asked of the same revoca
 R.createdAt <= O.createdAt
 ```
 
-The boundary is **inclusive**: a revocation signed at the same second as the operation invalidates it. `R.createdAt` comes from the revocation's own signed payload, so no relay can move the boundary by misreporting it — a caller that re-verifies the revocation JWS (as it must; see [Revocation Status](https://protocol.dfos.com/web-relay#revocation-status-v1)) reads the boundary out of the verified bytes.
+The boundary is **inclusive**: a revocation signed at the same second as the operation invalidates it. `R.createdAt` comes from the revocation's own signed payload, so no relay can move the boundary by misreporting it — a caller that re-verifies the revocation JWS (as it must; see [Revocation Status](https://protocol.dfos.com/web-relay#revocation-status)) reads the boundary out of the verified bytes.
 
 The rule applies at **every level** of the presented credential — leaf and each parent in the delegation chain — all evaluated at that one instant, so a parent revoked after the operation no longer invalidates it either.
 

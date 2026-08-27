@@ -35,16 +35,26 @@ The container generates Ed25519 keys on first boot and persists them in SQLite. 
 
 All configuration is via environment variables:
 
-| Variable         | Default            | Description                                                      |
-| ---------------- | ------------------ | ---------------------------------------------------------------- |
-| `PORT`           | `4444`             | HTTP listen port                                                 |
-| `SQLITE_PATH`    | `~/.dfos/relay.db` | Path to SQLite database                                          |
-| `RELAY_NAME`     | `DFOS Relay`       | Profile name (shown in well-known endpoint)                      |
-| `PEERS`          | _(empty)_          | Peer relay URLs (see below)                                      |
-| `RESYNC`         | `false`            | `true` resets peer cursors for a full re-sync on boot            |
-| `SYNC_INTERVAL`  | `30s`              | How often to poll peers for new operations                       |
-| `CONTENT_FOLLOW` | `none`             | `eager` = pull & cache granted public document bytes (see below) |
-| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`       |
+| Variable         | Default            | Description                                                          |
+| ---------------- | ------------------ | -------------------------------------------------------------------- |
+| `PORT`           | `4444`             | HTTP listen port                                                     |
+| `SQLITE_PATH`    | `~/.dfos/relay.db` | Path to SQLite database                                              |
+| `RELAY_NAME`     | `DFOS Relay`       | Profile name (shown in well-known endpoint)                          |
+| `PEERS`          | _(empty)_          | Peer relay URLs (see below)                                          |
+| `RESYNC`         | `false`            | `true` resets peer cursors for a full re-sync on boot                |
+| `SYNC_INTERVAL`  | `30s`              | How often to poll peers for new operations                           |
+| `CONTENT_FOLLOW` | `none`             | `eager` = pull & cache granted public document bytes (see below)     |
+| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`           |
+| `AUTHORITY`      | _(unset)_          | This relay's own `host[:port]` — the host identity proofs bind       |
+| `INGESTION`      | `open`             | Admission for `POST /operations`: `open`, `proof-required`, `closed` |
+| `GOSSIP_PROOF`   | `false`            | `true` signs gossip-out pushes with this relay's identity proof      |
+
+`AUTHORITY` is what every [API-AUTH](https://protocol.dfos.com/api-auth) identity proof
+is checked against — configuration, never taken from a request header. Without it the
+authenticated routes (blob upload, non-public blob download, the mailbox poll) answer 503. Behind TLS on 443 it is the bare hostname; locally it includes the port. `INGESTION`
+sets who may submit operations, per
+[Web Relay § Ingestion Admission](https://protocol.dfos.com/web-relay#ingestion-admission),
+and is advertised in the well-known.
 
 When embedding this library, signing is available through `RelayOptions.Signing`; it is not exposed by `dfos serve`.
 

@@ -432,7 +432,7 @@ verify(credential, resource, action):
 - **Public path.** The reader presents no credential. The relay derives the public credentials (`aud: "*"`) covering the chain from the proof plane it already reads — public credentials are ordinary proof-plane operations, so no separate grant table is authority — and runs each through the verifier. A surviving public grant authorizes the read. Crucially, the relay works from the **credentials themselves**, never a pre-chewed `publiclyReadable: true`: the proof plane provides _data_; the verifier makes the _decision_.
 - **Delegated path.** The reader presents a DFOS credential in the `X-Credential` header. The same verifier runs over it, including the same per-link revocation check.
 
-A public grant may name `chain:<contentId>` (this chain) or `chain:*` (all of the issuer's chains); either way it MUST root at the content creator to authorize. Public credentials SHOULD be read-scoped — a public `write` grant is a world-writable bearer token ([CREDENTIALS.md](https://protocol.dfos.com/credentials#security-aud-quotquot--write--a-world-writable-bearer-grant)).
+A public grant may name `chain:<contentId>` (this chain) or `chain:*` (all of the issuer's chains); either way it MUST root at the content creator to authorize. Public credentials SHOULD be read-scoped — a public `write` grant is a world-writable bearer token ([CREDENTIALS.md](https://protocol.dfos.com/credentials#security-aud---write--a-world-writable-bearer-grant)).
 
 ### Access
 

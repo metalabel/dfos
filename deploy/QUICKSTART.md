@@ -44,6 +44,31 @@ All configuration is via environment variables on the `relay` service in
 | `SQLITE_PATH`    | `~/.dfos/relay.db` | Database file path (set to `/data/relay.db` in the container)                                       |
 | `RESYNC`         | `false`            | Set to `true` to reset peer cursors on boot for a full re-pull                                      |
 | `CONTENT_FOLLOW` | `none`             | `eager` = also pull & cache the document bytes of public content you're granted to read (see below) |
+| `AUTHORITY`      | _(none)_           | This relay's own `host[:port]` — the host identity proofs bind (see below)                          |
+| `INGESTION`      | `open`             | Admission for `POST /proof/v1/operations`: `open`, `proof-required`, or `closed`                    |
+| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`                                          |
+| `GOSSIP_PROOF`   | `false`            | `true` signs gossip-out pushes with this relay's own identity proof                                 |
+
+## Authenticated routes
+
+Blob upload, non-public blob download, and the signing mailbox poll require an
+[API-AUTH](https://protocol.dfos.com/api-auth) identity proof, and a proof binds the
+host the caller reached. Set `AUTHORITY` to the public `host[:port]` your relay answers
+at — behind Caddy on 443 that is the bare hostname:
+
+```yaml
+environment:
+  AUTHORITY: 'relay.yourdomain.com'
+```
+
+It is configuration, never read from a request header: a relay that took the host from
+the request would have no host binding at all. Without it those routes answer 503 rather
+than blaming the caller. The public proof-plane reads need nothing.
+
+`INGESTION` sets who may submit operations — `open` accepts anonymous submissions,
+`proof-required` refuses them with 403 and admits only a submission carrying an identity
+proof, and `closed` presents no ingestion surface (501). The mode is advertised in the
+well-known as `ingestion`, so a client sees the posture before it submits.
 
 ## Peering
 

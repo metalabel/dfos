@@ -8,7 +8,7 @@ info:
 
     Two data planes:
     - **Proof plane** (public): signed chain operations, countersignatures
-    - **Content plane** (authenticated): raw content blobs gated by DID auth tokens and DFOS credentials
+    - **Content plane** (authenticated): raw content blobs gated by API-AUTH identity proofs and DFOS credentials
 
 servers:
   - url: http://localhost:3000

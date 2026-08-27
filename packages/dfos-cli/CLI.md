@@ -679,6 +679,7 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `GET`  | `identity show [name\|did]`     | Show identity state                                        |
 | `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                     |
 | `GET`  | `identity services [name\|did]` | Show resolved discovery services                           |
+| `GET`  | `identity well-known [name]`    | Emit the app-description members (`--patch`)               |
 | `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)                 |
 | `POST` | `identity update`               | Rotate keys / set services (`--service`)                   |
 | `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey                |
@@ -720,7 +721,7 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `POST` | `peer add <name> <url>`         | Register a named relay                                     |
 | `DEL`  | `peer remove <name>`            | Unregister a relay                                         |
 | `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store         |
-| `SET`  | `use <context>`                 | Set active context                                         |
+| `SET`  | `use <identity[@peer]>`         | Set active context                                         |
 | `GET`  | `config list`                   | Show full configuration                                    |
 | `GET`  | `config get <key>`              | Read a single config value                                 |
 | `SET`  | `config set <key> <value>`      | Write a config value                                       |
@@ -728,6 +729,7 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `POST` | `sync`                          | Sync with all configured relays                            |
 | `*`    | `serve`                         | Run the local relay as an HTTP server                      |
 | `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`)   |
+| `GET`  | `version`                       | Show the installed CLI version                             |
 
 ---
 

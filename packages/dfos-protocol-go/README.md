@@ -61,6 +61,7 @@ All protocol operations are covered:
 | `Sha256BodyHash`         | Hash API request body bytes               |
 | `BuildRequestProof`      | Sign an API request proof                 |
 | `VerifyRequestProof`     | Verify an API request-proof envelope      |
+| `VerifyIdentityProof`    | Verify an API-AUTH identity proof         |
 | `Int64Ptr`               | Set explicit request-proof option values  |
 | `DocumentCID`            | Canonical dag-cbor encode and CIDv1 hash  |
 

@@ -608,7 +608,8 @@ const GrantsPanel = (props: {
         <div class="ck-note">
           No public-read grant{' '}
           {props.indexed ? 'surfaced by the relay index' : 'in your local index'}. The document
-          bytes are gated — reads need a credential or an auth token.
+          bytes are gated — reads need an identity proof, plus a credential unless you are the
+          creator.
         </div>
       )}
     </Panel>
@@ -669,8 +670,8 @@ const DocPanel = (props: {
           <div class="ck-note" style={{ marginTop: 6 }}>
             Document bytes are on the content plane and require a{' '}
             <Term word="standing public-read grant" def={GLOSSARY['standingGrant'] ?? ''} /> or an
-            auth token. The committed document CID above is verified, so you know exactly what the
-            bytes must hash to.
+            identity proof. The committed document CID above is verified, so you know exactly what
+            the bytes must hash to.
           </div>
         </>
       ) : doc.blob.status === 404 ? (
