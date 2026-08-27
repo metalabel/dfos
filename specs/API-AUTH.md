@@ -49,7 +49,7 @@ This is the same shape the wider ecosystem converged on as [DPoP (RFC 9449)](htt
 
 **kid names the credential's audience.** The `kid` MUST be a DID URL containing `#`, and its DID portion MUST equal the `aud` of the presented leaf credential — the proof is signed by the party the grant was issued to, always. This is the possession being proven.
 
-**Key resolution is current-state.** The presenter's signing key is resolved against the **current** state of its identity chain — rotated-out keys are rejected, and a deleted presenter's proofs are rejected. This is the auth-token rule, not the credential rule, and for the same reason [SIGNING](https://protocol.dfos.com/signing) applies it to sign requests: a proof is ephemeral, with a hard freshness window and no revocation primitive, so rotation is how a presenter whose key is compromised stops that key from minting proofs in its name. Any current key role (auth, assert, controller) may sign.
+**Key resolution is current-state.** The presenter's signing key is resolved against the **current** state of its identity chain — rotated-out keys are rejected, and a deleted presenter's proofs are rejected. This is the live-authentication rule, not the credential rule, and for the same reason [SIGNING](https://protocol.dfos.com/signing) applies it to sign requests: a proof is ephemeral, with a hard freshness window and no revocation primitive, so rotation is how a presenter whose key is compromised stops that key from minting proofs in its name. Any current key role (auth, assert, controller) may sign.
 
 ### Payload
 
@@ -205,7 +205,7 @@ A DFOS request-authenticating artifact is **one envelope family with an optional
 | Failure tiers     | 401 / 503                                       | 401 / 403 / 503                                                  |
 | Stands alone      | Yes — it is the whole AuthN statement           | No — meaningless without its credential                          |
 
-Any DFOS-gated HTTP surface — the canonical API, a fork, a relay surface — consumes this family by asking, per route, which claim it needs: bare identity (then local policy), or an exercised grant. ([WEB-RELAY.md](https://protocol.dfos.com/web-relay) additionally defines an aud-bound content-plane **auth token**, `typ: JWT` — that surface is the relay spec's own, defined there.) Growth is additive members on this family — both artifacts ignore unknown members — never a new envelope: a surface that thinks it needs a third artifact has a missing member, not a missing genus.
+Any DFOS-gated HTTP surface — the canonical API, a fork, a relay surface — consumes this family by asking, per route, which claim it needs: bare identity (then local policy), or an exercised grant. Growth is additive members on this family — both artifacts ignore unknown members — never a new envelope: a surface that thinks it needs a third artifact has a missing member, not a missing genus.
 
 ---
 

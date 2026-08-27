@@ -53,8 +53,9 @@ whoever serves them. **The relay operator can read what it stores.** This is
 undisclosed-by-default, _not_ end-to-end encrypted. The content plane never gossips;
 blobs are stored by the relay that received them and served only to authorized readers
 (WEB-RELAY.md "Content Plane", `specs/WEB-RELAY.md`). Content-plane access is
-gated by an auth token plus (for non-creators) a read credential (WEB-RELAY.md
-"Content Plane Access", `specs/WEB-RELAY.md`).
+gated by an API-AUTH identity proof plus (for non-creators) a read credential
+(WEB-RELAY.md "Authentication" / "Content Plane — Document Gateway",
+`specs/WEB-RELAY.md`).
 
 The security posture of a document is therefore the security posture of the relay
 operator that holds it.
@@ -370,11 +371,12 @@ These are known and deliberately accepted for v1.
   named audience — anyone can attach it inline and write to the covered chains. Public
   credentials SHOULD be read-scoped (CREDENTIALS.md "Security: `aud: "*"` + write",
   `specs/CREDENTIALS.md`).
-- **Same-relay auth-token replay until expiry.** Auth tokens are not content-addressed and
-  not revocable; they are scoped to a relay via `aud` (preventing cross-relay replay) and
-  rely on short lifetime for invalidation (CREDENTIALS.md "Relationship to Auth Tokens",
-  `specs/CREDENTIALS.md`; WEB-RELAY.md "Relay Identity", `specs/WEB-RELAY.md`).
-  Within the same relay, a captured token is replayable until it expires.
+- **Within-window replay of an identical proven request.** An API-AUTH proof replays only
+  as the byte-identical request, against the same host, inside the verifier-owned
+  freshness window — the accepted bound for read-shaped surfaces (API-AUTH.md "Security
+  Considerations", `specs/API-AUTH.md`). Write-shaped relay surfaces (ingestion, blob
+  upload) close even that with the REQUIRED `jti` replay cache (WEB-RELAY.md
+  "Authentication", `specs/WEB-RELAY.md`).
 - **SIWD security controls live in the relying party.** Replay prevention (nonce),
   redirect-URI validation, challenge-DID binding, and timestamp windows are obligations
   on the verifying third party — no relay and no signer can enforce them on its behalf.

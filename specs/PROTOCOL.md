@@ -28,15 +28,15 @@ Any system implementing the same chain primitives produces interoperable, cross-
 
 The DFOS protocol has five components:
 
-| Component             | Concern                                                                                                          |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links                                     |
-| **Credentials**       | Auth tokens and DFOS credentials for authorization — see [CREDENTIALS.md](https://protocol.dfos.com/credentials) |
-| **Services**          | Identity discovery vocabulary — controller-signed relay locators and stable content anchors                      |
-| **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data                                  |
-| **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op                                     |
+| Component             | Concern                                                                                                    |
+| --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Crypto core**       | Identity chains + content chains — Ed25519 signatures, JWS tokens, CID links                               |
+| **Credentials**       | DFOS credentials for delegated authorization — see [CREDENTIALS.md](https://protocol.dfos.com/credentials) |
+| **Services**          | Identity discovery vocabulary — controller-signed relay locators and stable content anchors                |
+| **Artifacts**         | Standalone signed inline documents — immutable, CID-addressable structured data                            |
+| **Countersignatures** | Standalone witness attestation — signed references to any CID-addressable op                               |
 
-> **Note:** The credential format (auth tokens, read/write credentials, revocation) is specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials). This document covers the crypto core, chain primitives, services, artifacts, and countersignatures.
+> **Note:** The credential format (read/write credentials, revocation) is specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials); request authentication is [API-AUTH](https://protocol.dfos.com/api-auth). This document covers the crypto core, chain primitives, services, artifacts, and countersignatures.
 
 The crypto core is the trust boundary — everything below it is cryptographically verified. Documents are flat content objects, content-addressed directly: `documentCID = CID(dagCborCanonicalEncode(contentObject))`. What goes inside the content object is application-defined — see the [DFOS Content Model](https://protocol.dfos.com/content-model) for the standard schema library.
 
@@ -145,7 +145,7 @@ Content chain verification requires a **valid EdDSA signature** and delegates ke
 
 The JWS `typ` header uses protocol-specific values (not IANA media types). Every `typ` value — this document's core operation families and every extension envelope — is registered in one place, the [extension registry](https://protocol.dfos.com/extensions), which names each value, the spec that owns it, and whether its envelope carries the [`cid` header](#cid-header). A new envelope family adds its row there, never a local name; registration is for `typ` routing and says nothing about ingestion (several registered families are document-plane artifacts no relay ever ingests — the registry's semantics column says which).
 
-Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. `JWT` follows IANA conventions. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions.
+Protocol-specific `typ` values are non-standard per JOSE convention, documented intentionally. The `typ` header aids routing but is not security-critical. Implementations SHOULD validate it but MUST NOT rely on it for security decisions.
 
 ### Operation Versioning
 
@@ -494,7 +494,7 @@ Every operation JWS (identity-op and content-op) includes a `cid` field in the p
 
 A CID mismatch between header and derived value immediately surfaces dag-cbor encoding disagreements across implementations.
 
-Note: JWT auth tokens do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). Which envelope families carry `cid` is inventoried per family in the [extension registry](https://protocol.dfos.com/extensions).
+Note: [API-AUTH](https://protocol.dfos.com/api-auth)'s request and identity proofs do NOT include a `cid` header. DFOS credentials DO include a `cid` header (for revocation addressability). Which envelope families carry `cid` is inventoried per family in the [extension registry](https://protocol.dfos.com/extensions).
 
 ### CID Derivation
 
@@ -516,7 +516,7 @@ Where `idEncode` is the 19-char alphabet encoding described above.
 
 ## Signature Verification Profile
 
-DFOS pins a deliberately narrow profile of the JOSE/JWS surface so that **all conformant verifiers accept and reject the same signatures byte-for-byte**. The rules below are normative and apply to **every** verification path: identity-op JWS, content-op JWS, artifacts, countersignatures, DFOS credentials, credential revocations, and auth-token JWTs. A verifier MUST apply §1–§3 to the protected header **before** performing any signature computation, and MUST apply §4 as part of (or before) the signature check. A token that violates any rule MUST be rejected regardless of whether its signature would otherwise verify.
+DFOS pins a deliberately narrow profile of the JOSE/JWS surface so that **all conformant verifiers accept and reject the same signatures byte-for-byte**. The rules below are normative and apply to **every** verification path: identity-op JWS, content-op JWS, artifacts, countersignatures, DFOS credentials, credential revocations, and every API-AUTH proof. A verifier MUST apply §1–§3 to the protected header **before** performing any signature computation, and MUST apply §4 as part of (or before) the signature check. A token that violates any rule MUST be rejected regardless of whether its signature would otherwise verify.
 
 There is no algorithm agility: the verifier never branches on `alg` to select a primitive. Ed25519 (`EdDSA`) is the only signature algorithm.
 
@@ -561,20 +561,13 @@ Two different questions are asked of the same signature at two different times, 
 
 - **First admission is current-state.** A node accepting a **new** operation, artifact, or countersignature submitted to it resolves the signer against the identity's **current** state: an operation freshly signed by a rotated-out key is refused at the door, whatever its `createdAt` claims — otherwise rotation would leave a compromised key an indefinite authoring window. Rotation ends a key's authoring window, including for operations composed before the rotation but never submitted; the honest remedy is re-signing with a current key. (Identity-chain extension admission itself is governed by the prior-state controller rule — see [Identity Chain Signer Validity](#identity-chain-signer-validity) — which this section does not change.)
 - **Committed history re-verifies historically, forever.** Once an operation is committed — accepted by a node, or ingested from a peer's committed log — it is a historical fact: re-verification resolves the signing key against every key that ever appeared in the chain's head lineage, because the key may since have rotated out, and re-verifying honest history under current state would break it after any rotation. The admission verdict never enters the replicated log, so cross-node convergence is untouched. A node ingesting a peer's committed log deliberately inherits the **peer's** admission discipline — choosing peers is a trust decision.
-- **Two standing poles bracket the split.** Credentials and credit claims verify under **historical** resolution by their own specs' MUST — revocation, not rotation, is their invalidation mechanism ([CREDENTIALS.md](https://protocol.dfos.com/credentials), [CREDITS.md](https://protocol.dfos.com/credits)). Live authentication artifacts (relay auth tokens, [API-AUTH](https://protocol.dfos.com/api-auth) request proofs, [SIWD](https://protocol.dfos.com/siwd) challenge proofs) are always **current-state**, per their own specs — rotation is exactly how a compromised key is stopped from minting new ones.
+- **Two standing poles bracket the split.** Credentials and credit claims verify under **historical** resolution by their own specs' MUST — revocation, not rotation, is their invalidation mechanism ([CREDENTIALS.md](https://protocol.dfos.com/credentials), [CREDITS.md](https://protocol.dfos.com/credits)). Live authentication artifacts ([API-AUTH](https://protocol.dfos.com/api-auth)'s identity and request proofs, [SIWD](https://protocol.dfos.com/siwd) challenge proofs) are always **current-state**, per their own specs — rotation is exactly how a compromised key is stopped from minting new ones.
 
 ---
 
 ## Credentials
 
-Credentials handle authentication and authorization for relay access and content chain delegation. The full credential format, verification rules, and revocation mechanism are specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials).
-
-Summary of credential types:
-
-| Credential Type | Purpose                                                       |
-| --------------- | ------------------------------------------------------------- |
-| Auth token      | DID-signed JWT proving identity (relay AuthN)                 |
-| DFOS credential | Authorize actions on resources (read, write) via attenuations |
+Credentials handle authorization for relay access and content chain delegation — authorize actions on resources (read, write) via attenuations. The full credential format, verification rules, and revocation mechanism are specified in [CREDENTIALS.md](https://protocol.dfos.com/credentials); request authentication (proving a caller controls a DID, per exact request) is [API-AUTH](https://protocol.dfos.com/api-auth)'s surface.
 
 ### Content Chain Authorization
 
@@ -1262,10 +1255,9 @@ All source lives in [`packages/dfos-protocol/`](https://github.com/metalabel/dfo
 - [`chain/countersign`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/countersign.ts) — `signCountersignature`, `verifyCountersignature`
 - [`chain/credit-claim`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/credit-claim.ts) — `signCreditClaim`, `verifyCreditClaim`, `verifyCreditEntry`
 - [`chain/sign-request`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/sign-request.ts) — `buildSignRequest`, `verifySignRequest`, `assertCanonicalSignRequestPayload`
-- [`credentials/auth-token`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/auth-token.ts) — `createAuthToken`, `verifyAuthToken`
 - [`chain/revocation`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/chain/revocation.ts) — `signRevocation`, `verifyRevocation`
 - [`credentials/dfos-credential`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/dfos-credential.ts) — `createDFOSCredential`, `verifyDFOSCredential`, `decodeDFOSCredentialUnsafe`
-- [`credentials/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/schemas.ts) — `AuthTokenClaims`, `DFOSCredentialPayload`, `Attenuation`
+- [`credentials/schemas`](https://github.com/metalabel/dfos/blob/main/packages/dfos-protocol/src/credentials/schemas.ts) — `DFOSCredentialPayload`, `Attenuation`
 
 ### Related Specifications
 
