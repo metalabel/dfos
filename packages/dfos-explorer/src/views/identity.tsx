@@ -55,7 +55,7 @@ import {
   useIndexCapable,
   useIndexIter2,
 } from '../lib/index-light';
-import { useIndexCredits, type IndexCreditRow } from '../lib/index-raw';
+import { fetchContentPage, useIndexCredits, type IndexCreditRow } from '../lib/index-raw';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import {
@@ -306,6 +306,15 @@ export const Identity = (props: { did: string }) => {
   // older relay IGNORES it and returns an unfiltered page, so on `iter2 !== true`
   // we do NOT fetch it (the tab renders an honest note instead).
   // Keyed [did, indexed, iter2].
+  //
+  // These lanes read through `fetchContentPage` (lib/index-raw.ts), NOT the
+  // client seam. `client.indexContent` resolves `{ content: [], next: null }`
+  // when every relay declines — a total outage that arrives looking exactly like
+  // a served empty page. On a one-shot lane that is a false-empty; on a PAGING
+  // one it is worse, because the empty success lands in the resolve branch and
+  // clears a live cursor, dressing a truncated listing up as a complete one. The
+  // raw route throws instead, so the catch branches below are live and the
+  // error-vs-empty distinction this whole file rests on actually holds.
   useEffect(() => {
     let dead = false;
     const cleanup = (): void => {
@@ -315,35 +324,33 @@ export const Identity = (props: { did: string }) => {
     setCreated(emptyLane());
     setContributed(emptyLane());
     if (indexed !== true) return cleanup;
-    const client = getClient();
     // order= combines with creator=/signer= on an iteration-2 relay (the store
     // filters, then orders) — so newest-first, but ONLY where honoured; a
     // pre-iteration-2 relay would 400 on order=, so gate it on iter2.
     const newest = iter2 === true ? ({ order: 'genesisAt.desc' } as const) : {};
-    void client
-      .indexContent({ creator: props.did, limit: LEDGER_PAGE, ...newest })
+    void fetchContentPage({ creator: props.did, limit: LEDGER_PAGE, ...newest })
       .then((p) => {
-        if (!dead) setCreated({ rows: p.content, err: false, next: p.next, loadingMore: false });
+        if (!dead) setCreated({ rows: p.items, err: false, next: p.next, loadingMore: false });
       })
       .catch(() => {
-        // rejected (unreachable / declined) — an error, NOT a confirmed-empty
+        // rejected (unreachable / every relay declined) — an error, NOT a
+        // confirmed-empty. Absence of an answer is not absence of chains.
         if (!dead) setCreated({ rows: [], err: true, next: null, loadingMore: false });
       });
     // no signer support — leave `contributed` unasked (rows null); the tab shows
     // the note rather than a page the relay would have fabricated.
     if (iter2 !== true) return cleanup;
-    void client
-      // this branch runs only when iter2 === true (guarded above), so order= is safe
-      .indexContent({
-        signer: props.did,
-        limit: LEDGER_PAGE,
-        order: 'genesisAt.desc',
-      })
+    // this branch runs only when iter2 === true (guarded above), so order= is safe
+    void fetchContentPage({
+      signer: props.did,
+      limit: LEDGER_PAGE,
+      order: 'genesisAt.desc',
+    })
       .then((p) => {
         if (dead) return;
         // subtract the DID's own creations — row-local, so it applies per page
         setContributed({
-          rows: contributedFromSignerPage(p.content, props.did),
+          rows: contributedFromSignerPage(p.items, props.did),
           err: false,
           next: p.next,
           loadingMore: false,
@@ -364,12 +371,15 @@ export const Identity = (props: { did: string }) => {
    *
    * A page that REJECTS raises the lane's error flag and keeps both the rows
    * already loaded and the cursor: a failed reach says nothing about whether more
-   * exists, so the button stays a retry rather than quietly becoming an end.
+   * exists, so the button stays a retry rather than quietly becoming an end. That
+   * only works because this reads `fetchContentPage` and not the client seam —
+   * an all-declined client read would resolve an EMPTY SUCCESS here, take the
+   * branch below, and clear the cursor it was supposed to preserve.
    */
   const loadMoreLane = (
     lane: ContentLane,
     setLane: (update: (lane: ContentLane) => ContentLane) => void,
-    params: { creator: string } | { signer: string },
+    params: { creator?: string; signer?: string },
     derive: (rows: IndexContentRow[]) => IndexContentRow[],
   ): void => {
     const after = lane.next;
@@ -379,12 +389,11 @@ export const Identity = (props: { did: string }) => {
     // same iter2 gate as the first page — a cursor minted under one ordering is
     // only ever handed back under that same query
     const newest = iter2 === true ? ({ order: 'genesisAt.desc' } as const) : {};
-    void getClient()
-      .indexContent({ ...params, after, limit: LEDGER_PAGE, ...newest })
+    void fetchContentPage({ ...params, after, limit: LEDGER_PAGE, ...newest })
       .then((p) => {
         if (run !== laneRun.current) return;
         setLane((l) => ({
-          rows: [...(l.rows ?? []), ...derive(p.content)],
+          rows: [...(l.rows ?? []), ...derive(p.items)],
           err: false,
           next: p.next,
           loadingMore: false,
@@ -846,10 +855,35 @@ const LedgerContentRow = (props: { row: IndexContentRow }) => {
   );
 };
 
+/** The walk-further control for a lane whose cursor is still live. Rendered
+ *  under a table of rows AND under a zero-row lane — a lane can hold nothing yet
+ *  still have somewhere to go, and that case is exactly the one that used to
+ *  strand. A page that REJECTED is not an end: the rows stand, the cursor
+ *  stands, and this button is the retry. */
+const LedgerLoadMore = (props: { lane: ContentLane; onLoadMore: () => void }) => (
+  <div style={{ marginTop: 8 }}>
+    <button onClick={props.onLoadMore} disabled={props.lane.loadingMore}>
+      {props.lane.loadingMore ? 'loading…' : 'load more'}
+    </button>{' '}
+    <span class="lbl">the relay index surfaces more beyond these</span>
+    {props.lane.err ? (
+      <span class="err"> · couldn’t reach the relay index for the next page.</span>
+    ) : null}
+  </div>
+);
+
 /** A content-chain ledger table (Created / Contributed tabs) over relay-index
  *  rows. Distinguishes a REJECTED lookup (honest "couldn't reach") from a genuine
  *  200-with-zero-rows (the confirmed-empty `empty` copy) — a rejection labelled
  *  empty would violate the omission-can-lie posture.
+ *
+ *  A THIRD zero-row case exists, and it is neither: zero rows with the cursor
+ *  STILL LIVE. Contributed subtracts this DID's own creations out of every
+ *  signer page, so a creator-heavy first page can subtract to nothing while the
+ *  relay has plenty more to serve — and answering that with the confirmed-empty
+ *  copy is both a false claim and a dead end, since the copy replaced the very
+ *  button that would have walked to the rows. Confirmed-empty is licensed by an
+ *  EXHAUSTED cursor and nothing else.
  *
  *  Under the table sits the count line, which says how many rows are LOADED (not
  *  how many exist — the relay's cursor only ever says "more"), and how that
@@ -867,10 +901,27 @@ const LedgerContentTable = (props: {
   if (props.indexed !== true) return <span class="muted">requires an index-capable relay.</span>;
   const state = indexListState(lane.rows === null, lane.err, lane.rows?.length ?? 0);
   if (state === 'loading') return <span class="muted">reading relay index…</span>;
-  if (state === 'error') return <span class="muted">couldn’t reach the relay index.</span>;
-  if (state === 'empty') return <span class="muted">{props.empty}</span>;
-  const counts = ledgerCounts(lane.rows!);
+  const rows = lane.rows ?? [];
   const more = lane.next !== null;
+  if (rows.length === 0) {
+    // nothing loaded and nowhere left to go: now the two terminal verdicts are
+    // the only ones available, and they stay distinguishable.
+    if (!more)
+      return state === 'error' ? (
+        <span class="muted">couldn’t reach the relay index.</span>
+      ) : (
+        <span class="muted">{props.empty}</span>
+      );
+    return (
+      <>
+        <div class="ck-note">
+          none among the pages loaded so far — the relay index surfaces more.
+        </div>
+        <LedgerLoadMore lane={lane} onLoadMore={props.onLoadMore} />
+      </>
+    );
+  }
+  const counts = ledgerCounts(rows);
   return (
     <>
       <table>
@@ -883,7 +934,7 @@ const LedgerContentTable = (props: {
           </tr>
         </thead>
         <tbody>
-          {lane.rows!.map((row) => (
+          {rows.map((row) => (
             <LedgerContentRow key={row.contentId} row={row} />
           ))}
         </tbody>
@@ -895,19 +946,7 @@ const LedgerContentTable = (props: {
         — {counts.publicCount} public · {counts.gatedCount} gated. relay-asserted index hints — open
         a chain to fold its proof.
       </div>
-      {more ? (
-        <div style={{ marginTop: 8 }}>
-          <button onClick={props.onLoadMore} disabled={lane.loadingMore}>
-            {lane.loadingMore ? 'loading…' : 'load more'}
-          </button>{' '}
-          <span class="lbl">the relay index surfaces more beyond these</span>
-          {/* a page that REJECTED is not an end: the rows above stand, the cursor
-              stands, and the button above is the retry. */}
-          {lane.err ? (
-            <span class="err"> · couldn’t reach the relay index for the next page.</span>
-          ) : null}
-        </div>
-      ) : null}
+      {more ? <LedgerLoadMore lane={lane} onLoadMore={props.onLoadMore} /> : null}
     </>
   );
 };

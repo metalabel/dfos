@@ -1,6 +1,6 @@
 /*
 
-  RAW INDEX ROUTES — the two /index/v0 families the client seam doesn't wrap
+  RAW INDEX ROUTES — the /index/v0 reads that must FAIL LOUDLY
 
   `@metalabel/dfos-client` exposes identities / content / countersignatures /
   credentials. The relay also serves `/index/v0/operations` (a recency feed over
@@ -9,6 +9,14 @@
   `capabilities.index` flag — a single boolean that never implied any particular
   sub-route — so they are raw fetches here, with the same first-reachable-relay
   failover the client does.
+
+  `/index/v0/content` is wrapped here TOO, for the second reason rather than the
+  first. The client seam's content read resolves `{ content: [], next: null }`
+  when every relay declines, which is a face-value lie a caller cannot detect:
+  indistinguishable from a served empty page, and — on a lane that PAGES — it
+  lands in the success branch and clears the live cursor, presenting a truncated
+  listing as a complete one. The actor ledger's Created/Contributed lanes read
+  through {@link fetchContentPage} so an outage is an outage.
 
   AN ALL-DECLINED SET THROWS, deliberately. A relay predating a route answers
   404/501, and folding that into `{ items: [] }` renders a false-empty
@@ -30,6 +38,7 @@
 
 */
 
+import type { IndexContentRow, IndexOrder } from '@metalabel/dfos-client';
 import {
   PAGE,
   ROUTE_ABSENT,
@@ -184,6 +193,44 @@ export const toArtifactRows = (body: unknown): IndexArtifactRow[] => {
 };
 
 /**
+ * Coerce an `/index/v0/content` page body into rows, dropping anything without a
+ * `contentId` (a row that names no chain is not addressable). The shape is the
+ * client seam's `IndexContentRow` exactly, so every surface that already renders
+ * one renders these unchanged.
+ *
+ * `publicRead` coerces to FALSE on anything that is not literally `true` — a
+ * missing or malformed flag reads as gated, which is the direction that can only
+ * cost a title, never leak one. `docSchema` / `currentDocumentCID` / `title` keep
+ * the index's honest null. Pure, unit-tested.
+ */
+export const toContentRows = (body: unknown): IndexContentRow[] => {
+  const rows = (body as { content?: unknown } | null)?.content;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row): IndexContentRow[] => {
+    const r = row as Record<string, unknown>;
+    const contentId = str(r['contentId']);
+    if (!contentId) return [];
+    return [
+      {
+        contentId,
+        genesisCID: str(r['genesisCID']),
+        headCID: str(r['headCID']),
+        creatorDID: str(r['creatorDID']),
+        isDeleted: r['isDeleted'] === true,
+        opCount: typeof r['opCount'] === 'number' ? r['opCount'] : 0,
+        genesisAt: str(r['genesisAt']),
+        headAt: str(r['headAt']),
+        currentDocumentCID:
+          typeof r['currentDocumentCID'] === 'string' ? r['currentDocumentCID'] : null,
+        publicRead: r['publicRead'] === true,
+        docSchema: typeof r['docSchema'] === 'string' ? r['docSchema'] : null,
+        title: typeof r['title'] === 'string' ? r['title'] : null,
+      },
+    ];
+  });
+};
+
+/**
  * Coerce an `/index/v0/credits` page body into rows. A row needs both a
  * `contentId` and a `did` to mean anything — it names a credit OF someone ON
  * something — so an entry missing either is dropped rather than rendered as a
@@ -262,6 +309,38 @@ export const fetchArtifactsPage = async (params: {
     getRelays(),
   );
   return { items: toArtifactRows(body), next: nextCursor(body) };
+};
+
+/**
+ * One page of the content index on the ACTOR axis — `creator=` or `signer=`.
+ * Throws when every relay declines, which is the whole reason this route is
+ * mirrored here: the client seam would resolve an empty page instead, and a
+ * paging caller would read that as "the enumeration ended" and drop its cursor.
+ *
+ * No `publicRead` filter is offered, deliberately. The actor lanes list every
+ * chain on their axis and the index already answers them honestly (a gated row
+ * carries `publicRead: false` and no projected title); a caller that wants the
+ * public-only corpus surfaces is served by the client seam's paged hooks.
+ */
+export const fetchContentPage = async (params: {
+  creator?: string;
+  signer?: string;
+  order?: IndexOrder;
+  after?: string;
+  limit?: number;
+}): Promise<{ items: IndexContentRow[]; next: string | null }> => {
+  const body = await fetchIndexPage<unknown>(
+    'content',
+    {
+      ...(params.creator ? { creator: params.creator } : {}),
+      ...(params.signer ? { signer: params.signer } : {}),
+      ...(params.order ? { order: params.order } : {}),
+      ...(params.after ? { after: params.after } : {}),
+      limit: params.limit ?? PAGE,
+    },
+    getRelays(),
+  );
+  return { items: toContentRows(body), next: nextCursor(body) };
 };
 
 /** One page of the credit projection. Throws when no relay serves the route. */
