@@ -2,6 +2,7 @@ package localrelay
 
 import (
 	"crypto/ed25519"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,6 +19,7 @@ type LocalRelay struct {
 	Relay    *relay.Relay
 	Store    *relay.SQLiteStore
 	RelayDID string // the auto-bootstrapped relay identity DID (invisible to user)
+	dbPath   string
 }
 
 // Options configures the local relay. All fields are optional — sensible
@@ -97,7 +99,27 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 		return nil, fmt.Errorf("create relay: %w", err)
 	}
 
-	return &LocalRelay{Relay: r, Store: store, RelayDID: r.DID()}, nil
+	return &LocalRelay{Relay: r, Store: store, RelayDID: r.DID(), dbPath: dbPath}, nil
+}
+
+// DBPath returns the SQLite file backing this local relay.
+func (lr *LocalRelay) DBPath() string {
+	return lr.dbPath
+}
+
+// Vacuum compacts the SQLite file without exposing the relay library's private
+// database handles. The relay's own driver registration is shared process-wide,
+// so a short-lived connection can safely perform this one-shot maintenance.
+func (lr *LocalRelay) Vacuum() error {
+	db, err := sql.Open("sqlite", lr.dbPath)
+	if err != nil {
+		return fmt.Errorf("open SQLite maintenance connection: %w", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("VACUUM"); err != nil {
+		return fmt.Errorf("vacuum local relay: %w", err)
+	}
+	return nil
 }
 
 // Close closes the local relay database.

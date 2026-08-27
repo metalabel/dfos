@@ -230,8 +230,9 @@ func (c *Client) getLog(path string) ([]string, error) {
 			return nil, err
 		}
 		if resp.StatusCode == 404 {
+			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			return nil, fmt.Errorf("not found: %s", path)
+			return nil, notFoundError(path, body)
 		}
 		if resp.StatusCode == http.StatusBadRequest && after != "" && !restarted {
 			resp.Body.Close()
@@ -401,7 +402,8 @@ func (c *Client) getJSON(path string) (map[string]any, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("not found: %s", path)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, notFoundError(path, body)
 	}
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -413,4 +415,17 @@ func (c *Client) getJSON(path string) (map[string]any, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+// notFoundError distinguishes a routed record miss from a relay that does not
+// serve the route at all. Both remain ordinary errors beginning with the legacy
+// "not found: <path>" prefix for caller compatibility.
+func notFoundError(path string, body []byte) error {
+	var envelope struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil && envelope.Error != "" {
+		return fmt.Errorf("not found: %s — relay says: %s", path, envelope.Error)
+	}
+	return fmt.Errorf("not found: %s — no error envelope in the response; this relay may not serve this route at all (older version or capability off)", path)
 }
