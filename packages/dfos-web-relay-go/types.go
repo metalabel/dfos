@@ -298,6 +298,21 @@ type IngestionResult struct {
 	// substring matching of the human-readable Error string. Mirrors the TS
 	// twin's IngestionResult.dependencyMissing.
 	DependencyMissing bool `json:"dependencyMissing,omitempty"`
+
+	// PersistFailed narrows DependencyMissing to its one destructive case: a
+	// store WRITE that failed partway through applying an op, leaving that op's
+	// writes half-landed. Set only by persistError, its single producer.
+	//
+	// It needs its own flag because the recovery differs. Every other retryable
+	// rejection (an unknown parent, an authorization gate whose read failed)
+	// wrote nothing, so retrying it later is free. A half-applied op is not:
+	// whatever DID land makes the idempotency check at the top of each ingest
+	// path answer "duplicate" on every retry, so the writes that failed are
+	// never completed and the op stays permanently inconsistent. The batch owner
+	// therefore rolls the whole batch back rather than committing the half — see
+	// sequenceChunkLocked. Relay-internal, so it stays off the wire; the Go-only
+	// transient-store-retry path has no TS twin to mirror.
+	PersistFailed bool `json:"-"`
 }
 
 // OpOrigin records whether a raw operation first arrived directly or through

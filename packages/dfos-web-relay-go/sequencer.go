@@ -22,6 +22,16 @@ func (r *Relay) RunSequencer() ([]string, SequenceResult) {
 	return r.runSequencerLocked()
 }
 
+// sequencerBatchOps bounds how many pending ops share one write batch.
+//
+// A single pass can drain up to GetUnsequencedOps' limit (10k). Committing that
+// as one transaction would hold a write transaction open across the verify+apply
+// of every one of those ops, and would make a single failed commit discard the
+// whole pass. One batch per chunk keeps the atomic unit small enough that a
+// failure costs one chunk of re-ingest work, while still being large enough that
+// the per-transaction overhead is amortized away.
+const sequencerBatchOps = 1000
+
 // runSequencerLocked is the sequencer inner loop. Caller must hold ingestMu.
 func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 	var newOps []string
@@ -39,14 +49,14 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 			break
 		}
 
-		results := make([]IngestionResult, len(pendingOps))
+		progress := false
+		aborted := false
+
 		for _, origin := range []OpOrigin{OpOriginDirect, OpOriginPeer} {
 			var tokens []string
-			var indexes []int
-			for i, op := range pendingOps {
+			for _, op := range pendingOps {
 				if op.Origin == origin {
 					tokens = append(tokens, op.JWSToken)
-					indexes = append(indexes, i)
 				}
 			}
 			if len(tokens) == 0 {
@@ -56,82 +66,32 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 			if origin == OpOriginPeer {
 				partitionOpts = append(partitionOpts, WithHistoricalAdmission())
 			}
-			partitionResults := IngestOperations(tokens, r.store, partitionOpts...)
-			for i, result := range partitionResults {
-				results[indexes[i]] = result
+			for start := 0; start < len(tokens) && !aborted; start += sequencerBatchOps {
+				chunk := tokens[start:min(start+sequencerBatchOps, len(tokens))]
+				chunkOps, chunkResult, chunkProgress, ok := r.sequenceChunkLocked(chunk, partitionOpts)
+				newOps = append(newOps, chunkOps...)
+				result.Sequenced += chunkResult.Sequenced
+				result.Rejected += chunkResult.Rejected
+				result.Pending += chunkResult.Pending
+				progress = progress || chunkProgress
+				aborted = !ok
+			}
+			if aborted {
+				break
 			}
 		}
 
-		progress := false
-		var sequencedCIDs []string
-
-		for i, res := range results {
-			// Drain the raw_ops row by the SAME CID it was stored under
-			// (computeOpCID(token) == PutRawOp's key), NOT res.CID — and GATE on
-			// this storage CID too, not res.CID. Ingest carries the JWS-header-
-			// claimed CID on some results, which can DIVERGE from the storage CID:
-			//   - non-empty but wrong (e.g. a forged header cid): keying drain on
-			//     res.CID would update zero rows → row stays 'pending' → re-verifies
-			//     as duplicate/rejected → 100% CPU spin holding ingestMu.
-			//   - EMPTY while the payload decoded fine (e.g. a credential with a
-			//     missing/empty header cid, rejected at ingest.go): gating on
-			//     res.CID=="" would `continue` past a row that PutRawOp DID store
-			//     under the non-empty recomputed CID → stranded 'pending' forever
-			//     (a permanent leak + unbounded-growth vector, since each distinct
-			//     payload mints a fresh row).
-			// rawCID=="" means the token was undecodable, so PutRawOp was skipped
-			// and there is genuinely nothing to drain — skip it.
-			rawCID := computeOpCID(pendingOps[i].JWSToken)
-			if rawCID == "" {
-				continue
-			}
-			switch {
-			case res.Status == "new":
-				sequencedCIDs = append(sequencedCIDs, rawCID)
-				newOps = append(newOps, pendingOps[i].JWSToken)
-				result.Sequenced++
-				progress = true
-				r.markContentFollowDirty(res)
-			case res.Status == "duplicate":
-				sequencedCIDs = append(sequencedCIDs, rawCID)
-				progress = true
-			case res.Status == "rejected" && isPermanentRejection(res):
-				// The one durable trace of the drop: MarkOpRejected DELETES the row,
-				// and the reason was previously passed only to be discarded. Log
-				// before the delete so a relay refusing everything it is handed can
-				// be diagnosed. Observability only — deletion semantics unchanged.
-				//
-				// The event string and both field names match the TS twin's structured
-				// line (sequencer.ts logOpRejected) so one query shape works across
-				// implementations.
-				//
-				// One line per rejected op on an unauthenticated ingest endpoint is a
-				// considered tradeoff: a flood of junk ops does amplify into logs, but
-				// each such op already cost signature verification and store reads, so
-				// the marginal write is small next to the work it reports — and a
-				// silent drop is the failure mode that actually goes undiagnosed.
-				r.logger.Warn("relay.op.rejected", "cid", rawCID, "reason", res.Error)
-				r.store.MarkOpRejected(rawCID, res.Error)
-				result.Rejected++
-				progress = true
-			default:
-				result.Pending++
-			}
-		}
-
-		if len(sequencedCIDs) > 0 {
-			if err := r.store.MarkOpsSequenced(sequencedCIDs); err != nil {
-				// The sequenced status was never persisted. Do NOT gossip these
-				// ops (local state is inconsistent with what we'd advertise) and
-				// stop the loop — leaving the rows pending would otherwise spin
-				// here forever (re-verify → "duplicate" → progress) at 100% CPU
-				// holding ingestMu. The next sequencer tick retries.
-				r.logger.Error("sequencer: failed to mark ops sequenced — skipping gossip and backing off",
-					"count", len(sequencedCIDs),
-					"error", err,
-				)
-				return nil, result
-			}
+		// A chunk that could not be persisted has already been rolled back and
+		// contributed nothing above, so backing off here is only about the ops
+		// still pending: retrying them in this same call would hit the same
+		// unhealthy store, and leaving the loop running would spin at ~100% CPU
+		// holding ingestMu. The next sequencer tick retries. Chunks that DID
+		// commit before the failure are held durably, so their ops stay in newOps
+		// and are still gossiped — they are landed, and suppressing them would
+		// only strand them (they are already marked sequenced and will never be
+		// re-ingested).
+		if aborted {
+			return newOps, result
 		}
 
 		if !progress {
@@ -157,6 +117,152 @@ func (r *Relay) runSequencerLocked() ([]string, SequenceResult) {
 	}
 
 	return newOps, result
+}
+
+// sequenceChunkLocked ingests one chunk of pending raw ops and drains their
+// raw_ops rows inside a SINGLE write batch. Caller must hold ingestMu.
+//
+// The batch is what makes an accepted op atomic. Admitting one op writes its
+// chain state, its operation row, and its /proof/v1/log append as separate
+// statements. Outside a transaction each of those commits on its own, so a
+// failure after the operation row but before the log append leaves an operation
+// that every per-chain route serves but that the proof log has never heard of —
+// and leaves it that way permanently, because the idempotency check at the top
+// of each ingest path finds the stored operation and returns "duplicate" before
+// the missing append is ever retried. Re-ingesting the op cannot repair it and
+// nothing reports it: the log is simply short one entry, and opCount is derived
+// from the log itself. Inside one batch the three writes land together or not
+// at all, so the window does not exist.
+//
+// Extends the contract Ingest already holds for its own batch: a batch that is
+// not fully held is rolled back and must neither be gossiped nor reported as
+// landed. Returns the tokens to gossip, this chunk's counts, whether the chunk
+// drained any raw op, and ok=false when the chunk was discarded — in which case
+// the first three returns are all empty, because the relay holds none of it.
+// The discarded chunk's raw ops stay 'pending' (their drain was part of the same
+// batch), so the next pass re-ingests them cleanly.
+//
+// Stores that do not implement BatchableStore keep the previous per-statement
+// behavior; there is no transaction to roll back and nothing to wrap.
+func (r *Relay) sequenceChunkLocked(tokens []string, opts []IngestOption) ([]string, SequenceResult, bool, bool) {
+	var newOps []string
+	var result SequenceResult
+	progress := false
+
+	batchable, hasBatch := r.store.(BatchableStore)
+	if hasBatch {
+		if err := batchable.BeginWriteBatch(); err != nil {
+			r.logger.Error("sequencer: failed to begin write batch — falling back to unbatched writes", "error", err)
+			hasBatch = false
+		}
+	}
+
+	results := IngestOperations(tokens, r.store, opts...)
+
+	// A half-applied op poisons its own retry: the writes that DID land make
+	// every later attempt short-circuit as a "duplicate", so the writes that
+	// failed — the log append, last of the three — are never made up. Discarding
+	// the batch is what keeps the op whole and re-ingestable.
+	if hasBatch && batchPersistFailed(results) {
+		r.logger.Error("sequencer: a write failed mid-batch — chunk rolled back, not gossiped",
+			"ops", len(tokens),
+		)
+		_ = batchable.RollbackWriteBatch()
+		return nil, SequenceResult{}, false, false
+	}
+
+	var sequencedCIDs []string
+	for i, res := range results {
+		// Drain the raw_ops row by the SAME CID it was stored under
+		// (computeOpCID(token) == PutRawOp's key), NOT res.CID — and GATE on
+		// this storage CID too, not res.CID. Ingest carries the JWS-header-
+		// claimed CID on some results, which can DIVERGE from the storage CID:
+		//   - non-empty but wrong (e.g. a forged header cid): keying drain on
+		//     res.CID would update zero rows → row stays 'pending' → re-verifies
+		//     as duplicate/rejected → 100% CPU spin holding ingestMu.
+		//   - EMPTY while the payload decoded fine (e.g. a credential with a
+		//     missing/empty header cid, rejected at ingest.go): gating on
+		//     res.CID=="" would `continue` past a row that PutRawOp DID store
+		//     under the non-empty recomputed CID → stranded 'pending' forever
+		//     (a permanent leak + unbounded-growth vector, since each distinct
+		//     payload mints a fresh row).
+		// rawCID=="" means the token was undecodable, so PutRawOp was skipped
+		// and there is genuinely nothing to drain — skip it.
+		rawCID := computeOpCID(tokens[i])
+		if rawCID == "" {
+			continue
+		}
+		switch {
+		case res.Status == "new":
+			sequencedCIDs = append(sequencedCIDs, rawCID)
+			newOps = append(newOps, tokens[i])
+			result.Sequenced++
+			progress = true
+			r.markContentFollowDirty(res)
+		case res.Status == "duplicate":
+			sequencedCIDs = append(sequencedCIDs, rawCID)
+			progress = true
+		case res.Status == "rejected" && isPermanentRejection(res):
+			// The one durable trace of the drop: MarkOpRejected DELETES the row,
+			// and the reason was previously passed only to be discarded. Log
+			// before the delete so a relay refusing everything it is handed can
+			// be diagnosed. Observability only — deletion semantics unchanged.
+			//
+			// The event string and both field names match the TS twin's structured
+			// line (sequencer.ts logOpRejected) so one query shape works across
+			// implementations.
+			//
+			// One line per rejected op on an unauthenticated ingest endpoint is a
+			// considered tradeoff: a flood of junk ops does amplify into logs, but
+			// each such op already cost signature verification and store reads, so
+			// the marginal write is small next to the work it reports — and a
+			// silent drop is the failure mode that actually goes undiagnosed.
+			r.logger.Warn("relay.op.rejected", "cid", rawCID, "reason", res.Error)
+			r.store.MarkOpRejected(rawCID, res.Error)
+			result.Rejected++
+			progress = true
+		default:
+			result.Pending++
+		}
+	}
+
+	if len(sequencedCIDs) > 0 {
+		if err := r.store.MarkOpsSequenced(sequencedCIDs); err != nil {
+			// The sequenced status was never persisted. Do NOT gossip these ops
+			// (local state is inconsistent with what we'd advertise) and abandon
+			// the chunk — leaving the rows pending while continuing would spin
+			// here forever (re-verify → "duplicate" → progress) at 100% CPU
+			// holding ingestMu. The next sequencer tick retries.
+			r.logger.Error("sequencer: failed to mark ops sequenced — rolling back and backing off",
+				"count", len(sequencedCIDs),
+				"error", err,
+			)
+			if hasBatch {
+				// Roll back rather than commit a batch whose bookkeeping half is
+				// missing — and never leave the transaction open, or every later
+				// write on this store would join a batch nobody commits.
+				_ = batchable.RollbackWriteBatch()
+			}
+			return nil, SequenceResult{}, false, false
+		}
+	}
+
+	if hasBatch {
+		if err := batchable.CommitWriteBatch(); err != nil {
+			// The chunk's writes are GONE. Nothing it claimed to land is held, so
+			// none of it may be gossiped or counted. The raw ops were staged
+			// before the batch opened and their drain was inside it, so they are
+			// still 'pending' and the next pass re-ingests them from scratch.
+			r.logger.Error("sequencer: failed to commit write batch — chunk rolled back, not gossiped",
+				"error", err,
+				"ops", len(tokens),
+			)
+			_ = batchable.RollbackWriteBatch()
+			return nil, SequenceResult{}, false, false
+		}
+	}
+
+	return newOps, result, progress, true
 }
 
 // RunSequencerAndGossip runs the sequencer and gossips newly sequenced ops.
@@ -271,7 +377,27 @@ func persistError(cid string, err error) *IngestionResult {
 		Status:            "rejected",
 		Error:             persistErrorPrefix + err.Error(),
 		DependencyMissing: true,
+		PersistFailed:     true,
 	}
+}
+
+// errPartialWriteRolledBack is the error a batch's surviving results are
+// rewritten with when the batch is discarded because one of its ops could not
+// be fully written. The op that failed already carries its own store error;
+// this one explains to every OTHER op in the batch why a result it had earned
+// is being taken back.
+var errPartialWriteRolledBack = errors.New("a write in this batch failed and the batch was rolled back")
+
+// batchPersistFailed reports whether any op in the batch left a half-applied
+// write behind. Branches on the structured PersistFailed flag, never on the
+// human-readable error string.
+func batchPersistFailed(results []IngestionResult) bool {
+	for _, res := range results {
+		if res.PersistFailed {
+			return true
+		}
+	}
+	return false
 }
 
 // storeReadErrorPrefix marks a rejection caused by a store READ failing at an

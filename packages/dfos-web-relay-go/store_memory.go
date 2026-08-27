@@ -769,6 +769,13 @@ func (s *MemoryStore) GetIndexContentIDsByDocumentCID(documentCID string) ([]str
 func (s *MemoryStore) AppendToLog(entry LogEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// One op, one log row — the SQLite twin enforces it with a unique index on
+	// cid, and indexOperationRows (written only here) is this store's record of
+	// which CIDs the log already carries. Silently ignoring the repeat matches
+	// the twin's INSERT OR IGNORE.
+	if _, exists := s.indexOperationRows[entry.CID]; exists {
+		return nil
+	}
 	s.operationLog = append(s.operationLog, entry)
 	// One op, one receipt stamp: PutOperation stamped this op moments ago in the
 	// same ingest, so source ingestedAt from the stored operation's receipt stamp

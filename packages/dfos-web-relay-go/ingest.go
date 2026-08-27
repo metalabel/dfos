@@ -1190,10 +1190,19 @@ func IngestOperations(tokens []string, store Store, opts ...IngestOption) []Inge
 
 	// retry ops that failed due to missing dependencies — their dependencies
 	// may have been satisfied by earlier ops in the same batch
+	//
+	// A half-applied op is excluded even though it is retryable: its dependencies
+	// were never the problem, and re-running it now is actively harmful. Whatever
+	// the failed attempt DID write makes the idempotency check at the top of the
+	// ingest path answer "duplicate", which would overwrite the persistence
+	// failure with a success verdict — hiding the fact that the op is half
+	// applied from the batch owner, whose rollback is the only thing that can
+	// undo it. The retry that matters is the next pass, after the batch is
+	// discarded and the op is whole again.
 	for retry := 0; retry < 3; retry++ {
 		var pending []indexedResult
 		for i, ir := range results {
-			if ir.result.Status == "rejected" && !isPermanentRejection(ir.result) {
+			if ir.result.Status == "rejected" && !isPermanentRejection(ir.result) && !ir.result.PersistFailed {
 				pending = append(pending, results[i])
 			}
 		}
