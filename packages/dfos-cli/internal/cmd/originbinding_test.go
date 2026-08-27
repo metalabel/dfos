@@ -163,8 +163,9 @@ func TestDIDFromAppDescription(t *testing.T) {
 	}{
 		"structurally valid":     {full, testOriginDID},
 		"extra members ignored":  {`{"name":"Demo","logo":"x","redirect_uris":["https://e/cb"],"client_did":"` + testOriginDID + `"}`, testOriginDID},
-		"missing name":           {`{"redirect_uris":["https://e/cb"],"client_did":"` + testOriginDID + `"}`, ""},
+		"missing name accepted":  {`{"redirect_uris":["https://e/cb"],"client_did":"` + testOriginDID + `"}`, testOriginDID},
 		"empty name":             {`{"name":"","redirect_uris":["https://e/cb"],"client_did":"` + testOriginDID + `"}`, ""},
+		"non-string name":        {`{"name":42,"redirect_uris":["https://e/cb"],"client_did":"` + testOriginDID + `"}`, ""},
 		"missing redirect_uris":  {`{"name":"Demo","client_did":"` + testOriginDID + `"}`, ""},
 		"empty redirect_uris":    {`{"name":"Demo","redirect_uris":[],"client_did":"` + testOriginDID + `"}`, ""},
 		"redirect_uris not list": {`{"name":"Demo","redirect_uris":"https://e/cb","client_did":"` + testOriginDID + `"}`, ""},

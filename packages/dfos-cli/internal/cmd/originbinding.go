@@ -202,16 +202,19 @@ func didFromWellKnownBody(body []byte) (string, bool) {
 }
 
 // didFromAppDescription applies the SIWD app-description structural bar to the
-// fallback document: a JSON object with a non-empty name, a non-empty
-// redirect_uris array, and a client_did in DID form. That client_did attests
-// exactly as the well-known file would.
+// fallback document: a JSON object with a non-empty redirect_uris array, a
+// client_did in DID form, and an optional name (present-but-empty is
+// malformed, not absent). That client_did attests exactly as the well-known
+// file would.
 func didFromAppDescription(body []byte) (string, bool) {
 	var doc map[string]any
 	if err := json.Unmarshal(body, &doc); err != nil || doc == nil {
 		return "", false
 	}
-	if name, _ := doc["name"].(string); name == "" {
-		return "", false
+	if rawName, present := doc["name"]; present {
+		if name, ok := rawName.(string); !ok || name == "" {
+			return "", false
+		}
 	}
 	uris, ok := doc["redirect_uris"].([]any)
 	if !ok || len(uris) == 0 {

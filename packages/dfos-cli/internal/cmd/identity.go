@@ -1461,13 +1461,21 @@ func validateCarriage(chain *relay.StoredIdentityChain) error {
 }
 
 func buildWellKnownPatch(chain *relay.StoredIdentityChain, doc map[string]any, path string) (map[string]any, error) {
-	name, hasName := doc["name"].(string)
 	redirectURIs, hasRedirectURIs := doc["redirect_uris"].([]any)
-	if !hasName || name == "" || !hasRedirectURIs || len(redirectURIs) == 0 {
+	if !hasRedirectURIs || len(redirectURIs) == 0 {
 		return nil, fmt.Errorf(
-			"app description at %s is missing required members (name, redirect_uris); author those first — see specs/SIWD.md \"The App Description Document\"",
+			"app description at %s is missing its required member (redirect_uris); author that first — see specs/SIWD.md \"The App Description Document\"",
 			path,
 		)
+	}
+	// name is optional; present-but-empty (or non-string) is malformed, not absent.
+	if rawName, present := doc["name"]; present {
+		if name, ok := rawName.(string); !ok || name == "" {
+			return nil, fmt.Errorf(
+				"app description at %s has an invalid name: present-but-empty is malformed — give it a value or omit it",
+				path,
+			)
+		}
 	}
 	if existing, present := doc["client_did"]; present {
 		existingDID, ok := existing.(string)

@@ -126,23 +126,66 @@ func TestIdentityWellKnownPatchRefusesDIDMismatch(t *testing.T) {
 	}
 }
 
+// The two refusal messages buildWellKnownPatch can produce, as format strings
+// over the document path.
+const (
+	refusalMissingRedirectURIs = "app description at %s is missing its required member (redirect_uris); author that first — see specs/SIWD.md \"The App Description Document\""
+	refusalInvalidName         = "app description at %s has an invalid name: present-but-empty is malformed — give it a value or omit it"
+)
+
+// name is optional (SIWD.md: the domain leads) — a nameless document patches
+// exactly as a named one does.
+func TestIdentityWellKnownPatchAcceptsNamelessDocument(t *testing.T) {
+	store, _, _ := setupDevices(t)
+	did := createIdentity(t, "alice", store)
+	path := writeTempDoc(t, "{\n  \"redirect_uris\": [\"https://example.com/callback\"]\n}\n")
+
+	keys = store
+	cmd := newIdentityWellKnownCmd()
+	mustSetFlag(t, cmd, "patch", path)
+	var status struct {
+		ClientDID string `json:"client_did"`
+	}
+	runJSON(t, cmd, nil, &status)
+	if status.ClientDID != did {
+		t.Fatalf("client_did = %q, want %q", status.ClientDID, did)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read patched app description: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("unmarshal patched app description: %v", err)
+	}
+	if _, present := doc["name"]; present {
+		t.Fatal("patch invented a name the document never claimed")
+	}
+	if got, _ := doc["client_did"].(string); got != did {
+		t.Fatalf("client_did = %q, want %q", got, did)
+	}
+}
+
 func TestIdentityWellKnownPatchRefusesIncompleteDocument(t *testing.T) {
 	store, _, _ := setupDevices(t)
 	createIdentity(t, "alice", store)
 
-	cases := map[string]string{
-		"empty object":            "{}\n",
-		"null":                    "null\n",
-		"missing name":            "{\"redirect_uris\":[\"https://example.com/callback\"]}\n",
-		"empty name":              "{\"name\":\"\",\"redirect_uris\":[\"https://example.com/callback\"]}\n",
-		"non-string name":         "{\"name\":42,\"redirect_uris\":[\"https://example.com/callback\"]}\n",
-		"missing redirect uris":   "{\"name\":\"Example App\"}\n",
-		"empty redirect uris":     "{\"name\":\"Example App\",\"redirect_uris\":[]}\n",
-		"non-array redirect uris": "{\"name\":\"Example App\",\"redirect_uris\":\"https://example.com/callback\"}\n",
+	cases := map[string]struct {
+		body    string
+		wantFmt string
+	}{
+		"empty object":            {"{}\n", refusalMissingRedirectURIs},
+		"null":                    {"null\n", refusalMissingRedirectURIs},
+		"missing redirect uris":   {"{\"name\":\"Example App\"}\n", refusalMissingRedirectURIs},
+		"empty redirect uris":     {"{\"name\":\"Example App\",\"redirect_uris\":[]}\n", refusalMissingRedirectURIs},
+		"non-array redirect uris": {"{\"name\":\"Example App\",\"redirect_uris\":\"https://example.com/callback\"}\n", refusalMissingRedirectURIs},
+		"empty name":              {"{\"name\":\"\",\"redirect_uris\":[\"https://example.com/callback\"]}\n", refusalInvalidName},
+		"non-string name":         {"{\"name\":42,\"redirect_uris\":[\"https://example.com/callback\"]}\n", refusalInvalidName},
 	}
-	for name, body := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			path := writeTempDoc(t, body)
+			path := writeTempDoc(t, tc.body)
 			original, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("read original app description: %v", err)
@@ -155,10 +198,7 @@ func TestIdentityWellKnownPatchRefusesIncompleteDocument(t *testing.T) {
 			if err == nil {
 				t.Fatal("patch of incomplete app description succeeded")
 			}
-			want := fmt.Sprintf(
-				"app description at %s is missing required members (name, redirect_uris); author those first — see specs/SIWD.md \"The App Description Document\"",
-				path,
-			)
+			want := fmt.Sprintf(tc.wantFmt, path)
 			if err.Error() != want {
 				t.Fatalf("incomplete document error = %q, want %q", err, want)
 			}
