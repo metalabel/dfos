@@ -300,12 +300,27 @@ dfos serve --port 4444 --peers https://relay.example.com
 | `--port`           | `4444`             | `PORT`           | Port to listen on                                                       |
 | `--db`             | `~/.dfos/relay.db` | `SQLITE_PATH`    | Database path                                                           |
 | `--name`           | `DFOS Relay`       | `RELAY_NAME`     | Relay profile name in the well-known                                    |
-| `--peers`          | —                  | `PEERS`          | Comma-separated peer URLs, or a JSON array                              |
+| `--peers`          | —                  | `PEERS`          | Peer URLs: comma-separated, a JSON array, or per-peer objects           |
 | `--sync-interval`  | `30s`              | `SYNC_INTERVAL`  | Peer sync interval                                                      |
 | `--resync`         | `false`            | `RESYNC=true`    | Reset peer cursors for a full re-sync on boot                           |
 | `--no-write`       | `false`            | —                | LITE pull-only node: reject `POST /operations`, sync from peers only    |
 | `--no-index`       | `false`            | `INDEX=false`    | Disable `/index/v0`: advertise `index: false` and return 501            |
 | `--content-follow` | `none`             | `CONTENT_FOLLOW` | Materialize granted public content blobs from peers (`none` \| `eager`) |
+
+Peers accept three forms. Comma-separated URLs and a JSON array of URLs configure
+every peer with defaults; a JSON array of objects sets the per-peer switches
+(`gossip` pushes new operations, `readThrough` fetches on a local 404, `sync` polls
+the peer's `/log` — all default to `true`):
+
+```bash
+dfos serve --peers 'https://relay-a.example.com,https://relay-b.example.com'
+dfos serve --peers '["https://relay-a.example.com","https://relay-b.example.com"]'
+dfos serve --peers '[{"url":"https://relay-a.example.com"},{"url":"https://relay-b.example.com","gossip":false}]'
+```
+
+A value starting with `[` must parse as JSON, every peer must be an absolute
+`http(s)` URL, and unknown per-peer fields are rejected — a bad peer config fails
+at boot rather than erroring on every sync tick for the life of the process.
 
 `--no-write` is the pull-only posture: the node ingests exclusively through peer sync and refuses submissions outright, so its served state is entirely derived from relays it chose to follow.
 

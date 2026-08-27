@@ -68,6 +68,10 @@ Per-peer flags (all default to `true`):
 - `readThrough` — fetch from this peer on local 404
 - `sync` — poll this peer's `/log` for background sync
 
+A value starting with `[` must parse as JSON, every peer must be an absolute
+`http(s)` URL, and unknown per-peer fields are rejected: a bad peer config fails
+at boot rather than degrading into peers that error on every sync tick.
+
 ### Content following
 
 The operation log federates the **proof plane** (identities, content chains,

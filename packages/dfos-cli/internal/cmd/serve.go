@@ -3,9 +3,11 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -103,10 +105,11 @@ All flags support environment variable fallbacks for container deployment:
 				return fmt.Errorf("invalid --content-follow %q (expected: none|eager)", contentFollow)
 			}
 
-			// parse extra peers from flag/env (comma-separated URLs or JSON array)
-			var extraPeers []string
-			if peers != "" {
-				extraPeers = parsePeerURLs(peers)
+			// parse extra peers from flag/env (comma-separated URLs, a JSON array
+			// of URLs, or a JSON array of per-peer objects)
+			extraPeers, err := parsePeers(peers)
+			if err != nil {
+				return fmt.Errorf("invalid --peers/PEERS: %w", err)
 			}
 
 			// set up structured JSON logging for server mode
@@ -161,8 +164,8 @@ All flags support environment variable fallbacks for container deployment:
 				for name, r := range cfg.Relays {
 					fmt.Printf("    - %s (%s)\n", name, r.URL)
 				}
-				for _, u := range extraPeers {
-					fmt.Printf("    - %s\n", u)
+				for _, p := range extraPeers {
+					fmt.Printf("    - %s%s\n", p.URL, peerFlagSuffix(p))
 				}
 			}
 
@@ -279,7 +282,7 @@ All flags support environment variable fallbacks for container deployment:
 	cmd.Flags().StringVar(&syncInterval, "sync-interval", "30s", "Peer sync interval (env: SYNC_INTERVAL)")
 	cmd.Flags().StringVar(&dbPath, "db", "", "Database path (env: SQLITE_PATH, default: ~/.dfos/relay.db)")
 	cmd.Flags().StringVar(&relayName, "name", "DFOS Relay", "Relay profile name (env: RELAY_NAME)")
-	cmd.Flags().StringVar(&peers, "peers", "", "Comma-separated peer URLs or JSON array (env: PEERS)")
+	cmd.Flags().StringVar(&peers, "peers", "", "Peer URLs: comma-separated, a JSON array of URLs, or a JSON array of {url,gossip,readThrough,sync} objects (env: PEERS)")
 	cmd.Flags().BoolVar(&resync, "resync", false, "Reset peer cursors for full re-sync on boot (env: RESYNC)")
 	cmd.Flags().BoolVar(&noWrite, "no-write", false, "LITE pull-only node: reject POST /operations, sync from peers only")
 	cmd.Flags().BoolVar(&noIndex, "no-index", false, "Disable /index/v0 routes: advertise index:false and return 501 (env: INDEX=false)")
@@ -287,21 +290,128 @@ All flags support environment variable fallbacks for container deployment:
 	return cmd
 }
 
-// parsePeerURLs parses a comma-separated list of URLs or a JSON array of URLs.
-func parsePeerURLs(s string) []string {
+// peerSpec is the JSON object form of one entry in --peers / PEERS. It mirrors
+// relay.PeerConfig's per-peer switches; a nil flag means "default" (enabled).
+type peerSpec struct {
+	URL         string `json:"url"`
+	Gossip      *bool  `json:"gossip"`
+	ReadThrough *bool  `json:"readThrough"`
+	Sync        *bool  `json:"sync"`
+}
+
+// parsePeers parses --peers / PEERS into peer configs. Three accepted forms:
+//
+//	https://a.example,https://b.example            comma-separated URLs
+//	["https://a.example","https://b.example"]      JSON array of URLs
+//	[{"url":"https://a.example","gossip":false}]   JSON array of per-peer objects
+//
+// Anything starting with "[" is JSON and MUST parse as JSON: the earlier silent
+// fallback to comma-splitting turned a malformed (or object-form) array into a
+// list of garbage "peers" that then failed every sync tick for the life of the
+// process. Peer URLs are validated here so a bad config fails at boot, loudly,
+// instead of becoming a permanent error loop.
+func parsePeers(s string) ([]relay.PeerConfig, error) {
 	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+
+	var peers []relay.PeerConfig
 	if strings.HasPrefix(s, "[") {
-		var urls []string
-		if json.Unmarshal([]byte(s), &urls) == nil {
-			return urls
+		var entries []json.RawMessage
+		if err := json.Unmarshal([]byte(s), &entries); err != nil {
+			return nil, fmt.Errorf("not a valid JSON array: %w", err)
+		}
+		for i, entry := range entries {
+			trimmed := strings.TrimSpace(string(entry))
+			if strings.HasPrefix(trimmed, `"`) {
+				var u string
+				if err := json.Unmarshal(entry, &u); err != nil {
+					return nil, fmt.Errorf("peer %d: %w", i, err)
+				}
+				peers = append(peers, relay.PeerConfig{URL: strings.TrimSpace(u)})
+				continue
+			}
+			// Unknown fields are rejected rather than ignored — a typo'd flag
+			// would otherwise silently keep the default (enabled), which is the
+			// exact failure this function exists to prevent.
+			dec := json.NewDecoder(strings.NewReader(trimmed))
+			dec.DisallowUnknownFields()
+			var spec peerSpec
+			if err := dec.Decode(&spec); err != nil {
+				return nil, fmt.Errorf("peer %d: %w", i, err)
+			}
+			peers = append(peers, relay.PeerConfig{
+				URL:         strings.TrimSpace(spec.URL),
+				Gossip:      spec.Gossip,
+				ReadThrough: spec.ReadThrough,
+				Sync:        spec.Sync,
+			})
+		}
+	} else {
+		for _, u := range strings.Split(s, ",") {
+			if u = strings.TrimSpace(u); u != "" {
+				peers = append(peers, relay.PeerConfig{URL: u})
+			}
+		}
+		// An explicit "[]" legitimately means "no peers"; a non-empty
+		// comma-separated value that yields none is a typo, not an intent.
+		if len(peers) == 0 {
+			return nil, fmt.Errorf("no peer URLs in %q", s)
 		}
 	}
-	var urls []string
-	for _, u := range strings.Split(s, ",") {
-		u = strings.TrimSpace(u)
-		if u != "" {
-			urls = append(urls, u)
+
+	for i := range peers {
+		// Trailing slashes would make every peer path "…//proof/v1/log".
+		peers[i].URL = strings.TrimRight(peers[i].URL, "/")
+		if err := validatePeerURL(peers[i].URL); err != nil {
+			return nil, fmt.Errorf("peer %d: %w", i, err)
 		}
 	}
-	return urls
+	return peers, nil
+}
+
+// validatePeerURL rejects anything that is not an absolute http(s) base URL.
+// Peer URLs are concatenated with request paths (peerURL + "/proof/v1/log"),
+// so a relative or scheme-less value yields a request that can never succeed —
+// and so does a query or fragment, which would swallow the appended path
+// ("https://relay.example?t=x" + "/proof/v1/log" requests "/" with a garbage
+// query). Both are the permanent-error-loop failure this validation exists to
+// prevent, so both are rejected at boot.
+func validatePeerURL(raw string) error {
+	if raw == "" {
+		return errors.New("empty peer URL")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid peer URL %q: %w", raw, err)
+	}
+	if u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("invalid peer URL %q: want an absolute http(s) URL", raw)
+	}
+	// Checked against the raw string so a bare "?" or "#" (which parse to empty
+	// RawQuery/Fragment) is caught too.
+	if strings.ContainsAny(raw, "?#") {
+		return fmt.Errorf("invalid peer URL %q: want a base URL with no query or fragment", raw)
+	}
+	return nil
+}
+
+// peerFlagSuffix renders a peer's non-default switches for the boot banner, so
+// a `"gossip":false` in PEERS is visible at startup instead of silently applied.
+func peerFlagSuffix(p relay.PeerConfig) string {
+	var off []string
+	if p.Gossip != nil && !*p.Gossip {
+		off = append(off, "gossip")
+	}
+	if p.ReadThrough != nil && !*p.ReadThrough {
+		off = append(off, "readThrough")
+	}
+	if p.Sync != nil && !*p.Sync {
+		off = append(off, "sync")
+	}
+	if len(off) == 0 {
+		return ""
+	}
+	return " (disabled: " + strings.Join(off, ", ") + ")"
 }
