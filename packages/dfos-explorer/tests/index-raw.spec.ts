@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { nextCursor, toArtifactRows, toCreditRows, toOperationRows } from '../src/lib/index-raw';
+import {
+  nextCursor,
+  toArtifactRows,
+  toContentRows,
+  toCreditRows,
+  toOperationRows,
+} from '../src/lib/index-raw';
 
 describe('toOperationRows — /index/v0/operations page → rows', () => {
   it('reads the documented row shape', () => {
@@ -133,6 +139,81 @@ describe('toCreditRows — /index/v0/credits page → rows', () => {
     expect(toCreditRows(null)).toEqual([]);
     expect(toCreditRows({})).toEqual([]);
     expect(toCreditRows({ credits: 'nope' })).toEqual([]);
+  });
+});
+
+describe('toContentRows — /index/v0/content page → rows', () => {
+  it('reads the documented row shape', () => {
+    expect(
+      toContentRows({
+        content: [
+          {
+            contentId: 'a3n7r3nde8e4keeak92rr3aeztftvc2',
+            genesisCID: 'bafyGenesis',
+            headCID: 'bafyHead',
+            creatorDID: 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr',
+            isDeleted: false,
+            opCount: 4,
+            genesisAt: '2026-04-02T00:00:00.000Z',
+            headAt: '2026-04-03T00:00:00.000Z',
+            currentDocumentCID: 'bafyDoc',
+            publicRead: true,
+            docSchema: 'https://schemas.dfos.com/post/v1.json',
+            title: 'A Post',
+          },
+        ],
+        next: null,
+      }),
+    ).toEqual([
+      {
+        contentId: 'a3n7r3nde8e4keeak92rr3aeztftvc2',
+        genesisCID: 'bafyGenesis',
+        headCID: 'bafyHead',
+        creatorDID: 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr',
+        isDeleted: false,
+        opCount: 4,
+        genesisAt: '2026-04-02T00:00:00.000Z',
+        headAt: '2026-04-03T00:00:00.000Z',
+        currentDocumentCID: 'bafyDoc',
+        publicRead: true,
+        docSchema: 'https://schemas.dfos.com/post/v1.json',
+        title: 'A Post',
+      },
+    ]);
+  });
+
+  it('publicRead is strictly boolean — anything else reads as GATED', () => {
+    // the only direction that can misfire safely: a malformed flag costs a title,
+    // where softening it into truthy would leak one off a non-public chain
+    const rows = toContentRows({
+      content: [
+        { contentId: 'c1', publicRead: true },
+        { contentId: 'c2', publicRead: 'yes' },
+        { contentId: 'c3', publicRead: 1 },
+        { contentId: 'c4' },
+      ],
+    });
+    expect(rows.map((r) => r.publicRead)).toEqual([true, false, false, false]);
+  });
+
+  it('keeps the index’s honest nulls for schema, document, and title', () => {
+    const [row] = toContentRows({ content: [{ contentId: 'c1' }] });
+    expect(row?.docSchema).toBeNull();
+    expect(row?.currentDocumentCID).toBeNull();
+    expect(row?.title).toBeNull();
+    expect(row?.opCount).toBe(0);
+  });
+
+  it('drops a row that names no chain — it would not be addressable', () => {
+    expect(toContentRows({ content: [{ creatorDID: 'did:dfos:a' }, { contentId: '' }] })).toEqual(
+      [],
+    );
+  });
+
+  it('a body that is not a page yields no rows', () => {
+    expect(toContentRows(null)).toEqual([]);
+    expect(toContentRows({})).toEqual([]);
+    expect(toContentRows({ content: 'nope' })).toEqual([]);
   });
 });
 

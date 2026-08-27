@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rowProjection, verifiedContentLabel } from '../src/lib/content-labels';
+import { rowProjection, verifiedContentLabel, visibleRowLabel } from '../src/lib/content-labels';
 
 const CONTENT_ID = 'ct7kkfz7ehzvv6fzvate9rz2874nc3e';
 const POST = 'https://schemas.dfos.com/post/v1';
@@ -89,5 +89,26 @@ describe('rowProjection — the amber beat an index row is allowed to show', () 
   it('an absent or whitespace-only title is no title', () => {
     expect(rowProjection(row({}))).toBe('');
     expect(rowProjection(row({ title: '   ' }))).toBe('');
+  });
+});
+
+describe('visibleRowLabel — the same rule for the VERIFIED beat', () => {
+  const row = (publicRead: boolean) => ({ contentId: CONTENT_ID, title: null, publicRead });
+  const resolved = { text: 'A Post', quoted: false, kind: 'title' as const };
+
+  it('a public chain shows the label the resolver returned', () => {
+    expect(visibleRowLabel(row(true), resolved)).toEqual(resolved);
+  });
+
+  it('a NON-public chain shows nothing, even with a label in hand', () => {
+    // the resolver is never ASKED for a gated row, but it seeds itself from the
+    // session cache — so a chain resolved earlier while public would otherwise
+    // render its remembered title on a row the index now marks non-public
+    expect(visibleRowLabel(row(false), resolved)).toBeNull();
+  });
+
+  it('passes a null through unchanged either way — the caller owns the bare id', () => {
+    expect(visibleRowLabel(row(true), null)).toBeNull();
+    expect(visibleRowLabel(row(false), null)).toBeNull();
   });
 });

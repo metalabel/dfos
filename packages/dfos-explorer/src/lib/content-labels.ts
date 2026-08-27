@@ -289,6 +289,28 @@ export const rowProjection = (row: IndexRowProjection): string =>
   row.publicRead ? (row.title ?? '').trim() : '';
 
 /**
+ * THE SAME RULE FOR THE VERIFIED BEAT — a non-public row shows NO resolved label,
+ * whatever the resolver managed to hand back.
+ *
+ * `need` already stops the resolver from fetching for a gated row, but
+ * {@link useContentLabel} seeds its state from the module cache regardless: a
+ * chain resolved earlier in this same SPA session, while the index still called
+ * it public, would render its remembered title here. That breaks the bare-pill
+ * posture on exactly the surfaces built to hold it — the actor ledger, and home's
+ * include-gated mode whose own copy promises the titles are never rendered.
+ *
+ * When the row and the cache disagree, this suppresses. The index hint may well
+ * be the lagging half (a chain just made public reads gated for a moment), and
+ * withholding a legitimate title for that moment costs a name; rendering a title
+ * for a chain the relay currently marks non-public cannot be taken back. Pure,
+ * unit-tested.
+ */
+export const visibleRowLabel = (
+  row: IndexRowProjection,
+  resolved: DocLabel | null,
+): DocLabel | null => (row.publicRead ? resolved : null);
+
+/**
  * The label for one relay-index content row, running the SAME THREE BEATS as
  * ContentChip: the short contentId, promoted to the relay's projected public
  * title in the amber attributed tier, promoted again to a VERIFIED label derived
@@ -308,6 +330,12 @@ export const rowProjection = (row: IndexRowProjection): string =>
  * gate: it came down with the page. A chain the relay marks non-public is never
  * resolved either — its bytes are gated by definition, so the request could only
  * ever spend a round trip to learn what the row already says.
+ *
+ * NOT resolving is not the same as not SHOWING, which is why both beats pass
+ * through a gate here: the projected title through {@link rowProjection} and the
+ * resolved one through {@link visibleRowLabel}. The session cache can answer for
+ * a chain nobody re-asked about, so "we never fetched this" was never enough to
+ * keep a gated row bare.
  */
 export const useIndexRowLabel = (
   row: IndexRowProjection,
@@ -315,5 +343,8 @@ export const useIndexRowLabel = (
 ): { label: DocLabel; tier: ContentLabelTier } => {
   const projected = rowProjection(row);
   const { label, tier } = useContentLabel(row.contentId, seen && row.publicRead, projected);
-  return { label: label ?? deriveDocLabel({ contentId: row.contentId }), tier };
+  return {
+    label: visibleRowLabel(row, label) ?? deriveDocLabel({ contentId: row.contentId }),
+    tier,
+  };
 };
