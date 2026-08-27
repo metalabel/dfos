@@ -1,6 +1,6 @@
 {
   "name": "@metalabel/dfos-client",
-  "version": "0.36.1",
+  "version": "0.37.0",
   "type": "module",
   "description": "DFOS Client — the client-side kit for participating in the protocol: resolve, verify, prove. Fetch, resolve, verify-orchestration and cache over untrusted relays, plus the SIWD and API-AUTH proof surfaces. Holds no keys; all crypto truth comes from @metalabel/dfos-protocol",
   "license": "MIT",
@@ -62,8 +62,8 @@
     "prepublishOnly": "pnpm build"
   },
   "peerDependencies": {
-    "@metalabel/dfos-protocol": "^0.36.1",
-    "@metalabel/dfos-web-relay": "^0.36.1"
+    "@metalabel/dfos-protocol": "^0.37.0",
+    "@metalabel/dfos-web-relay": "^0.37.0"
   },
   "devDependencies": {
     "@metalabel/dfos-protocol": "workspace:*",
