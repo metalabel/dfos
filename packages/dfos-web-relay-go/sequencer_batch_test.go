@@ -87,7 +87,7 @@ func stagePendingOp(t *testing.T, store Store, token string) string {
 	if cid == "" {
 		t.Fatal("expected a decodable storage CID")
 	}
-	if err := store.PutRawOp(cid, token, OpOriginDirect); err != nil {
+	if _, err := store.PutRawOp(cid, token, OpOriginDirect); err != nil {
 		t.Fatalf("PutRawOp: %v", err)
 	}
 	return cid
