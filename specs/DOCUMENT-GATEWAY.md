@@ -9,10 +9,10 @@ This spec is under active review. Discuss it in the [DFOS](https://nce.dfos.com)
 > **Gateway version 0.1.** This document specifies the document gateway as an
 > optional service on its own `0.x` clock, independent of the Protocol v1 freeze.
 > It matches the behavior the reference relay (`@metalabel/dfos-web-relay`,
-> `dfos-web-relay-go`) ships today: both the public-grant and delegated read paths
+> `dfos-web-relay-go`) ships: both the public-grant and delegated read paths
 > re-derive authorization live from the proof plane on every request. How the
 > gateway hands a public-read caller the grants it re-verified — a 0.x ergonomic
-> that does **not** touch the frozen proof plane — is sketched under
+> that does **not** touch the frozen proof plane — is specified by shape under
 > [Public-read discovery](#public-read-discovery-0x). A relay MAY keep a
 > materialized public-credential index as a **non-authoritative performance
 > cache** — it is never authority (see [Statelessness](#statelessness)). Published
@@ -226,7 +226,7 @@ The gateway's own `0.x` clock advances independently. New gateway capability arr
 
 ## Public-read discovery (0.x)
 
-> **Status: design, not yet built.** This sketches a `0.x` gateway ergonomic. It is **not** part of the reference relay today and is deliberately under-specified at the wire level — the framing below fixes the _shape_ of the answer; an implementor picks the exact bytes.
+> **Status: design — shape, not bytes.** This section specifies a `0.x` gateway ergonomic by shape only. It is **not** part of the reference relay and is deliberately under-specified at the wire level — the framing below fixes the _shape_ of the answer; an implementor picks the exact bytes.
 
 A zero-trust public-read caller wants two things at once: the document bytes, _and_ the `aud: "*"` credentials that authorized the read, so it can re-verify the grant itself instead of trusting "the gateway let me in." The challenge is handing back both without:
 
@@ -266,5 +266,5 @@ Whether a gateway follows, which sources it pulls from, and how aggressively are
 
 - **Index chains** — a content chain enumerating an identity's documents (a catalog, an author's works) is pure discovery, orthogonal to authorization. This is served by the [`index/v1`](https://protocol.dfos.com/content-model#index-httpsschemasdfoscomindexv1) content schema, which needs no special gateway support: an index is just another content chain, gated by the same rules, and a consumer folds it via the canonical fold. No gateway `0.x` primitive.
 - **Credentials-by-resource query** — reverse discovery ("what can DID X read"). It serves no part of the read path; YAGNI for 0.1.
-- **Blob-response credential envelope** — inlining the re-verified `aud: "*"` grants alongside the public blob so a zero-trust caller re-verifies the grant itself (see [Public-read discovery](#public-read-discovery-0x)). Designed, not yet built; the exact wire shape is deferred to the implementor.
+- **Blob-response credential envelope** — inlining the re-verified `aud: "*"` grants alongside the public blob so a zero-trust caller re-verifies the grant itself (see [Public-read discovery](#public-read-discovery-0x)). The exact wire shape is deferred to the implementor.
 - **Media** — explicitly **out of gateway and protocol scope**. Media is a [referential document](#terminal-and-referential-documents): a content-schema convention describing how to fetch external bytes (`ipfs://`, an opaque `attachment://<id>` resolved by an out-of-protocol signed-CDN API), delivered out-of-protocol. That convention is now specced as the [Media object](https://protocol.dfos.com/content-model#media-object) in the content model — a content-schema convention, never a gateway `0.x` version or a protocol primitive. Nothing changes for the gateway: it serves the document that carries the media object and never dereferences the pointer.

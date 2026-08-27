@@ -2,7 +2,7 @@
 
 Verifiable identity and content chains — Ed25519 signatures, content-addressed CIDs, W3C DIDs. Cross-language verification in TypeScript, Go, Python, Rust, and Swift.
 
-> **Status — Protocol v1: feature-complete and frozen.** The v1 surface is **frozen**: the core primitives — chain mechanics, canonical DAG-CBOR encoding, identifier derivation, and the validity bounds — are settled and will not change in shape. Build on the wire as specified. v1 is frozen but not yet declared final — we are still gathering independent implementation experience, and changes from here are limited and disciplined:
+> **Status — Protocol v1: feature-complete and frozen.** The v1 surface is **frozen**: the core primitives — chain mechanics, canonical DAG-CBOR encoding, identifier derivation, and the validity bounds — are settled and will not change in shape. Build on the wire as specified. v1 is frozen but not yet declared final, and changes from here are limited and disciplined:
 >
 > - **Clarifications** — where the prose was ambiguous but conformant implementations already agree — are corrected in place.
 > - **Additive** capability — new optional fields, new service types, the [document gateway](https://protocol.dfos.com/document-gateway) — lands atop frozen v1, never as a break.
@@ -541,9 +541,9 @@ L = 2^252 + 27742317777372353535851937790883648493
 
 A signature whose `S >= L` MUST be rejected (classic Ed25519 malleability). A signature that does not decode to exactly 64 bytes MUST also be rejected. Most Ed25519 libraries enforce `S < L` already; implementations on libraries that do not (notably `ed25519-dalek`, where even `verify_strict` accepts non-canonical `S`) MUST add an explicit constant-time `S < L` gate.
 
-### Reserved for a future revision
+### Hardening axes outside this profile
 
-The following hardening axes are intentionally **deferred** to a later profile revision and are NOT part of v1. v1 verifiers inherit whatever behavior their Ed25519 library provides on these axes:
+The following hardening axes are intentionally **not part of v1**. v1 verifiers inherit whatever behavior their Ed25519 library provides on these axes:
 
 - **Cofactorless verification equation pinning** — requiring the specific `[S]B == R + [k]A` (cofactorless) equation rather than the batch/cofactored form.
 - **Full-order public key check** — the out-of-band `[L]A == identity` torsion test confirming `A` is a full-order point.
@@ -551,7 +551,7 @@ The following hardening axes are intentionally **deferred** to a later profile r
 - **Small-order public key rejection** — beyond whatever the underlying library already rejects.
 - **Strict base64url tightening** — rejecting non-canonical base64url padding/alphabet beyond what the decoder already enforces.
 
-These axes only matter for adversarially-constructed keys. Honest DFOS keys are full-order and canonically encoded, and honest signers produce canonical `S`, so honest participants are unaffected by the deferral. Any residual cross-implementation divergence on these axes is reachable only with adversarial keys and is addressed when this profile is next revised.
+These axes only matter for adversarially-constructed keys. Honest DFOS keys are full-order and canonically encoded, and honest signers produce canonical `S`, so honest participants are unaffected. Any residual cross-implementation divergence on these axes is reachable only with adversarial keys and sits outside the v1 profile.
 
 ---
 

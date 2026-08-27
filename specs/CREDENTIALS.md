@@ -253,7 +253,7 @@ Conversely, an `exp` strictly greater than `now_s` (i.e. in the future relative 
 
 This conversion and these boundaries are evaluated against the operation's `createdAt`, never against the verifier's wall clock (see the ingest bullet above). Two relays processing the same content operation therefore reach the same temporal verdict regardless of when each one ingests it.
 
-Revocation — not expiry — is the **timely lever** for invalidating a credential ahead of its natural expiry (see Revocation, below). A relay MAY additionally enforce a local maximum-age policy as **relay policy** (rejecting credentials whose `exp` is implausibly far in the future), but this is post-v1 and out of scope for the wire protocol; v1 defines no maximum-`exp` cap.
+Revocation — not expiry — is the **timely lever** for invalidating a credential ahead of its natural expiry (see Revocation, below). A relay MAY additionally enforce a local maximum-age policy as **relay policy** (rejecting credentials whose `exp` is implausibly far in the future); that is deployment policy, out of scope for the wire protocol — v1 defines no maximum-`exp` cap.
 
 ---
 

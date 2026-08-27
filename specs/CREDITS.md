@@ -117,7 +117,7 @@ It is **not** part of the bind, and consumers that ignore it are fully conforman
 
 ## Embedding: the `credits[]` Entry
 
-A claim is not published on its own. It rides in the `claim` field of a `credits[]` entry inside the document that credits the claimant — `post/v1` today, and the canonical shape for any schema that carries credits.
+A claim is not published on its own. It rides in the `claim` field of a `credits[]` entry inside the document that credits the claimant — `post/v1`, and the canonical shape for any schema that carries credits.
 
 ```json
 "credits": [

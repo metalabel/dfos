@@ -27,3 +27,26 @@ route/auth quick-start table, the OpenAPI document) — do one of:
 The waiver sentence is the mechanism: it converts a silent omission into a
 challengeable claim a reviewer can see and contest. A spec PR with neither the
 sync nor the sentence is incomplete — do not merge it.
+
+## Register rule (any prose in `specs/*.md`)
+
+Specs speak in the **present tense about what is**. Progression language never
+lands in spec prose: no "planned", "upcoming", "for now", "eventually", "not
+yet built", "will ship", no roadmap voice, and no reference to an unbuilt
+feature as forthcoming. A capability either is specified — write it as it
+stands, with its status block naming its clock — or it is absent, and absence
+is stated as a present fact ("X is not defined", a deferred-list bullet),
+never as a promise.
+
+Two futures are exempt because they are not roadmap:
+
+1. **Versioning discipline.** Status-block clock rules ("a break becomes v1.1
+   or v2", "the five-language sweep is a freeze requirement", "when the family
+   exits `0.x` it re-mounts at `/v1`") state the change contract, not a plan.
+2. **Technical semantics.** Temporal mechanics ("a timestamp in the future",
+   "eventually consistent", "authorized-but-not-yet-materialized", "the DID
+   does not yet exist" mid-algorithm) are the subject matter, not iteration.
+
+The test: would the sentence be false if the project stopped shipping
+tomorrow? A rule or mechanism stays true; a promise goes stale. Promises don't
+belong in the corpus.

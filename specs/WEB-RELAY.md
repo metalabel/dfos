@@ -492,7 +492,7 @@ Chain history is available via the per-chain log routes described above.
 
 ## Content Plane Access
 
-This section describes the content plane as the relay serves it today. The standalone gateway contract — the stateless, proof-plane-derived authorization model, where authority is re-derived live every request and any materialized public-credential index is a non-authoritative cache — is specified in [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway).
+This section describes the content plane as the relay serves it. The standalone gateway contract — the stateless, proof-plane-derived authorization model, where authority is re-derived live every request and any materialized public-credential index is a non-authoritative cache — is specified in [DOCUMENT-GATEWAY.md](https://protocol.dfos.com/document-gateway).
 
 Content plane requests carry a self-signed **auth token** in the `Bearer` header to prove caller identity (verified against the issuer's _current_ identity state — a rotated-out key cannot mint one; see [Key Resolution](#key-resolution)).
 
@@ -620,7 +620,7 @@ If more than one issuer has revoked the same credential CID (possible, since the
 
 A relay that verifies and folds chains already holds current-state projections — terminal states, standing public-read grants, per-chain logs. The **index** route family exposes read-only, cursor-paginated _queries_ over those projections: enumerate identities, filter content chains, reverse-look-up countersignatures by witness, enumerate held public credentials. It exists so a light client can browse and discover without replaying the global operation log — the same role the revocation status family plays for credential state, generalized.
 
-The family lives at **`/index/v0/*`** on its own **`0.x` clock** — NOT part of the frozen `/proof/v1` proof plane, and (unlike `/revocations/v1`) not yet frozen itself. A relay advertises support via `capabilities.index` in the well-known; when unsupported (or when the flag is absent — relays predating this family), the routes return **501 Not Implemented**. Nothing about ingestion changes.
+The family lives at **`/index/v0/*`** on its own **`0.x` clock** — NOT part of the frozen `/proof/v1` proof plane, and (unlike `/revocations/v1`) not frozen itself. A relay advertises support via `capabilities.index` in the well-known; when unsupported (or when the flag is absent — relays predating this family), the routes return **501 Not Implemented**. Nothing about ingestion changes.
 
 ### Hints, Not Authority
 
@@ -1150,10 +1150,10 @@ resetSequencer(): Promise<void>;
 ## What's Deferred
 
 - **Peer discovery**: Static configuration only — no dynamic discovery
-- **SSE/realtime push**: Polling `GET /proof/v1/log` for now, SSE in the future
-- **Fork visibility API**: Dedicated endpoint to list a content chain's tips/branches
-- **Search**: fuzzy/tokenized name queries — deliberately excluded from the [index](#index-v0) contract; would ship as its own explicitly-unstable family
-- **Branch termination op**: Protocol-level operation to explicitly kill content-chain fork branches
+- **SSE/realtime push**: Not defined — reads poll `GET /proof/v1/log`
+- **Fork visibility API**: No dedicated endpoint lists a content chain's tips/branches
+- **Search**: fuzzy/tokenized name queries — deliberately excluded from the [index](#index-v0) contract; any such capability is its own family, never an index extension
+- **Branch termination op**: No protocol-level operation explicitly kills content-chain fork branches
 - **Rate limiting / anti-spam**: Operational concern, not protocol concern
-- **Blob size limits**: No enforcement yet — production deployments should add limits at the middleware layer
-- **Artifact `$schema` registry**: Schema names are free-form strings for now — no formal registry or validation beyond structural checks
+- **Blob size limits**: No protocol enforcement — deployments add limits at the middleware layer
+- **Artifact `$schema` registry**: Schema names are free-form strings — no formal registry or validation beyond structural checks
