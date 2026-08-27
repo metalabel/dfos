@@ -28,7 +28,7 @@ import {
   signPayloadEd25519,
 } from '@metalabel/dfos-protocol/crypto';
 import { describe, expect, it } from 'vitest';
-import { createRelay, MemoryRelayStore } from '../src';
+import { createRelay, INGESTION_MODES, MemoryRelayStore } from '../src';
 import type { AdmissionPolicy, RelayOptions } from '../src';
 
 /**
@@ -371,6 +371,63 @@ describe('ingestion admission', () => {
       const other = await createIdentity();
       const res = await submit(relay, [other.jwsToken], submitter, { jti: 'x'.repeat(257) });
       expect(res.status).toBe(401);
+    });
+
+    it('consumes an INJECTED replay cache — the seam a multi-process deployment fills', async () => {
+      // The in-memory default is per-process, so the interface is the whole
+      // mechanism by which a fleet shares one replay window. A seam that cannot
+      // be reached from RelayOptions is documentation, not a seam.
+      const inserts: { presenterDID: string; jti: string; ttlSeconds: number }[] = [];
+      let admit = true;
+      const replayCache = {
+        insertIfAbsent(presenterDID: string, jti: string, _nowMs: number, ttlSeconds: number) {
+          inserts.push({ presenterDID, jti, ttlSeconds });
+          return admit;
+        },
+      };
+      const { store } = await relayWith();
+      const submitter = await createIdentity();
+      const relay = await createRelay({ store, authority: AUTHORITY, replayCache });
+      expect((await submit(relay, [submitter.jwsToken])).status).toBe(200);
+
+      const other = await createIdentity();
+      expect((await submit(relay, [other.jwsToken], submitter, { jti: 'injected' })).status).toBe(
+        200,
+      );
+      expect(inserts).toEqual([
+        // W + S at their defaults: the entry lives exactly as long as the proof.
+        { presenterDID: submitter.did, jti: 'injected', ttlSeconds: 120 },
+      ]);
+
+      // Its refusal is the relay's refusal — the fleet-wide cache is the authority
+      // on replay, not this process's memory of what it has seen.
+      admit = false;
+      expect((await submit(relay, [other.jwsToken], submitter, { jti: 'never-seen' })).status).toBe(
+        401,
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // construction
+  // ---------------------------------------------------------------------------
+
+  describe('mode validation', () => {
+    it('refuses an unknown ingestion mode at construction, naming the value', async () => {
+      // The type union guards compiled callers only. A JS consumer — or a mode
+      // read out of a config file — reaches this. Serving OPEN while advertising
+      // "proof-requred" is the failure the check exists to make impossible.
+      await expect(relayWith({ ingestion: 'proof-requred' as never })).rejects.toThrow(
+        /proof-requred/,
+      );
+    });
+
+    it('accepts every mode it advertises', async () => {
+      for (const mode of INGESTION_MODES) {
+        const { relay } = await relayWith({ ingestion: mode });
+        const body = await json(await relay.app.request('http://localhost/.well-known/dfos-relay'));
+        expect(body.ingestion).toBe(mode);
+      }
     });
   });
 });

@@ -56,7 +56,7 @@ import {
 } from './revocations';
 import { computeOpCID, sequenceOps } from './sequencer';
 import { registerSigningRoutes } from './signing';
-import { PROOF_BASE_PATH } from './types';
+import { INGESTION_MODES, PROOF_BASE_PATH } from './types';
 import type {
   AdmissionPolicy,
   GossipProofSigner,
@@ -255,11 +255,22 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   const authority = options.authority;
   const proofWindowSeconds = options.proofWindowSeconds ?? DEFAULT_PROOF_WINDOW_SECONDS;
   const proofSkewSeconds = options.proofSkewSeconds ?? DEFAULT_PROOF_SKEW_SECONDS;
-  const replayCache: JtiReplayCache = createJtiReplayCache();
+  // Injected when the deployment needs a replay cache wider than this process;
+  // see RelayOptions.replayCache.
+  const replayCache: JtiReplayCache = options.replayCache ?? createJtiReplayCache();
 
   // Ingestion admission. Explicit wins; absent derives from the write capability
   // (WEB-RELAY.md, well-known `ingestion`). A relay with writes off is closed
   // whatever it asked for — the capability gate fires first and answers 501.
+  //
+  // An unrecognized spelling is refused HERE rather than serving as its silent
+  // fallback: the routes special-case only `closed` and `proof-required`, so a
+  // typo would run OPEN while the well-known advertised the typo.
+  if (options.ingestion !== undefined && !INGESTION_MODES.includes(options.ingestion)) {
+    throw new Error(
+      `unknown ingestion mode: ${JSON.stringify(options.ingestion)} (expected ${INGESTION_MODES.join(', ')})`,
+    );
+  }
   const ingestionMode: IngestionMode = !writeEnabled ? 'closed' : (options.ingestion ?? 'open');
   // Default policy: ADMIT EVERYTHING — today's behavior, stated as a policy
   // rather than as the absence of one.

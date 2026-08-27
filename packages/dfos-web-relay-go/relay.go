@@ -41,9 +41,9 @@ type Relay struct {
 	proofWindowSeconds int64
 	proofSkewSeconds   int64
 	// jtiCache is the replay cache for write-shaped proofs (ingestion, blob
-	// upload). In-memory and per-process; the type is what a store-backed
-	// implementation replaces.
-	jtiCache *JtiReplayCache
+	// upload). Defaults to the in-memory per-process implementation; a
+	// multi-process deployment injects its own (RelayOptions.JtiCache).
+	jtiCache JtiCache
 	// ingestionMode is the advertised admission mode; admissionPolicy is step 3
 	// of the ingestion ladder.
 	ingestionMode   IngestionMode
@@ -166,7 +166,17 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 	// Ingestion admission. Explicit wins; absent derives from the write capability
 	// (WEB-RELAY.md, well-known `ingestion`). A relay with writes off is closed
 	// whatever it asked for — the capability gate fires first and answers 501.
+	//
+	// An unrecognized spelling is refused HERE rather than serving as its silent
+	// fallback: the routes special-case only "closed" and "proof-required", so a
+	// typo would run OPEN while the well-known advertised the typo.
 	ingestionMode := opts.Ingestion
+	switch ingestionMode {
+	case "", IngestionOpen, IngestionProofRequired, IngestionClosed:
+	default:
+		return nil, fmt.Errorf("unknown ingestion mode: %q (expected %s, %s, %s)",
+			ingestionMode, IngestionOpen, IngestionProofRequired, IngestionClosed)
+	}
 	if ingestionMode == "" {
 		ingestionMode = IngestionOpen
 	}
@@ -200,6 +210,13 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 
 	// One status row per peer the sync loop will actually poll — an explicitly
 	// sync:false peer is configured for gossip only and has no sync state to report.
+	// Injected when the deployment needs a replay cache wider than this process;
+	// see RelayOptions.JtiCache.
+	jtiCache := opts.JtiCache
+	if jtiCache == nil {
+		jtiCache = NewJtiReplayCache()
+	}
+
 	peerSync := make(map[string]*PeerSyncStatus, len(opts.Peers))
 	for _, p := range opts.Peers {
 		if p.Sync != nil && !*p.Sync {
@@ -226,7 +243,7 @@ func NewRelay(opts RelayOptions) (*Relay, error) {
 		authority:          opts.Authority,
 		proofWindowSeconds: proofWindow,
 		proofSkewSeconds:   proofSkew,
-		jtiCache:           NewJtiReplayCache(),
+		jtiCache:           jtiCache,
 		ingestionMode:      ingestionMode,
 		admissionPolicy:    admissionPolicy,
 		privateKey:         identity.PrivateKey,

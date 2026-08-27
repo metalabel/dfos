@@ -1371,6 +1371,43 @@ describe('verifyApiIdentityRequest', () => {
     }
   });
 
+  it('rejects a payload carrying MALFORMED UTF-8, in an unknown member included', async () => {
+    // The mirror of the Go twin's utf8.Valid gate. A lenient decode would
+    // substitute U+FFFD and verify, and the two stacks would answer the same
+    // octets differently — so the payload bytes must be well-formed UTF-8 before
+    // anything reads a member off them. `jti` is the live case: a write-shaped
+    // relay keys its replay cache on it.
+    const { signer, proof } = await buildIdentityProof();
+    const [header, payloadSegment] = proof.split('.') as [string, string, string];
+    const payload = decoder.decode(base64urlDecode(payloadSegment));
+    const withJti = encoder.encode(`${payload.slice(0, -1)},"jti":"aaaa"}`);
+    // The payload now ends `"jti":"aaaa"}`, so length - 4 is one of the a's.
+    // 0xFF is a byte no well-formed UTF-8 sequence contains.
+    const spliced = Uint8Array.from(withJti);
+    spliced[withJti.length - 4] = 0xff;
+
+    for (const [name, bytes] of [
+      ['well-formed', withJti],
+      ['malformed', spliced],
+    ] as const) {
+      const signingInput = `${header}.${base64urlEncode(bytes)}`;
+      const signed = `${signingInput}.${base64urlEncode(
+        await signer.k.signer(encoder.encode(signingInput)),
+      )}`;
+      const attempt = verifyApiIdentityRequest(clientFor([signer]), {
+        ...baseInput(),
+        proof: signed,
+      });
+      if (name === 'well-formed') {
+        // The control: everything but the spliced byte verifies, so the refusal
+        // below can only be the UTF-8 gate.
+        await expect(attempt, name).resolves.toBeTruthy();
+      } else {
+        expect(await reasonOf(attempt), name).toBe('invalid');
+      }
+    }
+  });
+
   it('rejects a key that is not current, and reports an unresolvable presenter as unverifiable', async () => {
     const { signer, proof } = await buildIdentityProof();
     const stranger = makeKey();

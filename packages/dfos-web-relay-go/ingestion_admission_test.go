@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	dfos "github.com/metalabel/dfos/packages/dfos-protocol-go"
 )
@@ -371,5 +373,70 @@ func TestAdmissionJtiIsScopedToThePresenter(t *testing.T) {
 	}
 	if got := submitOps(t, r, []string{other.token}, &second, dfos.IdentityProofOptions{}, "shared"); got.Code != 200 {
 		t.Fatalf("second presenter with the same jti: %d %s", got.Code, got.Body.String())
+	}
+}
+
+// recordingJtiCache is a JtiCache a deployment could plausibly write — the seam
+// a multi-process relay fills with a shared store's insert-if-absent.
+type recordingJtiCache struct {
+	inserts []string
+	admit   bool
+}
+
+func (c *recordingJtiCache) InsertIfAbsent(presenterDID, jti string, _ time.Time, ttl time.Duration) bool {
+	c.inserts = append(c.inserts, fmt.Sprintf("%s|%s|%s", presenterDID, jti, ttl))
+	return c.admit
+}
+
+// The in-memory default is per-process, so the interface is the whole mechanism
+// by which a fleet shares one replay window. A seam unreachable from
+// RelayOptions is documentation, not a seam.
+func TestAdmissionConsumesAnInjectedJtiCache(t *testing.T) {
+	cache := &recordingJtiCache{admit: true}
+	r, _ := admissionRelay(t, RelayOptions{JtiCache: cache})
+	submitter := createTestIdentity(t)
+	if got := submitOps(t, r, []string{submitter.token}, nil, dfos.IdentityProofOptions{}, ""); got.Code != 200 {
+		t.Fatalf("seed submitter: %d", got.Code)
+	}
+	other := createTestIdentity(t)
+	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "injected"); got.Code != 200 {
+		t.Fatalf("proven submission: %d %s", got.Code, got.Body.String())
+	}
+	// W + S at their defaults: the entry lives exactly as long as the proof.
+	want := []string{fmt.Sprintf("%s|injected|%s", submitter.did, 120*time.Second)}
+	if !reflect.DeepEqual(cache.inserts, want) {
+		t.Fatalf("injected cache saw %v, want %v", cache.inserts, want)
+	}
+
+	// Its refusal is the relay's refusal — the fleet-wide cache is the authority
+	// on replay, not this process's memory of what it has seen.
+	cache.admit = false
+	if got := submitOps(t, r, []string{other.token}, &submitter, dfos.IdentityProofOptions{}, "never-seen"); got.Code != http.StatusUnauthorized {
+		t.Fatalf("cache refusal: %d %s", got.Code, got.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// construction
+// ---------------------------------------------------------------------------
+
+// A misspelled mode must not pass through. The routes special-case only closed
+// and proof-required, so a typo would serve OPEN while the well-known advertised
+// the typo. Twin of the TS createRelay throw.
+func TestNewRelayRejectsUnknownIngestionMode(t *testing.T) {
+	_, err := NewRelay(RelayOptions{Store: NewMemoryStore(), Authority: testAuthority,
+		Ingestion: "proof-requred"})
+	if err == nil {
+		t.Fatal("misspelled ingestion mode was accepted")
+	}
+	if !strings.Contains(err.Error(), "proof-requred") {
+		t.Fatalf("error does not name the offending value: %v", err)
+	}
+	// Every mode it advertises still constructs.
+	for _, mode := range []IngestionMode{"", IngestionOpen, IngestionProofRequired, IngestionClosed} {
+		if _, err := NewRelay(RelayOptions{Store: NewMemoryStore(), Authority: testAuthority,
+			Ingestion: mode}); err != nil {
+			t.Fatalf("mode %q rejected: %v", mode, err)
+		}
 	}
 }

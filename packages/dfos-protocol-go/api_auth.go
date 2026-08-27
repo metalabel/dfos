@@ -630,6 +630,16 @@ func verifyProofEnvelope(proofToken string, expect RequestProofExpectations, sha
 	if decodeErr != nil {
 		return nil, fmt.Errorf("%w: failed to decode %s payload", ErrRequestProofInvalid, shape.label)
 	}
+	// MALFORMED UTF-8 IS AN INVALID PROOF, NOT A LENIENT DECODE. encoding/json
+	// silently substitutes U+FFFD for an invalid byte, where the TS twin decodes
+	// with TextDecoder('utf-8', {fatal:true}) and throws. Without this gate a
+	// hand-signed proof carrying a malformed byte in an unknown member (jti is the
+	// live case) authenticates here and 401s there — the same octets, two verdicts.
+	// Only the payload is gated: the TS twin's HEADER decode is non-fatal, and the
+	// twins must agree on leniency as exactly as they agree on strictness.
+	if !utf8.Valid(payloadBytes) {
+		return nil, fmt.Errorf("%w: %s payload is not valid UTF-8", ErrRequestProofInvalid, shape.label)
+	}
 	// The DECODED payload, unknown members included. ADDITIVE MEMBERS ARE READ
 	// FROM HERE, at the consuming layer, AFTER verification — the signature
 	// already covers them and the canonical member set stays closed. jti is the

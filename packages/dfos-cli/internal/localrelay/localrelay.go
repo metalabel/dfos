@@ -179,10 +179,15 @@ func bootstrapPersistent(store *relay.SQLiteStore, profileName string) (*relay.R
 			store.SetMeta("relay_profile_jws", []byte(identity.ProfileArtifactJWS))
 			return identity, nil
 		}
+		// PrivateKey rides along: it is what lets the relay mint an identity proof
+		// of its own DID on gossip-out. Omitting it here left --gossip-proof inert
+		// on every boot after the first — the flag reads as on, and the pushes go
+		// anonymously.
 		return &relay.RelayIdentity{
 			DID:                string(didBytes),
 			KeyID:              string(keyIDBytes),
 			ProfileArtifactJWS: profileJWS,
+			PrivateKey:         ed25519.PrivateKey(privBytes),
 		}, nil
 	}
 

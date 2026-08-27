@@ -57,15 +57,35 @@ func New(baseURL string) *Client {
 	}
 }
 
+// normalizeAuthority is the `host` member API-AUTH binds: the lowercase
+// authority with the port OMITTED when it is the scheme's default (https:443,
+// http:80) and carried otherwise.
+//
+// The default-port drop is not cosmetic. The TS twin derives its host from
+// WHATWG `URL.host`, which already drops :443 and :80, and a relay compares a
+// proof's `host` byte for byte against its own configured authority. A Go signer
+// that kept the explicit default port would therefore sign a host no normally
+// configured relay matches — a 401 the two stacks disagree about, from a URL
+// spelling the operator is entitled to use.
+func normalizeAuthority(scheme, hostport string) string {
+	host := strings.ToLower(hostport)
+	switch strings.ToLower(scheme) {
+	case "https":
+		return strings.TrimSuffix(host, ":443")
+	case "http":
+		return strings.TrimSuffix(host, ":80")
+	}
+	return host
+}
+
 // authority is the peer's host[:port] — what the relay checks a proof's `host`
-// member against. Lowercased, scheme-less, port included when the URL carries
-// one, exactly as the payload schema requires.
+// member against.
 func (c *Client) authority() (string, error) {
 	u, err := url.Parse(c.BaseURL)
 	if err != nil || u.Host == "" {
 		return "", fmt.Errorf("peer URL %q has no authority to bind a proof to", c.BaseURL)
 	}
-	return strings.ToLower(u.Host), nil
+	return normalizeAuthority(u.Scheme, u.Host), nil
 }
 
 // originForm returns the origin-form request target this client will put on the

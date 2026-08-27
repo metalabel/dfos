@@ -9,6 +9,7 @@
 import type { VerifiedContentChain, VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import type { Attenuation } from '@metalabel/dfos-protocol/credentials';
 import { base64urlDecode, base64urlEncode } from '@metalabel/dfos-protocol/crypto';
+import type { JtiReplayCache } from './auth';
 import type {
   IndexArtifactRow,
   IndexContentRow,
@@ -66,6 +67,17 @@ export interface RelayIdentity {
  * Advertisement is a HINT; the policy decision is the authority.
  */
 export type IngestionMode = 'open' | 'proof-required' | 'closed';
+
+/**
+ * The admitted spellings, as a runtime value.
+ *
+ * The union above guards COMPILED callers only. A JS consumer — or a mode read
+ * out of a config file — can hand `createRelay` a misspelling, and the routes
+ * special-case only `closed` and `proof-required`, so a typo would serve OPEN
+ * while advertising garbage in the well-known. `createRelay` checks against this
+ * set and refuses, exactly as the Go twin's NewRelay does.
+ */
+export const INGESTION_MODES: readonly IngestionMode[] = ['open', 'proof-required', 'closed'];
 
 /**
  * The relay-local admission policy — step 3 of the ingestion ladder.
@@ -149,6 +161,18 @@ export interface RelayOptions {
    * ladder. Default: admit everything (today's behavior).
    */
   admissionPolicy?: AdmissionPolicy;
+  /**
+   * The `jti` replay cache backing write-shaped identity proofs.
+   *
+   * DEFAULT: the in-memory `createJtiReplayCache()`, which is PER-PROCESS — it
+   * refuses a replay only against the process that saw the original. A
+   * multi-process deployment (several workers behind one authority, or a
+   * serverless runtime with no process to hold state) injects an implementation
+   * whose `insertIfAbsent` is atomic across the fleet — a shared store's
+   * insert-if-absent, `SET NX PX`, a conditional put — so the replay window is
+   * the deployment's, not one worker's.
+   */
+  replayCache?: JtiReplayCache;
   /**
    * Whether gossip-out attaches an identity proof signed by the relay's OWN DID
    * (WEB-RELAY.md, Relay Identity: "a gossiping peer authenticates like any

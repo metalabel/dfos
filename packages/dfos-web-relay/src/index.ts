@@ -57,6 +57,7 @@ export {
   type IdentityProofOutcome,
   type JtiReplayCache,
 } from './auth';
+export { INGESTION_MODES } from './types';
 export type {
   AdmissionPolicy,
   GossipProofSigner,

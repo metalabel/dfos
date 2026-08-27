@@ -40,14 +40,36 @@ func relayURL(t *testing.T) string {
 // dialed directly, which is every harness in this package.
 func relayAuthority(t *testing.T, base string) string {
 	t.Helper()
-	if v := os.Getenv("RELAY_AUTHORITY"); v != "" {
-		return strings.ToLower(v)
-	}
 	u, err := url.Parse(base)
 	if err != nil || u.Host == "" {
 		t.Fatalf("relay URL %q has no authority to bind a proof to", base)
 	}
-	return strings.ToLower(u.Host)
+	if v := os.Getenv("RELAY_AUTHORITY"); v != "" {
+		// Normalized against the dialed URL's scheme: RELAY_AUTHORITY names the
+		// same relay, so its default port is the same one the relay drops.
+		return normalizeAuthority(u.Scheme, v)
+	}
+	return normalizeAuthority(u.Scheme, u.Host)
+}
+
+// normalizeAuthority is the `host` member API-AUTH binds: the lowercase
+// authority with the port OMITTED when it is the scheme's default (https:443,
+// http:80) and carried otherwise.
+//
+// The default-port drop is not cosmetic. A relay compares a proof's `host` byte
+// for byte against its own configured authority, and the TS stack derives that
+// host from WHATWG `URL.host`, which already drops :443 and :80. A suite that
+// kept the explicit default port would sign a host no normally configured relay
+// matches, and report a conformance failure that is the harness's.
+func normalizeAuthority(scheme, hostport string) string {
+	host := strings.ToLower(hostport)
+	switch strings.ToLower(scheme) {
+	case "https":
+		return strings.TrimSuffix(host, ":443")
+	case "http":
+		return strings.TrimSuffix(host, ":80")
+	}
+	return host
 }
 
 // proofSigner is the key material a request signs its identity proof with.

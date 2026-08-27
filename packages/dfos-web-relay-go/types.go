@@ -118,6 +118,15 @@ type RelayOptions struct {
 	// everything (today's behavior, stated as a policy rather than the absence of
 	// one).
 	AdmissionPolicy AdmissionPolicy
+	// JtiCache is the replay cache backing write-shaped identity proofs.
+	//
+	// nil = NewJtiReplayCache(), which is PER-PROCESS — it refuses a replay only
+	// against the process that saw the original. A multi-process deployment
+	// (several workers behind one authority) injects an implementation whose
+	// InsertIfAbsent is atomic across the fleet — a shared store's
+	// insert-if-absent, SET NX PX, a conditional put — so the replay window is
+	// the deployment's, not one worker's.
+	JtiCache JtiCache
 	// GossipIdentityProof controls whether gossip-out attaches an identity proof
 	// signed by the relay's OWN DID (WEB-RELAY.md, Relay Identity: "a gossiping
 	// peer authenticates like any client: anonymously, or with an identity proof

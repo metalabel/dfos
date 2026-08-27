@@ -32,6 +32,27 @@ var ErrBlobNotFound = errors.New("peer does not have this blob")
 // instead of stalling on the dead cursor forever.
 var ErrPeerInvalidCursor = errors.New("peer rejected log cursor")
 
+// normalizeAuthority is the `host` member API-AUTH binds: the lowercase
+// authority with the port OMITTED when it is the scheme's default (https:443,
+// http:80) and carried otherwise.
+//
+// The default-port drop is not cosmetic. The TS twin derives its host from
+// WHATWG `URL.host`, which already drops :443 and :80, and a relay compares a
+// proof's `host` byte for byte against its own configured authority. A Go signer
+// that kept the explicit default port would therefore sign a host no normally
+// configured relay matches — a 401 the two stacks disagree about, from a peer
+// URL spelling the operator is entitled to use.
+func normalizeAuthority(scheme, hostport string) string {
+	host := strings.ToLower(hostport)
+	switch strings.ToLower(scheme) {
+	case "https":
+		return strings.TrimSuffix(host, ":443")
+	case "http":
+		return strings.TrimSuffix(host, ":80")
+	}
+	return host
+}
+
 // HttpPeerClient implements PeerClient using HTTP requests.
 type HttpPeerClient struct {
 	client *http.Client
@@ -168,10 +189,12 @@ func (c *HttpPeerClient) SubmitOperationsSigned(peerURL string, operations []str
 	}
 	request.Header.Set("Content-Type", "application/json")
 	if sign != nil {
-		// `Host` from the parsed URL, so a non-default port rides along: the peer
-		// compares it byte for byte against its OWN configured authority.
+		// The authority from the parsed URL, normalized: a non-default port rides
+		// along, a default one is dropped. The peer compares it byte for byte
+		// against its OWN configured authority.
 		if parsed, parseErr := url.Parse(endpoint); parseErr == nil {
-			if proof, signErr := sign(http.MethodPost, parsed.Host, parsed.RequestURI(), body); signErr == nil && proof != "" {
+			host := normalizeAuthority(parsed.Scheme, parsed.Host)
+			if proof, signErr := sign(http.MethodPost, host, parsed.RequestURI(), body); signErr == nil && proof != "" {
 				request.Header.Set("Authorization", "DFOS "+proof)
 			}
 		}

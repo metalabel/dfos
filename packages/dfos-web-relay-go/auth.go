@@ -97,8 +97,8 @@ func CreateCurrentStateProofResolver(store Store) dfos.KeyResolver {
 // jti replay cache
 // ---------------------------------------------------------------------------
 
-// JtiReplayCache records (presenter, jti) pairs — REQUIRED on every write-shaped
-// proof (WEB-RELAY.md, Authentication).
+// JtiCache is the replay cache a relay consumes — REQUIRED on every
+// write-shaped proof (WEB-RELAY.md, Authentication).
 //
 // WHY A WRITE-SHAPED SURFACE CANNOT BORROW ITS REPLAY POSTURE FROM DOWNSTREAM
 // IDEMPOTENCY: the admission ladder runs POLICY before full verification, so the
@@ -111,8 +111,17 @@ func CreateCurrentStateProofResolver(store Store) dfos.KeyResolver {
 // client-chosen jti beforehand. Entries expire after the freshness window
 // (W + S): past that the proof itself is stale, so the entry protects nothing.
 //
-// In-memory and per-process. A store-backed implementation replaces this type
-// without touching a route.
+// It is an INTERFACE because the default implementation is per-process: a
+// multi-process deployment injects one whose insert-if-absent is atomic across
+// the fleet (RelayOptions.JtiCache). Twin of the TS JtiReplayCache interface.
+type JtiCache interface {
+	// InsertIfAbsent records (presenterDID, jti) if absent. It returns true when
+	// newly inserted (the proof is fresh) and false when the pair was already seen
+	// within its lifetime (a replay).
+	InsertIfAbsent(presenterDID, jti string, now time.Time, ttl time.Duration) bool
+}
+
+// JtiReplayCache is the default JtiCache — in-memory and per-process.
 type JtiReplayCache struct {
 	mu   sync.Mutex
 	seen map[string]time.Time
@@ -122,9 +131,7 @@ func NewJtiReplayCache() *JtiReplayCache {
 	return &JtiReplayCache{seen: make(map[string]time.Time)}
 }
 
-// InsertIfAbsent records (presenterDID, jti) if absent. It returns true when
-// newly inserted (the proof is fresh) and false when the pair was already seen
-// within its lifetime (a replay).
+// InsertIfAbsent implements JtiCache.
 func (c *JtiReplayCache) InsertIfAbsent(presenterDID, jti string, now time.Time, ttl time.Duration) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
