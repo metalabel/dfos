@@ -247,7 +247,19 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 	}
 
 	if hasBatch {
-		if err := batchable.CommitWriteBatch(); err != nil {
+		// Two ways to end up holding nothing, with one outcome. Either a write
+		// inside the batch failed — leaving that op half-applied, which poisons
+		// its own retry, since the writes that DID land make every later attempt
+		// short-circuit as a "duplicate" and the ones that failed are never made
+		// up — or the commit itself failed. Both mean the batch must be
+		// discarded rather than half-kept.
+		err := errPartialWriteRolledBack
+		discard := batchPersistFailed(results)
+		if !discard {
+			err = batchable.CommitWriteBatch()
+			discard = err != nil
+		}
+		if discard {
 			// The batch's chain-state writes are GONE. Nothing this batch
 			// claimed to land is actually held, so the batch must neither be
 			// gossiped nor reported as landed — the same rule the per-op
@@ -259,7 +271,7 @@ func (r *Relay) Ingest(tokens []string) []IngestionResult {
 			// Permanent rejections are left alone: that verdict is a function of
 			// the op against the pre-batch state, which is the state a retry
 			// sees, so it remains true and claims nothing about what we hold.
-			r.logger.Error("failed to commit write batch — batch rolled back, not gossiped", "error", err, "ops", len(tokens))
+			r.logger.Error("write batch rolled back, not gossiped", "error", err, "ops", len(tokens))
 			batchable.RollbackWriteBatch()
 			newOps = nil
 			newCount, dupCount = 0, 0

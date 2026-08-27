@@ -322,6 +322,12 @@ A value starting with `[` must parse as JSON, every peer must be an absolute
 `http(s)` URL, and unknown per-peer fields are rejected — a bad peer config fails
 at boot rather than erroring on every sync tick for the life of the process.
 
+`--peers` is merged with the relays in `config.toml`, and a relay named in both is
+configured once: the `--peers` entry wins, since it is the one that can carry the
+per-peer switches. Peer state — the sync cursor above all — is keyed by URL, so the
+duplicate would otherwise pull twice against a single shared cursor. The dropped
+duplicate is logged.
+
 `--no-write` is the pull-only posture: the node ingests exclusively through peer sync and refuses submissions outright, so its served state is entirely derived from relays it chose to follow.
 
 ---
