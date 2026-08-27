@@ -187,9 +187,9 @@ describe('validateStructure', () => {
 
   // a nameless document is fully valid — the domain leads (SIWD.md: name is optional)
   it('accepts a document with no name', () => {
-    expect(
-      validateStructure(readJson('schemas/dfos-app.v1.fixtures/valid/no-name.json')).ok,
-    ).toBe(true);
+    expect(validateStructure(readJson('schemas/dfos-app.v1.fixtures/valid/no-name.json')).ok).toBe(
+      true,
+    );
   });
 
   // presence-but-empty is malformed, not absent — SIWD.md is explicit
