@@ -253,7 +253,7 @@ identity chains", `specs/SIWD.md`).
 ### Compromised custody / KMS key
 
 Where a hosting platform holds the user's key material and signs on their behalf — the
-custodial posture profile A works against today, and the custodial signer agent that
+custodial posture profile A works against, and the custodial signer agent that
 polls a mailbox for a keyless subject under profile B (SIWD.md "Profile A — Web
 Redirect" / "The custodial signer agent", `specs/SIWD.md`) — a compromise of that
 custody is **full impersonation** and is **indistinguishable on-chain**: the signature
