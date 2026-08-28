@@ -303,8 +303,8 @@ dfos content publish <contentId> --peer prod
 ### Raw API & identity proofs (escape hatch)
 
 ```bash
-dfos api GET /.well-known/dfos-relay
-dfos api POST /proof/v1/operations --body-file ops.json --auth
+dfos relay call GET /.well-known/dfos-relay
+dfos relay call POST /proof/v1/operations --body-file ops.json --auth
 dfos auth proof PUT /content/abc/blob/bafy... --body doc.json --jti   # print a proof for curl
 ```
 
