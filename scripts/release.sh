@@ -118,8 +118,11 @@ fi
 
 # stage everything version:sync rewrites — package manifests AND the shipped
 # openapi.yaml (its info.version is synced too; leaving it unstaged cuts a tag
-# that fails the openapi version tripwire test and blocks the publish)
-git add package.json packages/*/package.json packages/dfos-web-relay/openapi.yaml
+# that fails the openapi version tripwire test and blocks the publish), AND the
+# committed openapi.json codegen artifact version:sync regenerates from it (the
+# byte-identical drift test blocks the publish the same way — v0.39.0 learned
+# this the hard way)
+git add package.json packages/*/package.json packages/dfos-web-relay/openapi.yaml packages/dfos-web-relay/openapi.json
 git commit -m "release: v${VERSION}"
 git tag -a "v${VERSION}" -m "v${VERSION}"
 
