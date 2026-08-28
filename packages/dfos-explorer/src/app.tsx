@@ -181,10 +181,14 @@ const SearchBar = () => {
   );
 };
 
+// "client-side only" used to lead this strip, which overclaims — two serverless
+// routes do the DNS and well-known lookups a browser cannot (home's "what this
+// is" panel states them). Every VERDICT is still computed in the tab, and that
+// is the claim worth making here.
 const Foot = () => (
   <div class="foot">
-    client-side only · verify-in-tab via <code>@metalabel/dfos-client</code> · no canonical state —
-    the view of the relays you configured · <a href="#/glossary">glossary</a>
+    every verdict computed in your tab via <code>@metalabel/dfos-client</code> · no canonical state
+    — the view of the relays you configured · <a href="#/glossary">glossary</a>
   </div>
 );
 
