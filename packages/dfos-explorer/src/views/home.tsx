@@ -23,6 +23,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { ContentChip } from '../components/content-chip';
 import { DidChip } from '../components/did-chip';
 import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
+import { HomeIntro } from '../components/intro';
 import { OpLink, Pager, Panel, Term } from '../components/ui';
 import { useIndexRowLabel } from '../lib/content-labels';
 import type { OpKind } from '../lib/db';
@@ -698,6 +699,7 @@ export const Home = () => {
 
   return (
     <>
+      <HomeIntro />
       <NetworkPanel obs={obs} hint={hint} />
       <OperationsPanel obs={obs} assertedOps={hint.opCount ?? 0} indexed={indexed} />
       <PostsPanel indexed={indexed} ordered={ordered} />

@@ -432,6 +432,35 @@ header {
   line-height: 1.7;
 }
 
+/* ---------------------------------------------------------------- home intro */
+
+.intro {
+  max-width: 78ch;
+  line-height: 1.6;
+}
+
+.intro p {
+  margin: 0 0 8px;
+}
+
+.intro p:last-child {
+  margin-bottom: 0;
+}
+
+.intro-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 0 0 8px;
+  color: var(--dim);
+}
+
+.intro-legend > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
 /* ---------------------------------------------------------------- term */
 
 .term {
@@ -483,7 +512,10 @@ header {
   border-bottom: 1px solid var(--line2);
 }
 
-.termmodal-x {
+/* the one dismiss affordance — shared by the term modal's close and the home
+   intro's dismiss, because they are the same control doing the same thing */
+.termmodal-x,
+.intro-x {
   background: var(--panel);
   border: 1px solid var(--line);
   color: var(--dim);
@@ -494,7 +526,9 @@ header {
 }
 
 .termmodal-x:hover,
-.termmodal-x:focus {
+.termmodal-x:focus,
+.intro-x:hover,
+.intro-x:focus {
   border-color: var(--ink);
   color: var(--ink);
   outline: none;
