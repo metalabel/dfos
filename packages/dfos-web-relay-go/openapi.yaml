@@ -1,0 +1,2170 @@
+openapi: 3.1.0
+info:
+  title: DFOS Web Relay
+  version: 0.38.0
+  description: |
+    HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves
+    identity chains, content chains, countersignatures, and content blobs.
+
+    Two data planes:
+    - **Proof plane** (public): signed chain operations, countersignatures
+    - **Content plane** (authenticated): raw content blobs gated by API-AUTH identity proofs and DFOS credentials
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+paths:
+  /.well-known/dfos-relay:
+    get:
+      operationId: getRelayMetadata
+      summary: Relay metadata
+      description: |
+        Returns the relay's DID, protocol identifier, version, capabilities,
+        profile artifact, configured peers, and operational stats.
+      tags: [Meta]
+      responses:
+        '200':
+          description: Relay metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [did, protocol, version, capabilities, profile, peers, stats]
+                properties:
+                  did:
+                    type: string
+                    description: The relay's DID
+                    example: 'did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr'
+                  protocol:
+                    type: string
+                    enum: [dfos-web-relay]
+                  version:
+                    type: string
+                    example: '0.16.0'
+                  capabilities:
+                    type: object
+                    required: [proof, write, content, log, revocations, index, signing]
+                    properties:
+                      proof:
+                        type: boolean
+                        description: Always true — a relay without proof plane is not a relay
+                      write:
+                        type: boolean
+                        description: Whether the relay accepts writes via POST /proof/v1/operations (false = lite pull-only node)
+                      content:
+                        type: boolean
+                        description: Whether the relay supports the content plane (blob upload/download; enumerate a chain's documents via GET /proof/v1/content/{contentId}/log)
+                      log:
+                        type: boolean
+                        description: Whether the global operation log is available (GET /proof/v1/log)
+                      revocations:
+                        type: boolean
+                        description: Whether the revocation status index is served (GET /revocations/v1/*)
+                      index:
+                        type: boolean
+                        description: Whether the index query family is served (GET /index/v0/*)
+                      signing:
+                        type: boolean
+                        description: Whether the optional SIGNING 0.1 mailbox courier is enabled
+                  ingestion:
+                    type: string
+                    enum: [open, proof-required, closed]
+                    description: |
+                      Admission-mode hint for POST /proof/v1/operations. `open` — anonymous
+                      submissions admitted, subject to policy; `proof-required` — anonymous
+                      refused at the policy step (403); `closed` — no external ingestion (501).
+                      Absent derives from capabilities.write. Advertisement is a hint; the
+                      relay-local admission policy is the authority.
+                  openapi:
+                    type: string
+                    example: '/openapi.json'
+                    description: >-
+                      OPTIONAL. URL of an OpenAPI document describing this relay's full
+                      HTTP surface — absolute, or root-relative resolved against the
+                      relay's base URL. Serving the document is SHOULD, never MUST; a
+                      relay that serves one advertises it here, and absence of the field
+                      means none is served. The document is discovery, never authority:
+                      the routes, capability gates, and auth rules the spec fixes govern
+                      regardless of what an advertised document says.
+                  profile:
+                    type: string
+                    description: The relay's profile artifact as a compact JWS token
+                  peers:
+                    type: array
+                    description: Peers this relay is configured to sync from, for mesh discovery
+                    items:
+                      type: object
+                      required: [endpoint]
+                      properties:
+                        endpoint:
+                          type: string
+                          description: The peer relay's base URL
+                  stats:
+                    type: object
+                    description: >-
+                      Operational statistics. pendingOps is always present; the
+                      remaining fields appear when the store computes them
+                      (getStats is an optional store surface).
+                    required: [pendingOps]
+                    properties:
+                      pendingOps:
+                        type: integer
+                        description: Count of operations pending processing (-1 if unavailable)
+                      opCount:
+                        type: integer
+                        description: Total operations in the global log
+                      countsByKind:
+                        type: object
+                        description: Operation counts bucketed by primitive kind (all six keys present)
+                        required: [identity, content, artifact, credential, countersign, revocation]
+                        properties:
+                          identity:
+                            type: integer
+                          content:
+                            type: integer
+                          artifact:
+                            type: integer
+                          credential:
+                            type: integer
+                          countersign:
+                            type: integer
+                          revocation:
+                            type: integer
+                      oldestOpAt:
+                        type: string
+                        nullable: true
+                        description: createdAt of the oldest operation in the log, or null when empty
+                      headCid:
+                        type: string
+                        nullable: true
+                        description: CID of the newest operation in the log (the tip), or null when empty
+
+  /openapi.json:
+    get:
+      operationId: getOpenApiDocument
+      summary: This OpenAPI document
+      description: |
+        Returns the OpenAPI document describing the relay's HTTP surface. Relay
+        meta, ungated exactly as the well-known is — no capability flag stands
+        between a client and the description of the surface it is about to call.
+        Registered when the deployment is configured with a document
+        (`createRelay({ openapi: { document } })`), and its path is the value
+        advertised in the well-known `openapi` field. Discovery, never
+        authority: the routes, capability gates, and auth rules the spec fixes
+        govern regardless of what this document says.
+      tags: [Meta]
+      responses:
+        '200':
+          description: An OpenAPI document
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /signing/v0/requests:
+    post:
+      operationId: depositSignRequest
+      summary: Deposit a credential-authorized sign request
+      description: Verifies the request envelope and a deposit credential rooted at the mailbox subject, then stores ephemeral courier state by request CID.
+      tags: [Signing Mailbox]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request, credential]
+              properties:
+                request: { type: string }
+                credential: { type: string }
+                chain:
+                  type: array
+                  items: { type: string }
+      responses:
+        '201':
+          description: Request deposited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningDepositResponse' }
+        '200':
+          description: Identical request already deposited
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningDepositResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: CID already holds a different request token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413':
+          description: Deposit body exceeds 512 KiB
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: Subject mailbox is at the pending-request cap
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+    get:
+      operationId: pollSigningMailbox
+      summary: Poll the authenticated subject's pending sign requests
+      description: Returns only the authenticated subject's unexpired, unanswered requests in oldest-first order.
+      tags: [Signing Mailbox]
+      security:
+        - IdentityProof: []
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema: { type: string }
+          description: Opaque composite-key cursor from a prior page's `next`
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum requests to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Pending requests, oldest first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningMailboxResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+
+  /signing/v0/requests/{cid}/response:
+    post:
+      operationId: submitSignResponse
+      summary: Submit the subject-signed response artifact
+      description: Verifies a canonical compact JWS over the request's exact target bytes and stores it first-write-wins.
+      tags: [Signing Mailbox]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [response]
+              properties:
+                response: { type: string }
+      responses:
+        '201':
+          description: Response stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningStoredResponse' }
+        '200':
+          description: Identical response already stored
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningStoredResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: A different response already won the slot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413':
+          description: Response body exceeds the aggregate route limit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+    get:
+      operationId: getSignResponse
+      summary: Fetch request status or the response artifact
+      description: Returns the unexpired request's pending, declined, or responded state without authentication.
+      tags: [Signing Mailbox]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Pending, declined, or responded status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningResponseStatus' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+
+  /signing/v0/requests/{cid}/decline:
+    post:
+      operationId: declineSignRequest
+      summary: Set the advisory decline flag
+      description: Idempotently marks an unexpired unanswered request declined; the request may still be answered later.
+      tags: [Signing Mailbox]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Declined (idempotent) }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: A response already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413':
+          description: Decline body exceeds the aggregate route limit
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '501': { $ref: '#/components/responses/NotImplemented' }
+
+  /proof/v1/operations:
+    post:
+      operationId: ingestOperations
+      summary: Submit operations for ingestion
+      description: |
+        Accept a batch of JWS tokens — identity operations, content operations,
+        and countersignatures. The relay classifies, dependency-sorts,
+        verifies, and stores each token.
+
+        Admission is a ladder, cheapest first: structural caps (400/413), then
+        proof verification when an identity proof is presented (401 invalid /
+        503 unverifiable), then the relay-local admission policy over
+        (principal | anonymous) — a refusal is a request-level 403 with no
+        per-item results — then full per-item verification. An identity proof is
+        OPTIONAL here and, when presented, MUST carry `jti` (write-shaped).
+      tags: [Proof Plane]
+      security:
+        - {}
+        - IdentityProof: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operations]
+              properties:
+                operations:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: string
+                    description: JWS compact serialization token
+      responses:
+        '200':
+          description: Ingestion results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/IngestionResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: An identity proof was presented and is invalid (bad signature, stale, wrong binding, missing or replayed jti)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Refused by the relay-local admission policy — request-level, no per-item results
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '413':
+          description: Aggregate request body exceeds 16 MiB
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '503':
+          description: The presenter could not be resolved, the relay has no configured authority, or the admission policy could not be evaluated (fail closed)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /proof/v1/operations/{cid}:
+    get:
+      operationId: getOperation
+      summary: Get an operation by CID
+      tags: [Proof Plane]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: CIDv1 of the operation
+      responses:
+        '200':
+          description: Operation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoredOperation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /proof/v1/identities/{did}:
+    get:
+      operationId: getIdentityChain
+      summary: Get an identity chain by DID
+      tags: [Proof Plane]
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 'DID of the identity (e.g., did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr)'
+      responses:
+        '200':
+          description: Identity chain terminal state (the operation log is served by /proof/v1/identities/{did}/log)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityChainResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /1.0/identifiers/{did}:
+    get:
+      operationId: resolveDID
+      summary: Resolve a did:dfos to a W3C DID Document
+      description: |
+        Resolve a `did:dfos` identifier into a W3C DID Document, following the
+        DIF Universal Resolver HTTP binding. Read-only and self-certifying: the
+        relay serves the DID-core projection of the identity chain's verified
+        terminal state. A deactivated identity resolves to 200 with an empty
+        verification-method set and `deactivated: true`. Additive — rides the
+        frozen v1 surface, does not touch the wire or the proof plane.
+      tags: [DID Resolution]
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 'DID to resolve (e.g., did:dfos:cnnnft9f8a2rn938d6nkz38r847v2kr)'
+      responses:
+        '200':
+          description: DIF resolution result
+          content:
+            application/did+ld+json:
+              schema:
+                type: object
+                required: ['@context', didDocument, didResolutionMetadata, didDocumentMetadata]
+                properties:
+                  '@context':
+                    type: string
+                    example: https://w3id.org/did-resolution/v1
+                  didDocument:
+                    type: object
+                    required: ['@context', id, controller, verificationMethod]
+                    properties:
+                      '@context':
+                        type: array
+                        items:
+                          type: string
+                      id:
+                        type: string
+                      controller:
+                        type: string
+                      verificationMethod:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: string
+                            type:
+                              type: string
+                              example: Multikey
+                            controller:
+                              type: string
+                            publicKeyMultibase:
+                              type: string
+                      authentication:
+                        type: array
+                        items:
+                          type: string
+                      assertionMethod:
+                        type: array
+                        items:
+                          type: string
+                      capabilityInvocation:
+                        type: array
+                        items:
+                          type: string
+                      service:
+                        type: array
+                        items:
+                          type: object
+                          required: [id, type]
+                          properties:
+                            id:
+                              type: string
+                            type:
+                              type: string
+                            serviceEndpoint: {}
+                            label:
+                              type: string
+                              description: >-
+                                Human-readable label, emitted for ContentAnchor
+                                service entries. Unrecognized service types are
+                                preserved verbatim, so additional properties may
+                                appear.
+                  didResolutionMetadata:
+                    type: object
+                    properties:
+                      contentType:
+                        type: string
+                        example: application/did+ld+json
+                  didDocumentMetadata:
+                    type: object
+                    properties:
+                      created:
+                        type: string
+                      updated:
+                        type: string
+                      deactivated:
+                        type: boolean
+                      operationCount:
+                        type: integer
+        '400':
+          description: Malformed did:dfos identifier
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  didDocument:
+                    nullable: true
+                  didResolutionMetadata:
+                    type: object
+                    properties:
+                      error:
+                        type: string
+                        example: invalidDid
+                  didDocumentMetadata:
+                    type: object
+        '404':
+          description: No identity chain found for the DID
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  didDocument:
+                    nullable: true
+                  didResolutionMetadata:
+                    type: object
+                    properties:
+                      error:
+                        type: string
+                        example: notFound
+                  didDocumentMetadata:
+                    type: object
+
+  /revocations/v1/credential/{credentialCID}:
+    get:
+      operationId: getCredentialRevocationStatus
+      summary: Revocation status for a credential
+      description: |
+        Read-only projection of the relay's revocation set — the same
+        (issuerDID, credentialCID) index credential enforcement consults. A
+        frozen v1 contract at the relay root on its own version clock;
+        revocations still enter through POST /proof/v1/operations. Every positive answer carries the full
+        revocation JWS so a zero-trust caller re-verifies the proof instead of
+        trusting the boolean. `revoked: false` is an honest known-nothing answer
+        — absence is NOT proof of non-revocation. Relays without the index
+        (capabilities.revocations: false) return 501.
+      tags: [Revocation Status]
+      parameters:
+        - name: credentialCID
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 'Credential CID (CIDv1 dag-cbor + sha256, bafyrei…)'
+      responses:
+        '200':
+          description: Revocation status (revoked or honest known-nothing)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credentialCID, revoked]
+                properties:
+                  credentialCID:
+                    type: string
+                  revoked:
+                    type: boolean
+                  revocation:
+                    type: string
+                    description: The full revocation JWS token — present iff revoked. Self-proving.
+        '400':
+          description: Malformed credential CID
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: invalid credential CID
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /revocations/v1/issuer/{did}:
+    get:
+      operationId: getIssuerRevocations
+      summary: Paginated feed of all revocations ingested for an issuer
+      description: |
+        Every revocation this relay has ingested for the issuer, ordered by
+        credentialCID ascending and cursor-paginated. Each entry carries the full revocation JWS
+        (self-proving). An issuer with none returns an empty array — same honest
+        absence semantics as the credential route.
+      tags: [Revocation Status]
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema:
+            type: string
+          description: 'Issuer DID (canonical 31-char did:dfos)'
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Strictly-greater credentialCID keyset cursor. It need not name a present row; an unknown value resumes at the next greater key.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Issuer revocation list page (possibly empty)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [did, revocations, next]
+                properties:
+                  did:
+                    type: string
+                  revocations:
+                    type: array
+                    items:
+                      type: object
+                      required: [credentialCID, revocation]
+                      properties:
+                        credentialCID:
+                          type: string
+                        revocation:
+                          type: string
+                          description: The full revocation JWS token — self-proving
+                  next:
+                    type: string
+                    nullable: true
+                    description: Last row's credentialCID, or null when the page was not full
+        '400':
+          description: Malformed did:dfos identifier
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: invalid DID
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /index/v0/identities:
+    get:
+      operationId: indexIdentities
+      summary: Enumerate identity chains (non-authoritative index)
+      description: |
+        Cursor-paginated enumeration of identity chains, DID ascending. A
+        discovery hint, never authority — every row carries the identifiers a
+        client needs to re-derive its claims from the frozen proof plane. The
+        index cannot lie by assertion (a fabricated row fails the client's
+        fold) but CAN lie by omission — absence of a row is not proof of
+        absence. The `profile` object is the single well-known projection
+        (profile/v1 → name): null only when the identity declares no
+        profile-labeled content-chain anchor; on circuit breakers the object is
+        kept with docSchema/name null and anchor preserved as the verification
+        pointer. Relays without the capability (capabilities.index false or
+        absent) return 501.
+      tags: [Index]
+      parameters:
+        - name: did
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact DID match (zero or one row)
+        - name: key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Reverse lookup "which identities has this key ever been declared
+            by". Matched byte-for-byte against the multibase public-key strings
+            in the authKeys / assertKeys / controllerKeys arrays of every
+            accepted operation on the chain, not just the current head — a key
+            a later update rotated out still matches. One key may match many
+            identities, and a deleted identity still matches. The value is
+            opaque: a string no operation ever declared matches nothing, with
+            no format validation and no 400.
+        - name: hasPublicProfile
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: >-
+            Boolean filter on the predicate "profile is non-null AND
+            profile.publicRead is true" — true keeps rows where it holds, false
+            keeps rows where it does not, absent applies no filter
+        - name: nameContains
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Case-insensitive substring filter over the projected profile name. Non-authoritative (index hint).
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [genesisAt.desc, headAt.desc]
+          description: Optional author-time ordering; ordered cursors are opaque
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Keyset cursor — returns rows with `did` strictly greater than this value (from a prior page's next). Need not be a present key; a value between keys resumes at the next greater DID.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Identity index page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [identities, next]
+                properties:
+                  identities:
+                    type: array
+                    items:
+                      type: object
+                      required: [did, headCID, opCount, genesisAt, headAt, isDeleted, profile]
+                      properties:
+                        did:
+                          type: string
+                        headCID:
+                          type: string
+                        opCount:
+                          type: integer
+                          description: Operations stored for this chain, branch-inclusive
+                        genesisAt:
+                          type: string
+                          description: Author-claimed createdAt of the genesis operation
+                        headAt:
+                          type: string
+                          description: Author-claimed createdAt of the current head operation
+                        isDeleted:
+                          type: boolean
+                        profile:
+                          type: object
+                          nullable: true
+                          description: >-
+                            The profile/v1 → name well-known projection, or null
+                            when the identity declares no profile-labeled
+                            content-chain ContentAnchor
+                          required: [anchor, publicRead, docSchema, name]
+                          properties:
+                            anchor:
+                              type: string
+                              description: The anchored contentId — the client's verification pointer
+                            publicRead:
+                              type: boolean
+                              description: >-
+                                Whether a standing public-read grant currently
+                                authorizes anonymous read of the anchored chain,
+                                per this relay's fold — a hint, never an access
+                                decision
+                            docSchema:
+                              type: string
+                              nullable: true
+                              description: >-
+                                $schema declared by the held head document; null
+                                when bytes are not held or not decodable
+                            name:
+                              type: string
+                              nullable: true
+                              description: >-
+                                Extracted iff the held head doc declares
+                                profile/v1 and name is a non-empty string; null
+                                on any circuit breaker
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page (pass as `after`), or null when the page was not full
+        '400':
+          description: Invalid order or cursor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /index/v0/content:
+    get:
+      operationId: indexContent
+      summary: Enumerate and filter content chains (non-authoritative index)
+      description: |
+        Cursor-paginated enumeration of content chains, contentId ascending.
+        Filters are ANDed exact matches. docSchema matches only chains whose
+        current head document bytes the relay holds and can decode — a lower
+        bound, not exhaustive coverage. Same hints-not-authority posture as the
+        identity index: verify by fetching the chain from the proof plane and
+        folding. Relays without the capability return 501.
+      tags: [Index]
+      parameters:
+        - name: contentId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact contentId match (zero or one row)
+        - name: creator
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'Exact match on the chain creator (genesis signer) DID'
+        - name: signer
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact DID match against accepted operation signers in the chain
+        - name: docSchema
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Exact opaque string match on the $schema declared by the held head
+            document
+        - name: publicRead
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Filter on the standing public-read grant fold
+        - name: documentCID
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact match against currentDocumentCID
+        - name: isDeleted
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Exact match against terminal deletion state
+        - name: titleContains
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Case-insensitive substring match over projected title. Implicitly
+            restricts to publicRead=true; combining with publicRead=false is 400.
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [genesisAt.desc, headAt.desc]
+          description: Optional author-time ordering; ordered cursors are opaque
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Keyset cursor — returns rows with `contentId` strictly greater than this value (from a prior page's next). Need not be a present key; a value between keys resumes at the next greater contentId.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Content index page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [content, next]
+                properties:
+                  content:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        [
+                          contentId,
+                          genesisCID,
+                          headCID,
+                          creatorDID,
+                          isDeleted,
+                          opCount,
+                          genesisAt,
+                          headAt,
+                          currentDocumentCID,
+                          publicRead,
+                          docSchema,
+                          title,
+                        ]
+                      properties:
+                        contentId:
+                          type: string
+                        genesisCID:
+                          type: string
+                        headCID:
+                          type: string
+                        creatorDID:
+                          type: string
+                        isDeleted:
+                          type: boolean
+                        opCount:
+                          type: integer
+                          description: Operations stored for this chain, branch-inclusive
+                        genesisAt:
+                          type: string
+                        headAt:
+                          type: string
+                        currentDocumentCID:
+                          type: string
+                          nullable: true
+                        publicRead:
+                          type: boolean
+                          description: Standing public-read grant fold — a hint, never an access decision
+                        docSchema:
+                          type: string
+                          nullable: true
+                          description: >-
+                            $schema declared by the held head document; null when
+                            bytes are not held or not decodable
+                        title:
+                          type: string
+                          nullable: true
+                          description: The public post/v1 display-name projection, null on any circuit breaker
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page (pass as `after`), or null when the page was not full
+        '400':
+          description: Malformed creator DID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /index/v0/credits:
+    get:
+      operationId: indexCredits
+      summary: Credits asserted by public head documents (non-authoritative index)
+      description: |
+        Enumerates who publicly readable post/v1 head documents say made them.
+        Rows are assertion-tier discovery hints derived only from held current-head
+        bytes; non-public, deleted, malformed, unheld, and non-post documents have
+        zero rows. Claim tokens and names are never projected, and hasClaim records
+        only string byte-presence. Rows are ordered by contentId then position.
+      tags: [Index]
+      parameters:
+        - name: did
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact credited DID match; malformed DIDs return 400
+        - name: contentId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact content-chain identifier match
+        - name: role
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact opaque role match; null-role rows match no role filter
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Opaque composite cursor from a prior page's next
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Public-head credit page (possibly empty)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credits, next]
+                properties:
+                  credits:
+                    type: array
+                    items:
+                      type: object
+                      required: [contentId, did, role, position, hasClaim]
+                      properties:
+                        contentId:
+                          type: string
+                        did:
+                          type: string
+                        role:
+                          type: string
+                          nullable: true
+                        position:
+                          type: integer
+                          minimum: 0
+                        hasClaim:
+                          type: boolean
+                  next:
+                    type: string
+                    nullable: true
+                    description: Opaque cursor for the next page, or null when the page was not full
+        '400':
+          description: Malformed DID or cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /index/v0/countersignatures:
+    get:
+      operationId: indexCountersignaturesByWitness
+      summary: Countersignatures signed by a witness (non-authoritative index)
+      description: |
+        The reverse of GET /proof/v1/countersignatures/{cid}: every
+        countersignature this relay has ingested that was SIGNED BY the given
+        witness DID, ordered by countersignature CID ascending and
+        cursor-paginated. Each entry carries the full JWS — self-proving, same
+        posture as the issuer revocations feed. Relays without the capability
+        return 501.
+      tags: [Index]
+      parameters:
+        - name: witness
+          in: query
+          required: true
+          schema:
+            type: string
+          description: 'Witness DID (canonical 31-char did:dfos)'
+        - name: relation
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact opaque relation match
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [createdAt.desc, ingestedAt.desc]
+          description: Optional recency ordering; ordered cursors are opaque
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Keyset cursor — returns rows with countersignature `cid` strictly greater than this value (from a prior page's next). Need not be a present key; a value between keys resumes at the next greater cid.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Countersignatures-by-witness page (possibly empty)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [witness, countersignatures, next]
+                properties:
+                  witness:
+                    type: string
+                  countersignatures:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, targetCID, relation, jwsToken]
+                      properties:
+                        cid:
+                          type: string
+                        targetCID:
+                          type: string
+                        relation:
+                          type: string
+                          nullable: true
+                          description: Open-namespace relation tag, null when omitted by the signer
+                        jwsToken:
+                          type: string
+                          description: The full countersignature JWS — self-proving
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page (pass as `after`), or null when the page was not full
+        '400':
+          description: Missing or malformed witness DID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /index/v0/credentials:
+    get:
+      operationId: indexCredentials
+      summary: Public credentials held by the relay (non-authoritative index)
+      description: |
+        Enumerates the relay's held PUBLIC credentials (aud "*"), filterable by
+        issuer and/or resource, ordered by credential CID ascending and
+        cursor-paginated. When the requested `resource` is a chain resource, the
+        `chain:*` wildcard bucket is always unioned in (a chain:* grant may
+        authorize the named chain). Amber and relay-asserted: the result is a
+        superset of candidates carrying the full self-proving JWS; the caller
+        folds each token against the proof plane (delegation roots at the chain
+        creator, revocation, expiry) before treating it as authorization — the
+        relay makes no authorization claim. Only public credentials are ever
+        stored, so targeted bearer credentials are neither enumerable nor
+        leakable. Relays without the capability return 501.
+      tags: [Index]
+      parameters:
+        - name: issuer
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'Issuer DID (canonical 31-char did:dfos); 400 when malformed'
+        - name: resource
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'Exact match against an att[].resource. For a chain resource the chain:* wildcard bucket is unioned in.'
+        - name: action
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 'Exact match against an att[].action'
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Keyset cursor — returns rows with credential `cid` strictly greater than this value (from a prior page's next).
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Public-credentials page (possibly empty)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [credentials, next]
+                properties:
+                  credentials:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, issuerDID, aud, att, exp, jwsToken]
+                      properties:
+                        cid:
+                          type: string
+                        issuerDID:
+                          type: string
+                        aud:
+                          type: string
+                          enum: ['*']
+                        att:
+                          type: array
+                          items:
+                            type: object
+                            required: [resource, action]
+                            properties:
+                              resource:
+                                type: string
+                              action:
+                                type: string
+                        exp:
+                          type: integer
+                          description: Expiry (unix seconds)
+                        jwsToken:
+                          type: string
+                          description: The full credential JWS — self-proving, full-fidelity att
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page (pass as `after`), or null when the page was not full
+        '400':
+          description: Malformed issuer DID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /index/v0/operations:
+    get:
+      operationId: indexOperations
+      summary: Relay-held operation recency feed (non-authoritative index)
+      description: |
+        Metadata-only browse ordering over accepted operations. createdAt is
+        author-claimed (credential iat normalized to ISO 8601); ingestedAt is
+        relay-observed. Rows never include JWS tokens or payloads. The reference
+        stores do not retain indexed signer metadata, so signer is deliberately
+        not a filter.
+      tags: [Index]
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [identity-op, content-op, artifact, countersign, revocation, credential]
+          description: Exact operation-kind match
+        - name: chainId
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact operation-log routing identifier match
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [createdAt.desc, ingestedAt.desc]
+            default: ingestedAt.desc
+          description: Recency ordering
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Opaque ordered cursor from a prior page's next
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Operation index page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [operations, next]
+                properties:
+                  operations:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, kind, chainId, createdAt, ingestedAt]
+                      properties:
+                        cid:
+                          type: string
+                        kind:
+                          type: string
+                        chainId:
+                          type: string
+                        createdAt:
+                          type: string
+                        ingestedAt:
+                          type: string
+                  next:
+                    type: string
+                    nullable: true
+                    description: Opaque cursor for the next page, or null when caught up
+        '400':
+          description: Invalid kind, order, or cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /index/v0/artifacts:
+    get:
+      operationId: indexArtifacts
+      summary: Enumerate standalone signed artifacts (non-authoritative index)
+      description: |
+        Metadata-only enumeration of verified standalone artifacts. The inline
+        document bytes are held in the stored JWS, so docSchema coverage does
+        not depend on a separate blob. Rows never include the artifact payload.
+      tags: [Index]
+      parameters:
+        - name: cid
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact artifact CID match (zero or one row)
+        - name: signer
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact signing DID from the artifact JWS kid
+        - name: docSchema
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact opaque match on the inline document $schema
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [createdAt.desc, ingestedAt.desc]
+          description: Optional recency ordering; absent means lexical CID order
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CID keyset cursor in lexical mode or opaque cursor in ordered mode
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Artifact index page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifacts, next]
+                properties:
+                  artifacts:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, signerDID, createdAt, ingestedAt, docSchema]
+                      properties:
+                        cid:
+                          type: string
+                        signerDID:
+                          type: string
+                        createdAt:
+                          type: string
+                        ingestedAt:
+                          type: string
+                        docSchema:
+                          type: string
+                          nullable: true
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page, or null when caught up
+        '400':
+          description: Invalid signer DID, order, or cursor
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /proof/v1/content/{contentId}:
+    get:
+      operationId: getContentChain
+      summary: Get a content chain by content ID
+      tags: [Proof Plane]
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Content identifier (31-char hash)
+      responses:
+        '200':
+          description: Content chain terminal state (the operation log is served by /proof/v1/content/{contentId}/log)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentChainResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /content/{contentId}/blob/{ref}:
+    put:
+      operationId: uploadBlob
+      summary: Upload a content blob
+      description: |
+        Upload raw bytes for a document referenced by a content chain operation.
+        Requires an identity proof carrying `jti` (this is a write-shaped route).
+        The proven DID must be the chain creator or the signer of the referenced
+        operation. For PUT, `ref` MUST be the operation CID whose `documentCID`
+        this blob satisfies.
+      tags: [Content Plane]
+      security:
+        - IdentityProof: []
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+          description: MUST be the CID of the content operation whose documentCID this blob satisfies
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Blob stored
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, contentId, documentCID, operationCID]
+                properties:
+                  status:
+                    type: string
+                    enum: [stored]
+                  contentId:
+                    type: string
+                  documentCID:
+                    type: string
+                  operationCID:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          description: Blob body exceeds the configured maximum
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+    get:
+      operationId: downloadBlobAtRef
+      summary: Download a content blob at a specific operation
+      description: |
+        Download the raw bytes of the document committed by a specific operation.
+        The ref parameter is an operation CID within the chain. Anonymous access
+        is legal when a standing public-read grant authorizes it; otherwise the
+        creator presents an identity proof alone and a non-creator presents an
+        identity proof plus a DFOS read credential in `X-Credential`.
+      tags: [Content Plane]
+      # Three alternatives, cheapest first: anonymous under a standing
+      # public-read grant; the creator's bare identity proof (AuthN, local policy
+      # decides); or the authn/authz split — an identity proof AND a credential
+      # in this route's declared role.
+      security:
+        - {}
+        - IdentityProof: []
+        - IdentityProof: []
+          Credential: []
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ref
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Operation CID within the chain
+      responses:
+        '200':
+          description: Blob data
+          headers:
+            X-Document-CID:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /content/{contentId}/blob:
+    get:
+      operationId: downloadBlob
+      summary: Download a content blob at head
+      description: |
+        Download the raw bytes of the current document at chain head.
+        Anonymous access is legal when a standing public-read grant authorizes
+        it. Otherwise an identity proof is required (the AuthN half), and
+        non-creators must also present a DFOS read credential in `X-Credential`
+        (the AuthZ half). A read-shaped proof carries no `jti`.
+      tags: [Content Plane]
+      # Three alternatives, cheapest first: anonymous under a standing
+      # public-read grant; the creator's bare identity proof (AuthN, local policy
+      # decides); or the authn/authz split — an identity proof AND a credential
+      # in this route's declared role.
+      security:
+        - {}
+        - IdentityProof: []
+        - IdentityProof: []
+          Credential: []
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Blob data
+          headers:
+            X-Document-CID:
+              schema:
+                type: string
+              description: The documentCID of the returned blob
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /proof/v1/log:
+    get:
+      operationId: getLog
+      summary: Paginated global log of all accepted operations
+      description: |
+        Returns every operation the relay has accepted — across all identity and
+        content chains, plus countersignatures — in acceptance order.
+        Cursor-based pagination. Used by peer relays to background-sync. Available
+        only when the relay advertises the `log` capability; otherwise returns 501.
+      tags: [Proof Plane]
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CID cursor — start after this operation CID
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Global log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries, next, cursor]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, jwsToken, kind, chainId]
+                      properties:
+                        cid:
+                          type: string
+                        jwsToken:
+                          type: string
+                        kind:
+                          type: string
+                          enum:
+                            [identity-op, content-op, artifact, countersign, revocation, credential]
+                        chainId:
+                          type: string
+                          description: Chain identifier (DID or contentId)
+                  next:
+                    type: string
+                    nullable: true
+                    description: CID to pass as `after`, or null when the page was not full
+                  cursor:
+                    type: string
+                    nullable: true
+                    deprecated: true
+                    description: Deprecated alias of `next`; removed in the next minor release
+        '400':
+          description: Invalid relay-local cursor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /proof/v1/identities/{did}/log:
+    get:
+      operationId: getIdentityLog
+      summary: Paginated log of identity chain operations
+      description: |
+        Returns operations belonging to this identity chain in chain order.
+        Cursor-based pagination.
+      tags: [Proof Plane]
+      parameters:
+        - name: did
+          in: path
+          required: true
+          schema:
+            type: string
+          description: DID of the identity
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CID cursor — start after this operation CID
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Identity chain log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries, next, cursor]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, jwsToken]
+                      properties:
+                        cid:
+                          type: string
+                        jwsToken:
+                          type: string
+                  next:
+                    type: string
+                    nullable: true
+                    description: CID to pass as `after`, or null when the page was not full
+                  cursor:
+                    type: string
+                    nullable: true
+                    deprecated: true
+                    description: Deprecated alias of `next`; removed in the next minor release
+        '400':
+          description: Invalid relay-local cursor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /proof/v1/content/{contentId}/log:
+    get:
+      operationId: getContentLog
+      summary: Paginated log of content chain operations
+      description: |
+        Returns operations belonging to this content chain in chain order.
+        Cursor-based pagination.
+      tags: [Proof Plane]
+      parameters:
+        - name: contentId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Content identifier (31-char hash)
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: CID cursor — start after this operation CID
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Content chain log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries, next, cursor]
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, jwsToken]
+                      properties:
+                        cid:
+                          type: string
+                        jwsToken:
+                          type: string
+                  next:
+                    type: string
+                    nullable: true
+                    description: CID to pass as `after`, or null when the page was not full
+                  cursor:
+                    type: string
+                    nullable: true
+                    deprecated: true
+                    description: Deprecated alias of `next`; removed in the next minor release
+        '400':
+          description: Invalid relay-local cursor
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /proof/v1/countersignatures/{cid}:
+    get:
+      operationId: getCountersignaturesByCID
+      summary: Get countersignatures targeting any CID
+      description: |
+        Countersignatures targeting any countersignable CID — operations AND
+        artifacts. Cursor-paginated. Returns 404 only when the CID is not a
+        known operation and no countersignatures target it.
+      tags: [Proof Plane]
+      parameters:
+        - name: cid
+          in: path
+          required: true
+          schema:
+            type: string
+          description: CIDv1 of the countersigned target (operation or artifact)
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Cursor — start after this countersignature CID (from a prior page's next)
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+          description: Maximum rows to return; values above 1000 are clamped
+      responses:
+        '200':
+          description: Countersignatures page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [countersignatures, next]
+                properties:
+                  countersignatures:
+                    type: array
+                    items:
+                      type: object
+                      required: [cid, jwsToken]
+                      properties:
+                        cid:
+                          type: string
+                          description: CID of the countersignature itself
+                        jwsToken:
+                          type: string
+                          description: JWS compact serialization (witness signature)
+                  next:
+                    type: string
+                    nullable: true
+                    description: Cursor for the next page (pass as `after`), or null on the last page
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    # API-AUTH "Advertising in OpenAPI". Component NAMES are this host's choice —
+    # a consumer identifies a scheme structurally, by type / scheme / header name
+    # and the x-dfos-typ marker, never by the name below.
+    IdentityProof:
+      type: http
+      scheme: DFOS
+      x-dfos-typ: did:dfos:identity-proof
+      description: |
+        An API-AUTH identity proof — `Authorization: DFOS <did:dfos:identity-proof JWS>`.
+        The scheme token is `DFOS`, matched case-insensitively; it is deliberately
+        NOT `Bearer`, because nothing carried here is a bearer token. The proof
+        binds one exact request (method, the relay's own configured authority,
+        origin-form path, body hash) inside a freshness window the relay owns, and
+        resolves the signer's key against CURRENT identity state. On a write-shaped
+        route (blob upload, operation ingestion) the proof MUST also carry a `jti`
+        member, recorded in the relay's replay cache.
+
+    Credential:
+      type: apiKey
+      in: header
+      name: X-Credential
+      description: |
+        A DFOS credential JWS presented in the `X-Credential` header — the AuthZ
+        half of the relay's split. `apiKey` is OpenAPI's honest generic type for
+        "a token in a named header"; nothing carried here is a bearer artifact —
+        the possession claim lives entirely in the identity proof this scheme is
+        ANDed with, and a credential without its proof authorizes nothing. The
+        relay serves no request-proof (`did:dfos:request-proof`) route, so this
+        scheme appears only in the identity-proof + credential combination.
+
+  schemas:
+    SigningDepositResponse:
+      type: object
+      required: [cid, expiresAt]
+      properties:
+        cid: { type: string }
+        expiresAt:
+          type: string
+          format: date-time
+
+    SigningMailboxResponse:
+      type: object
+      required: [requests, next]
+      properties:
+        requests:
+          type: array
+          items:
+            type: object
+            required: [cid, request, depositedAt, declined]
+            properties:
+              cid: { type: string }
+              request: { type: string }
+              depositedAt:
+                type: string
+                format: date-time
+              declined: { type: boolean }
+        next:
+          type: string
+          nullable: true
+          description: Opaque cursor to pass as `after`, or null when the page was not full
+
+    SigningStoredResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [stored]
+
+    SigningResponseStatus:
+      oneOf:
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [pending] }
+        - type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [declined] }
+        - type: object
+          required: [status, response]
+          properties:
+            status: { type: string, enum: [responded] }
+            response: { type: string }
+
+    IngestionResult:
+      type: object
+      required: [cid, status]
+      properties:
+        cid:
+          type: string
+          description: CID of the operation
+        status:
+          type: string
+          enum: [new, duplicate, rejected]
+        error:
+          type: string
+          description: Error message if rejected
+        kind:
+          type: string
+          enum: [identity-op, content-op, artifact, countersign, revocation, credential]
+        chainId:
+          type: string
+          description: Chain identifier (DID or contentId)
+        revokedGrant:
+          type: object
+          required: [wildcard, contentIds]
+          description: Revoked public grant scope; omitted when the credential was not held
+          properties:
+            wildcard:
+              type: boolean
+            contentIds:
+              type: array
+              items: { type: string }
+        dependencyMissing:
+          type: boolean
+          description: True when rejection is retryable because a dependency is missing
+
+    StoredOperation:
+      type: object
+      required: [cid, jwsToken, chainType, chainId]
+      properties:
+        cid:
+          type: string
+        jwsToken:
+          type: string
+        chainType:
+          type: string
+          enum: [identity, content, artifact, countersign, revocation, credential]
+        chainId:
+          type: string
+
+    IdentityChainResponse:
+      type: object
+      required: [did, headCID, state]
+      properties:
+        did:
+          type: string
+        headCID:
+          type: string
+          description: CID of the current head operation
+        state:
+          type: object
+          required: [did, isDeleted, authKeys, assertKeys, controllerKeys, services]
+          properties:
+            did:
+              type: string
+            isDeleted:
+              type: boolean
+            authKeys:
+              type: array
+              items:
+                $ref: '#/components/schemas/MultikeyPublicKey'
+            assertKeys:
+              type: array
+              items:
+                $ref: '#/components/schemas/MultikeyPublicKey'
+            controllerKeys:
+              type: array
+              items:
+                $ref: '#/components/schemas/MultikeyPublicKey'
+            services:
+              type: array
+              description: >-
+                Resolved discovery vocabulary (controller-signed). Each entry has
+                a common envelope {id, type}; recognized types DfosRelay and
+                ContentAnchor carry type-specific fields. The namespace is open —
+                unrecognized types are preserved verbatim.
+              items:
+                type: object
+                required: [id, type]
+                properties:
+                  id:
+                    type: string
+                  type:
+                    type: string
+                additionalProperties: true
+
+    ContentChainResponse:
+      type: object
+      required: [contentId, genesisCID, headCID, state]
+      properties:
+        contentId:
+          type: string
+        genesisCID:
+          type: string
+        headCID:
+          type: string
+        state:
+          type: object
+          required:
+            [contentId, genesisCID, headCID, isDeleted, currentDocumentCID, length, creatorDID]
+          properties:
+            contentId:
+              type: string
+            genesisCID:
+              type: string
+            headCID:
+              type: string
+            isDeleted:
+              type: boolean
+            currentDocumentCID:
+              type: string
+              nullable: true
+            length:
+              type: integer
+            creatorDID:
+              type: string
+
+    MultikeyPublicKey:
+      type: object
+      required: [id, type, publicKeyMultibase]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [Multikey]
+        publicKeyMultibase:
+          type: string
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotImplemented:
+      description: Capability not supported by this relay
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+tags:
+  - name: Meta
+    description: Relay metadata and discovery
+  - name: Proof Plane
+    description: Public routes for signed chain operations and countersignatures
+  - name: Content Plane
+    description: Authenticated routes for content blob storage and retrieval
+  - name: DID Resolution
+    description: DIF Universal Resolver binding — resolve a did:dfos to a W3C DID Document
+  - name: Revocation Status
+    description: Read-only credential revocation status and issuer feeds
+  - name: Index
+    description: Non-authoritative query surface over the relay's current-state projections — discovery hints, verified by the client against the proof plane
+  - name: Signing Mailbox
+    description: Optional ephemeral SIGNING 0.1 request/response courier

@@ -37,6 +37,14 @@ const relay = await createRelay({
     did: fixture.relayDid,
     profileArtifactJws: fixture.relayProfileJws,
   },
+  // Serve + advertise the OpenAPI document, matching the Go twin (which serves
+  // its embedded copy unconditionally) — the parity test byte-compares the
+  // canonicalized well-known bodies, so both twins must advertise "/openapi.json".
+  openapi: {
+    document: JSON.parse(
+      readFileSync(new URL('../../dfos-web-relay/openapi.json', import.meta.url), 'utf8'),
+    ) as unknown,
+  },
 });
 
 serve(relay.app, { port });

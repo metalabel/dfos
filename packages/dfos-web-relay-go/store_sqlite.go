@@ -203,6 +203,13 @@ CREATE TABLE IF NOT EXISTS content_signers (
 );
 CREATE INDEX IF NOT EXISTS idx_content_signers_did ON content_signers(did, content_id);
 
+CREATE TABLE IF NOT EXISTS identity_keys (
+	public_key TEXT NOT NULL,
+	did TEXT NOT NULL,
+	key_id TEXT NOT NULL,
+	PRIMARY KEY (public_key, did, key_id)
+);
+
 CREATE TABLE IF NOT EXISTS index_countersign (
 	cid TEXT PRIMARY KEY,
 	witness_did TEXT NOT NULL,
@@ -1241,6 +1248,17 @@ func (s *SQLiteStore) PutIndexContentSigner(contentID string, did string) error 
 	return err
 }
 
+// PutIndexIdentityKey records one (publicKey, did, keyID) declaration. The PK
+// covers the `key=` lookup directly (public_key is its leftmost column), so no
+// secondary index is needed — nothing queries this table by did.
+func (s *SQLiteStore) PutIndexIdentityKey(did string, keyID string, publicKey string) error {
+	_, err := s.writerDB().Exec(
+		"INSERT OR IGNORE INTO identity_keys (public_key, did, key_id) VALUES (?, ?, ?)",
+		publicKey, did, keyID,
+	)
+	return err
+}
+
 func (s *SQLiteStore) PutIndexCountersignatureRow(row storedIndexCountersignature) error {
 	_, err := s.writerDB().Exec(
 		`INSERT OR REPLACE INTO index_countersign
@@ -1257,6 +1275,13 @@ func (s *SQLiteStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 	if q.DID != "" {
 		where = append(where, "did = ?")
 		args = append(args, q.DID)
+	}
+	if q.Key != "" {
+		// Has-ever-declared, mirroring the content family's signer= EXISTS probe.
+		// The value is opaque: a string no operation ever declared simply matches
+		// nothing.
+		where = append(where, "EXISTS (SELECT 1 FROM identity_keys WHERE identity_keys.did = index_identity.did AND identity_keys.public_key = ?)")
+		args = append(args, q.Key)
 	}
 	if q.HasPublicProfile != nil {
 		where = append(where, "has_public_profile = ?")
@@ -1712,7 +1737,7 @@ func (s *SQLiteStore) SetIndexProjectionVersion(v int) error {
 }
 
 func (s *SQLiteStore) ClearIndexProjection() error {
-	for _, table := range []string{"index_identity", "index_content", "index_credit", "content_signers", "index_countersign", "index_artifact"} {
+	for _, table := range []string{"index_identity", "index_content", "index_credit", "content_signers", "identity_keys", "index_countersign", "index_artifact"} {
 		if _, err := s.writerDB().Exec("DELETE FROM " + table); err != nil {
 			return err
 		}
