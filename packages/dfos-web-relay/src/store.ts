@@ -167,6 +167,14 @@ export class MemoryRelayStore implements RelayStore {
   private indexCreditRows = new Map<string, IndexCreditRow[]>();
   /** Accepted content-operation signer sets keyed by contentId. */
   private indexContentSigners = new Map<string, Set<string>>();
+  /**
+   * HAS-EVER-DECLARED key reverse index: multibase public key → the DIDs whose
+   * accepted operations ever declared it. Rows accumulate (a rotation removes
+   * nothing) and are never deleted (a deleted identity keeps its rows), which is
+   * exactly what makes the `key=` filter answer "what has this key ever
+   * controlled" rather than "what does it control now".
+   */
+  private indexIdentityKeys = new Map<string, Set<string>>();
   /** Countersignature projection rows keyed by cid (carry witnessDID column). */
   private indexCountersignatureRows = new Map<
     string,
@@ -389,6 +397,7 @@ export class MemoryRelayStore implements RelayStore {
 
   async queryIndexIdentities(q: {
     did?: string;
+    key?: string;
     hasPublicProfile?: boolean;
     nameContains?: string;
     after?: string;
@@ -398,6 +407,10 @@ export class MemoryRelayStore implements RelayStore {
   }): Promise<IndexIdentityRow[]> {
     const rows = [...this.indexIdentityRows.values()].filter((row) => {
       if (q.did !== undefined && row.did !== q.did) return false;
+      // opaque byte match against the has-ever-declared reverse index — an
+      // unknown key matches nothing rather than erroring, and deleted rows are
+      // never excluded here (compose the other filters for that)
+      if (q.key !== undefined && !this.indexIdentityKeys.get(q.key)?.has(row.did)) return false;
       if (q.hasPublicProfile !== undefined) {
         const isPublic = row.profile !== null && row.profile.publicRead;
         if (isPublic !== q.hasPublicProfile) return false;
@@ -611,6 +624,19 @@ export class MemoryRelayStore implements RelayStore {
     const signers = this.indexContentSigners.get(contentId) ?? new Set<string>();
     signers.add(did);
     this.indexContentSigners.set(contentId, signers);
+  }
+
+  async putIndexIdentityKey(did: string, publicKeyMultibase: string, keyId: string): Promise<void> {
+    const declarers = this.indexIdentityKeys.get(publicKeyMultibase) ?? new Set<string>();
+    declarers.add(did);
+    this.indexIdentityKeys.set(publicKeyMultibase, declarers);
+    // `keyId` is the third column of the (public_key, did, key_id) row a
+    // persistent twin stores — it completes the row's primary key so the same
+    // key redeclared under a different id is a distinct row. No query selects
+    // it, and the in-memory map keys on the pair the query needs, so it is
+    // accepted (keeping the store contract identical across implementations)
+    // and folded away here rather than stored as dead state.
+    void keyId;
   }
 
   async putIndexCountersignatureRow(

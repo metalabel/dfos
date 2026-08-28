@@ -179,6 +179,41 @@ const contentIdsFromCredentialToken = (
 };
 
 /**
+ * Every public key ONE identity operation declares, across all three key
+ * classes — the material behind the has-ever-declared `key=` reverse index.
+ *
+ * WHY THE OPERATION AND NOT THE HEAD STATE: an identity `update` REPLACES the
+ * key arrays, so the chain's current state knows only its live keys. Capturing
+ * each operation's own arrays as it is accepted is what makes a rotated-out key
+ * still findable — the case the filter exists for (key-loss recovery holds
+ * exactly the keys later updates dropped). `delete` / `restore` carry no key
+ * arrays and contribute nothing.
+ *
+ * There is no key-class column: which array carried the key is the chain's
+ * answer, not the index's, so all three fold into one flat row set.
+ */
+const declaredKeys = (
+  payload: Record<string, unknown> | undefined,
+): { publicKeyMultibase: string; id: string }[] => {
+  const declared: { publicKeyMultibase: string; id: string }[] = [];
+  for (const field of ['authKeys', 'assertKeys', 'controllerKeys'] as const) {
+    const keys = payload?.[field];
+    if (!Array.isArray(keys)) continue;
+    for (const entry of keys) {
+      const key = entry as Record<string, unknown> | null;
+      const publicKeyMultibase = key?.['publicKeyMultibase'];
+      const id = key?.['id'];
+      // stored VERBATIM — the filter is an opaque byte match, so nothing here
+      // normalizes, validates, or re-encodes the multibase string
+      if (typeof publicKeyMultibase === 'string' && typeof id === 'string') {
+        declared.push({ publicKeyMultibase, id });
+      }
+    }
+  }
+  return declared;
+};
+
+/**
  * Collect the rows ONE accepted operation dirties into the batch's dirty set.
  * Called from the single ingest choke point (ingestOperations) in dependency
  * order, right after each op is applied to the store. Only `status === 'new'`
@@ -190,6 +225,10 @@ const contentIdsFromCredentialToken = (
  *                                        currently-public subset, while restore
  *                                        sweeps all content because suspended
  *                                        rows are no longer in that subset
+ *  - any identity op for D             → also record every key the op DECLARES
+ *                                        into the has-ever-declared reverse
+ *                                        index (never a diff against head state
+ *                                        — an update replaces the arrays)
  *  - content-op for chain C            → dirty content row C (+ anchored identities)
  *  - credential grant                  → dirty the att-named content rows, or all
  *                                        content rows on a `chain:*` grant
@@ -214,9 +253,13 @@ export const collectIndexDirtyAfterOp = async (
       case 'identity-op':
         if (result.chainId) {
           dirty.identityDIDs.add(result.chainId);
-          const opType = decodeJwsUnsafe(jwsToken)?.payload.type;
+          const payload = decodeJwsUnsafe(jwsToken)?.payload as Record<string, unknown> | undefined;
+          const opType = payload?.['type'];
           if (opType === 'delete') dirty.allPublicContent = true;
           if (opType === 'restore') dirty.allContent = true;
+          for (const key of declaredKeys(payload)) {
+            await store.putIndexIdentityKey(result.chainId, key.publicKeyMultibase, key.id);
+          }
         }
         break;
       case 'artifact': {

@@ -63,6 +63,7 @@ export type {
   GossipProofSigner,
   IngestionMode,
   RelayIdentity,
+  RelayOpenApiOption,
   RelayOptions,
   RelayStore,
   RelayPeerInfo,

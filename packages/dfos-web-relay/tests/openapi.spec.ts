@@ -3,6 +3,11 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+// THE DOGFOOD PATH: exactly what a consumer imports and hands to createRelay —
+// the generated JSON artifact behind the package's `./openapi.json` export, not
+// a runtime read of the yaml (a bundled consumer has neither a yaml loader nor
+// filesystem assets).
+import openapiDocument from '../openapi.json';
 import { createRelay, MemoryRelayStore } from '../src';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -10,11 +15,18 @@ const openapiPath = resolve(testDir, '../openapi.yaml');
 const packageJsonPath = resolve(testDir, '../package.json');
 
 const openapi = parse(readFileSync(openapiPath, 'utf8')) as {
-  info: { version: string };
+  info: { title: string; version: string };
   paths: Record<string, Record<string, unknown>>;
-  components: { schemas: Record<string, Record<string, unknown>> };
+  components: {
+    schemas: Record<string, Record<string, unknown>>;
+    securitySchemes: Record<string, Record<string, unknown>>;
+  };
 };
-const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version: string };
+const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
+  version: string;
+  exports: Record<string, unknown>;
+  publishConfig: { exports: Record<string, unknown> };
+};
 
 const allowedMethods = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 
@@ -65,8 +77,16 @@ const responseSchema = (path: string, method: string): Record<string, unknown> =
 };
 
 describe('openapi', () => {
+  let relayApp: Awaited<ReturnType<typeof createRelay>>['app'];
+
   beforeAll(async () => {
-    const { app } = await createRelay({ store: new MemoryRelayStore() });
+    // the reference relay serves its own document — the route table under test
+    // therefore includes /openapi.json, exactly as a configured deployment's does
+    const { app } = await createRelay({
+      store: new MemoryRelayStore(),
+      openapi: { document: openapiDocument },
+    });
+    relayApp = app;
     const routes = app.routes.filter(({ method, path }) => {
       if (method === 'ALL' || path === '/*') return false;
       return allowedMethods.has(method);
@@ -126,5 +146,101 @@ describe('openapi', () => {
 
   it('keeps info.version in sync with package.json', () => {
     expect(openapi.info.version).toBe(packageJson.version);
+  });
+
+  it('keeps the generated openapi.json byte-identical to the yaml source', () => {
+    // the yaml is the source; openapi.json is its committed codegen output
+    // (scripts/generate-openapi-json.mjs). Drift here means someone edited the
+    // yaml without regenerating, and the served/imported document is stale.
+    expect(openapiDocument).toEqual(openapi);
+  });
+
+  it('exports the document so a consumer can import and serve it', () => {
+    // the reachability half of the dogfood: without this subpath a bundled
+    // consumer cannot resolve the document at all
+    expect(packageJson.exports['./openapi.json']).toBe('./openapi.json');
+    expect(packageJson.publishConfig.exports['./openapi.json']).toBe('./openapi.json');
+  });
+
+  it('serves the configured document and advertises it in the well-known', async () => {
+    const served = await relayApp.request('http://localhost/openapi.json');
+    expect(served.status).toBe(200);
+    const document = (await served.json()) as { info: { title: string } };
+    expect(document.info.title).toBe(openapi.info.title);
+
+    const wellKnown = (await (
+      await relayApp.request('http://localhost/.well-known/dfos-relay')
+    ).json()) as { openapi?: string };
+    expect(wellKnown.openapi).toBe('/openapi.json');
+  });
+
+  it('omits the well-known field and serves nothing when no document is configured', async () => {
+    // serving is SHOULD, never MUST — absence of the field is the honest
+    // statement that this relay serves no document
+    const { app } = await createRelay({ store: new MemoryRelayStore() });
+    const wellKnown = (await (
+      await app.request('http://localhost/.well-known/dfos-relay')
+    ).json()) as Record<string, unknown>;
+    expect(wellKnown).not.toHaveProperty('openapi');
+    expect((await app.request('http://localhost/openapi.json')).status).toBe(404);
+  });
+
+  it('advertises a url-form document without registering a route', async () => {
+    const { app } = await createRelay({
+      store: new MemoryRelayStore(),
+      openapi: { url: 'https://docs.example.com/relay.json' },
+    });
+    const wellKnown = (await (
+      await app.request('http://localhost/.well-known/dfos-relay')
+    ).json()) as { openapi?: string };
+    expect(wellKnown.openapi).toBe('https://docs.example.com/relay.json');
+    expect((await app.request('http://localhost/openapi.json')).status).toBe(404);
+  });
+
+  it('documents the index filters the routes actually parse', () => {
+    const parameters = object(openapi.paths['/index/v0/identities']!['get'])[
+      'parameters'
+    ] as Record<string, unknown>[];
+    expect(parameters.map((parameter) => parameter['name'])).toContain('key');
+    // opaque, so no enum/format constraint may creep in — a string is the whole
+    // contract, and an undeclared value matches nothing rather than 400ing
+    const key = parameters.find((parameter) => parameter['name'] === 'key')!;
+    expect(key['required']).toBe(false);
+    expect(key['schema']).toEqual({ type: 'string' });
+  });
+
+  it('adopts the API-AUTH advertising convention for its security schemes', () => {
+    const schemes = openapi.components.securitySchemes;
+
+    // x-dfos-typ is REQUIRED on every scheme:dfos scheme — it names the envelope
+    // the scheme carries, mirroring the JWS typ gate on the wire
+    expect(schemes['IdentityProof']).toMatchObject({
+      type: 'http',
+      'x-dfos-typ': 'did:dfos:identity-proof',
+    });
+    expect(String(schemes['IdentityProof']!['scheme']).toLowerCase()).toBe('dfos');
+
+    // the credential is a token in a named header, nothing bearer-shaped
+    expect(schemes['Credential']).toMatchObject({
+      type: 'apiKey',
+      in: 'header',
+      name: 'X-Credential',
+    });
+
+    // the relay serves no request-proof route, so no scheme claims that envelope
+    for (const scheme of Object.values(schemes)) {
+      expect(scheme['x-dfos-typ']).not.toBe('did:dfos:request-proof');
+    }
+
+    // the blob reads are the authn/authz split: anonymous under a standing
+    // public-read grant, a bare identity proof, or a proof AND a credential
+    for (const path of ['/content/{contentId}/blob', '/content/{contentId}/blob/{ref}']) {
+      const operation = object(openapi.paths[path]!['get']);
+      expect(operation['security'], `${path} security requirements`).toEqual([
+        {},
+        { IdentityProof: [] },
+        { IdentityProof: [], Credential: [] },
+      ]);
+    }
   });
 });

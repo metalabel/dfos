@@ -276,6 +276,18 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // rather than as the absence of one.
   const admissionPolicy: AdmissionPolicy = options.admissionPolicy ?? (() => true);
 
+  // OpenAPI advertisement. Serving a document is SHOULD, never MUST: absent the
+  // option the relay registers no route and the well-known omits the field
+  // entirely (absence means "none is served"). The `{ url }` form advertises a
+  // document hosted elsewhere; the `{ document }` form serves the given document
+  // here and advertises the route it was served at. Either way the document is
+  // DISCOVERY, NEVER AUTHORITY — nothing below reads it to decide a request.
+  const openapiOption = options.openapi;
+  const openapiDocument = openapiOption?.document;
+  const openapiRoute =
+    openapiDocument !== undefined ? (openapiOption?.route ?? '/openapi.json') : undefined;
+  const openapiUrl = openapiOption?.url ?? openapiRoute;
+
   // peer configuration
   const peers = options.peers ?? [];
   const peerClient: PeerClient | undefined = options.peerClient;
@@ -467,6 +479,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       // The admission-mode HINT, so a client knows before attempting. The policy
       // decision is still the authority.
       ingestion: ingestionMode,
+      // OPTIONAL, and omitted (never null) when this deployment serves no
+      // document — absence is the honest statement that none exists
+      ...(openapiUrl !== undefined ? { openapi: openapiUrl } : {}),
       profile: profileArtifactJws,
       peers: peerInfos,
       stats: {
@@ -475,6 +490,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       },
     });
   });
+
+  // The advertised document itself. UNGATED, like the well-known it is
+  // advertised from: this is relay meta, not a data plane, so no capability flag
+  // stands between a client and the description of the surface it is about to
+  // call. Registered only under the `{ document }` form — a `{ url }` relay
+  // points elsewhere and serves nothing here.
+  if (openapiDocument !== undefined && openapiRoute !== undefined) {
+    app.get(openapiRoute, (c) => c.json(openapiDocument as Record<string, unknown>));
+  }
 
   registerSigningRoutes({
     app,
@@ -769,6 +793,11 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     if (did !== undefined && !isValidDfosDid(did)) {
       return c.json({ error: 'invalid DID' }, 400);
     }
+    // OPAQUE, DELIBERATELY UNVALIDATED: `key=` matches multibase public-key
+    // strings byte-for-byte against the has-ever-declared reverse index. A value
+    // no operation ever declared matches nothing — there is no key format to
+    // enforce here and therefore no 400, unlike the DID-shaped filters above.
+    const key = c.req.query('key');
     const nameContains = c.req.query('nameContains');
     const order = parseIndexOrder(c.req.query('order'));
     if (order === null) return c.json({ error: 'invalid order' }, 400);
@@ -779,6 +808,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const rows = (
       await store.queryIndexIdentities({
         ...(did !== undefined ? { did } : {}),
+        ...(key !== undefined ? { key } : {}),
         ...(hasPublicProfile !== undefined ? { hasPublicProfile } : {}),
         ...(nameContains ? { nameContains } : {}),
         ...(order ? { order } : {}),

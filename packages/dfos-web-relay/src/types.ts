@@ -95,6 +95,32 @@ export const INGESTION_MODES: readonly IngestionMode[] = ['open', 'proof-require
  */
 export type AdmissionPolicy = (principal: string | null) => boolean | Promise<boolean>;
 
+/**
+ * How this deployment answers the well-known's optional `openapi` field
+ * (WEB-RELAY.md, Well-Known Endpoint). Serving a document is SHOULD, never MUST;
+ * an unset option means the relay serves none and omits the field.
+ *
+ * - `{ url }` — ADVERTISE ONLY. The document lives somewhere else (a docs site,
+ *   a CDN); the relay registers no route and advertises the URL verbatim,
+ *   absolute or root-relative.
+ * - `{ document, route? }` — SERVE AND ADVERTISE. The relay registers an ungated
+ *   `GET` at `route` (default `/openapi.json`) returning the given document as
+ *   JSON, and advertises that path. `@metalabel/dfos-web-relay/openapi.json` is
+ *   the canonical document for this package's own route table:
+ *
+ *   ```ts
+ *   import document from '@metalabel/dfos-web-relay/openapi.json';
+ *   const relay = await createRelay({ store, openapi: { document } });
+ *   ```
+ *
+ * The document is DISCOVERY, NEVER AUTHORITY — the routes, capability gates, and
+ * auth rules the spec fixes govern regardless of what an advertised document
+ * says, so nothing here is consulted when serving a request.
+ */
+export type RelayOpenApiOption =
+  | { url: string; document?: never; route?: never }
+  | { document: unknown; route?: string; url?: never };
+
 export interface RelayOptions {
   /** Storage backend */
   store: RelayStore;
@@ -195,6 +221,12 @@ export interface RelayOptions {
    * Sync-in and read-through are READS and stay public — nothing to sign.
    */
   gossipIdentityProof?: boolean;
+  /**
+   * OpenAPI document advertisement (and optional serving). See
+   * `RelayOpenApiOption`. Absent: no route is registered and the well-known
+   * omits the `openapi` field.
+   */
+  openapi?: RelayOpenApiOption;
 }
 
 // -----------------------------------------------------------------------------
@@ -639,9 +671,17 @@ export interface RelayStore {
    * to identities that expose a public profile; `did` is an exact point lookup;
    * `nameContains` filters by case-insensitive substring over projected
    * `profile.name`.
+   *
+   * `key` is the HAS-EVER-DECLARED reverse lookup: keep rows whose chain ever
+   * declared this public key in ANY key array (`authKeys` / `assertKeys` /
+   * `controllerKeys`) of ANY accepted operation — genesis or update, current or
+   * long since rotated out. Matched byte-for-byte as an opaque multibase string
+   * (a value no operation ever declared simply matches nothing; no format
+   * validation, no 400), and it never excludes deleted rows.
    */
   queryIndexIdentities(q: {
     did?: string;
+    key?: string;
     hasPublicProfile?: boolean;
     nameContains?: string;
     after?: string;
@@ -740,6 +780,19 @@ export interface RelayStore {
   putIndexArtifactRow(row: IndexArtifactRow): Promise<void>;
   /** Add one accepted content-operation signer to a chain's signer set. */
   putIndexContentSigner(contentId: string, did: string): Promise<void>;
+  /**
+   * Record one public key an accepted identity operation DECLARED — the
+   * `(publicKeyMultibase, did, keyId)` reverse row backing `key=` on
+   * /index/v0/identities.
+   *
+   * Called once per entry of every key array of every accepted identity
+   * operation, so the table accumulates the chain's whole declaration history
+   * rather than its head state — an `update` REPLACES the arrays, so diffing
+   * head state would lose exactly the rotated-out keys the filter exists to
+   * find. Rows are UPSERTS and are NEVER DELETED: a rotation removes nothing, a
+   * deleted identity keeps its rows. `publicKeyMultibase` is stored verbatim.
+   */
+  putIndexIdentityKey(did: string, publicKeyMultibase: string, keyId: string): Promise<void>;
   /**
    * Upsert a countersignature projection row by cid. The `witnessDID` column is
    * stored (never echoed in the row body) so witness-scoped queries stay O(page).
