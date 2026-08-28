@@ -18,16 +18,26 @@ import (
 )
 
 var (
-	// persistent flags
+	// persistent flags. --as and --relay are the canonical selectors; --ctx,
+	// --identity, and --peer are compat aliases of the same resolver, hidden in
+	// help and documented as aliases.
+	asFlag       string
+	relayFlag    string
 	ctxFlag      string
 	identityFlag string
 	peerFlag     string
 	jsonFlag     bool
+	quietFlag    bool
 
 	// shared state
 	cfg     *config.Config
 	keys    keystore.Store
 	Version = "dev"
+
+	// signerAnnounced keeps the resolved-principal line to ONE per invocation:
+	// several commands resolve the signer more than once (re-reading the chain
+	// after an operation), and repeating the line would be noise, not disclosure.
+	signerAnnounced bool
 
 	// lazy-initialized local relay
 	localRelayInstance *localrelay.LocalRelay
@@ -100,10 +110,19 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
-	root.PersistentFlags().StringVar(&ctxFlag, "ctx", "", "Context (identity@peer)")
-	root.PersistentFlags().StringVar(&identityFlag, "identity", "", "Identity name override")
-	root.PersistentFlags().StringVar(&peerFlag, "peer", "", "Peer name override")
+	root.PersistentFlags().StringVar(&asFlag, "as", "", "Identity to act as (name or did:dfos:…)")
+	root.PersistentFlags().StringVar(&relayFlag, "relay", "", "Peer to talk to (name)")
 	root.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output as JSON")
+	root.PersistentFlags().BoolVarP(&quietFlag, "quiet", "q", false, "Suppress the resolved-principal line on signing commands")
+
+	// Compat aliases. They resolve through the same stack at the same tier as
+	// the mechanism they alias; they are hidden so help teaches one spelling.
+	root.PersistentFlags().StringVar(&ctxFlag, "ctx", "", "Context (identity@peer) — alias of --as/--relay")
+	root.PersistentFlags().StringVar(&identityFlag, "identity", "", "Identity name — alias of --as")
+	root.PersistentFlags().StringVar(&peerFlag, "peer", "", "Peer name — alias of --relay")
+	for _, alias := range []string{"ctx", "identity", "peer"} {
+		_ = root.PersistentFlags().MarkHidden(alias)
+	}
 
 	// command groups
 	identityGroup := &cobra.Group{ID: "identity", Title: "Identity Commands"}
@@ -116,7 +135,8 @@ func NewRootCmd() *cobra.Command {
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newStatusCmd())
-	root.AddCommand(newUseCmd())
+	root.AddCommand(newWhoamiCmd())
+	root.AddCommand(newUseTombstoneCmd())
 	root.AddCommand(newIdentityCmd())
 	root.AddCommand(newContentCmd())
 	root.AddCommand(newCredentialCmd())
@@ -154,35 +174,82 @@ func getRelay() (*localrelay.LocalRelay, error) {
 	return localRelayInstance, nil
 }
 
-// resolveCtx resolves the current context from flags/env/config.
-func resolveCtx() (*config.ResolvedContext, error) {
-	return config.ResolveContext(cfg, ctxFlag, identityFlag, peerFlag)
+// overrides packages this invocation's selectors for the shared resolver. Every
+// site that needs a principal goes through here — there are no site-local
+// variants of the stack.
+func overrides() config.Overrides {
+	return config.Overrides{As: asFlag, Identity: identityFlag, Ctx: ctxFlag, Relay: relayFlag, Peer: peerFlag}
 }
 
-// requirePeer resolves context and ensures a peer is configured.
+// resolveCtx resolves the current (identity, peer) pair from flags/env/config.
+func resolveCtx() (*config.ResolvedContext, error) {
+	return config.ResolveContext(cfg, overrides())
+}
+
+// requirePeer resolves the pair and ensures a peer is configured. peerOverride
+// is a command-local --peer flag, which sits at the flag tier like the global one.
 func requirePeer(peerOverride string) (*config.ResolvedContext, *client.Client, error) {
-	r := peerOverride
-	if r == "" {
-		r = peerFlag
+	ov := overrides()
+	if peerOverride != "" {
+		ov.Peer = peerOverride
 	}
-	ctx, err := config.ResolveContext(cfg, ctxFlag, identityFlag, r)
+	ctx, err := config.ResolveContext(cfg, ov)
 	if err != nil {
 		return nil, nil, err
 	}
 	if ctx.RelayURL == "" {
-		return nil, nil, fmt.Errorf("no peer configured. Use --peer or 'dfos peer add'")
+		return nil, nil, errNoPeer()
 	}
 	return ctx, client.New(ctx.RelayURL), nil
 }
 
-// requireIdentity resolves and ensures an identity is available in the local relay.
+// errNoIdentity is the distinguishable "anonymous, and this command cannot be"
+// error. It names all three mechanisms because the fix is always one of exactly
+// three things, and a signing command that fell back to some ambient default
+// instead would be the failure this stack exists to prevent.
+func errNoIdentity() error {
+	return fmt.Errorf("no identity to sign with — name one:\n" +
+		"  --as <name|did>                             for this invocation\n" +
+		"  DFOS_AS=<name|did>                          for this environment\n" +
+		"  dfos config set default-identity <name|did> as the standing default")
+}
+
+// errNoPeer is the peer-side twin of errNoIdentity, same three-mechanism shape.
+func errNoPeer() error {
+	return fmt.Errorf("no peer to talk to — name one:\n" +
+		"  --relay <name>                          for this invocation\n" +
+		"  DFOS_RELAY=<name>                       for this environment\n" +
+		"  dfos config set default-peer <name>     as the standing default\n" +
+		"Register a peer first with 'dfos peer add <name> <url>'.")
+}
+
+// announceSigner echoes the resolved principal, and the mechanism it resolved
+// through, to stderr before anything is signed. Signing under an identity the
+// operator did not see named is the ambient-authority failure this whole stack
+// is built against, so the line is on by default and off only under --quiet.
+// stderr keeps it out of --json's single stdout document.
+func announceSigner(ctx *config.ResolvedContext) {
+	if quietFlag || signerAnnounced || !ctx.HasIdentity() {
+		return
+	}
+	signerAnnounced = true
+	label := ctx.Principal()
+	if ctx.IdentityName != "" && ctx.IdentityDID != "" {
+		label = fmt.Sprintf("%s (%s)", ctx.IdentityName, ctx.IdentityDID)
+	}
+	fmt.Fprintf(os.Stderr, "Signing as %s — via %s\n", label, ctx.IdentitySource)
+}
+
+// requireIdentity resolves the signing principal and ensures its chain is
+// available in the local relay. This is the choke point every signing command
+// passes through: it resolves once, announces once, and refuses anonymously.
 func requireIdentity() (*config.ResolvedContext, *relay.StoredIdentityChain, error) {
 	ctx, err := resolveCtx()
 	if err != nil {
 		return nil, nil, err
 	}
-	if ctx.IdentityName == "" {
-		return nil, nil, fmt.Errorf("no identity configured. Use --identity or 'dfos identity create'")
+	if !ctx.HasIdentity() {
+		return nil, nil, errNoIdentity()
 	}
 
 	lr, err := getRelay()
@@ -190,10 +257,9 @@ func requireIdentity() (*config.ResolvedContext, *relay.StoredIdentityChain, err
 		return nil, nil, err
 	}
 
-	// resolve DID from config
 	did := ctx.IdentityDID
 	if did == "" {
-		return nil, nil, fmt.Errorf("identity '%s' not found in config", ctx.IdentityName)
+		return nil, nil, fmt.Errorf("identity '%s' not found in config (from %s)", ctx.IdentityName, ctx.IdentitySource)
 	}
 
 	chain, err := lr.Relay.GetIdentity(did)
@@ -201,11 +267,12 @@ func requireIdentity() (*config.ResolvedContext, *relay.StoredIdentityChain, err
 		return nil, nil, err
 	}
 	if chain == nil {
-		return nil, nil, fmt.Errorf("identity '%s' (%s) not found in local relay", ctx.IdentityName, did)
+		return nil, nil, fmt.Errorf("identity '%s' not found in local relay", ctx.Principal())
 	}
 	if chain.State.IsDeleted {
-		return nil, nil, fmt.Errorf("identity '%s' is deleted — cannot sign operations", ctx.IdentityName)
+		return nil, nil, fmt.Errorf("identity '%s' is deleted — cannot sign operations", ctx.Principal())
 	}
+	announceSigner(ctx)
 	return ctx, chain, nil
 }
 
@@ -245,25 +312,21 @@ func newStatusCmd() *cobra.Command {
 			}
 			ctx, ctxErr := resolveCtx()
 
-			// No usable identity: distinguish a BROKEN active context (something
-			// is set but won't resolve) from nothing-configured, instead of
-			// telling a user with identities that they have none.
-			if ctx == nil || ctx.IdentityName == "" {
-				if cfg.ActiveContext != "" {
-					reason := "names an unknown identity or peer"
-					if ctxErr != nil {
-						reason = ctxErr.Error()
-					}
+			// No usable identity: distinguish a BROKEN selector (something was
+			// named but won't resolve) from nothing-selected, instead of telling
+			// a user with identities that they have none.
+			if !ctx.HasIdentity() {
+				if ctxErr != nil {
 					if jsonFlag {
-						out := map[string]any{"context": cfg.ActiveContext, "resolved": false, "error": reason}
+						out := map[string]any{"resolved": false, "error": ctxErr.Error()}
 						if store != nil {
 							out["store"] = store
 						}
 						outputJSON(out)
 						return nil
 					}
-					fmt.Printf("Active context '%s' is set but cannot be resolved: %s\n", cfg.ActiveContext, reason)
-					fmt.Printf("Fix it with 'dfos use <identity[@peer]>', add the peer via 'dfos peer add <name> <url>', or run 'dfos identity list'.\n")
+					fmt.Printf("Cannot resolve a context: %s\n", ctxErr)
+					fmt.Printf("Add the peer via 'dfos peer add <name> <url>', or run 'dfos identity list'.\n")
 					printLocalStoreStatus(store)
 					return nil
 				}
@@ -276,9 +339,9 @@ func newStatusCmd() *cobra.Command {
 					return nil
 				}
 				if len(cfg.Identities) == 0 {
-					fmt.Println("No active context. Use 'dfos identity create --name <name>' to begin.")
+					fmt.Println("No identity selected. Use 'dfos identity create --name <name>' to begin.")
 				} else {
-					fmt.Println("No active context. Use 'dfos use <identity[@peer]>' (see 'dfos identity list').")
+					fmt.Println("No identity selected. Pass --as <name|did>, set DFOS_AS, or run 'dfos config set default-identity <name|did>' (see 'dfos identity list').")
 				}
 				printLocalStoreStatus(store)
 				return nil
@@ -290,9 +353,9 @@ func newStatusCmd() *cobra.Command {
 				chain, _ = lr.Relay.GetIdentity(ctx.IdentityDID)
 			}
 
-			contextStr := ctx.IdentityName + " (local only)"
+			contextStr := ctx.Principal() + " (local only)"
 			if ctx.RelayName != "" {
-				contextStr = ctx.IdentityName + "@" + ctx.RelayName
+				contextStr = ctx.Principal() + "@" + ctx.RelayName
 			}
 
 			// Fetch peer health once; both the JSON and human paths render it.
@@ -337,14 +400,15 @@ func newStatusCmd() *cobra.Command {
 
 			fmt.Printf("Context:   %s\n", contextStr)
 			if chain != nil {
-				fmt.Printf("Identity:  %s (%s)\n", chain.DID, ctx.IdentityName)
+				fmt.Printf("Identity:  %s (%s)\n", chain.DID, ctx.Principal())
 				totalKeys := len(distinctKeyIDs(chain))
 				haveKeys := countKeysInChain(chain)
 				fmt.Printf("  Keys:    %d/%d (%s)\n", haveKeys, totalKeys, keys.Backend())
 				fmt.Printf("  Chain:   %d operation(s)\n", len(chain.Log))
 			} else {
-				fmt.Printf("Identity:  %s (%s) — not in local relay\n", ctx.IdentityDID, ctx.IdentityName)
+				fmt.Printf("Identity:  %s (%s) — not in local relay\n", ctx.IdentityDID, ctx.Principal())
 			}
+			fmt.Printf("  Via:     %s\n", ctx.IdentitySource)
 
 			if ctx.RelayURL != "" {
 				label := ctx.RelayURL
@@ -415,42 +479,21 @@ func printLocalStoreStatus(store *localStoreStatus) {
 		store.CountsByKind["credential"], store.CountsByKind["countersign"], store.CountsByKind["revocation"])
 }
 
-func newUseCmd() *cobra.Command {
+// newUseTombstoneCmd is what is left of `dfos use`. The command is gone: there
+// is no mutable active context to set, because a pointer two processes both
+// read and one of them writes is a race, and running parallel agents under
+// different identities is the normal case now. The tombstone exists only so the
+// removal reads as a removal — a bare "unknown command" would leave an operator
+// guessing where the mechanism went — and it is hidden from help so nothing
+// teaches it. It signs nothing, writes nothing, and always fails.
+func newUseTombstoneCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "use <identity[@peer]>",
-		Short: "Set active context (identity or identity@peer)",
-		Args:  cobra.ExactArgs(1),
+		Use:    "use [identity[@peer]]",
+		Hidden: true,
+		Args:   cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := args[0]
-
-			// validate components exist in config
-			if _, ok := cfg.Contexts[ctx]; !ok {
-				if parts := strings.SplitN(ctx, "@", 2); len(parts) == 2 {
-					// identity@relay format
-					if _, ok := cfg.Identities[parts[0]]; !ok {
-						fmt.Fprintf(os.Stderr, "Warning: identity '%s' not found in config\n", parts[0])
-					}
-					if _, ok := cfg.Relays[parts[1]]; !ok {
-						fmt.Fprintf(os.Stderr, "Warning: relay '%s' not found in config\n", parts[1])
-					}
-				} else {
-					// identity-only (local work without a relay)
-					if _, ok := cfg.Identities[ctx]; !ok {
-						fmt.Fprintf(os.Stderr, "Warning: identity '%s' not found in config\n", ctx)
-					}
-				}
-			}
-
-			cfg.ActiveContext = ctx
-			if err := config.Save(cfg); err != nil {
-				return err
-			}
-			if jsonFlag {
-				outputJSON(map[string]string{"context": ctx})
-				return nil
-			}
-			fmt.Printf("Active context set to: %s\n", ctx)
-			return nil
+			return fmt.Errorf("`dfos use` is removed — there is no mutable active context to set.\n" +
+				"Select an identity per invocation with --as <name|did> or DFOS_AS, or set the standing default with 'dfos config set default-identity <name|did>'.")
 		},
 	}
 }

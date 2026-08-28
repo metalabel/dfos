@@ -55,15 +55,25 @@ func setupDevices(t *testing.T) (storeA, storeB *keystore.MemoryStore, lr *local
 	}
 	localRelayInstance = lr
 
-	prevID := identityFlag
-	prevJSON := jsonFlag
+	// The resolution stack reads the environment before the config, so blank
+	// every mechanism a developer's own shell may carry.
+	for _, k := range []string{config.SourceEnvAs, config.SourceEnvIdentity, config.SourceEnvRelay, config.SourceEnvContext} {
+		t.Setenv(k, "")
+	}
+
+	prevID, prevAs, prevRelay := identityFlag, asFlag, relayFlag
+	prevPeer, prevCtx := peerFlag, ctxFlag
+	prevJSON, prevQuiet, prevAnnounced := jsonFlag, quietFlag, signerAnnounced
+	asFlag, relayFlag, identityFlag, peerFlag, ctxFlag = "", "", "", "", ""
+	quietFlag, signerAnnounced = false, false
 	t.Cleanup(func() {
 		lr.Close()
 		localRelayInstance = nil
 		cfg = nil
 		keys = nil
-		identityFlag = prevID
-		jsonFlag = prevJSON
+		identityFlag, asFlag, relayFlag = prevID, prevAs, prevRelay
+		peerFlag, ctxFlag = prevPeer, prevCtx
+		jsonFlag, quietFlag, signerAnnounced = prevJSON, prevQuiet, prevAnnounced
 	})
 
 	return storeA, storeB, lr

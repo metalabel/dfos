@@ -37,8 +37,9 @@ dfos relay add local http://localhost:4444
 # or unencrypted in ~/.dfos/keys/ when no keychain is available)
 dfos identity create --name alice --peer local
 
-# set active context
-dfos use alice@local
+# set the standing defaults (the only thing that writes them)
+dfos config set default-identity alice
+dfos config set default-peer local
 
 # create content from a file
 dfos content create post.json --peer local
@@ -126,21 +127,36 @@ dfos identity update --clear-services
 dfos identity services alice
 ```
 
-## Context Model
+## Identity Resolution
 
-A context is an (identity, relay) pair. Use the `@` shorthand:
+Identity and peer resolve independently, each from the same three tiers, first
+answer wins:
+
+```
+identity:  --as <name|did>   ->  DFOS_AS      ->  default-identity in config
+peer:      --relay <name>    ->  DFOS_RELAY   ->  default-peer in config
+```
 
 ```bash
-dfos use alice@local           # set default context
-dfos --ctx bob@prod status     # per-command override
+dfos config set default-identity alice   # the config tier; nothing else writes it
+dfos --as bob --relay prod status        # per-invocation override
+dfos whoami                              # what this shell would act as
 ```
+
+There is no mutable active context: no command updates the config tier as a side
+effect, so concurrent invocations carrying different `--as` values cannot race.
+Commands that sign print the resolved principal to stderr unless `--quiet`.
+
+`--ctx`, `--identity`, `--peer`, `DFOS_CONTEXT`, and `DFOS_IDENTITY` remain as
+deprecated aliases at the same precedence tier as the mechanism they alias.
 
 Environment variables:
 
 ```
-DFOS_CONTEXT          Override active context
-DFOS_IDENTITY         Override identity name
-DFOS_RELAY            Override relay name
+DFOS_AS               Identity to act as (name or did:dfos:...)
+DFOS_RELAY            Peer to talk to (name)
+DFOS_IDENTITY         Deprecated alias of DFOS_AS
+DFOS_CONTEXT          Deprecated alias naming both halves (identity@peer)
 DFOS_CONFIG           Config file path (default: ~/.dfos/config.toml)
 DFOS_NO_KEYCHAIN      Skip OS keychain; use file store ~/.dfos/keys/ (unencrypted, 0600)
 DFOS_NO_UPDATE_CHECK  Disable automatic version update checks

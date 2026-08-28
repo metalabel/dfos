@@ -105,7 +105,7 @@ Write-shaped surfaces — POST /proof/v1/operations and PUT blob — require --j
 		},
 	}
 	cmd.Flags().StringVar(&bodyFile, "body", "", "Request body from file (use - for stdin)")
-	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to bind the proof to (default: the active context's peer)")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to bind the proof to (default: the resolved peer)")
 	cmd.Flags().BoolVar(&jti, "jti", false, "Attach a random jti — required on write-shaped surfaces")
 	return cmd
 }
@@ -116,27 +116,20 @@ func newAuthStatusCmd() *cobra.Command {
 		Short: "Show current auth state",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, ctxErr := resolveCtx()
-			if ctx == nil || ctx.IdentityName == "" {
+			if !ctx.HasIdentity() {
 				if jsonFlag {
 					out := map[string]any{"authenticated": false}
-					if cfg.ActiveContext != "" {
-						out["activeContext"] = cfg.ActiveContext
-						if ctxErr != nil {
-							out["error"] = ctxErr.Error()
-						}
+					if ctxErr != nil {
+						out["error"] = ctxErr.Error()
 					}
 					outputJSON(out)
 					return nil
 				}
-				if cfg.ActiveContext != "" {
-					reason := "names an unknown identity or peer"
-					if ctxErr != nil {
-						reason = ctxErr.Error()
-					}
-					fmt.Printf("Not authenticated. Active context '%s' cannot be resolved: %s\n", cfg.ActiveContext, reason)
+				if ctxErr != nil {
+					fmt.Printf("Not authenticated. The selector cannot be resolved: %s\n", ctxErr)
 					return nil
 				}
-				fmt.Println("Not authenticated. Use 'dfos identity create --name <name>' first.")
+				fmt.Println("Not authenticated. Select an identity with --as <name|did>, DFOS_AS, or 'dfos config set default-identity <name|did>'.")
 				return nil
 			}
 
@@ -145,14 +138,15 @@ func newAuthStatusCmd() *cobra.Command {
 					"authenticated": true,
 					"identity":      ctx.IdentityDID,
 					"name":          ctx.IdentityName,
+					"source":        ctx.IdentitySource,
 					"peer":          ctx.RelayURL,
 				})
 				return nil
 			}
 
-			fmt.Printf("Identity: %s (%s)\n", ctx.IdentityDID, ctx.IdentityName)
+			fmt.Printf("Identity: %s (%s) — via %s\n", ctx.IdentityDID, ctx.Principal(), ctx.IdentitySource)
 			if ctx.RelayURL != "" {
-				fmt.Printf("Peer:     %s (%s)\n", ctx.RelayURL, ctx.RelayName)
+				fmt.Printf("Peer:     %s (%s) — via %s\n", ctx.RelayURL, ctx.RelayName, ctx.RelaySource)
 			}
 			return nil
 		},

@@ -1,14 +1,15 @@
 package config
 
 import (
-	"os"
+	"strings"
 	"testing"
 )
 
 func testConfig() *Config {
 	return &Config{
 		Relays: map[string]RelayConfig{
-			"prod": {URL: "https://prod.example.com"},
+			"prod":    {URL: "https://prod.example.com"},
+			"staging": {URL: "https://staging.example.com"},
 		},
 		Identities: map[string]IdentityConfig{
 			"alice": {DID: "did:dfos:alice123"},
@@ -20,168 +21,240 @@ func testConfig() *Config {
 	}
 }
 
-func TestResolveContext_InlineContext(t *testing.T) {
-	cfg := testConfig()
-	ctx, err := ResolveContext(cfg, "alice@prod", "", "")
+// clearEnv blanks every environment mechanism of the stack so a developer's own
+// shell (or a previous test) cannot leak into the case under test.
+func clearEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{SourceEnvAs, SourceEnvIdentity, SourceEnvRelay, SourceEnvContext} {
+		t.Setenv(k, "")
+	}
+}
+
+func resolve(t *testing.T, cfg *Config, ov Overrides) *ResolvedContext {
+	t.Helper()
+	ctx, err := ResolveContext(cfg, ov)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ctx.IdentityName != "alice" {
-		t.Errorf("identity = %q, want alice", ctx.IdentityName)
-	}
-	if ctx.RelayName != "prod" {
-		t.Errorf("relay = %q, want prod", ctx.RelayName)
+	return ctx
+}
+
+// --- the canonical stack -----------------------------------------------------
+
+func TestResolve_AsFlagBeatsEnvBeatsConfigDefault(t *testing.T) {
+	clearEnv(t)
+	cfg := testConfig()
+	cfg.DefaultIdentity = "alice"
+
+	ctx := resolve(t, cfg, Overrides{})
+	if ctx.IdentityName != "alice" || ctx.IdentitySource != SourceDefaultIdentity {
+		t.Fatalf("config tier = (%q, %q), want (alice, %q)", ctx.IdentityName, ctx.IdentitySource, SourceDefaultIdentity)
 	}
 	if ctx.IdentityDID != "did:dfos:alice123" {
-		t.Errorf("DID = %q, want did:dfos:alice123", ctx.IdentityDID)
+		t.Fatalf("DID = %q", ctx.IdentityDID)
+	}
+
+	t.Setenv(SourceEnvAs, "bob")
+	ctx = resolve(t, cfg, Overrides{})
+	if ctx.IdentityName != "bob" || ctx.IdentitySource != SourceEnvAs {
+		t.Fatalf("env tier = (%q, %q), want (bob, %q)", ctx.IdentityName, ctx.IdentitySource, SourceEnvAs)
+	}
+
+	ctx = resolve(t, cfg, Overrides{As: "alice"})
+	if ctx.IdentityName != "alice" || ctx.IdentitySource != SourceFlagAs {
+		t.Fatalf("flag tier = (%q, %q), want (alice, %q)", ctx.IdentityName, ctx.IdentitySource, SourceFlagAs)
+	}
+}
+
+func TestResolve_RelayFlagBeatsEnvBeatsConfigDefault(t *testing.T) {
+	clearEnv(t)
+	cfg := testConfig()
+	cfg.DefaultPeer = "prod"
+
+	ctx := resolve(t, cfg, Overrides{})
+	if ctx.RelayName != "prod" || ctx.RelaySource != SourceDefaultPeer {
+		t.Fatalf("config tier = (%q, %q)", ctx.RelayName, ctx.RelaySource)
 	}
 	if ctx.RelayURL != "https://prod.example.com" {
-		t.Errorf("URL = %q, want https://prod.example.com", ctx.RelayURL)
+		t.Fatalf("URL = %q", ctx.RelayURL)
+	}
+
+	t.Setenv(SourceEnvRelay, "staging")
+	ctx = resolve(t, cfg, Overrides{})
+	if ctx.RelayName != "staging" || ctx.RelaySource != SourceEnvRelay {
+		t.Fatalf("env tier = (%q, %q)", ctx.RelayName, ctx.RelaySource)
+	}
+
+	ctx = resolve(t, cfg, Overrides{Relay: "prod"})
+	if ctx.RelayName != "prod" || ctx.RelaySource != SourceFlagRelay {
+		t.Fatalf("flag tier = (%q, %q)", ctx.RelayName, ctx.RelaySource)
 	}
 }
 
-func TestResolveContext_NamedContext(t *testing.T) {
+func TestResolve_AsAcceptsABareDID(t *testing.T) {
+	clearEnv(t)
 	cfg := testConfig()
-	ctx, err := ResolveContext(cfg, "work", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+
+	// A DID nobody registered still resolves — that is the point of --as <did>.
+	ctx := resolve(t, cfg, Overrides{As: "did:dfos:stranger"})
+	if ctx.IdentityDID != "did:dfos:stranger" || ctx.IdentityName != "" {
+		t.Fatalf("unregistered DID = (%q, %q)", ctx.IdentityName, ctx.IdentityDID)
 	}
-	if ctx.IdentityName != "alice" || ctx.RelayName != "prod" {
-		t.Errorf("got (%q, %q), want (alice, prod)", ctx.IdentityName, ctx.RelayName)
+	if ctx.Principal() != "did:dfos:stranger" {
+		t.Fatalf("principal = %q", ctx.Principal())
+	}
+
+	// A registered one picks its name back up, so output can say "alice".
+	ctx = resolve(t, cfg, Overrides{As: "did:dfos:alice123"})
+	if ctx.IdentityName != "alice" || ctx.IdentityDID != "did:dfos:alice123" {
+		t.Fatalf("registered DID = (%q, %q)", ctx.IdentityName, ctx.IdentityDID)
 	}
 }
 
-func TestResolveContext_IdentityOnly_TreatedAsIdentity(t *testing.T) {
+func TestResolve_NothingSelectedIsAnonymousNotAnError(t *testing.T) {
+	clearEnv(t)
+	ctx := resolve(t, testConfig(), Overrides{})
+	if ctx.HasIdentity() {
+		t.Fatalf("empty config resolved an identity: %+v", ctx)
+	}
+	if ctx.IdentitySource != "" || ctx.RelaySource != "" {
+		t.Fatalf("sources = (%q, %q), want empty", ctx.IdentitySource, ctx.RelaySource)
+	}
+}
+
+// --- compat aliases ----------------------------------------------------------
+
+func TestResolve_AliasesSitAtTheirOwnTier(t *testing.T) {
+	clearEnv(t)
 	cfg := testConfig()
-	// An identity-only string should be treated as the identity name, not error
-	ctx, err := ResolveContext(cfg, "alice", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	cfg.DefaultIdentity = "alice"
+
+	// --identity is a flag alias: it beats the env canonical.
+	t.Setenv(SourceEnvAs, "alice")
+	ctx := resolve(t, cfg, Overrides{Identity: "bob"})
+	if ctx.IdentityName != "bob" || ctx.IdentitySource != SourceFlagIdentity {
+		t.Fatalf("--identity = (%q, %q)", ctx.IdentityName, ctx.IdentitySource)
 	}
-	if ctx.IdentityName != "alice" {
-		t.Errorf("identity = %q, want alice", ctx.IdentityName)
+
+	// DFOS_IDENTITY is an env alias: it beats the config default, and loses to
+	// the canonical env var that sits above it in the same tier.
+	t.Setenv(SourceEnvAs, "")
+	t.Setenv(SourceEnvIdentity, "bob")
+	ctx = resolve(t, cfg, Overrides{})
+	if ctx.IdentityName != "bob" || ctx.IdentitySource != SourceEnvIdentity {
+		t.Fatalf("DFOS_IDENTITY = (%q, %q)", ctx.IdentityName, ctx.IdentitySource)
 	}
-	if ctx.IdentityDID != "did:dfos:alice123" {
-		t.Errorf("DID = %q, want did:dfos:alice123", ctx.IdentityDID)
+	t.Setenv(SourceEnvAs, "alice")
+	ctx = resolve(t, cfg, Overrides{})
+	if ctx.IdentityName != "alice" || ctx.IdentitySource != SourceEnvAs {
+		t.Fatalf("DFOS_AS over DFOS_IDENTITY = (%q, %q)", ctx.IdentityName, ctx.IdentitySource)
 	}
-	if ctx.RelayName != "" {
-		t.Errorf("relay = %q, want empty", ctx.RelayName)
+
+	// --peer is the peer-side flag alias.
+	clearEnv(t)
+	ctx = resolve(t, cfg, Overrides{Peer: "staging"})
+	if ctx.RelayName != "staging" || ctx.RelaySource != SourceFlagPeer {
+		t.Fatalf("--peer = (%q, %q)", ctx.RelayName, ctx.RelaySource)
 	}
 }
 
-func TestResolveContext_IdentityOnly_FromActiveContext(t *testing.T) {
+func TestResolve_CtxAliasFillsBothHalves(t *testing.T) {
+	clearEnv(t)
 	cfg := testConfig()
-	cfg.ActiveContext = "bob"
-	ctx, err := ResolveContext(cfg, "", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+
+	for _, spec := range []string{"alice@prod", "work"} {
+		ctx := resolve(t, cfg, Overrides{Ctx: spec})
+		if ctx.IdentityName != "alice" || ctx.RelayName != "prod" {
+			t.Fatalf("--ctx %q = (%q, %q)", spec, ctx.IdentityName, ctx.RelayName)
+		}
+		if ctx.IdentitySource != SourceFlagCtx || ctx.RelaySource != SourceFlagCtx {
+			t.Fatalf("--ctx %q sources = (%q, %q)", spec, ctx.IdentitySource, ctx.RelaySource)
+		}
 	}
-	if ctx.IdentityName != "bob" {
-		t.Errorf("identity = %q, want bob", ctx.IdentityName)
+
+	// Identity-only spec leaves the peer half open for another mechanism.
+	ctx := resolve(t, cfg, Overrides{Ctx: "bob", Relay: "prod"})
+	if ctx.IdentityName != "bob" || ctx.RelayName != "prod" || ctx.RelaySource != SourceFlagRelay {
+		t.Fatalf("identity-only ctx = %+v", ctx)
 	}
-	if ctx.IdentityDID != "did:dfos:bob456" {
-		t.Errorf("DID = %q, want did:dfos:bob456", ctx.IdentityDID)
+
+	// --as wins the identity half of a --ctx pair; the peer half survives.
+	ctx = resolve(t, cfg, Overrides{Ctx: "alice@prod", As: "bob"})
+	if ctx.IdentityName != "bob" || ctx.IdentitySource != SourceFlagAs || ctx.RelayName != "prod" {
+		t.Fatalf("--as over --ctx = %+v", ctx)
 	}
 }
 
-func TestResolveContext_IdentityFlagOverridesContext(t *testing.T) {
+func TestResolve_CtxEnvAliasIsEnvTier(t *testing.T) {
+	clearEnv(t)
+	cfg := testConfig()
+	cfg.DefaultIdentity = "bob"
+	t.Setenv(SourceEnvContext, "alice@prod")
+
+	ctx := resolve(t, cfg, Overrides{})
+	if ctx.IdentityName != "alice" || ctx.IdentitySource != SourceEnvContext {
+		t.Fatalf("DFOS_CONTEXT = (%q, %q)", ctx.IdentityName, ctx.IdentitySource)
+	}
+	if ctx.RelayName != "prod" || ctx.RelaySource != SourceEnvContext {
+		t.Fatalf("DFOS_CONTEXT peer = (%q, %q)", ctx.RelayName, ctx.RelaySource)
+	}
+
+	// The flag spelling wins outright: a stale DFOS_CONTEXT never contributes a
+	// half to an invocation that named its own context.
+	ctx = resolve(t, cfg, Overrides{Ctx: "bob"})
+	if ctx.IdentityName != "bob" || ctx.RelayName != "" {
+		t.Fatalf("--ctx over DFOS_CONTEXT = %+v", ctx)
+	}
+}
+
+// --- the removed pointer -----------------------------------------------------
+
+func TestResolve_ActiveContextIsInert(t *testing.T) {
+	clearEnv(t)
 	cfg := testConfig()
 	cfg.ActiveContext = "alice@prod"
-	ctx, err := ResolveContext(cfg, "", "bob", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+
+	ctx := resolve(t, cfg, Overrides{})
+	if ctx.HasIdentity() || ctx.RelayName != "" {
+		t.Fatalf("the removed active_context still resolves: %+v", ctx)
 	}
+
+	// It also loses to nothing, because it is not in the stack at all: a config
+	// default set explicitly is what answers.
+	cfg.DefaultIdentity = "bob"
+	ctx = resolve(t, cfg, Overrides{})
 	if ctx.IdentityName != "bob" {
-		t.Errorf("identity = %q, want bob", ctx.IdentityName)
-	}
-	// relay should still come from active context
-	if ctx.RelayName != "prod" {
-		t.Errorf("relay = %q, want prod", ctx.RelayName)
+		t.Fatalf("default-identity = %q, want bob", ctx.IdentityName)
 	}
 }
 
-func TestResolveContext_EnvVarOverridesActiveContext(t *testing.T) {
-	cfg := testConfig()
-	cfg.ActiveContext = "alice@prod"
-	os.Setenv("DFOS_IDENTITY", "bob")
-	defer os.Unsetenv("DFOS_IDENTITY")
+// --- error surfaces ----------------------------------------------------------
 
-	ctx, err := ResolveContext(cfg, "", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ctx.IdentityName != "bob" {
-		t.Errorf("identity = %q, want bob (env var should override)", ctx.IdentityName)
+func TestResolve_UnknownContextSpecErrors(t *testing.T) {
+	clearEnv(t)
+	_, err := ResolveContext(testConfig(), Overrides{Ctx: "nonexistent"})
+	if err == nil || !strings.Contains(err.Error(), "unknown context") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
-func TestResolveContext_UnknownBareContextErrors(t *testing.T) {
-	cfg := testConfig()
-	_, err := ResolveContext(cfg, "nonexistent", "", "")
-	if err == nil {
-		t.Fatal("expected error for unknown bare context name")
+func TestResolve_UnknownPeerNamesTheMechanism(t *testing.T) {
+	clearEnv(t)
+	_, err := ResolveContext(testConfig(), Overrides{Relay: "nonexistent"})
+	if err == nil || !strings.Contains(err.Error(), "unknown peer") || !strings.Contains(err.Error(), SourceFlagRelay) {
+		t.Fatalf("error = %v (must name the peer and the mechanism that supplied it)", err)
 	}
 }
 
-func TestResolveContext_EnvVarOverridesBrokenActiveContext(t *testing.T) {
-	// When active_context is a valid identity@relay but env var overrides identity
-	cfg := testConfig()
-	cfg.ActiveContext = "alice@prod"
-	os.Setenv("DFOS_IDENTITY", "bob")
-	defer os.Unsetenv("DFOS_IDENTITY")
-
-	ctx, err := ResolveContext(cfg, "", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestResolve_UnknownIdentityNameIsNotAResolutionError(t *testing.T) {
+	// A name with no config registration resolves to a name and no DID. The
+	// signing site is what rejects it, with a message that can name the source.
+	clearEnv(t)
+	ctx := resolve(t, testConfig(), Overrides{As: "ghost"})
+	if ctx.IdentityName != "ghost" || ctx.IdentityDID != "" {
+		t.Fatalf("unknown name = (%q, %q)", ctx.IdentityName, ctx.IdentityDID)
 	}
-	if ctx.IdentityName != "bob" {
-		t.Errorf("identity = %q, want bob (env var should override context identity)", ctx.IdentityName)
-	}
-}
-
-func TestResolveContext_UnknownRelay(t *testing.T) {
-	cfg := testConfig()
-	_, err := ResolveContext(cfg, "alice@nonexistent", "", "")
-	if err == nil {
-		t.Fatal("expected error for unknown relay")
-	}
-}
-
-func TestResolveContext_Empty(t *testing.T) {
-	cfg := testConfig()
-	ctx, err := ResolveContext(cfg, "", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ctx.IdentityName != "" || ctx.RelayName != "" {
-		t.Errorf("expected empty context, got (%q, %q)", ctx.IdentityName, ctx.RelayName)
-	}
-}
-
-func TestResolveContext_DFOSContextEnvVar(t *testing.T) {
-	cfg := testConfig()
-	os.Setenv("DFOS_CONTEXT", "bob@prod")
-	defer os.Unsetenv("DFOS_CONTEXT")
-
-	ctx, err := ResolveContext(cfg, "", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ctx.IdentityName != "bob" || ctx.RelayName != "prod" {
-		t.Errorf("got (%q, %q), want (bob, prod)", ctx.IdentityName, ctx.RelayName)
-	}
-}
-
-func TestResolveContext_FlagTakesPrecedenceOverEnv(t *testing.T) {
-	cfg := testConfig()
-	os.Setenv("DFOS_CONTEXT", "bob@prod")
-	defer os.Unsetenv("DFOS_CONTEXT")
-
-	ctx, err := ResolveContext(cfg, "alice@prod", "", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ctx.IdentityName != "alice" {
-		t.Errorf("identity = %q, want alice (flag should override env)", ctx.IdentityName)
+	if !ctx.HasIdentity() {
+		t.Fatal("a named-but-unregistered identity must still count as selected")
 	}
 }

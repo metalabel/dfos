@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	"github.com/spf13/cobra"
@@ -33,45 +34,82 @@ func newConfigListCmd() *cobra.Command {
 	}
 }
 
+// configKeys are the writable keys, in the spelling `dfos config set` documents.
+// Dash and underscore forms both resolve here, so the CLI spelling and the TOML
+// key never diverge into two things a user has to remember.
+var configKeys = []string{"default-identity", "default-peer", "defaults.credential_ttl"}
+
+// normalizeConfigKey folds a key to its canonical dashed spelling.
+func normalizeConfigKey(key string) string {
+	if key == "defaults.credential_ttl" || key == "defaults.credential-ttl" {
+		return "defaults.credential_ttl"
+	}
+	return strings.ReplaceAll(key, "_", "-")
+}
+
+func unknownConfigKey(key string) error {
+	return fmt.Errorf("unknown config key: %s (known keys: %s)", key, strings.Join(configKeys, ", "))
+}
+
 func newConfigGetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <key>",
 		Short: "Get a config value",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key := args[0]
+			key := normalizeConfigKey(args[0])
+			var value string
 			switch key {
-			case "active_context":
-				if jsonFlag {
-					outputJSON(map[string]string{"active_context": cfg.ActiveContext})
-				} else {
-					fmt.Println(cfg.ActiveContext)
+			case "default-identity":
+				value = cfg.DefaultIdentity
+			case "default-peer":
+				value = cfg.DefaultPeer
+			case "defaults.credential_ttl":
+				if cfg.Defaults != nil {
+					value = cfg.Defaults.CredentialTTL
 				}
 			default:
-				return fmt.Errorf("unknown config key: %s", key)
+				return unknownConfigKey(args[0])
+			}
+			if jsonFlag {
+				outputJSON(map[string]string{key: value})
+			} else {
+				fmt.Println(value)
 			}
 			return nil
 		},
 	}
 }
 
+// newConfigSetCmd is the ONLY writer of the config tier of the resolution
+// stack. Nothing else updates default-identity or default-peer — no command
+// follows "last used" or "last created" — which is precisely why two concurrent
+// invocations carrying different --as values cannot interfere with each other.
 func newConfigSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
-		Args:  cobra.ExactArgs(2),
+		Long: "Write one config value. `default-identity` and `default-peer` are the config tier of the " +
+			"resolution stack — the fallback consulted after --as/--relay and DFOS_AS/DFOS_RELAY. This " +
+			"command is the only thing that writes them.",
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key, value := args[0], args[1]
+			key, value := normalizeConfigKey(args[0]), args[1]
 			switch key {
-			case "active_context":
-				cfg.ActiveContext = value
+			case "default-identity":
+				cfg.DefaultIdentity = value
+			case "default-peer":
+				if _, ok := cfg.Relays[value]; !ok {
+					return fmt.Errorf("unknown peer: %s (register it with 'dfos peer add %s <url>')", value, value)
+				}
+				cfg.DefaultPeer = value
 			case "defaults.credential_ttl":
 				if cfg.Defaults == nil {
 					cfg.Defaults = &config.DefaultsConfig{}
 				}
 				cfg.Defaults.CredentialTTL = value
 			default:
-				return fmt.Errorf("unknown config key: %s", key)
+				return unknownConfigKey(args[0])
 			}
 			return config.Save(cfg)
 		},
