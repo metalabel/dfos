@@ -209,6 +209,79 @@ Any DFOS-gated HTTP surface — the canonical API, a fork, a relay surface — c
 
 ---
 
+## Advertising in OpenAPI
+
+A host that serves this family states, in its OpenAPI document, exactly which claim each route needs — so a generic client signs the right artifact for any host from the document alone, with no per-host code. The convention below binds documents and the clients that consume them, never the wire: the envelopes, carriage, and verification above are identical whether or not a host advertises, and a host that publishes no document is exactly as gated as one that does.
+
+### Scheme vocabulary
+
+Three security-scheme shapes, declared in `components.securitySchemes`. Component names are the host's choice (the names below are RECOMMENDED); consumers identify schemes **structurally** — by `type` / `scheme` / header `name` and the `x-dfos-typ` marker — never by component name.
+
+```yaml
+components:
+  securitySchemes:
+    dfosIdentityProof:
+      type: http
+      scheme: dfos
+      x-dfos-typ: did:dfos:identity-proof
+    dfosRequestProof:
+      type: http
+      scheme: dfos
+      x-dfos-typ: did:dfos:request-proof
+      x-dfos-actions:
+        read:profile: Read the granting user's own profile
+        read:email: Read the granting user's account email address
+    dfosCredential:
+      type: apiKey
+      in: header
+      name: X-Credential
+```
+
+- **The two proof schemes are `type: http` with `scheme: dfos`** — literally accurate: the wire is `Authorization: DFOS <jws>`, and the scheme token is matched case-insensitively per [HTTP Carriage](#http-carriage) (a document spelling it `DFOS` names the same scheme; lowercase is RECOMMENDED, matching OpenAPI's registered-scheme convention). `x-dfos-typ` names the envelope the scheme carries, mirroring the JWS `typ` gate that keeps the two claims distinct on the wire; under this convention it is REQUIRED on every `scheme: dfos` security scheme. A consumer encountering a document without it MAY fall back to the combination rules below — unambiguous for a proof scheme standing alone (the identity proof) and for a proof scheme ANDed with the credential scheme (the request proof), which are the only combinations that occur without the marker; the mixed authn/authz combination in the table below is expressible only with explicit markers.
+- **The credential scheme is `type: apiKey, in: header, name: X-Credential`** — the grant header, named case-insensitively as HTTP field names are. `apiKey` is OpenAPI's honest generic type for "a token in a named header"; the possession claim lives entirely in the proof scheme it is combined with, and nothing declared this way is a bearer artifact.
+- **`x-dfos-actions` on the request-proof scheme is the host's action catalog**: a map of action token → human-readable description, restating the registry the host serves (for the canonical deployment, the [v0 registry above](#the-apihost-resource-and-its-actions)). Tokens are opaque strings to consumers, exactly as everywhere in this family — the catalog is documentation, not vocabulary the client interprets.
+
+### Requirement combinations
+
+OpenAPI's own security semantics carry the claim structure: within one security-requirement object, the named schemes are ANDed; across the `security` array, requirement objects are alternatives, and a client satisfies any one. Under this convention an operation's requirements mean:
+
+| Combination                                | Claim the route needs                                                                                                                                                                                       |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No requirement, or empty `security: []`    | Anonymous — no artifact of this family                                                                                                                                                                       |
+| Identity-proof scheme alone                | An [identity proof](#the-identity-proof) — authentication only; the resource's local policy decides the rest                                                                                                 |
+| Request-proof scheme AND credential scheme | A [request proof](#the-request-proof) with the credential it binds — the delegated-grant profile. Two schemes because the wire is two headers; a request-proof scheme alone advertises a route no conforming client can call (the proof is meaningless without its credential) |
+| Identity-proof scheme AND credential scheme | An identity proof plus a credential in the route's own declared role — the authn/authz split the [carriage rule](#the-identity-proof) names, as on the relay content plane's non-creator blob reads          |
+
+The combination **is** the profile declaration. A client selects the alternative it can satisfy and signs the artifact that combination names; a host offering a route under either claim lists two requirement objects.
+
+### Required actions (`x-dfos-actions` on an operation)
+
+OpenAPI permits a non-empty scope list only on `oauth2`/`openIdConnect` schemes, so required actions ride an operation-level extension rather than the requirement object. An operation under the delegated combination declares the actions its route requires as `x-dfos-actions` on the Operation Object: an array of **alternatives**, each alternative a single action token or an array of tokens, and the presented leaf credential satisfies the operation when its attenuation covers **every token of any one alternative** (the per-token coverage of [step 11](#verification-algorithm), applied to that alternative's set).
+
+```yaml
+# read:profile OR read:email — the route serves the field classes the grant covers
+x-dfos-actions: [read:profile, read:email]
+
+# a route requiring two tokens at once is one AND-alternative
+x-dfos-actions: [[read:profile, read:email]]
+```
+
+An operation under the delegated combination carrying **no** `x-dfos-actions` requires a valid `api:<host>` credential and no particular action token: some `att` entry naming the host's resource, with the action check vacuous — the presentation-suffices route class (a credential may always describe itself). Declaring that class by absence is unambiguous because the requirement combination, never the action list, is what distinguishes the delegated profile from the identity proof. `x-dfos-actions` never appears on an identity-proof-only operation — there is no credential to cover anything.
+
+### The document is discovery, never authority
+
+A consuming client reads the document to decide what to **attempt** — which combination, which artifact, which actions to hold — and the serving verifier's own configuration decides what is **accepted**: the [verification algorithm](#verification-algorithm) and its [verdict mapping](#verification-algorithm) are the normative machine signal, and a stale or wrong document changes what a client tries, never what a host serves. A client MUST honor the runtime verdicts over the document (a `401` on a route the document calls anonymous is a gated route), and an explicit client override — forcing a profile, or going anonymous — is always legitimate: the document ranks as a default, not a constraint. This is the same posture the family takes everywhere: advertisement is a hint; signatures and verifier policy are the authority.
+
+### Why not OAuth scopes
+
+Declaring this family as `oauth2` to put action tokens in the scopes slot lies to every generic consumer: there is no authorization server, no flow object, and nothing bearer-shaped. The schemes stay the honest `http` / `dfos` and `apiKey` shapes generic tooling renders correctly, and DFOS-specific structure rides `x-` extensions, which conforming OpenAPI tooling preserves and ignores.
+
+### Serving
+
+A host SHOULD serve its OpenAPI document at a stable URL — the canonical deployment serves its own at `https://api.dfos.com/openapi.json`, and a [web relay](https://protocol.dfos.com/web-relay) advertises its document's URL in its well-known response. Third parties advertise by adopting this convention in their own documents; there is no registry of deployments, here or anywhere in the family.
+
+---
+
 ## Security Considerations
 
 **A stolen credential is a metadata leak, not an access leak.** The credential names the grant — who authorized whom, over what, until when — and PoP makes that all it is: without the audience key, a captured credential authorizes nothing anywhere. This is what lets an issuance flow hand the credential back over a front channel and treat the leak surface as grant metadata rather than access: the artifact that must never leak is the audience key, which never crosses a channel at all. (The [SIWD](https://protocol.dfos.com/siwd) redirect callback is one such issuance flow; how a specific platform hardens its own callback delivery is that platform's concern, not this envelope's.)
