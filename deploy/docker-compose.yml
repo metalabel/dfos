@@ -18,6 +18,7 @@ services:
       SQLITE_PATH: '/data/relay.db'
       # PEERS: "https://other-relay.example.com"
       # SYNC_INTERVAL: "30s"
+      # AUTHORITY: "relay.example.com"  # required by blob upload + mailbox routes — see QUICKSTART
     volumes:
       - relay-data:/data
     expose:

@@ -737,5 +737,5 @@ A proof authorizes one request and nothing else: it binds that method, that host
 
 - **Schema validation**: validate documents against bundled JSON schemas (currently warns on missing `$schema` only)
 - **Key backup/recovery**: mnemonic seed phrases or encrypted export
-- **Shell completion docs**: `dfos completion <bash|zsh|fish>` ships today (cobra-generated); dedicated setup docs are still pending
+- **Shell completion docs**: `dfos completion <bash|zsh|fish>` is cobra-generated and works today; per-shell installation is not documented here
 - **Batch refresh** (`identity fetch --all`): re-fetch all tracked remote identities

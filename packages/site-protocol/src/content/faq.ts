@@ -26,9 +26,9 @@ export const faqs: FaqEntry[] = [
   {
     question: 'How does the relay network work?',
     answer:
-      'Web relays are verifying HTTP endpoints that store and serve chains: every relay independently re-verifies every operation, no relay trusts another, and topology emerges from per-peer configuration rather than roles or hierarchy. The Web Relay specification defines the peering behaviors, the routes, and the DID resolver.',
+      'Web relays are verifying HTTP endpoints that store and serve chains: every relay independently re-verifies every operation, no relay trusts another, and topology emerges from per-peer configuration rather than roles or hierarchy. The Relay Contract freezes the routes and their shapes; the Web Relay specification defines the peering behaviors and the DID resolver.',
     answerHtml:
-      'Web relays are verifying HTTP endpoints that store and serve chains: every relay independently re-verifies every operation, no relay trusts another, and topology emerges from per-peer configuration rather than roles or hierarchy. The <a href="/web-relay">Web Relay specification</a> defines the peering behaviors, the routes, and the DID resolver.',
+      'Web relays are verifying HTTP endpoints that store and serve chains: every relay independently re-verifies every operation, no relay trusts another, and topology emerges from per-peer configuration rather than roles or hierarchy. The <a href="/relay-contract">Relay Contract</a> freezes the routes and their shapes; the <a href="/web-relay">Web Relay specification</a> defines the peering behaviors and the DID resolver.',
   },
   {
     question: 'Do I need to run a server or connect to a network?',

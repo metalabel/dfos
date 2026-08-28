@@ -91,7 +91,9 @@ holds a standing public-read grant for, per
 - `none` (default) — proof plane only; byte-identical to a non-following node.
 - `eager` — convergent sweep pulls granted public blobs on each sync interval.
 
-(`lazy` read-through-on-404 is reserved for a future release.)
+`eager` is the only mode that follows: `lazy` read-through-on-404 is not
+implemented, and any other value — including a typo — leaves the relay
+non-following rather than erroring.
 
 ## Topology Testing
 

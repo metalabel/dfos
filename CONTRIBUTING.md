@@ -12,6 +12,8 @@ breaks become a new major.
 - `pnpm build` — tsup bundles each subpath entrypoint (ESM + declarations)
 - `pnpm typecheck` / `pnpm test` — strict tsc; protocol + relay vitest suites
 - `pnpm lint && pnpm lint:specs` — prettier + spec lint
+- `pnpm lint:anchors` — every `protocol.dfos.com` link resolves to a page and, when
+  it carries a fragment, to a heading that page actually renders
 - `packages/protocol-verify/` — five-language standalone vector verification
 - `packages/relay-conformance/` — Go integration suite against any live relay
 
