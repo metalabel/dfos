@@ -293,7 +293,7 @@ All fields are optional except `name`, which SHOULD be present. The optional `li
 
 ### Well-Known Endpoint (`GET /.well-known/dfos-relay`)
 
-Returns relay metadata. The core discovery contract (`did`, `protocol`, `version`, `capabilities`, `profile`) is required — `profile` is the relay's proof of DID controllership (an artifact JWS signed by the relay DID's controller key). `peers` and extended `stats` fields are optional additive telemetry.
+Returns relay metadata. The core discovery contract (`did`, `protocol`, `version`, `capabilities`, `profile`) is required — `profile` is the relay's proof of DID controllership (an artifact JWS signed by the relay DID's controller key). `peers` and extended `stats` fields are optional additive telemetry. A relay SHOULD serve an [OpenAPI](https://spec.openapis.org/oas/latest.html) document describing its HTTP surface and, when it does, advertises the document's URL in the optional `openapi` field; a relay that serves no document omits the field.
 
 ```json
 {
@@ -310,6 +310,7 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
     "signing": false
   },
   "profile": "eyJhbGciOiJFZERTQSIs...",
+  "openapi": "/openapi.json",
   "peers": [{ "endpoint": "https://peer.relay.example.com" }],
   "stats": {
     "pendingOps": 0,
@@ -343,6 +344,7 @@ Returns relay metadata. The core discovery contract (`did`, `protocol`, `version
 | `capabilities.signing`     | boolean        | Whether the [signing mailbox](https://protocol.dfos.com/signing) courier is served (`/signing/v0/*`). Opt-in: reference relays default it off, and an absent flag reads as `false`                                                                                |
 | `ingestion`                | string         | [Admission-mode](#ingestion-admission) hint: `"open"` (anonymous submissions admitted, subject to policy), `"proof-required"` (identity proof required), or `"closed"`. Absent derives from `capabilities.write`: `true` reads as `"open"`, `false` as `"closed"` |
 | `profile`                  | string         | The relay's profile artifact as a compact JWS token — self-proving payload                                                                                                                                                                                        |
+| `openapi`                  | string         | OPTIONAL. URL of an OpenAPI document describing this relay's full HTTP surface — absolute, or root-relative resolved against the relay's base URL. Serving the document is SHOULD, never MUST; a relay that serves one advertises it here, and absence means none is served. The document is discovery, never authority: the routes, capability gates, and auth rules in this spec govern regardless of what an advertised document says |
 | `peers`                    | array          | OPTIONAL additive telemetry. Configured peer relays surfaced for mesh discovery; reference relays emit `[]` when no peers are configured                                                                                                                          |
 | `peers[].endpoint`         | string         | OPTIONAL additive telemetry. The peer relay's base URL. A future `peers[].did` MAY appear once a relay resolves peer DIDs                                                                                                                                         |
 | `stats`                    | object         | Operational counters. `stats.pendingOps` is the count of operations pending processing (`-1` if unavailable)                                                                                                                                                      |
