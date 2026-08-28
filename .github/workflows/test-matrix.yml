@@ -38,6 +38,9 @@ jobs:
       - name: Lint spec anchors
         run: pnpm lint:specs
 
+      - name: Lint heading anchors
+        run: pnpm lint:anchors
+
       - name: Build
         run: pnpm build
 

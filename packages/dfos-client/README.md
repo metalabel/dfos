@@ -132,6 +132,8 @@ await verifyApiRequest(client, {
 
 It throws `ApiRequestVerifyError`, carrying `reason` (`invalid` / `unverifiable` / `config`), `phase`, and the recommended `status` — branch on those, never on message text.
 
+`verifyApiIdentityRequest` is the same verifier for the envelope's credential-less sibling, the [identity proof](https://protocol.dfos.com/api-auth#the-identity-proof) — it establishes only which DID is asking, leaving what that DID may do to the resource's own policy.
+
 `apiRequestSigningInput(payload)` is the pure byte contract both halves share, and the one place per language the canonical bytes are built.
 
 ### `@metalabel/dfos-client/siwd`

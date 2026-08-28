@@ -173,18 +173,22 @@ keychain prompts.
 
 ## Command map
 
-One line each — run `dfos <command> --help` for flags.
+The whole verb surface, one line per group. Flags and semantics are not here:
+run `dfos <command> --help`, which is the binary itself and therefore always
+current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 
 **Identity** (`dfos identity …`, alias `id`)
-`create` · `list` · `show` · `keys` · `log` · `update` · `delete` ·
-`publish` · `fetch` · `services` · `add-key` · `device-pubkey` · `remove`
+`create` · `list` · `show` · `keys` · `log` · `update` · `delete` · `restore` ·
+`publish` · `fetch` · `services` · `well-known` · `add-key` · `device-pubkey` ·
+`bind-domain` · `verify-binding` · `remove` · `forget`
 
 **Content** (`dfos content …`)
 `create` · `list` · `show` · `log` · `download` · `update` · `delete` ·
 `publish` · `fetch` · `verify` · `remove`
 
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
-**Peers** (`dfos peer …`, alias `relay`) — `add` · `remove` · `list` · `info`
+**Sign-in** — `dfos login [name|did]` · cached records: `dfos creds list` · `show` · `rm`
+**Peers** (`dfos peer …`, alias `relay`) — `add` · `remove` · `list` · `info` · `gc`
 **Auth** (`dfos auth …`) — `proof` · `status`
 **Config** (`dfos config …`) — `list` · `get` · `set`
 **Inspect & attest** — `dfos operation show <cid>` (alias `op`) · `dfos witness <opCID>` · `dfos countersigs <cid>`

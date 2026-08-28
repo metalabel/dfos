@@ -28,15 +28,25 @@ The waiver sentence is the mechanism: it converts a silent omission into a
 challengeable claim a reviewer can see and contest. A spec PR with neither the
 sync nor the sentence is incomplete — do not merge it.
 
-## Register rule (any prose in `specs/*.md`)
+## Register rule (any prose served on protocol.dfos.com)
 
-Specs speak in the **present tense about what is**. Progression language never
-lands in spec prose: no "planned", "upcoming", "for now", "eventually", "not
-yet built", "will ship", no roadmap voice, and no reference to an unbuilt
+The published corpus speaks in the **present tense about what is**. Progression
+language never lands in it: no "planned", "upcoming", "for now", "eventually",
+"not yet built", "will ship", no roadmap voice, and no reference to an unbuilt
 feature as forthcoming. A capability either is specified — write it as it
 stands, with its status block naming its clock — or it is absent, and absence
 is stated as a present fact ("X is not defined", a deferred-list bullet),
 never as a promise.
+
+**Scope is the served surface, not the directory.** A page published at
+protocol.dfos.com is read as the project speaking, whatever path its file
+happens to live at. Mechanically that is: every `source` in the site registry
+(`packages/site-protocol/src/content/specs.ts` — today `specs/*.md` and
+`packages/dfos-cli/CLI.md`), the markdown a page reads directly
+(`deploy/QUICKSTART.md` at `/deploy`, `skills/dfos/SKILL.md` at `/skill`), and
+the site's own prose in `packages/site-protocol/src/content/` and `src/pages/`.
+A package README that the site does not serve is a dev doc, where present-tense
+absence is preferred but not required.
 
 Two futures are exempt because they are not roadmap:
 
