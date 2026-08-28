@@ -148,16 +148,20 @@ func newLoginCmd() *cobra.Command {
 				return err
 			}
 
+			// A positional argument names the subject outright; otherwise the
+			// subject is whatever the resolution stack produced, and that gets
+			// announced before the flow starts — signing in is signing.
 			subjectDID := ctx.IdentityDID
 			if len(args) > 0 {
 				subjectDID, err = resolveIdentityDID(args[0])
 				if err != nil {
 					return err
 				}
+			} else {
+				announceSigner(ctx)
 			}
 			if subjectDID == "" {
-				return fmt.Errorf("no identity to sign in as: pass an identity name or a did:dfos: identifier, " +
-					"or set an active context with 'dfos use <identity[@peer]>'")
+				return errNoIdentity()
 			}
 
 			authorizeURL, err := resolveAuthorizeURL(peer, subjectDID, authorizeURLFlag)

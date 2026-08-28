@@ -103,15 +103,16 @@ dfos skill install --global      # write ~/.claude/skills/dfos/SKILL.md
 - **Countersignature** — a public witness attestation referencing an operation by
   CID (endorsement, co-authorship, solemnization). The protocol's only
   inter-subjective primitive.
-- **Context** — an `(identity, peer)` pair. Most remote commands need both. Set a
-  default with `dfos use alice@prod`, or override per-command with
-  `--ctx`/`--identity`/`--peer`.
+- **Resolution stack** — how each invocation picks its identity and its peer:
+  `--as <name|did>` → `DFOS_AS` → `default-identity` in config, and
+  `--relay <name>` → `DFOS_RELAY` → `default-peer`. First answer wins; there is no
+  mutable "current" pointer.
 
 ## Quick start — local-only
 
 ```bash
 dfos identity create --name alice          # generate keys + sign genesis (no relay needed)
-dfos use alice                             # set active identity (local-only context)
+dfos config set default-identity alice     # standing default (or pass --as alice per command)
 
 dfos content create - <<'EOF'
 {"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"hello world"}
@@ -128,20 +129,22 @@ All data lives in `~/.dfos/relay.db`. No relay needed.
 ```bash
 dfos peer add prod https://relay.dfos.com  # register + verify a peer
 dfos identity create --name alice --peer prod   # create locally AND auto-publish genesis
-dfos use alice@prod                        # relay-bound context
-dfos status                                # context, identity, peer health
+dfos config set default-identity alice     # standing defaults
+dfos config set default-peer prod
+dfos whoami                                # identity, signing key, credentials, peer
 ```
 
 `--peer` on `identity create` auto-publishes the genesis operation after local
-creation (and sets it as the active context if none is set yet). The canonical
-public relay is `https://relay.dfos.com`.
+creation. Creating an identity does NOT select it — nothing follows "last
+created". The canonical public relay is `https://relay.dfos.com`.
 
-## Context & configuration
+## Resolution & configuration
 
 Config file: `~/.dfos/config.toml`.
 
 ```toml
-active_context = "alice@prod"
+default_identity = "alice"
+default_peer = "prod"
 
 [identities.alice]
 did = "did:dfos:..."
@@ -154,19 +157,32 @@ did = "did:dfos:..."
 credential_ttl = "24h"
 ```
 
-**Context resolution** (highest priority first): `--ctx` flag → `DFOS_CONTEXT`
-env → `active_context` in config. The resolved identity/peer can be individually
-overridden by `--identity`/`DFOS_IDENTITY` and `--peer`/`DFOS_RELAY`. A bare name
-(no `@peer`) is a **local-only** context; `identity@peer` is **relay-bound**.
+**Resolution** (highest priority first, identity and peer resolved
+independently):
 
-| Variable               | Purpose                                              |
-| ---------------------- | ---------------------------------------------------- |
-| `DFOS_CONTEXT`         | Override active context (`identity@peer`)            |
-| `DFOS_IDENTITY`        | Override active identity name                        |
-| `DFOS_RELAY`           | Override active relay (peer) name                    |
-| `DFOS_CONFIG`          | Config file path (default `~/.dfos/config.toml`)     |
-| `DFOS_NO_KEYCHAIN`     | Force file-based key storage at `~/.dfos/keys/` (CI) |
-| `DFOS_NO_UPDATE_CHECK` | Disable the background version check                 |
+```
+identity:  --as <name|did>  →  DFOS_AS     →  default-identity in config
+peer:      --relay <name>   →  DFOS_RELAY  →  default-peer in config
+```
+
+The config tier is written by `dfos config set` and by nothing else, so parallel
+agents each carrying their own `--as`/`DFOS_AS` never disturb one another.
+Commands that sign echo the resolved principal and the mechanism it came from to
+stderr (`Signing as alice (did:dfos:…) — via --as`) unless `--quiet`; a signing
+command with nothing resolvable fails and names all three mechanisms. Public
+reads are anonymous and silent. `--ctx`, `--identity`, `--peer`,
+`DFOS_CONTEXT`, and `DFOS_IDENTITY` are deprecated aliases at the same tier as
+the mechanism they alias.
+
+| Variable               | Purpose                                               |
+| ---------------------- | ----------------------------------------------------- |
+| `DFOS_AS`              | Identity to act as (name or `did:dfos:…`)             |
+| `DFOS_RELAY`           | Peer to talk to (name)                                |
+| `DFOS_IDENTITY`        | Deprecated alias of `DFOS_AS`                         |
+| `DFOS_CONTEXT`         | Deprecated alias naming both halves (`identity@peer`) |
+| `DFOS_CONFIG`          | Config file path (default `~/.dfos/config.toml`)      |
+| `DFOS_NO_KEYCHAIN`     | Force file-based key storage at `~/.dfos/keys/` (CI)  |
+| `DFOS_NO_UPDATE_CHECK` | Disable the background version check                  |
 
 In headless/CI environments set `DFOS_NO_KEYCHAIN=1` to avoid interactive
 keychain prompts.
@@ -192,7 +208,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 **Auth** (`dfos auth …`) — `proof` · `status`
 **Config** (`dfos config …`) — `list` · `get` · `set`
 **Inspect & attest** — `dfos operation show <cid>` (alias `op`) · `dfos witness <opCID>` · `dfos countersigs <cid>`
-**Top-level** — `use` · `status` · `version` · `serve` · `sync` · `api` · `skill`
+**Top-level** — `whoami` · `status` · `version` · `serve` · `sync` · `api` · `skill`
 
 ## Key distinctions (the things that bite)
 
@@ -204,9 +220,9 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
   **replaces the entire services set**; services you don't pass are **carried
   forward** unchanged; `--clear-services` empties the set. `--service` and
   `--clear-services` are mutually exclusive.
-- **`identity update` has no positional name.** It acts on the active/`--identity`
-  identity, signed with a controller key. To target alice: `dfos use alice` first,
-  or `dfos --identity alice identity update …`. (The read-only identity subcommands
+- **`identity update` has no positional name.** It acts on the resolved identity,
+  signed with a controller key. To target alice: `dfos --as alice identity update …`,
+  or set `default-identity`. (The read-only identity subcommands
   `show`/`keys`/`services`/`delete` take an optional `[name|did]`; `log` and `fetch`
   **require** the `<name|did>` argument.)
 - **Publishing auto-resolves the creator, not delegates.** `content create --peer`
@@ -214,7 +230,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
   **delegated** writer's identity (someone updating via a write credential) must
   already be published to that peer — the CLI won't push it for you.
 - **`sync` is global.** `dfos sync` pulls from _all_ configured peers, ignoring the
-  active context. Use `content fetch` / `identity fetch` / `content publish` for
+  resolved peer. Use `content fetch` / `identity fetch` / `content publish` for
   peer-scoped transfers.
 - **`remove` ≠ `delete`.** `identity remove` drops a local config name (the chain
   data stays in the relay); `content remove` is just a no-op that points you at
@@ -228,7 +244,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 ```bash
 dfos peer add prod https://relay.dfos.com
 dfos identity create --name alice --peer prod
-dfos use alice@prod
+dfos config set default-identity alice
 
 CONTENT=$(dfos content create - --peer prod --json <<'EOF' | jq -r .contentId
 {"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"hello world"}
@@ -251,7 +267,7 @@ CRED=$(echo "$GRANT" | jq -r .credential)        # the JWS to hand to bob
 CRED_CID=$(echo "$GRANT" | jq -r .credentialCID) # the id you revoke later
 
 # Bob downloads by presenting the read credential:
-dfos --ctx bob@prod content download "$CONTENT" --credential "$CRED"
+dfos --as bob --relay prod content download "$CONTENT" --credential "$CRED"
 ```
 
 Flags: `--write` grants delegated write; `--ttl` sets lifetime (default 24h);
@@ -265,7 +281,7 @@ credential covering all of your content. Revoke with
 ```bash
 # Bob updates alice's content using a write credential alice granted him.
 # (Bob's identity must already be published to the peer.)
-dfos --ctx bob@prod content update "$CONTENT" new.json --authorization "$WRITE_CRED" --peer prod
+dfos --as bob --relay prod content update "$CONTENT" new.json --authorization "$WRITE_CRED" --peer prod
 ```
 
 ### Discovery + witness
@@ -273,15 +289,14 @@ dfos --ctx bob@prod content update "$CONTENT" new.json --authorization "$WRITE_C
 ```bash
 # Anchor content under a semantic label in alice's discovery vocabulary
 # (--service REPLACES the whole set, so include every entry you want to keep):
-dfos use alice@prod
-dfos identity update \
+dfos --as alice identity update \
   --service id=relay,type=DfosRelay,endpoint=https://relay.dfos.com \
   --service id=profile,type=ContentAnchor,label=profile,anchor="$CONTENT" \
   --peer prod
 
 # A witness countersigns the content's genesis operation:
 GENESIS=$(dfos content show "$CONTENT" --json | jq -r .genesisCID)
-dfos --ctx witness@prod witness "$GENESIS" --relation witnessed --peer prod
+dfos --as witness --relay prod witness "$GENESIS" --relation witnessed --peer prod
 dfos countersigs "$GENESIS" --peer prod
 ```
 
@@ -336,8 +351,10 @@ controller key.
 Common failures and the fix (relay-origin messages reach you wrapped as
 `local relay rejected: …` / `peer rejected: …`):
 
-- **`No active context…`** → `dfos use <identity@peer>` (or pass `--ctx`).
-- **`no peer configured…`** → `dfos peer add <name> <url>` or pass `--peer`.
+- **`no identity to sign with…`** → pass `--as <name|did>`, set `DFOS_AS`, or run
+  `dfos config set default-identity <name|did>`.
+- **`no peer to talk to…`** → `dfos peer add <name> <url>`, then pass `--relay <name>`
+  or run `dfos config set default-peer <name>`.
 - **`identity '<n>' … not found in local relay`** → create it, or
   `dfos identity fetch <did> --peer <p>`.
 - **`no held <role> key … on this device`** → run on the device that holds the

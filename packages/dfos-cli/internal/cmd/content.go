@@ -376,7 +376,7 @@ func newContentPublishCmd() *cobra.Command {
 				rn = peerFlag
 			}
 			if rn == "" {
-				return fmt.Errorf("--peer is required to publish: pass --peer <name> or set an active context with 'dfos use <identity@peer>'")
+				return errNoPeer()
 			}
 
 			c, _, err := getPeerClient(rn)

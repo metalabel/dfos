@@ -46,8 +46,14 @@ cd packages/dfos-cli && make build
 # create your identity
 dfos identity create --name myname
 
-# publish your first post
-echo '{"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"gm"}' | dfos content create -
+# publish your first post — every signing command names the identity it acts as
+echo '{"$schema":"https://schemas.dfos.com/post/v1","format":"short-post","body":"gm"}' | dfos --as myname content create -
+
+# tired of typing it: set the standing default
+dfos config set default-identity myname
+
+# see what this shell would sign as
+dfos whoami
 
 # see it
 dfos content list
@@ -78,7 +84,8 @@ The CLI is designed for both human operators and AI agents. Every command that p
            │
 ┌──────────▼───────────────┐
 │   ~/.dfos/               │  Configuration + local relay
-│   ├── config.toml        │  Relays, identities, contexts, defaults
+│   ├── config.toml        │  Peers, identities, static defaults
+│   ├── credentials/       │  Login credentials, one file per subject DID
 │   └── relay.db           │  SQLite — chains, operations, blobs
 └──────────┬───────────────┘
            │
@@ -95,18 +102,55 @@ The CLI has three layers of state:
 
 - **OS Keychain**: private key material only. One entry per Ed25519 key, keyed by `dfos` service + `did:dfos:xxx#key_yyy` account. Hex-encoded 32-byte seed. Never written to disk.
 - **Local relay** (`~/.dfos/relay.db`): SQLite database storing identity chains, content chains, operations, countersignatures, and blobs. Both chains you own (have private keys for) and chains you've fetched from relays.
-- **Config** (`~/.dfos/config.toml`): relay URLs, identity names, active context, defaults.
+- **Config** (`~/.dfos/config.toml`): peer URLs, identity names, and the static defaults the resolution stack falls back to. Nothing writes it as a side effect of another command.
 
 ---
 
-## Context Model
+## Identity Resolution
 
-A **context** is a (named-identity, named-relay) pair. Contexts determine which identity signs operations and which relay receives them.
+Every invocation resolves two things independently: the **identity** it acts as, and the **peer** it talks to. Both resolve from the same three-tier stack, in this order, and stop at the first one that answers:
+
+```
+identity:  --as <name|did>   →  DFOS_AS      →  default-identity in config
+peer:      --relay <name>    →  DFOS_RELAY   →  default-peer in config
+```
+
+The stack has no mutable pointer in it. The config tier is written by exactly one thing — `dfos config set` — and no command updates it as a side effect: nothing follows "last used" or "last created", and creating an identity does not select it. That is what makes concurrent invocations safe. Two agents running side by side each carry their own `--as` or their own `DFOS_AS`, and neither can disturb what the other signs as.
+
+`--as` takes an identity name from config **or** a bare `did:dfos:` identifier. A DID needs no local registration.
+
+### Disclosure
+
+A command about to sign says who it is signing as, on stderr, before it signs:
+
+```
+$ dfos --as alice content create post.json
+Signing as alice (did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar) — via --as
+Content created:
+  ...
+```
+
+The line names the mechanism that resolved, so an unexpected principal is visible at the moment it matters. `--quiet` suppresses it. Public reads sign nothing and say nothing about identity.
+
+A signing command with nothing resolvable fails, and names all three mechanisms rather than falling back to a guess:
+
+```
+$ dfos content create post.json
+no identity to sign with — name one:
+  --as <name|did>                             for this invocation
+  DFOS_AS=<name|did>                          for this environment
+  dfos config set default-identity <name|did> as the standing default
+```
+
+### Deprecated aliases
+
+`--ctx`, `--identity`, `--peer`, `DFOS_CONTEXT`, and `DFOS_IDENTITY` are deprecated aliases of the canonical selectors. They keep working, hidden from help, at the tier of the mechanism they alias — a flag alias beats an environment variable, an environment alias beats the config default. `--ctx`/`DFOS_CONTEXT` name both halves at once as `identity@peer`, a named `[contexts]` entry, or an identity on its own.
 
 ### Configuration
 
 ```toml
-active_context = "alice@local"
+default_identity = "alice"
+default_peer = "local"
 
 [relays.local]
 url = "http://localhost:4444"
@@ -124,19 +168,32 @@ did = "did:dfos:cv7n8vkvr64cctf3294h9k4eanhff8z"
 credential_ttl = "24h"
 ```
 
-Contexts are implicit: `alice@local` resolves to identity "alice" + relay "local" without needing an explicit `[contexts]` section. Named contexts can be defined for non-obvious names.
-
-### Resolution Precedence
-
-Every command resolves its active (identity, relay) pair via:
-
-```
---ctx flag  →  DFOS_CONTEXT env  →  active_context in config  →  error
---identity  →  DFOS_IDENTITY env →  from resolved context
---peer      →  DFOS_RELAY env    →  from resolved context     →  (optional for local-only ops)
+```bash
+dfos config set default-identity alice     # or a bare did:dfos: identifier
+dfos config set default-peer prod          # the peer must already be registered
+dfos config get default-identity
 ```
 
-The `@` syntax is shorthand: `alice@local` = identity "alice" + relay "local". If both the identity and relay names exist in config, the context resolves without pre-registration.
+An `active_context` line left over from an earlier configuration is inert: resolution never reads it, and `dfos whoami` reports it as such.
+
+---
+
+## whoami
+
+`dfos whoami` answers the question an operator has before running a signing command: what would this shell act as, right now.
+
+```
+$ dfos whoami
+Identity:    alice (did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar)
+  Via:       config default-identity
+Signing key: did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar#key_8fh3n2 (keychain)
+Credentials: 1 stored in /Users/you/.dfos/credentials
+  * did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar  aud did:dfos:cv7n8vkvr64cctf3294h9k4eanhff8z  valid
+Peer:        prod (https://relay.dfos.com)
+  Via:       config default-peer
+```
+
+Each section has an explicit negative state rather than an omission: `none selected` for an unresolved identity or peer, `not held` with the reason when this device holds none of the identity's published auth keys, `none stored` for an empty credential store. `--json` emits the whole report as one document. whoami reads only — it signs nothing and writes nothing.
 
 ---
 
@@ -309,7 +366,7 @@ dfos identity forget alice
 dfos identity forget did:dfos:xxx
 ```
 
-This removes the named identity and its referencing contexts from config, clears an affected active context, and removes that DID's cached login credential. Private keys remain in the OS keystore, public chain data remains in the local relay, and no chain operation is signed or published. Use `relay gc` for local space maintenance.
+This removes the named identity and its referencing contexts from config, clears a `default-identity` that pointed at it, and removes that DID's cached login credential. Private keys remain in the OS keystore, public chain data remains in the local relay, and no chain operation is signed or published. Use `relay gc` for local space maintenance.
 
 ---
 
@@ -431,7 +488,7 @@ Credentials are printed to stdout (or as JSON with `--json`). The recipient pass
 dfos content download <contentId> --credential <jws> --peer local
 
 # present a write credential for delegated mutations
-dfos --ctx bob@prod content update <contentId> new.json --authorization <jws>
+dfos --as bob --relay prod content update <contentId> new.json --authorization <jws>
 ```
 
 Credential transport is out-of-band — the CLI mints and consumes them, but doesn't transmit them between parties.
@@ -534,8 +591,8 @@ Exit `1` is also the CLI's generic error status (unresolvable target, chain not 
 `dfos login` signs in to the authorize host that speaks for an identity and stores the credential it returns. It runs the [SIWD](https://protocol.dfos.com/siwd) loopback flow: the CLI opens a consent screen in a browser, listens on a local port for the redirect, and verifies the signed challenge itself before anything is stored.
 
 ```bash
-# sign in as the active context's identity
-dfos login
+# sign in as the resolved identity
+dfos --as alice login
 
 # sign in as a named local identity, or a bare DID
 dfos login alice
@@ -584,7 +641,7 @@ dfos creds rm alice
 | `--no-browser`    | `false`    | Print the URL and wait without attempting to open a browser.            |
 | `--timeout`       | `5m`       | How long to wait for the callback.                                      |
 
-The global `--ctx`, `--identity`, and `--peer` flags select the subject and the peer to resolve chains through. With `--json` the command emits `{did, clientDid, credentialPath?, credential?}`.
+The global `--as` and `--relay` flags select the subject and the peer to resolve chains through when no positional argument names the subject. With `--json` the command emits `{did, clientDid, credentialPath?, credential?}`.
 
 ---
 
@@ -662,14 +719,15 @@ A proof authorizes one request and nothing else: it binds that method, that host
 
 ## Environment Variables
 
-| Variable               | Purpose                                           |
-| ---------------------- | ------------------------------------------------- |
-| `DFOS_CONTEXT`         | Override active context (`identity@relay`)        |
-| `DFOS_IDENTITY`        | Override active identity name                     |
-| `DFOS_RELAY`           | Override active relay name                        |
-| `DFOS_CONFIG`          | Config file path (default: `~/.dfos/config.toml`) |
-| `DFOS_NO_KEYCHAIN`     | Skip OS keychain; use file store `~/.dfos/keys/`  |
-| `DFOS_NO_UPDATE_CHECK` | Disable automatic version update checks           |
+| Variable               | Purpose                                               |
+| ---------------------- | ----------------------------------------------------- |
+| `DFOS_AS`              | Identity to act as (name or `did:dfos:…`)             |
+| `DFOS_RELAY`           | Peer to talk to (name)                                |
+| `DFOS_IDENTITY`        | Deprecated alias of `DFOS_AS`                         |
+| `DFOS_CONTEXT`         | Deprecated alias naming both halves (`identity@peer`) |
+| `DFOS_CONFIG`          | Config file path (default: `~/.dfos/config.toml`)     |
+| `DFOS_NO_KEYCHAIN`     | Skip OS keychain; use file store `~/.dfos/keys/`      |
+| `DFOS_NO_UPDATE_CHECK` | Disable automatic version update checks               |
 
 ---
 
@@ -724,11 +782,11 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `POST` | `peer add <name> <url>`         | Register a named relay                                     |
 | `DEL`  | `peer remove <name>`            | Unregister a relay                                         |
 | `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store         |
-| `SET`  | `use <identity[@peer]>`         | Set active context                                         |
 | `GET`  | `config list`                   | Show full configuration                                    |
 | `GET`  | `config get <key>`              | Read a single config value                                 |
 | `SET`  | `config set <key> <value>`      | Write a config value                                       |
 | `GET`  | `status [--store]`              | At-a-glance overview, optionally with local-store stats    |
+| `GET`  | `whoami`                        | Resolved identity, signing key, credentials, and peer      |
 | `POST` | `sync`                          | Sync with all configured relays                            |
 | `*`    | `serve`                         | Run the local relay as an HTTP server                      |
 | `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`)   |

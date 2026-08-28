@@ -140,19 +140,12 @@ func newIdentityCreateCmd() *cobra.Command {
 				publishedTo = append(publishedTo, rn)
 			}
 
-			// register name in config only after all operations succeed
+			// Register the name in config only after all operations succeed.
+			// Creating an identity does NOT select it: nothing follows "last
+			// created", because a default that moves on its own is a default an
+			// operator cannot reason about and two processes can race on. Say so
+			// and point at the three mechanisms instead.
 			cfg.Identities[name] = config.IdentityConfig{DID: did}
-			// Select the first identity created so `status`/signing commands work
-			// immediately, instead of leaving the user with "No active context".
-			activated := ""
-			if cfg.ActiveContext == "" {
-				if rn != "" {
-					cfg.ActiveContext = name + "@" + rn
-				} else {
-					cfg.ActiveContext = name
-				}
-				activated = cfg.ActiveContext
-			}
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
@@ -166,7 +159,6 @@ func newIdentityCreateCmd() *cobra.Command {
 					"authKey":       authKeyID,
 					"services":      len(services),
 					"publishedTo":   publishedTo,
-					"activeContext": cfg.ActiveContext,
 				})
 			} else {
 				fmt.Printf("Identity created:\n")
@@ -182,9 +174,7 @@ func newIdentityCreateCmd() *cobra.Command {
 				} else {
 					fmt.Printf("  Status:         local only. Use 'dfos identity publish' to push to a peer.\n")
 				}
-				if activated != "" {
-					fmt.Printf("  Active context: %s\n", activated)
-				}
+				fmt.Printf("  Sign as it:     --as %s, DFOS_AS=%s, or 'dfos config set default-identity %s'\n", name, name, name)
 				fmt.Fprintf(os.Stderr, "\nWarning: key loss is unrecoverable. There is no seed phrase, backup, or recovery flow.\n")
 				fmt.Fprintf(os.Stderr, "         If you lose these keys (%s), control of this identity is gone for good.\n", keys.Backend())
 				fmt.Fprintf(os.Stderr, "         Availability is a multi-key story, not a recovery one: register additional keys (e.g. on another device) with 'dfos identity add-key' while you still hold a controller key, so no single key loss is fatal.\n")
@@ -1024,13 +1014,14 @@ func newIdentityRestoreCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if ctx.IdentityName == "" {
-					return fmt.Errorf("no identity configured. Use --identity or 'dfos identity create'")
+				if !ctx.HasIdentity() {
+					return errNoIdentity()
 				}
-				identityArg = ctx.IdentityName
+				identityArg = ctx.Principal()
 				if ctx.IdentityDID == "" {
-					return fmt.Errorf("identity '%s' not found in config", ctx.IdentityName)
+					return fmt.Errorf("identity '%s' not found in config (from %s)", ctx.IdentityName, ctx.IdentitySource)
 				}
+				announceSigner(ctx)
 				chain, err = lr.Relay.GetIdentity(ctx.IdentityDID)
 				if err != nil {
 					return err
@@ -1528,11 +1519,11 @@ func newIdentityWellKnownCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if ctx.IdentityName == "" {
-					return fmt.Errorf("no identity configured. Use --identity or 'dfos identity create'")
+				if !ctx.HasIdentity() {
+					return errNoIdentity()
 				}
 				if ctx.IdentityDID == "" {
-					return fmt.Errorf("identity '%s' not found in config", ctx.IdentityName)
+					return fmt.Errorf("identity '%s' not found in config (from %s)", ctx.IdentityName, ctx.IdentitySource)
 				}
 				chain, _ = lr.Relay.GetIdentity(ctx.IdentityDID)
 			}
@@ -1613,7 +1604,7 @@ func newIdentityPublishCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "publish [name|did]",
 		Short: "Push identity chain to a peer",
-		Long:  "Push an identity's full operation chain to a peer relay. The target peer is taken from --peer, else the active context's peer; one or the other is required.",
+		Long:  "Push an identity's full operation chain to a peer relay. The target peer is taken from --peer, else the resolved peer; one or the other is required.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			lr, err := getRelay()
@@ -1650,7 +1641,7 @@ func newIdentityPublishCmd() *cobra.Command {
 				}
 			}
 			if rn == "" {
-				return fmt.Errorf("--peer is required to publish: pass --peer <name> or set an active context with 'dfos use <identity@peer>'")
+				return errNoPeer()
 			}
 
 			c, _, err := getPeerClient(rn)
@@ -1772,6 +1763,13 @@ func newIdentityRemoveCmd() *cobra.Command {
 			}
 
 			delete(cfg.Identities, name)
+			// Dropping the name that default-identity points at would leave the
+			// config tier naming something that no longer resolves, so it is
+			// cleared here. This is not a default that follows anything — it is
+			// the removal of a dangling one.
+			if cfg.DefaultIdentity == name || cfg.DefaultIdentity == idCfg.DID {
+				cfg.DefaultIdentity = ""
+			}
 			if cfg.ActiveContext != "" {
 				parts := strings.SplitN(cfg.ActiveContext, "@", 2)
 				if len(parts) > 0 && parts[0] == name {
@@ -1792,11 +1790,12 @@ func newIdentityRemoveCmd() *cobra.Command {
 }
 
 type identityForgetResult struct {
-	DID                  string   `json:"did"`
-	Name                 string   `json:"name,omitempty"`
-	RemovedContexts      []string `json:"removedContexts"`
-	ActiveContextCleared bool     `json:"activeContextCleared"`
-	CredentialRemoved    bool     `json:"credentialRemoved"`
+	DID                    string   `json:"did"`
+	Name                   string   `json:"name,omitempty"`
+	RemovedContexts        []string `json:"removedContexts"`
+	ActiveContextCleared   bool     `json:"activeContextCleared"`
+	DefaultIdentityCleared bool     `json:"defaultIdentityCleared"`
+	CredentialRemoved      bool     `json:"credentialRemoved"`
 }
 
 func newIdentityForgetCmd() *cobra.Command {
@@ -1884,6 +1883,13 @@ func forgetIdentityConfig(target *config.Config, nameOrDID string) (identityForg
 	if clearActive {
 		target.ActiveContext = ""
 		result.ActiveContextCleared = true
+	}
+	// Same reason as `identity remove`: a default-identity naming a forgotten
+	// identity is a dangling pointer, not a preference worth keeping.
+	if target.DefaultIdentity != "" &&
+		(target.DefaultIdentity == result.DID || (result.Name != "" && target.DefaultIdentity == result.Name)) {
+		target.DefaultIdentity = ""
+		result.DefaultIdentityCleared = true
 	}
 	return result, nil
 }

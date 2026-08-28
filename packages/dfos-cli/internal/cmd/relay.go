@@ -69,9 +69,12 @@ func runRelayCall(f *relayCallFlags, args []string, invocation string) error {
 		return fmt.Errorf("invalid HTTP method %q\nusage: %s <METHOD> <path> (e.g. %s GET /proof/v1/stats)", args[0], invocation, invocation)
 	}
 
-	ctx, _ := resolveCtx()
-	if ctx == nil || ctx.RelayURL == "" {
-		return fmt.Errorf("no peer configured")
+	ctx, err := resolveCtx()
+	if err != nil {
+		return err
+	}
+	if ctx.RelayURL == "" {
+		return errNoPeer()
 	}
 
 	c := client.New(ctx.RelayURL)
@@ -164,9 +167,14 @@ func runRelayCall(f *relayCallFlags, args []string, invocation string) error {
 	return nil
 }
 
+// resolveIdentityForRelayCall resolves the principal --auth signs as. It runs
+// the same stack, refuses anonymously with the same three-mechanism error, and
+// announces the principal the same way as every other signing site — --auth is
+// a signing site, and a raw passthrough is exactly where a silently-ambient
+// identity would do the most damage.
 func resolveIdentityForRelayCall(ctx *config.ResolvedContext) (*relay.StoredIdentityChain, error) {
-	if ctx.IdentityName == "" {
-		return nil, fmt.Errorf("--auth requires an identity. Use --identity or set a context")
+	if !ctx.HasIdentity() {
+		return nil, errNoIdentity()
 	}
 	lr, err := getRelay()
 	if err != nil {
@@ -174,14 +182,15 @@ func resolveIdentityForRelayCall(ctx *config.ResolvedContext) (*relay.StoredIden
 	}
 	did := ctx.IdentityDID
 	if did == "" {
-		return nil, fmt.Errorf("identity '%s' not found in config", ctx.IdentityName)
+		return nil, fmt.Errorf("identity '%s' not found in config (from %s)", ctx.IdentityName, ctx.IdentitySource)
 	}
 	chain, err := lr.Relay.GetIdentity(did)
 	if err != nil || chain == nil {
-		return nil, fmt.Errorf("identity '%s' not found in local relay", ctx.IdentityName)
+		return nil, fmt.Errorf("identity '%s' not found in local relay", ctx.Principal())
 	}
 	if len(chain.State.AuthKeys) == 0 {
-		return nil, fmt.Errorf("identity has no auth keys")
+		return nil, fmt.Errorf("identity '%s' has no auth keys", ctx.Principal())
 	}
+	announceSigner(ctx)
 	return chain, nil
 }
