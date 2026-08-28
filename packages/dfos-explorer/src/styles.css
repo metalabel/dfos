@@ -558,7 +558,9 @@ header {
   box-shadow: 0 0 0 1px currentColor;
 }
 
-.pill.pending {
+.pill.pending,
+/* a fact that is neither good nor bad: same dim ink as pending, no spinner */
+.pill.neutral {
   color: var(--dim);
   border-color: var(--line2);
   background: var(--panel-hd);

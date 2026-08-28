@@ -3,28 +3,37 @@
   DOMAIN VIEW — what an origin says about itself, checked
 
   The other detail views start from an identifier and ask the relays. This one
-  starts from a DOMAIN and asks the domain, because an app description document
-  is the one artifact where a domain vouches for a DFOS identity: serving
-  `/.well-known/dfos-app.json` IS the registration (SIWD.md). The explorer then
-  does what it always does — re-verifies the claim in the tab, and compares it
-  against what the untrusted relays hold.
+  starts from a DOMAIN and asks the domain, because two of the artifacts a domain
+  can serve say something about a DFOS identity, and this page checks both.
 
-  Four beats, and each one can fail differently:
+  ORIGIN BINDING (ORIGIN-BINDING.md), the headline when it resolves. The domain
+  attests a DID — a `_dfos` TXT record or `/.well-known/dfos-did` — and that DID's
+  chain must name this exact domain back. It is the domain-first walk
+  `dfos identity verify-binding <hostname>` runs, and it is the one thing on this
+  page that binds an identity to the domain in both directions.
+
+  APP DESCRIPTION (SIWD.md), four beats, each failing differently:
 
     1. the ORIGIN served a document        → unreachable / no-app-description
     2. it is a valid app description       → malformed
     3. its carried chain verifies + derives its client_did  → malformed
     4. the relays' log for that DID agrees  → relay-diverged
 
-  The reachability beat runs through the explorer's app-description route, so a
+  The two are independent claims and a domain may make either, both, or neither.
+  So an absent app description on a bound origin is a NEUTRAL fact, not a failure
+  headline — this origin describes no app, which is nothing at all to fix.
+
+  Both reachability beats run through the explorer's own serverless routes, so a
   failure there is OUR failure, and says so — never "this origin has no app
-  description", which is a claim about someone else's server we did not observe.
+  description" or "this domain is silent", which are claims about someone else's
+  server we did not observe.
 
 */
 
 import type { Resolved } from '@metalabel/dfos-client';
 import type { VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { useEffect, useState } from 'preact/hooks';
+import { BindingEvidence } from '../components/binding-evidence';
 import { Check, Checks } from '../components/checks';
 import { ProvenanceLine } from '../components/provenance';
 import { OpTimeline } from '../components/timeline';
@@ -39,10 +48,23 @@ import {
   Term,
   TROUBLESHOOTING_GUIDE,
   TruncId,
+  type PillState,
 } from '../components/ui';
 import { getClient } from '../lib/client';
 import { GLOSSARY } from '../lib/glossary';
 import { toOpRows, type OpRow } from '../lib/op-rows';
+import {
+  assessDomainBinding,
+  attestedCandidate,
+  domainBindingSpeaks,
+  fallbackEligible,
+  fetchBindingAttestation,
+  readAppAttestation,
+  type AppAttestation,
+  type AttestedChain,
+  type BindingMethodResult,
+  type DomainBinding,
+} from '../lib/origin-binding';
 import {
   assessDocument,
   compareLogs,
@@ -63,9 +85,23 @@ type RelayBeat =
   | { phase: 'absent'; error: string }
   | { phase: 'held'; log: string[]; rows: OpRow[]; resolved: Resolved<VerifiedIdentity> };
 
+/** The origin-binding beat. The probe is kept beside the verdict because the
+ *  panel renders BOTH — the verdict, and the per-channel evidence it was folded
+ *  from — and a verdict without its evidence is the bare checkmark the spec's
+ *  display discipline forbids. */
+type BindingBeat =
+  | { phase: 'checking' }
+  | {
+      phase: 'done';
+      binding: DomainBinding;
+      probe: { https: BindingMethodResult; dns: BindingMethodResult } | null;
+      fallback: AppAttestation | null;
+    };
+
 export const Domain = (props: { host: string }) => {
   const [document, setDocument] = useState<DomainVerdict | null>(null);
   const [relay, setRelay] = useState<RelayBeat>({ phase: 'idle' });
+  const [binding, setBinding] = useState<BindingBeat>({ phase: 'checking' });
   // re-check nonce. Most of the amber and red states here are TRANSIENT — a
   // hosting blip, a deploy mid-flight, our own route flapping — and the explorer
   // is stateless, so the only honest answer to "is this still true?" is to ask
@@ -83,6 +119,54 @@ export const Domain = (props: { host: string }) => {
       const outcome = await fetchAppDocument(props.host);
       const assessed = await assessDocument(outcome);
       if (!dead) setDocument(assessed);
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [props.host, nonce]);
+
+  // the origin-binding walk, domain-first: probe both attest-back channels, take
+  // the DID they attest, resolve and VERIFY that identity here, and require its
+  // chain to name this exact host back. Independent of the document beats above —
+  // a domain can be a bound origin, an app host, both, or neither.
+  useEffect(() => {
+    let dead = false;
+    setBinding({ phase: 'checking' });
+    void (async () => {
+      const probe = await fetchBindingAttestation(props.host);
+      // the app-description fallback is a MUST, and ONLY on absence. Here it can
+      // also SUPPLY the candidate: an origin that publishes nothing but a SIWD
+      // app description already publishes its DID, and this reads it.
+      const fallback = fallbackEligible(probe) ? await readAppAttestation(props.host) : undefined;
+      const candidate = attestedCandidate(probe, fallback);
+
+      let chain: AttestedChain | null = null;
+      if (candidate !== null) {
+        try {
+          const resolved = await getClient().identity(candidate);
+          chain = {
+            kind: 'verified',
+            did: resolved.value.did,
+            services: resolved.value.services,
+          };
+        } catch (e) {
+          // no relay served this identity, or it failed verification here. COULD
+          // NOT CHECK — never folded into "the chain claims nothing", which is a
+          // chain we actually read.
+          chain = {
+            kind: 'unavailable',
+            did: candidate,
+            reason: e instanceof Error ? e.message : String(e),
+          };
+        }
+      }
+      if (dead) return;
+      setBinding({
+        phase: 'done',
+        binding: assessDomainBinding(props.host, probe, fallback, chain),
+        probe: probe.kind === 'answered' ? { https: probe.https, dns: probe.dns } : null,
+        fallback: fallback ?? null,
+      });
     })();
     return () => {
       dead = true;
@@ -138,24 +222,34 @@ export const Domain = (props: { host: string }) => {
         ? compareLogs(proven.log, relay.log)
         : null;
 
+  // a binding that SPOKE earns the headline panel; silence and our own route
+  // failing stay one quiet line in the header, because neither is an observation
+  // about this domain's binding. The flag also neutralizes the app-description
+  // states below: with a binding on the page, "no app description" is a fact
+  // about what this origin does, not a failure to lead with.
+  const speaks = binding.phase === 'done' && domainBindingSpeaks(binding.binding);
+
   return (
     <>
       <Panel
         title={
           <>
-            domain <StatePill verdict={verdict} />
+            domain <StatePill verdict={verdict} neutralAbsence={speaks} />
           </>
         }
-        accent={accentFor(verdict)}
+        accent={accentFor(verdict, speaks)}
         orient={
           <>
-            An application's <code>/.well-known/dfos-app.json</code> — the one document where a{' '}
-            <b>domain vouches for a DFOS identity</b>. Serving the file is the registration: there
-            is no developer portal and no client secret,{' '}
-            <Term word="domain control" def={GLOSSARY['did'] ?? ''} /> is the credential. What the
-            document <i>claims</i> is checked here; what the relays hold is compared below.
-            Everything on this page is recomputed in your browser — relays are inputs, not
-            authorities. <a href="#/">how this works</a>
+            What a domain publishes about DFOS identities, checked here. Two independent claims: the{' '}
+            <Term word="origin binding" def={GLOSSARY['originBinding'] ?? ''} /> — the domain
+            attests a DID and that identity's chain names the domain back — and the{' '}
+            <Term word="app description" def={GLOSSARY['appDescription'] ?? ''} /> at{' '}
+            <code>/.well-known/dfos-app.json</code>, where{' '}
+            <b>a domain vouches for a DFOS identity</b> and serving the file is the registration: no
+            developer portal, no client secret,{' '}
+            <Term word="domain control" def={GLOSSARY['did'] ?? ''} /> is the credential. A domain
+            may make either claim, both, or neither. Everything on this page is recomputed in your
+            browser — relays are inputs, not authorities. <a href="#/">how this works</a>
           </>
         }
       >
@@ -166,6 +260,14 @@ export const Domain = (props: { host: string }) => {
               {props.host}
             </a>
           </div>
+          {speaks ? null : (
+            <>
+              <div class="k">origin binding</div>
+              <div class="v">
+                <QuietBinding beat={binding} />
+              </div>
+            </>
+          )}
           {proven !== null ? (
             <>
               <div class="k">
@@ -179,6 +281,14 @@ export const Domain = (props: { host: string }) => {
         </div>
       </Panel>
 
+      {binding.phase === 'done' && speaks ? (
+        <OriginBindingPanel
+          host={props.host}
+          beat={binding}
+          onRecheck={() => setNonce((n) => n + 1)}
+        />
+      ) : null}
+
       {verdict === null ? (
         <Panel title="verification">
           <Checks>
@@ -191,6 +301,7 @@ export const Domain = (props: { host: string }) => {
           verdict={verdict}
           relay={relay}
           comparison={comparison}
+          neutralAbsence={speaks}
           onRecheck={() => setNonce((n) => n + 1)}
         />
       )}
@@ -258,9 +369,18 @@ const PROXY_DOWN_DEF =
 const ORIGIN_DOWN_DEF =
   'Nothing was served, so nothing below could be checked. A transport failure — not a statement about what the domain publishes.';
 
-const StatePill = (props: { verdict: DomainVerdict | null }) => {
+const StatePill = (props: { verdict: DomainVerdict | null; neutralAbsence: boolean }) => {
   const { verdict } = props;
   if (verdict === null) return <Pill state="pending">checking origin…</Pill>;
+  // an origin with a binding on the page and no app description is describing no
+  // app — a complete answer, and amber would read as a shortfall
+  if (verdict.kind === 'no-app-description' && props.neutralAbsence) {
+    return (
+      <Pill state="neutral" def={STATE_DEFS['no-app-description']}>
+        no app description
+      </Pill>
+    );
+  }
   switch (verdict.kind) {
     case 'verified':
       return (
@@ -301,11 +421,276 @@ const StatePill = (props: { verdict: DomainVerdict | null }) => {
   }
 };
 
-const accentFor = (verdict: DomainVerdict | null): 'ok' | 'warn' | 'bad' | undefined => {
+const accentFor = (
+  verdict: DomainVerdict | null,
+  neutralAbsence: boolean,
+): 'ok' | 'warn' | 'bad' | undefined => {
   if (verdict === null) return undefined;
+  if (verdict.kind === 'no-app-description' && neutralAbsence) return undefined;
   if (verdict.kind === 'verified') return 'ok';
   if (verdict.kind === 'malformed' || verdict.kind === 'unreachable') return 'bad';
   return 'warn';
+};
+
+// -----------------------------------------------------------------------------
+// ORIGIN BINDING — the domain-first walk, and the page's headline when it speaks
+//
+// Display discipline here is NORMATIVE (ORIGIN-BINDING.md, "Display Discipline"):
+// a binding proves control of a DOMAIN at check time — never personhood,
+// endorsement, or notability — so the panel always shows the domain AND the
+// identity together, and never collapses the verdict into a checkmark divorced
+// from them. The evidence rows sit under the verdict for the same reason: a
+// silent channel beside an attesting one is the ordinary shape of a healthy
+// binding, and it is rendered as what it is rather than as a warning.
+// -----------------------------------------------------------------------------
+
+/** The pill, and the same verdict said plainly. The precise word stays the label
+ *  — bound / stale / broken are what stay machine-distinguishable — and the plain
+ *  rendering is one hover or tap away. The two half-states below the three spec
+ *  verdicts keep could-not-check and checked-and-absent apart, which is the same
+ *  discipline the stale/broken split enforces one level up. */
+const bindingPill = (binding: DomainBinding): { state: PillState; text: string; def: string } => {
+  switch (binding.kind) {
+    case 'bound':
+      return { state: 'ok', text: 'bound', def: GLOSSARY['bindingBound'] ?? '' };
+    case 'broken':
+      return {
+        state: 'bad',
+        text: 'broken — the domain contradicts itself',
+        def: GLOSSARY['bindingBroken'] ?? '',
+      };
+    case 'chain-unavailable':
+      return {
+        state: 'warn',
+        text: 'attested identity unresolved',
+        def: 'The domain attests a DID, and no relay you have configured resolved that identity — so the chain half of the binding could not be checked. Could not check: nothing here says the binding is wrong.',
+      };
+    case 'no-chain-claim':
+      return {
+        state: 'warn',
+        text: 'attested, not claimed back',
+        def: 'The domain attests an identity and that identity’s verified chain names no domain, so there is no binding. Half a binding is no binding — the chain entry is the identity’s signed consent to be named by the domain.',
+      };
+    case 'stale':
+      return {
+        state: 'neutral',
+        text: 'no attestation published',
+        def: GLOSSARY['bindingStale'] ?? '',
+      };
+    case 'proxy-unavailable':
+      return {
+        state: 'warn',
+        text: 'verifier unavailable',
+        def: 'The explorer’s own route failed, so nothing at all was learned about this domain. This is our failure — it says nothing either way about whether the domain attests an identity.',
+      };
+  }
+};
+
+/** The one-line binding state for the header, where the binding has nothing to
+ *  say: the domain published nothing, or our own route failed. Deliberately
+ *  quiet — an origin that publishes no attestation is not missing anything. */
+const QuietBinding = (props: { beat: BindingBeat }) => {
+  if (props.beat.phase === 'checking') {
+    return <span class="muted">asking the domain…</span>;
+  }
+  const binding = props.beat.binding;
+  if (binding.kind === 'proxy-unavailable') {
+    return (
+      <span class="muted">
+        the explorer's own binding route did not answer — nothing was learned about this domain
+      </span>
+    );
+  }
+  return <span class="muted">none — this domain attests no identity</span>;
+};
+
+/** Everything the domain-first walk established, in the order it establishes it:
+ *  what each channel answered, whether the attested identity resolves, and
+ *  whether its chain names this exact host back. */
+const OriginBindingPanel = (props: {
+  host: string;
+  beat: Extract<BindingBeat, { phase: 'done' }>;
+  onRecheck: () => void;
+}) => {
+  const { binding, probe, fallback } = props.beat;
+  const pill = bindingPill(binding);
+  // the DID the rows are judged against. Null on a domain that contradicts
+  // ITSELF: there is no identity yet to compare answers to, and each answer is
+  // rendered as an answer rather than as a match or a mismatch.
+  const did = binding.kind === 'stale' || binding.kind === 'proxy-unavailable' ? null : binding.did;
+  // the header rule takes the verdict's colour; `neutral` and `pending` carry no
+  // rule, and neither reaches this panel
+  const accent =
+    pill.state === 'ok' || pill.state === 'bad' || pill.state === 'warn' ? pill.state : undefined;
+
+  return (
+    <Panel
+      title={
+        <>
+          origin binding{' '}
+          <Pill state={pill.state} def={pill.def} word={pill.text}>
+            {pill.text}
+          </Pill>
+        </>
+      }
+      accent={accent}
+      right={<span class="lbl">checked in your browser</span>}
+      orient={
+        <>
+          The domain attests an identity and that identity's chain names the domain back — an{' '}
+          <Term word="origin binding" def={GLOSSARY['originBinding'] ?? ''} />. It proves{' '}
+          <b>control of this domain</b> at check time: never personhood, endorsement, or notability.
+          The domain is the credential, so both halves are shown, never summarized into a badge.
+        </>
+      }
+    >
+      <div class="kv">
+        <div class="k">
+          domain <span class="lbl">the host you looked up</span>
+        </div>
+        <div class="v">{props.host}</div>
+        <div class="k">
+          identity <span class="lbl">attested by this domain</span>
+        </div>
+        <div class="v">
+          {did !== null ? (
+            <DidLink did={did} full />
+          ) : (
+            <span class="muted">
+              the channels name different identities — the domain attests no single one
+            </span>
+          )}
+        </div>
+      </div>
+
+      <Checks>
+        {probe !== null ? (
+          <BindingEvidence
+            https={probe.https}
+            dns={probe.dns}
+            fallback={fallback}
+            did={did}
+            settled={binding.kind === 'bound'}
+          />
+        ) : null}
+        <BindingChainChecks binding={binding} />
+      </Checks>
+
+      {binding.kind === 'bound' ? (
+        // the two well-known documents are constantly mistaken for one another,
+        // and this page now checks both — so name which is which, here, once.
+        <div class="ck-note" style={{ marginTop: 10 }}>
+          This is the <Term word="domain attestation" def={GLOSSARY['domainAttestation'] ?? ''} /> (
+          <code>dfos-did</code> / <code>_dfos</code> TXT), checked against the identity's signed
+          chain. The panels below check this domain's{' '}
+          <Term word="app description" def={GLOSSARY['appDescription'] ?? ''} /> (
+          <code>dfos-app.json</code>) — a different claim, which neither confirms nor denies this
+          binding.
+        </div>
+      ) : null}
+      {binding.kind === 'broken' ? (
+        <div class="ck-note" style={{ marginTop: 10 }}>
+          {binding.details.join(' · ')}. A domain that answers with something else contradicts the
+          identity's claim — the identity and its history are untouched, only the domain claim is
+          contradicted.
+        </div>
+      ) : null}
+      {binding.kind === 'chain-unavailable' ? (
+        <div class="ck-note" style={{ marginTop: 10 }}>
+          The domain's half was read; the chain half was not. Add a relay that serves this identity
+          — or check it later — and the walk completes. Nothing here is a statement that the binding
+          is wrong.
+        </div>
+      ) : null}
+
+      <BindingNextStep binding={binding} onRecheck={props.onRecheck} />
+    </Panel>
+  );
+};
+
+/** The chain half's rows: did the attested identity resolve, and does its chain
+ *  name this exact host back. Byte-exact — a binding to `example.org` says
+ *  nothing about `sub.example.org`, in either direction. */
+const BindingChainChecks = (props: { binding: DomainBinding }) => {
+  const { binding } = props;
+  switch (binding.kind) {
+    case 'stale':
+    case 'proxy-unavailable':
+      return null;
+    case 'broken':
+      // a domain contradicting ITSELF never reached a chain; the other broken
+      // shape is a chain that resolved and claims somewhere else
+      return binding.did === null ? null : (
+        <>
+          <Check state="ok" note={binding.did}>
+            the attested identity's chain verifies in your browser
+          </Check>
+          <Check state="bad" note={binding.details.join(' · ')}>
+            its chain claims a <b>different domain</b>
+          </Check>
+        </>
+      );
+    case 'chain-unavailable':
+      return (
+        <Check state="warn" note={binding.reason}>
+          the attested identity did not resolve — <b>could not check</b> the chain half
+        </Check>
+      );
+    case 'no-chain-claim':
+      return (
+        <>
+          <Check state="ok" note={binding.did}>
+            the attested identity's chain verifies in your browser
+          </Check>
+          <Check
+            state="warn"
+            note={
+              binding.claim === 'ambiguous'
+                ? 'more than one DfosOrigin entry — an ambiguous claim is no claim'
+                : 'no DfosOrigin entry in this identity’s services'
+            }
+          >
+            its chain claims no domain —{' '}
+            <b>an attestation without a chain claim is not a binding</b>
+          </Check>
+        </>
+      );
+    case 'bound':
+      return (
+        <>
+          <Check state="ok" note={binding.did}>
+            the attested identity's chain verifies in your browser
+          </Check>
+          <Check state="ok" note={`DfosOrigin service entry — ${binding.domain}`}>
+            its chain claims this exact domain back
+          </Check>
+        </>
+      );
+  }
+};
+
+/** The action line under an amber or red binding. A domain that has published
+ *  nothing yet is setup-shaped and never reaches here (it stays a quiet header
+ *  line); everything that does reach here is a failure or a contradiction. */
+const BindingNextStep = (props: { binding: DomainBinding; onRecheck: () => void }) => {
+  if (props.binding.kind === 'bound') return null;
+  return (
+    <div class="ck-note" style={{ marginTop: 10 }}>
+      {props.binding.kind === 'no-chain-claim' ? (
+        <>
+          if this is your domain, the <DocsLink href={SETUP_GUIDE}>setup guide ↗</DocsLink> covers
+          claiming it on the identity's chain. troubleshooting:{' '}
+          <DocsLink href={TROUBLESHOOTING_GUIDE}>what can go wrong ↗</DocsLink>.
+        </>
+      ) : (
+        <>
+          what this means and what to do:{' '}
+          <DocsLink href={TROUBLESHOOTING_GUIDE}>the troubleshooting guide ↗</DocsLink>.
+        </>
+      )}{' '}
+      <button onClick={props.onRecheck}>re-check</button>
+    </div>
+  );
 };
 
 // -----------------------------------------------------------------------------
@@ -317,6 +702,9 @@ const Verification = (props: {
   verdict: DomainVerdict;
   relay: RelayBeat;
   comparison: LogComparison | null;
+  /** an origin binding already resolved above, so an absent app description is a
+   *  neutral fact about this origin rather than something it fell short of */
+  neutralAbsence: boolean;
   onRecheck: () => void;
 }) => {
   const { verdict, relay, comparison } = props;
@@ -333,11 +721,11 @@ const Verification = (props: {
         <>
           This checks the domain's{' '}
           <Term word="app description" def={GLOSSARY['appDescription'] ?? ''} /> (
-          <code>dfos-app.json</code>) — how a domain describes an app. A domain can separately
-          attest an identity back (the{' '}
+          <code>dfos-app.json</code>) — how a domain describes an app. Separately, a domain attests
+          an identity back (the{' '}
           <Term word="domain attestation" def={GLOSSARY['domainAttestation'] ?? ''} />,{' '}
-          <code>dfos-did</code> / <code>_dfos</code> TXT); that check lives on the identity page's
-          origin-binding panel.
+          <code>dfos-did</code> / <code>_dfos</code> TXT): that is the origin-binding check, which
+          runs above and on the identity page. Neither claim confirms or denies the other.
         </>
       }
     >
@@ -367,14 +755,14 @@ const Verification = (props: {
           </>
         ) : verdict.kind === 'no-app-description' ? (
           <Check
-            state="warn"
+            state={props.neutralAbsence ? 'pend' : 'warn'}
             note={
               verdict.httpStatus !== null
                 ? `HTTP ${verdict.httpStatus} — the origin answered, and has no such document`
                 : 'the origin answered, and has no such document'
             }
           >
-            {props.host} serves no app description
+            this origin serves no app description
           </Check>
         ) : (
           <>
@@ -452,7 +840,11 @@ const Verification = (props: {
         </div>
       ) : null}
 
-      <NextStep verdict={verdict} onRecheck={props.onRecheck} />
+      <NextStep
+        verdict={verdict}
+        neutralAbsence={props.neutralAbsence}
+        onRecheck={props.onRecheck}
+      />
     </Panel>
   );
 };
@@ -473,8 +865,15 @@ const SETUP_HINT: Partial<Record<DomainVerdict['kind'], string>> = {
   'no-carriage': 'covers carrying the identity chain in the app description',
 };
 
-const NextStep = (props: { verdict: DomainVerdict; onRecheck: () => void }) => {
+const NextStep = (props: {
+  verdict: DomainVerdict;
+  neutralAbsence: boolean;
+  onRecheck: () => void;
+}) => {
   if (props.verdict.kind === 'verified') return null;
+  // an origin that describes no app, on a page that already carries its binding,
+  // is not mid-setup — pointing at the setup guide would invent a shortfall
+  if (props.verdict.kind === 'no-app-description' && props.neutralAbsence) return null;
   const hint = SETUP_HINT[props.verdict.kind];
   return (
     <div class="ck-note" style={{ marginTop: 10 }}>

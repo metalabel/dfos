@@ -19,6 +19,7 @@ import type { ServiceEntry, VerifiedIdentity } from '@metalabel/dfos-protocol/ch
 import { classifyAnchor } from '@metalabel/dfos-protocol/chain';
 import { dagCborCanonicalEncode, decodeJwsUnsafe } from '@metalabel/dfos-protocol/crypto';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { BindingEvidence } from '../components/binding-evidence';
 import { Check, Checks, type CheckState } from '../components/checks';
 import { ContentChip } from '../components/content-chip';
 import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
@@ -1411,36 +1412,6 @@ const IdentityProfile = (props: { anchor: string | null; chainVerified: boolean 
 // and never collapses the verdict into a bare checkmark divorced from it.
 // -----------------------------------------------------------------------------
 
-/** One method's row state. An answer that names a DIFFERENT DID is red; every
- *  form of silence is amber; only an exact match is green. */
-const methodState = (result: BindingMethodResult, did: string): CheckState => {
-  if (result.status === 'ok') return result.did === did ? 'ok' : 'bad';
-  if (result.status === 'contradiction') return 'bad';
-  return 'warn';
-};
-
-/** The mechanical note under a method row — what was actually observed. */
-const methodNote = (result: BindingMethodResult, did: string): string => {
-  switch (result.status) {
-    case 'ok':
-      return result.did === did
-        ? `attests ${result.did} — exactly this identity`
-        : `attests ${result.did} — a DIFFERENT identity`;
-    case 'contradiction':
-      return result.reason;
-    case 'malformed':
-      return `${result.reason} — present, but not an attestation`;
-    case 'none':
-      return result.reason ?? 'nothing published';
-    case 'error':
-      return `${result.reason ?? 'the lookup failed'}${
-        result.httpStatus !== undefined ? ` (HTTP ${result.httpStatus})` : ''
-      } — could not check`;
-    case 'refused':
-      return `${result.reason} — refused before it left the explorer`;
-  }
-};
-
 /**
  * The pill, and the PLAIN rendering of the same verdict.
  *
@@ -1623,40 +1594,13 @@ const OriginBindingPanel = (props: {
             {domain}
           </Check>
         ) : probe === null ? null : (
-          <>
-            <Check
-              state={methodState(probe.https, props.did)}
-              note={methodNote(probe.https, props.did)}
-            >
-              https attest-back <code>/.well-known/dfos-did</code>
-            </Check>
-            <Check
-              state={methodState(probe.dns, props.did)}
-              note={methodNote(probe.dns, props.did)}
-            >
-              dns attest-back <code>_dfos</code> TXT
-            </Check>
-            {fallback !== null ? (
-              <Check
-                state={
-                  fallback.kind === 'attests'
-                    ? 'ok'
-                    : fallback.kind === 'answers-other'
-                      ? 'bad'
-                      : 'warn'
-                }
-                note={
-                  fallback.kind === 'attests'
-                    ? `client_did is ${fallback.did} — exactly this identity`
-                    : fallback.kind === 'answers-other'
-                      ? `client_did is ${fallback.did} — a DIFFERENT identity`
-                      : fallback.reason
-                }
-              >
-                app-description fallback <code>/.well-known/dfos-app.json</code>
-              </Check>
-            ) : null}
-          </>
+          <BindingEvidence
+            https={probe.https}
+            dns={probe.dns}
+            fallback={fallback}
+            did={props.did}
+            settled={verdict.kind === 'bound'}
+          />
         )}
       </Checks>
 

@@ -51,7 +51,10 @@ export const Badge = (props: {
 // verify pill
 // -----------------------------------------------------------------------------
 
-export type PillState = 'pending' | 'ok' | 'bad' | 'warn';
+/** `neutral` is the state for a fact that is neither good nor bad and must not be
+ *  dressed as either — an absence a page has already accounted for, where amber
+ *  would read as a shortfall and green would claim something was checked. */
+export type PillState = 'pending' | 'ok' | 'bad' | 'warn' | 'neutral';
 
 /**
  * A verdict pill. `def` adds the PLAIN-LANGUAGE layer without touching the

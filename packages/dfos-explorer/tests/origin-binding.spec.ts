@@ -13,12 +13,18 @@ import type { ServiceEntry } from '@metalabel/dfos-protocol/chain';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   assessBinding,
+  assessDomainBinding,
+  attestedCandidate,
   classifyBindingEnvelope,
+  domainBindingSpeaks,
   fallbackEligible,
   fetchBindingAttestation,
   isBareHostname,
+  readAppAttestation,
   readOriginClaim,
   runAppFallback,
+  type AppAttestation,
+  type AttestedChain,
   type BindingMethodResult,
   type BindingProbe,
   type FallbackResult,
@@ -450,5 +456,276 @@ describe('assessBinding', () => {
       answered({ status: 'ok', did: DID }, { status: 'none', reason: 'no TXT record' }),
     );
     if (out.kind === 'bound') expect(out.silences.join(' ')).toMatch(/no TXT record/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// the domain-first walk — the same walk `dfos identity verify-binding <host>` runs
+// -----------------------------------------------------------------------------
+
+describe('readAppAttestation', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // the domain-first walk has no candidate to compare against: the document's
+  // client_did IS the candidate, so the read is judged by nobody
+  it('reads the app description’s client_did with no candidate in hand', async () => {
+    const app = demoApp();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ status: 'ok', httpStatus: 200, body: app })),
+    );
+    expect(await readAppAttestation('example.com')).toEqual({
+      kind: 'answers',
+      did: app['client_did'],
+    });
+  });
+});
+
+describe('attestedCandidate', () => {
+  it('takes the first channel that answered, https before dns', () => {
+    expect(
+      attestedCandidate(answered({ status: 'ok', did: DID }, { status: 'ok', did: DID })),
+    ).toBe(DID);
+    expect(attestedCandidate(answered({ status: 'none' }, { status: 'ok', did: OTHER }))).toBe(
+      OTHER,
+    );
+  });
+
+  it('is null when the domain publishes nothing, and when OUR route failed', () => {
+    expect(attestedCandidate(silentProbe)).toBeNull();
+    expect(attestedCandidate({ kind: 'proxy-unavailable', reason: 'down' })).toBeNull();
+  });
+
+  // an origin publishing nothing but a SIWD app description already publishes its
+  // DID, and the fallback supplies the candidate from it
+  it('takes the app-description fallback as the https answer', () => {
+    expect(attestedCandidate(silentProbe, { kind: 'answers', did: DID })).toBe(DID);
+  });
+});
+
+describe('assessDomainBinding', () => {
+  const host = 'example.com';
+  const chainClaiming = (did: string, domain: string): AttestedChain => ({
+    kind: 'verified',
+    did,
+    services: [relay(), origin(domain)],
+  });
+
+  // the live acceptance shape: a TXT record attests, the well-known document is a
+  // 404. A healthy binding — either method suffices — and the silence is evidence
+  // detail, never a warning
+  it('binds on DNS alone with the https document silent', () => {
+    const probe = answered(
+      { status: 'none', reason: 'no dfos-did document' },
+      {
+        status: 'ok',
+        did: DID,
+      },
+    );
+    const out = assessDomainBinding(host, probe, undefined, chainClaiming(DID, host));
+    expect(out).toMatchObject({ kind: 'bound', domain: host, did: DID });
+    if (out.kind === 'bound') {
+      expect(out.attestedBy).toEqual(['dns']);
+      expect(out.silences.join(' ')).toMatch(/no dfos-did document/);
+    }
+  });
+
+  // the live shape at dfos.com, as a regression: `_dfos.dfos.com` attests, both
+  // HTTPS documents are 404, and the walk lands on `bound` with the two silences
+  // recorded as detail
+  it('binds dfos.com on its TXT record with both HTTPS documents absent', () => {
+    const DFOS = 'did:dfos:9ctvrdn9vedda7efetrhcdakfh4cr2k';
+    const out = assessDomainBinding(
+      'dfos.com',
+      answered(
+        { status: 'none', reason: 'no dfos-did document (HTTP 404)' },
+        { status: 'ok', did: DFOS },
+      ),
+      { kind: 'silent', reason: 'the origin serves no app description either' },
+      { kind: 'verified', did: DFOS, services: [relay(), origin('dfos.com')] },
+    );
+    expect(out).toMatchObject({ kind: 'bound', domain: 'dfos.com', did: DFOS });
+    if (out.kind === 'bound') {
+      expect(out.attestedBy).toEqual(['dns']);
+      expect(out.silences).toHaveLength(2);
+    }
+  });
+
+  it('binds on the app-description fallback alone', () => {
+    const out = assessDomainBinding(
+      host,
+      silentProbe,
+      { kind: 'answers', did: DID },
+      chainClaiming(DID, host),
+    );
+    expect(out).toMatchObject({ kind: 'bound', did: DID });
+    if (out.kind === 'bound') expect(out.attestedBy).toEqual(['app-fallback']);
+  });
+
+  // a domain that says two things is broken BEFORE any chain is resolved — never
+  // either-wins, never first-checked-wins
+  it('breaks when the two channels attest different identities', () => {
+    const out = assessDomainBinding(
+      host,
+      answered({ status: 'ok', did: DID }, { status: 'ok', did: OTHER }),
+      undefined,
+      null,
+    );
+    expect(out).toMatchObject({ kind: 'broken', did: null });
+    if (out.kind === 'broken') {
+      expect(out.details.join(' ')).toMatch(/different identities/);
+      expect(out.details.join(' ')).toContain(OTHER);
+    }
+  });
+
+  it('breaks on a self-contradicting channel, whatever the other one said', () => {
+    const out = assessDomainBinding(
+      host,
+      answered(
+        { status: 'ok', did: DID },
+        {
+          status: 'contradiction',
+          reason: '2 did= records at _dfos.example.com',
+        },
+      ),
+      undefined,
+      null,
+    );
+    expect(out).toMatchObject({ kind: 'broken', did: null });
+    if (out.kind === 'broken') expect(out.details.join(' ')).toMatch(/2 did= records/);
+  });
+
+  // the CLI's "the two halves name different domains" — the attestation stands,
+  // the chain names somewhere else, and half a binding pointing elsewhere is a
+  // contradiction between the two halves
+  it('breaks when the attested identity’s chain claims another domain', () => {
+    const out = assessDomainBinding(
+      host,
+      answered({ status: 'ok', did: DID }, { status: 'none' }),
+      undefined,
+      chainClaiming(DID, 'other.example.org'),
+    );
+    expect(out).toMatchObject({ kind: 'broken', did: DID });
+    if (out.kind === 'broken') {
+      expect(out.details.join(' ')).toMatch(/different domains/);
+      expect(out.details.join(' ')).toContain('other.example.org');
+    }
+  });
+
+  // the binding is EXACT: a claim on the parent says nothing about the subdomain
+  it('breaks on a chain claim that differs only by a label', () => {
+    const out = assessDomainBinding(
+      'sub.example.com',
+      answered({ status: 'ok', did: DID }, { status: 'none' }),
+      undefined,
+      chainClaiming(DID, 'example.com'),
+    );
+    expect(out.kind).toBe('broken');
+  });
+
+  // COULD NOT CHECK, and never folded into a verdict about the domain
+  it('keeps an unresolvable attested chain as its own state', () => {
+    const out = assessDomainBinding(
+      host,
+      answered({ status: 'ok', did: DID }, { status: 'none' }),
+      undefined,
+      { kind: 'unavailable', did: DID, reason: 'no relay served this identity' },
+    );
+    expect(out).toEqual({
+      kind: 'chain-unavailable',
+      domain: host,
+      did: DID,
+      reason: 'no relay served this identity',
+    });
+  });
+
+  // CHECKED AND ABSENT — a different statement from could-not-check, and the two
+  // must not collapse into each other
+  it('separates a chain that claims nothing from a chain that could not be read', () => {
+    const noEntry = assessDomainBinding(
+      host,
+      answered({ status: 'ok', did: DID }, { status: 'none' }),
+      undefined,
+      { kind: 'verified', did: DID, services: [relay()] },
+    );
+    expect(noEntry).toEqual({
+      kind: 'no-chain-claim',
+      domain: host,
+      did: DID,
+      claim: 'unclaimed',
+    });
+
+    const ambiguous = assessDomainBinding(
+      host,
+      answered({ status: 'ok', did: DID }, { status: 'none' }),
+      undefined,
+      { kind: 'verified', did: DID, services: [origin(host, 'o1'), origin(host, 'o2')] },
+    );
+    expect(ambiguous).toMatchObject({ kind: 'no-chain-claim', claim: 'ambiguous' });
+  });
+
+  it('is stale — no binding story — when both channels are silent', () => {
+    const out = assessDomainBinding(host, silentProbe, undefined, null);
+    expect(out).toMatchObject({ kind: 'stale', domain: host });
+    if (out.kind === 'stale') expect(out.reasons).toHaveLength(2);
+  });
+
+  it('is stale, not broken, when the lookups merely failed', () => {
+    const out = assessDomainBinding(
+      host,
+      answered(
+        { status: 'error', reason: 'the origin did not answer in time' },
+        { status: 'error', reason: 'the DNS lookup failed (SERVFAIL)' },
+      ),
+      undefined,
+      null,
+    );
+    expect(out.kind).toBe('stale');
+  });
+
+  it('keeps our own route failing as its own state, never as silence', () => {
+    const out = assessDomainBinding(
+      host,
+      { kind: 'proxy-unavailable', reason: 'the binding route answered 404' },
+      undefined,
+      null,
+    );
+    expect(out).toEqual({
+      kind: 'proxy-unavailable',
+      domain: host,
+      reason: 'the binding route answered 404',
+    });
+  });
+
+  // only a domain that SPOKE earns the headline panel: silence and our own route
+  // failing are not observations about this domain's binding
+  it('speaks only where the domain answered', () => {
+    const attesting = answered({ status: 'ok', did: DID }, { status: 'none' });
+    expect(
+      domainBindingSpeaks(
+        assessDomainBinding(host, attesting, undefined, chainClaiming(DID, host)),
+      ),
+    ).toBe(true);
+    expect(domainBindingSpeaks(assessDomainBinding(host, silentProbe, undefined, null))).toBe(
+      false,
+    );
+    expect(
+      domainBindingSpeaks(
+        assessDomainBinding(host, { kind: 'proxy-unavailable', reason: 'down' }, undefined, null),
+      ),
+    ).toBe(false);
+    expect(domainBindingSpeaks(null)).toBe(false);
+  });
+
+  // the app description is the HTTPS channel's answer, so it disagrees with DNS
+  // the same way the well-known document would
+  it('breaks when the fallback and DNS attest different identities', () => {
+    const out = assessDomainBinding(
+      host,
+      answered({ status: 'none' }, { status: 'ok', did: OTHER }),
+      { kind: 'answers', did: DID } satisfies AppAttestation,
+      null,
+    );
+    expect(out.kind).toBe('broken');
   });
 });
