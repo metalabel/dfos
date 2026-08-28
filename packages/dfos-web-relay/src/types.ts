@@ -116,6 +116,15 @@ export type AdmissionPolicy = (principal: string | null) => boolean | Promise<bo
  * The document is DISCOVERY, NEVER AUTHORITY — the routes, capability gates, and
  * auth rules the spec fixes govern regardless of what an advertised document
  * says, so nothing here is consulted when serving a request.
+ *
+ * THE QUIET DEFAULT IS DELIBERATE, AND THE TWO REFERENCE TWINS DIFFER HERE. This
+ * package is a library embedded in someone else's app, so it mounts no route and
+ * omits the field until its caller opts in; the Go twin is what `dfos serve`
+ * runs as a deployed relay, and serves + advertises its embedded copy
+ * unconditionally. Both defaults are conformant under the spec's SHOULD — do not
+ * "fix" the asymmetry by unifying them (dfos-web-relay-go/openapi.go carries the
+ * same note from the other end, and relay-conformance's parity server opts this
+ * twin in as a consequence of the choice, not as a workaround).
  */
 export type RelayOpenApiOption =
   | { url: string; document?: never; route?: never }
