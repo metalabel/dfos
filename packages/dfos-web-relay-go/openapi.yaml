@@ -76,6 +76,17 @@ paths:
                       refused at the policy step (403); `closed` — no external ingestion (501).
                       Absent derives from capabilities.write. Advertisement is a hint; the
                       relay-local admission policy is the authority.
+                  openapi:
+                    type: string
+                    example: '/openapi.json'
+                    description: >-
+                      OPTIONAL. URL of an OpenAPI document describing this relay's full
+                      HTTP surface — absolute, or root-relative resolved against the
+                      relay's base URL. Serving the document is SHOULD, never MUST; a
+                      relay that serves one advertises it here, and absence of the field
+                      means none is served. The document is discovery, never authority:
+                      the routes, capability gates, and auth rules the spec fixes govern
+                      regardless of what an advertised document says.
                   profile:
                     type: string
                     description: The relay's profile artifact as a compact JWS token
@@ -128,6 +139,28 @@ paths:
                         type: string
                         nullable: true
                         description: CID of the newest operation in the log (the tip), or null when empty
+
+  /openapi.json:
+    get:
+      operationId: getOpenApiDocument
+      summary: This OpenAPI document
+      description: |
+        Returns the OpenAPI document describing the relay's HTTP surface. Relay
+        meta, ungated exactly as the well-known is — no capability flag stands
+        between a client and the description of the surface it is about to call.
+        Registered when the deployment is configured with a document
+        (`createRelay({ openapi: { document } })`), and its path is the value
+        advertised in the well-known `openapi` field. Discovery, never
+        authority: the routes, capability gates, and auth rules the spec fixes
+        govern regardless of what this document says.
+      tags: [Meta]
+      responses:
+        '200':
+          description: An OpenAPI document
+          content:
+            application/json:
+              schema:
+                type: object
 
   /signing/v0/requests:
     post:
@@ -696,6 +729,20 @@ paths:
           schema:
             type: string
           description: Exact DID match (zero or one row)
+        - name: key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Reverse lookup "which identities has this key ever been declared
+            by". Matched byte-for-byte against the multibase public-key strings
+            in the authKeys / assertKeys / controllerKeys arrays of every
+            accepted operation on the chain, not just the current head — a key
+            a later update rotated out still matches. One key may match many
+            identities, and a deleted identity still matches. The value is
+            opaque: a string no operation ever declared matches nothing, with
+            no format validation and no 400.
         - name: hasPublicProfile
           in: query
           required: false
@@ -1498,11 +1545,19 @@ paths:
       description: |
         Download the raw bytes of the document committed by a specific operation.
         The ref parameter is an operation CID within the chain. Anonymous access
-        is legal when a standing public-read grant authorizes it.
+        is legal when a standing public-read grant authorizes it; otherwise the
+        creator presents an identity proof alone and a non-creator presents an
+        identity proof plus a DFOS read credential in `X-Credential`.
       tags: [Content Plane]
+      # Three alternatives, cheapest first: anonymous under a standing
+      # public-read grant; the creator's bare identity proof (AuthN, local policy
+      # decides); or the authn/authz split — an identity proof AND a credential
+      # in this route's declared role.
       security:
         - {}
         - IdentityProof: []
+        - IdentityProof: []
+          Credential: []
       parameters:
         - name: contentId
           in: path
@@ -1515,12 +1570,6 @@ paths:
           schema:
             type: string
           description: Operation CID within the chain
-        - name: X-Credential
-          in: header
-          required: false
-          schema:
-            type: string
-          description: DFOS read credential JWS (required for non-creators)
       responses:
         '200':
           description: Blob data
@@ -1553,21 +1602,21 @@ paths:
         non-creators must also present a DFOS read credential in `X-Credential`
         (the AuthZ half). A read-shaped proof carries no `jti`.
       tags: [Content Plane]
+      # Three alternatives, cheapest first: anonymous under a standing
+      # public-read grant; the creator's bare identity proof (AuthN, local policy
+      # decides); or the authn/authz split — an identity proof AND a credential
+      # in this route's declared role.
       security:
         - {}
         - IdentityProof: []
+        - IdentityProof: []
+          Credential: []
       parameters:
         - name: contentId
           in: path
           required: true
           schema:
             type: string
-        - name: X-Credential
-          in: header
-          required: false
-          schema:
-            type: string
-          description: DFOS read credential JWS (required for non-creators)
       responses:
         '200':
           description: Blob data
@@ -1844,9 +1893,13 @@ paths:
 
 components:
   securitySchemes:
+    # API-AUTH "Advertising in OpenAPI". Component NAMES are this host's choice —
+    # a consumer identifies a scheme structurally, by type / scheme / header name
+    # and the x-dfos-typ marker, never by the name below.
     IdentityProof:
       type: http
       scheme: DFOS
+      x-dfos-typ: did:dfos:identity-proof
       description: |
         An API-AUTH identity proof — `Authorization: DFOS <did:dfos:identity-proof JWS>`.
         The scheme token is `DFOS`, matched case-insensitively; it is deliberately
@@ -1856,6 +1909,19 @@ components:
         resolves the signer's key against CURRENT identity state. On a write-shaped
         route (blob upload, operation ingestion) the proof MUST also carry a `jti`
         member, recorded in the relay's replay cache.
+
+    Credential:
+      type: apiKey
+      in: header
+      name: X-Credential
+      description: |
+        A DFOS credential JWS presented in the `X-Credential` header — the AuthZ
+        half of the relay's split. `apiKey` is OpenAPI's honest generic type for
+        "a token in a named header"; nothing carried here is a bearer artifact —
+        the possession claim lives entirely in the identity proof this scheme is
+        ANDed with, and a credential without its proof authorizes nothing. The
+        relay serves no request-proof (`did:dfos:request-proof`) route, so this
+        scheme appears only in the identity-proof + credential combination.
 
   schemas:
     SigningDepositResponse:
