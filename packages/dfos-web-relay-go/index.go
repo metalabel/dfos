@@ -33,7 +33,12 @@ const (
 	// v4: persist countersignature created/ingested clocks for ordered queries.
 	// v5: add standalone artifact projection rows.
 	// v6: add public-head credit projection rows.
-	IndexProjectionVersion = 6
+	//
+	// v7: add the identity has-ever-declared key reverse index behind `key=`.
+	// The rows are history, not head state, so an upgraded relay can only
+	// backfill them by replaying every identity op log — which is exactly what
+	// the rebuild does.
+	IndexProjectionVersion = 7
 )
 
 var (
@@ -178,6 +183,10 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 		writeError(w, 400, "invalid DID")
 		return
 	}
+	// `key` is matched as an opaque string against the multibase public keys the
+	// chain's accepted operations declared — no format validation, so a string no
+	// operation ever declared is a 200 with an empty page, never a 400.
+	key := query.Get("key")
 	nameContains := query.Get("nameContains")
 	order, validOrder := parseIndexOrder(req.URL.Query().Get("order"))
 	if !validOrder {
@@ -196,6 +205,7 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 	limit := parseLimit(req, 100, 1000)
 	rows, err := r.readStore.QueryIndexIdentities(IndexIdentityQuery{
 		DID:              did,
+		Key:              key,
 		HasPublicProfile: hasPublicProfile,
 		NameContains:     nameContains,
 		After:            req.URL.Query().Get("after"),

@@ -35,6 +35,11 @@ func newRouter(r *Relay) http.Handler {
 	// well-known — stays at root (RFC 8615); announces the relay's own release version
 	mux.HandleFunc("GET /.well-known/dfos-relay", r.handleWellKnown)
 
+	// OpenAPI document — the meta surface the well-known's `openapi` field points
+	// at. Ungated and root-mounted, like the well-known itself: a client reads it
+	// before it knows anything about this relay. Discovery, never authority.
+	mux.HandleFunc("GET "+openapiPath, r.handleOpenAPI)
+
 	// proof plane — public, frozen with protocol v1, namespaced under proofBasePath
 	mux.HandleFunc("POST "+proofBasePath+"/operations", r.handlePostOperations)
 	mux.HandleFunc("GET "+proofBasePath+"/operations/{cid}", r.handleGetOperation)
@@ -186,9 +191,13 @@ func (r *Relay) handleWellKnown(w http.ResponseWriter, _ *http.Request) {
 		// The admission-mode HINT, so a client knows before attempting. The policy
 		// decision is still the authority.
 		"ingestion": r.ingestionMode,
-		"profile":   r.profileArtifactJWS,
-		"peers":     peers,
-		"stats":     statsBlock,
+		// This relay serves an OpenAPI document, so it advertises the URL —
+		// root-relative, resolved against the relay's base URL. Discovery only: the
+		// spec's routes, gates, and auth rules govern regardless.
+		"openapi": openapiPath,
+		"profile": r.profileArtifactJWS,
+		"peers":   peers,
+		"stats":   statsBlock,
 	})
 }
 

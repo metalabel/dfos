@@ -56,6 +56,7 @@ type MemoryStore struct {
 	indexContentRows     map[string]indexContentRow             // keyed by contentId
 	indexCreditRows      map[string][]indexCreditRow            // grouped by contentId
 	indexContentSigners  map[string]map[string]struct{}         // contentId → signer DID set
+	indexIdentityKeys    map[string]map[string]struct{}         // DID → has-ever-declared public key set
 	indexCountersignRows map[string]storedIndexCountersignature // keyed by cid (carry witness_did)
 	indexOperationRows   map[string]indexOperationRow           // keyed by operation cid
 	indexArtifactRows    map[string]indexArtifactRow            // keyed by artifact cid
@@ -85,6 +86,7 @@ func NewMemoryStore() *MemoryStore {
 		indexContentRows:     make(map[string]indexContentRow),
 		indexCreditRows:      make(map[string][]indexCreditRow),
 		indexContentSigners:  make(map[string]map[string]struct{}),
+		indexIdentityKeys:    make(map[string]map[string]struct{}),
 		indexCountersignRows: make(map[string]storedIndexCountersignature),
 		indexOperationRows:   make(map[string]indexOperationRow),
 		indexArtifactRows:    make(map[string]indexArtifactRow),
@@ -451,6 +453,13 @@ func (s *MemoryStore) QueryIndexIdentities(q IndexIdentityQuery) ([]indexIdentit
 		if q.DID != "" && row.DID != q.DID {
 			continue
 		}
+		if q.Key != "" {
+			// Has-ever-declared: the set is accumulated per accepted op, so a key a
+			// later update rotated out still matches.
+			if _, ok := s.indexIdentityKeys[row.DID][q.Key]; !ok {
+				continue
+			}
+		}
 		if q.HasPublicProfile != nil {
 			isPublic := row.Profile != nil && row.Profile.PublicRead
 			if isPublic != *q.HasPublicProfile {
@@ -732,6 +741,21 @@ func (s *MemoryStore) PutIndexContentSigner(contentID string, did string) error 
 		s.indexContentSigners[contentID] = signers
 	}
 	signers[did] = struct{}{}
+	return nil
+}
+
+// PutIndexIdentityKey adds one declared public key to a DID's has-ever-declared
+// set. keyID is not retained: nothing queries by it, and the durable store's
+// (public_key, did, key_id) row only uses it to keep one row per declaration.
+func (s *MemoryStore) PutIndexIdentityKey(did string, _ string, publicKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keys := s.indexIdentityKeys[did]
+	if keys == nil {
+		keys = map[string]struct{}{}
+		s.indexIdentityKeys[did] = keys
+	}
+	keys[publicKey] = struct{}{}
 	return nil
 }
 

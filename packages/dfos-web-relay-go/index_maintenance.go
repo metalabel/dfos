@@ -224,6 +224,57 @@ func contentIdsFromCredentialToken(jwsToken string) (wildcard bool, contentIds [
 	return wildcard, contentIds, parsed
 }
 
+// declaredIdentityKey is one (keyID, publicKeyMultibase) pair an identity
+// operation declared, as it appeared on the wire.
+type declaredIdentityKey struct {
+	KeyID     string
+	PublicKey string
+}
+
+// identityKeysDeclaredBy reads every key one identity operation DECLARES, across
+// all three key classes. Deliberately payload-shaped rather than state-shaped:
+// an identity `update` REPLACES the key arrays, so "has ever declared" only
+// exists in the operations themselves — diffing head state loses every rotated-out
+// key, which is exactly the population `key=` serves (audit, key-loss recovery).
+// A delete/restore op carries no key arrays and yields nothing.
+//
+// There is no key-class column: which array carried the key is the chain's
+// answer, not the index's, so all three fold into one flat list.
+func identityKeysDeclaredBy(payload map[string]any) []declaredIdentityKey {
+	declared := []declaredIdentityKey{}
+	for _, arrayName := range []string{"authKeys", "assertKeys", "controllerKeys"} {
+		entries, ok := payload[arrayName].([]any)
+		if !ok {
+			continue
+		}
+		for _, raw := range entries {
+			entry, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			publicKey, _ := entry["publicKeyMultibase"].(string)
+			if publicKey == "" {
+				continue
+			}
+			keyID, _ := entry["id"].(string)
+			declared = append(declared, declaredIdentityKey{KeyID: keyID, PublicKey: publicKey})
+		}
+	}
+	return declared
+}
+
+// putIndexIdentityKeysFromOp records every key one accepted identity operation
+// declared into the has-ever-declared reverse index.
+func putIndexIdentityKeysFromOp(did string, jwsToken string, store Store) {
+	_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+	if err != nil || payload == nil {
+		return
+	}
+	for _, key := range identityKeysDeclaredBy(payload) {
+		_ = store.PutIndexIdentityKey(did, key.KeyID, key.PublicKey)
+	}
+}
+
 // collectIndexDirtyAfterOp collects the rows ONE accepted operation dirties into
 // the batch's dirty set. Called from the single ingest choke point
 // (IngestOperations) in dependency order, right after each op is applied to the
@@ -257,6 +308,10 @@ func collectIndexDirtyAfterOp(result IngestionResult, jwsToken string, store Sto
 	case "identity-op":
 		if result.ChainID != "" {
 			dirty.identityDIDs[result.ChainID] = struct{}{}
+			// Has-ever-declared keys are captured HERE, per op, not recomputed at
+			// flush from head state — the row set is append-only history, and an
+			// update's replacement of the key arrays would otherwise erase it.
+			putIndexIdentityKeysFromOp(result.ChainID, jwsToken, store)
 			_, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
 			if err == nil && payload != nil {
 				if payload["type"] == "delete" {
@@ -468,6 +523,20 @@ func rebuildIndexProjectionRows(store Store, rebuildable RebuildableIndexStore, 
 	for i, chain := range identities {
 		if err := store.PutIndexIdentityRow(identityIndexRow(chain, store)); err != nil {
 			return err
+		}
+		// Walk the whole op log, not the head state: the reverse index is
+		// has-ever-declared, so a key some later update rotated out has to come back
+		// from the operation that declared it.
+		for _, token := range chain.Log {
+			_, payload, err := dfos.DecodeJWSUnsafe(token)
+			if err != nil || payload == nil {
+				continue
+			}
+			for _, key := range identityKeysDeclaredBy(payload) {
+				if err := store.PutIndexIdentityKey(chain.DID, key.KeyID, key.PublicKey); err != nil {
+					return err
+				}
+			}
 		}
 		if (i+1)%rebuildProgressEvery == 0 {
 			logger.Info("index projection: rebuilt identities", "count", i+1, "total", len(identities))
