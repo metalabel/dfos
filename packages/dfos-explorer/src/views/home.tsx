@@ -705,11 +705,16 @@ export const Home = () => {
       <PostsPanel indexed={indexed} ordered={ordered} />
       <SyncInstrument obs={obs} />
 
+      {/* The PERSISTENT canonical statement — the intro banner above is a
+          dismissable cold-visitor greeting, this is what stays. So it carries
+          the whole story on its own, and it says the honest thing about the two
+          serverless routes rather than the flat "no backend" it used to claim. */}
       <Panel title="what this is">
         <div class="kv about">
-          <div class="k">no backend</div>
+          <div class="k">static page</div>
           <div class="v muted">
-            A static page. Relays are swappable parameters, like RPC endpoints — never authorities.
+            The app is a static bundle with no database and no account. Relays are swappable
+            parameters, like RPC endpoints — never authorities.
           </div>
           <div class="k">verify-in-tab</div>
           <div class="v muted">
@@ -718,6 +723,13 @@ export const Home = () => {
             verified (or <b>MISMATCH</b>, loudly). Completeness stays outside the proof: you see
             what these relays hold. Definitions in the{' '}
             <Term word="glossary" def={GLOSSARY['verifiedLocal'] ?? ''} />.
+          </div>
+          <div class="k">the two routes</div>
+          <div class="v muted">
+            Checking a domain binding needs a DNS lookup and a fetch of someone else's
+            <code> /.well-known</code>, and a browser can do neither. Two small routes under{' '}
+            <code>packages/dfos-explorer/api</code> perform those lookups and report what they saw;
+            they store nothing and decide nothing — the verdict is still computed here.
           </div>
         </div>
       </Panel>

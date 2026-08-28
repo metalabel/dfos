@@ -1,6 +1,7 @@
 # @metalabel/dfos-explorer
 
-A client-side-only chain explorer for the DFOS proof plane, deployed at
+A chain explorer for the DFOS proof plane that verifies in the browser,
+deployed at
 <https://explore.dfos.com>. Paste a `did:dfos`, a contentId, an operation CID,
 or a domain; the explorer fetches signed bytes from an untrusted, swappable
 relay set and re-verifies everything in the tab — signatures, CIDs, chain
@@ -25,9 +26,21 @@ pnpm --filter @metalabel/dfos-explorer typecheck
 pnpm --filter @metalabel/dfos-explorer build      # static bundle → dist/
 ```
 
+`vite.config.ts` registers a dev-only middleware that answers `/api/*` by
+loading the real `api/*.ts` handler through Vite and adapting Node's
+request/response to the tiny shape the handlers expect — so the domain view
+exercises the same code in dev that Vercel runs in production, instead of
+falling through to Vite's file server (which answered a request like
+`/api/binding?host=example.com` with an esbuild loader crash).
+
 ## Deploy
 
 Deployed via Vercel on every push to `main` (`vercel.json` pins the build
 command and `dist/` output). The bundle is fully static and carries no
 configuration: relays are chosen in the app and stored in the browser, so the
 same artifact serves any relay set from any static host.
+
+The two routes under `api/` are the only server-side code. They are plain Node
+— `node:dns/promises` and the global `fetch`, no environment variables, no
+`@vercel/node` import, no platform SDK — so they run on any Node host; Vercel
+is a deployment choice, not a dependency.
