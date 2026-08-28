@@ -10,6 +10,19 @@ package relay
   /openapi.json and advertises "/openapi.json" (root-relative, resolved against
   the relay's base URL).
 
+  THE TWO REFERENCE TWINS DIFFER HERE, DELIBERATELY. This relay advertises
+  unconditionally; the TS twin advertises only when its caller passes
+  createRelay({ openapi: { document } }), and otherwise mounts no route and omits
+  the field. Serving is a SHOULD, so both defaults are conformant, and the
+  difference is one of packaging rather than protocol: the TS relay is a library
+  embedded in someone else's app, where the quiet default is the polite one,
+  while this package is what `dfos serve` runs as a deployed relay, where one
+  that holds a description of its own surface and declines to say so is just
+  less useful. The cost is that relay-conformance/scripts/parity-serve.ts has to opt
+  the TS twin in, because the parity gate byte-compares the two well-known
+  bodies. Read that opt-in as this note's consequence, not as a workaround for a
+  bug.
+
   THE DOCUMENT IS A COPY, DELIBERATELY. openapi.yaml here is a verbatim copy of
   packages/dfos-web-relay/openapi.yaml, the canonical description of the wire
   surface BOTH reference relays serve. Go's //go:embed cannot reach outside its
