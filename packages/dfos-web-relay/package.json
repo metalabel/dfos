@@ -27,7 +27,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./node": "./src/serve.ts",
-    "./peer-client": "./src/peer-client.ts"
+    "./peer-client": "./src/peer-client.ts",
+    "./openapi.json": "./openapi.json"
   },
   "publishConfig": {
     "exports": {
@@ -42,17 +43,20 @@
       "./peer-client": {
         "import": "./dist/peer-client.js",
         "types": "./dist/peer-client.d.ts"
-      }
+      },
+      "./openapi.json": "./openapi.json"
     }
   },
   "files": [
     "dist",
     "openapi.yaml",
+    "openapi.json",
     "LICENSE",
     "README.md"
   ],
   "scripts": {
-    "build": "tsup",
+    "gen:openapi": "node scripts/generate-openapi-json.mjs",
+    "build": "pnpm gen:openapi && tsup",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

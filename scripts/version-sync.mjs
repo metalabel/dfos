@@ -73,6 +73,13 @@ if (nextOpenapiText !== openapiText) {
   writeFileSync(openapiPath, nextOpenapiText);
   console.log(`  dfos-web-relay/openapi.yaml → ${version}`);
   changed++;
+  // openapi.json is the committed derived artifact of that yaml (it is what the
+  // relay actually serves and what consumers import), and a drift test compares
+  // the two — so a version bump that touched only the yaml would fail CI on the
+  // very release commit. Regenerate in the same breath.
+  execSync('node packages/dfos-web-relay/scripts/generate-openapi-json.mjs', { cwd: root });
+  console.log(`  dfos-web-relay/openapi.json → ${version}`);
+  changed++;
 }
 
 if (changed === 0) {

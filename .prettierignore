@@ -9,3 +9,8 @@ pnpm-lock.yaml
 # packages/dfos-explorer/tests/schema-validator-drift.spec.ts, so reformatting it
 # would report drift on every check
 packages/dfos-explorer/src/lib/generated
+
+# openapi.yaml → openapi.json codegen (scripts/generate-openapi-json.mjs), byte-
+# compared against a fresh run by packages/dfos-web-relay/tests/openapi.spec.ts —
+# same reason: reformatting it would report drift on every check
+packages/dfos-web-relay/openapi.json

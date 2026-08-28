@@ -45,6 +45,25 @@ routes answer 503. `ingestion` (`open` | `proof-required` | `closed`) and an inj
 `admissionPolicy` set who may submit operations
 ([Web Relay § Ingestion Admission](https://protocol.dfos.com/web-relay#ingestion-admission)).
 
+### Advertising an OpenAPI document
+
+Serving an OpenAPI document is a SHOULD, so it is opt-in. `openapi: { document }`
+serves the document at `/openapi.json` (override with `route`) and advertises that
+path in the well-known's `openapi` field; `openapi: { url }` advertises a document
+hosted elsewhere without registering a route. Absent the option the relay serves
+none and omits the field. This package's own document — the one describing the
+route table below — ships as an importable JSON artifact generated from
+`openapi.yaml`:
+
+```typescript
+import document from '@metalabel/dfos-web-relay/openapi.json';
+
+const relay = await createRelay({ store, openapi: { document } });
+```
+
+The document is discovery, never authority: the routes, capability gates, and auth
+rules the spec fixes govern regardless of what an advertised document says.
+
 ### Standalone (Node.js)
 
 ```typescript
@@ -58,6 +77,7 @@ serve({ port: 4444 });
 | Method | Path                                        | Description                                                          |
 | ------ | ------------------------------------------- | -------------------------------------------------------------------- |
 | `GET`  | `/.well-known/dfos-relay`                   | Relay metadata (DID, capabilities, profile, peers, stats)            |
+| `GET`  | `/openapi.json`                             | The configured OpenAPI document (registered only when configured)    |
 | `POST` | `/proof/v1/operations`                      | Submit signed operations (identity, content, countersig)             |
 | `GET`  | `/proof/v1/identities/:did`                 | Get identity chain terminal state                                    |
 | `GET`  | `/proof/v1/identities/:did/log`             | Paginated identity chain operation log                               |

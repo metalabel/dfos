@@ -850,6 +850,126 @@ describe('index v0', () => {
     expect(none).not.toContain(boris);
   });
 
+  it('filters identities by a key ever declared, across classes, rotations, and deletion', async () => {
+    const { deriveChainIdentifier } = await import('@metalabel/dfos-protocol/chain');
+
+    // genesis declaring a caller-chosen key in each class, so one key can be
+    // planted in two different chains and in the assert class the default
+    // helper leaves empty
+    const createDeclaring = async (declared: {
+      auth?: MultikeyPublicKey[];
+      assert?: MultikeyPublicKey[];
+    }) => {
+      const controller = makeKey();
+      const createOp: IdentityOperation = {
+        version: 1,
+        type: 'create',
+        authKeys: declared.auth ?? [],
+        assertKeys: declared.assert ?? [],
+        controllerKeys: [controller.key],
+        createdAt: ts(),
+      };
+      const { jwsToken, operationCID } = await signIdentityOperation({
+        operation: createOp,
+        signer: controller.signer,
+        keyId: controller.keyId,
+      });
+      const encoded = await dagCborCanonicalEncode(createOp);
+      const did = deriveChainIdentifier(encoded.cid.bytes, 'did:dfos');
+      expect((await postOps([jwsToken])).status).toBe(200);
+      return { did, controller, operationCID };
+    };
+
+    const dids = async (key: string): Promise<string[]> =>
+      (
+        await json(await req(`/index/v0/identities?key=${encodeURIComponent(key)}&limit=1000`))
+      ).identities.map((row: { did: string }) => row.did);
+
+    const shared = makeKey();
+    const rotatedOut = makeKey();
+    const asserted = makeKey();
+
+    // A declares the shared key at genesis and rotates it out later; B declares
+    // the same key and keeps it; C declares only an assert-class key
+    const a = await createDeclaring({ auth: [shared.key, rotatedOut.key] });
+    const b = await createDeclaring({ auth: [shared.key] });
+    const c = await createDeclaring({ assert: [asserted.key] });
+
+    // every key class produces matches — auth, assert, and the controller key
+    // each genesis signs with
+    expect(await dids(shared.key.publicKeyMultibase)).toEqual(
+      expect.arrayContaining([a.did, b.did]),
+    );
+    expect(await dids(asserted.key.publicKeyMultibase)).toEqual([c.did]);
+    expect(await dids(a.controller.key.publicKeyMultibase)).toEqual([a.did]);
+
+    // ROTATION: an update REPLACES the key arrays, so A's head no longer carries
+    // either genesis auth key — and both still match, which is the whole point
+    const replacement = makeKey();
+    const updateOp: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: a.operationCID,
+      authKeys: [replacement.key],
+      assertKeys: [],
+      controllerKeys: [a.controller.key],
+      createdAt: ts(2),
+    };
+    const { jwsToken: updateToken, operationCID: updateCID } = await signIdentityOperation({
+      operation: updateOp,
+      signer: a.controller.signer,
+      keyId: a.controller.keyId,
+      identityDID: a.did,
+    });
+    expect((await json(await postOps([updateToken]))).results[0].status).toBe('new');
+
+    expect(await dids(rotatedOut.key.publicKeyMultibase)).toEqual([a.did]);
+    expect(await dids(shared.key.publicKeyMultibase)).toEqual(
+      expect.arrayContaining([a.did, b.did]),
+    );
+    expect(await dids(replacement.key.publicKeyMultibase)).toEqual([a.did]);
+
+    // ANDs with the other filters — the shared key matches two chains, `did`
+    // narrows it to one
+    const composed = await json(
+      await req(
+        `/index/v0/identities?key=${encodeURIComponent(
+          shared.key.publicKeyMultibase,
+        )}&did=${encodeURIComponent(b.did)}&limit=1000`,
+      ),
+    );
+    expect(composed.identities.map((row: { did: string }) => row.did)).toEqual([b.did]);
+
+    // DELETION removes nothing: the row keeps matching, carrying isDeleted
+    const deleteOp: IdentityOperation = {
+      version: 1,
+      type: 'delete',
+      previousOperationCID: updateCID,
+      createdAt: ts(3),
+    };
+    const { jwsToken: deleteToken } = await signIdentityOperation({
+      operation: deleteOp,
+      signer: a.controller.signer,
+      keyId: a.controller.keyId,
+      identityDID: a.did,
+    });
+    expect((await json(await postOps([deleteToken]))).results[0].status).toBe('new');
+
+    const afterDelete = await json(
+      await req(
+        `/index/v0/identities?key=${encodeURIComponent(rotatedOut.key.publicKeyMultibase)}&limit=1000`,
+      ),
+    );
+    expect(afterDelete.identities).toHaveLength(1);
+    expect(afterDelete.identities[0]).toMatchObject({ did: a.did, isDeleted: true });
+
+    // OPAQUE: a value no operation ever declared matches nothing — 200 with an
+    // empty page, never a 400, because there is no key format to enforce
+    const garbage = await req('/index/v0/identities?key=not-a-multibase-key%20%21');
+    expect(garbage.status).toBe(200);
+    expect((await json(garbage)).identities).toEqual([]);
+  });
+
   it('applies profile projection circuit breakers', async () => {
     const nonProfile = await createIdentity();
     const nonProfileContent = await createContent(nonProfile, {
