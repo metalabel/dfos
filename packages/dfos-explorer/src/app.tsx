@@ -20,6 +20,7 @@ import { Domain } from './views/domain';
 import { Glossary } from './views/glossary';
 import { Home } from './views/home';
 import { Identity } from './views/identity';
+import { Key } from './views/key';
 import { LocalIndex } from './views/local-index';
 import { Op } from './views/op';
 import { Relays } from './views/relays';
@@ -150,10 +151,10 @@ const Header = (props: {
 
 /**
  * One box, two outcomes. A pasted IDENTIFIER dispatches straight to its view (a
- * DID, a contentId, a CID, or a DOMAIN — the resolve-in-one-step the explorer
- * has always had). Anything else is a NAME, and goes to the grouped search
- * results, where the relay's server-side name filter answers and the content
- * group says honestly what the index cannot do. There is no dead end.
+ * DID, a contentId, a CID, a public KEY, or a DOMAIN — the resolve-in-one-step
+ * the explorer has always had). Anything else is a NAME, and goes to the grouped
+ * search results, where the relay's server-side name filter answers and the
+ * content group says honestly what the index cannot do. There is no dead end.
  */
 const SearchBar = () => {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -169,7 +170,7 @@ const SearchBar = () => {
     <div class="search">
       <input
         ref={inputRef}
-        placeholder="search names, or paste a did:dfos:… / contentId / operation CID (baf…) / domain"
+        placeholder="search names, or paste a did:dfos:… / contentId / CID (baf…) / key (z6Mk…) / domain"
         autocomplete="off"
         spellcheck={false}
         onKeyDown={(e) => {
@@ -216,6 +217,8 @@ export const App = () => {
         return <BrowseArtifacts />;
       case 'did':
         return <Identity did={route.id} />;
+      case 'key':
+        return <Key multibase={route.key} />;
       case 'domain':
         return <Domain host={route.host} />;
       case 'content':

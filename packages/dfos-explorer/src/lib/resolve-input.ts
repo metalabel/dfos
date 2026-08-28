@@ -11,6 +11,7 @@ export type InputTarget =
   | { kind: 'identity'; id: string }
   | { kind: 'content'; id: string }
   | { kind: 'op'; id: string }
+  | { kind: 'key'; key: string }
   | { kind: 'domain'; host: string }
   | null;
 
@@ -20,6 +21,28 @@ const CONTENT_ID = /^[a-z0-9]{31}$/;
 
 // CIDv1 base32 (bafy… op/dag-cbor, bafk… raw, etc.)
 const CID_V1 = /^baf[a-z2-7]+$/;
+
+/**
+ * A `publicKeyMultibase` as this protocol mints them — EXACT, not permissive,
+ * unlike the id patterns above. Derived from the encoder rather than guessed:
+ * `encodeEd25519Multikey` (dfos-protocol chain/multikey.ts) is
+ * `'z' + base58btc([0xed, 0x01] ++ 32 key bytes)`, and 34 bytes whose leading
+ * byte is 0xed always encode to exactly 47 base58 digits — the whole value space
+ * sits between `z6Mke…` and `z6Mkw…` — so every key is 48 characters with a fixed
+ * `z6Mk` head. The two spec fixtures in PROTOCOL.md are both 48 characters.
+ *
+ * Strict on purpose. A key is the only pasteable identifier with no view of its
+ * own to render an honest not-found: the key page ASKS THE RELAY "which
+ * identities ever declared this", and a relay answers a garbage string with an
+ * empty page — indistinguishable from a real key nobody has used. So the
+ * dispatcher, not the view, is where a non-key is refused, and anything that
+ * fails this falls through to the name search.
+ *
+ * The alphabet is base58btc (no `0`, `O`, `I`, `l`). Nothing else the dispatcher
+ * handles can collide: a contentId is 31 lowercase characters, a CID starts `baf`,
+ * a DID starts `did:dfos:`, and a hostname requires a dot.
+ */
+const PUBLIC_KEY_MULTIBASE = /^z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/;
 
 /**
  * A hostname, deliberately conservative: labels joined by dots, ending in an
@@ -54,6 +77,9 @@ export const dispatchInput = (raw: string): InputTarget => {
   if (value.startsWith('did:dfos:')) return { kind: 'identity', id: value };
   if (CID_V1.test(value)) return { kind: 'op', id: value };
   if (CONTENT_ID.test(value)) return { kind: 'content', id: value };
+  // no overlap with the patterns above (48 chars, mixed case, `z6Mk` head), so
+  // the position is readability rather than precedence
+  if (PUBLIC_KEY_MULTIBASE.test(value)) return { kind: 'key', key: value };
   // LAST, and after every id pattern: a bare 31-char lowercase string is a
   // contentId, not a hostname, and the id patterns must never lose to a domain
   // guess. A dot is required, so nothing that reaches the name search today
@@ -71,6 +97,8 @@ export const routeFor = (target: NonNullable<InputTarget>): string => {
       return `#/content/${target.id}`;
     case 'op':
       return `#/op/${target.id}`;
+    case 'key':
+      return `#/key/${target.key}`;
     case 'domain':
       return `#/domain/${target.host}`;
   }

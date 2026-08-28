@@ -1,5 +1,12 @@
+import { encodeEd25519Multikey } from '@metalabel/dfos-protocol/chain';
 import { describe, expect, it } from 'vitest';
 import { dispatchInput, normalizeHost, routeFor } from '../src/lib/resolve-input';
+
+/** The two multikeys PROTOCOL.md's deterministic vectors mint. */
+const SPEC_KEYS = [
+  'z6MkfUd65JrAhfdgFuMCccU9ThQvjB2fJAMUHkuuajF992gK',
+  'z6MkrzLMNwoJSV4P3YccWcbtk8vd9LtgMKnLeaDLUqLuASjb',
+];
 
 describe('dispatchInput', () => {
   it('routes DIDs to identity', () => {
@@ -27,6 +34,21 @@ describe('dispatchInput', () => {
     });
   });
 
+  it('routes publicKeyMultibase to key', () => {
+    for (const key of SPEC_KEYS) {
+      expect(dispatchInput(key)).toEqual({ kind: 'key', key });
+    }
+  });
+
+  it('accepts every key the protocol encoder can mint', () => {
+    // the pattern is EXACT (48 chars, `z6Mk` head), so it must hold across the
+    // whole value space, not just the two spec fixtures
+    for (const seed of [0x00, 0x01, 0x7f, 0x80, 0xfe, 0xff]) {
+      const key = encodeEd25519Multikey(new Uint8Array(32).fill(seed));
+      expect(dispatchInput(key)).toEqual({ kind: 'key', key });
+    }
+  });
+
   it('trims whitespace', () => {
     expect(dispatchInput('  dn2nc79k7z6ekzfhd43he4v8tr6h236\n')?.kind).toBe('content');
   });
@@ -50,7 +72,46 @@ describe('dispatchInput', () => {
     expect(routeFor({ kind: 'identity', id: 'did:dfos:x' })).toBe('#/did/did:dfos:x');
     expect(routeFor({ kind: 'content', id: 'abc' })).toBe('#/content/abc');
     expect(routeFor({ kind: 'op', id: 'bafy1' })).toBe('#/op/bafy1');
+    expect(routeFor({ kind: 'key', key: SPEC_KEYS[0]! })).toBe(`#/key/${SPEC_KEYS[0]}`);
     expect(routeFor({ kind: 'domain', host: '3p.com' })).toBe('#/domain/3p.com');
+  });
+});
+
+// The key pattern is the one EXACT pattern in the dispatcher, and it is exact for
+// a reason: a key has no view that can render an honest not-found. The key page
+// asks a relay "which identities ever declared this", and a relay answers a
+// garbage string with an empty page — indistinguishable from a real key nobody
+// used. So a near-miss must fall through to the name search, not become a page
+// that quietly states a false absence.
+describe('key dispatch is strict', () => {
+  const KEY = SPEC_KEYS[0]!;
+
+  it('never swallows another identifier', () => {
+    expect(dispatchInput('dn2nc79k7z6ekzfhd43he4v8tr6h236')?.kind).toBe('content');
+    expect(dispatchInput('bafyreib36cg2bevmfjcgoqbcjqugmqvmvpu4wxy2sqxq3jc4c3ez6enp7q')?.kind).toBe(
+      'op',
+    );
+    expect(dispatchInput('did:dfos:tn7kkfz7ehzvv6fzvate9rz2874nc3e')?.kind).toBe('identity');
+    expect(dispatchInput('z6mk.example.com')?.kind).toBe('domain');
+  });
+
+  it('rejects a near-miss rather than guessing', () => {
+    expect(dispatchInput(KEY.slice(0, -1))).toBeNull(); // one short
+    expect(dispatchInput(`${KEY}a`)).toBeNull(); // one long
+    expect(dispatchInput(KEY.replace(/^z6Mk/, 'z6Mj'))).toBeNull(); // wrong multicodec head
+    expect(dispatchInput(KEY.replace(/^z/, ''))).toBeNull(); // no multibase prefix
+    expect(dispatchInput(KEY.toLowerCase())).toBeNull(); // case is load-bearing
+    // base58btc excludes 0, O, I and l — a string carrying one is not a key
+    expect(dispatchInput(`z6Mk0${KEY.slice(5)}`)).toBeNull();
+    expect(dispatchInput(`z6MkO${KEY.slice(5)}`)).toBeNull();
+    expect(dispatchInput(`z6MkI${KEY.slice(5)}`)).toBeNull();
+    expect(dispatchInput(`z6Mkl${KEY.slice(5)}`)).toBeNull();
+  });
+
+  it('still trims and still leaves ordinary searches alone', () => {
+    expect(dispatchInput(`  ${KEY}\n`)).toEqual({ kind: 'key', key: KEY });
+    expect(dispatchInput('z6Mk')).toBeNull();
+    expect(dispatchInput('multikey')).toBeNull();
   });
 });
 
