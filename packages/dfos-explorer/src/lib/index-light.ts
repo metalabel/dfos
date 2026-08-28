@@ -122,24 +122,39 @@ const probeRelayStatus = async (base: string, path: string): Promise<number> => 
 // goes stale)
 const probeCache = new Map<string, Promise<boolean>>();
 
-const probeSupport = (feature: string, path: string, relays: string[]): Promise<boolean> => {
+/** Memoize one feature's verdict for one relay set. */
+const probeOnce = (
+  feature: string,
+  relays: string[],
+  run: () => Promise<boolean>,
+): Promise<boolean> => {
   const key = `${feature}|${relays.join('|')}`;
   let cached = probeCache.get(key);
   if (!cached) {
-    cached = Promise.all(relays.map((base) => probeRelayStatus(base, path))).then(decideIter2);
+    cached = run();
     probeCache.set(key, cached);
   }
   return cached;
 };
 
+/** The STATUS-shaped probe: ask every relay in parallel, read the verdict off the
+ *  ordered statuses (400 validates / 2xx ignores). */
+const probeSupport = (path: string, relays: string[]): Promise<boolean> =>
+  Promise.all(relays.map((base) => probeRelayStatus(base, path))).then(decideIter2);
+
 /** The shared "probe once, hold the degraded view until it settles" hook behind
- *  both feature gates below. `null` while in flight; a rejection reads as
- *  unsupported, which is always the safe direction. */
-const useProbe = (feature: string, path: string): boolean | null => {
+ *  every feature gate below. `null` while in flight; a rejection reads as
+ *  unsupported, which is always the safe direction. `run` is read through a ref so
+ *  a caller may pass a fresh closure — the FEATURE keys the cache, not the
+ *  closure's identity. */
+const useProbe = (feature: string, run: (relays: string[]) => Promise<boolean>): boolean | null => {
   const [supported, setSupported] = useState<boolean | null>(null);
+  const runRef = useRef(run);
+  runRef.current = run;
   useEffect(() => {
     let dead = false;
-    void probeSupport(feature, path, getRelays())
+    const relays = getRelays();
+    void probeOnce(feature, relays, () => runRef.current(relays))
       .then((v) => {
         if (!dead) setSupported(v);
       })
@@ -149,7 +164,9 @@ const useProbe = (feature: string, path: string): boolean | null => {
     return () => {
       dead = true;
     };
-  }, [feature, path]);
+    // `run` is read via runRef so it is intentionally not a dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feature]);
   return supported;
 };
 
@@ -161,7 +178,9 @@ const useProbe = (feature: string, path: string): boolean | null => {
  * once-per-session idiom as {@link useIndexCapable}.
  */
 export const useIndexIter2 = (): boolean | null =>
-  useProbe('iter2', `/index/v0/identities?order=${PROBE_ORDER}&limit=1`);
+  useProbe('iter2', (relays) =>
+    probeSupport(`/index/v0/identities?order=${PROBE_ORDER}&limit=1`, relays),
+  );
 
 // -----------------------------------------------------------------------------
 // TITLE-SEARCH FEATURE DETECTION — does the SERVING relay honour `titleContains=`?
@@ -185,7 +204,95 @@ export const useIndexIter2 = (): boolean | null =>
  * than running a query whose results it could not stand behind.
  */
 export const useIndexTitleSearch = (): boolean | null =>
-  useProbe('titleContains', '/index/v0/content?titleContains=__dfos_probe__&publicRead=false');
+  useProbe('titleContains', (relays) =>
+    probeSupport('/index/v0/content?titleContains=__dfos_probe__&publicRead=false', relays),
+  );
+
+// -----------------------------------------------------------------------------
+// KEY-FILTER FEATURE DETECTION — does the SERVING relay honour `key=` on the
+// identity index (the has-ever-declared reverse lookup)?
+//
+// Same failure shape as `order=` and `titleContains=`, and this one is the worst
+// of the three: a relay predating the filter IGNORES the param and answers with
+// an UNFILTERED page of identities. The key page would then present every
+// identity on the relay as one that declared this key — a fabricated claim about
+// key custody, on the surface where that claim matters most.
+//
+// The 400-based separator the other two probes use is UNAVAILABLE here, and
+// deliberately so: WEB-RELAY.md specifies `key=` as an OPAQUE string match — "a
+// string no operation ever declared simply matches nothing — no format
+// validation, no 400". There is no invalid value to provoke a rejection with. So
+// this probe reads the BODY instead of the status: query a sentinel no chain can
+// have declared, and
+//
+//   rows came back  → the relay ignored the param        → UNSUPPORTED
+//   zero rows       → the relay applied it (or is empty)  → supported
+//   non-2xx         → indeterminate, defer to the next relay
+//
+// The empty-corpus case reads as "supported" and is harmless: a relay holding no
+// identities answers a real key query with nothing either way, so the page states
+// a true absence rather than inventing rows.
+// -----------------------------------------------------------------------------
+
+/**
+ * The probe value: a syntactically REAL multikey — `z` + base58btc of
+ * `[0xed, 0x01] ++ sha256('dfos-explorer:index-key-filter-probe:v1')` — so a
+ * relay sees a well-formed key rather than something it might one day reject,
+ * and one whose 32 bytes are a published hash rather than a generated public
+ * key, so no chain has ever declared it.
+ */
+export const KEY_PROBE_MULTIBASE = 'z6MkoR9B2ETntZELcPzFTTMnbfhz3pHumPyJi5oEzQvC2WbE';
+
+/** Interpret one relay's key-filter probe: rows back means the param was IGNORED
+ *  (pre-`key=`), a served empty page means it was applied, and a non-2xx / a
+ *  throw (`status` 0) is indeterminate — defer to the next relay. `rows` is only
+ *  meaningful on a 2xx. Pure, unit-tested. */
+export const keyFilterFromProbe = (status: number, rows: number): boolean | null =>
+  status >= 200 && status < 300 ? rows === 0 : null;
+
+/** Decide `key=` support from the ordered per-relay probe outcomes: the first
+ *  DEFINITIVE relay wins (mirrors query failover), all-indeterminate → unsupported.
+ *  The default degrades rather than risk presenting an unfiltered identity page as
+ *  key matches. Pure, unit-tested. */
+export const decideKeyFilter = (probes: { status: number; rows: number }[]): boolean => {
+  for (const p of probes) {
+    const verdict = keyFilterFromProbe(p.status, p.rows);
+    if (verdict !== null) return verdict;
+  }
+  return false;
+};
+
+/** One relay's key-filter probe outcome. A network throw / abort reports status 0
+ *  (indeterminate), as does a body that isn't a readable identities page. */
+const probeRelayKeyFilter = async (base: string): Promise<{ status: number; rows: number }> => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const url = new URL(
+      `/index/v0/identities?key=${encodeURIComponent(KEY_PROBE_MULTIBASE)}&limit=1`,
+      base,
+    );
+    const res = await fetch(url.toString(), { signal: ctrl.signal });
+    if (!res.ok) return { status: res.status, rows: 0 };
+    const body = (await res.json()) as { identities?: unknown };
+    // a 2xx whose body we cannot read as a page is no verdict about the filter
+    if (!Array.isArray(body.identities)) return { status: 0, rows: 0 };
+    return { status: res.status, rows: body.identities.length };
+  } catch {
+    return { status: 0, rows: 0 }; // unreachable / aborted / unparseable
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/**
+ * Whether the serving relay honours `key=` on the identity index. `null` while
+ * the probe is in flight — the key page says it is checking rather than running a
+ * query whose rows it could not stand behind — then a stable boolean. Same
+ * module-cached, once-per-session idiom as the gates above.
+ */
+export const useIndexKeyFilter = (): boolean | null =>
+  useProbe('key', (relays) => Promise.all(relays.map(probeRelayKeyFilter)).then(decideKeyFilter));
 
 export interface IndexPage<T> {
   /** the rows of the CURRENT page only — paging replaces them, never appends. */

@@ -8,6 +8,7 @@
     #/documents        browse public documents
     #/artifacts        browse standalone signed artifacts
     #/did/<did>        identity
+    #/key/<multibase>  a public key, and the identities that declared it
     #/domain/<host>    an origin's app description document
     #/content/<id>     content chain
     #/op/<cid>         operation
@@ -35,6 +36,7 @@ export type Route =
   | { view: 'documents' }
   | { view: 'artifacts' }
   | { view: 'did'; id: string }
+  | { view: 'key'; key: string }
   | { view: 'domain'; host: string }
   | { view: 'content'; id: string }
   | { view: 'op'; id: string }
@@ -58,6 +60,7 @@ export const parseRoute = (hash: string): Route => {
   if (head === 'documents') return { view: 'documents' };
   if (head === 'artifacts') return { view: 'artifacts' };
   if (head === 'did' && id) return { view: 'did', id };
+  if (head === 'key' && id) return { view: 'key', key: id };
   if (head === 'domain' && id) return { view: 'domain', host: id };
   if (head === 'content' && id) return { view: 'content', id };
   if (head === 'op' && id) return { view: 'op', id };

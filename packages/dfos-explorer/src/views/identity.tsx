@@ -1672,8 +1672,18 @@ const KeysPanel = (props: { state: IdentityClaimState | VerifiedIdentity; verifi
                     </span>
                   ))}
                 </td>
+                {/* the multibase links to the key's own page — the reverse
+                    lookup "which identities has this key ever been declared by",
+                    which is how a rotated-out key on another chain becomes
+                    findable from here at all */}
                 <td>
-                  <TruncId value={row.publicKeyMultibase} />
+                  <a
+                    href={`#/key/${row.publicKeyMultibase}`}
+                    class="cid"
+                    title={row.publicKeyMultibase}
+                  >
+                    {short(row.publicKeyMultibase, 12, 8)}
+                  </a>
                 </td>
               </tr>
             ))}

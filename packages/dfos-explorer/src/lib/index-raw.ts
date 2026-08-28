@@ -20,6 +20,12 @@
   {@link fetchCountersignaturesPage} so an outage is an outage. (`indexCredentials`
   already sets `throwOnDecline`, so the Issued lane stays on the client seam.)
 
+  `/index/v0/identities?key=` is wrapped here for BOTH reasons: the client seam's
+  `indexIdentities` predates the `key=` filter and so cannot express the query at
+  all, and it would resolve an all-declined set to an empty page — a false "no
+  identity ever declared this key", which is the exact claim the key page must
+  never make from an outage.
+
   AN ALL-DECLINED SET THROWS, deliberately. A relay predating a route answers
   404/501, and folding that into `{ items: [] }` renders a false-empty
   indistinguishable from "this relay holds no artifacts". The throw surfaces as
@@ -40,7 +46,12 @@
 
 */
 
-import type { IndexContentRow, IndexCountersignatureRow, IndexOrder } from '@metalabel/dfos-client';
+import type {
+  IndexContentRow,
+  IndexCountersignatureRow,
+  IndexIdentityRow,
+  IndexOrder,
+} from '@metalabel/dfos-client';
 import {
   PAGE,
   ROUTE_ABSENT,
@@ -233,6 +244,46 @@ export const toContentRows = (body: unknown): IndexContentRow[] => {
 };
 
 /**
+ * Coerce an `/index/v0/identities` page body into rows, dropping anything without
+ * a `did` (a row that names no identity is not addressable). The shape is the
+ * client seam's `IndexIdentityRow` exactly, so every surface that already renders
+ * one renders these unchanged.
+ *
+ * `profile` keeps the index's honest nulls all the way down: a relay withholds
+ * the projected `name` of a non-public profile by spec, and coercing that to a
+ * string would manufacture one. Pure, unit-tested.
+ */
+export const toIdentityRows = (body: unknown): IndexIdentityRow[] => {
+  const rows = (body as { identities?: unknown } | null)?.identities;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row): IndexIdentityRow[] => {
+    const r = row as Record<string, unknown>;
+    const did = str(r['did']);
+    if (!did) return [];
+    const p = r['profile'] as Record<string, unknown> | null | undefined;
+    return [
+      {
+        did,
+        headCID: str(r['headCID']),
+        opCount: typeof r['opCount'] === 'number' ? r['opCount'] : 0,
+        genesisAt: str(r['genesisAt']),
+        headAt: str(r['headAt']),
+        isDeleted: r['isDeleted'] === true,
+        profile:
+          p && typeof p === 'object'
+            ? {
+                anchor: str(p['anchor']),
+                publicRead: p['publicRead'] === true,
+                docSchema: typeof p['docSchema'] === 'string' ? p['docSchema'] : null,
+                name: typeof p['name'] === 'string' ? p['name'] : null,
+              }
+            : null,
+      },
+    ];
+  });
+};
+
+/**
  * Coerce an `/index/v0/countersignatures` page body into rows.
  *
  * A row is addressable when it names BOTH operations — the countersignature
@@ -408,6 +459,59 @@ export const fetchCountersignaturesPage = async (params: {
   );
   return { items: toCountersignatureRows(body), next: nextCursor(body) };
 };
+
+/**
+ * One page of the has-ever-declared key reverse lookup —
+ * `/index/v0/identities?key=`. Throws when every relay declines, which matters
+ * more here than anywhere else in this module: an empty page from this route is
+ * read as "no identity ever declared this key", and an outage must never be able
+ * to say that.
+ *
+ * The value is passed VERBATIM. The relay matches it byte-for-byte against the
+ * multibase strings in accepted operations' key arrays, so normalizing it here
+ * would silently ask a different question than the one pasted.
+ */
+export const fetchIdentitiesByKeyPage = async (params: {
+  key: string;
+  after?: string;
+  limit?: number;
+}): Promise<{ items: IndexIdentityRow[]; next: string | null }> => {
+  const body = await fetchIndexPage<unknown>(
+    'identities',
+    {
+      key: params.key,
+      ...(params.after ? { after: params.after } : {}),
+      limit: params.limit ?? PAGE,
+    },
+    getRelays(),
+  );
+  return { items: toIdentityRows(body), next: nextCursor(body) };
+};
+
+/**
+ * Page the identities that have ever declared one public key.
+ *
+ * `enabled` carries TWO gates, not one: a relay index must exist, and the serving
+ * relay must honour `key=` (`useIndexKeyFilter` in ./index-light). A relay
+ * predating the filter ignores it and answers with the unfiltered identity list,
+ * so running this ungated would present the whole corpus as key matches.
+ *
+ * No `order=` is offered. `key=` and the ordered enumeration are independent
+ * filters, and this lane wants the route's plain lexical `did` cursor — the one
+ * ordering every index-capable relay serves.
+ */
+export const useIndexIdentitiesByKey = (
+  enabled: boolean,
+  key: string,
+  opts?: { cursor?: string; onCursor?: (cursor: string) => void },
+): IndexPage<IndexIdentityRow> =>
+  useIndexPageStack(
+    enabled,
+    `identities-by-key:${key}`,
+    opts?.cursor ?? '',
+    opts?.onCursor,
+    (after) => fetchIdentitiesByKeyPage({ key, ...(after ? { after } : {}) }),
+  );
 
 /** One page of the credit projection. Throws when no relay serves the route. */
 export const fetchCreditsPage = async (params: {
