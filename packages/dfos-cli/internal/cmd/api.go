@@ -1,163 +1,36 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"os"
-	"strings"
 
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
-	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
-	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
 
+// newAPICmd is the deprecated legacy spelling of `dfos relay call`. It is a
+// command with its own RunE rather than an alias of the passthrough: cobra
+// dispatches a matching subcommand before it reaches RunE, so `api` can carry
+// subcommands while this legacy raw form — an uppercase HTTP method and a path
+// as the two bare arguments — keeps working. The passthrough itself lives in
+// relay.go; this forwards to it, so both spellings produce identical output.
 func newAPICmd() *cobra.Command {
-	var auth bool
-	var body string
-	var bodyFile string
-	var includeHeaders bool
-	var headerFlags []string
+	f := &relayCallFlags{}
 
 	cmd := &cobra.Command{
 		Use:   "api <METHOD> <path>",
-		Short: "Raw HTTP request to peer",
-		Long:  "Make raw HTTP requests to the active peer. Use --auth to sign an identity proof for the request.",
-		Args:  cobra.ExactArgs(2),
+		Short: "Raw HTTP request to peer (deprecated: use 'relay call')",
+		Long:  "Deprecated spelling of 'dfos relay call'. Make raw HTTP requests to the active peer. Use --auth to sign an identity proof for the request.",
+		// Cobra prints one line to stderr — `Command "api" is deprecated,
+		// use "dfos relay call <METHOD> <path>"` — before this runs.
+		Deprecated: `use "dfos relay call <METHOD> <path>"`,
+		Args:       cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			method := strings.ToUpper(args[0])
-			path := args[1]
-
-			switch method {
-			case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
-			default:
-				return fmt.Errorf("invalid HTTP method %q\nusage: dfos api <METHOD> <path> (e.g. dfos api GET /proof/v1/stats)", args[0])
+			if len(args) != 2 {
+				return fmt.Errorf("usage: dfos api <METHOD> <path> (e.g. dfos api GET /proof/v1/stats)")
 			}
-
-			ctx, _ := resolveCtx()
-			if ctx == nil || ctx.RelayURL == "" {
-				return fmt.Errorf("no peer configured")
-			}
-
-			c := client.New(ctx.RelayURL)
-			headers := map[string]string{}
-
-			for _, h := range headerFlags {
-				parts := strings.SplitN(h, ":", 2)
-				if len(parts) == 2 {
-					headers[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-				}
-			}
-
-			var bodyBytes []byte
-			if body != "" {
-				bodyBytes = []byte(body)
-				if _, ok := headers["Content-Type"]; !ok {
-					headers["Content-Type"] = "application/json"
-				}
-			} else if bodyFile != "" {
-				var err error
-				if bodyFile == "-" {
-					bodyBytes, err = io.ReadAll(os.Stdin)
-				} else {
-					bodyBytes, err = os.ReadFile(bodyFile)
-				}
-				if err != nil {
-					return fmt.Errorf("read body: %w", err)
-				}
-				if _, ok := headers["Content-Type"]; !ok {
-					headers["Content-Type"] = "application/json"
-				}
-			}
-
-			// The proof binds THIS request — its method, path, and body — so it is
-			// signed after the body is in hand, never before. A jti always rides
-			// along: write-shaped routes require it, read-shaped routes ignore it,
-			// so attaching one keeps --auth correct on every route.
-			if auth {
-				chain, err := resolveIdentityForAPI(ctx)
-				if err != nil {
-					return err
-				}
-
-				kid, err := selectHeldKey(chain.DID, chain.State.AuthKeys, "auth")
-				if err != nil {
-					return err
-				}
-				privKey, err := keys.GetPrivateKey(kid)
-				if err != nil {
-					return err
-				}
-
-				authorization, err := c.AuthorizationFor(
-					&client.Signer{Kid: kid, PrivateKey: privKey}, method, path, bodyBytes, true)
-				if err != nil {
-					return err
-				}
-				headers["Authorization"] = authorization
-			}
-
-			status, respHeaders, respBody, err := c.DoRaw(method, path, bodyBytes, headers)
-			if err != nil {
-				return err
-			}
-
-			if includeHeaders {
-				fmt.Printf("HTTP %d\n", status)
-				for k, v := range respHeaders {
-					for _, val := range v {
-						fmt.Printf("%s: %s\n", k, val)
-					}
-				}
-				fmt.Println()
-			}
-
-			ct := respHeaders.Get("Content-Type")
-			if strings.Contains(ct, "json") {
-				var parsed any
-				if json.Unmarshal(respBody, &parsed) == nil {
-					pretty, _ := json.MarshalIndent(parsed, "", "  ")
-					fmt.Println(string(pretty))
-					return nil
-				}
-			}
-
-			os.Stdout.Write(respBody)
-			if len(respBody) > 0 && respBody[len(respBody)-1] != '\n' {
-				fmt.Println()
-			}
-			return nil
+			return runRelayCall(f, args, "dfos api")
 		},
 	}
 
-	cmd.Flags().BoolVar(&auth, "auth", false, "Sign an identity proof for this request")
-	cmd.Flags().StringVar(&body, "body", "", "Request body (JSON string)")
-	cmd.Flags().StringVar(&bodyFile, "body-file", "", "Request body from file (use - for stdin)")
-	cmd.Flags().BoolVarP(&includeHeaders, "include", "i", false, "Include response headers")
-	cmd.Flags().StringArrayVarP(&headerFlags, "header", "H", nil, "Additional headers (key: value)")
-
+	f.bind(cmd)
 	return cmd
-}
-
-func resolveIdentityForAPI(ctx *config.ResolvedContext) (*relay.StoredIdentityChain, error) {
-	if ctx.IdentityName == "" {
-		return nil, fmt.Errorf("--auth requires an identity. Use --identity or set a context")
-	}
-	lr, err := getRelay()
-	if err != nil {
-		return nil, err
-	}
-	did := ctx.IdentityDID
-	if did == "" {
-		return nil, fmt.Errorf("identity '%s' not found in config", ctx.IdentityName)
-	}
-	chain, err := lr.Relay.GetIdentity(did)
-	if err != nil || chain == nil {
-		return nil, fmt.Errorf("identity '%s' not found in local relay", ctx.IdentityName)
-	}
-	if len(chain.State.AuthKeys) == 0 {
-		return nil, fmt.Errorf("identity has no auth keys")
-	}
-	return chain, nil
 }

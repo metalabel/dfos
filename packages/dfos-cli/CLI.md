@@ -618,29 +618,31 @@ This catches relay corruption, data tampering, and implementation bugs (includin
 
 ---
 
-## Raw API Access
+## Raw Relay Access
 
-`dfos api` is the escape hatch for agents and power users — raw HTTP to the relay, with `--auth` signing the request:
+`dfos relay call` is the escape hatch for agents and power users — raw HTTP to the peer, with `--auth` signing the request:
 
 ```bash
 # unauthenticated
-dfos api GET /.well-known/dfos-relay
-dfos api GET /proof/v1/identities/did:dfos:xxx
+dfos relay call GET /.well-known/dfos-relay
+dfos relay call GET /proof/v1/identities/did:dfos:xxx
 
 # with auto auth (signs an identity proof for this request, injects Authorization)
-dfos api GET /content/abc123/blob --auth
+dfos relay call GET /content/abc123/blob --auth
 
 # POST with body
-dfos api POST /proof/v1/operations --body '{"operations":["eyJ..."]}'
+dfos relay call POST /proof/v1/operations --body '{"operations":["eyJ..."]}'
 
 # custom headers
-dfos api PUT /content/abc123/blob/bafyop... --auth -H "Content-Type: application/octet-stream" --body-file doc.bin
+dfos relay call PUT /content/abc123/blob/bafyop... --auth -H "Content-Type: application/octet-stream" --body-file doc.bin
 
 # response headers
-dfos api GET /proof/v1/identities/did:dfos:xxx -i
+dfos relay call GET /proof/v1/identities/did:dfos:xxx -i
 ```
 
 The `--auth` flag resolves the active identity, loads the auth key from the keychain, and signs an identity proof bound to this exact request — its method, the peer's host, the path as sent, and the body bytes. The proof always carries a `jti`, which the write-shaped routes require and the read-shaped ones ignore, so one flag is correct on every route.
+
+`call` is a subcommand of the peer group, so `dfos peer call` is the same command under the group's own name. `dfos api <METHOD> <path>` is a deprecated alias of `dfos relay call <METHOD> <path>`: it takes the same arguments and flags and prints the same output, plus one deprecation line on stderr.
 
 ### Signing a proof by hand
 
@@ -715,7 +717,8 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                      |
 | `GET`  | `auth proof <METHOD> <path>`    | Sign an identity proof for one request (`--body`, `--jti`) |
 | `GET`  | `auth status`                   | Show current auth state                                    |
-| `*`    | `api <METHOD> <path>`           | Raw HTTP to relay with optional `--auth`                   |
+| `*`    | `relay call <METHOD> <path>`    | Raw HTTP to relay with optional `--auth`                   |
+| `*`    | `api <METHOD> <path>`           | Deprecated alias of `relay call`                           |
 | `GET`  | `peer list`                     | List configured relays (alias: `relay`)                    |
 | `GET`  | `peer info [name]`              | Show relay metadata                                        |
 | `POST` | `peer add <name> <url>`         | Register a named relay                                     |

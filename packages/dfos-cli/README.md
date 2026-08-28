@@ -56,8 +56,8 @@ dfos content download <contentId>
 dfos auth proof GET /signing/v0/requests
 
 # raw HTTP to the relay (with auto auth)
-dfos api GET /proof/v1/identities/did:dfos:xxx
-dfos api GET /content/abc123/blob --auth
+dfos relay call GET /proof/v1/identities/did:dfos:xxx
+dfos relay call GET /content/abc123/blob --auth
 ```
 
 ## Multiparty Flow

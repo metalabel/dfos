@@ -25,6 +25,7 @@ func newPeerCmd() *cobra.Command {
 	cmd.AddCommand(newPeerRemoveCmd())
 	cmd.AddCommand(newPeerListCmd())
 	cmd.AddCommand(newPeerInfoCmd())
+	cmd.AddCommand(newRelayCallCmd())
 	cmd.AddCommand(newRelayGCCmd())
 	return cmd
 }
