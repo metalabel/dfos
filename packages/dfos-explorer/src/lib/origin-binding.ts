@@ -6,14 +6,27 @@
   domain in a signed `DfosOrigin` services entry, and the domain attests the DID
   back over HTTPS (`/.well-known/dfos-did`) or DNS (a `_dfos` TXT record). Each
   half alone is a claim anyone could publish; only the PAIR proves one party
-  controls both. This module is the pure logic behind the identity view's binding
-  panel — claim reading, probe classification, and the verdict fold. The view owns
-  the async orchestration and the rendering; nothing here touches the DOM.
+  controls both. This module is the pure logic behind BOTH binding panels — the
+  identity view's (chain-first) and the domain view's (domain-first) — claim
+  reading, probe classification, and the two verdict folds. The views own the
+  async orchestration and the rendering; nothing here touches the DOM.
 
-  The chain half is already in hand (the identity view resolved and verified the
-  chain before this runs). The domain half arrives through `/api/binding`, the
-  second serverless route, because a tab can do neither method honestly: origins
-  do not reliably send CORS headers, and a browser cannot query DNS at all.
+  The walk runs in both directions, and the direction only changes which half is
+  in hand first:
+
+    chain-first   the identity's verified services name a domain; ask the domain
+                  (`assessBinding`)
+    domain-first  the domain attests a DID; resolve that DID's chain and require
+                  it to name this exact domain back (`assessDomainBinding`)
+
+  Both are the same walk `dfos identity verify-binding` runs, and this module
+  mirrors that CLI's semantics deliberately — including its half-states.
+
+  The chain half is always a chain the caller RESOLVED AND VERIFIED first —
+  whichever direction the walk runs, a relay-asserted services set is not a signed
+  claim. The domain half arrives through `/api/binding`, the second serverless
+  route, because a tab can do neither method honestly: origins do not reliably
+  send CORS headers, and a browser cannot query DNS at all.
 
   Three verdicts, and keeping them distinguishable is the whole discipline:
 
@@ -222,6 +235,14 @@ export type FallbackResult =
   | { kind: 'silent'; reason: string };
 
 /**
+ * What the app description answered ON ITS OWN TERMS, with no candidate DID in
+ * hand. The domain-first walk needs exactly this: when the origin publishes
+ * nothing but its app description, that document's `client_did` IS the candidate,
+ * and there is nothing yet to compare it against.
+ */
+export type AppAttestation = { kind: 'answers'; did: string } | { kind: 'silent'; reason: string };
+
+/**
  * Fetch `/.well-known/dfos-app.json` and read its `client_did`. Rung 1 does the
  * fetching and the structural validation; nothing is duplicated here.
  *
@@ -231,7 +252,7 @@ export type FallbackResult =
  * required for the attestation — the domain serving the file is what attests,
  * the same doctrine that makes serving the file the registration.
  */
-export const runAppFallback = async (host: string, candidate: string): Promise<FallbackResult> => {
+export const readAppAttestation = async (host: string): Promise<AppAttestation> => {
   const outcome = await fetchAppDocument(host);
   if (outcome.kind === 'proxy-unavailable') {
     return {
@@ -253,10 +274,23 @@ export const runAppFallback = async (host: string, candidate: string): Promise<F
   if (typeof clientDid !== 'string' || clientDid === '') {
     return { kind: 'silent', reason: 'the app description declares no client_did' };
   }
-  return clientDid === candidate
-    ? { kind: 'attests', did: clientDid }
-    : { kind: 'answers-other', did: clientDid };
+  return { kind: 'answers', did: clientDid };
 };
+
+/** Judge an app-description answer against the candidate it is meant to attest.
+ *  Split from the fetch so the domain-first walk can read the same document
+ *  BEFORE it has a candidate, and judge it once the chain resolves. */
+export const appFallbackAgainst = (answer: AppAttestation, candidate: string): FallbackResult =>
+  answer.kind === 'silent'
+    ? answer
+    : answer.did === candidate
+      ? { kind: 'attests', did: answer.did }
+      : { kind: 'answers-other', did: answer.did };
+
+/** The chain-first fallback: read the document, then judge it against the DID the
+ *  chain already proved. */
+export const runAppFallback = async (host: string, candidate: string): Promise<FallbackResult> =>
+  appFallbackAgainst(await readAppAttestation(host), candidate);
 
 /**
  * True when the app-description fallback is eligible: the HTTPS well-known was
@@ -291,8 +325,45 @@ export type BindingVerdict =
   /** OUR route failed — never rendered as a statement about the domain */
   | { kind: 'proxy-unavailable'; domain: string; reason: string };
 
-/** One method's contribution to the fold: an attestation, a contradiction, or
- *  silence. Only methods that ANSWERED participate in agreement. */
+/**
+ * What ONE channel established, before any DID is compared: an answer, a
+ * self-contradiction, or silence. Reading and JUDGING are split because the two
+ * walks judge against different things — the chain-first walk against the DID the
+ * chain already proved, the domain-first walk against the other channels first
+ * and the resolved chain second — while what each channel SAID is the same
+ * reading either way.
+ */
+type ChannelReading =
+  | { kind: 'answer'; method: BindingMethod; did: string }
+  | { kind: 'contradiction'; detail: string }
+  | { kind: 'silence'; detail: string };
+
+const readChannel = (label: 'https' | 'dns', result: BindingMethodResult): ChannelReading => {
+  switch (result.status) {
+    case 'ok':
+      return { kind: 'answer', method: label, did: result.did };
+    case 'contradiction':
+      return { kind: 'contradiction', detail: `${label} — ${result.reason}` };
+    case 'malformed':
+      // present without an answer: silence for the verdict, and the caller has
+      // already declined to fall back because the document exists
+      return { kind: 'silence', detail: `${label} — ${result.reason}` };
+    case 'none':
+      return { kind: 'silence', detail: `${label} — ${result.reason ?? 'nothing published'}` };
+    case 'error':
+      return {
+        kind: 'silence',
+        detail: `${label} — ${result.reason ?? 'the lookup failed'}${
+          result.httpStatus !== undefined ? ` (HTTP ${result.httpStatus})` : ''
+        }`,
+      };
+    case 'refused':
+      return { kind: 'silence', detail: `${label} — ${result.reason}` };
+  }
+};
+
+/** One channel's contribution to the chain-first fold, judged against the DID the
+ *  chain proved. Only channels that ANSWERED participate in agreement. */
 const foldMethod = (
   label: 'https' | 'dns',
   result: BindingMethodResult,
@@ -301,31 +372,17 @@ const foldMethod = (
   details: string[],
   silences: string[],
 ): void => {
-  switch (result.status) {
-    case 'ok':
-      if (result.did === candidate) attested.push(label);
-      else details.push(`${label} attests a different identity — ${result.did}`);
+  const reading = readChannel(label, result);
+  switch (reading.kind) {
+    case 'answer':
+      if (reading.did === candidate) attested.push(reading.method);
+      else details.push(`${label} attests a different identity — ${reading.did}`);
       return;
     case 'contradiction':
-      details.push(`${label} — ${result.reason}`);
+      details.push(reading.detail);
       return;
-    case 'malformed':
-      // present without an answer: silence for the verdict, and the caller has
-      // already declined to fall back because the document exists
-      silences.push(`${label} — ${result.reason}`);
-      return;
-    case 'none':
-      silences.push(`${label} — ${result.reason ?? 'nothing published'}`);
-      return;
-    case 'error':
-      silences.push(
-        `${label} — ${result.reason ?? 'the lookup failed'}${
-          result.httpStatus !== undefined ? ` (HTTP ${result.httpStatus})` : ''
-        }`,
-      );
-      return;
-    case 'refused':
-      silences.push(`${label} — ${result.reason}`);
+    case 'silence':
+      silences.push(reading.detail);
       return;
   }
 };
@@ -375,3 +432,190 @@ export const assessBinding = (
   if (attested.length > 0) return { kind: 'bound', domain, attestedBy: attested, silences };
   return { kind: 'stale', domain, reasons: silences };
 };
+
+// -----------------------------------------------------------------------------
+// the domain-first walk
+// -----------------------------------------------------------------------------
+
+/**
+ * The attested identity's chain, as the domain-first walk got it. `unavailable`
+ * is COULD NOT CHECK — no relay served the chain, or it failed verification here
+ * — and it is deliberately not the same statement as a chain that resolved and
+ * claims nothing. One is an absent answer; the other is an answer.
+ */
+export type AttestedChain =
+  | { kind: 'verified'; did: string; services: ServiceEntry[] }
+  | { kind: 'unavailable'; did: string; reason: string };
+
+/**
+ * What a DOMAIN lookup established about origin binding. The three spec verdicts
+ * plus the proxy state, and two half-states that mirror the CLI's domain-first
+ * walk (`verifyBindingFromDomain` in packages/dfos-cli):
+ *
+ *   bound             the domain attests a DID, that DID's chain verifies, and it
+ *                     names this exact domain back
+ *   broken            the domain contradicts itself (a channel carrying two
+ *                     answers, or two channels answering differently), or the
+ *                     attested identity's chain claims a DIFFERENT domain — the
+ *                     CLI's "the two halves name different domains"
+ *   stale             the domain publishes no attestation at all, so no binding
+ *                     could be checked. Silence, and silence is not contradiction
+ *   chain-unavailable the domain attests a DID and that identity would not
+ *                     resolve. COULD NOT CHECK — the CLI exits with an error here
+ *                     rather than a verdict, for exactly this reason
+ *   no-chain-claim    the attested identity resolved and its verified chain claims
+ *                     no domain (none, or an ambiguous set). CHECKED AND ABSENT —
+ *                     an attestation without a chain claim is not a binding
+ *   proxy-unavailable OUR route failed. Never a statement about the domain
+ */
+export type DomainBinding =
+  | {
+      kind: 'bound';
+      domain: string;
+      did: string;
+      attestedBy: BindingMethod[];
+      silences: string[];
+    }
+  | { kind: 'broken'; domain: string; did: string | null; details: string[] }
+  | { kind: 'stale'; domain: string; reasons: string[] }
+  | { kind: 'chain-unavailable'; domain: string; did: string; reason: string }
+  | { kind: 'no-chain-claim'; domain: string; did: string; claim: 'unclaimed' | 'ambiguous' }
+  | { kind: 'proxy-unavailable'; domain: string; reason: string };
+
+/** Every channel that ANSWERED, in the CLI's fixed order: the HTTPS slot first
+ *  (the well-known document, or the app description standing in for it on
+ *  absence), then DNS. Order makes the output stable; it never wins a
+ *  disagreement. */
+const domainAnswers = (
+  probe: Extract<BindingProbe, { kind: 'answered' }>,
+  fallback: AppAttestation | undefined,
+): {
+  answers: { method: BindingMethod; did: string }[];
+  details: string[];
+  silences: string[];
+} => {
+  const readings: ChannelReading[] = [readChannel('https', probe.https)];
+  if (fallback) {
+    readings.push(
+      fallback.kind === 'answers'
+        ? { kind: 'answer', method: 'app-fallback', did: fallback.did }
+        : { kind: 'silence', detail: `app-fallback — ${fallback.reason}` },
+    );
+  }
+  readings.push(readChannel('dns', probe.dns));
+
+  const answers: { method: BindingMethod; did: string }[] = [];
+  const details: string[] = [];
+  const silences: string[] = [];
+  for (const reading of readings) {
+    if (reading.kind === 'answer') answers.push({ method: reading.method, did: reading.did });
+    else if (reading.kind === 'contradiction') details.push(reading.detail);
+    else silences.push(reading.detail);
+  }
+  return { answers, details, silences };
+};
+
+/**
+ * The DID the domain attests, or null when it attests nothing. The first channel
+ * that answered wins the CANDIDATE slot only — disagreement between channels is
+ * caught by the fold as a contradiction, never resolved by this order.
+ */
+export const attestedCandidate = (
+  probe: BindingProbe,
+  fallback?: AppAttestation,
+): string | null => {
+  if (probe.kind === 'proxy-unavailable') return null;
+  return domainAnswers(probe, fallback).answers[0]?.did ?? null;
+};
+
+/**
+ * Fold a domain's attestation and the attested identity's chain into ONE verdict.
+ *
+ * Pure and total, and a direct mirror of the CLI's `verifyBindingFromDomain`:
+ *
+ *   1. our own route failing is our own state, first and always
+ *   2. a domain that contradicts ITSELF is broken before any chain is resolved
+ *   3. no channel answers → nothing was published, so nothing could be checked
+ *   4. the attested chain must RESOLVE (else could-not-check) and must CLAIM a
+ *      domain (else checked-and-absent: half a binding is no binding)
+ *   5. that claim must be this exact host, byte for byte — a claim naming another
+ *      domain is the two halves naming different things, which is broken
+ *   6. and then the ordinary fold against the resolved chain's DID
+ *
+ * `chain` is null only before a candidate exists; the caller resolves the chain
+ * for whatever `attestedCandidate` returned.
+ */
+export const assessDomainBinding = (
+  domain: string,
+  probe: BindingProbe,
+  fallback: AppAttestation | undefined,
+  chain: AttestedChain | null,
+): DomainBinding => {
+  if (probe.kind === 'proxy-unavailable') {
+    return { kind: 'proxy-unavailable', domain, reason: probe.reason };
+  }
+
+  const { answers, details, silences } = domainAnswers(probe, fallback);
+
+  // a domain that says two things is broken before anything else is asked: a
+  // channel contradicting itself, or two channels answering differently. Never a
+  // tiebreak, never first-checked-wins.
+  if (answers.some((a) => a.did !== answers[0]?.did)) {
+    details.push(
+      `the channels attest different identities — ${answers
+        .map((a) => `${a.method} ${a.did}`)
+        .join(', ')}`,
+    );
+  }
+  if (details.length > 0) return { kind: 'broken', domain, did: null, details };
+
+  const candidate = answers[0]?.did;
+  if (candidate === undefined) {
+    // nothing published at all: unverifiable, not contradicted
+    return { kind: 'stale', domain, reasons: silences };
+  }
+
+  if (chain === null || chain.kind === 'unavailable') {
+    return {
+      kind: 'chain-unavailable',
+      domain,
+      did: candidate,
+      reason: chain?.reason ?? 'the attested identity was not resolved',
+    };
+  }
+
+  const claim = readOriginClaim(chain.services);
+  if (claim.kind !== 'claimed')
+    return { kind: 'no-chain-claim', domain, did: chain.did, claim: claim.kind };
+  if (claim.domain !== domain) {
+    return {
+      kind: 'broken',
+      domain,
+      did: chain.did,
+      details: [
+        `${domain} attests this identity, and its chain claims ${claim.domain} — the two halves name different domains`,
+      ],
+    };
+  }
+
+  // the ordinary fold, now against the DID the chain actually derived
+  const attested: BindingMethod[] = [];
+  const mismatched: string[] = [];
+  for (const a of answers) {
+    if (a.did === chain.did) attested.push(a.method);
+    else mismatched.push(`${a.method} attests a different identity — ${a.did}`);
+  }
+  if (mismatched.length > 0) {
+    return { kind: 'broken', domain, did: chain.did, details: mismatched };
+  }
+  return { kind: 'bound', domain, did: chain.did, attestedBy: attested, silences };
+};
+
+/**
+ * True when the domain published something and the binding therefore has a story
+ * to tell. Silence and our own route failing are not stories: the domain view
+ * keeps them to one quiet line rather than a headline panel, because neither is
+ * an observation ABOUT this domain's binding.
+ */
+export const domainBindingSpeaks = (binding: DomainBinding | null): boolean =>
+  binding !== null && binding.kind !== 'stale' && binding.kind !== 'proxy-unavailable';
