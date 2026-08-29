@@ -20,11 +20,10 @@
 import type { IndexContentRow } from '@metalabel/dfos-client';
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { ContentChip } from '../components/content-chip';
 import { DidChip } from '../components/did-chip';
-import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
+import { ChainCell, DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
 import { HomeIntro } from '../components/intro';
-import { OpLink, Pager, Panel, Term } from '../components/ui';
+import { Pager, Panel, Term } from '../components/ui';
 import { useIndexRowLabel } from '../lib/content-labels';
 import type { OpKind } from '../lib/db';
 import { estimateStorageBytes, OP_KINDS } from '../lib/db';
@@ -239,18 +238,6 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
 // -----------------------------------------------------------------------------
 // OPERATIONS — the op browser (no such surface existed before)
 // -----------------------------------------------------------------------------
-
-/** A chain identifier rendered by what it actually is: an identity resolves to
- *  its public profile name, a content chain links to its chain, a bare CID to
- *  its op. Non-chain primitives (credential / countersign / revocation) ride a
- *  shared chainId, which is why this is a switch and not a single link. */
-const ChainCell = (props: { chainId: string }) => {
-  const { chainId } = props;
-  if (!chainId) return <span class="muted">—</span>;
-  if (chainId.startsWith('did:dfos:')) return <DidChip did={chainId} />;
-  if (chainId.startsWith('baf')) return <OpLink cid={chainId} />;
-  return <ContentChip id={chainId} />;
-};
 
 /** The shared cells of an operation row; the two wrappers below differ only in
  *  whether the chain is one the verify-queue can fold. */

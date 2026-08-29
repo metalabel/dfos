@@ -10,7 +10,7 @@
 import { encodeEd25519Multikey } from '@metalabel/dfos-protocol/chain';
 import type { VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { describe, expect, it } from 'vitest';
-import { decideKeyFilter, KEY_PROBE_MULTIBASE, keyFilterFromProbe } from '../src/lib/index-light';
+import { bodyFilterFromProbe, decideBodyFilter, KEY_PROBE_MULTIBASE } from '../src/lib/index-light';
 import { toIdentityRows } from '../src/lib/index-raw';
 import {
   classesOf,
@@ -111,34 +111,38 @@ describe('headKeysOf', () => {
 // THE OLD-RELAY TRAP — a relay predating `key=` ignores it and answers with the
 // UNFILTERED identity list. `key=` is specified as an opaque match with no format
 // validation and therefore no 400, so the probe reads the BODY, not the status.
+//
+// The classifier is shared with the operations index's `signerKey=`, which has
+// the identical shape and the identical trap; the sentinel is shared too. What
+// that filter's lane does with the verdict is tests/key-ops.spec.ts.
 // -----------------------------------------------------------------------------
 
-describe('keyFilterFromProbe', () => {
+describe('bodyFilterFromProbe', () => {
   it('reads rows-came-back as the param being IGNORED', () => {
-    expect(keyFilterFromProbe(200, 1)).toBe(false);
-    expect(keyFilterFromProbe(200, 25)).toBe(false);
+    expect(bodyFilterFromProbe(200, 1)).toBe(false);
+    expect(bodyFilterFromProbe(200, 25)).toBe(false);
   });
 
   it('reads a served empty page as the param being applied', () => {
-    expect(keyFilterFromProbe(200, 0)).toBe(true);
-    expect(keyFilterFromProbe(204, 0)).toBe(true);
+    expect(bodyFilterFromProbe(200, 0)).toBe(true);
+    expect(bodyFilterFromProbe(204, 0)).toBe(true);
   });
 
   it('is indeterminate for anything that is not a 2xx', () => {
-    expect(keyFilterFromProbe(501, 0)).toBeNull(); // no index at all
-    expect(keyFilterFromProbe(404, 0)).toBeNull();
-    expect(keyFilterFromProbe(500, 0)).toBeNull();
-    expect(keyFilterFromProbe(400, 0)).toBeNull();
-    expect(keyFilterFromProbe(0, 0)).toBeNull(); // unreachable / aborted
+    expect(bodyFilterFromProbe(501, 0)).toBeNull(); // no index at all
+    expect(bodyFilterFromProbe(404, 0)).toBeNull();
+    expect(bodyFilterFromProbe(500, 0)).toBeNull();
+    expect(bodyFilterFromProbe(400, 0)).toBeNull();
+    expect(bodyFilterFromProbe(0, 0)).toBeNull(); // unreachable / aborted
   });
 });
 
-describe('decideKeyFilter', () => {
+describe('decideBodyFilter', () => {
   it('takes the first DEFINITIVE relay, mirroring query failover', () => {
-    expect(decideKeyFilter([{ status: 200, rows: 0 }])).toBe(true);
-    expect(decideKeyFilter([{ status: 200, rows: 3 }])).toBe(false);
+    expect(decideBodyFilter([{ status: 200, rows: 0 }])).toBe(true);
+    expect(decideBodyFilter([{ status: 200, rows: 3 }])).toBe(false);
     expect(
-      decideKeyFilter([
+      decideBodyFilter([
         { status: 0, rows: 0 },
         { status: 501, rows: 0 },
         { status: 200, rows: 0 },
@@ -146,7 +150,7 @@ describe('decideKeyFilter', () => {
     ).toBe(true);
     // an old relay FIRST loses to nothing behind it — it is the one that serves
     expect(
-      decideKeyFilter([
+      decideBodyFilter([
         { status: 200, rows: 5 },
         { status: 200, rows: 0 },
       ]),
@@ -154,10 +158,10 @@ describe('decideKeyFilter', () => {
   });
 
   it('degrades to unsupported when nothing is definitive', () => {
-    expect(decideKeyFilter([])).toBe(false);
-    expect(decideKeyFilter([{ status: 0, rows: 0 }])).toBe(false);
+    expect(decideBodyFilter([])).toBe(false);
+    expect(decideBodyFilter([{ status: 0, rows: 0 }])).toBe(false);
     expect(
-      decideKeyFilter([
+      decideBodyFilter([
         { status: 501, rows: 0 },
         { status: 502, rows: 0 },
       ]),

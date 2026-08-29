@@ -146,6 +146,43 @@ export const useIndexLog = (
   });
 
 /**
+ * Page the operations one PUBLIC KEY signed — `/index/v0/operations?signerKey=`.
+ *
+ * The rows are the same shape the recency feed renders, because they are the same
+ * rows under a filter: the relay narrows the operations index to those whose
+ * verified signature resolved to this key at ingest. That is a PROOF-TIER axis
+ * over every op kind — an identity-chain update, a content-chain op, a
+ * countersignature, a credential — so it answers the question a key page is for,
+ * which the identity index's has-ever-declared lookup cannot.
+ *
+ * Ordered `createdAt.desc`, not the route's `ingestedAt.desc` default: the table's
+ * one timestamp column is the op's own author-claimed clock, and a column that
+ * disagrees with the ordering it is sorted by reads as broken. Both orderings are
+ * served on this route.
+ *
+ * `enabled` carries TWO gates: a relay index must exist, and the serving relay
+ * must honour `signerKey=` (`useIndexSignerKeyFilter` in ./index-light). A relay
+ * predating the filter ignores it and answers with the unfiltered operations
+ * feed, so running this ungated would present the whole log as this key's
+ * signings.
+ */
+export const useSignerKeyLog = (
+  enabled: boolean,
+  signerKey: string,
+  cursor: string,
+  onCursor: (cursor: string) => void,
+): IndexPage<LogRow> =>
+  useIndexPageStack(enabled, `signer-key-log:${signerKey}`, cursor, onCursor, async (after) => {
+    const page = await fetchOperationsPage({
+      order: 'createdAt.desc',
+      signerKey,
+      ...(after ? { after } : {}),
+      limit: PAGE,
+    });
+    return { items: indexOpRows(page.items), next: page.next };
+  });
+
+/**
  * Page the RELAY's global log forward from genesis. `cursor` is the position the
  * URL states — it restores a deep link and keeps following the hash thereafter.
  * A cursor the relay never issued (a rebuilt log, or a link minted against a

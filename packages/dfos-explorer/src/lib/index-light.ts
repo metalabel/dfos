@@ -212,81 +212,95 @@ export const useIndexTitleSearch = (): boolean | null =>
   );
 
 // -----------------------------------------------------------------------------
-// KEY-FILTER FEATURE DETECTION — does the SERVING relay honour `key=` on the
-// identity index (the has-ever-declared reverse lookup)?
+// BODY-PROBED FILTER DETECTION — the two OPAQUE key filters: `key=` on the
+// identity index (has-ever-declared) and `signerKey=` on the operations index
+// (what this key signed).
 //
-// Same failure shape as `order=` and `titleContains=`, and this one is the worst
-// of the three: a relay predating the filter IGNORES the param and answers with
-// an UNFILTERED page of identities. The key page would then present every
-// identity on the relay as one that declared this key — a fabricated claim about
-// key custody, on the surface where that claim matters most.
+// Same failure shape as `order=` and `titleContains=`, and these two are the
+// worst of the family: a relay predating either filter IGNORES the param and
+// answers with an UNFILTERED page — every identity on the relay presented as one
+// that declared this key, or every operation on the relay presented as one this
+// key signed. Both are fabricated claims about key custody, on the surface where
+// that claim matters most.
 //
 // The 400-based separator the other two probes use is UNAVAILABLE here, and
-// deliberately so: WEB-RELAY.md specifies `key=` as an OPAQUE string match — "a
-// string no operation ever declared simply matches nothing — no format
-// validation, no 400". There is no invalid value to provoke a rejection with. So
-// this probe reads the BODY instead of the status: query a sentinel no chain can
-// have declared, and
+// deliberately so: WEB-RELAY.md specifies both as OPAQUE matches — a string no
+// operation ever declared simply matches nothing, "no format validation and no
+// 400". There is no invalid value to provoke a rejection with. So these probes
+// read the BODY instead of the status: query a sentinel nothing can match, and
 //
 //   rows came back  → the relay ignored the param        → UNSUPPORTED
 //   zero rows       → the relay applied it (or is empty)  → supported
 //   non-2xx         → indeterminate, defer to the next relay
 //
-// The empty-corpus case reads as "supported" and is harmless: a relay holding no
-// identities answers a real key query with nothing either way, so the page states
-// a true absence rather than inventing rows.
+// The empty-corpus case reads as "supported" and is harmless: a relay holding
+// nothing answers a real query with nothing either way, so the page states a true
+// absence rather than inventing rows.
 // -----------------------------------------------------------------------------
 
 /**
- * The probe value: a syntactically REAL multikey — `z` + base58btc of
- * `[0xed, 0x01] ++ sha256('dfos-explorer:index-key-filter-probe:v1')` — so a
- * relay sees a well-formed key rather than something it might one day reject,
- * and one whose 32 bytes are a published hash rather than a generated public
- * key, so no chain has ever declared it.
+ * The probe value, shared by BOTH key filters: a syntactically REAL multikey —
+ * `z` + base58btc of `[0xed, 0x01] ++
+ * sha256('dfos-explorer:index-key-filter-probe:v1')` — so a relay sees a
+ * well-formed key rather than something it might one day reject, and one whose 32
+ * bytes are a published hash rather than a generated public key.
+ *
+ * That construction answers both questions at once. No chain has ever declared
+ * it, and — having no private half anyone could hold — nothing has ever signed
+ * with it either, so it matches nothing on `key=` and nothing on `signerKey=`.
+ * One sentinel, because it is the same unclaimable value in both places.
  */
 export const KEY_PROBE_MULTIBASE = 'z6MkoR9B2ETntZELcPzFTTMnbfhz3pHumPyJi5oEzQvC2WbE';
 
-/** Interpret one relay's key-filter probe: rows back means the param was IGNORED
- *  (pre-`key=`), a served empty page means it was applied, and a non-2xx / a
- *  throw (`status` 0) is indeterminate — defer to the next relay. `rows` is only
- *  meaningful on a 2xx. Pure, unit-tested. */
-export const keyFilterFromProbe = (status: number, rows: number): boolean | null =>
+/** Interpret one relay's body-shaped filter probe: rows back means the param was
+ *  IGNORED (the relay predates it), a served empty page means it was applied, and
+ *  a non-2xx / a throw (`status` 0) is indeterminate — defer to the next relay.
+ *  `rows` is only meaningful on a 2xx. Pure, unit-tested. */
+export const bodyFilterFromProbe = (status: number, rows: number): boolean | null =>
   status >= 200 && status < 300 ? rows === 0 : null;
 
-/** Decide `key=` support from the ordered per-relay probe outcomes: the first
- *  DEFINITIVE relay wins (mirrors query failover), all-indeterminate → unsupported.
- *  The default degrades rather than risk presenting an unfiltered identity page as
- *  key matches. Pure, unit-tested. */
-export const decideKeyFilter = (probes: { status: number; rows: number }[]): boolean => {
+/** Decide an opaque filter's support from the ordered per-relay probe outcomes:
+ *  the first DEFINITIVE relay wins (mirrors query failover), all-indeterminate →
+ *  unsupported. The default degrades rather than risk presenting an unfiltered
+ *  page as filtered matches. Pure, unit-tested. */
+export const decideBodyFilter = (probes: { status: number; rows: number }[]): boolean => {
   for (const p of probes) {
-    const verdict = keyFilterFromProbe(p.status, p.rows);
+    const verdict = bodyFilterFromProbe(p.status, p.rows);
     if (verdict !== null) return verdict;
   }
   return false;
 };
 
-/** One relay's key-filter probe outcome. A network throw / abort reports status 0
- *  (indeterminate), as does a body that isn't a readable identities page. */
-const probeRelayKeyFilter = async (base: string): Promise<{ status: number; rows: number }> => {
+/** One relay's body-probe outcome for a filter param. A network throw / abort
+ *  reports status 0 (indeterminate), as does a body that isn't a readable page of
+ *  `rowsKey` — a 2xx we cannot parse is no verdict about the filter. */
+const probeRelayBodyFilter = async (
+  base: string,
+  path: string,
+  rowsKey: string,
+): Promise<{ status: number; rows: number }> => {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
   try {
-    const url = new URL(
-      `/index/v0/identities?key=${encodeURIComponent(KEY_PROBE_MULTIBASE)}&limit=1`,
-      base,
-    );
-    const res = await fetch(url.toString(), { signal: ctrl.signal });
+    const res = await fetch(new URL(path, base).toString(), { signal: ctrl.signal });
     if (!res.ok) return { status: res.status, rows: 0 };
-    const body = (await res.json()) as { identities?: unknown };
-    // a 2xx whose body we cannot read as a page is no verdict about the filter
-    if (!Array.isArray(body.identities)) return { status: 0, rows: 0 };
-    return { status: res.status, rows: body.identities.length };
+    const body = (await res.json()) as Record<string, unknown>;
+    const rows = body[rowsKey];
+    if (!Array.isArray(rows)) return { status: 0, rows: 0 };
+    return { status: res.status, rows: rows.length };
   } catch {
     return { status: 0, rows: 0 }; // unreachable / aborted / unparseable
   } finally {
     clearTimeout(timer);
   }
 };
+
+/** The BODY-shaped probe: ask every relay in parallel, read the verdict off the
+ *  ordered outcomes (rows ignore / empty applies). */
+const probeBodyFilter = (path: string, rowsKey: string, relays: string[]): Promise<boolean> =>
+  Promise.all(relays.map((base) => probeRelayBodyFilter(base, path, rowsKey))).then(
+    decideBodyFilter,
+  );
 
 /**
  * Whether the serving relay honours `key=` on the identity index. `null` while
@@ -295,7 +309,31 @@ const probeRelayKeyFilter = async (base: string): Promise<{ status: number; rows
  * module-cached, once-per-session idiom as the gates above.
  */
 export const useIndexKeyFilter = (): boolean | null =>
-  useProbe('key', (relays) => Promise.all(relays.map(probeRelayKeyFilter)).then(decideKeyFilter));
+  useProbe('key', (relays) =>
+    probeBodyFilter(
+      `/index/v0/identities?key=${encodeURIComponent(KEY_PROBE_MULTIBASE)}&limit=1`,
+      'identities',
+      relays,
+    ),
+  );
+
+/**
+ * Whether the serving relay honours `signerKey=` on the operations index — the
+ * proof-tier "what has this key signed" filter. `null` while the probe is in
+ * flight, then a stable boolean.
+ *
+ * A relay that does not serve `/index/v0/operations` at all answers 404/501,
+ * which is indeterminate here and degrades to unsupported once no relay is
+ * definitive — the same safe direction, reached without a second probe.
+ */
+export const useIndexSignerKeyFilter = (): boolean | null =>
+  useProbe('signerKey', (relays) =>
+    probeBodyFilter(
+      `/index/v0/operations?signerKey=${encodeURIComponent(KEY_PROBE_MULTIBASE)}&limit=1`,
+      'operations',
+      relays,
+    ),
+  );
 
 export interface IndexPage<T> {
   /** the rows of the CURRENT page only — paging replaces them, never appends. */

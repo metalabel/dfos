@@ -357,10 +357,21 @@ export const nextCursor = (body: unknown): string | null => {
 // page loaders
 // -----------------------------------------------------------------------------
 
-/** One page of the operation recency feed. Throws when no relay serves the route. */
+/**
+ * One page of the operation recency feed. Throws when no relay serves the route.
+ *
+ * `signerKey` is the proof-tier actor filter — an exact multibase match against
+ * the public key each row's signature verified against at ingest (WEB-RELAY.md,
+ * Operations). It is passed VERBATIM: the relay matches it as opaque bytes, so
+ * normalizing it here would silently ask a different question than the one
+ * pasted. A relay predating the filter IGNORES it and answers with the
+ * UNFILTERED feed, which no caller may present as key-scoped — gate on
+ * `useIndexSignerKeyFilter` before asking.
+ */
 export const fetchOperationsPage = async (params: {
   order: IndexRecency;
   kind?: string;
+  signerKey?: string;
   after?: string;
   limit?: number;
 }): Promise<{ items: IndexOperationRow[]; next: string | null }> => {
@@ -369,6 +380,7 @@ export const fetchOperationsPage = async (params: {
     {
       order: params.order,
       ...(params.kind ? { kind: params.kind } : {}),
+      ...(params.signerKey ? { signerKey: params.signerKey } : {}),
       ...(params.after ? { after: params.after } : {}),
       limit: params.limit ?? PAGE,
     },

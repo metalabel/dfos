@@ -16,8 +16,11 @@ import { useDidProfile } from '../lib/did-profiles';
 import type { DocLabel } from '../lib/doc-label';
 import { GLOSSARY } from '../lib/glossary';
 import { projectedName } from '../lib/index-point';
+import { chainKindOf } from '../lib/key-ops';
 import { enqueueVerify, useVerifyStatus, type VerifyKind } from '../lib/verify-queue';
-import { Badge, Term } from './ui';
+import { ContentChip } from './content-chip';
+import { DidChip } from './did-chip';
+import { Badge, OpLink, Term } from './ui';
 
 /**
  * A ref to attach to a row element. The first time the element intersects the
@@ -134,6 +137,29 @@ export const IdentityName = (props: { row: IndexIdentityRow; seen: boolean }) =>
       {profile.name}
     </span>
   );
+};
+
+/**
+ * An operation row's chain, rendered by what the identifier actually is
+ * (lib/key-ops.ts): an identity resolves to its public profile name, a content
+ * chain links to its chain, a bare CID to its op. The non-chain primitives
+ * (credential / countersign / revocation) ride some other primitive's chainId,
+ * which is why this is a switch and not a single link.
+ *
+ * Shared by every table of operation rows — the home log feed and the key page's
+ * signed-operations list — so one chainId reads identically wherever it lands.
+ */
+export const ChainCell = (props: { chainId: string }) => {
+  switch (chainKindOf(props.chainId)) {
+    case 'none':
+      return <span class="muted">—</span>;
+    case 'identity':
+      return <DidChip did={props.chainId} />;
+    case 'op':
+      return <OpLink cid={props.chainId} />;
+    case 'content':
+      return <ContentChip id={props.chainId} />;
+  }
 };
 
 /** The one badge vocabulary for an index-light row's verification tier. */
