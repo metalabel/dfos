@@ -173,18 +173,21 @@ func getVaults() *vault.Store {
 	return vaultStore
 }
 
+// quietRelayLogger is the logger every one-shot CLI command opens its embedded
+// relay with. That relay's INFO chatter ("ingest complete", "peer sync fetched
+// ops") is pure noise on a terminal, so the happy path is silent at Warn while
+// genuine warnings and errors still surface. (`serve` opens its own at INFO.)
+func quietRelayLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
+
 // getRelay returns the lazily-initialized local relay.
 func getRelay() (*localrelay.LocalRelay, error) {
 	if localRelayInstance != nil {
 		return localRelayInstance, nil
 	}
 	var err error
-	// One-shot CLI commands drive an embedded relay whose INFO chatter ("ingest
-	// complete", "peer sync fetched ops") is pure noise on the terminal. Open it
-	// with a Warn-level logger so the happy path is silent while genuine
-	// warnings/errors still surface. (`serve` opens its own relay with INFO.)
-	quiet := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	localRelayInstance, err = localrelay.Open(cfg, &localrelay.Options{Logger: quiet})
+	localRelayInstance, err = localrelay.Open(cfg, &localrelay.Options{Logger: quietRelayLogger()})
 	if err != nil {
 		return nil, fmt.Errorf("open local relay: %w", err)
 	}
@@ -217,7 +220,14 @@ func requirePeer(peerOverride string) (*config.ResolvedContext, *client.Client, 
 	if ctx.RelayURL == "" {
 		return nil, nil, errNoPeer()
 	}
-	return ctx, client.New(ctx.RelayURL), nil
+	// Same gate getPeerClient applies: a resolved peer name means the identity
+	// config pinned to that name, not merely the URL parked under it.
+	if err := verifyPeerPin(ctx.RelayName); err != nil {
+		return nil, nil, err
+	}
+	c := client.New(ctx.RelayURL)
+	c.Peer = ctx.RelayName
+	return ctx, c, nil
 }
 
 // errNoIdentity is the distinguishable "anonymous, and this command cannot be"

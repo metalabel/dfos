@@ -223,7 +223,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 **Keys** (`dfos keys …`) — `list` · `show` · `prune` · `prove <code-or-uri>` (complete a key-add ceremony: mints or names a key, shows the audience, refuses a key any identity has ever declared, posts one KEY-PROOF envelope and never retries)
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
 **Sign-in** — `dfos login [name|did]` (`--host <name-or-host>` to pick from an API's advertised actions) · cached records: `dfos creds list` · `show` · `rm`
-**Peers** (`dfos peer …`, alias `relay`) — `add` · `remove` · `list` · `info` · `gc`
+**Peers** (`dfos peer …`, alias `relay`) — `add` · `repin` · `remove` · `list` · `info` · `gc`
 **Auth** (`dfos auth …`) — `proof` · `status`
 **API client** (`dfos api …`) — `add` · `list` · `refresh` · `rm` · `call`
 **Config** (`dfos config …`) — `list` · `get` · `set`
@@ -257,9 +257,18 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
   and `content publish` auto-publish _your_ identity to the peer first. But a
   **delegated** writer's identity (someone updating via a write credential) must
   already be published to that peer — the CLI won't push it for you.
-- **`sync` is global.** `dfos sync` pulls from _all_ configured peers, ignoring the
-  resolved peer. Use `content fetch` / `identity fetch` / `content publish` for
-  peer-scoped transfers.
+- **`sync` is the bulk pull, and it is switchable.** `dfos sync` takes each peer's
+  _whole_ operation log; `--peer <name>` narrows it to one. A `[relays.<name>]`
+  entry with `sync = false` is skipped by name and reason, and `sync --peer` on it
+  refuses. Explicit transfers — `identity fetch` / `content fetch` /
+  `content publish` — are never gated by that switch, so
+  `dfos peer add <name> <url> --no-sync` registers a peer for those alone.
+- **A peer's `did` is a pin, not a label.** Commands acting through a named peer
+  refuse when it serves a different DID than config pins, naming both. An entry
+  with no `did` is pinned on first contact, announced on stderr; `dfos peer repin
+<name>` is the only thing that moves one afterwards. `peer info` reports a
+  mismatch (exit 1) instead of refusing, and rewrites neither the pin nor the
+  per-peer policy flags — those are yours once the peer is registered.
 - **`remove` ≠ `delete`.** `identity remove` drops a local config name (the chain
   data stays in the relay); `content remove` is just a no-op that points you at
   `content delete` — local content can't be selectively un-ingested. Neither signs

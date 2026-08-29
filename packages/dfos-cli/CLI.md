@@ -165,6 +165,8 @@ url = "http://localhost:4444"
 
 [relays.prod]
 url = "https://relay.dfos.com"
+did = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
+sync = false
 
 [identities.alice]
 did = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
@@ -188,6 +190,17 @@ dfos config list --json                    # the same, key for key with the TOML
 `config list` reads like the rest of the CLI: a plain report by default, naming every writable key including the ones that are unset, and under `--json` the config document itself — the same snake_case namespace the TOML uses, so `jq` output round-trips back into `config set`.
 
 `default-vault` is the same tier for minting that `default-identity` is for signing: the fallback when no `--vault` names one. `dfos config set` is the only thing that writes it, with the one exception that creating the first vault on a machine with none sets it.
+
+A `[relays.<name>]` entry carries four kinds of key, and the difference is what each one answers to:
+
+| Key                                                         | Kind    | Meaning                                                                              |
+| ----------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------ |
+| `url`                                                       | address | Where the peer is                                                                    |
+| `did`                                                       | pin     | Which identity that address must serve (see [Peer Identity Pin](#peer-identity-pin)) |
+| `content`, `proof`, `log`, `gossip`, `read_through`, `sync` | policy  | What this machine does with the peer; absent means on (see [Peer Sync](#peer-sync))  |
+| `profile_name`                                              | label   | Display name from the peer's profile artifact                                        |
+
+Policy is the operator's. It is seeded from the peer's advertised capabilities the first time the peer is registered, and nothing rewrites it after that — not `peer add` over an existing entry, not `peer info`. Only the label is refreshed freely, and only the pin commands move the pin.
 
 An `active_context` line left over from an earlier configuration is inert: resolution never reads it, and `dfos whoami` reports it as such.
 
@@ -610,6 +623,71 @@ dfos identity forget did:dfos:xxx
 
 This removes the named identity and its referencing contexts from config, clears a `default-identity` that pointed at it, and removes that DID's cached login credential. Private keys remain in the OS keystore, public chain data remains in the local relay, and no chain operation is signed or published. Use `relay gc` for local space maintenance.
 
+### Peer Sync
+
+`dfos sync` is the bulk transfer: it pulls a peer's whole operation log into the local relay and sequences it. That is unbounded in the peer's corpus rather than in what was asked for — a busy relay's log is every chain it holds — so it is the one peer interaction that answers to a switch.
+
+```bash
+dfos sync                  # every peer the switches allow
+dfos sync --peer prod      # that peer alone
+```
+
+The `sync` key under `[relays.<name>]` decides whether a peer is polled. Absent means yes, which is what a config written without the key says and what `peer add` registers:
+
+```toml
+[relays.prod]
+url = "https://relay.dfos.com"
+sync = false
+```
+
+The two plane flags decide it as well: `proof = false` says this machine does not use the peer's proof plane, and `log = false` says it does not use its operation log. Either takes the peer out of the pull, and a peer that advertises neither would answer it with a 501 every cycle anyway. `content` does not gate it — that is the document plane, and bulk sync is the proof plane's log.
+
+The plane flags are seeded from the peer's advertised capabilities the first time it is registered, and are the operator's from then on. Nothing refreshes them: `peer info` shows what the peer advertises beside what this machine has configured, and writes neither. A posture that a metadata refresh could undo is not a posture.
+
+A skipped peer is named, with the reason, on every run — "did not pull" and "pulled nothing" are otherwise the same output:
+
+```
+Syncing with 1 peer(s): local
+Skipping 1 peer(s): prod (sync = false)
+```
+
+`dfos sync --peer prod` against a peer the config says not to poll refuses and names the switch and the file holding it, rather than silently syncing or silently doing nothing.
+
+Explicit single-chain traffic is a different thing and no switch here touches it: `identity fetch`, `content fetch`, `content publish`, `api call`, and `login` reach the peer they are told to reach. A machine that registers a relay for those flows alone registers it with `dfos peer add <name> <url> --no-sync`, and holds every chain it asked for and nothing else.
+
+`gossip` (push newly sequenced operations) and `read_through` (fetch on a local 404) are the other two switches, spelled the same way and defaulting the same way. They are the config.toml half of the `serve --peers` object form.
+
+### Peer Identity Pin
+
+The `did` under `[relays.<name>]` is a pin: the identity that address must serve for the name to mean what it meant when it was registered. `dfos peer add` writes it from the peer's well-known, and every command that acts through a named peer checks it — one well-known fetch per peer per invocation, memoized.
+
+A peer that serves a different DID than the one pinned is refused, by name, with both DIDs:
+
+```
+peer 'prod' is not the relay this machine pinned:
+  pinned: did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar (~/.dfos/config.toml)
+  serves: did:dfos:cv7n8vkvr64cctf3294h9k4eanhff8z
+  'dfos peer repin prod' accepts the new identity
+```
+
+The CLI cannot tell a relay that re-keyed from a different relay answering at that URL. The operator can, so accepting the new identity is a command they run:
+
+```bash
+dfos peer repin prod
+```
+
+`peer repin` is the only thing that moves a pin. `peer add` over an existing entry refreshes its label and refuses to move the pin when the URL is unchanged; a changed URL is a new registration and pins fresh. `peer info` prints the full report — including the mismatch, in as many words — and exits non-zero rather than refusing to look; it is the command you run to see a mismatch, and it never rewrites the pin it just reported on.
+
+An entry with no `did` — one written by hand, or registered while the peer was unreachable — is pinned on first contact, to whoever answers. The write is announced:
+
+```
+Pinned peer 'prod' to did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar on first contact ('dfos peer repin prod' to change).
+```
+
+Every invocation after that is checked against it. A well-known that cannot be fetched pins nothing and refuses nothing: an unreachable peer is a reachability problem, and the operation the caller was running reports it in its own words.
+
+What a pin does not establish is who the peer is in the world — only that it is the same one as last time. `peer info`'s profile line is scoped the same way: a valid profile signature says the peer's self-description was signed by a key in its own HEAD state, which is a claim about internal consistency and not about identity.
+
 ---
 
 ## Serve
@@ -650,11 +728,13 @@ A value starting with `[` must parse as JSON, every peer must be an absolute
 `http(s)` URL, and unknown per-peer fields are rejected — a bad peer config fails
 at boot rather than erroring on every sync tick for the life of the process.
 
-`--peers` is merged with the relays in `config.toml`, and a relay named in both is
-configured once: the `--peers` entry wins, since it is the one that can carry the
-per-peer switches. Peer state — the sync cursor above all — is keyed by URL, so the
-duplicate would otherwise pull twice against a single shared cursor. The dropped
-duplicate is logged.
+`--peers` is merged with the relays in `config.toml`, whose entries carry the same
+three switches under their own keys (`gossip`, `read_through`, `sync` — see
+[Peer Sync](#peer-sync)). A relay named in both is configured once and the
+`--peers` entry wins, since it is the one supplied for this run. Peer state — the
+sync cursor above all — is keyed by URL, so the duplicate would otherwise pull
+twice against a single shared cursor. The dropped duplicate is logged, and the
+boot banner marks every peer with a switch turned off.
 
 `--no-write` is the pull-only posture: the node ingests exclusively through peer sync and refuses submissions outright, so its served state is entirely derived from relays it chose to follow.
 
@@ -1120,7 +1200,8 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `*`    | `api <METHOD> <path>`           | Deprecated alias of `relay call`                             |
 | `GET`  | `peer list`                     | List configured relays (alias: `relay`)                      |
 | `GET`  | `peer info [name]`              | Show relay metadata                                          |
-| `POST` | `peer add <name> <url>`         | Register a named relay                                       |
+| `POST` | `peer add <name> <url>`         | Register a named relay (`--no-sync`: no bulk log sync)       |
+| `SET`  | `peer repin <name>`             | Pin a peer to the identity it serves now                     |
 | `DEL`  | `peer remove <name>`            | Unregister a relay                                           |
 | `DEL`  | `relay gc`                      | GC follower blobs + compact the local SQLite store           |
 | `GET`  | `config list`                   | Show full configuration                                      |
@@ -1128,7 +1209,7 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `SET`  | `config set <key> <value>`      | Write a config value                                         |
 | `GET`  | `status [--store]`              | At-a-glance overview, optionally with local-store stats      |
 | `GET`  | `whoami`                        | Resolved identity, signing key, credentials, and peer        |
-| `POST` | `sync`                          | Sync with all configured relays                              |
+| `POST` | `sync [--peer <name>]`          | Pull the operation log from configured peers                 |
 | `*`    | `serve`                         | Run the local relay as an HTTP server                        |
 | `*`    | `skill print` / `skill install` | Print or install the DFOS Claude Code skill (`--global`)     |
 | `GET`  | `version`                       | Show the installed CLI version                               |

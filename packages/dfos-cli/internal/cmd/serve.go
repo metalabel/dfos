@@ -207,7 +207,7 @@ All flags support environment variable fallbacks for container deployment:
 			if peerCount > 0 {
 				fmt.Printf("  Peers:  %d configured\n", peerCount)
 				for name, r := range cfg.Relays {
-					fmt.Printf("    - %s (%s)\n", name, r.URL)
+					fmt.Printf("    - %s (%s)%s\n", name, r.URL, peerFlagSuffix(localrelay.PeerConfigFor(r)))
 				}
 				for _, p := range extraPeers {
 					fmt.Printf("    - %s%s\n", p.URL, peerFlagSuffix(p))

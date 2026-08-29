@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
@@ -28,9 +29,14 @@ type Options struct {
 	DBPath      string             // override database path (default: ~/.dfos/relay.db)
 	ProfileName string             // relay profile name (default: "DFOS CLI")
 	ExtraPeers  []relay.PeerConfig // additional peers beyond config.toml
-	Write       *bool              // nil/true = accept writes; false = LITE pull-only node
-	Index       *bool              // nil/true = serve /index/v0; false = advertise false + 501
-	Logger      *slog.Logger       // nil = relay's slog.Default(); CLI passes a quiet one
+	// OnlyPeers restricts the config.toml-derived peer set to these NAMES.
+	// nil (the default) takes every registered peer; a non-nil list is
+	// `dfos sync --peer <name>` narrowing one invocation to one peer. It does
+	// not filter ExtraPeers, which are named by URL and supplied per-run.
+	OnlyPeers []string
+	Write     *bool        // nil/true = accept writes; false = LITE pull-only node
+	Index     *bool        // nil/true = serve /index/v0; false = advertise false + 501
+	Logger    *slog.Logger // nil = relay's slog.Default(); CLI passes a quiet one
 	// ContentFollow: "eager" = eagerly materialize the document bytes of content
 	// chains this relay holds a standing public-read grant for (a follower / cache
 	// node). "" or "none" = off (default). See relay.RelayOptions.ContentFollow.
@@ -87,7 +93,7 @@ func Open(cfg *config.Config, opts *Options) (*LocalRelay, error) {
 	}
 
 	// build peer configs from config.toml relay entries + extra peers
-	peers := mergePeerConfigs(buildPeerConfigs(cfg), opts.ExtraPeers, logger)
+	peers := mergePeerConfigs(buildPeerConfigs(cfg, opts.OnlyPeers), opts.ExtraPeers, logger)
 
 	// wire up peer client if peers exist
 	var peerClient relay.PeerClient
@@ -215,14 +221,58 @@ func bootstrapPersistent(store *relay.SQLiteStore, profileName string) (*relay.R
 	return identity, nil
 }
 
+// PeerConfigFor renders one config.toml relay entry as the peer config the
+// relay library runs on. The three per-peer switches carry through verbatim,
+// and bulk sync is additionally forced off for a peer this machine must not
+// poll — see config.BulkSyncDisabledReason. Exported so the `serve` banner can
+// report the same effective switches the sync loop is about to run on.
+func PeerConfigFor(r config.RelayConfig) relay.PeerConfig {
+	peer := relay.PeerConfig{
+		URL:         r.URL,
+		Gossip:      r.Gossip,
+		ReadThrough: r.ReadThrough,
+		Sync:        r.Sync,
+	}
+	if config.BulkSyncDisabledReason(r) != "" {
+		off := false
+		peer.Sync = &off
+	}
+	return peer
+}
+
 // buildPeerConfigs converts config.toml relay entries into relay PeerConfig
-// structs. All configured relays become peers with default settings.
-func buildPeerConfigs(cfg *config.Config) []relay.PeerConfig {
-	var peers []relay.PeerConfig
-	for _, r := range cfg.Relays {
-		if r.URL != "" {
-			peers = append(peers, relay.PeerConfig{URL: r.URL})
+// structs, honoring each entry's per-peer switches. When only is non-nil the
+// peer set is restricted to the named entries — that is `dfos sync --peer <x>`,
+// which pulls from one peer rather than the whole configured mesh.
+//
+// Names are visited in sorted order so the peer list (and therefore the merge's
+// duplicate reporting) is the same on every run rather than a map's iteration
+// order.
+func buildPeerConfigs(cfg *config.Config, only []string) []relay.PeerConfig {
+	var wanted map[string]bool
+	if only != nil {
+		wanted = make(map[string]bool, len(only))
+		for _, name := range only {
+			wanted[name] = true
 		}
+	}
+
+	names := make([]string, 0, len(cfg.Relays))
+	for name := range cfg.Relays {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var peers []relay.PeerConfig
+	for _, name := range names {
+		if wanted != nil && !wanted[name] {
+			continue
+		}
+		r := cfg.Relays[name]
+		if r.URL == "" {
+			continue
+		}
+		peers = append(peers, PeerConfigFor(r))
 	}
 	return peers
 }

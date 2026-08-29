@@ -121,13 +121,111 @@ func TestMergePeerConfigsFromConfigRelays(t *testing.T) {
 	}
 	extra := []relay.PeerConfig{{URL: "https://relay.example", Sync: boolPtr(false)}}
 
-	got := mergePeerConfigs(buildPeerConfigs(cfg), extra, quietLogger())
+	got := mergePeerConfigs(buildPeerConfigs(cfg, nil), extra, quietLogger())
 	if len(got) != 2 {
 		t.Fatalf("got %d peers, want 2 (%+v)", len(got), got)
 	}
 	shared := peerByURL(t, got, "https://relay.example")
 	if shared.Sync == nil || *shared.Sync {
 		t.Errorf("the explicit peer's sync=false must survive the merge, got %v", shared.Sync)
+	}
+}
+
+// TestBuildPeerConfigsHonorsSwitches is the regression for the bulk-pull bug: a
+// config.toml peer used to become a peer with library defaults for all three
+// switches, so `sync = false` (and a peer that serves no proof plane or no log)
+// still had its entire operation log pulled onto the machine.
+func TestBuildPeerConfigsHonorsSwitches(t *testing.T) {
+	tests := []struct {
+		name  string
+		relay config.RelayConfig
+		want  relay.PeerConfig
+	}{
+		{
+			// The compat case, and the common one: a config written before the
+			// switches existed keeps every default.
+			name:  "no switches and no capabilities leaves every default",
+			relay: config.RelayConfig{URL: "https://relay.example"},
+			want:  relay.PeerConfig{URL: "https://relay.example"},
+		},
+		{
+			name:  "capabilities advertised true leave every default",
+			relay: config.RelayConfig{URL: "https://relay.example", Content: boolPtr(true), Proof: boolPtr(true), Log: boolPtr(true)},
+			want:  relay.PeerConfig{URL: "https://relay.example"},
+		},
+		{
+			name:  "sync = false disables the pull",
+			relay: config.RelayConfig{URL: "https://relay.example", Sync: boolPtr(false)},
+			want:  relay.PeerConfig{URL: "https://relay.example", Sync: boolPtr(false)},
+		},
+		{
+			// The live report: proof = false on the prod peer, and the whole
+			// proof log arrived anyway.
+			name:  "proof = false disables the pull",
+			relay: config.RelayConfig{URL: "https://relay.example", Content: boolPtr(false), Proof: boolPtr(false)},
+			want:  relay.PeerConfig{URL: "https://relay.example", Sync: boolPtr(false)},
+		},
+		{
+			name:  "log = false disables the pull",
+			relay: config.RelayConfig{URL: "https://relay.example", Proof: boolPtr(true), Log: boolPtr(false)},
+			want:  relay.PeerConfig{URL: "https://relay.example", Sync: boolPtr(false)},
+		},
+		{
+			// content is about the document plane. Bulk sync is the proof plane's
+			// operation log, so content alone never gates it.
+			name:  "content = false alone does not disable the pull",
+			relay: config.RelayConfig{URL: "https://relay.example", Content: boolPtr(false), Proof: boolPtr(true)},
+			want:  relay.PeerConfig{URL: "https://relay.example"},
+		},
+		{
+			name:  "gossip and read-through carry through verbatim",
+			relay: config.RelayConfig{URL: "https://relay.example", Gossip: boolPtr(false), ReadThrough: boolPtr(false), Sync: boolPtr(true)},
+			want:  relay.PeerConfig{URL: "https://relay.example", Gossip: boolPtr(false), ReadThrough: boolPtr(false), Sync: boolPtr(true)},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{Relays: map[string]config.RelayConfig{"peer": tc.relay}}
+			got := buildPeerConfigs(cfg, nil)
+			if len(got) != 1 {
+				t.Fatalf("got %d peers, want 1 (%+v)", len(got), got)
+			}
+			assertFlag(t, tc.want.URL, "gossip", got[0].Gossip, tc.want.Gossip)
+			assertFlag(t, tc.want.URL, "readThrough", got[0].ReadThrough, tc.want.ReadThrough)
+			assertFlag(t, tc.want.URL, "sync", got[0].Sync, tc.want.Sync)
+		})
+	}
+}
+
+// TestBuildPeerConfigsOnlyPeers covers `dfos sync --peer <name>`: the run is
+// narrowed to one registered peer, and the others are not configured at all —
+// so nothing about them (cursor, gossip, read-through) moves either.
+func TestBuildPeerConfigsOnlyPeers(t *testing.T) {
+	cfg := &config.Config{
+		Relays: map[string]config.RelayConfig{
+			"local": {URL: "http://127.0.0.1:4444"},
+			"prod":  {URL: "https://relay.example"},
+		},
+	}
+
+	all := buildPeerConfigs(cfg, nil)
+	if len(all) != 2 {
+		t.Fatalf("nil filter must take every peer, got %+v", all)
+	}
+	// Sorted by name, so the peer list is the same on every run.
+	if all[0].URL != "http://127.0.0.1:4444" || all[1].URL != "https://relay.example" {
+		t.Errorf("peers must be built in sorted name order, got %+v", all)
+	}
+
+	one := buildPeerConfigs(cfg, []string{"prod"})
+	if len(one) != 1 || one[0].URL != "https://relay.example" {
+		t.Fatalf("only=[prod] must yield prod alone, got %+v", one)
+	}
+
+	none := buildPeerConfigs(cfg, []string{})
+	if len(none) != 0 {
+		t.Errorf("an empty (non-nil) filter selects nothing, got %+v", none)
 	}
 }
 
