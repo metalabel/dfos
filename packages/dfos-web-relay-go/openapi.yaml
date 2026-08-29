@@ -1288,9 +1288,9 @@ paths:
       description: |
         Metadata-only browse ordering over accepted operations. createdAt is
         author-claimed (credential iat normalized to ISO 8601); ingestedAt is
-        relay-observed. Rows never include JWS tokens or payloads. The reference
-        stores do not retain indexed signer metadata, so signer is deliberately
-        not a filter.
+        relay-observed. Rows never include JWS tokens or payloads. signerKey
+        filters by the public key the row's signature verified against at
+        ingest; a DID-addressed signer filter is not defined here.
       tags: [Index]
       parameters:
         - name: kind
@@ -1306,6 +1306,17 @@ paths:
           schema:
             type: string
           description: Exact operation-log routing identifier match
+        - name: signerKey
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >-
+            Exact multibase public-key match against the key this operation's
+            signature verified against at ingest. Matched byte-for-byte, with no
+            format validation: a string no accepted operation was signed with is
+            a 200 with an empty page, never a 400. Key-addressed, not
+            DID-addressed.
         - name: order
           in: query
           required: false

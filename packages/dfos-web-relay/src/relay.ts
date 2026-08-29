@@ -1032,6 +1032,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     }
     const kind = rawKind as import('./types').OperationKind | undefined;
     const chainId = c.req.query('chainId');
+    // OPAQUE, DELIBERATELY UNVALIDATED: `signerKey=` matches the multibase
+    // public key the row's signature verified against at ingest, byte-for-byte.
+    // A key no accepted operation was signed with matches nothing — there is no
+    // key format to enforce and therefore no 400, the `key=` posture on
+    // /index/v0/identities. A PRESENT-BUT-EMPTY value applies NO filter (the
+    // truthiness check below), which is where this differs from the same route's
+    // `chainId=` presence check — an empty key is not a key, and both relay
+    // twins answer `?signerKey=` identically as an unfiltered page.
+    const signerKey = c.req.query('signerKey');
     const order = parseIndexRecencyOrder(c.req.query('order'), 'ingestedAt.desc');
     if (order === null || order === undefined) return c.json({ error: 'invalid order' }, 400);
     const after = c.req.query('after');
@@ -1041,6 +1050,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const rows = await store.queryIndexOperations({
       ...(kind !== undefined ? { kind } : {}),
       ...(chainId !== undefined ? { chainId } : {}),
+      ...(signerKey ? { signerKey } : {}),
       ...(orderedAfter ? { orderedAfter } : {}),
       order,
       limit,

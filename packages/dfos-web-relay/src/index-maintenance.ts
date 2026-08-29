@@ -73,7 +73,7 @@ const ENUMERATE_ALL_LIMIT = Number.MAX_SAFE_INTEGER;
  * across implementations. Observability only — the swallow semantics are
  * unchanged.
  */
-const logIndexMaintenanceError = (site: string, error: unknown): void => {
+export const logIndexMaintenanceError = (site: string, error: unknown): void => {
   console.warn(
     JSON.stringify({
       event: 'relay.index.maintenance_failed',

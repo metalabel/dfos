@@ -40,6 +40,7 @@ import {
   contentIdsFromCredential,
   createIndexDirtySet,
   flushIndexMaintenance,
+  logIndexMaintenanceError,
 } from './index-maintenance';
 import type { IngestionResult, RelayStore, StoredContentChain, StoredIdentityChain } from './types';
 
@@ -296,43 +297,80 @@ export const createKeyResolver =
     const identity = await store.getIdentityChain(did);
     if (!identity) throw new Error(`unknown identity: ${did}`);
 
-    // first check current state (fast path)
-    const currentKeys = [
-      ...identity.state.authKeys,
-      ...identity.state.assertKeys,
-      ...identity.state.controllerKeys,
-    ];
-    const currentKey = currentKeys.find((k) => k.id === keyId);
-    if (currentKey) return decodeMultikey(currentKey.publicKeyMultibase).keyBytes;
+    const publicKeyMultibase = declaredKeyMultibase(identity, keyId);
+    if (!publicKeyMultibase) throw new Error(`unknown key ${keyId} on identity ${did}`);
+    return decodeMultikey(publicKeyMultibase).keyBytes;
+  };
 
-    // search historical keys from the identity chain log — handles rotated-out keys
-    for (const token of identity.log) {
-      const decoded = decodeJwsUnsafe(token);
-      if (!decoded) continue;
-      const payload = decoded.payload as Record<string, unknown>;
-      const opType = payload['type'];
-      if (opType !== 'create' && opType !== 'update') continue;
+/**
+ * The multibase public-key string an identity chain declares for `keyId` —
+ * current state first (fast path), then the chain's whole declaration history
+ * (which is what resolves a key a later update rotated out).
+ *
+ * This is THE key lookup, shared deliberately: `createKeyResolver` decodes its
+ * result into the bytes a signature verifies against, and
+ * `resolveSignerKeyMultibase` hands the very same string to the index as an
+ * operation row's stored `signerKey`. Sharing the search is what makes the
+ * stored column "the key this signature resolved to" rather than a second,
+ * independently drifting answer to the same question.
+ */
+const declaredKeyMultibase = (identity: StoredIdentityChain, keyId: string): string | null => {
+  const currentKeys = [
+    ...identity.state.authKeys,
+    ...identity.state.assertKeys,
+    ...identity.state.controllerKeys,
+  ];
+  const currentKey = currentKeys.find((k) => k.id === keyId);
+  if (currentKey) return currentKey.publicKeyMultibase;
 
-      const keyArrays = ['authKeys', 'assertKeys', 'controllerKeys'] as const;
-      for (const arrayName of keyArrays) {
-        const keys = payload[arrayName];
-        if (!Array.isArray(keys)) continue;
-        for (const k of keys) {
-          if (
-            k &&
-            typeof k === 'object' &&
-            'id' in k &&
-            k.id === keyId &&
-            'publicKeyMultibase' in k
-          ) {
-            return decodeMultikey(k.publicKeyMultibase as string).keyBytes;
-          }
+  // search historical keys from the identity chain log — handles rotated-out keys
+  for (const token of identity.log) {
+    const decoded = decodeJwsUnsafe(token);
+    if (!decoded) continue;
+    const payload = decoded.payload as Record<string, unknown>;
+    const opType = payload['type'];
+    if (opType !== 'create' && opType !== 'update') continue;
+
+    const keyArrays = ['authKeys', 'assertKeys', 'controllerKeys'] as const;
+    for (const arrayName of keyArrays) {
+      const keys = payload[arrayName];
+      if (!Array.isArray(keys)) continue;
+      for (const k of keys) {
+        if (
+          k &&
+          typeof k === 'object' &&
+          'id' in k &&
+          k.id === keyId &&
+          'publicKeyMultibase' in k
+        ) {
+          return k.publicKeyMultibase as string;
         }
       }
     }
+  }
 
-    throw new Error(`unknown key ${keyId} on identity ${did}`);
-  };
+  return null;
+};
+
+/**
+ * The public key a `(did, keyId)` signer reference resolves to, VERBATIM as the
+ * identity chain declared it — never re-encoded from the decoded key bytes, so
+ * the string this returns is byte-identical to the one `key=` on
+ * /index/v0/identities matches. A client that found a key through that filter
+ * can paste it straight into `signerKey=`.
+ *
+ * Returns null when the identity is unknown or declares no such key id; callers
+ * store nothing in that case (see the RelayStore contract — a row with no
+ * recorded signer key matches no `signerKey=` value).
+ */
+export const resolveSignerKeyMultibase = async (
+  did: string,
+  keyId: string,
+  store: RelayStore,
+): Promise<string | null> => {
+  const identity = await store.getIdentityChain(did);
+  return identity ? declaredKeyMultibase(identity, keyId) : null;
+};
 
 /**
  * Create an identity resolver that includes all historical keys.
@@ -1262,6 +1300,45 @@ const selectDeterministicHead = (log: string[]): { cid: string; createdAt: strin
  * are processed first so content chains can resolve their keys.
  * Within each kind, genesis operations are processed before extensions.
  */
+/**
+ * Record the public key ONE accepted operation's signature verified against —
+ * the stored `signerKey` column behind `signerKey=` on /index/v0/operations.
+ *
+ * WHY HERE AND NOT IN index-maintenance.ts: the other projection captures
+ * (a content op's signer DID, an identity op's declared keys) read the signed
+ * payload, so they belong with the projection builders. A signer key is not a
+ * payload field — it is a VERIFICATION OUTCOME, and the only honest way to
+ * record "the key this signature resolved to" is to resolve it exactly the way
+ * ingestion just did (`declaredKeyMultibase`, shared with `createKeyResolver`).
+ * Nothing re-decodes the corpus at query time; this is the one resolution.
+ *
+ * The kid carries the DID for every kind except an identity GENESIS, whose kid
+ * is bare (the DID does not exist until the op is encoded) — there the chain
+ * identifier the ingest just derived is the signer's DID.
+ *
+ * Fenced like every other projection write: the index is a non-authoritative
+ * hint plane and must never fail an authoritative write.
+ */
+const captureIndexSignerKey = async (
+  result: IngestionResult,
+  jwsToken: string,
+  store: RelayStore,
+): Promise<void> => {
+  if (result.status !== 'new' || !result.kind) return;
+  try {
+    const kid = decodeJwsUnsafe(jwsToken)?.header.kid;
+    if (typeof kid !== 'string' || kid === '') return;
+    const hashIdx = kid.indexOf('#');
+    const did = hashIdx >= 0 ? kid.substring(0, hashIdx) : (result.chainId ?? '');
+    const keyId = hashIdx >= 0 ? kid.substring(hashIdx + 1) : kid;
+    if (!did || !keyId) return;
+    const publicKeyMultibase = await resolveSignerKeyMultibase(did, keyId, store);
+    if (publicKeyMultibase) await store.putIndexOperationSignerKey(result.cid, publicKeyMultibase);
+  } catch (error) {
+    logIndexMaintenanceError('captureIndexSignerKey', error);
+  }
+};
+
 export const ingestOperations = async (
   tokens: string[],
   store: RelayStore,
@@ -1318,6 +1395,7 @@ export const ingestOperations = async (
             error: 'unrecognized operation type',
           };
       }
+      await captureIndexSignerKey(result, op.jwsToken, store);
       await collectIndexDirtyAfterOp(result, op.jwsToken, store, dirty);
       indexedResults.push({ index: op.originalIndex, result });
     } catch (err) {
