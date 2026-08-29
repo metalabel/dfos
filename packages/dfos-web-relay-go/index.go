@@ -38,7 +38,15 @@ const (
 	// The rows are history, not head state, so an upgraded relay can only
 	// backfill them by replaying every identity op log — which is exactly what
 	// the rebuild does.
-	IndexProjectionVersion = 7
+	//
+	// v8: retain each operation-log row's resolved signer key behind `signerKey=`.
+	// Ingest resolves the signing key to verify the operation and now persists the
+	// multibase it resolved to; rows a pre-v8 relay wrote carry no key, so the
+	// rebuild re-resolves them from the stored JWS against the identity chains.
+	// Unlike every other bump this one does not clear and re-derive a projection
+	// table — the operation log is authoritative — it fills the new column in
+	// place on the rows that lack it.
+	IndexProjectionVersion = 8
 )
 
 var (
@@ -522,6 +530,13 @@ func (r *Relay) handleIndexOperations(w http.ResponseWriter, req *http.Request) 
 	if value, ok := firstQueryValue(query, "chainId"); ok {
 		chainID = &value
 	}
+	// `signerKey` is matched as an opaque string against the multibase public key
+	// this row's signature verified against at ingest — no format validation, so a
+	// string no accepted operation was signed with is a 200 with an empty page,
+	// never a 400. Read with Get, not firstQueryValue: an empty `signerKey=` is no
+	// filter, the identities `key=` posture the spec names, rather than the
+	// present-but-empty filter `chainId=` above applies.
+	signerKey := query.Get("signerKey")
 	order, validOrder := parseIndexRecencyOrder(query.Get("order"), "ingestedAt.desc")
 	if !validOrder {
 		writeError(w, 400, "invalid order")
@@ -540,6 +555,7 @@ func (r *Relay) handleIndexOperations(w http.ResponseWriter, req *http.Request) 
 	rows, err := r.readStore.QueryIndexOperations(IndexOperationQuery{
 		Kind:         kind,
 		ChainID:      chainID,
+		SignerKey:    signerKey,
 		OrderedAfter: orderedAfter,
 		Order:        order,
 		Limit:        limit,

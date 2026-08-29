@@ -59,7 +59,12 @@ type MemoryStore struct {
 	indexIdentityKeys    map[string]map[string]struct{}         // DID → has-ever-declared public key set
 	indexCountersignRows map[string]storedIndexCountersignature // keyed by cid (carry witness_did)
 	indexOperationRows   map[string]indexOperationRow           // keyed by operation cid
-	indexArtifactRows    map[string]indexArtifactRow            // keyed by artifact cid
+	// operation cid → the multibase public key its signature verified against at
+	// ingest. Held beside the row rather than on it because the row IS the wire
+	// shape /index/v0/operations serves, and signerKey is a filter, never a field.
+	// A CID absent here never resolved, and matches no signerKey= value.
+	indexOperationSignerKeys map[string]string
+	indexArtifactRows        map[string]indexArtifactRow // keyed by artifact cid
 }
 
 type rawOpEntry struct {
@@ -82,14 +87,15 @@ func NewMemoryStore() *MemoryStore {
 		publicCredentials: make(map[string]StoredPublicCredential),
 		signRequests:      make(map[string]StoredSignRequest),
 
-		indexIdentityRows:    make(map[string]indexIdentityRow),
-		indexContentRows:     make(map[string]indexContentRow),
-		indexCreditRows:      make(map[string][]indexCreditRow),
-		indexContentSigners:  make(map[string]map[string]struct{}),
-		indexIdentityKeys:    make(map[string]map[string]struct{}),
-		indexCountersignRows: make(map[string]storedIndexCountersignature),
-		indexOperationRows:   make(map[string]indexOperationRow),
-		indexArtifactRows:    make(map[string]indexArtifactRow),
+		indexIdentityRows:        make(map[string]indexIdentityRow),
+		indexContentRows:         make(map[string]indexContentRow),
+		indexCreditRows:          make(map[string][]indexCreditRow),
+		indexContentSigners:      make(map[string]map[string]struct{}),
+		indexIdentityKeys:        make(map[string]map[string]struct{}),
+		indexCountersignRows:     make(map[string]storedIndexCountersignature),
+		indexOperationRows:       make(map[string]indexOperationRow),
+		indexOperationSignerKeys: make(map[string]string),
+		indexArtifactRows:        make(map[string]indexArtifactRow),
 	}
 }
 
@@ -689,6 +695,14 @@ func (s *MemoryStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperat
 		if q.ChainID != nil && row.ChainID != *q.ChainID {
 			continue
 		}
+		if q.SignerKey != "" {
+			// Opaque byte match against the key ingest resolved. A row whose signer
+			// key never resolved has no entry here and so matches nothing, which is
+			// the SQLite twin's `signer_key = ?` against NULL.
+			if s.indexOperationSignerKeys[row.CID] != q.SignerKey {
+				continue
+			}
+		}
 		rows = append(rows, row)
 	}
 	return pageOrderedIndexRows(rows, func(row indexOperationRow) string { return row.CID }, func(row indexOperationRow) string {
@@ -814,6 +828,9 @@ func (s *MemoryStore) AppendToLog(entry LogEntry) error {
 	s.indexOperationRows[entry.CID] = indexOperationRow{
 		CID: entry.CID, Kind: entry.Kind, ChainID: entry.ChainID, CreatedAt: operationCreatedAt(entry.JWSToken),
 		IngestedAt: ingestedAt,
+	}
+	if entry.SignerKey != "" {
+		s.indexOperationSignerKeys[entry.CID] = entry.SignerKey
 	}
 	return nil
 }

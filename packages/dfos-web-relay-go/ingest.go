@@ -368,7 +368,7 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 			return *perr
 		}
 		if logEnabled {
-			if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})); perr != nil {
+			if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: result.State.DID})); perr != nil {
 				return *perr
 			}
 		}
@@ -411,7 +411,7 @@ func ingestIdentityOp(jwsToken string, store Store, logEnabled bool) IngestionRe
 			return *perr
 		}
 		if logEnabled {
-			if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})); perr != nil {
+			if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "identity-op", ChainID: did})); perr != nil {
 				return *perr
 			}
 		}
@@ -513,7 +513,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 			return *perr
 		}
 		if logEnabled {
-			if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})); perr != nil {
+			if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: result.State.ContentID})); perr != nil {
 				return *perr
 			}
 		}
@@ -568,7 +568,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 			return *perr
 		}
 		if logEnabled {
-			if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})); perr != nil {
+			if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})); perr != nil {
 				return *perr
 			}
 		}
@@ -618,7 +618,7 @@ func ingestContentOp(jwsToken string, store Store, logEnabled bool, mode admissi
 		return *perr
 	}
 	if logEnabled {
-		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})); perr != nil {
+		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "content-op", ChainID: chain.ContentID})); perr != nil {
 			return *perr
 		}
 	}
@@ -697,7 +697,7 @@ func ingestCountersign(jwsToken string, store Store, logEnabled bool, mode admis
 		return *perr
 	}
 	if logEnabled {
-		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "countersign", ChainID: targetCID})); perr != nil {
+		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "countersign", ChainID: targetCID})); perr != nil {
 			return *perr
 		}
 	}
@@ -737,7 +737,7 @@ func ingestArtifact(jwsToken string, store Store, logEnabled bool, mode admissio
 		return *perr
 	}
 	if logEnabled {
-		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "artifact", ChainID: did})); perr != nil {
+		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "artifact", ChainID: did})); perr != nil {
 			return *perr
 		}
 	}
@@ -804,7 +804,7 @@ func ingestRevocation(jwsToken string, store Store, logEnabled bool) IngestionRe
 		return *perr
 	}
 	if logEnabled {
-		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "revocation", ChainID: did})); perr != nil {
+		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "revocation", ChainID: did})); perr != nil {
 			return *perr
 		}
 	}
@@ -930,7 +930,7 @@ func ingestPublicCredential(jwsToken string, store Store, logEnabled bool) Inges
 		return *perr
 	}
 	if logEnabled {
-		if perr := persistError(cid, store.AppendToLog(LogEntry{CID: cid, JWSToken: jwsToken, Kind: "credential", ChainID: kidDID})); perr != nil {
+		if perr := persistError(cid, appendOperationToLog(store, LogEntry{CID: cid, JWSToken: jwsToken, Kind: "credential", ChainID: kidDID})); perr != nil {
 			return *perr
 		}
 	}
