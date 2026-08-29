@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "DFOS Web Relay",
-    "version": "0.40.1",
+    "version": "0.41.0",
     "description": "HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves\nidentity chains, content chains, countersignatures, and content blobs.\n\nTwo data planes:\n- **Proof plane** (public): signed chain operations, countersignatures\n- **Content plane** (authenticated): raw content blobs gated by API-AUTH identity proofs and DFOS credentials\n"
   },
   "paths": {
