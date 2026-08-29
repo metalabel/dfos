@@ -363,12 +363,36 @@ The report ends with the end state per identity: `recovered`, `already-present`,
 
 ### The counter
 
-An imported vault starts with its derivation counter at 0, because this machine has no record of what the seed minted elsewhere. `recover` raises that counter past every index it found in use, so the next `identity create` from the vault cannot hand a recovered index to a second identity. This is the half of recovery that matters even when every key was already present.
+An imported vault starts with its derivation counter at 0, because this machine has no record of what the seed minted elsewhere. `recover` raises that counter past every index it learned is in use, so the next `identity create` from the vault cannot hand a spent index to a second identity. This is the half of recovery that matters even when every key was already present, and it is the half where a mistake is unrecoverable: two identities minted at one index sign with the same Ed25519 private key.
+
+The scan is not the only thing the run learns from. A chain pulled from the oracle declares public keys, and the seed in hand derives them, so `recover` matches every key its fetched chains name against forward derivations and feeds those indices to the counter too. This closes the case the scan structurally cannot reach: rotations move an identity's current auth key to a fresh index each time, and enough of them — or enough burned indices in between — put that index past where the gap limit ended the walk. The chain names the key regardless, so the index is known, the private key is derived and installed, and the counter clears it.
+
+A key a fetched chain names that this seed cannot derive was minted elsewhere. It moves nothing here.
+
+### When the scan stopped short
+
+An index found past the walk is proof the gap limit ended it early, and `recover` says so rather than reporting a clean recovery:
+
+```
+! SCAN DEPTH TOO SHALLOW — current key(s) beyond scan depth.
+  The scan walked 22 indices and stopped after 20 consecutive unused ones. A chain
+  this run fetched declares key(s) this vault's seed derives at index 24,
+  past that stop. They are recovered here and the counter clears them.
+  ...
+  Re-run with --scan-depth 25 (or more): dfos recover --vault restored --scan-depth 25
+```
+
+The keys it names are recovered and the counter clears them. What it warns about is the shortfall itself: the same gap that hid a known identity's key hides an identity whose **every** key sits past it, along with every index that identity holds. `--scan-depth N` walks through a gap that wide.
+
+`--json` carries the same fact as data rather than prose: `scanComplete`, `beyondScanIndices`, and `recommendedScanDepth`. `scanComplete: false` with indices listed is the proven shortfall; `false` with none listed is the unproven kind — a chain this run could not read, so what it declares was never checked against a derivation at all. A `--dry-run` on a machine holding no chains reports exactly that.
+
+An oracle failure under `--json` carries a `reason` code beside its prose — `oracle-no-index`, `oracle-unreachable`, or `oracle-key-param-ignored` — because the operator's next move differs for each and a sentence is not something to branch on.
 
 ### What recovery cannot see
 
 - **A derived key no identity operation ever declared is invisible to any index.** It is still derivable from the phrase; nothing can find it for you, because there is nothing anywhere that records it.
 - **One relay's index-absence is not global absence.** A key the named oracle does not know may be declared on a chain it never ingested.
+- **An identity behind a gap longer than the limit is out of reach.** The walk ends on `--scan-depth` consecutive unused indices, so an identity whose every key sits past a longer run of them is never asked about. `--scan-depth N` is the lever, and the report names it whenever a fetched chain proves the walk stopped short.
 - **Keys minted outside a vault are not derivable from any phrase.** `--no-vault` keys, and keys created on a machine with no vault, live only in the keystore that was lost. `recover` says nothing about them; `dfos keys list` is the tool that shows what a machine holds.
 
 ### Dry run
@@ -667,6 +691,23 @@ Explicit single-chain traffic is a different thing and no switch here touches it
 
 `gossip` (push newly sequenced operations) and `read_through` (fetch on a local 404) are the other two switches, spelled the same way and defaulting the same way. They are the config.toml half of the `serve --peers` object form.
 
+### Local commands are local
+
+A one-shot `dfos` command never gossips. The local relay it opens has gossip off for every peer, whatever `gossip` says under `[relays.<name>]` and whatever `--peers` supplied — the switch is overridden, not defaulted, because an absent switch means on and the ordinary registration writes no switch at all.
+
+The three directions are therefore distinct, and only one of them puts local state on a peer:
+
+| What you run                                                       | Where it goes                                                      |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `identity create`, `content create`, `credential grant`, `witness` | The local relay. Nothing leaves the machine.                       |
+| `content publish`, `identity publish`, `--peer`, `login`           | The peer you named, and no other.                                  |
+| `dfos sync`                                                        | Pulls from the peers the switches allow. It pushes nothing.        |
+| `dfos serve`                                                       | Participates in the mesh: each peer's own `gossip` switch decides. |
+
+`serve` is the mesh participant, and relaying what it sequences is what makes it a node rather than a private store. Everything else writes locally and sends when told to.
+
+The distinction is not cosmetic. A local command that gossiped would put an operation on a relay while reporting `publishedTo: null`, because the push is a background goroutine the command never hears back from — an operator would have no way to know from the output that anything left the machine.
+
 ### Peer Identity Pin
 
 The `did` under `[relays.<name>]` is a pin: the identity that address must serve for the name to mean what it meant when it was registered. `dfos peer add` writes it from the peer's well-known, and every command that acts through a named peer checks it — one well-known fetch per peer per invocation, memoized.
@@ -716,6 +757,7 @@ dfos serve --port 4444 --peers https://relay.example.com
 | `--peers`          | —                  | `PEERS`             | Peer URLs: comma-separated, a JSON array, or per-peer objects             |
 | `--sync-interval`  | `30s`              | `SYNC_INTERVAL`     | Peer sync interval                                                        |
 | `--resync`         | `false`            | `RESYNC=true`       | Reset peer cursors for a full re-sync on boot                             |
+| `--no-sync`        | `false`            | `NO_SYNC=true`      | Pull no peer's log: serve and ingest, but boot local-only                 |
 | `--no-write`       | `false`            | —                   | LITE pull-only node: reject `POST /operations`, sync from peers only      |
 | `--no-index`       | `false`            | `INDEX=false`       | Disable `/index/v0`: advertise `index: false` and return 501              |
 | `--content-follow` | `none`             | `CONTENT_FOLLOW`    | Materialize granted public content blobs from peers (`none` \| `eager`)   |
@@ -745,6 +787,17 @@ three switches under their own keys (`gossip`, `read_through`, `sync` — see
 sync cursor above all — is keyed by URL, so the duplicate would otherwise pull
 twice against a single shared cursor. The dropped duplicate is logged, and the
 boot banner marks every peer with a switch turned off.
+
+The boot banner names what the sync loop is about to do, before it does it — the first thing `serve` does with a registered peer is pull its whole log, and a boot that drags a corpus onto the machine says so first:
+
+```
+  Peers:  2 configured
+    - local (http://localhost:4444)
+    - prod (https://relay.dfos.com) (disabled: sync)
+  Pull:   will sync 1 peer(s) now and every 30s: local
+```
+
+`--no-sync` is the other half: the node serves, ingests submissions, and gossips what it sequences, and reaches for no peer's log at all. The banner reads `Pull: none — --no-sync, so this node serves what it already holds`. Per-peer `sync = false` is the same posture scoped to one relay; `--no-sync` is the whole boot.
 
 `--no-write` is the pull-only posture: the node ingests exclusively through peer sync and refuses submissions outright, so its served state is entirely derived from relays it chose to follow.
 

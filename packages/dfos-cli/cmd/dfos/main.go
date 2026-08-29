@@ -32,9 +32,10 @@ func main() {
 			os.Exit(exitErr.Code)
 		}
 		// Honor --json on the error path too, so scripted callers always get
-		// machine-readable output instead of a bare error line.
+		// machine-readable output instead of a bare error line. An error that
+		// carries a reason code renders it beside the prose.
 		if cmd.JSONFlag() {
-			json.NewEncoder(os.Stderr).Encode(map[string]string{"error": err.Error()})
+			json.NewEncoder(os.Stderr).Encode(cmd.ErrorJSON(err))
 		} else {
 			fmt.Fprintln(os.Stderr, err)
 		}

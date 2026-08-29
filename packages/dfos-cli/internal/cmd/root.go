@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -66,6 +67,42 @@ func JSONFlag() bool { return jsonFlag }
 type ExitCodeError struct{ Code int }
 
 func (e *ExitCodeError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
+
+// CodedError carries a stable machine-readable reason alongside an error's
+// prose. The prose is written for the operator reading a terminal and changes
+// when a better sentence is found; the code is what a script branches on, so it
+// does not. --json renders both.
+type CodedError struct {
+	// Reason is the stable identifier, kebab-case and namespaced by what failed.
+	Reason string
+	// Fields are additional machine-readable facts about this failure. Keys are
+	// merged into the JSON document beside "error" and "reason".
+	Fields map[string]string
+	Err    error
+}
+
+func (e *CodedError) Error() string { return e.Err.Error() }
+func (e *CodedError) Unwrap() error { return e.Err }
+
+// ErrorJSON renders a top-level command error as the document --json emits for
+// it: always the prose under "error", plus a "reason" code and any extra fields
+// when the error carries them. Used by main on the error path.
+func ErrorJSON(err error) map[string]string {
+	doc := map[string]string{"error": err.Error()}
+	var coded *CodedError
+	if errors.As(err, &coded) {
+		doc["reason"] = coded.Reason
+		for k, v := range coded.Fields {
+			// "error" and "reason" are the document's own, never overwritten by a
+			// field that happens to share the name.
+			if k == "error" || k == "reason" {
+				continue
+			}
+			doc[k] = v
+		}
+	}
+	return doc
+}
 
 // skipStateLock reports whether a command should NOT take the state lock:
 // commands explicitly opted out (daemons), and cobra's own completion/help
@@ -181,7 +218,15 @@ func quietRelayLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 }
 
-// getRelay returns the lazily-initialized local relay.
+// getRelay returns the lazily-initialized local relay every one-shot command
+// reads and writes through.
+//
+// It opens with gossip off (localrelay.Options.Gossip's zero value). A one-shot
+// command writes LOCALLY; sending is the explicit path — `content publish`, a
+// `--peer` argument, `login`. Without that, ingesting an operation would run the
+// sequencer, and the sequencer would push the operation to every registered peer
+// as a side effect of the local write, in goroutines racing process exit, with
+// the command reporting publishedTo:null the whole time.
 func getRelay() (*localrelay.LocalRelay, error) {
 	if localRelayInstance != nil {
 		return localRelayInstance, nil

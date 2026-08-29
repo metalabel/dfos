@@ -261,3 +261,48 @@ func assertFlag(t *testing.T, url, name string, got, want *bool) {
 		t.Errorf("%s %s: got %v want %v", url, name, *got, *want)
 	}
 }
+
+// TestWithGossipOffOverridesEverySpelling pins the local-only posture at its
+// mechanism. Options.Gossip == false — the zero value every one-shot command
+// opens on — forces the switch off for every peer, whatever the peer entry said.
+//
+// It is an OVERRIDE rather than a default because the leak it closes came from a
+// default: an absent `gossip` key means on, so a peer registered the ordinary
+// way (`dfos peer add`, no switches) received every operation a local command
+// sequenced. Making the CLI's default false would have left `gossip = true` and
+// the object form of --peers still pushing.
+func TestWithGossipOffOverridesEverySpelling(t *testing.T) {
+	peers := withGossipOff([]relay.PeerConfig{
+		{URL: "https://absent.example"},
+		{URL: "https://on.example", Gossip: boolPtr(true)},
+		{URL: "https://off.example", Gossip: boolPtr(false)},
+		// The other two switches are pulls this machine initiates; only gossip
+		// puts local state on a peer, so only gossip is touched.
+		{URL: "https://pulls.example", ReadThrough: boolPtr(true), Sync: boolPtr(true)},
+	})
+
+	for _, peer := range peers {
+		if peer.Gossip == nil || *peer.Gossip {
+			t.Errorf("%s gossips: %v", peer.URL, peer.Gossip)
+		}
+	}
+	pulls := peerByURL(t, peers, "https://pulls.example")
+	assertFlag(t, pulls.URL, "readThrough", pulls.ReadThrough, boolPtr(true))
+	assertFlag(t, pulls.URL, "sync", pulls.Sync, boolPtr(true))
+}
+
+// TestBuildPeerConfigsKeepsTheGossipSwitch is the serve half: the switch a peer
+// entry carries survives untouched, so `serve` — which opens with gossip on —
+// pushes to exactly the peers the config says to push to.
+func TestBuildPeerConfigsKeepsTheGossipSwitch(t *testing.T) {
+	cfg := &config.Config{Relays: map[string]config.RelayConfig{
+		"absent": {URL: "https://absent.example"},
+		"on":     {URL: "https://on.example", Gossip: boolPtr(true)},
+		"off":    {URL: "https://off.example", Gossip: boolPtr(false)},
+	}}
+	peers := buildPeerConfigs(cfg, nil)
+
+	assertFlag(t, "https://absent.example", "gossip", peerByURL(t, peers, "https://absent.example").Gossip, nil)
+	assertFlag(t, "https://on.example", "gossip", peerByURL(t, peers, "https://on.example").Gossip, boolPtr(true))
+	assertFlag(t, "https://off.example", "gossip", peerByURL(t, peers, "https://off.example").Gossip, boolPtr(false))
+}

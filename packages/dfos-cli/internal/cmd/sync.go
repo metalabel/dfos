@@ -49,6 +49,10 @@ func openSyncRelay(peerName string) (*localrelay.LocalRelay, error) {
 		localRelayInstance.Close()
 		localRelayInstance = nil
 	}
+	// Gossip stays at its zero value — off. `sync` is a PULL: it takes the named
+	// peer's log and sequences it locally. Forwarding what it just pulled on to
+	// the rest of the mesh is a relay's job, and this machine is a relay only
+	// while `dfos serve` is running.
 	lr, err := localrelay.Open(cfg, &localrelay.Options{
 		Logger:    quietRelayLogger(),
 		OnlyPeers: []string{peerName},

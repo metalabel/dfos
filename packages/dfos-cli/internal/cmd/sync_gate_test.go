@@ -29,6 +29,9 @@ type fakePeer struct {
 	server   *httptest.Server
 	logHits  atomic.Int32
 	infoHits atomic.Int32
+	// opsHits counts operations PUSHED to this peer — the gossip direction. A
+	// local-only command must never move this. See gossip_posture_test.go.
+	opsHits atomic.Int32
 	// what the well-known advertises.
 	did   string
 	proof bool
@@ -58,6 +61,13 @@ func newFakePeer(t *testing.T) *fakePeer {
 			p.logHits.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"entries": []any{}, "next": nil})
+		case "/proof/v1/operations":
+			// The gossip-out endpoint. Accepting here rather than 404ing matters:
+			// the relay suppresses gossip to a peer that refuses a push, which
+			// would mask a leak after the first attempt.
+			p.opsHits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"results": []any{}})
 		default:
 			w.WriteHeader(404)
 		}
