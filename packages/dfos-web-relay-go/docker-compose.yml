@@ -4,6 +4,14 @@
 # Start:  docker compose up
 # Test:   ./topology.sh smoke
 # Clean:  docker compose down -v
+#
+# AUTHORITY is the host each node's identity proofs are checked against, and it
+# is the PUBLISHED host[:port] a client reaches — not the container's internal
+# one. These nodes are driven from the host through their mapped ports, so each
+# gets its own localhost:<mapped port>. Without it every authenticated write
+# (blob upload, non-public blob download, mailbox poll) answers 503 on a fresh
+# clone, which makes this fixture unable to exercise the write paths it exists
+# to test.
 
 services:
   relay-a:
@@ -13,6 +21,7 @@ services:
     environment:
       PORT: '8080'
       RELAY_NAME: 'relay-a'
+      AUTHORITY: 'localhost:9801'
       PEERS: 'http://relay-b:8080'
       SYNC_INTERVAL: '5s'
     ports:
@@ -27,6 +36,7 @@ services:
     environment:
       PORT: '8080'
       RELAY_NAME: 'relay-b'
+      AUTHORITY: 'localhost:9802'
       PEERS: 'http://relay-c:8080'
       SYNC_INTERVAL: '5s'
     ports:
@@ -41,6 +51,7 @@ services:
     environment:
       PORT: '8080'
       RELAY_NAME: 'relay-c'
+      AUTHORITY: 'localhost:9803'
       PEERS: 'http://relay-a:8080'
       SYNC_INTERVAL: '5s'
     ports:

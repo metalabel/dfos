@@ -2608,6 +2608,59 @@ describe('web relay', () => {
       });
       expect(res.status).toBe(200);
     });
+
+    // -------------------------------------------------------------------------
+    // The verifier's hash cap is the transport cap (twin of Go's
+    // auth_body_size_test.go). The envelope verifier's library default is 1 MiB;
+    // left unpassed, every AUTHENTICATED write between 1 and 16 MiB died at a
+    // bare 401 — a correctly-signed, in-spec request refused as unauthenticated
+    // with size named nowhere. These pin the whole buffered range verifying.
+    // -------------------------------------------------------------------------
+
+    it('verifies an authenticated POST /operations over 1 MiB (hash cap = transport cap)', async () => {
+      const identity = await createIdentity();
+      // The proof's DID must RESOLVE, so its genesis lands first (anonymous
+      // ingestion) — an unresolvable signer is a 503, a different failure than
+      // the one under test.
+      expect((await postOps([identity.jwsToken])).status).toBe(200);
+      // A garbage entry sized to push the JSON past 1 MiB: per-item rejection
+      // is request-level 200, so the assertion isolates AUTH.
+      const pad = 'x'.repeat((1 << 20) + 4096);
+      const body = new TextEncoder().encode(JSON.stringify({ operations: [pad] }));
+      expect(body.length).toBeGreaterThan(1 << 20);
+      const proof = await identityProof(identity, {
+        method: 'POST',
+        path: '/proof/v1/operations',
+        body,
+        jti: true,
+      });
+      const res = await req('/proof/v1/operations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: proofHeader(proof) },
+        body,
+      });
+      expect(res.status).toBe(200);
+      const results = (await json(res)).results;
+      expect(results[0].status).toBe('rejected');
+    });
+
+    it('verifies an authenticated over-1 MiB blob PUT (not a 401)', async () => {
+      const identity = await createIdentity();
+      expect((await postOps([identity.jwsToken])).status).toBe(200);
+      const data = new Uint8Array((1 << 20) + 4096);
+      const path = '/content/nosuchchain/blob/nosuchop';
+      const proof = await identityProof(identity, { method: 'PUT', path, body: data, jti: true });
+      const res = await req(path, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream', authorization: proofHeader(proof) },
+        body: data,
+      });
+      // The chain does not exist, so the route's own semantics answer past auth
+      // (404) — what this pins is only that the verifier hashed all the bytes
+      // the route buffered instead of refusing them as an invalid proof.
+      expect(res.status).not.toBe(401);
+      expect(res.status).toBe(404);
+    });
   });
 
   // ---------------------------------------------------------------------------

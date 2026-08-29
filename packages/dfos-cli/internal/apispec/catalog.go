@@ -12,9 +12,11 @@ package apispec
 //     route requires. A token can be required by a route the catalog forgot to
 //     list, and a client asking for a grant it will actually spend needs it.
 //
-// The same extension name carries both, which is unambiguous by POSITION — a
-// scheme's is a map, an operation's is an array — and this reader discriminates
-// on the node's shape rather than trusting either to be well-formed.
+// The same extension name carries both, and API-AUTH pins the two shapes
+// STRICTLY: on a scheme the member is a map, on an operation it is an array.
+// Position says which is being read; the shape then confirms it, and a shape
+// that does not confirm is malformed at that position — refused, never guessed
+// at, so every consumer's parse of a given document is identical.
 //
 // TOKENS ARE OPAQUE. They are read as strings, deduplicated as strings, and
 // printed as strings. Descriptions are display text and nothing else: no
@@ -135,39 +137,51 @@ func (d *Doc) schemeCatalog() ([]CatalogEntry, error) {
 
 // decodeSchemeCatalog reads one scheme's catalog node.
 //
-// The map is the spelled convention. A sequence is accepted as the tokens with
-// no descriptions, because a host that wrote its catalog as a bare list has
-// still named its vocabulary, and refusing it would hide actions a person could
-// otherwise ask for.
+// THE MAP IS THE ONLY FORM. API-AUTH pins the two `x-dfos-actions` shapes
+// strictly and deliberately differently — a map on a scheme because a catalog is
+// a dictionary, an array on an operation because requirements are a list. The
+// node's POSITION says which is being read; the shape then confirms it, and a
+// shape that does not confirm is malformed.
+//
+// This reader once accepted a bare sequence here as "the tokens with no
+// descriptions". That leniency is gone: lenient parsing is how divergent
+// documents happen, since a shape one consumer silently accepts is a shape the
+// next consumer rejects, and the author is never told which one they wrote.
+// Refusing names the mistake once, to the person who can fix it.
 func decodeSchemeCatalog(node *yaml.Node) ([]CatalogEntry, error) {
-	switch node.Kind {
-	case yaml.MappingNode:
-		entries := make([]CatalogEntry, 0, len(node.Content)/2)
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			var action string
-			if err := node.Content[i].Decode(&action); err != nil || action == "" {
-				return nil, fmt.Errorf("entry %d has a key that is not an action token", i/2)
-			}
-			// A non-string description is DROPPED, not an error: the catalog is
-			// documentation, and a malformed line of it must not cost the token.
-			var description string
-			node.Content[i+1].Decode(&description)
-			entries = append(entries, CatalogEntry{Action: action, Description: description, Advertised: true})
-		}
-		return entries, nil
-
-	case yaml.SequenceNode:
-		entries := make([]CatalogEntry, 0, len(node.Content))
-		for i, item := range node.Content {
-			var action string
-			if err := item.Decode(&action); err != nil || action == "" {
-				return nil, fmt.Errorf("element %d is neither an action token nor a description of one", i)
-			}
-			entries = append(entries, CatalogEntry{Action: action, Advertised: true})
-		}
-		return entries, nil
+	if node.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("%s", describeCatalogShape(node))
 	}
-	return nil, fmt.Errorf("is neither a map of action token to description nor a list of action tokens")
+	entries := make([]CatalogEntry, 0, len(node.Content)/2)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		var action string
+		if err := node.Content[i].Decode(&action); err != nil || action == "" {
+			return nil, fmt.Errorf("entry %d has a key that is not an action token", i/2)
+		}
+		// A non-string description is DROPPED, not an error: the catalog is
+		// documentation, and a malformed line of it must not cost the token.
+		var description string
+		node.Content[i+1].Decode(&description)
+		entries = append(entries, CatalogEntry{Action: action, Description: description, Advertised: true})
+	}
+	return entries, nil
+}
+
+// describeCatalogShape names what a non-conforming scheme-level `x-dfos-actions`
+// node IS — the scheme-position twin of describeActionsShape.
+//
+// The shape that actually turns up is the LIST: an author who wrote the
+// operation-level form at the scheme position, or who thought a catalog with no
+// descriptions could shed the keys. Naming the position each shape belongs to is
+// what makes the message fixable, so both are named here.
+func describeCatalogShape(node *yaml.Node) string {
+	switch node.Kind {
+	case yaml.SequenceNode:
+		return "is a list of action tokens — that is the shape of an OPERATION's member, which belongs on the Operation Object. A scheme's member is a map of action token to description: x-dfos-actions: {read:profile: Read the profile}"
+	case yaml.ScalarNode:
+		return fmt.Sprintf("is the bare token %q — a scheme's member is a map of action token to description, so write it as {%s: <what it grants>}", node.Value, node.Value)
+	}
+	return "is not a map of action token to description, which is the only shape a scheme's member takes"
 }
 
 // ActionBundle is one AND-alternative a route requires: tokens that mean

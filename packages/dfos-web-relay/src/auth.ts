@@ -201,6 +201,19 @@ export interface AuthenticateIdentityProofOptions {
   replayCache?: JtiReplayCache;
   windowSeconds?: number;
   skewSeconds?: number;
+  /**
+   * THE VERIFIER'S HASH CAP IS THIS DEPLOYMENT'S TRANSPORT CAP, ALWAYS.
+   *
+   * Bounds the body the envelope verifier is willing to SHA-256; over-cap is an
+   * INVALID-proof verdict, which every caller renders as a bare
+   * `401 authentication required`. Left unset it takes the library default
+   * (1 MiB) — so a route that buffers more than that MUST pass its own read cap
+   * here, or every authenticated write between the two numbers dies at a 401
+   * that says nothing about size. The body is already bounded before it arrives
+   * (each route caps its own read), so this is a belt-and-braces bound on an
+   * in-hand buffer, never the thing that lets an unbounded body through.
+   */
+  maxBodyBytes?: number;
   now?: () => number;
 }
 
@@ -250,6 +263,7 @@ export const authenticateIdentityProof = async (
         body: options.body,
         windowSeconds,
         skewSeconds,
+        ...(options.maxBodyBytes !== undefined ? { maxBodyBytes: options.maxBodyBytes } : {}),
         ...(options.now ? { now: options.now } : {}),
       },
       createCurrentStateProofResolver(options.store),

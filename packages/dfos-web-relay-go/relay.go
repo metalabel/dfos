@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -495,6 +497,37 @@ func (r *Relay) SyncFromPeers() error {
 	return nil
 }
 
+// peerSyncStartupGraceCycles is how many CONSECUTIVE not-yet-listening failures
+// a peer is granted before the failure is logged at ERROR. Three cycles: a cold
+// mesh heals in one tick, so this is generous about startup and still escalates
+// a real outage well inside any alerting window.
+const peerSyncStartupGraceCycles = 3
+
+// notYetListening reports whether err is the failure a peer that has not opened
+// its socket yet produces: a refused connection, or a name that does not resolve
+// yet (a container the DNS has not published). Deliberately narrow — a timeout
+// is NOT here, because a peer that accepts and then hangs is a real condition,
+// not a boot artifact.
+func notYetListening(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
+}
+
+// peerFailureStreak reads a peer's current consecutive-failure count without
+// creating a status row. Read BEFORE recordPeerSync folds this cycle in, so it
+// is the count of PRIOR consecutive failures.
+func (r *Relay) peerFailureStreak(peerURL string) int {
+	r.peerSyncMu.Lock()
+	defer r.peerSyncMu.Unlock()
+	if st := r.peerSync[peerURL]; st != nil {
+		return st.ConsecutiveFailures
+	}
+	return 0
+}
+
 // pullResult reports one pass of pullPeerOps over a peer's log.
 type pullResult struct {
 	// received counts entries the peer served, duplicates included; inserted
@@ -545,7 +578,28 @@ func (r *Relay) pullPeerOps(peerURL, startCursor string, maxOps int, persist boo
 			continue
 		}
 		if err != nil {
-			r.logger.Error("peer sync failed", "peer", peerURL, "error", err)
+			// A PEER THAT IS NOT LISTENING YET IS NOT AN OUTAGE YET.
+			//
+			// Every node in a multi-node topology starts its sync loop before its
+			// siblings have opened their sockets, so a cold boot reliably emits
+			// connection-refused on the first tick or two and then heals itself.
+			// Logging that at ERROR trains operators to ignore ERROR — it fires on
+			// every clean start of every mesh, with nothing wrong.
+			//
+			// THE RULE: a not-yet-listening failure (refused connection, or a name
+			// that does not resolve yet) is a WARN while this peer's consecutive
+			// failure streak is under the grace, and an ERROR at or past it. Every
+			// other failure — a peer answering 500, a malformed page — is an ERROR
+			// on the first occurrence, because none of them is a startup artifact.
+			// A genuine persistent outage still reaches ERROR, one grace period
+			// late, and the peer's consecutiveFailures in the well-known counts it
+			// from the first tick either way.
+			if notYetListening(err) && r.peerFailureStreak(peerURL) < peerSyncStartupGraceCycles {
+				r.logger.Warn("peer sync: peer not reachable yet",
+					"peer", peerURL, "error", err, "graceCycles", peerSyncStartupGraceCycles)
+			} else {
+				r.logger.Error("peer sync failed", "peer", peerURL, "error", err)
+			}
 			failed = true
 			break
 		}

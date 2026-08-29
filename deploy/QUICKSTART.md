@@ -35,19 +35,20 @@ You should get back a JSON object with the relay's DID and profile.
 All configuration is via environment variables on the `relay` service in
 `docker-compose.yml`.
 
-| Variable         | Default            | Description                                                                                         |
-| ---------------- | ------------------ | --------------------------------------------------------------------------------------------------- |
-| `PORT`           | `8080`             | HTTP listen port inside the container                                                               |
-| `RELAY_NAME`     | `DFOS Relay`       | Human-readable relay profile name                                                                   |
-| `PEERS`          | _(none)_           | Peer relay URLs to sync from (comma-separated, JSON array, or per-peer objects)                     |
-| `SYNC_INTERVAL`  | `30s`              | How often to pull from peers and run the sequencer                                                  |
-| `SQLITE_PATH`    | `~/.dfos/relay.db` | Database file path (set to `/data/relay.db` in the container)                                       |
-| `RESYNC`         | `false`            | Set to `true` to reset peer cursors on boot for a full re-pull                                      |
-| `CONTENT_FOLLOW` | `none`             | `eager` = also pull & cache the document bytes of public content you're granted to read (see below) |
-| `AUTHORITY`      | _(none)_           | This relay's own `host[:port]` — the host identity proofs bind (see below)                          |
-| `INGESTION`      | `open`             | Admission for `POST /proof/v1/operations`: `open`, `proof-required`, or `closed`                    |
-| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`                                          |
-| `GOSSIP_PROOF`   | `false`            | `true` signs gossip-out pushes with this relay's own identity proof                                 |
+| Variable         | Default            | Description                                                                                               |
+| ---------------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
+| `PORT`           | `8080`             | HTTP listen port inside the container                                                                     |
+| `RELAY_NAME`     | `DFOS Relay`       | Human-readable relay profile name                                                                         |
+| `PEERS`          | _(none)_           | Peer relay URLs to sync from (comma-separated, JSON array, or per-peer objects)                           |
+| `SYNC_INTERVAL`  | `30s`              | How often to pull from peers and run the sequencer                                                        |
+| `SQLITE_PATH`    | `~/.dfos/relay.db` | Database file path (set to `/data/relay.db` in the container)                                             |
+| `RESYNC`         | `false`            | Set to `true` to reset peer cursors on boot for a full re-pull                                            |
+| `CONTENT_FOLLOW` | `none`             | `eager` = also pull & cache the document bytes of public content you're granted to read (see below)       |
+| `AUTHORITY`      | _(none)_           | This relay's own `host[:port]` — the host identity proofs bind (see below)                                |
+| `INGESTION`      | `open`             | Admission for `POST /proof/v1/operations`: `open`, `proof-required`, or `closed`                          |
+| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`                                                |
+| `WRITE`          | _(enabled)_        | `false` makes this a LITE pull-only node — writes answer 501 and the well-known advertises `write: false` |
+| `GOSSIP_PROOF`   | `false`            | `true` signs gossip-out pushes with this relay's own identity proof                                       |
 
 ## Authenticated routes
 

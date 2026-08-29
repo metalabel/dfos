@@ -743,7 +743,7 @@ What a pin does not establish is who the peer is in the world — only that it i
 
 ## Serve
 
-`dfos serve` exposes the embedded local relay over HTTP, turning the machine into a reachable node with peer sync, gossip, and read-through. Every flag has an environment-variable fallback for container deployment (except `--no-write`, which is deliberately explicit).
+`dfos serve` exposes the embedded local relay over HTTP, turning the machine into a reachable node with peer sync, gossip, and read-through. Every flag has an environment-variable fallback for container deployment.
 
 ```bash
 dfos serve --port 4444 --peers https://relay.example.com
@@ -758,7 +758,7 @@ dfos serve --port 4444 --peers https://relay.example.com
 | `--sync-interval`  | `30s`              | `SYNC_INTERVAL`     | Peer sync interval                                                        |
 | `--resync`         | `false`            | `RESYNC=true`       | Reset peer cursors for a full re-sync on boot                             |
 | `--no-sync`        | `false`            | `NO_SYNC=true`      | Pull no peer's log: serve and ingest, but boot local-only                 |
-| `--no-write`       | `false`            | —                   | LITE pull-only node: reject `POST /operations`, sync from peers only      |
+| `--no-write`       | `false`            | `WRITE=false`       | LITE pull-only node: reject `POST /operations`, sync from peers only      |
 | `--no-index`       | `false`            | `INDEX=false`       | Disable `/index/v0`: advertise `index: false` and return 501              |
 | `--content-follow` | `none`             | `CONTENT_FOLLOW`    | Materialize granted public content blobs from peers (`none` \| `eager`)   |
 | `--authority`      | —                  | `AUTHORITY`         | This relay's own `host[:port]` — the host identity proofs bind            |
@@ -799,7 +799,7 @@ The boot banner names what the sync loop is about to do, before it does it — t
 
 `--no-sync` is the other half: the node serves, ingests submissions, and gossips what it sequences, and reaches for no peer's log at all. The banner reads `Pull: none — --no-sync, so this node serves what it already holds`. Per-peer `sync = false` is the same posture scoped to one relay; `--no-sync` is the whole boot.
 
-`--no-write` is the pull-only posture: the node ingests exclusively through peer sync and refuses submissions outright, so its served state is entirely derived from relays it chose to follow.
+`--no-write` is the pull-only posture: the node ingests exclusively through peer sync and refuses submissions outright, so its served state is entirely derived from relays it chose to follow. Its environment form is `WRITE=false` rather than a negative `NO_WRITE`, because the flag toggles an advertised capability (`capabilities.write` in the well-known) — the same shape as `INDEX=false`.
 
 `--authority` is the host callers reach this relay at, and it is what every
 identity proof is checked against. It is configuration, never read from a request
@@ -1158,6 +1158,8 @@ The security schemes an operation requires, ANDed within one requirement object,
 An operation's `x-dfos-actions` is an OR of alternatives, each a single action token or an array of tokens that must all be covered — `[read:memberships, [read:profile, read:email]]` is "either `read:memberships`, or both of the other two". Under the delegated combination its absence is the presentation-suffices class: a valid credential for the host and no particular token. Action tokens are the host's vocabulary — they are copied from document to request to error message verbatim, never enumerated or interpreted here.
 
 An empty array, an empty alternative, and an empty token are refused rather than read: each states no requirement any credential could satisfy, and reading one as "anything goes" widens a route in silence. The two shapes that turn up wrong are named for what they are — a **map** is the scheme-level action catalog written on an operation, and a **bare token** is the array spelling missing its brackets.
+
+The shape split is strict at both positions, and it runs the other way too: a security scheme's `x-dfos-actions` is the host's action catalog and MUST be a map of action token to description, so a **list** there is the operation's shape at the scheme's position and a **bare token** is the map spelling missing its description. Either is refused with the same naming, and for the same reason a document's own spec gives: one canonical shape per position is what makes every consumer's parse of a document identical.
 
 `--profile <anon|identity|delegated>` (and its shorthand `--anon`) forces a profile instead. The document ranks as a default, not a constraint. A scheme this client cannot read says which kind of unreadable it is: a `scheme: dfos` scheme marked with an `x-dfos-typ` outside the registered pair is this envelope family mis-marked, and reads differently from a scheme that is not this family at all.
 

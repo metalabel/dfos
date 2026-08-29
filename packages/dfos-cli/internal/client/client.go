@@ -86,6 +86,32 @@ func (c *Client) unreachable(op string, err error) error {
 	return fmt.Errorf("%s%w", prefix, err)
 }
 
+// RelayMaxBodyBytes is the request-body ceiling both reference relays enforce
+// (maxRequestBodyBytes in the Go relay, MAX_BODY_BYTES in the TypeScript one).
+// It is what a 413 from either of them means, and this client keeps it only to
+// SAY so — it never pre-refuses a body of its own accord, because the cap is the
+// relay's to set and a deployment is free to configure a different one.
+const RelayMaxBodyBytes = 16 << 20
+
+// mib renders a byte count in MiB to one decimal — the unit the relay's cap is
+// expressed in, so an operator can compare the two numbers without arithmetic.
+func mib(n int) string {
+	return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
+}
+
+// tooLarge renders a relay's 413 as the SIZE refusal it is.
+//
+// A 413 is the one relay refusal whose cause the client already holds: it has
+// the body it just sent. Passing the bare status through makes an operator go
+// read relay source to learn what "413" was about, so this names the size that
+// was refused next to the ceiling the reference relays enforce. sent is the
+// body this client actually put on the wire.
+func tooLarge(op string, sent int) error {
+	return fmt.Errorf("%s: %s exceeds the relay's %s request-body limit — "+
+		"the relay refused it (413) before reading the whole request",
+		op, mib(sent), mib(RelayMaxBodyBytes))
+}
+
 // label names the peer this client speaks to — by registered name when it has
 // one, since that is the name the operator's config and commands use.
 func (c *Client) label() string {
@@ -374,6 +400,9 @@ func (c *Client) postOperations(body []byte, signer *Signer) ([]IngestionResult,
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		return nil, resp.StatusCode, tooLarge("submit operations", len(body))
+	}
 	if resp.StatusCode != 200 {
 		errBody, _ := io.ReadAll(resp.Body)
 		return nil, resp.StatusCode, fmt.Errorf("relay returned %d: %s", resp.StatusCode, string(errBody))
@@ -542,6 +571,9 @@ func (c *Client) UploadBlob(contentID string, operationCID string, data []byte) 
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusRequestEntityTooLarge {
+		return tooLarge("upload blob", len(data))
+	}
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, string(body))

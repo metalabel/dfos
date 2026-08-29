@@ -582,6 +582,10 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       replayCache,
       windowSeconds: proofWindowSeconds,
       skewSeconds: proofSkewSeconds,
+      // The verifier's hash cap is the transport cap — read.bytes was read
+      // under MAX_BODY_BYTES, and the verifier must never refuse bytes the
+      // route already accepted (the Go twin pins the same equality).
+      maxBodyBytes: MAX_BODY_BYTES,
     });
     if (!auth.ok) return c.json({ error: auth.error }, auth.status as 401 | 503);
     const principal = auth.principal?.did ?? null;
@@ -1222,6 +1226,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       replayCache,
       windowSeconds: proofWindowSeconds,
       skewSeconds: proofSkewSeconds,
+      // Same equality as ingestion: the hash cap is the read cap, so a blob the
+      // route buffered is a blob the verifier will hash.
+      maxBodyBytes: MAX_BODY_BYTES,
     });
     if (!auth.ok) return c.json({ error: auth.error }, auth.status as 401 | 503);
     if (!auth.principal) return c.json({ error: 'authentication required' }, 401);
