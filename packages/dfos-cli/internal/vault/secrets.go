@@ -116,6 +116,31 @@ func (f *FileSecrets) Delete(name string) error {
 	return os.Remove(f.path(name))
 }
 
+// --- Lazy ---
+
+// lazySecrets defers NewSecretStore until a secret is actually touched.
+//
+// Probing the OS keychain costs a write/read/delete cycle, and the read-only
+// paths — `vault list`, `vault show`, whoami's provenance line — never open a
+// mnemonic at all. Every invocation already probes once for the keystore; making
+// a metadata read probe a second time would be a cost paid by commands that have
+// no business asking the keychain anything.
+type lazySecrets struct {
+	dir  string
+	once sync.Once
+	real SecretStore
+}
+
+func (l *lazySecrets) get() SecretStore {
+	l.once.Do(func() { l.real = NewSecretStore(l.dir) })
+	return l.real
+}
+
+func (l *lazySecrets) Put(name, mnemonic string) error { return l.get().Put(name, mnemonic) }
+func (l *lazySecrets) Get(name string) (string, error) { return l.get().Get(name) }
+func (l *lazySecrets) Delete(name string) error        { return l.get().Delete(name) }
+func (l *lazySecrets) Backend() string                 { return l.get().Backend() }
+
 // --- In-Memory (tests only) ---
 
 type MemorySecrets struct {

@@ -100,9 +100,11 @@ func Open(dir string, secrets SecretStore) *Store {
 // It resolves through config.ConfigDir(), which honors DFOS_CONFIG, rather than
 // os.UserHomeDir() — so pointing DFOS_CONFIG at a scratch directory takes the
 // vaults with it instead of reaching into the operator's real ones.
+// The secret backend is chosen lazily, so a metadata-only command — `vault
+// list`, `vault show`, whoami's provenance line — never probes the keychain.
 func Default() *Store {
 	dir := filepath.Join(config.ConfigDir(), "vaults")
-	return Open(dir, NewSecretStore(dir))
+	return Open(dir, &lazySecrets{dir: dir})
 }
 
 // Dir is where vault metadata lives.
