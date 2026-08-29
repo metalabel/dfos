@@ -145,6 +145,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newUseTombstoneCmd())
 	root.AddCommand(newIdentityCmd())
 	root.AddCommand(newVaultCmd())
+	root.AddCommand(newKeysCmd())
 	root.AddCommand(newContentCmd())
 	root.AddCommand(newCredentialCmd())
 	root.AddCommand(newCredsCmd())

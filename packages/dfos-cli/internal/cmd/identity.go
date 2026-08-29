@@ -2046,8 +2046,14 @@ func newIdentityForgetCmd() *cobra.Command {
 			if result.CredentialRemoved {
 				fmt.Println("  Stored login credential removed.")
 			}
-			fmt.Println("  Any private keys remain in the OS keystore; key lifecycle is managed separately.")
-			fmt.Println("  Public chain data remains in the local relay; use 'dfos relay gc' for space maintenance.")
+			// Forget removes a NAME, and deliberately nothing else: no key is
+			// touched and no chain is dropped. Saying which is which matters,
+			// because the two halves have different consequences — the name is
+			// re-registerable, the key is not re-derivable unless a vault minted
+			// it. Both surfaces are named so neither has to be guessed at.
+			fmt.Println("  Private keys are untouched — forgetting a name removes no key material.")
+			fmt.Println("  See what this machine holds with 'dfos keys list'; 'dfos keys prune' removes keys no local chain declares.")
+			fmt.Println("  Public chain data remains in the local relay, so this identity's keys still read as declared; use 'dfos relay gc' for space maintenance.")
 			return nil
 		},
 	}
