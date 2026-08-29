@@ -225,6 +225,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 **Sign-in** — `dfos login [name|did]` · cached records: `dfos creds list` · `show` · `rm`
 **Peers** (`dfos peer …`, alias `relay`) — `add` · `remove` · `list` · `info` · `gc`
 **Auth** (`dfos auth …`) — `proof` · `status`
+**API client** (`dfos api …`) — `add` · `list` · `refresh` · `rm` · `call`
 **Config** (`dfos config …`) — `list` · `get` · `set`
 **Inspect & attest** — `dfos operation show <cid>` (alias `op`) · `dfos witness <opCID>` · `dfos countersigs <cid>`
 **Top-level** — `whoami` · `status` · `version` · `recover` · `serve` · `sync` · `api` · `skill`
@@ -351,7 +352,31 @@ dfos identity publish alice --peer prod
 dfos content publish <contentId> --peer prod
 ```
 
-### Raw API & identity proofs (escape hatch)
+### Calling a DFOS-gated API
+
+`dfos api` is a generic client for any host that advertises the API-AUTH OpenAPI
+convention. Register it once, then call operations by name; the document says
+which artifact each route needs and the CLI signs that one.
+
+```bash
+dfos api add dfos api.dfos.com            # discover and cache the document
+dfos api list                             # what is registered, and how stale
+dfos api call dfos protocol.getProtocolInfo
+dfos api call dfos GET /spaces/{space} --param space=nce
+dfos api refresh dfos                     # refetch when the staleness line says so
+```
+
+The profile is read from the operation's security requirements: nothing for an
+anonymous route, an identity proof for the identity-proof scheme alone, and a
+request proof plus `X-Credential` when the request-proof and credential schemes
+are ANDed. `--profile <anon|identity|delegated>` forces one. A 401 prints the
+host's challenge and stops — nothing is retried under stronger auth. A 403 prints
+the actions the route requires next to the actions the credential grants.
+
+The delegated profile spends a credential obtained by `dfos login`; `dfos creds list`
+shows what is stored.
+
+### Raw relay access & identity proofs (escape hatch)
 
 ```bash
 dfos relay call GET /.well-known/dfos-relay

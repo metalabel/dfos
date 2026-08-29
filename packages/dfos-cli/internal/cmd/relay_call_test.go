@@ -86,6 +86,10 @@ func captureStdio(t *testing.T, fn func()) (stdout, stderr string) {
 func runThroughRoot(t *testing.T, cmd *cobra.Command, args ...string) (stdout, stderr string, runErr error) {
 	t.Helper()
 	root := &cobra.Command{Use: "dfos", SilenceUsage: true, SilenceErrors: true}
+	// The real root's groups, so a grouped command can be attached here at all.
+	for _, id := range []string{"identity", "content", "auth", "peer", "config"} {
+		root.AddGroup(&cobra.Group{ID: id, Title: id})
+	}
 	root.AddCommand(cmd)
 	root.SetArgs(args)
 	stdout, stderr = captureStdio(t, func() { runErr = root.Execute() })
@@ -159,12 +163,25 @@ func TestRelayCall(t *testing.T) {
 		}
 	})
 
-	t.Run("api is a command, not an alias, and stays open to subcommands", func(t *testing.T) {
+	t.Run("the legacy raw form lives beside the subcommands", func(t *testing.T) {
 		api := newAPICmd()
-		if api.Deprecated == "" || !strings.Contains(api.Deprecated, "dfos relay call") {
-			t.Fatalf("api Deprecated = %q", api.Deprecated)
+		// The Deprecated MARKER moved off the command when the subcommands
+		// landed — cobra hides a deprecated command from help, subcommands and
+		// all, which would make `api add` undiscoverable. The line it printed is
+		// emitted by the legacy path itself instead, byte-identical.
+		if api.Deprecated != "" {
+			t.Fatalf("api must not be marked Deprecated, or its subcommands vanish from help")
 		}
-		// ArbitraryArgs is what lets a future subcommand sit beside the legacy
+		if api.Hidden {
+			t.Fatalf("api must be visible in help")
+		}
+		for _, name := range []string{"add", "list", "rm", "refresh", "call"} {
+			found, _, err := api.Find([]string{name})
+			if err != nil || found.Name() != name {
+				t.Fatalf("api %s did not resolve: %v", name, err)
+			}
+		}
+		// ArbitraryArgs is what lets a subcommand sit beside the legacy
 		// two-argument form: cobra dispatches the subcommand first and only
 		// falls through to RunE for the raw form.
 		if err := api.Args(api, []string{"add", "https://example.test/openapi.json"}); err != nil {
@@ -172,6 +189,21 @@ func TestRelayCall(t *testing.T) {
 		}
 		if err := api.RunE(api, []string{"GET"}); err == nil || !strings.Contains(err.Error(), "usage: dfos api") {
 			t.Fatalf("wrong-arity error = %v", err)
+		}
+	})
+
+	t.Run("a subcommand invocation costs no deprecation line", func(t *testing.T) {
+		setupRelayCall(t)
+		store := setupAPIRegistry(t)
+		if err := store.Put(apispecRegistrationForTest(), []byte(registryDoc)); err != nil {
+			t.Fatal(err)
+		}
+		_, stderr, err := runThroughRoot(t, newAPICmd(), "api", "list")
+		if err != nil {
+			t.Fatalf("api list: %v", err)
+		}
+		if strings.Contains(stderr, "deprecated") {
+			t.Fatalf("a subcommand must not inherit the legacy form's deprecation line: %q", stderr)
 		}
 	})
 }
