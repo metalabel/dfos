@@ -327,6 +327,62 @@ func (s *Store) Record(name string, records ...MintedKey) error {
 	return s.save(meta)
 }
 
+// Reconcile folds a recovery scan's findings back into a vault's metadata in
+// one write: the minted-key records this machine did not already have, and a
+// derivation counter raised past every index now known to be in use.
+//
+// Both halves are idempotent, because a recovery is re-runnable by nature — an
+// operator who scans, loses the machine again, and scans again must converge on
+// the same metadata rather than accumulate duplicate provenance. Records are
+// deduped on (DID, key id), which is the pair that names a key in a chain.
+//
+// The counter is the half that MATTERS for correctness. An imported vault starts
+// at 0 with no record of what the seed minted elsewhere, so the next mint on
+// this machine would hand index 0 to a second identity — the one outcome the
+// burn-on-failure counter exists to prevent. Recovery is the moment that
+// knowledge arrives, so the counter is raised here and NEVER lowered:
+// minNextIndex is a floor, not an assignment.
+func (s *Store) Reconcile(name string, minNextIndex uint32, records ...MintedKey) (added int, next uint32, err error) {
+	meta, err := s.Load(name)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	have := make(map[string]bool, len(meta.Minted))
+	for _, r := range meta.Minted {
+		have[r.DID+"#"+r.KeyID] = true
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, r := range records {
+		key := r.DID + "#" + r.KeyID
+		if have[key] {
+			continue
+		}
+		have[key] = true
+		if r.MintedAt == "" {
+			r.MintedAt = now
+		}
+		meta.Minted = append(meta.Minted, r)
+		added++
+	}
+
+	if minNextIndex > meta.NextIndex {
+		meta.NextIndex = minNextIndex
+	}
+	for _, r := range meta.Minted {
+		// A record's index is consumed by definition, whether it arrived from a
+		// mint on this machine or from a scan a moment ago.
+		if r.Index < hardenedOffset && r.Index+1 > meta.NextIndex {
+			meta.NextIndex = r.Index + 1
+		}
+	}
+
+	if err := s.save(meta); err != nil {
+		return 0, 0, err
+	}
+	return added, meta.NextIndex, nil
+}
+
 // FindMinted locates the vault and index that minted a given (DID, key id)
 // pair. This is how `whoami` reports provenance and how rotation stays on the
 // seed that minted the identity's current keys. It reads only.

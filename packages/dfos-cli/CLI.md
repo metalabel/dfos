@@ -274,7 +274,76 @@ The fingerprint is the first four bytes of SHA-256 over the seed's SLIP-0010 mas
 
 `vault import` reads the phrase from stdin — a prompt at a terminal, a piped line otherwise. It is never an argument: argv lands in shell history and is readable in the process list. The words are checked against the BIP-39 English wordlist and their checksum before anything is stored.
 
-A vault's phrase is the only copy of its seed. There is no second copy on any machine, with any relay, or at Metalabel.
+A vault's phrase is the only copy of its seed. There is no second copy on any machine, with any relay, or at Metalabel. What that phrase gets you back is [Recovery](#recovery).
+
+---
+
+## Recovery
+
+`dfos recover` is the disaster path: the machine is gone, and what survives is a vault's 24-word phrase. It rebuilds what that phrase controls.
+
+```bash
+dfos vault import restored              # adopt the phrase (read from stdin)
+dfos recover --vault restored --peer prod
+```
+
+Those two commands are the whole flow. `vault import` is the one way a phrase enters a machine — it checks the words against the BIP-39 wordlist and their checksum, and it never reads a phrase from argv — and `recover` is what turns the adopted seed back into working identities.
+
+### The two stages
+
+**Derive.** Keys come back out of the seed at `m/1684434803'/<index>'` for index 0, 1, 2, … . This is local arithmetic and it never ends on its own, so something has to say when to stop.
+
+**Ask.** For each derived **public** key, `recover` asks a relay's identity index which identities have ever declared it: `GET /index/v0/identities?key=<multibase>`. Rows back means the index is in use; no rows means it is not. The scan stops after **20 consecutive unused** indices — a gap limit, not a ceiling, so a hole shorter than 20 does not end the walk. `--scan-depth N` changes the number.
+
+The gap limit works because minting is sequential: a vault's counter hands out dense ascending indices and never reuses one, so real holes are short. An index consumed by a mint that then failed is burned, which is exactly the kind of hole a gap limit is for.
+
+Only public keys go on the wire. The mnemonic, the seed, and the fingerprint never leave the machine — the query carries a public key and nothing else.
+
+### The oracle is named, and its silence is not an answer
+
+"Used" and "unused" are one relay's answers. `recover` names that relay in its output (`Oracle: prod (https://relay.dfos.com)`), and it resolves it through the ordinary peer stack — `--peer` on the command, `--relay`, `DFOS_RELAY`, then `default-peer`.
+
+The index is optional and non-authoritative, which makes four different silences look alike, and each one is a loud failure rather than an empty result:
+
+| What happened                                                            | What `recover` does                                                               |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| The relay answers **501** on `/index/v0/*` (`capabilities.index` off)    | Fails, naming the relay and the missing capability                                |
+| The relay is unreachable, or answers something that is not an index page | Fails, naming the relay and the response                                          |
+| The relay stops answering **mid-scan**                                   | Fails, naming the index it stopped at — everything past it is unknown, not unused |
+| The relay **ignores** `key=` and answers an unfiltered page              | Fails, naming the version needed (`web-relay >= 0.39.0`)                          |
+
+The last one has no status code to catch it by: `key=` is an opaque string match, so a relay that predates the filter sees an unknown parameter, drops it, and answers `200` with a page of identities that have nothing to do with the key asked about. Every index would look used and the scan would never stop. So before the scan runs, `recover` asks one sentinel query — a syntactically real multikey whose 32 bytes are a published hash, so no chain can have declared it. Rows coming back to that query prove the filter was not applied.
+
+`--manifest-only` is the deliberate degradation: it skips the scan and the relay entirely and recovers exactly what this machine's own vault records already name. It prints a banner saying the scan did not run and that the report says nothing about keys the seed minted elsewhere. It is the only path that reports without asking, and it never happens on its own.
+
+### What comes back
+
+For each identity the scan finds, `recover` pulls the chain from the oracle into the local relay, reads the key id the chain declares each recovered public key under, and writes the private key into the keystore under `<did>#<keyId>`. Then it rebuilds the vault's minted-key records and registers the identity in config — using the relay's projected profile name where there is one, and a DID-derived label otherwise, with a numeric suffix on a collision. A name already in config is kept; recovery adds and never renames.
+
+Signing afterwards needs nothing further: it resolves the identity, intersects its published auth keys with the keys this device holds, and signs.
+
+Two details matter:
+
+- **A key a rotation left behind is still recovered.** `key=` is a **has-ever-declared** lookup, so it finds the chains a key controlled before an update rotated it out — which is the case a phrase-holder is most likely to be in. Those keys land in the keystore and are reported as superseded.
+- **A deleted identity is still found, fetched, and reported as deleted.** Deletion is not revocation, and `identity restore` is real.
+
+The report ends with the end state per identity: `recovered`, `already-present`, or `found-but-not-fetched`. Re-running converges — nothing is duplicated and nothing is renamed.
+
+### The counter
+
+An imported vault starts with its derivation counter at 0, because this machine has no record of what the seed minted elsewhere. `recover` raises that counter past every index it found in use, so the next `identity create` from the vault cannot hand a recovered index to a second identity. This is the half of recovery that matters even when every key was already present.
+
+### What recovery cannot see
+
+- **A derived key no identity operation ever declared is invisible to any index.** It is still derivable from the phrase; nothing can find it for you, because there is nothing anywhere that records it.
+- **One relay's index-absence is not global absence.** A key the named oracle does not know may be declared on a chain it never ingested.
+- **Keys minted outside a vault are not derivable from any phrase.** `--no-vault` keys, and keys created on a machine with no vault, live only in the keystore that was lost. `recover` says nothing about them; `dfos keys list` is the tool that shows what a machine holds.
+
+### Dry run
+
+`recover` writes by default. It is additive and idempotent — it stores keys, ingests chains, adds config names, and raises a counter, and it deletes nothing — and it is the command an operator reaches for at the worst moment, so making the disaster path take two invocations buys nothing. (`keys prune` is dry-run-by-default for the opposite reason: it deletes.)
+
+`--dry-run` scans and reports without writing anything: no keystore writes, no config writes, no chain pulls. Because it pulls no chains it cannot read key ids either, so identities it finds report as `found-but-not-fetched` — an honest account of what a look-only run can know.
 
 ---
 
@@ -311,6 +380,8 @@ Each key gets an **origin** (where its seed came from) and a **status** (what cu
 | `login-client`                            | infrastructure: the per-install sign-in client key                                                 |
 | `orphan`                                  | nothing in the local relay declares it and nothing else claims it                                  |
 | `unreadable` / `unnamed` / `unrecognized` | the key's status cannot be established from what this machine can see                              |
+
+A key with origin `vault` is derivable again from that vault's phrase, which is what [`dfos recover`](#recovery) does; a `standalone` key is not, and this keystore is its only copy.
 
 `prune` removes keys with status `orphan` and nothing else. It is a dry run until `--yes`, and it prints, per key, whether the seed is derivable again from a vault's recovery phrase or exists only in this keystore. Four rules bound it:
 

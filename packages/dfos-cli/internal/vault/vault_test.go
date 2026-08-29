@@ -262,3 +262,62 @@ func TestNameValidation(t *testing.T) {
 		t.Error("Load of an absent vault returned no error")
 	}
 }
+
+func TestReconcileIsIdempotentAndOnlyRaisesTheCounter(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.Import("restored", "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"); err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+
+	records := []MintedKey{
+		{Index: 0, DID: "did:dfos:a", KeyID: "key_1", Role: "controller", PublicKey: "z1"},
+		{Index: 1, DID: "did:dfos:a", KeyID: "key_2", Role: "auth", PublicKey: "z2"},
+	}
+	added, next, err := s.Reconcile("restored", 2, records...)
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if added != 2 {
+		t.Errorf("added = %d, want 2", added)
+	}
+	// An imported vault starts at 0 knowing nothing about what the seed minted
+	// elsewhere. Leaving it there would hand index 0 out a second time.
+	if next != 2 {
+		t.Errorf("counter = %d, want 2", next)
+	}
+
+	// Re-running converges: a recovery is re-runnable by nature.
+	added, next, err = s.Reconcile("restored", 2, records...)
+	if err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if added != 0 || next != 2 {
+		t.Errorf("second run added %d records and moved the counter to %d, want 0 and 2", added, next)
+	}
+	meta, _ := s.Load("restored")
+	if len(meta.Minted) != 2 {
+		t.Errorf("minted records = %d after two runs, want 2", len(meta.Minted))
+	}
+
+	// A record's own index raises the counter even when the caller asks for less,
+	// and a lower floor never lowers it.
+	if _, next, err = s.Reconcile("restored", 0,
+		MintedKey{Index: 7, DID: "did:dfos:b", KeyID: "key_3", Role: "auth", PublicKey: "z3"}); err != nil {
+		t.Fatalf("third Reconcile: %v", err)
+	}
+	if next != 8 {
+		t.Errorf("counter = %d after a record at index 7, want 8", next)
+	}
+	if _, next, _ = s.Reconcile("restored", 1); next != 8 {
+		t.Errorf("a floor of 1 lowered the counter to %d", next)
+	}
+
+	// Every record it wrote carries a mint timestamp, so provenance a scan
+	// rebuilt is not distinguishable-by-absence from provenance a mint wrote.
+	meta, _ = s.Load("restored")
+	for _, r := range meta.Minted {
+		if r.MintedAt == "" {
+			t.Errorf("reconciled record %+v has no timestamp", r)
+		}
+	}
+}
