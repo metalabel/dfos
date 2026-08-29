@@ -43,6 +43,7 @@ const (
 	originVault       = "vault"        // a vault's minted-key record names it
 	originStandalone  = "standalone"   // generated straight into the keystore
 	originPending     = "pending"      // a `pending:` account — an unfinished create
+	originCandidate   = "candidate"    // a `candidate:` account — a key-proof ceremony key
 	originLoginClient = "login-client" // this installation's SIWD client key
 	originUnknown     = "unknown"      // the account is not in a shape this CLI writes
 )
@@ -59,6 +60,11 @@ const (
 	statusSuperseded = "superseded"
 	// statusLoginClient: the per-install SIWD client key. Infrastructure.
 	statusLoginClient = "login-client"
+	// statusCandidate: a key `keys prove` presented to a key-add ceremony. No
+	// chain here names it, and that is its normal state — the chain that adopts
+	// it is custodied by the ceremony operator, not by this machine. It is not an
+	// orphan and prune never removes it.
+	statusCandidate = "candidate"
 	// statusOrphan: nothing in the local relay declares it and nothing else
 	// claims it. This is the only status prune acts on.
 	statusOrphan = "orphan"
@@ -132,6 +138,7 @@ func newKeysCmd() *cobra.Command {
 	cmd.AddCommand(newKeysListCmd())
 	cmd.AddCommand(newKeysShowCmd())
 	cmd.AddCommand(newKeysPruneCmd())
+	cmd.AddCommand(newKeysProveCmd())
 	return cmd
 }
 
@@ -383,10 +390,12 @@ func statusRank(status string) int {
 		return 1
 	case statusSuperseded:
 		return 2
-	case statusOrphan:
+	case statusCandidate:
 		return 3
-	default:
+	case statusOrphan:
 		return 4
+	default:
+		return 5
 	}
 }
 
@@ -458,6 +467,14 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 		entry.KeyID = strings.TrimPrefix(account, pendingAccountPrefix)
 		entry.Status = statusOrphan
 		entry.Reason = "an 'identity create' that was interrupted before its DID existed — no chain can ever name it"
+	case strings.HasPrefix(account, candidateAccountPrefix):
+		// A candidate is a key 'keys prove' presented to a key-add ceremony. That
+		// nothing here declares it is its normal state, not a leftover: the chain
+		// that adopts it belongs to the ceremony operator, and this machine may
+		// never hold that chain at all. Never an orphan, therefore never pruned.
+		entry.Origin = originCandidate
+		entry.Status = statusCandidate
+		entry.Reason = "presented to a key-add ceremony — the chain that adopts it is not this machine's, so nothing here declares it"
 	default:
 		entry.Status = statusUnrecognized
 		entry.Reason = "not an account shape this CLI writes"
@@ -558,8 +575,8 @@ func printKeyLedger(l *keyLedger) {
 		counts[e.Status]++
 	}
 	fmt.Println()
-	for _, status := range []string{statusDeclared, statusLoginClient, statusSuperseded, statusOrphan,
-		statusUnreadable, statusUnnamed, statusUnrecognized} {
+	for _, status := range []string{statusDeclared, statusLoginClient, statusSuperseded, statusCandidate,
+		statusOrphan, statusUnreadable, statusUnnamed, statusUnrecognized} {
 		if counts[status] > 0 {
 			fmt.Printf("  %-14s %d\n", status, counts[status])
 		}

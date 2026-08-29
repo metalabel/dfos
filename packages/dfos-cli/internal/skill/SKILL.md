@@ -220,7 +220,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 `publish` · `fetch` · `verify` · `remove`
 
 **Vaults** (`dfos vault …`) — `create` · `import` · `list` · `show`
-**Keys** (`dfos keys …`) — `list` · `show` · `prune`
+**Keys** (`dfos keys …`) — `list` · `show` · `prune` · `prove <code-or-uri>` (complete a key-add ceremony: mints or names a key, shows the audience, refuses a key any identity has ever declared, posts one KEY-PROOF envelope and never retries)
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
 **Sign-in** — `dfos login [name|did]` (`--host <name-or-host>` to pick from an API's advertised actions) · cached records: `dfos creds list` · `show` · `rm`
 **Peers** (`dfos peer …`, alias `relay`) — `add` · `remove` · `list` · `info` · `gc`

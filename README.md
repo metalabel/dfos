@@ -61,6 +61,7 @@ Each spec declares its own clock in its header; this table is the index, not the
 | [SIWD](./specs/SIWD.md)                     | `0.1` — optional authentication seam, own `0.x` clock            |
 | [API-AUTH](./specs/API-AUTH.md)             | `0.1` — optional capability, own `0.x` clock                     |
 | [ORIGIN-BINDING](./specs/ORIGIN-BINDING.md) | `0.1` — optional capability, own `0.x` clock                     |
+| [KEY-PROOF](./specs/KEY-PROOF.md)           | `0.1` — optional capability, own `0.x` clock                     |
 | [EXTENSIONS](./specs/EXTENSIONS.md)         | Companion — indexes registered names, defines no rules           |
 | [THREAT-MODEL](./specs/THREAT-MODEL.md)     | Companion — assembles specified surface, defines no rules        |
 | [CONFORMANCE](./specs/CONFORMANCE.md)       | Companion — tiers over the normative MUST sets, defines no rules |

@@ -48,6 +48,7 @@ import { signKeyProof, verifyKeyProof } from '@metalabel/dfos-protocol/key-proof
 | [SIGNING.md](../../specs/SIGNING.md)             | A transport-agnostic way for one party to ask another to produce a DFOS signature |
 | [SIWD.md](../../specs/SIWD.md)                   | Sign In With DFOS — cryptographic identity verification for third-party apps      |
 | [API-AUTH.md](../../specs/API-AUTH.md)           | Proof-of-possession authentication for credential-gated HTTP APIs                 |
+| [KEY-PROOF.md](../../specs/KEY-PROOF.md)         | Challenge-bound, single-shot proof that a candidate key is held                   |
 
 Release history lives at https://github.com/metalabel/dfos/releases.
 
