@@ -154,8 +154,29 @@ func ConfigPath() string {
 	return filepath.Join(ConfigDir(), "config.toml")
 }
 
+// checkConfigPath rejects a config path that names a directory, which is the
+// one misconfiguration DFOS_CONFIG invites: everything on disk sits beside
+// config.toml, so "point DFOS_CONFIG at a scratch directory" reads as naming
+// the directory. The bare syscall error ("is a directory") says what went wrong
+// and not what was expected, and the expectation is the whole answer.
+func checkConfigPath() error {
+	path := ConfigPath()
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	if os.Getenv("DFOS_CONFIG") != "" {
+		return fmt.Errorf("$DFOS_CONFIG must be the config FILE path (e.g. %s), got a directory: %s",
+			filepath.Join(path, "config.toml"), path)
+	}
+	return fmt.Errorf("config path %s is a directory, not a file", path)
+}
+
 // Load loads config from disk. Returns empty config if file doesn't exist.
 func Load() (*Config, error) {
+	if err := checkConfigPath(); err != nil {
+		return nil, err
+	}
 	cfg := &Config{
 		Relays:     make(map[string]RelayConfig),
 		Identities: make(map[string]IdentityConfig),
@@ -187,6 +208,9 @@ func Load() (*Config, error) {
 
 // Save writes config to disk.
 func Save(cfg *Config) error {
+	if err := checkConfigPath(); err != nil {
+		return err
+	}
 	dir := ConfigDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
