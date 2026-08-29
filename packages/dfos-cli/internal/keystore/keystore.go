@@ -4,9 +4,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -36,6 +38,75 @@ type Store interface {
 	DeleteKey(account string) error
 	// Backend returns a human-readable name for the storage backend.
 	Backend() string
+}
+
+// Entry is one thing a backend holds.
+//
+// Account is what the entry answers to — the string every other method on Store
+// takes. It is empty ONLY when the backend can prove something is there and
+// cannot name it exactly: a file written by the pre-reversible naming scheme
+// (see fileName) whose name maps back to more than one possible account. Ref is
+// then the backend-scoped handle for that thing, so a caller can report "this
+// exists and I cannot name it" instead of guessing at it.
+type Entry struct {
+	Account string
+	Ref     string
+}
+
+// Enumerator is implemented by backends that can list what they hold.
+//
+// It is deliberately NOT part of Store: whether a backend can enumerate is a
+// property of the backend, not of key storage. The OS keychain wrappers differ
+// on this — macOS can be asked for every item under a service, the
+// secret-service and Windows backends this CLI links cannot — and a caller that
+// wants a full picture has to know which case it is in rather than be handed a
+// short list that looks complete.
+type Enumerator interface {
+	// Entries lists what this backend holds, with reserved accounts (see
+	// IsReservedAccount) already dropped. It returns ErrNoEnumeration when the
+	// backend cannot answer the question at all.
+	Entries() ([]Entry, error)
+}
+
+// ErrNoEnumeration says a backend cannot list its own contents. It is a fact
+// about the backend, not a failure: a caller that gets it falls back to naming
+// candidate accounts from the other local stores and probing each with HasKey,
+// which finds every key something else already knows about and no others.
+var ErrNoEnumeration = errors.New("this keystore backend cannot list the keys it holds")
+
+// reservedAccountPrefixes and reservedAccounts name things that live in the same
+// backend namespace as key seeds and are NOT key seeds.
+//
+// Vault mnemonics are the dangerous case: internal/vault/secrets.go stores them
+// in the SAME OS keychain service as the seeds ("dfos", under a "vault:<name>"
+// account), so anything that enumerates that service sees them. Treating one as
+// a key would read a recovery phrase as a hex seed, and DELETING one would
+// destroy the phrase every key it minted derives from. The probe accounts are
+// the harmless case: a write/read/delete cycle that lost its delete would
+// otherwise show up as a key.
+//
+// The filter lives here, at the one place enumeration produces a list, so no
+// caller can forget it.
+var (
+	reservedAccountPrefixes = []string{"vault:"}
+	reservedAccounts        = []string{"dfos-keychain-probe", "dfos-vault-keychain-probe"}
+)
+
+// IsReservedAccount reports whether an account names something that is not a
+// key seed. Callers that delete should re-check it: the cost of asking twice is
+// nothing, and the cost of being wrong once is a lost recovery phrase.
+func IsReservedAccount(account string) bool {
+	for _, prefix := range reservedAccountPrefixes {
+		if strings.HasPrefix(account, prefix) {
+			return true
+		}
+	}
+	for _, name := range reservedAccounts {
+		if account == name {
+			return true
+		}
+	}
+	return false
 }
 
 // New returns the appropriate keystore.
@@ -167,10 +238,154 @@ func (f *FileStore) ensureDir() error {
 	return os.MkdirAll(f.dir, 0o700)
 }
 
+// fileName maps an account to a file name by percent-encoding every byte
+// outside [A-Za-z0-9.-]: `did:dfos:abc#key_x` becomes
+// `did%3Adfos%3Aabc%23key%5Fx`.
+//
+// The encoding is REVERSIBLE, and that is the whole point of it. The scheme it
+// replaces mangled `#`→`__` and `:`→`_`, which is many-to-one: `pending:key_a`
+// and `pending_key:a` both land on `pending_key_a`, so a file name could not be
+// read back as the account that produced it. Nothing needed to read it back
+// until this store had to be able to say what it holds — a ledger of local key
+// material that cannot name its own entries is not a ledger — and a lossy name
+// is also a silent overwrite waiting for two accounts that collide.
+//
+// `_` is escaped rather than kept, so a new-style name never contains one. That
+// is what makes the two schemes distinguishable on sight: see legacyFileName.
+func fileName(account string) string {
+	const hexDigits = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(account); i++ {
+		c := account[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '.', c == '-':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hexDigits[c>>4])
+			b.WriteByte(hexDigits[c&0x0f])
+		}
+	}
+	return b.String()
+}
+
+// accountFromFileName inverts fileName. ok is false for a name the old mangling
+// wrote, which is reported rather than guessed at.
+func accountFromFileName(name string) (account string, ok bool) {
+	// A name holding `_` cannot have come from fileName, which escapes it. It is
+	// a pre-reversible file, and the account that produced it is not recoverable
+	// from the name — `_` there could have been a `:` or a literal `_`.
+	if strings.Contains(name, "_") {
+		return "", false
+	}
+	var b strings.Builder
+	for i := 0; i < len(name); i++ {
+		if name[i] != '%' {
+			b.WriteByte(name[i])
+			continue
+		}
+		if i+2 >= len(name) {
+			return "", false
+		}
+		hi, lo := unhex(name[i+1]), unhex(name[i+2])
+		if hi < 0 || lo < 0 {
+			return "", false
+		}
+		b.WriteByte(byte(hi<<4 | lo))
+		i += 2
+	}
+	return b.String(), true
+}
+
+func unhex(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	}
+	return -1
+}
+
+// legacyFileName is the pre-reversible name for an account: `#`→`__`, `:`→`_`.
+// Files written under it are still READ — an upgrade must not lose a key — and
+// are rewritten under the new name the next time the account is written.
+func legacyFileName(account string) string {
+	return strings.NewReplacer("#", "__", ":", "_").Replace(account)
+}
+
+// keyPath is where an account is WRITTEN.
 func (f *FileStore) keyPath(account string) string {
-	// replace path-unsafe characters: # → _ , : → _
-	safe := strings.NewReplacer("#", "__", ":", "_").Replace(account)
-	return filepath.Join(f.dir, safe)
+	return filepath.Join(f.dir, fileName(account))
+}
+
+func (f *FileStore) legacyKeyPath(account string) string {
+	return filepath.Join(f.dir, legacyFileName(account))
+}
+
+// resolvePath is where an account is READ from: the current name if it is there,
+// otherwise the legacy one. It falls back to the current name so a miss reports
+// the path this store would use.
+func (f *FileStore) resolvePath(account string) string {
+	current := f.keyPath(account)
+	if _, err := os.Stat(current); err == nil {
+		return current
+	}
+	legacy := f.legacyKeyPath(account)
+	if legacy != current {
+		if _, err := os.Stat(legacy); err == nil {
+			return legacy
+		}
+	}
+	return current
+}
+
+// writeKey writes an account's seed under the current name and drops any legacy
+// file for the same account, so one account is never two files.
+func (f *FileStore) writeKey(account string, seedHex []byte) error {
+	if err := f.ensureDir(); err != nil {
+		return fmt.Errorf("create keys dir: %w", err)
+	}
+	current := f.keyPath(account)
+	if err := os.WriteFile(current, seedHex, 0o600); err != nil {
+		return fmt.Errorf("write key file: %w", err)
+	}
+	if legacy := f.legacyKeyPath(account); legacy != current {
+		_ = os.Remove(legacy)
+	}
+	return nil
+}
+
+// Entries lists every key file, naming each one's account where the file name
+// can be read back. A pre-reversible file name is reported by reference with no
+// account, which is the honest answer: something is there, and this store
+// cannot say what it is called.
+func (f *FileStore) Entries() ([]Entry, error) {
+	dirEntries, err := os.ReadDir(f.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read keys dir %s: %w", f.dir, err)
+	}
+	out := make([]Entry, 0, len(dirEntries))
+	for _, e := range dirEntries {
+		if e.IsDir() {
+			continue
+		}
+		account, ok := accountFromFileName(e.Name())
+		if ok && IsReservedAccount(account) {
+			continue
+		}
+		if !ok {
+			account = ""
+		}
+		out = append(out, Entry{Account: account, Ref: e.Name()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ref < out[j].Ref })
+	return out, nil
 }
 
 func (f *FileStore) GenerateKey(account string) (ed25519.PrivateKey, ed25519.PublicKey, error) {
@@ -182,11 +397,8 @@ func (f *FileStore) GenerateKey(account string) (ed25519.PrivateKey, ed25519.Pub
 	priv := ed25519.NewKeyFromSeed(seed)
 	pub := priv.Public().(ed25519.PublicKey)
 
-	if err := f.ensureDir(); err != nil {
-		return nil, nil, fmt.Errorf("create keys dir: %w", err)
-	}
-	if err := os.WriteFile(f.keyPath(account), []byte(hex.EncodeToString(seed)), 0o600); err != nil {
-		return nil, nil, fmt.Errorf("write key file: %w", err)
+	if err := f.writeKey(account, []byte(hex.EncodeToString(seed))); err != nil {
+		return nil, nil, err
 	}
 
 	return priv, pub, nil
@@ -196,17 +408,14 @@ func (f *FileStore) PutKey(account string, priv ed25519.PrivateKey) (ed25519.Pub
 	if len(priv) != ed25519.PrivateKeySize {
 		return nil, fmt.Errorf("not an ed25519 private key: %d bytes", len(priv))
 	}
-	if err := f.ensureDir(); err != nil {
-		return nil, fmt.Errorf("create keys dir: %w", err)
-	}
-	if err := os.WriteFile(f.keyPath(account), []byte(hex.EncodeToString(priv.Seed())), 0o600); err != nil {
-		return nil, fmt.Errorf("write key file: %w", err)
+	if err := f.writeKey(account, []byte(hex.EncodeToString(priv.Seed()))); err != nil {
+		return nil, err
 	}
 	return priv.Public().(ed25519.PublicKey), nil
 }
 
 func (f *FileStore) GetPrivateKey(account string) (ed25519.PrivateKey, error) {
-	data, err := os.ReadFile(f.keyPath(account))
+	data, err := os.ReadFile(f.resolvePath(account))
 	if err != nil {
 		return nil, fmt.Errorf("key not found: %s", account)
 	}
@@ -218,26 +427,23 @@ func (f *FileStore) GetPrivateKey(account string) (ed25519.PrivateKey, error) {
 }
 
 func (f *FileStore) HasKey(account string) bool {
-	_, err := os.Stat(f.keyPath(account))
+	_, err := os.Stat(f.resolvePath(account))
 	return err == nil
 }
 
 func (f *FileStore) RenameKey(oldAccount, newAccount string) error {
-	data, err := os.ReadFile(f.keyPath(oldAccount))
+	data, err := os.ReadFile(f.resolvePath(oldAccount))
 	if err != nil {
 		return fmt.Errorf("old key not found: %s", oldAccount)
 	}
-	if err := f.ensureDir(); err != nil {
+	if err := f.writeKey(newAccount, data); err != nil {
 		return err
 	}
-	if err := os.WriteFile(f.keyPath(newAccount), data, 0o600); err != nil {
-		return err
-	}
-	return os.Remove(f.keyPath(oldAccount))
+	return os.Remove(f.resolvePath(oldAccount))
 }
 
 func (f *FileStore) DeleteKey(account string) error {
-	return os.Remove(f.keyPath(account))
+	return os.Remove(f.resolvePath(account))
 }
 
 // --- In-Memory (for testing only, not used in production paths) ---
@@ -252,6 +458,24 @@ func NewMemoryStore() *MemoryStore {
 }
 
 func (m *MemoryStore) Backend() string { return "memory" }
+
+func (m *MemoryStore) Entries() ([]Entry, error) {
+	m.mu.Lock()
+	accounts := make([]string, 0, len(m.keys))
+	for account := range m.keys {
+		if IsReservedAccount(account) {
+			continue
+		}
+		accounts = append(accounts, account)
+	}
+	m.mu.Unlock()
+	sort.Strings(accounts)
+	out := make([]Entry, 0, len(accounts))
+	for _, account := range accounts {
+		out = append(out, Entry{Account: account, Ref: account})
+	}
+	return out, nil
+}
 
 func (m *MemoryStore) GenerateKey(account string) (ed25519.PrivateKey, ed25519.PublicKey, error) {
 	seed := make([]byte, ed25519.SeedSize)

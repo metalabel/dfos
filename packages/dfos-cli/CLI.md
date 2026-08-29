@@ -282,6 +282,47 @@ A vault's phrase is the only copy of its seed. There is no second copy on any ma
 
 > The task-oriented view of key custody — what is and isn't backed up, what key loss costs, and the deploy-time provisioning recipe — lives at [docs.dfos.com/docs/developers/sign-in-with-dfos/key-custody](https://docs.dfos.com/docs/developers/sign-in-with-dfos/key-custody). The full app-integration walkthrough is at [docs.dfos.com/docs/developers/sign-in-with-dfos/setup](https://docs.dfos.com/docs/developers/sign-in-with-dfos/setup).
 
+### The key ledger
+
+`dfos keys` reports every key this machine holds:
+
+```bash
+dfos keys list                 # the whole manifest
+dfos keys show <key-id>        # one key: also accepts its public key or its full account
+dfos keys prune                # what removing the orphans would cost — removes nothing
+dfos keys prune --yes          # remove them
+```
+
+The manifest is **derived**, not stored. Every column is folded on the spot out of state that already exists — the keystore backend, each vault's minted-key records, the identity chains in the local relay, and `login-client.json` — and no file records it. A cached list of keys is a list that can disagree with the keystore, and `prune` acts on what it reads.
+
+Each key gets an **origin** (where its seed came from) and a **status** (what currently claims it):
+
+| Origin         | Meaning                                                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------- |
+| `vault`        | a vault's minted-key record names it, with the derivation index that produced it                  |
+| `standalone`   | generated straight into the keystore; no vault record names it, so this keystore is its only copy |
+| `pending`      | held under a `pending:` account — an `identity create` interrupted before its DID existed         |
+| `login-client` | this installation's Sign In With DFOS client key                                                  |
+
+| Status                                    | Meaning                                                                                            |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `declared`                                | an identity chain in the local relay names it in a current role (`controller` / `auth` / `assert`) |
+| `superseded`                              | that identity's chain is local and no longer names the key — a rotation left it behind             |
+| `login-client`                            | infrastructure: the per-install sign-in client key                                                 |
+| `orphan`                                  | nothing in the local relay declares it and nothing else claims it                                  |
+| `unreadable` / `unnamed` / `unrecognized` | the key's status cannot be established from what this machine can see                              |
+
+`prune` removes keys with status `orphan` and nothing else. It is a dry run until `--yes`, and it prints, per key, whether the seed is derivable again from a vault's recovery phrase or exists only in this keystore. Four rules bound it:
+
+- **A key any local identity declares is never an orphan** — including a **deleted** identity's. Deletion is not revocation, and `identity restore` exists.
+- **Uncertainty is not an orphan.** A key whose status cannot be established is listed as skipped, with the reason, and left alone.
+- **The local relay's own key is out of reach by construction.** It lives in `relay.db`'s `relay_meta` table, not in the keystore, so a fold over the keystore cannot see it, list it, or delete it.
+- **Vault mnemonics are out of reach too.** They share the OS keychain service with key seeds, so the keystore drops them inside the enumerator that produces the list, and `prune` re-checks before every delete.
+
+`identity forget` removes a local name and touches no key material, and it leaves the chain in the local relay — so a forgotten identity's keys still read as `declared`, and `prune` leaves them alone.
+
+What `keys list` can see depends on whether the active backend can enumerate itself. The file store lists its own directory. The macOS keychain is listed through `security dump-keychain`, filtered to the `dfos` service. The Linux secret-service and Windows backends expose no search at all: there, `keys list` reports the keys the local relay, the vaults, and the login client already name — every key in use, and no leftovers — and says on its first line that the listing is partial.
+
 ### Backends
 
 The CLI stores each Ed25519 seed under an account key of the form `did:dfos:xxx#key_yyy`. This is true whether the key was derived from a vault or generated standalone: the keystore is the one place private key material lives, so every signing path is identical regardless of where the key came from. There are two storage backends:
@@ -311,7 +352,7 @@ Protection is whatever the host keychain provides (e.g. macOS Keychain, libsecre
 
 #### File store backend (`~/.dfos/keys/`)
 
-When the keychain is unavailable, each key is written to its own file under `~/.dfos/keys/`, named after the account (`#` and `:` replaced with path-safe characters). **The file contains the hex-encoded 32-byte Ed25519 seed in plaintext — it is not encrypted.** The directory is created `0700` and each key file `0600` (owner read/write only), so the protection is filesystem permissions and nothing more.
+When the keychain is unavailable, each key is written to its own file under `~/.dfos/keys/`, named by percent-encoding its account: every byte outside `[A-Za-z0-9.-]` becomes `%XX`, so `did:dfos:xxx#key_yyy` is filed as `did%3Adfos%3Axxx%23key%5Fyyy`. The encoding is reversible, which is what lets the store enumerate itself for `dfos keys list`. Files written under the earlier scheme (`#`→`__`, `:`→`_`) are still read, and are rewritten under the current name the next time that account is written; one whose account that scheme made ambiguous is listed as an unnamed entry rather than guessed at. **The file contains the hex-encoded 32-byte Ed25519 seed in plaintext — it is not encrypted.** The directory is created `0700` and each key file `0600` (owner read/write only), so the protection is filesystem permissions and nothing more.
 
 Threat model for the file store:
 
@@ -319,7 +360,7 @@ Threat model for the file store:
 - There is no passphrase, no encryption at rest, and no hardware backing. Disk theft, a permissive backup, a synced home directory, or root on the box all expose the seeds.
 - If you need encryption at rest, run on a host with a working OS keychain (the default path) or place `~/.dfos/keys/` on an encrypted volume.
 
-During identity genesis (before the DID is known), keys are stored under a temporary account (`pending:<keyId>`) and renamed after the DID is derived from the genesis CID — this happens in whichever backend is active.
+During identity genesis (before the DID is known), keys are stored under a temporary account (`pending:<keyId>`) and renamed after the DID is derived from the genesis CID — this happens in whichever backend is active. A genesis interrupted between the mint and the rename leaves the `pending:` account behind; no chain can ever name it, so `dfos keys list` reports it as an orphan and `dfos keys prune` removes it.
 
 The CLI discovers which keys belong to which identity by querying the identity's chain state (from local store or relay) and checking which keys have private material in the active backend.
 
@@ -327,8 +368,8 @@ The CLI discovers which keys belong to which identity by querying the identity's
 
 - Private keys are loaded into memory only during signing operations
 - With the keychain backend, seeds are held by the OS keychain; with the file store backend, seeds are written **unencrypted** to `~/.dfos/keys/` at mode `0600` (see threat model above)
-- `identity keys` shows key presence/absence, never key material
-- After key rotation, old keys remain in the active backend (needed for historical chain re-verification) but are no longer used for new operations
+- `identity keys` shows key presence/absence, never key material; `dfos keys list` / `show` report public keys, ids, and metadata, and never a seed in any output including `--json`
+- After key rotation, old keys remain in the active backend (needed for historical chain re-verification) but are no longer used for new operations; `dfos keys list` reports them as `superseded`, and `prune` leaves them alone
 - A vault-minted key is stored exactly like a generated one; what the vault adds is a written-down phrase that, with the documented derivation path, describes the same key
 
 ---
