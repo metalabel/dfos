@@ -126,10 +126,12 @@ components:
 	}
 }
 
-// A catalog written as a bare list still names the vocabulary; refusing it would
-// hide actions a person could otherwise ask for.
-func TestActionCatalogAcceptsASequenceCatalog(t *testing.T) {
-	catalog := catalogOf(t, mustParse(t, `openapi: 3.1.0
+// A catalog written as a bare list is the OPERATION's shape at the SCHEME's
+// position. API-AUTH pins the two shapes strictly, so this is malformed — and
+// the message says which shape belongs where, because that is the whole reason
+// to refuse rather than guess.
+func TestActionCatalogRefusesASequenceCatalog(t *testing.T) {
+	doc := mustParse(t, `openapi: 3.1.0
 info: {title: t, version: "1"}
 paths: {}
 components:
@@ -139,13 +141,38 @@ components:
       scheme: dfos
       x-dfos-typ: did:dfos:request-proof
       x-dfos-actions: [read:a, read:b]
-`))
-	if len(catalog) != 2 || catalog[0].Action != "read:a" || catalog[1].Action != "read:b" {
-		t.Fatalf("catalog = %+v", catalog)
+`)
+	_, err := doc.ActionCatalog()
+	if err == nil {
+		t.Fatal("a list at the scheme position was accepted")
 	}
-	for _, entry := range catalog {
-		if entry.Description != "" {
-			t.Fatalf("a list catalog describes nothing, got %+v", entry)
+	for _, want := range []string{"proof", "list of action tokens", "OPERATION", "map of action token to description"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// The bare-token case: the message names the map form and spells the fix.
+func TestActionCatalogRefusesABareTokenCatalog(t *testing.T) {
+	doc := mustParse(t, `openapi: 3.1.0
+info: {title: t, version: "1"}
+paths: {}
+components:
+  securitySchemes:
+    proof:
+      type: http
+      scheme: dfos
+      x-dfos-typ: did:dfos:request-proof
+      x-dfos-actions: read:a
+`)
+	_, err := doc.ActionCatalog()
+	if err == nil {
+		t.Fatal("a bare token at the scheme position was accepted")
+	}
+	for _, want := range []string{"proof", `bare token "read:a"`, "map of action token to description"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err, want)
 		}
 	}
 }

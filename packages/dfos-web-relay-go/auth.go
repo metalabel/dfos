@@ -208,6 +208,22 @@ func (r *Relay) authenticateIdentityProof(req *http.Request, body []byte, requir
 	}
 
 	window, skew := r.proofWindowSeconds, r.proofSkewSeconds
+	// THE VERIFIER'S HASH CAP IS THIS DEPLOYMENT'S TRANSPORT CAP, ALWAYS.
+	//
+	// MaxBodyBytes bounds the body the envelope verifier is willing to SHA-256,
+	// and an over-cap body is an INVALID PROOF — which every caller below turns
+	// into a bare `401 authentication required`. Leaving it nil takes the
+	// library's MaxBodyBytesDefault (1 MiB) while the routes that reach here
+	// buffer up to maxRequestBodyBytes (16 MiB), so every authenticated write
+	// between those two numbers died at a 401 that said nothing about size —
+	// silently, deterministically, at exactly 1 MiB + 1.
+	//
+	// The two numbers are one number. body is ALREADY bounded before it arrives:
+	// each route caps its own read with http.MaxBytesReader, so the cap is a
+	// belt-and-braces bound on an in-hand buffer, never the thing that lets an
+	// unbounded body through. Routes with a TIGHTER read cap (the signing
+	// deposit/response bodies) stay bounded by their own reader; what must never
+	// happen again is a verifier refusing bytes a route already accepted.
 	verified, err := dfos.VerifyIdentityProof(token, dfos.IdentityProofExpectations{
 		Method:        req.Method,
 		Host:          r.authority,
@@ -215,6 +231,7 @@ func (r *Relay) authenticateIdentityProof(req *http.Request, body []byte, requir
 		Body:          body,
 		WindowSeconds: dfos.Int64Ptr(window),
 		SkewSeconds:   dfos.Int64Ptr(skew),
+		MaxBodyBytes:  dfos.Int64Ptr(maxRequestBodyBytes),
 	}, CreateCurrentStateProofResolver(r.readStore), time.Now())
 	if err != nil {
 		if errors.Is(err, dfos.ErrIdentityProofInvalid) {

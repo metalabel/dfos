@@ -35,19 +35,20 @@ The container generates Ed25519 keys on first boot and persists them in SQLite. 
 
 All configuration is via environment variables:
 
-| Variable         | Default            | Description                                                          |
-| ---------------- | ------------------ | -------------------------------------------------------------------- |
-| `PORT`           | `4444`             | HTTP listen port                                                     |
-| `SQLITE_PATH`    | `~/.dfos/relay.db` | Path to SQLite database                                              |
-| `RELAY_NAME`     | `DFOS Relay`       | Profile name (shown in well-known endpoint)                          |
-| `PEERS`          | _(empty)_          | Peer relay URLs (see below)                                          |
-| `RESYNC`         | `false`            | `true` resets peer cursors for a full re-sync on boot                |
-| `SYNC_INTERVAL`  | `30s`              | How often to poll peers for new operations                           |
-| `CONTENT_FOLLOW` | `none`             | `eager` = pull & cache granted public document bytes (see below)     |
-| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`           |
-| `AUTHORITY`      | _(unset)_          | This relay's own `host[:port]` — the host identity proofs bind       |
-| `INGESTION`      | `open`             | Admission for `POST /operations`: `open`, `proof-required`, `closed` |
-| `GOSSIP_PROOF`   | `false`            | `true` signs gossip-out pushes with this relay's identity proof      |
+| Variable         | Default            | Description                                                                                                                           |
+| ---------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`           | `4444`             | HTTP listen port                                                                                                                      |
+| `SQLITE_PATH`    | `~/.dfos/relay.db` | Path to SQLite database                                                                                                               |
+| `RELAY_NAME`     | `DFOS Relay`       | Profile name (shown in well-known endpoint)                                                                                           |
+| `PEERS`          | _(empty)_          | Peer relay URLs (see below)                                                                                                           |
+| `RESYNC`         | `false`            | `true` resets peer cursors for a full re-sync on boot                                                                                 |
+| `SYNC_INTERVAL`  | `30s`              | How often to poll peers for new operations                                                                                            |
+| `CONTENT_FOLLOW` | `none`             | `eager` = pull & cache granted public document bytes (see below)                                                                      |
+| `INDEX`          | _(enabled)_        | `false` disables `/index/v0` and advertises `index: false`                                                                            |
+| `WRITE`          | _(enabled)_        | `false` makes this a LITE pull-only node: `POST /operations` and blob upload answer 501, and the well-known advertises `write: false` |
+| `AUTHORITY`      | _(unset)_          | This relay's own `host[:port]` — the host identity proofs bind                                                                        |
+| `INGESTION`      | `open`             | Admission for `POST /operations`: `open`, `proof-required`, `closed`                                                                  |
+| `GOSSIP_PROOF`   | `false`            | `true` signs gossip-out pushes with this relay's identity proof                                                                       |
 
 `AUTHORITY` is what every [API-AUTH](https://protocol.dfos.com/api-auth) identity proof
 is checked against — configuration, never taken from a request header. Without it the

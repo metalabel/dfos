@@ -56,7 +56,7 @@ declare and is never read off a request.
 
 All flags support environment variable fallbacks for container deployment:
   PORT, SQLITE_PATH, RELAY_NAME, PEERS, RESYNC, NO_SYNC, SYNC_INTERVAL,
-  CONTENT_FOLLOW, INDEX, AUTHORITY, INGESTION, GOSSIP_PROOF`,
+  CONTENT_FOLLOW, INDEX, WRITE, AUTHORITY, INGESTION, GOSSIP_PROOF`,
 		// A long-lived daemon must not hold the process-wide state lock (it
 		// would block every other dfos invocation for its entire run).
 		Annotations: map[string]string{annNoStateLock: "true"},
@@ -120,6 +120,15 @@ All flags support environment variable fallbacks for container deployment:
 			if !cmd.Flags().Changed("no-sync") {
 				if os.Getenv("NO_SYNC") == "true" {
 					noSync = true
+				}
+			}
+			// WRITE=false, not NO_WRITE=true, because this flag toggles an
+			// ADVERTISED CAPABILITY: the well-known's capabilities.write, exactly
+			// as INDEX=false toggles capabilities.index. NO_SYNC keeps its negative
+			// form because syncing is a local behavior with no capability to name.
+			if !cmd.Flags().Changed("no-write") {
+				if os.Getenv("WRITE") == "false" {
+					noWrite = true
 				}
 			}
 
@@ -379,7 +388,7 @@ All flags support environment variable fallbacks for container deployment:
 	cmd.Flags().StringVar(&peers, "peers", "", "Peer URLs: comma-separated, a JSON array of URLs, or a JSON array of {url,gossip,readThrough,sync} objects (env: PEERS)")
 	cmd.Flags().BoolVar(&resync, "resync", false, "Reset peer cursors for full re-sync on boot (env: RESYNC)")
 	cmd.Flags().BoolVar(&noSync, "no-sync", false, "Do not pull any peer's log: serve and ingest, but boot local-only (env: NO_SYNC=true)")
-	cmd.Flags().BoolVar(&noWrite, "no-write", false, "LITE pull-only node: reject POST /operations, sync from peers only")
+	cmd.Flags().BoolVar(&noWrite, "no-write", false, "LITE pull-only node: reject POST /operations, sync from peers only (env: WRITE=false)")
 	cmd.Flags().BoolVar(&noIndex, "no-index", false, "Disable /index/v0 routes: advertise index:false and return 501 (env: INDEX=false)")
 	cmd.Flags().StringVar(&contentFollow, "content-follow", "none", "Materialize granted public content blobs from peers: none|eager (env: CONTENT_FOLLOW)")
 	cmd.Flags().StringVar(&authority, "authority", "", "This relay's own host[:port] — the host identity proofs bind (env: AUTHORITY; unset: authenticated routes answer 503)")

@@ -19,6 +19,14 @@ COMPOSE_FILE="$SCRIPT_DIR/docker-compose.generated.yml"
 BASE_PORT=9801
 SYNC_INTERVAL="5s"
 
+# AUTHORITY is the host a node's identity proofs are checked against, and it is
+# the PUBLISHED host[:port] a client reaches — not the container-internal one.
+# Every node below is driven from the host through its mapped port, so each gets
+# localhost:<mapped port>. Omitting it makes every authenticated write answer
+# 503, which would leave these generated topologies unable to exercise the write
+# paths at all.
+AUTHORITY_HOST="localhost"
+
 # ---------------------------------------------------------------------------
 # topology generators
 # ---------------------------------------------------------------------------
@@ -42,6 +50,7 @@ generate_ring() {
     environment:
       PORT: \"8080\"
       RELAY_NAME: \"$name\"
+      AUTHORITY: \"$AUTHORITY_HOST:$host_port\"
       PEERS: \"http://$next_name:8080\"
       SYNC_INTERVAL: \"$SYNC_INTERVAL\"
     ports:
@@ -89,6 +98,7 @@ generate_mesh() {
     environment:
       PORT: \"8080\"
       RELAY_NAME: \"$name\"
+      AUTHORITY: \"$AUTHORITY_HOST:$host_port\"
       PEERS: \"$peers\"
       SYNC_INTERVAL: \"$SYNC_INTERVAL\"
     ports:
@@ -131,6 +141,7 @@ generate_star() {
     environment:
       PORT: \"8080\"
       RELAY_NAME: \"$hub_name (hub)\"
+      AUTHORITY: \"$AUTHORITY_HOST:$BASE_PORT\"
       PEERS: \"$hub_peers\"
       SYNC_INTERVAL: \"$SYNC_INTERVAL\"
     ports:
@@ -154,6 +165,7 @@ generate_star() {
     environment:
       PORT: \"8080\"
       RELAY_NAME: \"$name\"
+      AUTHORITY: \"$AUTHORITY_HOST:$host_port\"
       PEERS: \"http://$hub_name:8080\"
       SYNC_INTERVAL: \"$SYNC_INTERVAL\"
     ports:

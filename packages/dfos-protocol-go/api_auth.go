@@ -73,7 +73,14 @@ const (
 	// proof is accepted, and therefore its worst-case replay window.
 	MaxProofFreshnessSpanSeconds = 300
 	// MaxBodyBytesDefault is the default cap on the decoded body a verifier will
-	// hash (1 MiB). The v0 action registry is bodyless, so it never binds today.
+	// hash (1 MiB).
+	//
+	// A DEPLOYMENT THAT BUFFERS MORE THAN THIS MUST SAY SO. Over-cap is an
+	// INVALID-proof verdict, which a route renders as a 401 — so a verifier left
+	// on this default while its transport accepts larger bodies refuses every
+	// in-spec request between the two numbers as unauthenticated, with no hint
+	// that size was the reason. Set MaxBodyBytes to the transport cap; this
+	// default is for a deployment that has not got one.
 	MaxBodyBytesDefault = 1 << 20
 )
 
