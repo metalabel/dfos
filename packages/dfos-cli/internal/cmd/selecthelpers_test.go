@@ -5,6 +5,7 @@ package cmd
 // still mutate the package-global `keys`, so they MUST NOT run in parallel.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -142,14 +143,32 @@ func TestAppendKeyGuarded_DuplicateRejected(t *testing.T) {
 	}
 }
 
-func TestAppendKeyGuarded_CapRejectsSeventeenth(t *testing.T) {
-	ids := make([]string, roleKeyCap)
+// keySet builds n distinct keys, for exercising the cap boundary.
+func keySet(n int) []protocol.MultikeyPublicKey {
+	ids := make([]string, n)
 	for i := range ids {
-		ids[i] = "key" + string(rune('a'+i))
+		ids[i] = fmt.Sprintf("key%d", i)
 	}
-	set := mkSet(ids...) // exactly roleKeyCap (16) keys
+	return mkSet(ids...)
+}
+
+// TestAppendKeyGuarded_CapIsTheProtocolCap pins the boundary to the number
+// PROTOCOL.md and the TS schemas both state — 256 per role. The guard read 16,
+// which rejected a seventeenth key every conformant implementation accepts.
+func TestAppendKeyGuarded_CapIsTheProtocolCap(t *testing.T) {
+	if roleKeyCap != 256 {
+		t.Fatalf("roleKeyCap = %d, want 256 (PROTOCOL.md 'Cardinality caps', MAX_KEYS_PER_ROLE)", roleKeyCap)
+	}
+
 	newKey := protocol.MultikeyPublicKey{ID: "overflow", Type: "Multikey", PublicKeyMultibase: "zoverflow"}
-	_, err := appendKeyGuarded(set, newKey)
+
+	// One under the cap: a spec-valid set the CLI must not refuse.
+	if _, err := appendKeyGuarded(keySet(roleKeyCap-1), newKey); err != nil {
+		t.Fatalf("appending key %d must be allowed: %v", roleKeyCap, err)
+	}
+
+	// At the cap: the next one overflows.
+	_, err := appendKeyGuarded(keySet(roleKeyCap), newKey)
 	if err == nil {
 		t.Fatalf("expected cap error when appending key %d", roleKeyCap+1)
 	}

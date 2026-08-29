@@ -32,6 +32,12 @@ type whoamiSigningKey struct {
 	// not an input to anything. Signing resolved this key without asking a vault
 	// a thing, and none of this is ever published.
 	Vault *whoamiVault `json:"vault,omitempty"`
+	// VaultReason says why Vault is absent when the answer is "this machine
+	// could not read its own vault directory" rather than "no vault minted this
+	// key". Reporting the first as the second is the same lie rotation used to
+	// act on: "generated standalone" is a claim, and an unreadable file is not
+	// evidence for it.
+	VaultReason string `json:"vaultReason,omitempty"`
 }
 
 type whoamiVault struct {
@@ -110,7 +116,17 @@ func newWhoamiCmd() *cobra.Command {
 					result.SigningKey.Available = result.SigningKey.KID != ""
 					if result.SigningKey.Available {
 						keyID := result.SigningKey.KID[strings.Index(result.SigningKey.KID, "#")+1:]
-						if meta, rec, ok := getVaults().FindMinted(chain.DID, keyID); ok {
+						// whoami is a DISPLAY surface, so an unreadable vault
+						// directory degrades to a note rather than a refusal: the
+						// report's subject is the signing key, which is answered
+						// already. Rotation reads the same provenance and hard-stops
+						// on this error, because there the answer decides whether a
+						// phrase still covers the identity.
+						meta, rec, ok, err := getVaults().FindMinted(chain.DID, keyID)
+						switch {
+						case err != nil:
+							result.SigningKey.VaultReason = fmt.Sprintf("vault provenance unreadable: %v", err)
+						case ok:
 							result.SigningKey.Vault = &whoamiVault{
 								Name:        meta.Name,
 								Fingerprint: meta.Fingerprint,
@@ -188,9 +204,12 @@ func printWhoami(r whoamiResult, ctxErr, credErr error) {
 		if r.SigningKey.PublishedAll > 1 {
 			fmt.Printf("  Held:      %d of %d published auth key(s)\n", r.SigningKey.Held, r.SigningKey.PublishedAll)
 		}
-		if v := r.SigningKey.Vault; v != nil {
+		switch v := r.SigningKey.Vault; {
+		case v != nil:
 			fmt.Printf("  Vault:     %s [%s] at %s\n", v.Name, v.Fingerprint, v.Path)
-		} else {
+		case r.SigningKey.VaultReason != "":
+			fmt.Printf("  Vault:     unknown — %s\n", r.SigningKey.VaultReason)
+		default:
 			fmt.Printf("  Vault:     none — this key was generated standalone\n")
 		}
 	} else if r.Identity == nil {

@@ -148,6 +148,26 @@ func newIdentityCreateCmd() *cobra.Command {
 				return fmt.Errorf("local relay rejected: %s", results[0].Error)
 			}
 
+			// Record which derivation indices became which published keys, on the
+			// strength of the LOCAL ingest above and before anything is sent to a
+			// peer. This is local provenance only — it is what `whoami` reports and
+			// what a rotation reads to stay on the seed that minted the current
+			// keys — and the chain it describes exists the moment the local relay
+			// accepts it. Waiting for a peer put the trail behind an unreachable
+			// network: the key was in the keystore and the chain was in the local
+			// relay, and a later bare `identity update --rotate-*` found no vault
+			// and minted a STANDALONE replacement for a phrase-backed identity.
+			if vaultName != "" {
+				if err := getVaults().Record(vaultName,
+					vault.MintedKey{
+						Index: minted.Index, DID: did, KeyID: keyID,
+						Roles: genesisRoles, PublicKey: mk.PublicKeyMultibase,
+					},
+				); err != nil {
+					return fmt.Errorf("record vault provenance: %w", err)
+				}
+			}
+
 			// push to peer if specified — do this before saving config so a
 			// peer rejection doesn't leave an orphaned name mapping
 			var publishedTo []string
@@ -168,22 +188,6 @@ func newIdentityCreateCmd() *cobra.Command {
 					return fmt.Errorf("peer rejected: %s", peerResults[0].Error)
 				}
 				publishedTo = append(publishedTo, rn)
-			}
-
-			// Record which derivation indices became which published keys. This is
-			// LOCAL provenance only — it is what `whoami` reports and what a
-			// rotation reads to stay on the seed that minted the current keys. It
-			// is written after the operation succeeds, so the trail describes keys
-			// that actually exist in a chain.
-			if vaultName != "" {
-				if err := getVaults().Record(vaultName,
-					vault.MintedKey{
-						Index: minted.Index, DID: did, KeyID: keyID,
-						Roles: genesisRoles, PublicKey: mk.PublicKeyMultibase,
-					},
-				); err != nil {
-					return fmt.Errorf("record vault provenance: %w", err)
-				}
 			}
 
 			// Register the name in config only after all operations succeed.
@@ -697,7 +701,20 @@ func resolveRotationVault(chain *relay.StoredIdentityChain, vaultFlag string, no
 	for _, k := range chain.State.AuthKeys {
 		keyIDs = append(keyIDs, k.ID)
 	}
-	if meta, ok := getVaults().FindMintingVault(chain.DID, keyIDs); ok {
+	meta, ok, err := getVaults().FindMintingVault(chain.DID, keyIDs)
+	if err != nil {
+		// A provenance read that FAILED is not an identity with no vault, and the
+		// difference is custody. Falling through to standalone here would rotate a
+		// mnemonic-backed identity onto a key no phrase can ever recover — quietly,
+		// on the strength of an unrelated sibling file being unparseable. So this
+		// stops, names the file, and hands back the two ways past it.
+		return "", "", fmt.Errorf("cannot read vault provenance, so this rotation does not know which seed minted %s: %w\n"+
+			"Rotating without that answer risks replacing a phrase-backed key with a standalone one. Either:\n"+
+			"  fix or remove the unreadable vault file named above, then re-run\n"+
+			"  --vault <name>   rotate onto that vault explicitly\n"+
+			"  --no-vault       accept a standalone replacement key, out loud", chain.DID, err)
+	}
+	if ok {
 		return meta.Name, "the vault that minted this identity's keys", nil
 	}
 	return "", "", nil
@@ -713,12 +730,18 @@ func boolCount(bs ...bool) int {
 	return n
 }
 
-// roleKeyCap is the maximum number of keys a single role set may hold. The
-// protocol caps each role (auth/assert/controller) at 16 items (PROTOCOL.md
-// "Identity Operation Field Limits"). The Go verifier does not currently
-// enforce this — the TS Zod schemas do — so the CLI guards against producing
-// an operation a conformant relay would reject.
-const roleKeyCap = 16
+// roleKeyCap is the maximum number of keys a single role set may hold, and it
+// is the protocol's number rather than one of this CLI's own: PROTOCOL.md
+// "Cardinality caps" puts `authKeys` / `assertKeys` / `controllerKeys` at 256
+// items each, and packages/dfos-protocol/src/chain/schemas.ts enforces the same
+// 256 as MAX_KEYS_PER_ROLE. The Go verifier does not enforce it, so the CLI
+// guards against producing an operation a conformant relay would reject.
+//
+// It read 16 before, over a comment citing both surfaces for a number neither
+// of them says. A local cap below the spec's is not a conservative guard — it
+// refuses an operation every implementation would accept, which is a bug that
+// only shows up on the seventeenth key.
+const roleKeyCap = 256
 
 // appendKeyGuarded returns a copy of set with newKey appended, after enforcing
 // the per-role cap and rejecting a duplicate key id. It copies the input slice

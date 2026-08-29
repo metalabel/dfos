@@ -264,7 +264,10 @@ func (s *Store) Load(name string) (*Metadata, error) {
 	}
 	meta := &Metadata{}
 	if err := toml.Unmarshal(data, meta); err != nil {
-		return nil, fmt.Errorf("parse vault '%s': %w", name, err)
+		// The PATH, not just the name: the operator's next move is to open the
+		// file, and a caller that hard-stops over this (rotation does) can only
+		// say which file to open if this error carries it.
+		return nil, fmt.Errorf("parse vault '%s' (%s): %w", name, s.metaPath(name), err)
 	}
 	// The file name is the authority on the name, so a hand-edited or copied
 	// metadata file cannot make a vault answer to something it is not filed under.
@@ -433,32 +436,78 @@ func (s *Store) Reconcile(name string, minNextIndex uint32, records ...MintedKey
 	return added, meta.NextIndex, nil
 }
 
+// RaiseCounter persists the derivation-counter floor and NOTHING else.
+//
+// It exists because ORDER is the safety property of a recovery, not a detail of
+// it. A recovery installs key material, writes provenance, and registers names,
+// and every one of those can fail — so the counter has to be on disk before the
+// first of them. A failure AFTER the floor is written burns indices, which costs
+// nothing a gap limit does not already walk through. A failure BEFORE it leaves
+// installed keys standing over an unraised counter, and the next mint hands a
+// spent index to a second identity: one Ed25519 private key, two DIDs.
+//
+// Floor semantics, identical to Reconcile's: minNextIndex is a floor, never an
+// assignment, and the counter only ever ascends.
+func (s *Store) RaiseCounter(name string, minNextIndex uint32) (uint32, error) {
+	meta, err := s.Load(name)
+	if err != nil {
+		return 0, err
+	}
+	if minNextIndex <= meta.NextIndex {
+		return meta.NextIndex, nil
+	}
+	meta.NextIndex = minNextIndex
+	if err := s.save(meta); err != nil {
+		return 0, err
+	}
+	return meta.NextIndex, nil
+}
+
 // FindMinted locates the vault and index that minted a given (DID, key id)
 // pair. This is how `whoami` reports provenance and how rotation stays on the
 // seed that minted the identity's current keys. It reads only.
-func (s *Store) FindMinted(did, keyID string) (*Metadata, *MintedKey, bool) {
+//
+// The error is RETURNED rather than folded into "not found", and the difference
+// between the two is the difference between an identity that was never minted
+// from a vault and one whose provenance this machine cannot currently read. One
+// unparseable sibling .toml fails List() wholesale, and a caller told "no
+// provenance" would rotate a mnemonic-backed identity onto a standalone key no
+// phrase can ever recover — over a file that has nothing to do with it.
+func (s *Store) FindMinted(did, keyID string) (*Metadata, *MintedKey, bool, error) {
 	all, err := s.List()
 	if err != nil {
-		return nil, nil, false
+		return nil, nil, false, err
 	}
 	for _, meta := range all {
 		for i := range meta.Minted {
 			if meta.Minted[i].DID == did && meta.Minted[i].KeyID == keyID {
-				return meta, &meta.Minted[i], true
+				return meta, &meta.Minted[i], true, nil
 			}
 		}
 	}
-	return nil, nil, false
+	return nil, nil, false, nil
 }
 
 // FindMintingVault returns the vault that minted any of an identity's keys, so
 // a rotation draws its replacement from the same seed. keyIDs are checked in
 // order, so the caller decides which role's provenance is authoritative.
-func (s *Store) FindMintingVault(did string, keyIDs []string) (*Metadata, bool) {
+//
+// It reads the whole vault directory once rather than once per key id: the
+// answer is the same, and a read error is then one error about one directory
+// instead of a different one per key.
+func (s *Store) FindMintingVault(did string, keyIDs []string) (*Metadata, bool, error) {
+	all, err := s.List()
+	if err != nil {
+		return nil, false, err
+	}
 	for _, id := range keyIDs {
-		if meta, _, ok := s.FindMinted(did, id); ok {
-			return meta, true
+		for _, meta := range all {
+			for i := range meta.Minted {
+				if meta.Minted[i].DID == did && meta.Minted[i].KeyID == id {
+					return meta, true, nil
+				}
+			}
 		}
 	}
-	return nil, false
+	return nil, false, nil
 }
