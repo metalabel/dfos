@@ -29,6 +29,7 @@ import { useIndexRowLabel } from '../lib/content-labels';
 import type { OpKind } from '../lib/db';
 import { estimateStorageBytes, OP_KINDS } from '../lib/db';
 import { getDb } from '../lib/db-instance';
+import { ensureDivergenceCheck, useDivergenceReport } from '../lib/divergence-store';
 import { fmtAge, fmtBytes, fmtCount, schemaLabel, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { useIndexCapable, useIndexContent, useIndexIter2 } from '../lib/index-light';
@@ -103,6 +104,10 @@ interface Observatory {
 // Only OPERATIONS carries a numeric verified delta — it is the one figure where
 // local and relay share a unit (ops vs ops); the per-kind figures are CHAIN
 // counts locally but OP counts in the hint, so they stay relay-asserted.
+//
+// Preferring the local figure is only honest while the local index still
+// describes the network, so the band carries one line when it doesn't — see
+// DivergenceNotice.
 // -----------------------------------------------------------------------------
 
 const StatCell = (props: { label: string; value: string; green: boolean }) => (
@@ -111,6 +116,49 @@ const StatCell = (props: { label: string; value: string; green: boolean }) => (
     <span class="ss-unit">{props.label}</span>
   </span>
 );
+
+/** How long after mount the spot-check may run — see the effect below. */
+const CHECK_DELAY_MS = 1500;
+
+/**
+ * The one line the stat band owes a reader whose local figures have gone stale.
+ *
+ * This band PREFERS local numbers — a locally-counted figure is trusted over a
+ * relay-asserted one, which is the whole trust palette — so when the local index
+ * holds operations the relays have dropped, the number that wins is the wrong
+ * one, silently. lib/divergence.ts answers that question and this says so.
+ *
+ * ONLY `diverged` speaks. `unknown` is a failure to look and `aligned` is a
+ * spot-check that passed; neither is a reason to put a warning under the figures.
+ * The check runs at most once a session (lib/divergence-store.ts) and only where
+ * there is local data to be wrong about — a cold tab counts nothing locally, so
+ * it has nothing to be stale about and issues no probes.
+ */
+const DivergenceNotice = (props: { populated: boolean }) => {
+  const report = useDivergenceReport();
+  const sync = useSyncState();
+  const { populated } = props;
+  // a run in flight is rewriting the very store the check samples — ask after
+  const busy = sync.phase === 'syncing' || sync.phase === 'resolving';
+
+  useEffect(() => {
+    if (!populated || busy) return;
+    // the check reads every chain rollup out of IndexedDB before it probes
+    // anything, so it waits out the landing render and its feeds rather than
+    // competing with them — and a reader who bounces straight off home never
+    // pays for it at all.
+    const t = setTimeout(() => void ensureDivergenceCheck(), CHECK_DELAY_MS);
+    return () => clearTimeout(t);
+  }, [populated, busy]);
+
+  if (report?.verdict !== 'diverged') return null;
+  return (
+    <div class="ck-note" style={{ marginTop: 8 }}>
+      local data <Term word="diverges" def={GLOSSARY['localDivergence'] ?? ''} /> from the relays —
+      operations counted here no longer resolve upstream. see <a href="#/sync">local sync</a>.
+    </div>
+  );
+};
 
 const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
   const { obs, hint } = props;
@@ -182,6 +230,8 @@ const NetworkPanel = (props: { obs: Observatory | null; hint: RelayHint }) => {
           </div>
         </>
       ) : null}
+
+      <DivergenceNotice populated={(obs?.chains ?? 0) > 0} />
     </Panel>
   );
 };

@@ -25,6 +25,21 @@ const VERDICT_KEYS = [
   'logAheadBehindDiverged',
 ] as const;
 
+/**
+ * Keys the inline `Term` help links by name, outside the verdict vocabulary. Same
+ * failure mode as the pills: a renamed key type-checks and renders a dotted word
+ * with an EMPTY definition, which is worse than not offering the link at all.
+ */
+const HELP_KEYS = [
+  'cid',
+  'indexLight',
+  'keyIdentity',
+  'keyRoles',
+  'localDivergence',
+  'localIndex',
+  'publicProjection',
+] as const;
+
 describe('GLOSSARY — shape', () => {
   it('has no duplicate keys', () => {
     const keys = GLOSSARY_TERMS.map((t) => t.key);
@@ -79,5 +94,32 @@ describe('GLOSSARY — the verdict vocabulary the pills depend on', () => {
   it('covers the whole relay-log taxonomy in one entry', () => {
     const def = (GLOSSARY['logAheadBehindDiverged'] ?? '').toLowerCase();
     for (const word of ['ahead', 'behind', 'diverged']) expect(def, word).toContain(word);
+  });
+});
+
+describe('GLOSSARY — the inline help vocabulary', () => {
+  it('defines every key a Term links by name', () => {
+    for (const key of HELP_KEYS) {
+      expect(GLOSSARY[key], key).toBeTruthy();
+    }
+  });
+
+  // "diverged" names two different findings in this app, and reading one as the
+  // other is the whole risk: a STALE CACHE in your tab is not a signed
+  // contradiction between two servers. The local entry has to say which it is not.
+  it('separates a stale local index from a signed relay-log divergence', () => {
+    const def = (GLOSSARY['localDivergence'] ?? '').toLowerCase();
+    expect(def).toContain('distinct from');
+    expect(def).toContain('local sync');
+  });
+
+  // Absence must be DEFINITIVE (lib/divergence.ts): only an answered "not found"
+  // from every configured relay is evidence, and a failure to look never reads as
+  // clean. The plain rendering must not soften that into "we checked, it's fine".
+  it('keeps an unsettled divergence probe inconclusive rather than clean', () => {
+    const def = (GLOSSARY['localDivergence'] ?? '').toLowerCase();
+    expect(def).toContain('not found');
+    expect(def).toContain('inconclusive');
+    expect(def).not.toMatch(/proves? (completeness|the corpus)/);
   });
 });

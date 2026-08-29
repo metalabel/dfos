@@ -17,10 +17,14 @@ import { Panel, Term } from '../components/ui';
 import type { OpKind } from '../lib/db';
 import { estimateStorageBytes } from '../lib/db';
 import { getDb } from '../lib/db-instance';
-import { checkDivergence, type DivergenceReport } from '../lib/divergence';
+import {
+  clearDivergenceReport,
+  ensureDivergenceCheck,
+  runDivergenceCheck,
+  useDivergenceReport,
+} from '../lib/divergence-store';
 import { fmtBytes, fmtCount } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
-import { getRelays } from '../lib/relays';
 import {
   AUTO_SYNC_OPTIONS,
   getAutoSyncMinutes,
@@ -184,35 +188,29 @@ const VERDICT_ACCENT = {
   empty: undefined,
 } as const;
 
-const Divergence = (props: {
-  counts: Counts;
-  report: DivergenceReport | null;
-  onReport: (r: DivergenceReport | null) => void;
-}) => {
+const Divergence = (props: { counts: Counts }) => {
   const populated = props.counts.chains > 0;
   const sync = useSyncState();
   const busy = sync.phase === 'syncing' || sync.phase === 'resolving';
+  // the verdict is session-wide (lib/divergence-store.ts), so the one home may
+  // already have run is the one shown here — arriving costs no second volley
+  const report = useDivergenceReport();
   const [checking, setChecking] = useState(false);
-  const ran = useRef(false);
-  const { onReport, report } = props;
 
-  const run = async (): Promise<void> => {
+  const run = async (fresh: boolean): Promise<void> => {
     setChecking(true);
     try {
-      const db = await getDb().catch(() => null);
-      if (!db) return;
-      onReport(await checkDivergence({ db, relays: getRelays() }));
+      await (fresh ? runDivergenceCheck() : ensureDivergenceCheck());
     } finally {
       setChecking(false);
     }
   };
 
-  // check once on arrival when there is something to check — you came to this
-  // page because something looked wrong, so don't make the answer a second click
+  // check on arrival when there is something to check — you came to this page
+  // because something looked wrong, so don't make the answer a second click
   useEffect(() => {
-    if (ran.current || !populated || busy) return;
-    ran.current = true;
-    void run();
+    if (!populated || busy) return;
+    void run(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [populated, busy]);
 
@@ -236,14 +234,15 @@ const Divergence = (props: {
       orient={
         <>
           The local index never retracts an operation. A relay that <b>drops</b> one — a corpus
-          rebuild, a re-mint under new CIDs — leaves this tab holding history no relay carries any
-          more, and the local figures quietly stop describing the network. This spot-checks a spread
-          of the operations you hold against the relays you configured.
+          rebuild, a re-mint under new <Term word="CIDs" def={GLOSSARY['cid'] ?? ''} /> — leaves
+          this tab holding history no relay carries any more, and the local figures quietly stop
+          describing the network. This spot-checks a spread of the operations you hold against the
+          relays you configured.
         </>
       }
     >
       <div class="bar">
-        <button onClick={() => void run()} disabled={checking || !populated}>
+        <button onClick={() => void run(true)} disabled={checking || !populated}>
           {checking ? 'checking…' : 'check now'}
         </button>
       </div>
@@ -255,7 +254,7 @@ const Divergence = (props: {
           <>Fetching a sample of your operations back from the relays…</>
         ) : verdict === 'diverged' ? (
           <>
-            <b class="err">Local data diverges from the relay — reset recommended.</b>{' '}
+            <b class="err">Local data diverges from the relays — reset recommended.</b>{' '}
             {fmtCount(report?.absent ?? 0)} of {fmtCount(report?.sampled ?? 0)} sampled operations
             no longer exist on any relay you have configured. What you are looking at is a history
             the network has dropped; counts, ages, and browse rows drawn from it describe a corpus
@@ -264,8 +263,8 @@ const Divergence = (props: {
         ) : verdict === 'aligned' ? (
           <>
             Every one of the {fmtCount(report?.sampled ?? 0)} sampled operations still resolves on a
-            configured relay. That is a spot-check over a spread of your chains, not a proof of
-            completeness — nothing here ever proves completeness.
+            configured relay. That is a spot-check over a spread of your chains — completeness is
+            never proven here.
           </>
         ) : verdict === 'unknown' ? (
           <>
@@ -318,11 +317,12 @@ const Reset = (props: { counts: Counts; onCleared: () => void }) => {
     >
       <div class="ck-note">
         Clears this browser's copy of the operation log — every operation, every chain rollup, the
-        per-relay sync cursors, the resolved public projections, and the saved fold verdicts — and
-        starts the sync over from the relays you have configured. <b>Local only:</b> nothing is
-        deleted, retracted, or submitted anywhere on any relay, and no operation is destroyed — the
-        relays still hold whatever they hold, and the next sync pulls it back. What you lose is
-        time: a full re-sync has to page the whole log again.
+        per-relay sync cursors, the resolved{' '}
+        <Term word="public projections" def={GLOSSARY['publicProjection'] ?? ''} />, and the saved
+        fold verdicts — and starts the sync over from the relays you have configured.{' '}
+        <b>Local only:</b> nothing is deleted, retracted, or submitted anywhere on any relay, and no
+        operation is destroyed — the relays still hold whatever they hold, and the next sync pulls
+        it back. What you lose is time: a full re-sync has to page the whole log again.
       </div>
 
       <div class="bar" style={{ marginTop: 8 }}>
@@ -361,14 +361,14 @@ const Reset = (props: { counts: Counts; onCleared: () => void }) => {
 
 export const LocalSync = () => {
   const counts = useLocalCounts();
-  // the verdict lives here so the reset can retire it — a "diverged" banner left
-  // standing over a freshly-cleared store is the same stale-data bug one level up
-  const [report, setReport] = useState<DivergenceReport | null>(null);
   return (
     <>
       <Instrument counts={counts} />
-      <Divergence counts={counts} report={report} onReport={setReport} />
-      <Reset counts={counts} onCleared={() => setReport(null)} />
+      <Divergence counts={counts} />
+      {/* the reset retires the standing verdict — a "diverged" banner left over a
+          freshly-cleared store is the same stale-data bug one level up, and it
+          would now be left on home too */}
+      <Reset counts={counts} onCleared={clearDivergenceReport} />
     </>
   );
 };
