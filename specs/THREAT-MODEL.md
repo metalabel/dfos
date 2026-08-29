@@ -211,6 +211,12 @@ surface is built around:
   index survives rotation and deletion, so declaring one key in two chains publishes
   their association irreversibly — which is why holder tooling refuses by default
   before any signature exists (KEY-PROOF.md "Holder Obligations").
+- **The operator may name the pre-flight's oracle, and that adds no trust the ceremony
+  does not already extend.** The short-code resolution's optional `relay` member reaches
+  only a holder with no configured relay of its own — a holder's own oracle always takes
+  precedence, the member is ceremony-scoped, and adopting it as a standing peer is
+  refused by rule. The party it defers to is the one that already decides what the
+  completion effects (KEY-PROOF.md "Carriage", "Security Considerations").
 
 ### Countersignatures live on the public proof plane
 

@@ -43,6 +43,7 @@ type stubCeremony struct {
 	resolveStatus  int    // non-zero: answer the well-known with this status
 	resolveBody    string // non-empty: answer the well-known with this body
 	resolveURI     string // non-empty: the carriage URI answered instead of the real one
+	resolveRelay   string // non-empty: the optional `relay` member of the resolution
 	completeStatus int    // non-zero: answer the completion with this status
 	completeBody   string // non-empty: the completion body
 	answerDID      string // non-empty: the identity the operator says adopted the key
@@ -78,7 +79,11 @@ func (s *stubCeremony) handle(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"error":"unknown or expired code"}`))
 			return
 		}
-		writeJSON(w, map[string]any{"uri": s.carriageURI()})
+		answer := map[string]any{"uri": s.carriageURI()}
+		if s.resolveRelay != "" {
+			answer["relay"] = s.resolveRelay
+		}
+		writeJSON(w, answer)
 
 	case r.URL.Path == "/keys/complete" && r.Method == http.MethodPost:
 		s.completeHits++
@@ -136,6 +141,18 @@ func runProve(t *testing.T, input string, flags map[string]string, out any) (std
 		mustSetFlag(t, cmd, name, value)
 	}
 	return runCapturingJSON(t, cmd, []string{input}, out)
+}
+
+// runProveHuman is runProve without --json, for the assertions about what a
+// person reads off the terminal on the way out.
+func runProveHuman(t *testing.T, input string, flags map[string]string) (stdout, stderr string, err error) {
+	t.Helper()
+	cmd := newKeysProveCmd()
+	cmd.SetIn(strings.NewReader(""))
+	for name, value := range flags {
+		mustSetFlag(t, cmd, name, value)
+	}
+	return runCapturing(t, cmd, []string{input})
 }
 
 // plantCandidate puts a key in the store under a candidate account, which is
@@ -234,6 +251,85 @@ func TestKeysProve_ShortCodeIsCaseNormalized(t *testing.T) {
 	}
 }
 
+// A code is displayed grouped so a person can read it, and it is retyped the way
+// it was read. The separators are not in the alphabet, so dropping them decides
+// nothing.
+func TestKeysProve_ACodeSurvivesTheSpacingItWasDisplayedWith(t *testing.T) {
+	for _, raw := range []string{"ABCD2345", "abcd2345", "ABCD-2345", "ABCD 2345", "AB CD-23 45", " ABCD2345 "} {
+		code, ok := normalizeDeviceCode(raw)
+		if !ok || code != stubCode {
+			t.Fatalf("normalizeDeviceCode(%q) = %q, %v — want %q", raw, code, ok, stubCode)
+		}
+	}
+	// What the tolerance is NOT: a separator never counts as a character, and
+	// nothing outside the alphabet is dropped to make a code fit.
+	for _, raw := range []string{"ABCD-234", "ABCD-234I", "ABCD_2345", "ABCD.2345"} {
+		if code, ok := normalizeDeviceCode(raw); ok {
+			t.Fatalf("normalizeDeviceCode(%q) accepted %q", raw, code)
+		}
+	}
+}
+
+func TestKeysProve_ResolvesACodeTypedWithSeparators(t *testing.T) {
+	stub := newStubCeremony(t)
+	car, err := resolveCeremony("http://" + stub.authority() + "/ABCD-23 45")
+	if err != nil {
+		t.Fatalf("resolve a grouped code: %v", err)
+	}
+	if stub.lastCode != stubCode {
+		t.Fatalf("resolved with %q, want %q", stub.lastCode, stubCode)
+	}
+	if car.Nonce != stubNonce {
+		t.Fatalf("triple: %+v", car)
+	}
+}
+
+// The resolution's `relay` member is a courtesy: usable when it is one, absent
+// when it is not, and never a reason to fail a ceremony.
+func TestKeysProve_ReadsTheResolutionsOptionalRelay(t *testing.T) {
+	for _, tc := range []struct {
+		name, answered, want string
+	}{
+		{"absent", "", ""},
+		{"https", "https://relay.example", "https://relay.example"},
+		{"trailing slash trimmed", "https://relay.example/", "https://relay.example"},
+		{"a path is a base too", "https://relay.example/dfos/", "https://relay.example/dfos"},
+		{"http on loopback, as everywhere else here", "http://127.0.0.1:9999", "http://127.0.0.1:9999"},
+		{"cleartext off loopback is ignored, not refused", "http://relay.example", ""},
+		{"not a URL at all", "nonsense", ""},
+		{"blank", "   ", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := newStubCeremony(t)
+			stub.resolveRelay = tc.answered
+
+			car, err := resolveCeremony(stub.shortCode())
+			if err != nil {
+				t.Fatalf("a %q relay member failed the ceremony: %v", tc.answered, err)
+			}
+			if car.Relay != tc.want {
+				t.Fatalf("relay: %q, want %q", car.Relay, tc.want)
+			}
+		})
+	}
+}
+
+// A carriage URI is three values. A `relay` query member on one is the
+// operator's own routing, carried through to the endpoint like any other — it is
+// not an oracle, because only a resolution can name one.
+func TestKeysProve_ACarriageURICarriesNoRelay(t *testing.T) {
+	car, err := resolveCeremony("https://ceremony.example/c?ceremony=x&nonce=y&relay=https%3A%2F%2Frelay.example")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if car.Relay != "" {
+		t.Fatalf("relay: %q, want none", car.Relay)
+	}
+	if car.Endpoint != "https://ceremony.example/c?relay=https%3A%2F%2Frelay.example" {
+		t.Fatalf("endpoint: %q", car.Endpoint)
+	}
+}
+
 // The rule that makes the short form safe: a code typed at one host can never
 // resolve to a ceremony completing at another.
 func TestKeysProve_RefusesAnOffAuthorityResolution(t *testing.T) {
@@ -313,8 +409,8 @@ func TestKeysProve_HappyPath(t *testing.T) {
 	}
 
 	// The completion body's shape, and what does NOT ride in it: the ceremony id
-	// travels beside the envelope, and the nonce rides only inside the signed
-	// payload.
+	// and the description travel beside the envelope, and the nonce rides only
+	// inside the signed payload.
 	if got := stub.lastCompletion["ceremony"]; got != stubCeremonyID {
 		t.Fatalf("completion ceremony: %q", got)
 	}
@@ -322,7 +418,16 @@ func TestKeysProve_HappyPath(t *testing.T) {
 	if envelope == "" {
 		t.Fatal("completion carried no envelope")
 	}
-	if len(stub.lastCompletion) != 2 {
+	// A machine that can name neither its user nor itself sends no description at
+	// all, so the member count follows the default rather than assuming it.
+	wantMembers := 2
+	if want := defaultKeyDescription(); want != "" {
+		wantMembers = 3
+		if got := stub.lastCompletion["description"]; got != want {
+			t.Fatalf("completion description: %q, want %q", got, want)
+		}
+	}
+	if len(stub.lastCompletion) != wantMembers {
 		t.Fatalf("completion body has extra members: %v", stub.lastCompletion)
 	}
 	if stub.lastQuery.Get("ceremony") != "" || stub.lastQuery.Get("nonce") != "" {
@@ -584,7 +689,9 @@ func TestKeysProve_UnanswerableCheckRequiresAcknowledgment(t *testing.T) {
 	}
 }
 
-// No peer at all is the same class of failure as a peer that cannot answer.
+// No peer at all is the same class of failure as a peer that cannot answer —
+// and the refusal names both halves, because a machine with no peer whose
+// ceremony named no relay cannot fix the second half from here.
 func TestKeysProve_NoOracleConfiguredRequiresAcknowledgment(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	keys = storeA
@@ -596,8 +703,122 @@ func TestKeysProve_NoOracleConfiguredRequiresAcknowledgment(t *testing.T) {
 		!strings.Contains(err.Error(), "no peer to talk to") {
 		t.Fatalf("want the no-oracle refusal, got %v", err)
 	}
+	if !strings.Contains(err.Error(), "Nor did this ceremony name one") {
+		t.Fatalf("the refusal did not say the ceremony offered no relay either: %v", err)
+	}
 	if stub.completeHits != 0 {
 		t.Fatal("signed anyway")
+	}
+}
+
+// A machine that has no relay of its own takes the one the resolution named —
+// for this one check. Nothing about it is written down.
+func TestKeysProve_FallsBackToTheRelayTheResolutionNamed(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	keys = storeA
+	createVault(t, "personal")
+	// Deliberately NOT registerAsPeer: this machine knows no relay at all.
+	oracle := newFakeOracle(t)
+	stub := newStubCeremony(t)
+	stub.resolveRelay = oracle.server.URL
+
+	var result proveResult
+	_, stderr, err := runProve(t, stub.shortCode(), map[string]string{"yes": "true"}, &result)
+	if err != nil {
+		t.Fatalf("keys prove: %v", err)
+	}
+	if !result.Linkage.Checked || result.Linkage.OracleVia != oracleViaResolution {
+		t.Fatalf("linkage: %+v", result.Linkage)
+	}
+	if result.Linkage.OracleURL != oracle.server.URL {
+		t.Fatalf("oracle URL: %q, want %q", result.Linkage.OracleURL, oracle.server.URL)
+	}
+	// The same discipline as a configured oracle: the sentinel probe, then the key.
+	if oracle.indexQueries < 2 {
+		t.Fatalf("the fallback oracle was asked %d times — the sentinel probe and the key both", oracle.indexQueries)
+	}
+	// The human is told whose oracle answered, because that is trust they are
+	// extending at the moment they consent.
+	if !strings.Contains(stderr, "named by the ceremony resolution") {
+		t.Fatalf("the disclosure did not name the oracle's provenance:\n%s", stderr)
+	}
+	// And it is not a peer. A ceremony configures nothing.
+	if len(cfg.Relays) != 0 {
+		t.Fatalf("the ceremony's relay was registered: %v", cfg.Relays)
+	}
+	if cfg.DefaultPeer != "" {
+		t.Fatalf("the ceremony's relay became a default: %q", cfg.DefaultPeer)
+	}
+}
+
+// This machine's own peer always wins, and the relay the operator named is not
+// even asked.
+func TestKeysProve_AConfiguredPeerOutranksTheResolutionsRelay(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	keys = storeA
+	createVault(t, "personal")
+	mine := wireOracle(t)
+	theirs := newFakeOracle(t)
+	stub := newStubCeremony(t)
+	stub.resolveRelay = theirs.server.URL
+
+	var result proveResult
+	_, stderr, err := runProve(t, stub.shortCode(), map[string]string{"yes": "true"}, &result)
+	if err != nil {
+		t.Fatalf("keys prove: %v", err)
+	}
+	if result.Linkage.OracleVia != oracleViaPeer || result.Linkage.Oracle != "oracle" {
+		t.Fatalf("linkage: %+v", result.Linkage)
+	}
+	if theirs.indexQueries != 0 {
+		t.Fatalf("the ceremony's relay was asked %d times despite a configured peer", theirs.indexQueries)
+	}
+	if mine.indexQueries < 2 {
+		t.Fatalf("the configured oracle was asked %d times", mine.indexQueries)
+	}
+	if strings.Contains(stderr, "named by the ceremony resolution") {
+		t.Fatalf("a configured peer was reported as the ceremony's:\n%s", stderr)
+	}
+}
+
+// A fallback oracle answers under the same discipline it would as a peer: a
+// relay that cannot answer the question refuses the ceremony rather than
+// answering it with silence.
+func TestKeysProve_AFallbackOracleThatCannotAnswerStillRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		arrange func(*fakeOracle)
+		want    string
+	}{
+		{"does not serve the index", func(o *fakeOracle) { o.indexStatus = http.StatusNotImplemented }, "501"},
+		{"predates the key filter", func(o *fakeOracle) {
+			o.ignoresKeyParam = true
+			o.declare("z6MkirrelevantirrelevantirrelevantA", "did:dfos:z6Mksomeone", false, "")
+		}, "ignored the 'key=' parameter"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storeA, _, _ := setupDevices(t)
+			keys = storeA
+			createVault(t, "personal")
+			oracle := newFakeOracle(t)
+			tc.arrange(oracle)
+			stub := newStubCeremony(t)
+			stub.resolveRelay = oracle.server.URL
+
+			_, _, err := runProve(t, stub.shortCode(), map[string]string{"yes": "true"}, nil)
+			if err == nil || !strings.Contains(err.Error(), "could not run") ||
+				!strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want an unanswerable-check refusal mentioning %q, got %v", tc.want, err)
+			}
+			// A relay WAS named — the refusal is about what it said, not about
+			// there being nothing to ask.
+			if strings.Contains(err.Error(), "Nor did this ceremony name one") {
+				t.Fatalf("the refusal reported no relay when one answered: %v", err)
+			}
+			if stub.completeHits != 0 {
+				t.Fatal("signed anyway")
+			}
+		})
 	}
 }
 
@@ -699,6 +920,9 @@ func TestKeysProve_KeyAndVaultAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+// The virgin machine: a code pasted before this machine has ever held a seed.
+// Every other failure in this command spends the ceremony, so this one has to
+// say out loud that it did not — the same code is still good.
 func TestKeysProve_WithNoVaultSelectedSaysSo(t *testing.T) {
 	storeA, _, _ := setupDevices(t)
 	keys = storeA
@@ -706,12 +930,165 @@ func TestKeysProve_WithNoVaultSelectedSaysSo(t *testing.T) {
 	stub := newStubCeremony(t)
 
 	_, _, err := runProve(t, stub.carriageURI(), map[string]string{"yes": "true"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "no vault to mint from") {
-		t.Fatalf("want the no-vault error, got %v", err)
+	if err == nil {
+		t.Fatal("a machine with no vault minted a candidate anyway")
+	}
+	for _, want := range []string{
+		"no vault to mint the candidate key from",
+		"nothing was signed",
+		"THE CEREMONY IS NOT SPENT",
+		"dfos vault create <name>",
+		"dfos config set default-vault <name>",
+		"the same paste",
+		"--no-vault",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the no-vault refusal is missing %q:\n%v", want, err)
+		}
+	}
+	// No seed is created on a ceremony's behalf, and no key is left behind.
+	if vaults, listErr := getVaults().List(); listErr != nil || len(vaults) != 0 {
+		t.Fatalf("vaults after the refusal: %v (%v)", vaults, listErr)
 	}
 	if stub.completeHits != 0 {
 		t.Fatal("signed anyway")
 	}
+}
+
+// The description is a label for the operator's own list of keys. It rides
+// beside the envelope, never inside it, and the human sees it before it goes.
+func TestKeysProve_TheCompletionCarriesAKeyDescription(t *testing.T) {
+	t.Run("this machine names itself by default", func(t *testing.T) {
+		storeA, _, _ := setupDevices(t)
+		keys = storeA
+		createVault(t, "personal")
+		wireOracle(t)
+		stub := newStubCeremony(t)
+
+		var result proveResult
+		_, stderr, err := runProve(t, stub.shortCode(), map[string]string{"yes": "true"}, &result)
+		if err != nil {
+			t.Fatalf("keys prove: %v", err)
+		}
+		want := defaultKeyDescription()
+		if result.Description != want || stub.lastCompletion["description"] != want {
+			t.Fatalf("description: result %q, wire %q, want %q",
+				result.Description, stub.lastCompletion["description"], want)
+		}
+		if want != "" && !strings.Contains(stderr, want) {
+			t.Fatalf("the disclosure did not show the label being sent:\n%s", stderr)
+		}
+	})
+
+	t.Run("--name is what the operator files it under", func(t *testing.T) {
+		storeA, _, _ := setupDevices(t)
+		keys = storeA
+		createVault(t, "personal")
+		wireOracle(t)
+		stub := newStubCeremony(t)
+
+		var result proveResult
+		_, stderr, err := runProve(t, stub.shortCode(),
+			map[string]string{"yes": "true", "name": "work laptop"}, &result)
+		if err != nil {
+			t.Fatalf("keys prove: %v", err)
+		}
+		if stub.lastCompletion["description"] != "work laptop" || result.Description != "work laptop" {
+			t.Fatalf("description: result %q, wire %q", result.Description, stub.lastCompletion["description"])
+		}
+		if !strings.Contains(stderr, "work laptop") {
+			t.Fatalf("the disclosure did not show the label being sent:\n%s", stderr)
+		}
+		// It is a label beside the proof, and nothing about the signed bytes.
+		envelope := stub.lastCompletion["envelope"]
+		verified, err := protocol.VerifyKeyProof(envelope, protocol.KeyProofExpectations{
+			Typ: protocol.KeyAddJWSTyp, Audience: stub.authority(),
+		}, time.Now())
+		if err != nil {
+			t.Fatalf("verify the envelope: %v", err)
+		}
+		if verified.Payload.PublicKeyMultibase != result.PublicKey {
+			t.Fatalf("the envelope names %s", verified.Payload.PublicKeyMultibase)
+		}
+		if strings.Contains(envelope, "work") {
+			t.Fatal("the label reached the signed bytes")
+		}
+	})
+
+	t.Run("an empty --name sends no member at all", func(t *testing.T) {
+		storeA, _, _ := setupDevices(t)
+		keys = storeA
+		createVault(t, "personal")
+		wireOracle(t)
+		stub := newStubCeremony(t)
+
+		var result proveResult
+		if _, _, err := runProve(t, stub.shortCode(),
+			map[string]string{"yes": "true", "name": ""}, &result); err != nil {
+			t.Fatalf("keys prove: %v", err)
+		}
+		if _, present := stub.lastCompletion["description"]; present {
+			t.Fatalf("--name '' still sent a description: %v", stub.lastCompletion)
+		}
+		if result.Description != "" {
+			t.Fatalf("description: %q", result.Description)
+		}
+	})
+}
+
+// What a person is left holding: the key in full, the key shortened the way they
+// will compare it against the other screen, and where to look it up in public.
+func TestKeysProve_TheReceiptPointsAtTheKeyInPublic(t *testing.T) {
+	storeA, _, _ := setupDevices(t)
+	keys = storeA
+	createVault(t, "personal")
+	wireOracle(t)
+	stub := newStubCeremony(t)
+	stub.answerDID = "did:dfos:z6MkexampleexampleexampleexA"
+
+	stdout, _, err := runProveHuman(t, stub.shortCode(), map[string]string{"yes": "true"})
+	if err != nil {
+		t.Fatalf("keys prove: %v", err)
+	}
+	publicKey := receiptField(t, stdout, "Key:")
+	if publicKey == "" {
+		t.Fatalf("the receipt names no key:\n%s", stdout)
+	}
+
+	// The explorer link carries the WHOLE key: a shortened one addresses nothing.
+	if want := explorerKeyBase + publicKey; !strings.Contains(stdout, want) {
+		t.Fatalf("the receipt is missing %q:\n%s", want, stdout)
+	}
+	if got := receiptField(t, stdout, "Key id:"); got != "key_ceremony ("+truncateKey(publicKey)+")" {
+		t.Fatalf("key id line: %q", got)
+	}
+	if !strings.Contains(stdout, "Settings → Signing keys") {
+		t.Fatalf("the receipt does not say where the name can be changed:\n%s", stdout)
+	}
+
+	// An operator that named no identity has no settings screen to point at.
+	bare := newStubCeremony(t)
+	stdout, _, err = runProveHuman(t, bare.shortCode(), map[string]string{"yes": "true"})
+	if err != nil {
+		t.Fatalf("keys prove: %v", err)
+	}
+	if strings.Contains(stdout, "Settings → Signing keys") {
+		t.Fatalf("a candidate key was offered a rename it has no home for:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, explorerKeyBase) {
+		t.Fatalf("a candidate key got no explorer link:\n%s", stdout)
+	}
+}
+
+// receiptField reads one "  Label:  value" line out of the receipt.
+func receiptField(t *testing.T, stdout, label string) string {
+	t.Helper()
+	for _, line := range strings.Split(stdout, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), label); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
 }
 
 func TestKeysProve_NoVaultMintsStandalone(t *testing.T) {

@@ -70,6 +70,8 @@ The carriage conveys exactly three values — **completion endpoint, ceremony id
 
 **Short code.** A human-typeable display form, `<authority>/<code>`, where `<code>` is an operator-chosen compact token. A tool resolves it with `GET https://<authority>/.well-known/dfos-key-proof?code=<code>`, which answers `{"uri": "<carriage URI>"}` — and the resolved URI's authority MUST byte-equal the resolving authority, so a code's resolution can never redirect a ceremony off the host the human typed.
 
+The resolution answer MAY carry one more member: `relay`, an absolute `https` URL of a relay serving the has-ever-declared [`key=` reverse index](https://protocol.dfos.com/web-relay#identities-get-indexv0identitiesdidkeyhaspublicprofilenamecontainsorderafterdidlimitn). It is the operator naming an oracle for the [one-key-one-DID pre-flight](#holder-obligations): a holder with no oracle of its own SHOULD check against it, **for that ceremony only**, and MUST NOT adopt it as a standing peer — the member configures nothing beyond the single pre-flight it names, and a holder's own configured relay always takes precedence. The trust posture is examined under [Security Considerations](#security-considerations). A tool ignores resolution members it does not recognize.
+
 Single-shot applies to the carriage too: a carriage token is consumed with its ceremony, and no member of the triple is a session, a pairing, or a credential.
 
 ---
@@ -93,7 +95,7 @@ A proof that passes all seven is exactly one fact: _the named key was held, and 
 ## Holder Obligations
 
 - **Display before signing.** A holder MUST show its human the audience and the ceremony purpose before signing, and MUST refuse an audience its human did not initiate — the audience member only defends people who saw it.
-- **One key, one DID — ever.** A holder SHOULD refuse to sign a key proof for a key that any identity's chain has ever declared (its own DID included, for a key-add naming a different identity). The [`key=` reverse index](https://protocol.dfos.com/web-relay#identities-get-indexv0identitiesdidkeyhaspublicprofilenamecontainsorderafterdidlimitn) is has-ever-declared across all three key sets, and its rows survive rotation and deletion — declaring one key in two chains publishes an irreversible public link between them. Reference tooling checks against a named oracle relay and refuses by default.
+- **One key, one DID — ever.** A holder SHOULD refuse to sign a key proof for a key that any identity's chain has ever declared (its own DID included, for a key-add naming a different identity). The [`key=` reverse index](https://protocol.dfos.com/web-relay#identities-get-indexv0identitiesdidkeyhaspublicprofilenamecontainsorderafterdidlimitn) is has-ever-declared across all three key sets, and its rows survive rotation and deletion — declaring one key in two chains publishes an irreversible public link between them. Reference tooling checks against a named oracle relay and refuses by default. A holder with no oracle of its own takes the one the [carriage resolution names](#carriage), for that ceremony only.
 - **Fresh bytes only.** A holder signs a payload it constructed itself from a carriage it resolved — never payload bytes supplied ready-made by anyone else.
 
 ---
@@ -106,6 +108,7 @@ A proof that passes all seven is exactly one fact: _the named key was held, and 
 - **Intent smuggling** — foreclosed by the closed payload: there is no member in which to embed a transaction, a message, or an instruction, so a key proof can never be socially engineered into "signing something".
 - **Session capture** — foreclosed by single-shot: no pairing or channel exists to hijack after completion.
 - **Cross-DID linkage** — the one-key-one-DID holder rule above; the linkage risk is public and permanent by construction of the has-ever-declared index, which is why the refusal belongs in the holder's tooling, before any signature exists.
+- **Operator-named oracle** — the resolution's `relay` member hands the pre-flight's data source to the same party that runs the ceremony, which is trust the ceremony already extends: the operator decides what its completion effects, and a holder's own configured relay always takes precedence over the member. It reaches only the holder that brought no oracle at all — for whom the alternative was no check running — and it is ceremony-scoped by rule: a holder that registered it as a standing peer would be extending trust the ceremony never asked for.
 - **Key-type agility** — the grammar carries any chain-admissible Multikey; admitting a new key type to identity chains is a deliberate protocol-level act with its own review, and this envelope inherits the result without amendment.
 
 ---
