@@ -26,6 +26,17 @@
   identity ever declared this key", which is the exact claim the key page must
   never make from an outage.
 
+  THE TWO OPAQUE KEY FILTERS TAKE THEIR RELAY SET AS A PARAMETER, and it is not
+  `getRelays()`. Every other route here fails over across the whole configured set
+  and that is correct, because every other param is one a relay either honours or
+  400s. `key=` and `signerKey=` are specified as opaque matches that never 400, so
+  a relay predating either IGNORES it and answers 200 with an unfiltered page —
+  and a failover that takes the first 2xx from ANY relay will happily take that
+  one, whatever a probe said about some other relay. So those queries live in
+  their own functions with a REQUIRED `relays`, carrying only the relays whose own
+  probe cleared them (lib/index-light.ts). The gate is a parameter you cannot
+  forget rather than a sentence in a doc comment.
+
   AN ALL-DECLINED SET THROWS, deliberately. A relay predating a route answers
   404/501, and folding that into `{ items: [] }` renders a false-empty
   indistinguishable from "this relay holds no artifacts". The throw surfaces as
@@ -357,37 +368,74 @@ export const nextCursor = (body: unknown): string | null => {
 // page loaders
 // -----------------------------------------------------------------------------
 
+/** One page of the operations index, against a caller-chosen relay set. */
+const operationsPage = async (
+  params: Record<string, string | number | undefined>,
+  relays: string[],
+): Promise<{ items: IndexOperationRow[]; next: string | null }> => {
+  const body = await fetchIndexPage<unknown>('operations', params, relays);
+  return { items: toOperationRows(body), next: nextCursor(body) };
+};
+
 /**
- * One page of the operation recency feed. Throws when no relay serves the route.
+ * One page of the operation recency feed, across every configured relay. Throws
+ * when no relay serves the route.
  *
- * `signerKey` is the proof-tier actor filter — an exact multibase match against
- * the public key each row's signature verified against at ingest (WEB-RELAY.md,
- * Operations). It is passed VERBATIM: the relay matches it as opaque bytes, so
- * normalizing it here would silently ask a different question than the one
- * pasted. A relay predating the filter IGNORES it and answers with the
- * UNFILTERED feed, which no caller may present as key-scoped — gate on
- * `useIndexSignerKeyFilter` before asking.
+ * Carries no opaque filter, so any index relay may answer it: `order` and `kind`
+ * are validated params a relay either honours or 400s, never ones it can silently
+ * ignore into a wrong page. The key-scoped filter is a different function for
+ * exactly that reason — see {@link fetchSignerKeyOperationsPage}.
  */
 export const fetchOperationsPage = async (params: {
   order: IndexRecency;
   kind?: string;
-  signerKey?: string;
   after?: string;
   limit?: number;
-}): Promise<{ items: IndexOperationRow[]; next: string | null }> => {
-  const body = await fetchIndexPage<unknown>(
-    'operations',
+}): Promise<{ items: IndexOperationRow[]; next: string | null }> =>
+  operationsPage(
     {
       order: params.order,
       ...(params.kind ? { kind: params.kind } : {}),
-      ...(params.signerKey ? { signerKey: params.signerKey } : {}),
       ...(params.after ? { after: params.after } : {}),
       limit: params.limit ?? PAGE,
     },
     getRelays(),
   );
-  return { items: toOperationRows(body), next: nextCursor(body) };
-};
+
+/**
+ * One page of the operations index narrowed to ONE SIGNING KEY. Throws when no
+ * relay in `relays` serves the route.
+ *
+ * `signerKey` is the proof-tier actor filter — an exact multibase match against
+ * the public key each row's signature verified against at ingest (WEB-RELAY.md,
+ * Operations). It is passed VERBATIM: the relay matches it as opaque bytes, so
+ * normalizing it here would silently ask a different question than the one pasted.
+ *
+ * `relays` IS REQUIRED, and it is not the configured set. A relay predating this
+ * filter ignores it and answers with the UNFILTERED feed, so this query may only
+ * be sent to relays whose own body probe said they honour it
+ * (`useIndexSignerKeyFilterRelays` in ./index-light). Reading `getRelays()` here
+ * is precisely the bug the split exists to make unwriteable: the failover takes
+ * the first 2xx from ANY relay it is handed, so an unvetted relay in this list
+ * ends up presenting the whole operation log as this key's signings. An empty
+ * list asks nothing and throws, which is the honest degrade.
+ */
+export const fetchSignerKeyOperationsPage = async (params: {
+  signerKey: string;
+  relays: string[];
+  order: IndexRecency;
+  after?: string;
+  limit?: number;
+}): Promise<{ items: IndexOperationRow[]; next: string | null }> =>
+  operationsPage(
+    {
+      order: params.order,
+      signerKey: params.signerKey,
+      ...(params.after ? { after: params.after } : {}),
+      limit: params.limit ?? PAGE,
+    },
+    params.relays,
+  );
 
 /** One page of the artifact enumeration. Throws when no relay serves the route. */
 export const fetchArtifactsPage = async (params: {
@@ -482,9 +530,17 @@ export const fetchCountersignaturesPage = async (params: {
  * The value is passed VERBATIM. The relay matches it byte-for-byte against the
  * multibase strings in accepted operations' key arrays, so normalizing it here
  * would silently ask a different question than the one pasted.
+ *
+ * `relays` IS REQUIRED, and it is not the configured set — same reason as
+ * {@link fetchSignerKeyOperationsPage}. `key=` is an opaque match a relay
+ * predating it IGNORES, so only relays whose own body probe cleared them
+ * (`useIndexKeyFilterRelays` in ./index-light) may be asked; the failover would
+ * otherwise take an unvetted relay's unfiltered identity page and this surface
+ * would print every identity on it as a declarer of the key.
  */
 export const fetchIdentitiesByKeyPage = async (params: {
   key: string;
+  relays: string[];
   after?: string;
   limit?: number;
 }): Promise<{ items: IndexIdentityRow[]; next: string | null }> => {
@@ -495,7 +551,7 @@ export const fetchIdentitiesByKeyPage = async (params: {
       ...(params.after ? { after: params.after } : {}),
       limit: params.limit ?? PAGE,
     },
-    getRelays(),
+    params.relays,
   );
   return { items: toIdentityRows(body), next: nextCursor(body) };
 };
@@ -503,10 +559,11 @@ export const fetchIdentitiesByKeyPage = async (params: {
 /**
  * Page the identities that have ever declared one public key.
  *
- * `enabled` carries TWO gates, not one: a relay index must exist, and the serving
- * relay must honour `key=` (`useIndexKeyFilter` in ./index-light). A relay
- * predating the filter ignores it and answers with the unfiltered identity list,
- * so running this ungated would present the whole corpus as key matches.
+ * `enabled` carries TWO gates, not one: a relay index must exist, and `relays`
+ * must be non-empty — the subset whose own probe said they honour `key=`
+ * (`useIndexKeyFilterRelays` in ./index-light). The set is also part of the
+ * resetKey: a query bound to different relays is a different query, and a cursor
+ * minted against the old one means nothing to it.
  *
  * No `order=` is offered. `key=` and the ordered enumeration are independent
  * filters, and this lane wants the route's plain lexical `did` cursor — the one
@@ -515,14 +572,15 @@ export const fetchIdentitiesByKeyPage = async (params: {
 export const useIndexIdentitiesByKey = (
   enabled: boolean,
   key: string,
+  relays: string[],
   opts?: { cursor?: string; onCursor?: (cursor: string) => void },
 ): IndexPage<IndexIdentityRow> =>
   useIndexPageStack(
     enabled,
-    `identities-by-key:${key}`,
+    `identities-by-key:${key}:${relays.join(',')}`,
     opts?.cursor ?? '',
     opts?.onCursor,
-    (after) => fetchIdentitiesByKeyPage({ key, ...(after ? { after } : {}) }),
+    (after) => fetchIdentitiesByKeyPage({ key, relays, ...(after ? { after } : {}) }),
   );
 
 /** One page of the credit projection. Throws when no relay serves the route. */

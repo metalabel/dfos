@@ -3,11 +3,13 @@ import { describe, expect, it } from 'vitest';
 import type { ChainRollup } from '../src/lib/db';
 import { openExplorerDb } from '../src/lib/db';
 import {
+  bodyNamesOperation,
   checkDivergence,
-  classifyStatuses,
+  classifyAnswers,
   sampleChainHeads,
   summarize,
   type ProbeOutcome,
+  type RelayAnswer,
 } from '../src/lib/divergence';
 
 const chain = (
@@ -23,35 +25,88 @@ const chain = (
   headCid,
 });
 
-describe('classifyStatuses — only an ANSWERED absence counts', () => {
-  it('any 2xx is present, whatever the other relays said', () => {
-    expect(classifyStatuses([200])).toBe('present');
-    expect(classifyStatuses([404, 200])).toBe('present');
-    expect(classifyStatuses([0, 500, 204])).toBe('present');
+// A relay's answer is a status AND, on a 2xx, whether the body was the operation
+// asked for. Both halves have to be definitive: an absence only from an answered
+// 404, a presence only from a body that names the op.
+const answered = (status: number, namesOp = status >= 200 && status < 300): RelayAnswer => ({
+  status,
+  namesOp,
+});
+
+describe('bodyNamesOperation — a 200 is a response, not the operation', () => {
+  it('accepts the body both relay twins serve for this route', () => {
+    expect(
+      bodyNamesOperation(
+        { cid: 'bafy-a', jwsToken: 'eyJ…', chainType: 'identity', chainId: 'did:dfos:aaa' },
+        'bafy-a',
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects a body that names a DIFFERENT operation', () => {
+    expect(bodyNamesOperation({ cid: 'bafy-b' }, 'bafy-a')).toBe(false);
+  });
+
+  it('rejects everything that names nothing at all', () => {
+    // the catch-all host: an SPA serving index.html parses to null, or to JSON
+    // with no cid — either way it has told us nothing about this operation
+    expect(bodyNamesOperation(null, 'bafy-a')).toBe(false);
+    expect(bodyNamesOperation(undefined, 'bafy-a')).toBe(false);
+    expect(bodyNamesOperation({}, 'bafy-a')).toBe(false);
+    expect(bodyNamesOperation({ cid: 42 }, 'bafy-a')).toBe(false);
+    expect(bodyNamesOperation('<!doctype html>', 'bafy-a')).toBe(false);
+  });
+});
+
+describe('classifyAnswers — only an ANSWERED absence and a NAMED presence count', () => {
+  it('a 2xx naming the op is present, whatever the other relays said', () => {
+    expect(classifyAnswers([answered(200)])).toBe('present');
+    expect(classifyAnswers([answered(404), answered(200)])).toBe('present');
+    expect(classifyAnswers([answered(0), answered(500), answered(204)])).toBe('present');
+  });
+
+  // THE CATCH-ALL 200. A host answering index.html for every path used to make
+  // every sampled op 'present' and the whole check read ALIGNED — divergence
+  // detection switched off, silently, by a misconfiguration.
+  it('a 2xx whose body does not name the op is UNKNOWN, never present', () => {
+    expect(classifyAnswers([{ status: 200, namesOp: false }])).toBe('unknown');
+    expect(
+      classifyAnswers([
+        { status: 200, namesOp: false },
+        { status: 200, namesOp: false },
+      ]),
+    ).toBe('unknown');
+  });
+
+  // …and never ABSENT either: the host answered, it just answered nothing about
+  // this operation. Reading that as a definite absence would flip the failure
+  // from a false 'aligned' to a false 'diverged'.
+  it('a catch-all 200 beside a real 404 is unknown, not absence', () => {
+    expect(classifyAnswers([answered(404), { status: 200, namesOp: false }])).toBe('unknown');
   });
 
   it('a 404/410 from every relay is a definite absence', () => {
-    expect(classifyStatuses([404])).toBe('absent');
-    expect(classifyStatuses([404, 410])).toBe('absent');
+    expect(classifyAnswers([answered(404)])).toBe('absent');
+    expect(classifyAnswers([answered(404), answered(410)])).toBe('absent');
   });
 
   it('a network failure is UNKNOWN, never divergence', () => {
-    expect(classifyStatuses([0])).toBe('unknown');
-    expect(classifyStatuses([0, 0])).toBe('unknown');
+    expect(classifyAnswers([answered(0)])).toBe('unknown');
+    expect(classifyAnswers([answered(0), answered(0)])).toBe('unknown');
     // one relay says gone, the other never answered — we did not look everywhere
-    expect(classifyStatuses([404, 0])).toBe('unknown');
+    expect(classifyAnswers([answered(404), answered(0)])).toBe('unknown');
   });
 
   it('server errors and gating are inconclusive, not absence', () => {
-    expect(classifyStatuses([500])).toBe('unknown');
-    expect(classifyStatuses([503, 404])).toBe('unknown');
-    expect(classifyStatuses([401])).toBe('unknown');
-    expect(classifyStatuses([403, 404])).toBe('unknown');
-    expect(classifyStatuses([429])).toBe('unknown');
+    expect(classifyAnswers([answered(500)])).toBe('unknown');
+    expect(classifyAnswers([answered(503), answered(404)])).toBe('unknown');
+    expect(classifyAnswers([answered(401)])).toBe('unknown');
+    expect(classifyAnswers([answered(403), answered(404)])).toBe('unknown');
+    expect(classifyAnswers([answered(429)])).toBe('unknown');
   });
 
   it('no relays probed at all is inconclusive', () => {
-    expect(classifyStatuses([])).toBe('unknown');
+    expect(classifyAnswers([])).toBe('unknown');
   });
 });
 
@@ -126,15 +181,25 @@ describe('sampleChainHeads — an even spread, oldest first', () => {
 describe('checkDivergence — over a real store', () => {
   const freshDb = () => openExplorerDb(`divergence-${Math.random()}`, new IDBFactory());
 
+  /** A stub relay. A 2xx serves the operation body the real route serves — echoing
+   *  back the CID in the URL — unless `body` overrides it, which is how the
+   *  catch-all host is expressed. */
   const withFetch = async (
-    handler: (url: string) => { status: number } | 'throw',
+    handler: (url: string) => { status: number; body?: unknown } | 'throw',
     run: () => Promise<void>,
   ): Promise<void> => {
     const original = globalThis.fetch;
     globalThis.fetch = ((input: RequestInfo | URL) => {
-      const out = handler(String(input));
+      const url = String(input);
+      const out = handler(url);
       if (out === 'throw') return Promise.reject(new Error('network'));
-      return Promise.resolve({ status: out.status } as Response);
+      const cid = decodeURIComponent(url.slice(url.lastIndexOf('/') + 1));
+      const body = 'body' in out ? out.body : { cid, jwsToken: 'eyJ…' };
+      return Promise.resolve({
+        status: out.status,
+        json: () =>
+          body === undefined ? Promise.reject(new Error('not json')) : Promise.resolve(body),
+      } as Response);
     }) as typeof fetch;
     try {
       await run();
@@ -178,6 +243,35 @@ describe('checkDivergence — over a real store', () => {
         const report = await checkDivergence({ db, relays: ['http://r'] });
         expect(report.verdict).toBe('unknown');
         expect(report.absent).toBe(0);
+      },
+    );
+    db.close();
+  });
+
+  it('a host answering 200 to everything reads UNKNOWN, not aligned', async () => {
+    // the whole point: a misconfigured host must not be able to certify the
+    // mirror. Nothing it said was evidence, so the check says it could not look.
+    const db = await freshDb();
+    await db.putBatch([], [chain('a', '2026-01-01'), chain('b', '2026-02-01')]);
+    await withFetch(
+      () => ({ status: 200, body: undefined }), // index.html — parses to nothing
+      async () => {
+        const report = await checkDivergence({ db, relays: ['http://r'] });
+        expect(report.verdict).toBe('unknown');
+        expect(report.present).toBe(0);
+        expect(report.absent).toBe(0);
+      },
+    );
+    db.close();
+  });
+
+  it('a 200 naming a DIFFERENT operation is not evidence this one is here', async () => {
+    const db = await freshDb();
+    await db.putBatch([], [chain('a', '2026-01-01')]);
+    await withFetch(
+      () => ({ status: 200, body: { cid: 'bafy-someone-else' } }),
+      async () => {
+        expect((await checkDivergence({ db, relays: ['http://r'] })).verdict).toBe('unknown');
       },
     );
     db.close();

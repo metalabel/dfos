@@ -27,7 +27,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { getClient } from './client';
 import type { VerifyVerdict } from './db';
 import { getDb } from './db-instance';
-import { jitIndexChain } from './sync-store';
+import { currentDbGeneration, jitIndexChain, writeIfCurrent } from './sync-store';
 
 /** The chain kinds a browse row can carry — the only two that fold as a history. */
 export type VerifyKind = 'identity' | 'content';
@@ -87,16 +87,24 @@ const loadVerdict = async (k: string): Promise<VerifyVerdict | undefined> => {
   }
 };
 
-/** Best-effort persist of a fold verdict so a reload trusts it without a fold. */
-const persistVerdict = async (k: string, facts: VerifiedFacts): Promise<void> => {
+/** Best-effort persist of a fold verdict so a reload trusts it without a fold.
+ *  Fenced on the wipe generation captured when the fold began: a verdict landing
+ *  after a reset would leave the emptied store asserting a chain was verified,
+ *  with none of the ops that verdict was folded from. */
+const persistVerdict = async (
+  k: string,
+  facts: VerifiedFacts,
+  generation: number,
+): Promise<void> => {
   try {
-    await (
-      await getDb()
-    ).putVerify({
-      key: k,
-      opCount: facts.opCount,
-      isDeleted: facts.isDeleted,
-      verifiedAt: Date.now(),
+    const db = await getDb();
+    await writeIfCurrent(generation, async () => {
+      await db.putVerify({
+        key: k,
+        opCount: facts.opCount,
+        isDeleted: facts.isDeleted,
+        verifiedAt: Date.now(),
+      });
     });
   } catch {
     // durable verdicts are an optimization, never a correctness requirement
@@ -124,6 +132,10 @@ const setRecord = (k: string, rec: VerifyRecord): void => {
  *  contradiction) → status error (NOT persisted — errors are transient). */
 const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Promise<void> => {
   const k = key(kind, chainId);
+  // the fold below is a network round trip; a reset can land inside it. Both
+  // writes this job makes are fenced on the store as it stands NOW, so neither
+  // repopulates an index the user has since cleared (lib/sync-store.ts).
+  const generation = currentDbGeneration();
   try {
     // durable verdict first: a prior fold recorded at an opCount >= the relay's
     // current hint is trusted with NO network fold — the ops are already local,
@@ -145,22 +157,22 @@ const run = async (kind: VerifyKind, chainId: string, hintOpCount?: number): Pro
         client.identity(chainId),
         client.log('identity', chainId),
       ]);
-      void jitIndexChain(chainId, 'identity-op', log.value);
+      void jitIndexChain(chainId, 'identity-op', log.value, generation);
       const facts: VerifiedFacts = { isDeleted: res.value.isDeleted, opCount: log.value.length };
       setRecord(k, { status: 'verified', facts });
-      void persistVerdict(k, facts);
+      void persistVerdict(k, facts, generation);
     } else {
       const [res, log] = await Promise.all([
         client.content(chainId),
         client.log('content', chainId),
       ]);
-      void jitIndexChain(chainId, 'content-op', log.value);
+      void jitIndexChain(chainId, 'content-op', log.value, generation);
       const facts: VerifiedFacts = {
         isDeleted: res.value.chain.isDeleted,
         opCount: log.value.length,
       };
       setRecord(k, { status: 'verified', facts });
-      void persistVerdict(k, facts);
+      void persistVerdict(k, facts, generation);
     }
   } catch (e) {
     setRecord(k, { status: 'error', error: e instanceof Error ? e.message : String(e) });

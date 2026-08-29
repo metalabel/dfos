@@ -60,7 +60,7 @@ import {
   revocationStatus,
   type RevocationView,
 } from '../lib/revocations';
-import { jitIndexChain } from '../lib/sync-store';
+import { currentDbGeneration, jitIndexChain } from '../lib/sync-store';
 import { NotFound } from './not-found';
 
 /** Ceiling on the offline credential scan behind the access-grants panel. The
@@ -159,6 +159,10 @@ export const Content = (props: { id: string }) => {
       if (!dead) setClaim(c);
     });
 
+    // the local index as it stands BEFORE the fold: a reset can land while these
+    // round trips are out, and a JIT write that resolves after it would repopulate
+    // a store the user just cleared (lib/sync-store.ts, the wipe generation)
+    const generation = currentDbGeneration();
     void (async () => {
       try {
         const [res, log] = await Promise.all([
@@ -169,7 +173,7 @@ export const Content = (props: { id: string }) => {
         setResolved(res);
         setRows(toOpRows(log.value));
         // JIT: land the content chain in the local index…
-        void jitIndexChain(props.id, 'content-op', log.value);
+        void jitIndexChain(props.id, 'content-op', log.value, generation);
         // …and pull the creator's identity (its keys/services) into the index
         // too, so navigating a chain fills in the actors around it
         const creator = res.value.chain.creatorDID;
@@ -177,7 +181,7 @@ export const Content = (props: { id: string }) => {
           void client
             .log('identity', creator)
             .then((idLog) => {
-              if (!dead) void jitIndexChain(creator, 'identity-op', idLog.value);
+              if (!dead) void jitIndexChain(creator, 'identity-op', idLog.value, generation);
             })
             .catch(() => {
               // best-effort prefetch — the creator link still resolves on click

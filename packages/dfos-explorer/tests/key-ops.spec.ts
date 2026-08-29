@@ -17,7 +17,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { bodyFilterFromProbe, decideBodyFilter, KEY_PROBE_MULTIBASE } from '../src/lib/index-light';
+import {
+  bodyFilterFromProbe,
+  KEY_PROBE_MULTIBASE,
+  supportedBodyFilterRelays,
+} from '../src/lib/index-light';
 import { toOperationRows } from '../src/lib/index-raw';
 import { chainKindOf, signerOpCount, signerOpCountLabel } from '../src/lib/key-ops';
 import { indexOpRows } from '../src/lib/log-feed';
@@ -35,12 +39,12 @@ describe('signerKey= probe — the body verdict', () => {
     // nothing holds the sentinel's private half, so nothing can have signed with
     // it: a row in this answer is the relay ignoring the filter, never a match
     expect(bodyFilterFromProbe(200, 1)).toBe(false);
-    expect(decideBodyFilter([{ status: 200, rows: 20 }])).toBe(false);
+    expect(supportedBodyFilterRelays([{ relay: 'a', status: 200, rows: 20 }])).toEqual([]);
   });
 
   it('reads a served empty page as the param being applied', () => {
     expect(bodyFilterFromProbe(200, 0)).toBe(true);
-    expect(decideBodyFilter([{ status: 200, rows: 0 }])).toBe(true);
+    expect(supportedBodyFilterRelays([{ relay: 'a', status: 200, rows: 0 }])).toEqual(['a']);
   });
 
   // `/index/v0/operations` is NEWER than the capabilities.index flag, so a relay
@@ -51,11 +55,11 @@ describe('signerKey= probe — the body verdict', () => {
     expect(bodyFilterFromProbe(404, 0)).toBeNull();
     expect(bodyFilterFromProbe(501, 0)).toBeNull();
     expect(
-      decideBodyFilter([
-        { status: 501, rows: 0 },
-        { status: 404, rows: 0 },
+      supportedBodyFilterRelays([
+        { relay: 'a', status: 501, rows: 0 },
+        { relay: 'b', status: 404, rows: 0 },
       ]),
-    ).toBe(false);
+    ).toEqual([]);
   });
 
   // one sentinel answers both filters: no chain has ever declared it (`key=`) and

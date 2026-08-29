@@ -123,16 +123,16 @@ const probeRelayStatus = async (base: string, path: string): Promise<number> => 
 // probe once per (feature, relay set), shared across every mount for the session
 // (a relay switch re-navigates, and the set key changes anyway, so this never
 // goes stale)
-const probeCache = new Map<string, Promise<boolean>>();
+const probeCache = new Map<string, Promise<unknown>>();
 
-/** Memoize one feature's verdict for one relay set. */
-const probeOnce = (
-  feature: string,
-  relays: string[],
-  run: () => Promise<boolean>,
-): Promise<boolean> => {
+/** Memoize one feature's verdict for one relay set. The verdict shape is the
+ *  feature's own — a boolean for the status-probed gates, the SUPPORTED RELAY
+ *  SUBSET for the body-probed ones — so this is generic over it; the feature name
+ *  and the relay set together key the cache, and a feature always answers in one
+ *  shape. */
+const probeOnce = <T>(feature: string, relays: string[], run: () => Promise<T>): Promise<T> => {
   const key = `${feature}|${relays.join('|')}`;
-  let cached = probeCache.get(key);
+  let cached = probeCache.get(key) as Promise<T> | undefined;
   if (!cached) {
     cached = run();
     probeCache.set(key, cached);
@@ -163,6 +163,39 @@ const useProbe = (feature: string, run: (relays: string[]) => Promise<boolean>):
       })
       .catch(() => {
         if (!dead) setSupported(false);
+      });
+    return () => {
+      dead = true;
+    };
+    // `run` is read via runRef so it is intentionally not a dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feature]);
+  return supported;
+};
+
+/**
+ * {@link useProbe} for a feature whose verdict is a RELAY SUBSET rather than one
+ * boolean — the two opaque key filters, whose queries must be bound to the
+ * relays that actually passed the probe (see the body-probe section below).
+ * `null` while in flight; a rejection reads as the EMPTY set, which is the same
+ * safe direction a `false` is for the boolean gates: nothing is asked at all.
+ */
+const useRelayProbe = (
+  feature: string,
+  run: (relays: string[]) => Promise<string[]>,
+): string[] | null => {
+  const [supported, setSupported] = useState<string[] | null>(null);
+  const runRef = useRef(run);
+  runRef.current = run;
+  useEffect(() => {
+    let dead = false;
+    const relays = getRelays();
+    void probeOnce(feature, relays, () => runRef.current(relays))
+      .then((v) => {
+        if (!dead) setSupported(v);
+      })
+      .catch(() => {
+        if (!dead) setSupported([]);
       });
     return () => {
       dead = true;
@@ -236,6 +269,19 @@ export const useIndexTitleSearch = (): boolean | null =>
 // The empty-corpus case reads as "supported" and is harmless: a relay holding
 // nothing answers a real query with nothing either way, so the page states a true
 // absence rather than inventing rows.
+//
+// THE VERDICT IS PER-RELAY, AND THE QUERY IS BOUND TO IT. This is the whole
+// difference between these two gates and the status-probed ones above. A single
+// collapsed boolean ("some relay supports it") is not a safe gate here, because
+// the query paths fail over relay by relay and serve the FIRST 2xx from ANY
+// configured relay: probe A as supported, have A be down at query time, and the
+// query lands on old relay B, which ignores the param and answers with the
+// unfiltered page — the exact fabrication above, reached through a gate that said
+// yes. So the probe keeps each relay's own verdict, and the filtered queries run
+// ONLY against relays whose OWN probe was definitive-supported. An INDETERMINATE
+// relay is excluded rather than trusted: it made no claim, and asking it is the
+// one thing we cannot take back. An empty supported set means the filter is
+// unsupported here and the lane says so — never a query against an unvetted relay.
 // -----------------------------------------------------------------------------
 
 /**
@@ -259,58 +305,73 @@ export const KEY_PROBE_MULTIBASE = 'z6MkoR9B2ETntZELcPzFTTMnbfhz3pHumPyJi5oEzQvC
 export const bodyFilterFromProbe = (status: number, rows: number): boolean | null =>
   status >= 200 && status < 300 ? rows === 0 : null;
 
-/** Decide an opaque filter's support from the ordered per-relay probe outcomes:
- *  the first DEFINITIVE relay wins (mirrors query failover), all-indeterminate →
- *  unsupported. The default degrades rather than risk presenting an unfiltered
- *  page as filtered matches. Pure, unit-tested. */
-export const decideBodyFilter = (probes: { status: number; rows: number }[]): boolean => {
-  for (const p of probes) {
-    const verdict = bodyFilterFromProbe(p.status, p.rows);
-    if (verdict !== null) return verdict;
-  }
-  return false;
-};
+/** One relay's body-probe outcome for a filter param, carrying WHICH relay it was
+ *  about — the binding the queries need. */
+export interface BodyFilterProbe {
+  relay: string;
+  status: number;
+  rows: number;
+}
+
+/** The relays a filtered query may honestly be sent to: those whose OWN probe was
+ *  definitive-SUPPORTED. An indeterminate relay (unreachable, 5xx, no such route)
+ *  is excluded, not deferred to — it made no claim, and the query fails over to
+ *  whatever answers, so a relay we could not vet must never be in the set. Order
+ *  is preserved so failover still walks the configured preference. Pure,
+ *  unit-tested. */
+export const supportedBodyFilterRelays = (probes: readonly BodyFilterProbe[]): string[] =>
+  probes.filter((p) => bodyFilterFromProbe(p.status, p.rows) === true).map((p) => p.relay);
+
+/** The UI gate derived from a supported-relay set: `null` while the probe is in
+ *  flight, else whether any relay can be asked at all. Pure, unit-tested. */
+export const bodyFilterSupported = (relays: string[] | null): boolean | null =>
+  relays === null ? null : relays.length > 0;
 
 /** One relay's body-probe outcome for a filter param. A network throw / abort
  *  reports status 0 (indeterminate), as does a body that isn't a readable page of
  *  `rowsKey` — a 2xx we cannot parse is no verdict about the filter. */
 const probeRelayBodyFilter = async (
-  base: string,
+  relay: string,
   path: string,
   rowsKey: string,
-): Promise<{ status: number; rows: number }> => {
+): Promise<BodyFilterProbe> => {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
   try {
-    const res = await fetch(new URL(path, base).toString(), { signal: ctrl.signal });
-    if (!res.ok) return { status: res.status, rows: 0 };
+    const res = await fetch(new URL(path, relay).toString(), { signal: ctrl.signal });
+    if (!res.ok) return { relay, status: res.status, rows: 0 };
     const body = (await res.json()) as Record<string, unknown>;
     const rows = body[rowsKey];
-    if (!Array.isArray(rows)) return { status: 0, rows: 0 };
-    return { status: res.status, rows: rows.length };
+    if (!Array.isArray(rows)) return { relay, status: 0, rows: 0 };
+    return { relay, status: res.status, rows: rows.length };
   } catch {
-    return { status: 0, rows: 0 }; // unreachable / aborted / unparseable
+    return { relay, status: 0, rows: 0 }; // unreachable / aborted / unparseable
   } finally {
     clearTimeout(timer);
   }
 };
 
-/** The BODY-shaped probe: ask every relay in parallel, read the verdict off the
- *  ordered outcomes (rows ignore / empty applies). */
-const probeBodyFilter = (path: string, rowsKey: string, relays: string[]): Promise<boolean> =>
-  Promise.all(relays.map((base) => probeRelayBodyFilter(base, path, rowsKey))).then(
-    decideBodyFilter,
+/** The BODY-shaped probe: ask every relay in parallel, keep each relay's own
+ *  verdict, and return the subset that passed. */
+const probeBodyFilterRelays = (
+  path: string,
+  rowsKey: string,
+  relays: string[],
+): Promise<string[]> =>
+  Promise.all(relays.map((relay) => probeRelayBodyFilter(relay, path, rowsKey))).then(
+    supportedBodyFilterRelays,
   );
 
 /**
- * Whether the serving relay honours `key=` on the identity index. `null` while
- * the probe is in flight — the key page says it is checking rather than running a
- * query whose rows it could not stand behind — then a stable boolean. Same
- * module-cached, once-per-session idiom as the gates above.
+ * The relays that honour `key=` on the identity index — the ONLY relays the
+ * has-ever-declared lookup may be sent to. `null` while the probe is in flight
+ * (the key page says it is checking rather than running a query whose rows it
+ * could not stand behind), then a stable set; `[]` is "no relay here answers this
+ * question". Same module-cached, once-per-session idiom as the gates above.
  */
-export const useIndexKeyFilter = (): boolean | null =>
-  useProbe('key', (relays) =>
-    probeBodyFilter(
+export const useIndexKeyFilterRelays = (): string[] | null =>
+  useRelayProbe('key', (relays) =>
+    probeBodyFilterRelays(
       `/index/v0/identities?key=${encodeURIComponent(KEY_PROBE_MULTIBASE)}&limit=1`,
       'identities',
       relays,
@@ -318,17 +379,17 @@ export const useIndexKeyFilter = (): boolean | null =>
   );
 
 /**
- * Whether the serving relay honours `signerKey=` on the operations index — the
- * proof-tier "what has this key signed" filter. `null` while the probe is in
- * flight, then a stable boolean.
+ * The relays that honour `signerKey=` on the operations index — the proof-tier
+ * "what has this key signed" filter. `null` while the probe is in flight, then a
+ * stable set.
  *
  * A relay that does not serve `/index/v0/operations` at all answers 404/501,
- * which is indeterminate here and degrades to unsupported once no relay is
- * definitive — the same safe direction, reached without a second probe.
+ * which is indeterminate here and simply leaves it out of the set — the same safe
+ * direction, reached without a second probe.
  */
-export const useIndexSignerKeyFilter = (): boolean | null =>
-  useProbe('signerKey', (relays) =>
-    probeBodyFilter(
+export const useIndexSignerKeyFilterRelays = (): string[] | null =>
+  useRelayProbe('signerKey', (relays) =>
+    probeBodyFilterRelays(
       `/index/v0/operations?signerKey=${encodeURIComponent(KEY_PROBE_MULTIBASE)}&limit=1`,
       'operations',
       relays,

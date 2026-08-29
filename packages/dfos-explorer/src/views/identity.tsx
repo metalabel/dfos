@@ -98,7 +98,7 @@ import {
   revocationStatus,
   type RevocationView,
 } from '../lib/revocations';
-import { jitIndexChain } from '../lib/sync-store';
+import { currentDbGeneration, jitIndexChain } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
 import { useHashParam } from '../router';
 import { NotFound } from './not-found';
@@ -218,6 +218,9 @@ export const Identity = (props: { did: string }) => {
     });
 
     const client = getClient();
+    // the local index as it stands BEFORE the fold — a reset landing inside these
+    // round trips must not be undone by the JIT write below (lib/sync-store.ts)
+    const generation = currentDbGeneration();
     void (async () => {
       try {
         const [res, log] = await Promise.all([
@@ -229,7 +232,7 @@ export const Identity = (props: { did: string }) => {
         setRows(toOpRows(log.value));
         // JIT: land this identity's verified ops in the local index so it shows
         // up there without a full sync (relay-asserted routing metadata only)
-        void jitIndexChain(props.did, 'identity-op', log.value);
+        void jitIndexChain(props.did, 'identity-op', log.value, generation);
       } catch (e) {
         if (!dead) setError(e instanceof Error ? e.message : String(e));
       }
