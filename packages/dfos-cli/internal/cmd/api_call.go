@@ -406,7 +406,10 @@ func selectCredentialForHost(host string) (*spendableCredential, error) {
 	var candidates []*spendableCredential
 	var expired []*spendableCredential
 	for _, item := range items {
-		record, err := readStoredCredential(credentialPath(item.SubjectDID))
+		// Read back by the file the item CAME FROM. The store holds one file per
+		// (subject, host), so re-deriving a path from the subject alone would read
+		// one host's credential while scanning another's.
+		record, err := readStoredCredential(item.path())
 		if err != nil {
 			continue
 		}

@@ -983,7 +983,7 @@ func TestLoginClientRejectsAnEditedRecord(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCredentialFileName(t *testing.T) {
-	got := credentialFileName(testLoginSubject)
+	got := credentialFileName(testLoginSubject, "")
 	if strings.Contains(got, ":") {
 		t.Fatalf("credential filename %q keeps a colon", got)
 	}
@@ -1053,7 +1053,7 @@ func TestStoreLoginCredential(t *testing.T) {
 	setupLoginClientEnv(t)
 	lc, _ := newTestLoginClient(t)
 
-	path, err := storeLoginCredential(testLoginSubject, lc, "cred.header.sig")
+	path, err := storeLoginCredential(testLoginSubject, lc, "cred.header.sig", "")
 	if err != nil {
 		t.Fatalf("storeLoginCredential: %v", err)
 	}
@@ -1064,7 +1064,7 @@ func TestStoreLoginCredential(t *testing.T) {
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("%s mode = %o, want 600", path, perm)
 	}
-	dir, err := os.Stat(strings.TrimSuffix(path, "/"+credentialFileName(testLoginSubject)))
+	dir, err := os.Stat(strings.TrimSuffix(path, "/"+credentialFileName(testLoginSubject, "")))
 	if err != nil {
 		t.Fatalf("stat credentials dir: %v", err)
 	}
@@ -1104,12 +1104,12 @@ func TestStoreLoginCredentialReplacesRatherThanFollows(t *testing.T) {
 	if err := os.WriteFile(elsewhere, []byte("untouched\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(dir, credentialFileName(testLoginSubject))
+	target := filepath.Join(dir, credentialFileName(testLoginSubject, ""))
 	if err := os.Symlink(elsewhere, target); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	path, err := storeLoginCredential(testLoginSubject, lc, "cred.header.sig")
+	path, err := storeLoginCredential(testLoginSubject, lc, "cred.header.sig", "")
 	if err != nil {
 		t.Fatalf("storeLoginCredential: %v", err)
 	}
@@ -1125,14 +1125,14 @@ func TestStoreLoginCredentialReplacesRatherThanFollows(t *testing.T) {
 	}
 
 	// A second login overwrites in place, leaving no temp files behind.
-	if _, err := storeLoginCredential(testLoginSubject, lc, "second.header.sig"); err != nil {
+	if _, err := storeLoginCredential(testLoginSubject, lc, "second.header.sig", ""); err != nil {
 		t.Fatalf("second store: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != credentialFileName(testLoginSubject) {
+	if len(entries) != 1 || entries[0].Name() != credentialFileName(testLoginSubject, "") {
 		names := make([]string, len(entries))
 		for i, e := range entries {
 			names[i] = e.Name()

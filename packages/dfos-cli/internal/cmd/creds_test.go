@@ -22,8 +22,8 @@ func TestCredsCommands(t *testing.T) {
 			name: "list sorts records and marks expiry",
 			run: func(t *testing.T) {
 				setupCredsTest(t)
-				writeCredentialRecord(t, testLoginOther, "not-a-jws")
-				writeCredentialRecord(t, testLoginSubject, testCredentialToken(t, 1))
+				writeCredentialRecord(t, testLoginOther, "", "not-a-jws")
+				writeCredentialRecord(t, testLoginSubject, "", testCredentialToken(t, 1))
 
 				var got []storedCredentialListItem
 				runJSON(t, newCredsListCmd(), nil, &got)
@@ -46,7 +46,7 @@ func TestCredsCommands(t *testing.T) {
 			run: func(t *testing.T) {
 				setupCredsTest(t)
 				cfg.Identities["alice"] = config.IdentityConfig{DID: testLoginSubject}
-				writeCredentialRecord(t, testLoginSubject, testCredentialToken(t, 1234))
+				writeCredentialRecord(t, testLoginSubject, "", testCredentialToken(t, 1234))
 
 				var got struct {
 					SubjectDID string         `json:"subjectDid"`
@@ -66,13 +66,13 @@ func TestCredsCommands(t *testing.T) {
 			name: "rm accepts bare DID and errors when absent",
 			run: func(t *testing.T) {
 				setupCredsTest(t)
-				writeCredentialRecord(t, testLoginSubject, testCredentialToken(t, 1234))
+				writeCredentialRecord(t, testLoginSubject, "", testCredentialToken(t, 1234))
 				var got map[string]string
 				runJSON(t, newCredsRemoveCmd(), []string{testLoginSubject}, &got)
 				if got["removed"] != testLoginSubject {
 					t.Fatalf("rm output = %#v", got)
 				}
-				if _, err := os.Stat(credentialPath(testLoginSubject)); !os.IsNotExist(err) {
+				if _, err := os.Stat(credentialPath(testLoginSubject, "")); !os.IsNotExist(err) {
 					t.Fatalf("credential still exists: %v", err)
 				}
 				cmd := newCredsRemoveCmd()
@@ -81,11 +81,74 @@ func TestCredsCommands(t *testing.T) {
 				}
 			},
 		},
+		{
+			// One subject, two hosts, two files. A subject stopped being an
+			// address the moment a second login could land beside the first, so
+			// show and rm name which one rather than picking.
+			name: "show and rm refuse to guess between a subject's hosts",
+			run: func(t *testing.T) {
+				setupCredsTest(t)
+				writeCredentialRecord(t, testLoginSubject, "a.example.test", testCredentialForHost(t, "a.example.test"))
+				writeCredentialRecord(t, testLoginSubject, "b.example.test", testCredentialForHost(t, "b.example.test"))
+
+				show := newCredsShowCmd()
+				err := show.RunE(show, []string{testLoginSubject})
+				if err == nil || !strings.Contains(err.Error(), "--host") {
+					t.Fatalf("show with two stored credentials must ask which: %v", err)
+				}
+				for _, host := range []string{"a.example.test", "b.example.test"} {
+					if !strings.Contains(err.Error(), host) {
+						t.Fatalf("the refusal must name %s:\n%v", host, err)
+					}
+				}
+
+				var shown struct {
+					Credential string `json:"credential"`
+				}
+				showOne := newCredsShowCmd()
+				if err := showOne.Flags().Set("host", "b.example.test"); err != nil {
+					t.Fatal(err)
+				}
+				runJSON(t, showOne, []string{testLoginSubject}, &shown)
+				if shown.Credential == "" {
+					t.Fatalf("show --host returned no credential: %+v", shown)
+				}
+
+				var removed map[string]string
+				removeOne := newCredsRemoveCmd()
+				if err := removeOne.Flags().Set("host", "a.example.test"); err != nil {
+					t.Fatal(err)
+				}
+				runJSON(t, removeOne, []string{testLoginSubject}, &removed)
+				if _, err := os.Stat(credentialPath(testLoginSubject, "a.example.test")); !os.IsNotExist(err) {
+					t.Fatalf("the named credential still exists: %v", err)
+				}
+				if _, err := os.Stat(credentialPath(testLoginSubject, "b.example.test")); err != nil {
+					t.Fatalf("removing one host's credential took the other: %v", err)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, tt.run)
 	}
+}
+
+// testCredentialForHost is a credential whose attenuation names api:<host> —
+// the string both the store's slot and `api call` read it by.
+func testCredentialForHost(t *testing.T, host string) string {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := protocol.CreateCredential(testLoginSubject, testLoginOther, testLoginSubject+"#key_test",
+		"api:"+host, "read", time.Hour, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
 }
 
 func setupCredsTest(t *testing.T) {
@@ -100,7 +163,9 @@ func setupCredsTest(t *testing.T) {
 	t.Cleanup(func() { cfg = previousCfg })
 }
 
-func writeCredentialRecord(t *testing.T, subjectDID, token string) {
+// writeCredentialRecord plants one record in the (subject, host) slot the store
+// keys by. host names the slot; what the token itself grants is its own claim.
+func writeCredentialRecord(t *testing.T, subjectDID, host, token string) {
 	t.Helper()
 	if err := os.MkdirAll(credentialStoreDir(), 0o700); err != nil {
 		t.Fatal(err)
@@ -116,7 +181,7 @@ func writeCredentialRecord(t *testing.T, subjectDID, token string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(credentialPath(subjectDID), data, 0o600); err != nil {
+	if err := os.WriteFile(credentialPath(subjectDID, host), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }

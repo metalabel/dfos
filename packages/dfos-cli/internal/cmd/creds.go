@@ -16,10 +16,20 @@ import (
 type storedCredentialListItem struct {
 	SubjectDID string `json:"subjectDid"`
 	ClientDID  string `json:"clientDid"`
-	ObtainedAt string `json:"obtainedAt"`
-	Expiry     *int64 `json:"expiry"`
-	Expired    bool   `json:"expired"`
+	// Hosts is every `api:<host>` the credential names — the hosts `api call`
+	// will select it for. Two records for one subject differ here and nowhere
+	// else visible, which is why the column exists.
+	Hosts      []string `json:"hosts"`
+	ObtainedAt string   `json:"obtainedAt"`
+	Expiry     *int64   `json:"expiry"`
+	Expired    bool     `json:"expired"`
 	fileName   string
+}
+
+// path is the file this item was read from. The store holds one file per
+// (subject, host), so a subject is no longer enough to name one.
+func (i storedCredentialListItem) path() string {
+	return filepath.Join(credentialStoreDir(), i.fileName)
 }
 
 func newCredsCmd() *cobra.Command {
@@ -58,17 +68,22 @@ func newCredsListCmd() *cobra.Command {
 				return nil
 			}
 
-			fmt.Printf("%-48s  %-48s  %-24s  %-24s  %s\n", "SUBJECT DID", "CLIENT DID", "OBTAINED AT", "EXPIRY", "STATUS")
+			fmt.Printf("%-48s  %-32s  %-48s  %-24s  %-24s  %s\n", "SUBJECT DID", "HOSTS", "CLIENT DID", "OBTAINED AT", "EXPIRY", "STATUS")
 			for _, item := range items {
 				expiry := "-"
 				status := ""
+				hosts := "-"
 				if item.Expiry != nil {
 					expiry = time.Unix(*item.Expiry, 0).UTC().Format("2006-01-02 15:04:05 UTC")
 				}
 				if item.Expired {
 					status = "EXPIRED"
 				}
-				fmt.Printf("%-48s  %-48s  %-24s  %-24s  %s\n", item.SubjectDID, item.ClientDID, item.ObtainedAt, expiry, status)
+				if len(item.Hosts) > 0 {
+					hosts = strings.Join(item.Hosts, ",")
+				}
+				fmt.Printf("%-48s  %-32s  %-48s  %-24s  %-24s  %s\n",
+					item.SubjectDID, hosts, item.ClientDID, item.ObtainedAt, expiry, status)
 			}
 			return nil
 		},
@@ -76,20 +91,20 @@ func newCredsListCmd() *cobra.Command {
 }
 
 func newCredsShowCmd() *cobra.Command {
-	return &cobra.Command{
+	var host string
+	cmd := &cobra.Command{
 		Use:   "show <name|did>",
 		Short: "Show a stored login credential and its decoded claims",
-		Args:  cobra.ExactArgs(1),
+		Long: "Show one stored login credential. A subject can hold one per API host, so --host <host> " +
+			"names which when there is more than one; with a single stored credential it is not needed.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			did, err := resolveIdentityDID(args[0])
 			if err != nil {
 				return err
 			}
-			record, err := readStoredCredential(credentialPath(did))
+			_, record, err := selectStoredCredential(did, host)
 			if err != nil {
-				if os.IsNotExist(err) {
-					return fmt.Errorf("no stored login credential for %s", did)
-				}
 				return err
 			}
 			_, claims, err := protocol.DecodeJWSUnsafe(record.Credential)
@@ -120,12 +135,18 @@ func newCredsShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&host, "host", "", "Which stored credential to show, by the API host it names")
+	return cmd
 }
 
 func newCredsRemoveCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:     "rm <name|did>",
-		Short:   "Remove a locally stored login credential",
+	var host string
+	cmd := &cobra.Command{
+		Use:   "rm <name|did>",
+		Short: "Remove a locally stored login credential",
+		Long: "Remove one stored login credential. A subject can hold one per API host, so --host <host> " +
+			"names which when there is more than one; removing them all would take one credential the user " +
+			"named and discard several they did not.",
 		Aliases: []string{"remove"},
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -133,20 +154,80 @@ func newCredsRemoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := os.Remove(credentialPath(did)); err != nil {
-				if os.IsNotExist(err) {
-					return fmt.Errorf("no stored login credential for %s", did)
-				}
+			path, _, err := selectStoredCredential(did, host)
+			if err != nil {
+				return err
+			}
+			if err := os.Remove(path); err != nil {
 				return fmt.Errorf("remove stored login credential for %s: %w", did, err)
 			}
 			if jsonFlag {
-				outputJSON(map[string]any{"removed": did})
+				outputJSON(map[string]any{"removed": did, "path": path})
 			} else {
-				fmt.Printf("Removed stored login credential for %s\n", did)
+				fmt.Printf("Removed stored login credential for %s (%s)\n", did, filepath.Base(path))
 			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&host, "host", "", "Which stored credential to remove, by the API host it names")
+	return cmd
+}
+
+// selectStoredCredential picks ONE of a subject's stored credentials, and
+// refuses to guess when the subject holds several.
+//
+// The store holds one file per (subject, host), so a subject alone stopped being
+// an address the moment a second login could land beside the first. host filters
+// on the credential's own `api:<host>` attenuation — the same string `api call`
+// selects on — so what the user types here is what they would type there.
+func selectStoredCredential(did, host string) (string, storedLoginCredential, error) {
+	paths, records, err := credentialFilesForSubject(did)
+	if err != nil {
+		return "", storedLoginCredential{}, err
+	}
+	if len(records) == 0 {
+		return "", storedLoginCredential{}, fmt.Errorf("no stored login credential for %s", did)
+	}
+
+	wanted := strings.TrimSpace(host)
+	if wanted == "" && len(records) == 1 {
+		return paths[0], records[0], nil
+	}
+
+	var hosts []string
+	var matches []int
+	for i, record := range records {
+		named := credentialAPIHosts(record.Credential)
+		hosts = append(hosts, credentialHostsLabel(named))
+		for _, name := range named {
+			if wanted != "" && strings.EqualFold(name, wanted) {
+				matches = append(matches, i)
+				break
+			}
+		}
+	}
+	switch {
+	case wanted == "":
+		return "", storedLoginCredential{}, fmt.Errorf("%s holds %d stored credentials (for %s) — name which one with --host <host>",
+			did, len(records), strings.Join(hosts, ", "))
+	case len(matches) == 0:
+		return "", storedLoginCredential{}, fmt.Errorf("no stored credential for %s names host %s (it holds %s)",
+			did, wanted, strings.Join(hosts, ", "))
+	case len(matches) > 1:
+		// Two files, one host: only a hand-edited store produces this, and
+		// picking one of them is the guess this function exists not to make.
+		return "", storedLoginCredential{}, fmt.Errorf("%d stored credentials for %s name host %s — the store in %s holds more than one file for that pair",
+			len(matches), did, wanted, credentialStoreDir())
+	}
+	return paths[matches[0]], records[matches[0]], nil
+}
+
+// credentialHostsLabel renders what one stored credential is spendable against.
+func credentialHostsLabel(hosts []string) string {
+	if len(hosts) == 0 {
+		return "no api host"
+	}
+	return strings.Join(hosts, "+")
 }
 
 func listStoredCredentials(now time.Time) ([]storedCredentialListItem, error) {
@@ -171,6 +252,7 @@ func listStoredCredentials(now time.Time) ([]storedCredentialListItem, error) {
 		items = append(items, storedCredentialListItem{
 			SubjectDID: record.SubjectDID,
 			ClientDID:  record.ClientDID,
+			Hosts:      credentialAPIHosts(record.Credential),
 			ObtainedAt: record.ObtainedAt,
 			Expiry:     expiry,
 			Expired:    expiry != nil && now.Unix() >= *expiry,

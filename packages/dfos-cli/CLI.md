@@ -88,7 +88,7 @@ The CLI is designed for both human operators and AI agents. Every command that p
 ┌──────────▼───────────────┐
 │   ~/.dfos/               │  Configuration + local relay
 │   ├── config.toml        │  Peers, identities, static defaults
-│   ├── credentials/       │  Login credentials, one file per subject DID
+│   ├── credentials/       │  Login credentials, one file per subject DID + API host
 │   ├── vaults/            │  Vault metadata — fingerprint, counter, minted keys
 │   └── relay.db           │  SQLite — chains, operations, blobs
 └──────────┬───────────────┘
@@ -1082,23 +1082,29 @@ Taking part of one is still allowed — the host decides what a grant covers, ne
 
 **What is checked before anything is stored.** The returned artifact must carry `typ: did:dfos:siwd`, the signer must be the DID the challenge was bound to, and the signature must verify against a **current** authentication key of the signer's freshly re-fetched chain — resolved through the configured peer, whose operation log is replayed and re-verified locally. Only then is the challenge consumed: its payload segment must equal this run's challenge bytes exactly, compared once and then spent, which is the spec's rule that consumption is the _final_ verification step so nothing invalid can ever spend it. A returned credential is checked once more before it is written — it must be issued to this installation's client DID, since one issued to anyone else is inert here. Any failure exits non-zero and stores nothing.
 
-Credentials land in the config directory's `credentials/<did>.json` (mode `600`, directory `700`) — `~/.dfos/credentials/` by default, and beside `DFOS_CONFIG` wherever that points — alongside the client DID they were issued to. The summary printed on success is decoded from the artifact locally — no network call. `scope=identity` returns no credential, and that is a success too: the sign-in was verified, there was just nothing to store.
+Credentials land in the config directory's `credentials/` (mode `600`, directory `700`) — `~/.dfos/credentials/` by default, and beside `DFOS_CONFIG` wherever that points — alongside the client DID they were issued to. The summary printed on success is decoded from the artifact locally — no network call. `scope=identity` returns no credential, and that is a success too: the sign-in was verified, there was just nothing to store.
+
+**One file per subject and host.** A credential is spent by host — `api call` selects on the `api:<host>` attenuation — so the host is part of the file's name, and signing one identity in to a second host stores beside the first rather than over it. The name is only a slot: every command matches the record's own fields, so a file written under the older subject-only name is read exactly the same way, and moves into its slot the next time that subject stores a credential.
 
 The separate `creds` group manages these local login records (not protocol grants and revocations):
 
 ```bash
-# subject DID, client DID, obtained time, expiry, and expired status
+# subject DID, the api hosts it covers, client DID, obtained time, expiry, status
 dfos creds list
 
 # full stored record plus locally decoded, unverified payload claims
 dfos creds show alice
 dfos creds show did:dfos:xxx --json
 
+# one identity signed in to two hosts holds two records — name which
+dfos creds show alice --host api.dfos.com
+dfos creds rm alice --host api.dfos.com
+
 # remove the local cached record without a prompt
 dfos creds rm alice
 ```
 
-`creds list` prints `-` when an expiry claim is absent or cannot be decoded; an empty store prints a friendly message (`[]` with `--json`). `creds show` resolves configured identity names and also accepts a bare DID. Decoding here is intentionally unsafe inspection: signature verification happens when a credential is presented, not while listing the local cache.
+`creds list` prints `-` when an expiry claim is absent or cannot be decoded; an empty store prints a friendly message (`[]` with `--json`). `creds show` resolves configured identity names and also accepts a bare DID. `show` and `rm` take one record: with a single credential stored for that subject they take it, and with several they name the hosts and wait for `--host <host>` rather than picking — the same refusal to guess `api call` makes. `identity forget` drops every credential the identity holds, since forgetting some of them and reporting a whole forget would be a lie. Decoding here is intentionally unsafe inspection: signature verification happens when a credential is presented, not while listing the local cache.
 
 | Flag              | Default    | Meaning                                                                                         |
 | ----------------- | ---------- | ----------------------------------------------------------------------------------------------- |
@@ -1178,6 +1184,8 @@ A bare host — or a scheme and host with no path — is discovered: the host's 
 
 The document is fetched, parsed, and validated at registration, so a source that is not an OpenAPI 3.x document fails there rather than on some later call. A document larger than 16 MiB is refused by size, named as its size. `api list` reports which of the three routes found it (`well-known`, `conventional`, `direct`, `file`).
 
+A fetch that **redirects across origins is refused**, naming both origins. The origin recorded is the one every request resolves against, so a document served by another host cannot be filed under the host that was asked — register the final URL directly if that host is what you mean, or read the document with `--file`. A redirect that stays on the same origin is a moved path and changes nothing. A well-known probe that redirects off-origin is not that host's advertisement, so discovery falls through to `/openapi.json` exactly as an absent well-known does.
+
 Re-registering an existing name against a **different** source repoints it, and that is asked about rather than done: the name is the address of every `dfos api call` written against it, so where it points is part of what those calls mean. A terminal gets a `[y/N]`; without one, the command errors and names both `--yes` and `dfos api rm <name>`. Re-registering the same source is a refresh and passes straight through.
 
 ### The request goes to the origin the document came from
@@ -1192,6 +1200,8 @@ it came from (https://api.example.com) — the request goes to https://api.examp
 ```
 
 Same host and a different scheme is off-origin too, which can only upgrade an `http` entry to the `https` the document arrived over. A default port and the case of a host name are not differences. A relative `servers` url — the `"url": "/v1"` spelling — names no authority at all, so it resolves against the origin with nothing to disclose.
+
+What decides that is the **authority, not the scheme**: a `"url": "//other.example.com/v1"` entry carries a host without one, so it is read as the authority it is — scheme taken from the fetch origin, then the same off-origin treatment — rather than as a path prefix.
 
 `--trust-servers` sends the request where the document says, and says so. `--server <url>` names a base outright, over the document and the origin alike, and discloses nothing: the operator named it.
 

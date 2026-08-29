@@ -130,9 +130,9 @@ func newWhoamiCmd() *cobra.Command {
 				result.Peer = &whoamiPeer{Name: ctx.RelayName, URL: ctx.RelayURL, Source: ctx.RelaySource}
 			}
 
-			// Credentials are stored per subject DID; the host they are spendable
-			// against is the audience recorded inside the artifact, so it is read
-			// out of the credential rather than invented from the file name.
+			// Credentials are stored one file per (subject, host); what each is
+			// spendable against is read out of the artifact itself rather than
+			// invented from the file name, which is only a slot.
 			stored, credErr := listStoredCredentials(time.Now())
 			for _, item := range stored {
 				entry := whoamiCredential{
@@ -143,7 +143,7 @@ func newWhoamiCmd() *cobra.Command {
 				if item.Expiry != nil {
 					entry.Expires = time.Unix(*item.Expiry, 0).UTC().Format("2006-01-02 15:04:05 UTC")
 				}
-				if record, err := readStoredCredential(credentialPath(item.SubjectDID)); err == nil {
+				if record, err := readStoredCredential(item.path()); err == nil {
 					if _, claims, err := protocol.DecodeJWSUnsafe(record.Credential); err == nil {
 						entry.Issuer, _ = claims["iss"].(string)
 						entry.Audience, _ = claims["aud"].(string)

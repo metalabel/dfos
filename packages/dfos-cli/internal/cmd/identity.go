@@ -2259,10 +2259,19 @@ func newIdentityForgetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := os.Remove(credentialPath(result.DID)); err == nil {
+			// EVERY stored credential for this subject, not one: the store holds a
+			// file per (subject, host), and forgetting an identity while leaving
+			// some of its grants on disk would be a partial forget reported as a
+			// whole one.
+			paths, _, err := credentialFilesForSubject(result.DID)
+			if err != nil {
+				return err
+			}
+			for _, path := range paths {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("remove stored login credential for %s: %w", result.DID, err)
+				}
 				result.CredentialRemoved = true
-			} else if !os.IsNotExist(err) {
-				return fmt.Errorf("remove stored login credential for %s: %w", result.DID, err)
 			}
 			if err := config.Save(cfg); err != nil {
 				return err
