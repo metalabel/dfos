@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -47,6 +48,11 @@ type Client struct {
 	// never pay that cost, so each call site attaches a signer at the point it
 	// already holds the key material.
 	Signer *Signer
+	// Peer is the registered name this client was built for, when it was built
+	// from one. It appears in transport failures and nowhere else: an operator
+	// reading "connection refused" needs to know WHICH peer of theirs is down,
+	// and a URL alone makes them go look that up.
+	Peer string
 }
 
 // New creates a new relay client.
@@ -55,6 +61,38 @@ func New(baseURL string) *Client {
 		BaseURL:    baseURL,
 		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+// unreachable renders a failed round-trip in one shape: the operation, the peer
+// it was against, and the transport's own words last.
+//
+// Go's http.Client wraps every transport failure in a *url.Error whose text
+// leads with `Get "<url>":`, so the raw error puts a quoted URL and a verb
+// ahead of the one fact the operator needs. Unwrapping to url.Error.Err drops
+// that preamble; the peer label supplies the address it was carrying, plus the
+// name, which the raw error never had.
+//
+// An empty op names no operation of its own — for the shared helpers whose
+// callers already say what they were doing, where a second verb only stutters.
+func (c *Client) unreachable(op string, err error) error {
+	prefix := ""
+	if op != "" {
+		prefix = op + ": "
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) && urlErr.Err != nil {
+		return fmt.Errorf("%s%s unreachable: %w", prefix, c.label(), urlErr.Err)
+	}
+	return fmt.Errorf("%s%w", prefix, err)
+}
+
+// label names the peer this client speaks to — by registered name when it has
+// one, since that is the name the operator's config and commands use.
+func (c *Client) label() string {
+	if c.Peer != "" {
+		return fmt.Sprintf("peer '%s' (%s)", c.Peer, c.BaseURL)
+	}
+	return fmt.Sprintf("peer %s", c.BaseURL)
 }
 
 // normalizeAuthority is the `host` member API-AUTH binds: the lowercase
@@ -223,7 +261,7 @@ type IdentityKey struct {
 func (c *Client) GetIdentityState(did string) (*IdentityResponse, error) {
 	resp, err := c.HTTPClient.Get(c.BaseURL + proofBasePath + "/identities/" + url.PathEscape(did))
 	if err != nil {
-		return nil, err
+		return nil, c.unreachable("fetch identity state", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
@@ -253,7 +291,7 @@ type IngestionResult struct {
 func (c *Client) GetRelayInfo() (*RelayInfo, error) {
 	resp, err := c.HTTPClient.Get(c.BaseURL + "/.well-known/dfos-relay")
 	if err != nil {
-		return nil, fmt.Errorf("connect to relay: %w", err)
+		return nil, c.unreachable("fetch relay well-known", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -332,7 +370,7 @@ func (c *Client) postOperations(body []byte, signer *Signer) ([]IngestionResult,
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, c.unreachable("submit operations", err)
 	}
 	defer resp.Body.Close()
 
@@ -404,7 +442,7 @@ func (c *Client) getLog(path string) ([]string, error) {
 		}
 		resp, err := c.HTTPClient.Get(u)
 		if err != nil {
-			return nil, err
+			return nil, c.unreachable("", err)
 		}
 		if resp.StatusCode == 404 {
 			body, _ := io.ReadAll(resp.Body)
@@ -500,7 +538,7 @@ func (c *Client) UploadBlob(contentID string, operationCID string, data []byte) 
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return err
+		return c.unreachable("upload blob", err)
 	}
 	defer resp.Body.Close()
 
@@ -538,7 +576,7 @@ func (c *Client) DownloadBlob(contentID string, credential string, ref ...string
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", c.unreachable("download blob", err)
 	}
 	defer resp.Body.Close()
 
@@ -572,7 +610,7 @@ func (c *Client) DoRaw(method, path string, body []byte, headers map[string]stri
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, c.unreachable("", err)
 	}
 	defer resp.Body.Close()
 
@@ -586,7 +624,7 @@ func (c *Client) DoRaw(method, path string, body []byte, headers map[string]stri
 func (c *Client) getJSON(path string) (map[string]any, error) {
 	resp, err := c.HTTPClient.Get(c.BaseURL + path)
 	if err != nil {
-		return nil, err
+		return nil, c.unreachable("", err)
 	}
 	defer resp.Body.Close()
 

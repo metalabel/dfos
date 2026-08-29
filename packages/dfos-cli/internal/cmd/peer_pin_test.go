@@ -8,6 +8,10 @@ package cmd
 // repeatedly with no warning. A pin nothing checks is a comment.
 
 import (
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -18,6 +22,21 @@ const (
 	pinnedDID = "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar"
 	otherDID  = "did:dfos:cv7n8vkvr64cctf3294h9k4eanhff8z"
 )
+
+// captureStderr runs fn with stderr redirected and returns what it wrote. The
+// TOFU announcement goes to stderr so a --json stdout stays one document, which
+// means stderr is where the assertion has to look.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	fn()
+	w.Close()
+	os.Stderr = old
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
 
 // assertMismatch checks an error is the pin refusal: it names the peer, both
 // DIDs, and the one command that resolves it.
@@ -103,24 +122,33 @@ func TestPeerPinIsMemoizedPerProcess(t *testing.T) {
 	}
 }
 
-// TestPeerPinAbsentMeansUnpinned: an entry with no `did` is unpinned by choice.
-// Nothing verifies it, and — the half that makes it a choice — nothing writes a
-// pin behind the operator's back, so an unpinned entry cannot start failing at
-// a moment nobody picked.
-func TestPeerPinAbsentMeansUnpinned(t *testing.T) {
+// TestPeerPinTOFUOnFirstContact: an entry with no pin is trusted on first use
+// and pinned then. The write is announced, because a trust decision this machine
+// makes on the operator's behalf is one they are entitled to watch happen.
+func TestPeerPinTOFUOnFirstContact(t *testing.T) {
 	setupSync(t)
 	peer := newFakePeer(t)
 	cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL}
 
-	if _, _, err := getPeerClient("prod"); err != nil {
-		t.Fatalf("an unpinned peer must not refuse: %v", err)
+	stderr := captureStderr(t, func() {
+		if _, _, err := getPeerClient("prod"); err != nil {
+			t.Fatalf("first contact must not refuse: %v", err)
+		}
+	})
+	if r := cfg.Relays["prod"]; r.DID != pinnedDID {
+		t.Fatalf("first contact must pin, got %q", r.DID)
 	}
-	if got := peer.infoHits.Load(); got != 0 {
-		t.Errorf("an unpinned peer costs no well-known fetch, got %d", got)
+	for _, want := range []string{"prod", pinnedDID, "first contact", "peer repin prod"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the TOFU write must announce %q, got:\n%s", want, stderr)
+		}
 	}
-	if r := cfg.Relays["prod"]; r.DID != "" {
-		t.Errorf("first contact must not write a pin, got %q", r.DID)
-	}
+
+	// And it holds from then on: the same URL answering as someone else refuses.
+	peerPinChecks = map[string]error{}
+	peer.did = otherDID
+	_, _, err := getPeerClient("prod")
+	assertMismatch(t, err, "prod", pinnedDID, otherDID)
 }
 
 // TestPeerPinUnreachableIsNotAMismatch: an offline peer is a reachability
@@ -131,6 +159,46 @@ func TestPeerPinUnreachableIsNotAMismatch(t *testing.T) {
 
 	if _, _, err := getPeerClient("dead"); err != nil {
 		t.Fatalf("an unreachable peer must not read as a moved pin: %v", err)
+	}
+}
+
+// TestPeerPinNotWrittenWhenUnreachable: TOFU pins whoever answered, so a peer
+// that never answered pins nothing.
+func TestPeerPinNotWrittenWhenUnreachable(t *testing.T) {
+	setupSync(t)
+	cfg.Relays["dead"] = config.RelayConfig{URL: "http://127.0.0.1:1"}
+
+	if _, _, err := getPeerClient("dead"); err != nil {
+		t.Fatalf("an unreachable peer must not refuse: %v", err)
+	}
+	if r := cfg.Relays["dead"]; r.DID != "" {
+		t.Fatalf("nothing may be pinned from a contact that did not happen, got %q", r.DID)
+	}
+}
+
+// TestUnreachablePeerErrorNamesThePeer: Go's transport error leads with
+// `Get "<url>": dial tcp …`, which puts quoting and a verb ahead of the one fact
+// the operator needs — which of THEIR peers is down.
+func TestUnreachablePeerErrorNamesThePeer(t *testing.T) {
+	setupSync(t)
+	cfg.Relays["dead"] = config.RelayConfig{URL: "http://127.0.0.1:1"}
+
+	c, _, err := getPeerClient("dead")
+	if err != nil {
+		t.Fatalf("getPeerClient: %v", err)
+	}
+	if _, err = c.GetRelayInfo(); err == nil {
+		t.Fatal("a dead peer must fail")
+	}
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "fetch relay well-known: peer 'dead' (http://127.0.0.1:1) unreachable:") {
+		t.Errorf("error must lead with the operation, the peer, and its URL: %q", msg)
+	}
+	if strings.Contains(msg, `Get "http`) {
+		t.Errorf("the url.Error preamble must be stripped: %q", msg)
+	}
+	if !strings.Contains(msg, "connection refused") {
+		t.Errorf("the dial detail must survive as the trailing cause: %q", msg)
 	}
 }
 
@@ -216,20 +284,94 @@ func TestPeerInfoReportsAMismatchWithoutRefusing(t *testing.T) {
 	peer := newFakePeer(t)
 	cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL, DID: otherDID}
 
-	var got struct {
-		DID string `json:"did"`
-		Pin struct {
-			Pinned   string `json:"pinned"`
-			Matches  bool   `json:"matches"`
-			Mismatch bool   `json:"mismatch"`
-		} `json:"pin"`
+	// The report goes out in full AND the command exits non-zero, so the JSON is
+	// unmarshaled here rather than through the helper, which skips that on error.
+	var got peerInfoJSON
+	stdout, _, err := runCapturingJSON(t, newPeerInfoCmd(), []string{"prod"}, nil)
+	if jsonErr := json.Unmarshal([]byte(stdout), &got); jsonErr != nil {
+		t.Fatalf("peer info emitted no JSON document: %v\n%s", jsonErr, stdout)
 	}
-	runJSON(t, newPeerInfoCmd(), []string{"prod"}, &got)
 	if got.DID != pinnedDID || got.Pin.Pinned != otherDID || got.Pin.Matches || !got.Pin.Mismatch {
-		t.Fatalf("peer info = %+v", got)
+		t.Fatalf("peer info = %+v (raw %s)", got, stdout)
+	}
+	// It reports in full — and still exits non-zero, so a script that inspects
+	// before acting can branch on the same condition every acting command
+	// refuses on.
+	var exit *ExitCodeError
+	if !errors.As(err, &exit) || exit.Code != 1 {
+		t.Fatalf("a mismatch must exit non-zero, got %v", err)
 	}
 	// And it must not quietly repair the pin it just reported on.
 	if r := cfg.Relays["prod"]; r.DID != otherDID {
 		t.Fatalf("peer info moved the pin to %q", r.DID)
+	}
+}
+
+type peerInfoJSON struct {
+	DID        string `json:"did"`
+	Content    bool   `json:"content"`
+	Proof      bool   `json:"proof"`
+	Log        bool   `json:"log"`
+	Sync       bool   `json:"sync"`
+	Advertises struct {
+		Content bool `json:"content"`
+		Proof   bool `json:"proof"`
+		Log     bool `json:"log"`
+	} `json:"advertises"`
+	Pin struct {
+		Pinned   string `json:"pinned"`
+		Matches  bool   `json:"matches"`
+		Mismatch bool   `json:"mismatch"`
+	} `json:"pin"`
+}
+
+// TestPeerInfoLeavesThePolicyFlagsAlone is the one-command silent bypass: with
+// the plane flags gating bulk sync, a `peer info` that wrote back the advertised
+// values would turn a posture off and on again unprompted. The flags are the
+// operator's answer to "what do I use this peer for"; what the peer advertises
+// is shown beside them, never over them.
+func TestPeerInfoLeavesThePolicyFlagsAlone(t *testing.T) {
+	setupSync(t)
+	off := false
+	peer := newFakePeer(t) // advertises content, proof, log all true
+	cfg.Relays["prod"] = config.RelayConfig{
+		URL: peer.server.URL, DID: pinnedDID,
+		Content: &off, Proof: &off, Sync: &off,
+	}
+
+	var got peerInfoJSON
+	runJSON(t, newPeerInfoCmd(), []string{"prod"}, &got)
+
+	r := cfg.Relays["prod"]
+	if r.Content == nil || *r.Content || r.Proof == nil || *r.Proof {
+		t.Fatalf("peer info rewrote the operator's plane flags: %+v", r)
+	}
+	if r.Sync == nil || *r.Sync {
+		t.Fatalf("peer info rewrote the sync switch: %v", r.Sync)
+	}
+	if r.Log != nil {
+		t.Errorf("peer info wrote a log flag the operator never set: %v", *r.Log)
+	}
+
+	// Both facts, distinctly: what is configured and what is advertised.
+	if got.Content || got.Proof || got.Sync {
+		t.Errorf("configured posture must report the operator's values: %+v", got)
+	}
+	if !got.Advertises.Content || !got.Advertises.Proof || !got.Advertises.Log {
+		t.Errorf("the peer's advertisement must be reported too: %+v", got.Advertises)
+	}
+}
+
+// TestPeerAddPreservesThePolicyFlagsOnReRegistration: same rule for the other
+// refresh path. A re-add of the same URL is a refresh, not a posture reset.
+func TestPeerAddPreservesThePolicyFlagsOnReRegistration(t *testing.T) {
+	setupSync(t)
+	off := false
+	peer := newFakePeer(t)
+	cfg.Relays["prod"] = config.RelayConfig{URL: peer.server.URL, DID: pinnedDID, Proof: &off}
+
+	runJSON(t, newPeerAddCmd(), []string{"prod", peer.server.URL}, nil)
+	if r := cfg.Relays["prod"]; r.Proof == nil || *r.Proof {
+		t.Fatalf("re-registration rewrote the operator's proof flag: %v", r.Proof)
 	}
 }

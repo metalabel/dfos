@@ -92,11 +92,13 @@ func newPeerAddCmd() *cobra.Command {
 
 			rc := config.RelayConfig{URL: url}
 			// Re-registering a peer refreshes its metadata; it does not silently
-			// discard the posture the operator set for it. --no-sync is the one
-			// thing that rewrites the sync switch here (--no-sync=false turns it
-			// back on explicitly).
-			if existing, ok := cfg.Relays[name]; ok {
+			// discard the posture the operator set for it. Every policy field
+			// carries over, and --no-sync is the one thing here that rewrites one
+			// (--no-sync=false turns it back on explicitly).
+			existing, reRegistration := cfg.Relays[name]
+			if reRegistration {
 				rc.Gossip, rc.ReadThrough, rc.Sync = existing.Gossip, existing.ReadThrough, existing.Sync
+				rc.Content, rc.Proof, rc.Log = existing.Content, existing.Proof, existing.Log
 			}
 			if cmd.Flags().Changed("no-sync") {
 				enabled := !noSync
@@ -104,6 +106,7 @@ func newPeerAddCmd() *cobra.Command {
 			}
 
 			c := client.New(url)
+			c.Peer = name
 			info, err := c.GetRelayInfo()
 			if err != nil {
 				cfg.Relays[name] = rc
@@ -112,15 +115,16 @@ func newPeerAddCmd() *cobra.Command {
 				}
 				if jsonFlag {
 					outputJSON(map[string]any{
-						"name":     name,
-						"url":      url,
-						"verified": false,
-						"warning":  err.Error(),
-						"sync":     config.BulkSyncDisabledReason(rc) == "",
+						"name":      name,
+						"url":       url,
+						"reachable": false,
+						"warning":   err.Error(),
+						"sync":      config.BulkSyncDisabledReason(rc) == "",
 					})
 				} else {
 					fmt.Printf("Peer '%s' added: %s\n", name, url)
-					fmt.Printf("  Warning: could not verify peer: %s\n", err)
+					fmt.Printf("  Warning: %s\n", err)
+					fmt.Printf("           Registered unverified — no DID pinned, no capabilities recorded.\n")
 					printPeerSyncPosture(name, rc)
 				}
 				return nil
@@ -131,16 +135,20 @@ func newPeerAddCmd() *cobra.Command {
 			// re-keyed relay or a different relay, and which one it is decides
 			// whether to trust it. `peer repin` is that decision, made out loud.
 			// A changed URL is a new registration, so its pin is written fresh.
-			if existing, ok := cfg.Relays[name]; ok &&
-				existing.DID != "" && existing.DID != info.DID &&
-				samePeerURL(existing.URL, url) {
+			sameRelay := reRegistration && samePeerURL(existing.URL, url)
+			if sameRelay && existing.DID != "" && existing.DID != info.DID {
 				return errPeerPinMismatch(name, existing.DID, info.DID)
 			}
 
 			rc.DID = info.DID
-			rc.Content = &info.Content
-			rc.Proof = &info.Proof
-			rc.Log = &info.Capabilities.Log
+			// Seed the plane posture from what the peer advertises — but only on
+			// a FIRST registration. After that the fields are the operator's
+			// answer to "what do I use this peer for", and a refresh that
+			// overwrote them would silently undo a posture (the exact bug where
+			// one `peer info` turned bulk sync back on).
+			if !sameRelay {
+				rc.Content, rc.Proof, rc.Log = &info.Content, &info.Proof, &info.Capabilities.Log
+			}
 
 			profileName, profileValid := verifyPeerProfile(c, info)
 			if profileName != "" {
@@ -154,37 +162,48 @@ func newPeerAddCmd() *cobra.Command {
 
 			if jsonFlag {
 				outputJSON(map[string]any{
-					"name":         name,
-					"url":          url,
-					"did":          info.DID,
-					"profileName":  profileName,
-					"content":      info.Content,
-					"proof":        info.Proof,
-					"log":          info.Capabilities.Log,
-					"write":        info.Write,
-					"verified":     true,
-					"profileValid": profileValid,
-					"sync":         config.BulkSyncDisabledReason(rc) == "",
+					"name":        name,
+					"url":         url,
+					"did":         info.DID,
+					"profileName": profileName,
+					// What the peer says of itself, and separately what this
+					// machine has configured. Collapsing the two is how a
+					// posture becomes invisible.
+					"advertises": map[string]any{
+						"content": info.Content,
+						"proof":   info.Proof,
+						"log":     info.Capabilities.Log,
+						"write":   info.Write,
+					},
+					"content":          boolValue(rc.Content, info.Content),
+					"proof":            boolValue(rc.Proof, info.Proof),
+					"log":              boolValue(rc.Log, info.Capabilities.Log),
+					"sync":             config.BulkSyncDisabledReason(rc) == "",
+					"reachable":        true,
+					"profileSignature": profileSignatureWord(info.Profile, profileValid),
 				})
 			} else {
-				label := info.DID
-				if profileName != "" {
-					label = profileName
-				}
 				fmt.Printf("Peer '%s' added: %s\n", name, url)
 				fmt.Printf("  DID:     %s\n", info.DID)
 				if profileName != "" {
 					fmt.Printf("  Profile: %s\n", profileName)
 				}
-				fmt.Printf("  Content: %s\n", boolYesNo(info.Content))
-				fmt.Printf("  Proof:   %s\n", boolYesNo(info.Proof))
-				fmt.Printf("  Log:     %s\n", boolYesNo(info.Capabilities.Log))
-				fmt.Printf("  Write:   %s\n", boolYesNo(info.Write))
+				fmt.Printf("  Advertises: content %s, proof %s, log %s, write %s\n",
+					boolYesNo(info.Content), boolYesNo(info.Proof),
+					boolYesNo(info.Capabilities.Log), boolYesNo(info.Write))
+				fmt.Printf("  Configured: content %s, proof %s, log %s\n",
+					boolConfigured(rc.Content), boolConfigured(rc.Proof), boolConfigured(rc.Log))
 				printPeerSyncPosture(name, rc)
-				if profileValid {
-					fmt.Printf("  Status:  verified (%s)\n", label)
-				} else if info.Profile != "" {
-					fmt.Printf("  Status:  profile signature could not be verified\n")
+				// Scoped deliberately: what a valid signature establishes is that
+				// the profile blob was signed by a key in this DID's HEAD state.
+				// It says nothing about whether that DID is the one you meant —
+				// that is the pin's job, and calling this "verified" full stop
+				// implied a guarantee it never made.
+				switch {
+				case profileValid:
+					fmt.Printf("  Profile signature: valid against %s HEAD key state\n", info.DID)
+				case info.Profile != "":
+					fmt.Printf("  Profile signature: could not be verified\n")
 				}
 			}
 			return nil
@@ -428,22 +447,21 @@ func newPeerInfoCmd() *cobra.Command {
 			identityResp, identityErr := c.GetIdentityState(info.DID)
 			profileName, profileValid := verifyPeerProfile(c, info)
 
-			// Refresh the CACHE — capabilities and profile name. The pin is not
-			// cache: overwriting it here would mean a relay could change identity
-			// and have the evidence erased by the command you ran to check.
-			cached := config.RelayConfig{}
-			pinned := ""
-			if r, ok := cfg.Relays[rn]; ok {
-				pinned = r.DID
-				r.Content = &info.Content
-				r.Proof = &info.Proof
-				r.Log = &info.Capabilities.Log
-				if profileName != "" {
-					r.ProfileName = profileName
+			// This command inspects. The ONLY thing it writes is the display
+			// label, because everything else in the entry is either the
+			// operator's policy (the plane flags and the switches — an inspection
+			// that rewrote those would silently undo a posture) or the pin, whose
+			// whole purpose is to survive a peer that changed identity. Both were
+			// overwritten here before, which made `peer info` the one command that
+			// could quietly restore the state you ran it to check.
+			configured := cfg.Relays[rn]
+			pinned := configured.DID
+			if configured.ProfileName != profileName && profileName != "" {
+				configured.ProfileName = profileName
+				cfg.Relays[rn] = configured
+				if err := config.Save(cfg); err != nil {
+					return err
 				}
-				cfg.Relays[rn] = r
-				cached = r
-				config.Save(cfg)
 			}
 			pinMatches := pinned != "" && pinned == info.DID
 
@@ -452,20 +470,30 @@ func newPeerInfoCmd() *cobra.Command {
 					"did":      info.DID,
 					"protocol": info.Protocol,
 					"version":  info.Version,
-					"content":  info.Content,
-					"proof":    info.Proof,
-					"log":      info.Capabilities.Log,
-					"write":    info.Write,
-					"sync":     config.BulkSyncDisabledReason(cached) == "",
+					// advertises is the peer's claim; the top-level content/proof/
+					// log are this machine's configured posture. They are separate
+					// keys because they answer different questions and a reader
+					// that conflated them would report a posture it does not have.
+					"advertises": map[string]any{
+						"content": info.Content,
+						"proof":   info.Proof,
+						"log":     info.Capabilities.Log,
+						"write":   info.Write,
+					},
+					"content": boolValue(configured.Content, info.Content),
+					"proof":   boolValue(configured.Proof, info.Proof),
+					"log":     boolValue(configured.Log, info.Capabilities.Log),
+					"write":   info.Write,
+					"sync":    config.BulkSyncDisabledReason(configured) == "",
 					"pin": map[string]any{
 						"pinned":   pinned,
 						"matches":  pinMatches,
 						"mismatch": pinned != "" && !pinMatches,
 					},
 					"profile": map[string]any{
-						"present": info.Profile != "",
-						"name":    profileName,
-						"valid":   profileValid,
+						"present":        info.Profile != "",
+						"name":           profileName,
+						"signatureValid": profileValid,
 					},
 				}
 				if identityResp != nil {
@@ -484,6 +512,9 @@ func newPeerInfoCmd() *cobra.Command {
 					}
 				}
 				outputJSON(result)
+				if pinned != "" && !pinMatches {
+					return &ExitCodeError{Code: 1}
+				}
 				return nil
 			}
 
@@ -509,15 +540,20 @@ func newPeerInfoCmd() *cobra.Command {
 			}
 			fmt.Println()
 
-			fmt.Println("Capabilities:")
-			fmt.Printf("  content: %s\n", boolYesNo(info.Content))
-			fmt.Printf("  proof:   %s\n", boolYesNo(info.Proof))
-			fmt.Printf("  log:     %s\n", boolYesNo(info.Capabilities.Log))
-			fmt.Printf("  write:   %s\n", boolYesNo(info.Write))
+			// Two columns, never one. The left is the peer's claim about itself;
+			// the right is what this machine has decided to use it for. They
+			// disagree exactly when an operator has set a posture, which is the
+			// moment collapsing them would hide the thing they set.
+			fmt.Println("Planes:")
+			fmt.Printf("  %-9s %-12s %s\n", "", "advertises", "configured")
+			fmt.Printf("  %-9s %-12s %s\n", "content:", boolYesNo(info.Content), boolConfigured(configured.Content))
+			fmt.Printf("  %-9s %-12s %s\n", "proof:", boolYesNo(info.Proof), boolConfigured(configured.Proof))
+			fmt.Printf("  %-9s %-12s %s\n", "log:", boolYesNo(info.Capabilities.Log), boolConfigured(configured.Log))
+			fmt.Printf("  %-9s %-12s %s\n", "write:", boolYesNo(info.Write), "—")
 			fmt.Println()
 
 			fmt.Println("Bulk sync:")
-			if reason := config.BulkSyncDisabledReason(cached); reason != "" {
+			if reason := config.BulkSyncDisabledReason(configured); reason != "" {
 				fmt.Printf("  disabled — %s in %s\n", reason, config.ConfigPath())
 			} else {
 				fmt.Printf("  enabled — 'dfos sync --peer %s' pulls this peer's whole log\n", rn)
@@ -540,15 +576,25 @@ func newPeerInfoCmd() *cobra.Command {
 			fmt.Println()
 
 			fmt.Println("Profile:")
+			// Scoped wording: a valid signature establishes that the profile blob
+			// was signed by a key in THIS DID's HEAD state. It does not establish
+			// that this DID is the one you meant to talk to — that is the pin
+			// above, and a bare "verified" here read as if it covered both.
 			if info.Profile == "" {
 				fmt.Println("  not present")
 			} else if profileValid {
-				fmt.Printf("  name:    %s\n", profileName)
-				fmt.Printf("  status:  verified (signature valid against HEAD key state)\n")
+				fmt.Printf("  name:      %s\n", profileName)
+				fmt.Printf("  signature: valid against %s HEAD key state\n", info.DID)
 			} else {
-				fmt.Printf("  status:  present but could not verify signature\n")
+				fmt.Printf("  signature: present but could not be verified\n")
 			}
 
+			// The report is complete either way; the status distinguishes it. A
+			// mismatch is a refusal everywhere else, so a script that inspects
+			// before acting must be able to branch on it here too.
+			if pinned != "" && !pinMatches {
+				return &ExitCodeError{Code: 1}
+			}
 			return nil
 		},
 	}
@@ -629,6 +675,38 @@ func boolYesNo(v bool) string {
 	return "no"
 }
 
+// boolConfigured renders an operator-owned flag: "yes"/"no" when set, and a dash
+// when absent, because absent is not "no" — it is "this machine has said nothing
+// and takes the peer at its word".
+func boolConfigured(v *bool) string {
+	if v == nil {
+		return "— (default)"
+	}
+	return boolYesNo(*v)
+}
+
+// boolValue resolves an operator-owned flag against the fallback that applies
+// when it is unset.
+func boolValue(v *bool, fallback bool) bool {
+	if v == nil {
+		return fallback
+	}
+	return *v
+}
+
+// profileSignatureWord names what was checked, and only that: the profile blob's
+// signature against the serving DID's HEAD key state.
+func profileSignatureWord(profile string, valid bool) string {
+	switch {
+	case profile == "":
+		return "absent"
+	case valid:
+		return "valid"
+	default:
+		return "unverified"
+	}
+}
+
 // getPeerClient gets a client for a named peer, after checking the peer is
 // still the identity config pinned it to.
 func getPeerClient(name string) (*client.Client, string, error) {
@@ -639,7 +717,9 @@ func getPeerClient(name string) (*client.Client, string, error) {
 	if err := verifyPeerPin(name); err != nil {
 		return nil, "", err
 	}
-	return client.New(r.URL), name, nil
+	c := client.New(r.URL)
+	c.Peer = name
+	return c, name, nil
 }
 
 // peerClientFor builds a client for a named peer WITHOUT the pin check. It is
@@ -650,7 +730,9 @@ func peerClientFor(name string) (*client.Client, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown peer: %s", name)
 	}
-	return client.New(r.URL), nil
+	c := client.New(r.URL)
+	c.Peer = name
+	return c, nil
 }
 
 // peerPinChecks memoizes the well-known fetch per peer name for the life of the
@@ -663,29 +745,45 @@ var peerPinChecks = map[string]error{}
 // address: without it, a URL that starts answering as a different relay is
 // indistinguishable from the relay you registered.
 //
-// Two cases are deliberately NOT failures:
+// An entry with no pin is trusted on first use and pinned then — the peer is
+// whoever answered the first time this machine spoke to it, and every later
+// invocation is checked against that. The write is announced, because a
+// trust decision this machine makes on the operator's behalf is one they are
+// entitled to see happen.
 //
-//   - No pin. An entry with no `did` is unpinned by choice, and nothing here
-//     writes one: a pin is acquired by a deliberate act (`peer add`, which
-//     registers, or `peer repin`), never by first contact, so an unpinned entry
-//     can never start failing at a moment nobody chose.
-//   - Unreachable. A well-known that cannot be fetched is not evidence of a
-//     changed identity, and turning an offline peer into a pin error would
-//     report the wrong thing. The operation the caller was about to run fails
-//     on its own, in its own words.
+// A well-known that cannot be fetched is NOT a failure: it is not evidence of a
+// changed identity, and turning an offline peer into a pin error would report
+// the wrong thing. The operation the caller was about to run fails on its own,
+// in its own words. Nothing is pinned from a contact that did not happen.
 func verifyPeerPin(name string) error {
 	r, ok := cfg.Relays[name]
-	if !ok || r.DID == "" {
+	if !ok || r.URL == "" {
 		return nil
 	}
 	if err, checked := peerPinChecks[name]; checked {
 		return err
 	}
-	info, err := client.New(r.URL).GetRelayInfo()
+	c := client.New(r.URL)
+	c.Peer = name
+	info, err := c.GetRelayInfo()
 	if err != nil {
 		peerPinChecks[name] = nil
 		return nil
 	}
+
+	if r.DID == "" {
+		r.DID = info.DID
+		cfg.Relays[name] = r
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		// stderr, so --json stdout stays one document.
+		fmt.Fprintf(os.Stderr, "Pinned peer '%s' to %s on first contact ('dfos peer repin %s' to change).\n",
+			name, info.DID, name)
+		peerPinChecks[name] = nil
+		return nil
+	}
+
 	var result error
 	if info.DID != r.DID {
 		result = errPeerPinMismatch(name, r.DID, info.DID)

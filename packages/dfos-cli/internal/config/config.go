@@ -40,22 +40,32 @@ type Config struct {
 	Defaults *DefaultsConfig `toml:"defaults,omitempty" json:"defaults,omitempty"`
 }
 
-// RelayConfig is one registered peer. Its fields come in two kinds, and the
-// difference is the whole reason the switches below exist:
+// RelayConfig is one registered peer. Its fields come in three kinds, and the
+// difference is which of them anything on the network is allowed to write:
 //
-//   - CACHE — DID, ProfileName, Content, Proof, Log. What the peer said about
-//     itself in its well-known. `peer add` and `peer info` overwrite these from
-//     the wire, so an operator edit here survives only until the next refresh.
-//   - SWITCHES — Gossip, ReadThrough, Sync. What THIS machine has decided to do
-//     with the peer. Nothing reads them off the network; only the operator (and
-//     `peer add --no-sync`) writes them.
+//   - PIN — DID. The identity this URL must serve for the name to keep meaning
+//     what it meant. Written on registration and by `peer repin`, and by nothing
+//     else, because a pin a refresh can move is not a pin.
+//   - POLICY — Content, Proof, Log, Gossip, ReadThrough, Sync. What THIS machine
+//     has decided to do with the peer. Seeded from the peer's advertisement on
+//     first registration and owned by the operator from then on; no refresh
+//     overwrites them, which is what makes a posture hold.
+//   - LABEL — ProfileName. Display only, refreshed freely.
+//
+// The plane flags sit in policy rather than in a cache because they decide
+// behavior: a peer whose Proof or Log says false is not bulk-polled. When they
+// were a cache, one `peer info` could silently restore a posture the operator
+// had turned off.
 type RelayConfig struct {
 	URL         string `toml:"url" json:"url"`
-	DID         string `toml:"did,omitempty" json:"did,omitempty"`                   // cached from well-known
-	ProfileName string `toml:"profile_name,omitempty" json:"profile_name,omitempty"` // cached from profile artifact
-	Content     *bool  `toml:"content,omitempty" json:"content,omitempty"`           // cached capability
-	Proof       *bool  `toml:"proof,omitempty" json:"proof,omitempty"`               // cached capability
-	Log         *bool  `toml:"log,omitempty" json:"log,omitempty"`                   // cached capability: serves the global operation log
+	DID         string `toml:"did,omitempty" json:"did,omitempty"`                   // pinned peer identity
+	ProfileName string `toml:"profile_name,omitempty" json:"profile_name,omitempty"` // display label from the profile artifact
+	// The plane flags: which of the peer's surfaces this machine uses. Seeded
+	// from its advertised capabilities at registration; absent means take the
+	// peer at its word.
+	Content *bool `toml:"content,omitempty" json:"content,omitempty"` // use this peer's document plane
+	Proof   *bool `toml:"proof,omitempty" json:"proof,omitempty"`     // use this peer's proof plane
+	Log     *bool `toml:"log,omitempty" json:"log,omitempty"`         // use this peer's global operation log
 	// The per-peer switches, in the config.toml spelling of the same three
 	// switches a `serve --peers` object carries. Absent means the relay
 	// library's default, which is on for all three.
@@ -75,20 +85,21 @@ type RelayConfig struct {
 // which one applies rather than looking like a peer that had nothing to send:
 //
 //   - `sync = false` — the operator's standing posture for this peer.
-//   - `proof = false` — the peer does not serve the proof plane at all.
-//   - `log = false` — the peer serves the proof plane but not the global
-//     operation log, so the pull would be a 501 every cycle.
+//   - `proof = false` — this machine does not use the peer's proof plane.
+//   - `log = false` — this machine does not use the peer's operation log (a
+//     peer that advertises none would answer the pull with a 501 every cycle).
 //
 // An absent value means on, which is what every config written before the
-// switches existed says, and what a peer that advertises the capabilities says.
+// switches existed says, and what registration writes for a peer that
+// advertises the capability.
 func BulkSyncDisabledReason(r RelayConfig) string {
 	switch {
 	case r.Sync != nil && !*r.Sync:
 		return "sync = false"
 	case r.Proof != nil && !*r.Proof:
-		return "proof = false (peer does not serve the proof plane)"
+		return "proof = false (this machine does not use the peer's proof plane)"
 	case r.Log != nil && !*r.Log:
-		return "log = false (peer does not serve the operation log)"
+		return "log = false (this machine does not use the peer's operation log)"
 	}
 	return ""
 }

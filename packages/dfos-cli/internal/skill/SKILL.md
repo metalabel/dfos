@@ -264,9 +264,11 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
   `content publish` — are never gated by that switch, so
   `dfos peer add <name> <url> --no-sync` registers a peer for those alone.
 - **A peer's `did` is a pin, not a label.** Commands acting through a named peer
-  refuse when it serves a different DID than config pins, naming both. `dfos peer
-repin <name>` is the only thing that moves a pin; an entry with no `did` is
-  unpinned and nothing writes one behind you.
+  refuse when it serves a different DID than config pins, naming both. An entry
+  with no `did` is pinned on first contact, announced on stderr; `dfos peer repin
+<name>` is the only thing that moves one afterwards. `peer info` reports a
+  mismatch (exit 1) instead of refusing, and rewrites neither the pin nor the
+  per-peer policy flags — those are yours once the peer is registered.
 - **`remove` ≠ `delete`.** `identity remove` drops a local config name (the chain
   data stays in the relay); `content remove` is just a no-op that points you at
   `content delete` — local content can't be selectively un-ingested. Neither signs

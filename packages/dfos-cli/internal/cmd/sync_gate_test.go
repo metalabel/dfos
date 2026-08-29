@@ -29,21 +29,22 @@ type fakePeer struct {
 	server   *httptest.Server
 	logHits  atomic.Int32
 	infoHits atomic.Int32
-	// capabilities the well-known advertises.
+	// what the well-known advertises.
+	did   string
 	proof bool
 	log   bool
 }
 
 func newFakePeer(t *testing.T) *fakePeer {
 	t.Helper()
-	p := &fakePeer{proof: true, log: true}
+	p := &fakePeer{did: pinnedDID, proof: true, log: true}
 	p.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/dfos-relay":
 			p.infoHits.Add(1)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
-				"did":      "did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar",
+				"did":      p.did,
 				"protocol": "dfos-web-relay",
 				"version":  "test",
 				"capabilities": map[string]any{

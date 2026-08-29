@@ -225,7 +225,9 @@ func requirePeer(peerOverride string) (*config.ResolvedContext, *client.Client, 
 	if err := verifyPeerPin(ctx.RelayName); err != nil {
 		return nil, nil, err
 	}
-	return ctx, client.New(ctx.RelayURL), nil
+	c := client.New(ctx.RelayURL)
+	c.Peer = ctx.RelayName
+	return ctx, c, nil
 }
 
 // errNoIdentity is the distinguishable "anonymous, and this command cannot be"
