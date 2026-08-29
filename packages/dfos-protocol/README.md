@@ -22,6 +22,8 @@ import { verifyContentChain, verifyIdentityChain } from '@metalabel/dfos-protoco
 import { createDFOSCredential, signApiIdentityRequest } from '@metalabel/dfos-protocol/credentials';
 // Crypto primitives
 import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-protocol/crypto';
+// KEY-PROOF — the challenge-bound proof that a candidate key is held
+import { signKeyProof, verifyKeyProof } from '@metalabel/dfos-protocol/key-proof';
 ```
 
 ## Subpath Exports
@@ -31,6 +33,7 @@ import { createJws, dagCborCanonicalEncode, verifyJws } from '@metalabel/dfos-pr
 | `@metalabel/dfos-protocol/chain`       | Identity & content chains, services, artifacts, countersigns, revocations, credit claims, sign requests |
 | `@metalabel/dfos-protocol/credentials` | DFOS credentials for authorization, and the API-AUTH request-proof / identity-proof envelopes           |
 | `@metalabel/dfos-protocol/crypto`      | Ed25519, JWS, JWT, dag-cbor, base64url, ID generation                                                   |
+| `@metalabel/dfos-protocol/key-proof`   | KEY-PROOF envelopes — compose/sign and verify a challenge-bound proof that a candidate key is held      |
 | `@metalabel/dfos-protocol/fold`        | Canonical linearization and LWW-map folds for index documents                                           |
 
 ## Specifications
