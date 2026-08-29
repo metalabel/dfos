@@ -43,15 +43,6 @@ func newVaultCmd() *cobra.Command {
 	return cmd
 }
 
-// errNoVault is the mint-side twin of errNoIdentity: two mechanisms, named, so
-// nothing has to guess which seed to derive from.
-func errNoVault() error {
-	return fmt.Errorf("no vault to mint from — name one:\n" +
-		"  --vault <name>                       for this invocation\n" +
-		"  dfos config set default-vault <name> as the standing default\n" +
-		"Create one first with 'dfos vault create <name>', or pass --no-vault to generate a standalone key.")
-}
-
 // resolveVault picks the vault new key material is minted from: the flag, then
 // the config default. There is no environment tier and no "last used" — a seed
 // is the most consequential choice the CLI makes, and it is made explicitly or
