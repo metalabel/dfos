@@ -192,8 +192,11 @@ func (r *Relay) handleIndexIdentities(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 	// `key` is matched as an opaque string against the multibase public keys the
-	// chain's accepted operations declared — no format validation, so a string no
-	// operation ever declared is a 200 with an empty page, never a 400.
+	// chain's accepted operations declared — no format validation, so a NON-EMPTY
+	// string no operation ever declared is a 200 with an empty page, never a 400.
+	// Read with Get, not firstQueryValue: an empty `key=` is no filter, the same
+	// posture `signerKey=` on /index/v0/operations holds, rather than the
+	// present-but-empty filters that presence-detect elsewhere in this family.
 	key := query.Get("key")
 	nameContains := query.Get("nameContains")
 	order, validOrder := parseIndexOrder(req.URL.Query().Get("order"))
@@ -534,8 +537,9 @@ func (r *Relay) handleIndexOperations(w http.ResponseWriter, req *http.Request) 
 	// this row's signature verified against at ingest — no format validation, so a
 	// string no accepted operation was signed with is a 200 with an empty page,
 	// never a 400. Read with Get, not firstQueryValue: an empty `signerKey=` is no
-	// filter, the identities `key=` posture the spec names, rather than the
-	// present-but-empty filter `chainId=` above applies.
+	// filter, the identities `key=` posture the spec names — which `key=` itself
+	// holds on the empty value too — rather than the present-but-empty filter
+	// `chainId=` above applies.
 	signerKey := query.Get("signerKey")
 	order, validOrder := parseIndexRecencyOrder(query.Get("order"), "ingestedAt.desc")
 	if !validOrder {
