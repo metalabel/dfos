@@ -167,8 +167,8 @@ func (d *Doc) readRequirement(requirement *base.SecurityRequirement) Alternative
 
 	switch {
 	case other > 0:
-		alt.Unsatisfiable = fmt.Sprintf("names a security scheme this client does not implement (%s)",
-			strings.Join(names, " AND "))
+		alt.Unsatisfiable = "names a security scheme this client does not implement: " +
+			d.describeUnimplemented(names)
 	case identity == 1 && request == 0 && unmarked == 0 && credential == 0:
 		alt.Profile = ProfileIdentity
 	case identity == 1 && request == 0 && unmarked == 0 && credential == 1:
@@ -195,6 +195,45 @@ func (d *Doc) readRequirement(requirement *base.SecurityRequirement) Alternative
 			strings.Join(names, " AND "))
 	}
 	return alt
+}
+
+// describeUnimplemented says WHY each unreadable scheme in a requirement is
+// unreadable.
+//
+// The distinction is worth the words. A `scheme: dfos` scheme marked with an
+// envelope type outside the registered pair is THIS family, mis-marked — a typo
+// or a placeholder in the document, fixable in one line — while a scheme that is
+// not this family at all is a route this client was never going to call. Naming
+// both "a security scheme this client does not implement" and stopping sends a
+// reader hunting through their client for a scheme the document got wrong.
+func (d *Doc) describeUnimplemented(names []string) string {
+	described := make([]string, 0, len(names))
+	for _, name := range names {
+		scheme := d.securityScheme(name)
+		switch {
+		case scheme == nil:
+			described = append(described, fmt.Sprintf("%s is named by the requirement but declared nowhere in components.securitySchemes", name))
+		case classifyScheme(scheme) != kindOther:
+			continue
+		case strings.EqualFold(scheme.Type, "http") && strings.EqualFold(scheme.Scheme, "dfos"):
+			described = append(described, fmt.Sprintf("%s is a `scheme: dfos` scheme marked `x-dfos-typ: %q`, which is neither %s nor %s",
+				name, extensionString(scheme.Extensions, "x-dfos-typ"), TypIdentityProof, TypRequestProof))
+		default:
+			described = append(described, fmt.Sprintf("%s (type: %s, scheme: %s) is not part of the DFOS envelope family",
+				name, orNone(scheme.Type), orNone(scheme.Scheme)))
+		}
+	}
+	if len(described) == 0 {
+		return strings.Join(names, " AND ")
+	}
+	return strings.Join(described, "; ")
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }
 
 func (d *Doc) securityScheme(name string) *v3.SecurityScheme {
@@ -255,28 +294,61 @@ func (o *Operation) RequiredActions() ([][]string, error) {
 	}
 	var raw []any
 	if err := node.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("x-dfos-actions on %s is not an array of alternatives: %w", o.Label(), err)
+		// The decoder's own words are a parser's complaint about a document
+		// problem. Name the SHAPE instead: a reader can fix a shape.
+		return nil, fmt.Errorf("x-dfos-actions on %s %s", o.Label(), describeActionsShape(node))
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("x-dfos-actions on %s is an empty array — it states no alternative any credential could satisfy; omit the member for the presentation-suffices class (a valid credential for the host, and no particular token)", o.Label())
 	}
 	alternatives := make([][]string, 0, len(raw))
 	for i, entry := range raw {
 		switch v := entry.(type) {
 		case string:
+			if v == "" {
+				return nil, fmt.Errorf("x-dfos-actions on %s: alternative %d is an empty token", o.Label(), i)
+			}
 			alternatives = append(alternatives, []string{v})
 		case []any:
+			if len(v) == 0 {
+				// An AND-set with no members is satisfied by anything, which is
+				// not a requirement — and reading it as one would widen the
+				// route silently.
+				return nil, fmt.Errorf("x-dfos-actions on %s: alternative %d is an empty array — an alternative with no tokens states no requirement; omit the member for the presentation-suffices class", o.Label(), i)
+			}
 			tokens := make([]string, 0, len(v))
 			for _, token := range v {
 				s, ok := token.(string)
 				if !ok {
-					return nil, fmt.Errorf("x-dfos-actions on %s: alternative %d holds a non-string token", o.Label(), i)
+					return nil, fmt.Errorf("x-dfos-actions on %s: alternative %d holds a non-string token (%T)", o.Label(), i, token)
+				}
+				if s == "" {
+					return nil, fmt.Errorf("x-dfos-actions on %s: alternative %d holds an empty token", o.Label(), i)
 				}
 				tokens = append(tokens, s)
 			}
 			alternatives = append(alternatives, tokens)
 		default:
-			return nil, fmt.Errorf("x-dfos-actions on %s: alternative %d is neither a token nor an array of tokens", o.Label(), i)
+			return nil, fmt.Errorf("x-dfos-actions on %s: alternative %d is neither a token nor an array of tokens (%T)", o.Label(), i, entry)
 		}
 	}
 	return alternatives, nil
+}
+
+// describeActionsShape names what a non-conforming `x-dfos-actions` node IS.
+//
+// The two shapes that actually turn up have specific, correctable causes: the
+// MAP is the SCHEME-level action catalog written in the wrong place, and the
+// BARE TOKEN is an author who wrote the one action a route needs without the
+// array around it. Both are worth naming; the raw decoder error names neither.
+func describeActionsShape(node *yaml.Node) string {
+	switch node.Kind {
+	case yaml.MappingNode:
+		return "is a map of action token to description — that is the shape of the SCHEME-level action catalog, which belongs on the request-proof security scheme. An operation's member is an array of alternatives: x-dfos-actions: [read:profile, [read:profile, read:email]]"
+	case yaml.ScalarNode:
+		return fmt.Sprintf("is the bare token %q — an operation's member is an array of alternatives, so write it as [%s]", node.Value, node.Value)
+	}
+	return "is neither an array of alternatives nor anything this client can read as one"
 }
 
 // CoversActions reports whether a granted action set satisfies the operation:

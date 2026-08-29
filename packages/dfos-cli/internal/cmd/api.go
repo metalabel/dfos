@@ -14,8 +14,11 @@ package cmd
 // form, and cobra dispatches a matching subcommand before ever reaching it.
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -89,6 +92,7 @@ func newAPICmd() *cobra.Command {
 
 func newAPIAddCmd() *cobra.Command {
 	var file string
+	var assumeYes bool
 
 	cmd := &cobra.Command{
 		Use:   "add <name> [host-or-url]",
@@ -108,7 +112,11 @@ outright.
 
 The document is fetched, parsed, and validated here, so a source that is not an
 OpenAPI document fails at registration rather than on some later call. What is
-cached is a snapshot; 'dfos api refresh' re-runs this same resolution.`,
+cached is a snapshot; 'dfos api refresh' re-runs this same resolution.
+
+Re-registering a name against a DIFFERENT source repoints it, and that is asked
+about rather than done: the name is what every later call names, so where it
+points is part of what a call means.`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -119,6 +127,9 @@ cached is a snapshot; 'dfos api refresh' re-runs this same resolution.`,
 			if len(args) == 2 {
 				source = args[1]
 			}
+			if err := confirmRepoint(name, source, file, assumeYes, cmd.InOrStdin(), os.Stderr); err != nil {
+				return err
+			}
 			registration, err := fetchAndStore(name, source, file)
 			if err != nil {
 				return err
@@ -127,7 +138,59 @@ cached is a snapshot; 'dfos api refresh' re-runs this same resolution.`,
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "", "Read the OpenAPI document from a local path instead of a host")
+	cmd.Flags().BoolVarP(&assumeYes, "yes", "y", false, "Repoint an already-registered name without asking")
 	return cmd
+}
+
+// confirmRepoint refuses to silently move a registered name to a new source.
+//
+// "Staleness visible, never silent" covers source IDENTITY, not just source AGE.
+// A name is the whole address of every later `api call`, so a second `api add`
+// under the same name pointed somewhere else redefines calls the operator
+// already wrote — and does it with no output that reads differently from the
+// first registration. Re-registering the SAME source is a refresh and passes
+// straight through; a genuine repoint is confirmed, or refused with the two ways
+// to mean it.
+func confirmRepoint(name, source, file string, assumeYes bool, in io.Reader, out io.Writer) error {
+	existing, err := apiStore().Get(name)
+	if err != nil {
+		// Not registered: nothing to repoint.
+		return nil
+	}
+	was, now := strings.TrimSpace(existing.Source), recordedSourceFor(source, file)
+	if was == "" || now == "" || was == now {
+		return nil
+	}
+	if assumeYes {
+		fmt.Fprintf(out, "Repointing '%s' from %s to %s.\n", name, was, now)
+		return nil
+	}
+	if !stdinIsInteractive() {
+		return fmt.Errorf("'%s' is already registered from %s — registering it from %s would repoint the name, and every 'dfos api call %s ...' with it.\nPass --yes to repoint, or 'dfos api rm %s' first",
+			name, was, now, name, name)
+	}
+	fmt.Fprintf(out, "'%s' is already registered from %s.\nRepoint it to %s? [y/N]: ", name, was, now)
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("read the answer: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return nil
+	}
+	return fmt.Errorf("left '%s' pointed at %s", name, was)
+}
+
+// recordedSourceFor is the Source a registration WOULD record, so the comparison
+// is against the same string `fetchAndStore` will write.
+func recordedSourceFor(source, file string) string {
+	if file == "" {
+		return strings.TrimSpace(source)
+	}
+	if abs, err := filepath.Abs(file); err == nil {
+		return abs
+	}
+	return file
 }
 
 func newAPIRefreshCmd() *cobra.Command {

@@ -26,6 +26,16 @@ type Doc struct {
 	model *libopenapi.DocumentModel[v3.Document]
 }
 
+// MaxDocumentBytes is the largest document this client reads. An OpenAPI
+// document is text; past this it is not the thing we asked for.
+//
+// The number is checked HERE, before the parser sees the bytes, because the YAML
+// scanner has a limit of its own at the same order of magnitude and reports
+// hitting it as "unexpected end of stream" — a truncation complaint that reads
+// like a malformed document and sends a reader looking for a syntax error that
+// is not there. Size is a fact this client knows; it says so itself.
+const MaxDocumentBytes = 16 << 20
+
 // Parse reads an OpenAPI document from its bytes (JSON or YAML) and builds the
 // v3 model. A Swagger 2.0 document, a 3.x document with structural errors, and
 // anything that is not an OpenAPI document at all all fail here — registration
@@ -33,6 +43,9 @@ type Doc struct {
 func Parse(data []byte) (*Doc, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return nil, fmt.Errorf("the document is empty")
+	}
+	if len(data) > MaxDocumentBytes {
+		return nil, fmt.Errorf("the document is too large — this client reads at most %d MiB", MaxDocumentBytes>>20)
 	}
 	document, err := libopenapi.NewDocument(data)
 	if err != nil {
@@ -65,36 +78,6 @@ func (d *Doc) InfoVersion() string {
 		return ""
 	}
 	return d.model.Model.Info.Version
-}
-
-// Authorities returns the distinct authorities the document's operations
-// resolve to, in first-seen operation order — the `<host>` half of the
-// `api:<host>` resource a credential for this API names.
-//
-// A list rather than a value because nothing in OpenAPI says a document
-// describes one host: `servers` is per-document, per-path, and per-operation,
-// and a document spanning two authorities names two resources. The caller
-// decides what to do with more than one; this only refuses to pick.
-func (d *Doc) Authorities(fallbackOrigin string) ([]string, error) {
-	var authorities []string
-	seen := map[string]bool{}
-	for _, op := range d.Operations() {
-		server, err := op.ServerURL(fallbackOrigin)
-		if err != nil {
-			return nil, err
-		}
-		parsed, err := url.Parse(server)
-		if err != nil {
-			return nil, fmt.Errorf("server URL %q does not parse: %w", server, err)
-		}
-		authority := NormalizeAuthority(parsed.Scheme, parsed.Host)
-		if authority == "" || seen[authority] {
-			continue
-		}
-		seen[authority] = true
-		authorities = append(authorities, authority)
-	}
-	return authorities, nil
 }
 
 // Operation is one (method, path) the document describes.
@@ -210,44 +193,6 @@ func (o *Operation) BodyMediaType() string {
 		}
 	}
 	return first
-}
-
-// ServerURL is the base URL the operation's path hangs off: the operation's own
-// `servers`, then the path item's, then the document's, then fallback (the
-// origin the document itself was fetched from). Relative server URLs resolve
-// against fallback, which is what a document served with `"url": "/v1"` means.
-func (o *Operation) ServerURL(fallback string) (string, error) {
-	candidates := [][]*v3.Server{o.op.Servers, o.pathItem.Servers, o.doc.model.Model.Servers}
-	for _, set := range candidates {
-		for _, s := range set {
-			if s != nil && s.URL != "" {
-				return resolveServerURL(s.URL, fallback)
-			}
-		}
-	}
-	if fallback == "" {
-		return "", fmt.Errorf("the document declares no server and no origin is known for it")
-	}
-	return strings.TrimRight(fallback, "/"), nil
-}
-
-// resolveServerURL turns a document's server value into an absolute base URL.
-func resolveServerURL(server, fallback string) (string, error) {
-	parsed, err := url.Parse(server)
-	if err != nil {
-		return "", fmt.Errorf("the document's server URL %q does not parse: %w", server, err)
-	}
-	if !parsed.IsAbs() {
-		if fallback == "" {
-			return "", fmt.Errorf("the document's server URL %q is relative and no origin is known for it", server)
-		}
-		base, err := url.Parse(fallback)
-		if err != nil {
-			return "", fmt.Errorf("origin %q does not parse: %w", fallback, err)
-		}
-		parsed = base.ResolveReference(parsed)
-	}
-	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 // JoinServerPath joins a server base URL to an operation's path.

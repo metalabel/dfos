@@ -43,6 +43,8 @@ type apiCallFlags struct {
 	profile        string
 	anon           bool
 	includeHeaders bool
+	server         string
+	trustServers   bool
 }
 
 func newAPICallCmd() *cobra.Command {
@@ -59,6 +61,12 @@ Name the operation by its operationId, or by method and path template:
   dfos api call dfos GET /spaces/{space} --param space=nce
 
 Path and query parameters ride --param; a JSON body rides --data or --data-file.
+
+The request goes to the ORIGIN THE DOCUMENT CAME FROM. A document's 'servers'
+entry contributes a path prefix, never an authority: an entry naming some other
+origin is ignored and said out loud, because a document that could redirect the
+wire would let whoever serves it aim this client anywhere. --trust-servers sends
+the request where the document says; --server <url> names a base outright.
 
 The authentication profile is READ FROM THE DOCUMENT — anonymous, an identity
 proof, or a request proof with the credential it binds — from the combination of
@@ -77,6 +85,9 @@ stronger auth.`,
 	cmd.Flags().StringVar(&f.profile, "profile", "", "Force an auth profile: anon, identity, or delegated")
 	cmd.Flags().BoolVar(&f.anon, "anon", false, "Force the anonymous profile (same as --profile anon)")
 	cmd.Flags().BoolVarP(&f.includeHeaders, "include", "i", false, "Print the response status and headers to stderr")
+	cmd.Flags().StringVar(&f.server, "server", "", "Base URL to call, overriding both the document's servers and the fetch origin")
+	cmd.Flags().BoolVar(&f.trustServers, "trust-servers", false,
+		"Let the document's servers entry name the authority, even off the origin it was served from")
 	return cmd
 }
 
@@ -101,11 +112,21 @@ func runAPICall(f *apiCallFlags, args []string) error {
 		return err
 	}
 
-	serverURL, err := operation.ServerURL(registration.Origin)
+	// WHERE IT GOES is decided before WHAT IT CARRIES, and the disclosure is
+	// printed before the request leaves: a note about an authority the operator
+	// did not choose is worth nothing after the bytes are on the wire.
+	choice, err := operation.ResolveServer(apispec.ServerPolicy{
+		FetchOrigin:  registration.Origin,
+		Override:     f.server,
+		TrustServers: f.trustServers,
+	})
 	if err != nil {
 		return err
 	}
-	request, err := operation.BuildRequest(serverURL, params, body)
+	if choice.Note != "" {
+		fmt.Fprintln(os.Stderr, choice.Note)
+	}
+	request, err := operation.BuildRequest(choice.Base, params, body)
 	if err != nil {
 		return err
 	}
@@ -145,8 +166,33 @@ func runAPICall(f *apiCallFlags, args []string) error {
 	if status < 200 || status > 299 {
 		return apiCallFailure(status, respHeaders, respBody, operation, profile, request)
 	}
+	announceProfile(operation, profile)
 	printResponseBody(respHeaders, respBody)
 	return nil
+}
+
+// announceProfile echoes which claim actually went out, and whether the document
+// or the operator chose it.
+//
+// A failure already names the profile — every 401 and 403 prints it — so the
+// only case where the claim was invisible was the SUCCESS, which is exactly the
+// case worth seeing: a route the operator believed anonymous that quietly signed
+// an identity proof, or a delegated call that spent a grant they forgot they
+// held. It is the same disclosure as the signing-principal line and obeys the
+// same --quiet, and it goes to stderr so stdout stays one document.
+func announceProfile(operation *apispec.Operation, profile *callProfile) {
+	if quietFlag {
+		return
+	}
+	chose := "as the document advertises"
+	if profile.forced {
+		chose = "forced with --profile"
+	}
+	detail := ""
+	if profile.profile == apispec.ProfileDelegated && profile.actions != nil {
+		detail = " (" + apispec.DescribeActions(profile.actions) + ")"
+	}
+	fmt.Fprintf(os.Stderr, "%s → %s%s, %s\n", operation.Label(), profile.profile, detail, chose)
 }
 
 // resolveOperation reads the operation argument in either spelling: one token is

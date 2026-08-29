@@ -50,10 +50,11 @@ func HTTPFetcher() Fetcher {
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("fetch %s: HTTP %d", rawURL, resp.StatusCode)
 		}
-		// 16 MiB. An OpenAPI document is text; anything past this is not the
-		// thing we asked for, and reading it unbounded is the caller's problem
-		// to not have.
-		data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+		// One byte PAST the limit, so an over-size body is DETECTED rather than
+		// silently truncated to exactly the limit — a truncated document parses
+		// as a malformed one, and reports itself as a syntax error that is not
+		// there. Parse checks the length and says the honest thing.
+		data, err := io.ReadAll(io.LimitReader(resp.Body, MaxDocumentBytes+1))
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", rawURL, err)
 		}

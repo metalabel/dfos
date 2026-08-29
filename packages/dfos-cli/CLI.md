@@ -953,7 +953,16 @@ dfos login alice --authorize-url https://app.example.com
 
 The listed actions are then yours to pick from, by number or by token, with enter taking all of them. Three rules bound that ask: an explicit `--scope` is an instruction and is used exactly as typed, `--all-scopes` takes the whole catalog without prompting, and a run with no terminal and no explicit scope **errors and prints the choices** rather than choosing for you — a scope picked on your behalf is a grant you never made. Tokens stay opaque throughout: they are copied from document to prompt to scope string to credential unchanged, and the descriptions are display text nothing decides from.
 
-**Which host a credential is for.** The host lives in the credential's attenuation, as the `api:<host>` resource — not in `aud`, which is this installation's login client DID, the party the grant was issued to. That is the resource `dfos api call` selects on, so a `--host` login says out loud when what came back does not name it.
+**Combinations are shown as combinations.** A route requiring `[["read:profile", "read:email"]]` needs both tokens or refuses, and a flat list of tokens cannot say so — it presents the pair as two independent choices, so a subset looks complete and the shortfall arrives later as a 403 against a grant already minted. Every AND-alternative the document's operations require is listed under its own heading with the routes that need it, and selectable whole by a group letter:
+
+```
+Some routes need a COMBINATION — every token of the group, or the route refuses:
+   A  read:profile AND read:email   (getProfile)
+```
+
+Taking part of one is still allowed — the host decides what a grant covers, never this client — but the selection says which token it leaves out and which route that costs.
+
+**Which host a credential is for.** The host lives in the credential's attenuation, as the `api:<host>` resource — not in `aud`, which is this installation's login client DID, the party the grant was issued to. That is the resource `dfos api call` selects on, so a `--host` login says out loud when what came back does not name it. The host is resolved under the same fetch-origin doctrine `api call` sends under, so the `api:<host>` a credential is minted for is the one it will be looked for under; minting on the document's word and spending on the origin's would be a grant that matches nothing.
 
 **How this machine asks.** A CLI holds no domain, so it asks under SIWD's **loopback credential tier**: a per-install client identity, minted on first login and recorded at `~/.dfos/login-client.json` with its key in the keystore. The request carries that identity's DID, an ask proof signed by its current authentication key, and its one-operation chain — which is what lets a credential-returning scope have something to be issued to. The DID is stable across logins, so the consent you give names the same party each time; if its key goes missing the command errors instead of minting a new DID behind your back (delete the file to start over, and expect to consent again). Key control is all this proves about the software: origin and authorship are unverifiable from the host's side, which is why a credential minted here carries a hard expiry ceiling.
 
@@ -1055,7 +1064,26 @@ dfos api rm mine
 
 A bare host — or a scheme and host with no path — is discovered: the host's `/.well-known/dfos-relay` is read for an `openapi` member (absolute or root-relative, per [WEB-RELAY.md](https://protocol.dfos.com/web-relay)), and `/openapi.json` is assumed when it advertises none. A URL carrying a path names the document outright. `--file` reads one from disk and makes no request at all.
 
-The document is fetched, parsed, and validated at registration, so a source that is not an OpenAPI 3.x document fails there rather than on some later call. `api list` reports which of the three routes found it (`well-known`, `conventional`, `direct`, `file`).
+The document is fetched, parsed, and validated at registration, so a source that is not an OpenAPI 3.x document fails there rather than on some later call. A document larger than 16 MiB is refused by size, named as its size. `api list` reports which of the three routes found it (`well-known`, `conventional`, `direct`, `file`).
+
+Re-registering an existing name against a **different** source repoints it, and that is asked about rather than done: the name is the address of every `dfos api call` written against it, so where it points is part of what those calls mean. A terminal gets a `[y/N]`; without one, the command errors and names both `--yes` and `dfos api rm <name>`. Re-registering the same source is a refresh and passes straight through.
+
+### The request goes to the origin the document came from
+
+A document is discovery, never authority — and the authority a document _names_ is exactly the thing it must not be trusted to name. A document fetched from host A whose `servers` entry says host B, sent to host B, is a document redirecting the wire: whoever can serve A a document aims this client anywhere, and the request that leaves carries whatever artifact the profile for B says to attach.
+
+So the **fetch origin decides the authority**, and `servers` contributes a **path prefix only**. A `servers` url of `https://api.example.com/v1` fetched from `api.example.com` contributes `/v1`; the same entry fetched from anywhere else contributes `/v1` and nothing more, and the request goes to the origin that served the document. An ignored entry is disclosed on stderr with both ways to mean otherwise:
+
+```
+note: this document's servers entry names https://evil.example.org, which is not the origin
+it came from (https://api.example.com) — the request goes to https://api.example.com/v1.
+```
+
+Same host and a different scheme is off-origin too, which can only upgrade an `http` entry to the `https` the document arrived over. A default port and the case of a host name are not differences. A relative `servers` url — the `"url": "/v1"` spelling — names no authority at all, so it resolves against the origin with nothing to disclose.
+
+`--trust-servers` sends the request where the document says, and says so. `--server <url>` names a base outright, over the document and the origin alike, and discloses nothing: the operator named it.
+
+A `--file` registration has no fetch origin, so its `servers` are the only thing left and they must agree. One origin across every entry is used and echoed; two origins, a relative url, or no `servers` at all is refused by name, with `--server <url>` as the answer to each. Picking one of two origins for the operator is the same trust this doctrine withholds.
 
 ### A cached document goes stale visibly
 
@@ -1074,9 +1102,11 @@ The security schemes an operation requires, ANDed within one requirement object,
 | several requirement objects                 | the cheapest one it can satisfy; the anonymous alternative last    |
 | the request-proof scheme with no credential | nothing — no conforming client can call that route, and it says so |
 
-An operation's `x-dfos-actions` is an OR of alternatives, each a single action token or an array of tokens that must all be covered. Under the delegated combination its absence is the presentation-suffices class: a valid credential for the host and no particular token. Action tokens are the host's vocabulary — they are copied from document to request to error message verbatim, never enumerated or interpreted here.
+An operation's `x-dfos-actions` is an OR of alternatives, each a single action token or an array of tokens that must all be covered — `[read:memberships, [read:profile, read:email]]` is "either `read:memberships`, or both of the other two". Under the delegated combination its absence is the presentation-suffices class: a valid credential for the host and no particular token. Action tokens are the host's vocabulary — they are copied from document to request to error message verbatim, never enumerated or interpreted here.
 
-`--profile <anon|identity|delegated>` (and its shorthand `--anon`) forces a profile instead. The document ranks as a default, not a constraint.
+An empty array, an empty alternative, and an empty token are refused rather than read: each states no requirement any credential could satisfy, and reading one as "anything goes" widens a route in silence. The two shapes that turn up wrong are named for what they are — a **map** is the scheme-level action catalog written on an operation, and a **bare token** is the array spelling missing its brackets.
+
+`--profile <anon|identity|delegated>` (and its shorthand `--anon`) forces a profile instead. The document ranks as a default, not a constraint. A scheme this client cannot read says which kind of unreadable it is: a `scheme: dfos` scheme marked with an `x-dfos-typ` outside the registered pair is this envelope family mis-marked, and reads differently from a scheme that is not this family at all.
 
 ### Credentials, and what a refusal means
 
@@ -1088,16 +1118,20 @@ A non-2xx renders by tier, because the tiers mean different things:
 - **403** — the credential layer refused. The actions the operation requires and the actions the presented credential grants on `api:<host>` are both printed, verbatim.
 - **503** — the host could not complete the check. That is the host's condition, not a verdict on the request.
 
-Everything but the response document goes to stderr — the staleness line, the signer announcement, `-i` headers — so stdout carries one document.
+A **2xx** echoes the claim that went out — `profile → delegated (read:profile OR read:email), as the document advertises`, or `forced with --profile` when the operator overrode it. A failure already names the profile in its own message, so success was the one case where what a request carried was invisible. It is the same disclosure as the signing-principal line and obeys the same `--quiet`.
 
-| Flag               | Meaning                                                        |
-| ------------------ | -------------------------------------------------------------- |
-| `--param name=val` | A path or query parameter, matched against the operation's own |
-| `--data`           | A request body, as a JSON string                               |
-| `--data-file`      | A request body from a file (`-` for stdin)                     |
-| `--profile`        | Force `anon`, `identity`, or `delegated`                       |
-| `--anon`           | Shorthand for `--profile anon`                                 |
-| `-i`, `--include`  | Print the response status and headers to stderr                |
+Everything but the response document goes to stderr — the staleness line, the servers disclosure, the signer announcement, the profile echo, `-i` headers — so stdout carries one document.
+
+| Flag               | Meaning                                                           |
+| ------------------ | ----------------------------------------------------------------- |
+| `--param name=val` | A path or query parameter, matched against the operation's own    |
+| `--data`           | A request body, as a JSON string                                  |
+| `--data-file`      | A request body from a file (`-` for stdin)                        |
+| `--profile`        | Force `anon`, `identity`, or `delegated`                          |
+| `--anon`           | Shorthand for `--profile anon`                                    |
+| `--server <url>`   | Call this base URL, over the document's `servers` and the origin  |
+| `--trust-servers`  | Let the document's `servers` entry name the authority, off-origin |
+| `-i`, `--include`  | Print the response status and headers to stderr                   |
 
 ---
 
@@ -1201,7 +1235,7 @@ A proof authorizes one request and nothing else: it binds that method, that host
 | `DEL`  | `creds rm <name\|did>`          | Remove a cached SIWD login credential                        |
 | `GET`  | `auth proof <METHOD> <path>`    | Sign an identity proof for one request (`--body`, `--jti`)   |
 | `GET`  | `auth status`                   | Show current auth state                                      |
-| `POST` | `api add <name> [source]`       | Register an API and cache its OpenAPI document (`--file`)    |
+| `POST` | `api add <name> [source]`       | Register an API, cache its document (`--file`, `--yes`)      |
 | `GET`  | `api list`                      | List registered APIs and their documents' age                |
 | `POST` | `api refresh <name>`            | Refetch a registered API's document                          |
 | `DEL`  | `api rm <name>`                 | Unregister an API and drop its cached document               |

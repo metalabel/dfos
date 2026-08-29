@@ -332,6 +332,255 @@ func TestRequiredActionsOrAndAnd(t *testing.T) {
 	})
 }
 
+// THE SHAPE MATRIX. Every spelling of `x-dfos-actions` an operation can carry,
+// conforming and not, with the exact reading or the exact refusal.
+//
+// The canonical AND-array — one OR-alternative that is an AND-pair, the
+// `[[a, b]]` spelling API-AUTH.md's convention writes verbatim — is the row that
+// matters most: it is legal, it is what a real host publishes, and a client that
+// mis-walks it refuses a route it can call.
+func TestRequiredActionsShapeMatrix(t *testing.T) {
+	cases := []struct {
+		name string
+		// member is the `x-dfos-actions` value, written as a document writes it.
+		member string
+		want   [][]string
+		// refusedNaming is what a refusal must say. Empty when the shape is read.
+		refusedNaming []string
+	}{
+		{
+			name:   "bare tokens are an OR of singles",
+			member: "[read:profile, read:email]",
+			want:   [][]string{{"read:profile"}, {"read:email"}},
+		},
+		{
+			name:   "the canonical AND-array is one alternative of two tokens",
+			member: `[["read:profile", "read:email"]]`,
+			want:   [][]string{{"read:profile", "read:email"}},
+		},
+		{
+			name:   "a one-token AND-array is one alternative of one token",
+			member: `[["read:profile"]]`,
+			want:   [][]string{{"read:profile"}},
+		},
+		{
+			name:   "mixed shapes read in document order",
+			member: `[read:memberships, ["read:profile", "read:email"], write:posts]`,
+			want:   [][]string{{"read:memberships"}, {"read:profile", "read:email"}, {"write:posts"}},
+		},
+		{
+			name:   "a block-sequence AND-array reads the same as the flow one",
+			member: "\n  - - read:profile\n    - read:email",
+			want:   [][]string{{"read:profile", "read:email"}},
+		},
+		{
+			name:          "an empty array states no satisfiable alternative",
+			member:        "[]",
+			refusedNaming: []string{"empty array", "presentation-suffices"},
+		},
+		{
+			name:          "a nested-empty alternative is refused, never read as vacuous",
+			member:        "[[]]",
+			refusedNaming: []string{"alternative 0 is an empty array", "states no requirement"},
+		},
+		{
+			name:          "a nested-empty alternative beside a real one is still refused",
+			member:        `[["read:profile"], []]`,
+			refusedNaming: []string{"alternative 1 is an empty array"},
+		},
+		{
+			name:          "an empty token is refused",
+			member:        `["", read:profile]`,
+			refusedNaming: []string{"alternative 0 is an empty token"},
+		},
+		{
+			name:          "an empty token inside an AND-array is refused",
+			member:        `[["read:profile", ""]]`,
+			refusedNaming: []string{"alternative 0 holds an empty token"},
+		},
+		{
+			name:          "a non-string token is refused and its type named",
+			member:        "[[read:profile, 7]]",
+			refusedNaming: []string{"alternative 0 holds a non-string token"},
+		},
+		{
+			name:          "a doubly-nested array is refused",
+			member:        `[[["read:profile"]]]`,
+			refusedNaming: []string{"alternative 0 holds a non-string token"},
+		},
+		{
+			name:          "an alternative that is neither token nor array is refused",
+			member:        "[{read:profile: yes}]",
+			refusedNaming: []string{"alternative 0 is neither a token nor an array of tokens"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			op := onlyOperation(t, docWithOperation(t,
+				"security:\n  - popProof: []\n    theGrant: []",
+				"x-dfos-actions: "+tc.member))
+			got, err := op.RequiredActions()
+			if len(tc.refusedNaming) > 0 {
+				if err == nil {
+					t.Fatalf("%s must be refused, got %v", tc.member, got)
+				}
+				for _, want := range tc.refusedNaming {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("the refusal must name %q:\n%v", want, err)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RequiredActions: %v", err)
+			}
+			if DescribeActions(got) != DescribeActions(tc.want) {
+				t.Fatalf("read %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The canonical AND-array must also survive INFERENCE, not just the actions
+// walk: the requirement combination is what names the profile, and an action
+// list — of any shape — never enters that decision.
+func TestCanonicalANDArrayDoesNotDisturbProfileInference(t *testing.T) {
+	op := onlyOperation(t, docWithOperation(t,
+		"security:\n  - popProof: []\n    theGrant: []",
+		`x-dfos-actions: [["read:profile", "read:email"]]`))
+
+	ranked := Rank(op.Alternatives())
+	if len(ranked) != 1 || ranked[0].Profile != ProfileDelegated || !ranked[0].Credential {
+		t.Fatalf("ranked = %+v, want the delegated combination", ranked)
+	}
+	actions, err := op.RequiredActions()
+	if err != nil {
+		t.Fatalf("RequiredActions: %v", err)
+	}
+	if CoversActions(actions, map[string]bool{"read:profile": true}) {
+		t.Fatalf("half of the pair must not cover it")
+	}
+	if !CoversActions(actions, map[string]bool{"read:profile": true, "read:email": true}) {
+		t.Fatalf("the whole pair must cover it")
+	}
+}
+
+// The errata shapes get a CLI-native message naming the shape. The behavior is
+// unchanged — both are still refused — but a raw decoder error reads as a
+// parser complaint about a document problem, and sends a reader looking in the
+// wrong place.
+func TestMalformedActionsNameTheShapeRatherThanLeakingTheDecoder(t *testing.T) {
+	t.Run("a map is the scheme-level catalog written in the wrong place", func(t *testing.T) {
+		op := onlyOperation(t, docWithOperation(t,
+			"security:\n  - popProof: []\n    theGrant: []",
+			"x-dfos-actions:\n  read:profile: Read the profile"))
+		_, err := op.RequiredActions()
+		if err == nil {
+			t.Fatal("a map-valued member must be refused")
+		}
+		for _, want := range []string{"map of action token to description", "security scheme", "array of alternatives"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("message must name %q:\n%v", want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "yaml:") {
+			t.Fatalf("the decoder's own words must not leak:\n%v", err)
+		}
+	})
+
+	t.Run("a bare token names itself and the array it belongs in", func(t *testing.T) {
+		op := onlyOperation(t, docWithOperation(t,
+			"security:\n  - popProof: []\n    theGrant: []",
+			"x-dfos-actions: read:profile"))
+		_, err := op.RequiredActions()
+		if err == nil {
+			t.Fatal("a scalar member must be refused")
+		}
+		if !strings.Contains(err.Error(), `[read:profile]`) {
+			t.Fatalf("the message must show the corrected spelling:\n%v", err)
+		}
+		if strings.Contains(err.Error(), "yaml:") {
+			t.Fatalf("the decoder's own words must not leak:\n%v", err)
+		}
+	})
+}
+
+// A `scheme: dfos` scheme marked with an envelope type outside the registered
+// pair is THIS family, mis-marked — a document bug fixable in one line. Reading
+// it out as "a scheme this client does not implement" and stopping sends the
+// reader hunting through their client instead.
+func TestUnimplementedSchemeSaysWhichKindOfUnimplemented(t *testing.T) {
+	t.Run("a mis-marked dfos scheme names its own marker", func(t *testing.T) {
+		doc, err := Parse([]byte(`openapi: 3.1.0
+info: {title: t, version: "1"}
+servers: [{url: "https://api.example.test"}]
+paths:
+  /thing:
+    get:
+      operationId: getThing
+      security: [{dfosAuth: []}]
+components:
+  securitySchemes:
+    dfosAuth: {type: http, scheme: dfos, x-dfos-typ: REQUIRED}
+`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		op, err := doc.FindOperation("getThing")
+		if err != nil {
+			t.Fatal(err)
+		}
+		reason := op.Alternatives()[0].Unsatisfiable
+		for _, want := range []string{"dfosAuth", `"REQUIRED"`, TypIdentityProof, TypRequestProof} {
+			if !strings.Contains(reason, want) {
+				t.Fatalf("the reason must name %q:\n%s", want, reason)
+			}
+		}
+	})
+
+	t.Run("a scheme outside the family says so instead", func(t *testing.T) {
+		op := onlyOperation(t, docWithOperation(t, "security:\n  - bearerish: []", ""))
+		reason := op.Alternatives()[0].Unsatisfiable
+		if !strings.Contains(reason, "not part of the DFOS envelope family") {
+			t.Fatalf("reason = %q", reason)
+		}
+	})
+
+	t.Run("a requirement naming an undeclared scheme says THAT", func(t *testing.T) {
+		op := onlyOperation(t, docWithOperation(t, "security:\n  - nowhere: []", ""))
+		reason := op.Alternatives()[0].Unsatisfiable
+		if !strings.Contains(reason, "declared nowhere in components.securitySchemes") {
+			t.Fatalf("reason = %q", reason)
+		}
+	})
+}
+
+// A document past the read limit reports its SIZE, not a truncation artifact.
+// The old failure — the reader stopping at exactly the limit and the YAML
+// scanner calling that "unexpected end of stream" — read as a syntax error in a
+// document that has none.
+func TestOverSizeDocumentSaysItIsOverSize(t *testing.T) {
+	// Valid YAML, then a comment long enough to put the whole past the limit —
+	// so the only thing wrong with the document is its size.
+	prefix := "openapi: 3.1.0\ninfo: {title: t, version: \"1\"}\npaths: {}\n# "
+	body := make([]byte, 0, MaxDocumentBytes+len(prefix)+1)
+	body = append(body, prefix...)
+	for len(body) <= MaxDocumentBytes {
+		body = append(body, 'x')
+	}
+	_, err := Parse(body)
+	if err == nil {
+		t.Fatal("an over-size document must be refused")
+	}
+	if !strings.Contains(err.Error(), "too large") || !strings.Contains(err.Error(), "16 MiB") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "not an OpenAPI document") {
+		t.Fatalf("size must not be reported as a parse failure:\n%v", err)
+	}
+}
+
 // The root default applies to operations that state no requirement of their own,
 // and an operation's own empty list overrides it.
 func TestRootSecurityIsInheritedAndOverridable(t *testing.T) {

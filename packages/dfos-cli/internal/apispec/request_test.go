@@ -69,10 +69,11 @@ func TestBuildRequestSurvivesATrailingSlashInTheServerURL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		base, err := op.ServerURL("")
+		choice, err := op.ResolveServer(ServerPolicy{})
 		if err != nil {
 			t.Fatal(err)
 		}
+		base := choice.Base
 		req, err := op.BuildRequest(base, map[string]string{"space": "nce"}, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -95,7 +96,8 @@ func TestBuildRequestParameters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, _ := op.ServerURL("")
+	resolved, _ := op.ResolveServer(ServerPolicy{})
+	base := resolved.Base
 
 	t.Run("query parameters land in the target the proof binds", func(t *testing.T) {
 		req, err := op.BuildRequest(base, map[string]string{"space": "nce", "limit": "2", "after": "a b"}, nil)
@@ -140,14 +142,19 @@ func TestRelativeServerURLResolvesAgainstTheOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := op.ServerURL("https://api.example.test")
+	choice, err := op.ResolveServer(ServerPolicy{FetchOrigin: "https://api.example.test"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if base != "https://api.example.test/v1" {
-		t.Fatalf("server = %q", base)
+	if choice.Base != "https://api.example.test/v1" {
+		t.Fatalf("server = %q", choice.Base)
 	}
-	if _, err := op.ServerURL(""); err == nil {
+	// A relative server URL names no authority, so resolving one discloses
+	// nothing: there was never anything here to distrust.
+	if choice.Note != "" {
+		t.Fatalf("a relative server URL needs no disclosure, got %q", choice.Note)
+	}
+	if _, err := op.ResolveServer(ServerPolicy{}); err == nil {
 		t.Fatalf("a relative server URL with no known origin must be refused")
 	}
 }

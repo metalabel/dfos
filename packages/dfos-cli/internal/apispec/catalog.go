@@ -23,6 +23,7 @@ package apispec
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"go.yaml.in/yaml/v4"
 )
@@ -167,6 +168,55 @@ func decodeSchemeCatalog(node *yaml.Node) ([]CatalogEntry, error) {
 		return entries, nil
 	}
 	return nil, fmt.Errorf("is neither a map of action token to description nor a list of action tokens")
+}
+
+// ActionBundle is one AND-alternative a route requires: tokens that mean
+// nothing apart, because the route needs all of them or refuses.
+type ActionBundle struct {
+	Actions []string `json:"actions"`
+	// Operations are the routes requiring this exact combination, in document
+	// order — the evidence for why the combination is a combination.
+	Operations []string `json:"operations"`
+}
+
+// Label renders the bundle the way the document wrote it.
+func (b ActionBundle) Label() string { return strings.Join(b.Actions, " AND ") }
+
+// ActionBundles is every distinct AND-alternative the document's operations
+// require, in first-seen order.
+//
+// The flat catalog LOSES this, and losing it costs a real grant. A person
+// choosing from a list of tokens cannot see that `read:profile` buys nothing on
+// a route that requires `read:profile AND read:email`, so they can select a
+// strict subset of what a route needs, believe the selection complete, and
+// discover otherwise as a 403 after the credential is already minted. A
+// single-token alternative has no structure to lose and is not a bundle.
+func (d *Doc) ActionBundles() ([]ActionBundle, error) {
+	index := map[string]int{}
+	var bundles []ActionBundle
+	for _, op := range d.Operations() {
+		alternatives, err := op.RequiredActions()
+		if err != nil {
+			return nil, err
+		}
+		for _, alternative := range alternatives {
+			if len(alternative) < 2 {
+				continue
+			}
+			key := strings.Join(alternative, "\x00")
+			at, ok := index[key]
+			if !ok {
+				index[key] = len(bundles)
+				bundles = append(bundles, ActionBundle{
+					Actions:    append([]string(nil), alternative...),
+					Operations: []string{op.Label()},
+				})
+				continue
+			}
+			bundles[at].Operations = append(bundles[at].Operations, op.Label())
+		}
+	}
+	return bundles, nil
 }
 
 // CatalogActions is the catalog's tokens, in catalog order.
