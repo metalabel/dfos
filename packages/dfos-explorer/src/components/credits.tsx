@@ -38,9 +38,10 @@ import { getClient } from '../lib/client';
 import { GLOSSARY } from '../lib/glossary';
 import type { IndexPage } from '../lib/index-light';
 import { useIndexCredits, type IndexCreditRow } from '../lib/index-raw';
+import { useClientPager } from '../lib/paging';
 import { Check, Checks, type CheckState } from './checks';
 import { DidChip } from './did-chip';
-import { Badge, DidLink, Pager, Panel, Term } from './ui';
+import { Badge, ClientPager, DidLink, Pager, Panel, Term } from './ui';
 
 /** `pending` is a render-only state — the library never returns it */
 type DisplayState = CreditEntryState | 'pending';
@@ -166,6 +167,10 @@ const CreditsPanel = (props: { verified: boolean; children: ComponentChildren })
 const VerifiedCredits = (props: { contentId: string; entries: readonly unknown[] }) => {
   const displays = props.entries.map(readDisplay);
   const [results, setResults] = useState<CreditResult[]>(() => displays.map(initialResult));
+  // a work can credit any number of people; the fold verifies them all and the
+  // list shows twenty at a time. The row keeps its index into `results` so a
+  // verdict landing on page 3 still lands on the right row.
+  const page = useClientPager(displays.map((display, index) => ({ display, index })));
 
   useEffect(() => {
     let dead = false;
@@ -202,7 +207,7 @@ const VerifiedCredits = (props: { contentId: string; entries: readonly unknown[]
   return (
     <CreditsPanel verified>
       <Checks>
-        {displays.map((display, index) => {
+        {page.rows.map(({ display, index }) => {
           const result = results[index] ?? initialResult(display);
           const lead = creditLead(display.name, display.did);
           return (
@@ -240,6 +245,7 @@ const VerifiedCredits = (props: { contentId: string; entries: readonly unknown[]
           );
         })}
       </Checks>
+      <ClientPager page={page} noun="credits" />
     </CreditsPanel>
   );
 };

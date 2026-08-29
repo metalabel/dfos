@@ -23,15 +23,18 @@ import { BindingEvidence } from '../components/binding-evidence';
 import { Check, Checks, type CheckState } from '../components/checks';
 import { ContentChip } from '../components/content-chip';
 import { DocName, useVerifyOnVisible, VerifyBadge } from '../components/index-light';
+import { OpTable } from '../components/op-table';
 import { ProfileCard } from '../components/profile';
 import { ProvenanceLine } from '../components/provenance';
-import { OpTimeline } from '../components/timeline';
 import {
   Badge,
+  ClientPager,
   CredLink,
   CredStatus,
   DidLink,
   DocsLink,
+  KeyIdLink,
+  KeyLink,
   OpLink,
   Pager,
   Panel,
@@ -68,6 +71,7 @@ import {
   useIndexCredits,
   type IndexCreditRow,
 } from '../lib/index-raw';
+import { declaredKeys, keyDirectoryOf } from '../lib/key-identity';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
 import {
@@ -82,6 +86,7 @@ import {
   type FallbackResult,
   type OriginClaim,
 } from '../lib/origin-binding';
+import { useClientPager } from '../lib/paging';
 import { isProfileContent, profileAnchorOf } from '../lib/profile';
 import { fetchBlobRaw, fetchClaim, type ClaimResult } from '../lib/relay-raw';
 import { addRelay, getRelays } from '../lib/relays';
@@ -526,6 +531,15 @@ export const Identity = (props: { did: string }) => {
 
   const services = ('services' in state ? state.services : undefined) ?? [];
 
+  // The key set this page resolves op signers against — the VERIFIED document
+  // ONLY. A relay-asserted key list is a claim, and a signer column reading a
+  // claim would print a public key nobody proved this identity ever declared.
+  // Until the fold lands the history shows each op's kid as it stands, which is
+  // the same two-beat honesty every other panel here runs.
+  const keyDir = verified
+    ? keyDirectoryOf(props.did, declaredKeys(verified.value))
+    : keyDirectoryOf('', []);
+
   // the chain half of an origin binding (ORIGIN-BINDING.md). The claim is only
   // ever acted on once the chain has VERIFIED here — a relay-asserted services
   // set is not a signed claim, and the domain half is checked against a signed
@@ -669,11 +683,14 @@ export const Identity = (props: { did: string }) => {
 
       <CreditedOn did={props.did} indexed={indexed} />
 
-      <Panel title="operation history">
+      <Panel
+        title="operation history"
+        right={<span class="lbl">newest first · verified fold</span>}
+      >
         {rows.length === 0 ? (
           <span class="muted">{error ? <span class="err">{error}</span> : 'loading log…'}</span>
         ) : (
-          <OpTimeline rows={rows} headCid={localHead ?? claimHead} />
+          <OpTable rows={rows} headCid={localHead ?? claimHead} dir={keyDir} />
         )}
       </Panel>
 
@@ -992,7 +1009,13 @@ const LedgerEmpty = (props: { lane: Lane<unknown>; onLoadMore: () => void; empty
  *  how many exist — the relay's cursor only ever says "more"), and how that
  *  splits public/gated. It replaces the old "showing the first 200" heuristic:
  *  a lane with a live cursor says so and offers `load more`, and one without has
- *  walked the whole listing the relay serves. */
+ *  walked the whole listing the relay serves.
+ *
+ *  TWO PAGERS, ONE ABOVE THE OTHER, AND THEY MEAN DIFFERENT THINGS. The client
+ *  pager walks the rows this lane already holds, twenty at a time; `load more`
+ *  walks the RELAY's cursor for rows it does not. Collapsing them would make the
+ *  count line a lie in one direction or the other — "next" cannot fetch, and
+ *  `load more` is not a page turn. */
 const LedgerContentTable = (props: {
   lane: ContentLane;
   indexed: boolean | null;
@@ -1000,11 +1023,12 @@ const LedgerContentTable = (props: {
   empty: string;
 }) => {
   const { lane } = props;
+  const rows = lane.rows ?? [];
+  const page = useClientPager(rows);
   if (props.indexed === null) return <span class="muted">checking relay capabilities…</span>;
   if (props.indexed !== true) return <span class="muted">requires an index-capable relay.</span>;
-  const state = indexListState(lane.rows === null, lane.err, lane.rows?.length ?? 0);
+  const state = indexListState(lane.rows === null, lane.err, rows.length);
   if (state === 'loading') return <span class="muted">reading relay index…</span>;
-  const rows = lane.rows ?? [];
   const more = lane.next !== null;
   if (rows.length === 0)
     return <LedgerEmpty lane={lane} onLoadMore={props.onLoadMore} empty={props.empty} />;
@@ -1021,11 +1045,12 @@ const LedgerContentTable = (props: {
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {page.rows.map((row) => (
             <LedgerContentRow key={row.contentId} row={row} />
           ))}
         </tbody>
       </table>
+      <ClientPager page={page} noun="chains" />
       <div class="ck-note" style={{ marginTop: 8 }}>
         {ledgerCountPhrase(counts.total, 'chain', more)} — {counts.publicCount} public ·{' '}
         {counts.gatedCount} gated. relay-asserted index hints — open a chain to fold its proof.
@@ -1159,6 +1184,8 @@ const WitnessedTable = (props: {
   onRelation: (relation: string | null) => void;
 }) => {
   const { lane } = props;
+  const rows = lane.rows ?? [];
+  const page = useClientPager(rows);
   if (props.indexed === null) return <span class="muted">checking relay capabilities…</span>;
   if (props.indexed !== true) return <span class="muted">requires an index-capable relay.</span>;
   const filters =
@@ -1176,7 +1203,7 @@ const WitnessedTable = (props: {
         ))}
       </div>
     ) : null;
-  const state = indexListState(lane.rows === null, lane.err, lane.rows?.length ?? 0);
+  const state = indexListState(lane.rows === null, lane.err, rows.length);
   if (state === 'loading')
     return (
       <>
@@ -1184,7 +1211,6 @@ const WitnessedTable = (props: {
         <span class="muted">reading relay index…</span>
       </>
     );
-  const rows = lane.rows ?? [];
   const more = lane.next !== null;
   if (rows.length === 0)
     return (
@@ -1213,7 +1239,7 @@ const WitnessedTable = (props: {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
+          {page.rows.map((r) => (
             <tr key={r.cid}>
               <td>
                 {r.relation ? (
@@ -1232,6 +1258,7 @@ const WitnessedTable = (props: {
           ))}
         </tbody>
       </table>
+      <ClientPager page={page} noun="countersignatures" />
       <div class="ck-note" style={{ marginTop: 8 }}>
         {ledgerCountPhrase(rows.length, 'countersignature', more)}. relay-asserted index hints —
         open a witnessed op to fold its countersignature proof.
@@ -1257,6 +1284,7 @@ const IssuedTable = (props: {
   revoked: RevocationView;
 }) => {
   const { credSource, credFromRelayIndex, lane } = props;
+  const page = useClientPager(credSource ?? []);
   const more = credFromRelayIndex && lane.next !== null;
   if (credSource === null)
     return (
@@ -1286,7 +1314,7 @@ const IssuedTable = (props: {
           </tr>
         </thead>
         <tbody>
-          {credSource.map((op) => {
+          {page.rows.map((op) => {
             const decoded = decodeJwsUnsafe(op.jwsToken);
             const aud = typeof decoded?.payload['aud'] === 'string' ? decoded.payload['aud'] : '?';
             const att = Array.isArray(decoded?.payload['att'])
@@ -1319,6 +1347,7 @@ const IssuedTable = (props: {
           })}
         </tbody>
       </table>
+      <ClientPager page={page} noun="credentials" />
       {credFromRelayIndex ? (
         <>
           <div class="ck-note" style={{ marginTop: 8 }}>
@@ -1625,120 +1654,133 @@ const OriginBindingPanel = (props: {
   );
 };
 
+/**
+ * The identity's declared keys — LED BY THE KEY, not by the name this document
+ * gave it. `key_1` is a slot on this one document: it is not the key, it does
+ * not travel to any other chain, and a reader comparing this panel against
+ * another identity's is comparing public keys or nothing. So the multibase leads
+ * and the `key_xxx` id is metadata in the last column. Both link to the key's own
+ * page — the reverse lookup "which identities has this key ever been declared
+ * by", which is how a rotated-out key on another chain becomes findable at all.
+ */
 const KeysPanel = (props: { state: IdentityClaimState | VerifiedIdentity; verified: boolean }) => {
-  const rows = new Map<string, { publicKeyMultibase: string; roles: string[] }>();
+  const byId = new Map<string, { publicKeyMultibase: string; roles: string[] }>();
   const add = (
     keys: { id: string; publicKeyMultibase: string }[] | undefined,
     role: string,
   ): void => {
     for (const key of keys ?? []) {
-      const row = rows.get(key.id) ?? { publicKeyMultibase: key.publicKeyMultibase, roles: [] };
+      const row = byId.get(key.id) ?? { publicKeyMultibase: key.publicKeyMultibase, roles: [] };
       row.roles.push(role);
-      rows.set(key.id, row);
+      byId.set(key.id, row);
     }
   };
   add(props.state.authKeys, 'auth');
   add(props.state.assertKeys, 'assert');
   add(props.state.controllerKeys, 'controller');
+  const rows = [...byId.entries()];
+  const page = useClientPager(rows);
   return (
     <Panel
       title="keys"
       right={
         <span class="lbl">
           <Term word="roles" def={GLOSSARY['keyRoles'] ?? ''} /> ·{' '}
+          <Term word="key ids" def={GLOSSARY['keyIdentity'] ?? ''} /> ·{' '}
           {props.verified ? 'verified head state' : 'relay-asserted'}
         </span>
       }
     >
-      {rows.size === 0 ? (
+      {rows.length === 0 ? (
         <span class="muted">none</span>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>key id</th>
-              <th>roles</th>
-              <th>public key (multibase)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[...rows.entries()].map(([id, row]) => (
-              <tr key={id}>
-                <td>{id}</td>
-                <td>
-                  {row.roles.map((role) => (
-                    <span key={role} class="k-role">
-                      {role}
-                    </span>
-                  ))}
-                </td>
-                {/* the multibase links to the key's own page — the reverse
-                    lookup "which identities has this key ever been declared by",
-                    which is how a rotated-out key on another chain becomes
-                    findable from here at all */}
-                <td>
-                  <a
-                    href={`#/key/${row.publicKeyMultibase}`}
-                    class="cid"
-                    title={row.publicKeyMultibase}
-                  >
-                    {short(row.publicKeyMultibase, 12, 8)}
-                  </a>
-                </td>
+        <>
+          <table>
+            <thead>
+              <tr>
+                <th>public key</th>
+                <th>roles</th>
+                <th>key id</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {page.rows.map(([id, row]) => (
+                <tr key={id}>
+                  <td>
+                    <KeyLink multibase={row.publicKeyMultibase} />
+                  </td>
+                  <td>
+                    {row.roles.map((role) => (
+                      <span key={role} class="k-role">
+                        {role}
+                      </span>
+                    ))}
+                  </td>
+                  <td>
+                    <KeyIdLink id={id} multibase={row.publicKeyMultibase} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <ClientPager page={page} noun="keys" />
+        </>
       )}
     </Panel>
   );
 };
 
-const ServicesPanel = (props: { services: ServiceEntry[]; claim: OriginClaim }) => (
-  <Panel
-    title="services"
-    right={
-      <span class="lbl">
-        <Term word="discovery" def={GLOSSARY['services'] ?? ''} />
-      </span>
-    }
-  >
-    {/* an identity claims AT MOST ONE canonical domain: more than one DfosOrigin
+const ServicesPanel = (props: { services: ServiceEntry[]; claim: OriginClaim }) => {
+  const page = useClientPager(props.services);
+  return (
+    <Panel
+      title="services"
+      right={
+        <span class="lbl">
+          <Term word="discovery" def={GLOSSARY['services'] ?? ''} />
+        </span>
+      }
+    >
+      {/* an identity claims AT MOST ONE canonical domain: more than one DfosOrigin
         entry claims none at all ("an ambiguous claim is no claim"), which is
         deliberately not `broken` — nobody is being contradicted, the claim is
         simply unreadable. So the binding panel is absent and this says why. */}
-    {props.claim.kind === 'ambiguous' ? (
-      <div class="ck-note" style={{ marginBottom: 10 }}>
-        ⚠ {props.claim.count} <code>DfosOrigin</code> entries — an identity claims at most one
-        canonical domain, so this set claims <b>no</b> origin binding at all.
-      </div>
-    ) : null}
-    {props.services.length === 0 ? (
-      <span class="muted">none declared</span>
-    ) : (
-      <table>
-        <thead>
-          <tr>
-            <th>type</th>
-            <th>label / id</th>
-            <th>target</th>
-          </tr>
-        </thead>
-        <tbody>
-          {props.services.map((entry) => (
-            <tr key={entry.id}>
-              <td>{entry.type}</td>
-              <td>{String((entry as Record<string, unknown>)['label'] ?? entry.id ?? '')}</td>
-              <td>
-                <ServiceTarget entry={entry} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    )}
-  </Panel>
-);
+      {props.claim.kind === 'ambiguous' ? (
+        <div class="ck-note" style={{ marginBottom: 10 }}>
+          ⚠ {props.claim.count} <code>DfosOrigin</code> entries — an identity claims at most one
+          canonical domain, so this set claims <b>no</b> origin binding at all.
+        </div>
+      ) : null}
+      {props.services.length === 0 ? (
+        <span class="muted">none declared</span>
+      ) : (
+        <>
+          <table>
+            <thead>
+              <tr>
+                <th>type</th>
+                <th>label / id</th>
+                <th>target</th>
+              </tr>
+            </thead>
+            <tbody>
+              {page.rows.map((entry) => (
+                <tr key={entry.id}>
+                  <td>{entry.type}</td>
+                  <td>{String((entry as Record<string, unknown>)['label'] ?? entry.id ?? '')}</td>
+                  <td>
+                    <ServiceTarget entry={entry} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <ClientPager page={page} noun="entries" />
+        </>
+      )}
+    </Panel>
+  );
+};
 
 const ServiceTarget = (props: { entry: ServiceEntry }) => {
   const rec = props.entry as Record<string, unknown>;

@@ -58,6 +58,17 @@ export const fmtAge = (iso: string | null | undefined): string => {
   return 'just now';
 };
 
+/** ISO timestamp → `YYYY-MM-DD HH:MM` in UTC — the width a dense table column
+ *  can hold. Unparseable input passes through untouched rather than becoming an
+ *  empty cell: the raw value is still the honest thing to show. Callers keep the
+ *  full timestamp in the cell's title. */
+export const fmtStamp = (iso: string | null | undefined): string => {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  return new Date(t).toISOString().slice(0, 16).replace('T', ' ');
+};
+
 /** Bytes → "~92 MB" / "~1.2 GB" (binary units, browser-estimate precision). */
 export const fmtBytes = (bytes: number | null | undefined): string => {
   if (bytes == null) return '';

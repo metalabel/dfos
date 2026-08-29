@@ -18,9 +18,10 @@ import { Credits, documentCredits } from '../components/credits';
 import { IndexPanel } from '../components/index-view';
 import { JsonView } from '../components/json-view';
 import { MediaPanel } from '../components/media';
+import { OpTable } from '../components/op-table';
 import { ProvenanceLine } from '../components/provenance';
-import { OpTimeline } from '../components/timeline';
 import {
+  ClientPager,
   CredLink,
   CredStatus,
   DidLink,
@@ -40,8 +41,15 @@ import { GLOSSARY } from '../lib/glossary';
 import { isIndexDocument } from '../lib/index-fold';
 import { indexCredSource, useIndexCapable } from '../lib/index-light';
 import { projectedTitle, useIndexContentRow } from '../lib/index-point';
+import {
+  declaredKeys,
+  EMPTY_KEY_DIRECTORY,
+  keyDirectoryOf,
+  type KeyDirectory,
+} from '../lib/key-identity';
 import { parseMediaObject } from '../lib/media';
 import { toOpRows, type OpRow } from '../lib/op-rows';
+import { useClientPager } from '../lib/paging';
 import { fetchBlobRaw, fetchClaim, type BlobResult, type ClaimResult } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
 import {
@@ -89,6 +97,11 @@ export const Content = (props: { id: string }) => {
   const [resolved, setResolved] = useState<Resolved<ResolvedContent> | null>(null);
   const [rows, setRows] = useState<OpRow[]>([]);
   const [doc, setDoc] = useState<DocState | null>(null);
+  // the CREATOR's declared keys — the one identity document this page ever holds,
+  // and therefore the only kid it can resolve to a public key. An op signed by a
+  // delegated key from some other chain keeps its kid in the history table, which
+  // is the true statement about what was read (lib/key-identity.ts).
+  const [creatorKeys, setCreatorKeys] = useState<KeyDirectory>(EMPTY_KEY_DIRECTORY);
   const [grants, setGrants] = useState<GrantSummary[] | null>(null);
   // related grants off the relay's /index/v0/credentials?resource=chain:<id> — the
   // always-fresh, no-sync path (a superset: exact chain:<id> ∪ chain:* wildcards).
@@ -111,6 +124,7 @@ export const Content = (props: { id: string }) => {
     setResolved(null);
     setRows([]);
     setDoc(null);
+    setCreatorKeys(EMPTY_KEY_DIRECTORY);
     setGrants(null);
     setRevoked(emptyRevocations());
     setError('');
@@ -167,6 +181,17 @@ export const Content = (props: { id: string }) => {
             })
             .catch(() => {
               // best-effort prefetch — the creator link still resolves on click
+            });
+          // …and fold the creator's chain for its DECLARED KEYS, so the operation
+          // history can name the key that signed each op. The key set comes from
+          // the VERIFIED identity, never a relay's assertion of one.
+          void client
+            .identity(creator)
+            .then((idRes) => {
+              if (!dead) setCreatorKeys(keyDirectoryOf(creator, declaredKeys(idRes.value)));
+            })
+            .catch(() => {
+              // the creator's chain did not resolve here — every op keeps its kid
             });
         }
       } catch (e) {
@@ -433,11 +458,14 @@ export const Content = (props: { id: string }) => {
         indexed={grantsFromRelayIndex}
       />
 
-      <Panel title="operation history">
+      <Panel
+        title="operation history"
+        right={<span class="lbl">newest first · verified fold</span>}
+      >
         {rows.length === 0 ? (
           <span class="muted">{error ? <span class="err">{error}</span> : 'loading…'}</span>
         ) : (
-          <OpTimeline rows={rows} headCid={chain?.headCID ?? claimHead} />
+          <OpTable rows={rows} headCid={chain?.headCID ?? claimHead} dir={creatorKeys} />
         )}
       </Panel>
 
@@ -520,6 +548,7 @@ const GrantsPanel = (props: {
   indexed?: boolean;
 }) => {
   const { grants } = props;
+  const page = useClientPager(grants ?? []);
   const has = grants && grants.length > 0;
   // nothing to surface: no grants in the index and byte state is unknown/private
   if (!has && !props.publicBytes && !props.gated) return null;
@@ -546,7 +575,7 @@ const GrantsPanel = (props: {
               </tr>
             </thead>
             <tbody>
-              {grants.map((g) => (
+              {page.rows.map((g) => (
                 <tr key={g.cid}>
                   <td>
                     <CredLink cid={g.cid} />
@@ -572,6 +601,7 @@ const GrantsPanel = (props: {
               ))}
             </tbody>
           </table>
+          <ClientPager page={page} noun="grants" />
           <div class="ck-note" style={{ marginTop: 8 }}>
             {props.indexed ? (
               <>

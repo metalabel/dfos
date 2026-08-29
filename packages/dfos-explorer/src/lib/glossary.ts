@@ -47,6 +47,11 @@ export const GLOSSARY_TERMS: readonly GlossaryTerm[] = [
     def: 'An identity separates keys by use: controller keys sign the chain’s own operations and rotate keys, auth keys authenticate to services, assert keys sign statements (content ops, credentials, countersignatures).',
   },
   {
+    key: 'keyIdentity',
+    term: 'public key vs key id',
+    def: 'A key is its public key — the multibase string (z6Mk…), identical on every chain that ever declared it. A key id like key_1 is a slot name on one identity document: two identities can both use key_1 for different keys, and one identity can rotate key_1 and mean a different key than before. So surfaces lead with the public key and keep the id beside it; both open the key’s own page.',
+  },
+  {
     key: 'services',
     term: 'services',
     def: 'Discovery vocabulary in identity state: DfosRelay entries advertise a relay endpoint holding this identity’s data; ContentAnchor entries pin a stable contentId or artifact CID (e.g. a profile); DfosAuthorizationServer entries name the server where this identity’s person signs in, so a client holding only the DID can find it. The vocabulary is open — an unrecognized type is still a legible claim, just one this explorer has no special reading for.',

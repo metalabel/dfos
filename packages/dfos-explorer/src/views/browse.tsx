@@ -20,7 +20,7 @@
   pretending. They live in their own view because an artifact has no chain to
   fold, and therefore no attributed→verified promotion in place.
 
-  Pages are 25 rows off the relay's keyset cursor, with the position carried in
+  Pages are 20 rows off the relay's keyset cursor, with the position carried in
   the hash so a browse view can be linked. Enumeration is never a completeness
   claim ("completeness is outside the proof"); a deep sync is the exhaustive
   AUDIT stance that alone detects a relay's omissions.
@@ -37,7 +37,7 @@ import {
   useVerifyOnVisible,
   VerifyBadge,
 } from '../components/index-light';
-import { Badge, Pager, Panel, Pill, Term } from '../components/ui';
+import { Badge, ClientPager, Pager, Panel, Pill, Term } from '../components/ui';
 import { useIndexRowLabel } from '../lib/content-labels';
 import type { ChainRollup, DocumentsBrowse, IdentitiesBrowse } from '../lib/db';
 import { getDb } from '../lib/db-instance';
@@ -52,6 +52,7 @@ import {
   useIndexIter2,
   type IndexPage,
 } from '../lib/index-light';
+import { useClientPager } from '../lib/paging';
 import { fetchRelayHint } from '../lib/relay-hint';
 import { startProjections, startSync, stopSync, useSyncState } from '../lib/sync-store';
 import { useVerifyStatus } from '../lib/verify-queue';
@@ -333,6 +334,10 @@ export const BrowseIdentities = () => {
   const [includeGated, setIncludeGated] = useState(false);
   const [result, setResult] = useState<IdentitiesBrowse | null>(null);
   const available = useAvailable(ID_KEYS);
+  // the LOCAL fallback listing is materialized whole (up to BROWSE_LIMIT rows)
+  // rather than walked off a relay cursor, so it pages here in the tab — the same
+  // twenty-row control the index path gets from its keyset pager.
+  const localPage = useClientPager(result?.rows ?? []);
   // debounce the search box into the relay's server-side `nameContains` filter so
   // a keystroke doesn't re-page the index on every character; the relay filters
   // over the projected profile name (amber) before paginating.
@@ -437,7 +442,7 @@ export const BrowseIdentities = () => {
               </tr>
             </thead>
             <tbody>
-              {result.rows.map((row) => (
+              {localPage.rows.map((row) => (
                 <tr key={row.chainId} onClick={() => (location.hash = `#/did/${row.chainId}`)}>
                   <td>
                     {row.name ? (
@@ -454,6 +459,7 @@ export const BrowseIdentities = () => {
               ))}
             </tbody>
           </table>
+          <ClientPager page={localPage} noun="identities" />
           {result.matched > result.rows.length ? (
             <div class="ck-note" style={{ marginTop: 8 }}>
               showing {fmtCount(result.rows.length)} of {fmtCount(result.matched)} — narrow the
@@ -492,6 +498,9 @@ export const BrowseDocuments = () => {
   const effectiveOrder = ordered ? order : null;
   const [result, setResult] = useState<DocumentsBrowse | null>(null);
   const available = useAvailable(DOC_KEYS);
+  // same as the identities lane: the local listing arrives whole, so it pages in
+  // the tab rather than off a cursor.
+  const localPage = useClientPager(result?.rows ?? []);
   const index = useIndexContent(indexed === true, true, {
     ...(schema ? { docSchema: schema } : {}),
     ...(effectiveOrder ? { order: effectiveOrder } : {}),
@@ -670,7 +679,7 @@ export const BrowseDocuments = () => {
               </tr>
             </thead>
             <tbody>
-              {result?.rows.map((row: ChainRollup) => {
+              {localPage.rows.map((row: ChainRollup) => {
                 const gated = !(row.docSchema && row.publicRead);
                 // local projections carry the same material the relay index does:
                 // a post/v1 title/snippet on the rollup, a profile name via names-join.
@@ -711,6 +720,7 @@ export const BrowseDocuments = () => {
               })}
             </tbody>
           </table>
+          <ClientPager page={localPage} noun="documents" />
           {result && result.matched > result.rows.length ? (
             <div class="ck-note" style={{ marginTop: 8 }}>
               showing {fmtCount(result.rows.length)} of {fmtCount(result.matched)}.

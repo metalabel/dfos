@@ -12,6 +12,8 @@ import type { ComponentChildren } from 'preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { useDidProfile } from '../lib/did-profiles';
 import { copyToClipboard, short } from '../lib/format';
+import { resolveKidPubkey, shortPubkey, splitKid, type KeyDirectory } from '../lib/key-identity';
+import { clientPagerNoun, type ClientPage } from '../lib/paging';
 import type { RevocationStatus } from '../lib/revocations';
 
 // -----------------------------------------------------------------------------
@@ -325,6 +327,30 @@ export const Pager = (props: {
   </div>
 );
 
+/**
+ * The same control, over rows this tab already holds (lib/paging.ts). Renders
+ * NOTHING when everything fits on one page — a dead pager under a three-row
+ * table is chrome, and the whole point of one shared control is that its
+ * presence means the same thing everywhere.
+ */
+export const ClientPager = (props: { page: ClientPage<unknown>; noun: string }) => {
+  const { page } = props;
+  if (!page.paged) return null;
+  return (
+    <Pager
+      count={page.rows.length}
+      noun={clientPagerNoun(page.total, props.noun)}
+      loading={false}
+      hasNext={page.hasNext}
+      hasPrev={page.hasPrev}
+      offFirst={page.offFirst}
+      onFirst={page.first}
+      onPrev={page.prev}
+      onNext={page.next}
+    />
+  );
+};
+
 // -----------------------------------------------------------------------------
 // docs — the one place the SIWD guide slugs live
 //
@@ -393,6 +419,36 @@ export const CredLink = (props: { cid: string }) => (
   </a>
 );
 
+/** A public key, linked to its own page. THE KEY IS THE IDENTIFIER — the
+ *  `key_xxx` id a document gave it names a slot on that one document and travels
+ *  nowhere, so it never leads (lib/key-identity.ts). `cramped` drops to 8…4 for
+ *  a cell that cannot hold the reading width; `note` appends to the hover title
+ *  where the caller knows something more about which key this is. */
+export const KeyLink = (props: { multibase: string; cramped?: boolean; note?: string }) => (
+  <a
+    href={`#/key/${props.multibase}`}
+    class="cid"
+    title={`${props.multibase}${props.note ? ` — ${props.note}` : ''} — open this key`}
+  >
+    {shortPubkey(props.multibase, props.cramped)}
+  </a>
+);
+
+/** The `key_xxx` id, as metadata beside the key itself — demoted to dim ink and
+ *  pointed at the same page, because a reader who recognizes the id should still
+ *  land where the key lives. Dim, NOT the uppercase `.lbl` treatment: an id is a
+ *  literal string a document wrote, and re-casing it would show a value that is
+ *  not the one on the chain. */
+export const KeyIdLink = (props: { id: string; multibase: string }) => (
+  <a
+    href={`#/key/${props.multibase}`}
+    class="muted"
+    title={`${props.id} — this identity's name for ${props.multibase}`}
+  >
+    {props.id}
+  </a>
+);
+
 /** kid → linked DID + fragment; genesis ops carry no kid. */
 export const KidLink = (props: { kid: string }) => {
   const i = props.kid.indexOf('#');
@@ -408,6 +464,24 @@ export const KidLink = (props: { kid: string }) => {
       <span class="muted">#{props.kid.slice(i + 1)}</span>
     </>
   );
+};
+
+/**
+ * An operation's signer, shown as the KEY that signed rather than the slot name
+ * the JWS header carries. The kid resolves through whatever identity documents
+ * the view holds (lib/key-identity.ts); a kid whose document is not in hand
+ * renders as the kid it is — a DID and a fragment — and never as a key this tab
+ * did not read.
+ *
+ * The resolved form shows the key ALONE. The `key_xxx` id is what the key was
+ * called, and a history column that already names the key does not also need the
+ * name — a rotation is visible as a different key, which is the thing that
+ * actually changed. The kid stays one hover away.
+ */
+export const SignerKey = (props: { kid: string; dir: KeyDirectory }) => {
+  const multibase = resolveKidPubkey(props.kid, props.dir);
+  if (!multibase) return <KidLink kid={props.kid} />;
+  return <KeyLink multibase={multibase} note={`signed as ${splitKid(props.kid).fragment}`} />;
 };
 
 /**

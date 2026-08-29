@@ -29,6 +29,7 @@ import { ContentChip } from '../components/content-chip';
 import { JsonView } from '../components/json-view';
 import { OpTimeline, OpType } from '../components/timeline';
 import {
+  ClientPager,
   CredLink,
   DidLink,
   KidLink,
@@ -46,6 +47,7 @@ import { didOfKid, fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { KIND_OF_TYP, PAYLOAD_NOTES } from '../lib/op-annotations';
 import { toOpRows, type OpRow } from '../lib/op-rows';
+import { useClientPager } from '../lib/paging';
 import { fetchCountersigs, fetchOpRaw } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
 
@@ -122,6 +124,9 @@ export const Op = (props: { cid: string }) => {
   const [chainPending, setChainPending] = useState(false);
   const [witnesses, setWitnesses] = useState<WitnessRow[] | null>(null);
   const [standalone, setStandalone] = useState<Standalone | null>(null);
+  // the countersignature web is fetched whole and verified in the tab — an op can
+  // carry any number of witnesses, so the table pages here
+  const witnessPage = useClientPager(witnesses ?? []);
 
   useEffect(() => {
     let dead = false;
@@ -630,42 +635,45 @@ export const Op = (props: { cid: string }) => {
             been published to these relays for this op.
           </div>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>witness</th>
-                <th>relation</th>
-                <th>when</th>
-                <th>targets this op</th>
-                <th>sig</th>
-              </tr>
-            </thead>
-            <tbody>
-              {witnesses.map((w, i) => (
-                <tr key={i}>
-                  <td>
-                    <DidLink did={w.did} />
-                  </td>
-                  <td>
-                    <span class="k-role">{w.relation}</span>
-                  </td>
-                  <td class="muted">{w.createdAt}</td>
-                  <td>
-                    {w.targetsThis ? (
-                      <span class="ck ok">✓</span>
-                    ) : (
-                      <span class="err">✗ different target</span>
-                    )}
-                  </td>
-                  <td>
-                    <span class={`ck ${w.sig}`}>
-                      {w.sig === 'ok' ? '✓' : w.sig === 'bad' ? '✗' : '·'}
-                    </span>
-                  </td>
+          <>
+            <table>
+              <thead>
+                <tr>
+                  <th>witness</th>
+                  <th>relation</th>
+                  <th>when</th>
+                  <th>targets this op</th>
+                  <th>sig</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {witnessPage.rows.map((w, i) => (
+                  <tr key={i}>
+                    <td>
+                      <DidLink did={w.did} />
+                    </td>
+                    <td>
+                      <span class="k-role">{w.relation}</span>
+                    </td>
+                    <td class="muted">{w.createdAt}</td>
+                    <td>
+                      {w.targetsThis ? (
+                        <span class="ck ok">✓</span>
+                      ) : (
+                        <span class="err">✗ different target</span>
+                      )}
+                    </td>
+                    <td>
+                      <span class={`ck ${w.sig}`}>
+                        {w.sig === 'ok' ? '✓' : w.sig === 'bad' ? '✗' : '·'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <ClientPager page={witnessPage} noun="witnesses" />
+          </>
         )}
       </Panel>
 

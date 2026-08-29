@@ -213,8 +213,9 @@ export type ContentLabelTier = 'attributed' | 'verified';
  * the relay's row (a browse, search, or feed table does — the projection came
  * down with the page). Supplying it, INCLUDING as `''` for "the relay projects
  * no title here", suppresses the point lookup a bare chip has to spend a round
- * trip on: 25 rows would otherwise mean 25 extra index requests for answers the
- * page already received. The caller owns the public-read honesty rule for what
+ * trip on: a page of rows would otherwise mean a page of extra index requests
+ * for answers the page already received. The caller owns the public-read
+ * honesty rule for what
  * it passes; {@link useIndexRowLabel} applies it.
  */
 export const useContentLabel = (
