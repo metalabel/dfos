@@ -117,7 +117,7 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	root.PersistentFlags().StringVar(&asFlag, "as", "", "Identity to act as (name or did:dfos:…)")
-	root.PersistentFlags().StringVar(&relayFlag, "relay", "", "Peer to talk to (name)")
+	root.PersistentFlags().StringVar(&relayFlag, "relay", "", "Peer to talk to (name) — a command's own --peer flag takes precedence for that command; see its help for what it selects")
 	root.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output as JSON")
 	root.PersistentFlags().BoolVarP(&quietFlag, "quiet", "q", false, "Suppress the resolved-principal line on signing commands")
 
@@ -278,18 +278,50 @@ func requireIdentity() (*config.ResolvedContext, *relay.StoredIdentityChain, err
 	if !ctx.HasIdentity() {
 		return nil, nil, errNoIdentity()
 	}
+	if ctx.IdentityDID == "" {
+		return nil, nil, fmt.Errorf("identity '%s' not found in config (from %s)", ctx.IdentityName, ctx.IdentitySource)
+	}
+	return loadSigningChain(ctx)
+}
 
+// requireIdentityTarget is requireIdentity with an optional TYPED target in
+// front of the resolution stack: `identity update <name> --rotate-auth` acts on
+// <name>, not on whatever --as / DFOS_AS / default-identity happens to resolve
+// to. A positional target is the most explicit statement of intent the command
+// line has, so it outranks every ambient tier — and the announce line names
+// "positional argument" as the mechanism, so which identity is about to be
+// signed for is never inferred from a default the operator cannot see.
+//
+// With no positional, resolution is exactly requireIdentity's.
+func requireIdentityTarget(args []string) (*config.ResolvedContext, *relay.StoredIdentityChain, error) {
+	if len(args) == 0 {
+		return requireIdentity()
+	}
+	did, err := resolveIdentityDID(args[0])
+	if err != nil {
+		return nil, nil, err
+	}
+	// Only the identity half is overridden. The peer half still resolves
+	// through the ordinary stack, so --peer/--relay keep working alongside a
+	// typed target.
+	ctx := &config.ResolvedContext{}
+	if resolved, err := resolveCtx(); err == nil && resolved != nil {
+		ctx.RelayName, ctx.RelayURL, ctx.RelaySource = resolved.RelayName, resolved.RelayURL, resolved.RelaySource
+	}
+	ctx.IdentityDID = did
+	ctx.IdentityName = config.FindIdentityName(cfg, did)
+	ctx.IdentitySource = config.SourcePositionalTarget
+	return loadSigningChain(ctx)
+}
+
+// loadSigningChain is the shared tail of both: fetch the chain, refuse a
+// missing or deleted one, and announce the principal before anything is signed.
+func loadSigningChain(ctx *config.ResolvedContext) (*config.ResolvedContext, *relay.StoredIdentityChain, error) {
 	lr, err := getRelay()
 	if err != nil {
 		return nil, nil, err
 	}
-
-	did := ctx.IdentityDID
-	if did == "" {
-		return nil, nil, fmt.Errorf("identity '%s' not found in config (from %s)", ctx.IdentityName, ctx.IdentitySource)
-	}
-
-	chain, err := lr.Relay.GetIdentity(did)
+	chain, err := lr.Relay.GetIdentity(ctx.IdentityDID)
 	if err != nil {
 		return nil, nil, err
 	}

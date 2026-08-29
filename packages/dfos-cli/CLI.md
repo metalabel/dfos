@@ -126,6 +126,8 @@ The stack has no mutable pointer in it. The config tier is written by exactly on
 
 `--as` takes an identity name from config **or** a bare `did:dfos:` identifier. A DID needs no local registration.
 
+A verb that takes its subject as a positional argument — `identity update <name|did>`, like `delete`, `restore`, `show`, `log`, `forget`, and `remove` before it — acts on that identity, ahead of the whole stack. A target typed on the command line is the most explicit statement of intent available, so it outranks `--as`, `DFOS_AS`, and `default-identity`, and the disclosure line names `positional argument` as the mechanism it resolved through. With no positional the stack resolves as it always does.
+
 ### Disclosure
 
 A command about to sign says who it is signing as, on stderr, before it signs:
@@ -414,6 +416,8 @@ Each key gets an **origin** (where its seed came from) and a **status** (what cu
 | `orphan`                                  | nothing in the local relay declares it and nothing else claims it                                        |
 | `unreadable` / `unnamed` / `unrecognized` | the key's status cannot be established from what this machine can see                                    |
 
+Roles are reported for a `superseded` key as well as a `declared` one: a declared key's `roles` are its current roles, and a superseded key's are the roles it held before the rotation that retired it, read back out of the chain's own log. The status field is what separates the two, and the human table spells the second out as `was auth, no longer current`.
+
 A key with origin `vault` is derivable again from that vault's phrase, which is what [`dfos recover`](#recovery) does; a `standalone` key is not, and this keystore is its only copy.
 
 `prune` removes keys with status `orphan` and nothing else. It is a dry run until `--yes`, and it prints, per key, whether the seed is derivable again from a vault's recovery phrase or exists only in this keystore. Five rules bound it:
@@ -612,7 +616,11 @@ dfos identity fetch did:dfos:xxx --peer prod --name carol
 dfos content fetch abc123 --peer prod
 ```
 
-Fetched identities appear in `identity list` with `KEYS 0/N` — visible public keys but no private material in the keychain. This enables local verification, credential checking, and countersigning against remote identities.
+A fetched identity given a `--name` appears in `identity list` with `KEYS 0/N` — visible public keys but no private material in the keychain. This enables local verification, credential checking, and countersigning against remote identities.
+
+Without a name, the KEYS column reads `?`: probing the keystore costs one lookup per declared key, so it runs only for identities a local name points at. `?` is the absence of a probe, not a count of zero — a footnote under the table says so, and `identity fetch <did> --name <name>` registers the name that turns it into a count. A deleted identity is marked `(deleted)` on its row, the same fact `keys list` marks on its keys and `whoami` reports as `State: deleted`.
+
+`identity list --json` reports each identity's DID, local name, head CID, last-operation timestamp, operation count, and resolved state. The operation log itself is omitted — a roster that inlines every base64 operation of every chain is mostly bytes nobody asked for. `--include-log` emits the full stored shape instead, and `identity log <did>` shows one chain's operations.
 
 To forget only this machine's registration for an identity:
 
@@ -622,6 +630,8 @@ dfos identity forget did:dfos:xxx
 ```
 
 This removes the named identity and its referencing contexts from config, clears a `default-identity` that pointed at it, and removes that DID's cached login credential. Private keys remain in the OS keystore, public chain data remains in the local relay, and no chain operation is signed or published. Use `relay gc` for local space maintenance.
+
+`identity remove <name>` drops the name alone, leaving contexts and any cached credential in place. It clears the same dangling pointers a removed name would leave behind, and reports them in the same field names `forget` uses — `activeContextCleared` and `defaultIdentityCleared` under `--json`, and a line each in the human output — so which config state moved is read off the result rather than out of `config.toml`.
 
 ### Peer Sync
 
@@ -951,7 +961,7 @@ The listed actions are then yours to pick from, by number or by token, with ente
 
 **What is checked before anything is stored.** The returned artifact must carry `typ: did:dfos:siwd`, the signer must be the DID the challenge was bound to, and the signature must verify against a **current** authentication key of the signer's freshly re-fetched chain — resolved through the configured peer, whose operation log is replayed and re-verified locally. Only then is the challenge consumed: its payload segment must equal this run's challenge bytes exactly, compared once and then spent, which is the spec's rule that consumption is the _final_ verification step so nothing invalid can ever spend it. A returned credential is checked once more before it is written — it must be issued to this installation's client DID, since one issued to anyone else is inert here. Any failure exits non-zero and stores nothing.
 
-Credentials land in `~/.dfos/credentials/<did>.json` (mode `600`, directory `700`) alongside the client DID they were issued to. The summary printed on success is decoded from the artifact locally — no network call. `scope=identity` returns no credential, and that is a success too: the sign-in was verified, there was just nothing to store.
+Credentials land in the config directory's `credentials/<did>.json` (mode `600`, directory `700`) — `~/.dfos/credentials/` by default, and beside `DFOS_CONFIG` wherever that points — alongside the client DID they were issued to. The summary printed on success is decoded from the artifact locally — no network call. `scope=identity` returns no credential, and that is a success too: the sign-in was verified, there was just nothing to store.
 
 The separate `creds` group manages these local login records (not protocol grants and revocations):
 
@@ -1151,13 +1161,13 @@ A proof authorizes one request and nothing else: it binds that method, that host
 
 | Method | Command                         | Description                                                  |
 | ------ | ------------------------------- | ------------------------------------------------------------ |
-| `GET`  | `identity list`                 | List all known identities (owned + fetched)                  |
+| `GET`  | `identity list`                 | List all known identities (owned + fetched; `--include-log`) |
 | `GET`  | `identity show [name\|did]`     | Show identity state                                          |
 | `GET`  | `identity keys [name\|did]`     | Show key state + keychain availability                       |
 | `GET`  | `identity services [name\|did]` | Show resolved discovery services                             |
 | `GET`  | `identity well-known [name]`    | Emit the app-description members (`--patch`)                 |
 | `POST` | `identity create --name`        | Generate keys + sign genesis (`--service`)                   |
-| `POST` | `identity update`               | Rotate keys / set services (`--service`)                     |
+| `POST` | `identity update [name\|did]`   | Rotate keys / set services (`--service`)                     |
 | `POST` | `identity device-pubkey`        | Generate a device keypair, print its pubkey                  |
 | `POST` | `identity add-key`              | Add another device's pubkey (1-of-N)                         |
 | `POST` | `identity bind-domain <domain>` | Claim a domain in the chain (`DfosOrigin`, `--id`)           |

@@ -35,6 +35,7 @@ import (
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/vault"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
 )
 
@@ -96,14 +97,18 @@ type keyVaultProvenance struct {
 type keyLedgerEntry struct {
 	Account string `json:"account,omitempty"`
 	// Ref is the backend's own handle, carried only when the account is unknown.
-	Ref         string              `json:"ref,omitempty"`
-	KeyID       string              `json:"keyId,omitempty"`
-	DID         string              `json:"did,omitempty"`
-	Identity    string              `json:"identity,omitempty"`
-	PublicKey   string              `json:"publicKey,omitempty"`
-	Origin      string              `json:"origin"`
-	Backend     string              `json:"backend"`
-	Status      string              `json:"status"`
+	Ref       string `json:"ref,omitempty"`
+	KeyID     string `json:"keyId,omitempty"`
+	DID       string `json:"did,omitempty"`
+	Identity  string `json:"identity,omitempty"`
+	PublicKey string `json:"publicKey,omitempty"`
+	Origin    string `json:"origin"`
+	Backend   string `json:"backend"`
+	Status    string `json:"status"`
+	// Roles is what the chain says this key is for. On a declared key those are
+	// its CURRENT roles; on a superseded one they are the roles it held before
+	// the rotation that retired it, read back out of the log. The status field
+	// is what distinguishes the two, and it is always set.
 	Roles       []string            `json:"roles,omitempty"`
 	Deleted     bool                `json:"identityDeleted,omitempty"`
 	Vault       *keyVaultProvenance `json:"vault,omitempty"`
@@ -280,6 +285,7 @@ func buildKeyLedger() (*keyLedger, error) {
 	declaredPublic := map[string]string{}
 	knownDID := map[string]bool{}
 	deletedDID := map[string]bool{}
+	chainByDID := map[string]*relay.StoredIdentityChain{}
 	resolved := map[string]bool{}
 	for _, h := range order {
 		if h.account == "" || strings.HasPrefix(h.account, loginClientAccountPrefix) ||
@@ -303,6 +309,7 @@ func buildKeyLedger() (*keyLedger, error) {
 		}
 		knownDID[chain.DID] = true
 		deletedDID[chain.DID] = chain.State.IsDeleted
+		chainByDID[chain.DID] = chain
 		declare := func(set []protocol.MultikeyPublicKey, role string) {
 			for _, k := range set {
 				account := chain.DID + "#" + k.ID
@@ -313,6 +320,41 @@ func buildKeyLedger() (*keyLedger, error) {
 		declare(chain.State.ControllerKeys, "controller")
 		declare(chain.State.AuthKeys, "auth")
 		declare(chain.State.AssertKeys, "assert")
+	}
+
+	// What a SUPERSEDED key used to be. Current state cannot say — that is what
+	// superseded means — but the operation that retired the key is still in the
+	// log, and a rotation the ledger reports without naming the role it retired
+	// is a fact with its subject removed. So the log is read back, for exactly
+	// the held accounts current state could not place and no others: a chain
+	// with nothing superseded on this machine is never walked.
+	supersededRoles := map[string][]string{}
+	wantByDID := map[string]map[string]bool{}
+	for _, h := range order {
+		if h.account == "" || strings.HasPrefix(h.account, loginClientAccountPrefix) ||
+			!strings.Contains(h.account, "#") {
+			continue
+		}
+		if _, declared := declaredRoles[h.account]; declared {
+			continue
+		}
+		did := didFromKid(h.account)
+		if !knownDID[did] {
+			continue
+		}
+		if wantByDID[did] == nil {
+			wantByDID[did] = map[string]bool{}
+		}
+		wantByDID[did][h.account] = true
+	}
+	for did, want := range wantByDID {
+		chain := chainByDID[did]
+		if chain == nil {
+			continue
+		}
+		for account, roles := range rolesFromLog(chain, want) {
+			supersededRoles[account] = roles
+		}
 	}
 
 	// Reading a seed is the expensive step on a keychain-backed store — one
@@ -333,14 +375,15 @@ func buildKeyLedger() (*keyLedger, error) {
 
 	for _, h := range order {
 		ledger.Entries = append(ledger.Entries, classifyKey(h.account, h.ref, classifyInputs{
-			declaredRoles:  declaredRoles,
-			declaredPublic: declaredPublic,
-			mintedBy:       mintedBy,
-			mintedPublic:   mintedPublic,
-			knownDID:       knownDID,
-			deletedDID:     deletedDID,
-			loginAccount:   loginAccount,
-			loginDID:       loginDID,
+			declaredRoles:   declaredRoles,
+			declaredPublic:  declaredPublic,
+			supersededRoles: supersededRoles,
+			mintedBy:        mintedBy,
+			mintedPublic:    mintedPublic,
+			knownDID:        knownDID,
+			deletedDID:      deletedDID,
+			loginAccount:    loginAccount,
+			loginDID:        loginDID,
 		}))
 	}
 	sort.SliceStable(ledger.Entries, func(i, j int) bool {
@@ -399,15 +442,79 @@ func statusRank(status string) int {
 	}
 }
 
+// rolesFromLog reads an identity's operation log and reports, for each of the
+// wanted accounts, every role that identity ever declared the key in. The
+// role sets are full-state on each operation, so a key that appears in one and
+// not the next was rotated out — but this asks only what it WAS, which no later
+// operation can take back.
+//
+// A malformed or undecodable operation is skipped rather than fatal: the log
+// was already verified when it was ingested, and a ledger that refuses to
+// report because one historical operation reads oddly is worse than one that
+// reports what the rest of the log says.
+func rolesFromLog(chain *relay.StoredIdentityChain, want map[string]bool) map[string][]string {
+	roleFields := [...]struct{ field, role string }{
+		{"controllerKeys", "controller"},
+		{"authKeys", "auth"},
+		{"assertKeys", "assert"},
+	}
+	held := map[string]map[string]bool{}
+	for _, token := range chain.Log {
+		_, payload, err := protocol.DecodeJWSUnsafe(token)
+		if err != nil || payload == nil {
+			continue
+		}
+		for _, rf := range roleFields {
+			entries, ok := payload[rf.field].([]any)
+			if !ok {
+				continue
+			}
+			for _, raw := range entries {
+				item, ok := raw.(map[string]any)
+				if !ok {
+					continue
+				}
+				id, _ := item["id"].(string)
+				if id == "" {
+					continue
+				}
+				account := chain.DID + "#" + id
+				if !want[account] {
+					continue
+				}
+				if held[account] == nil {
+					held[account] = map[string]bool{}
+				}
+				held[account][rf.role] = true
+			}
+		}
+	}
+	// Emitted in the same order the current-state fold emits declared roles, so
+	// one key's roles read the same whichever side of a rotation it is on.
+	out := make(map[string][]string, len(held))
+	for account, roles := range held {
+		for _, rf := range roleFields {
+			if roles[rf.role] {
+				out[account] = append(out[account], rf.role)
+			}
+		}
+	}
+	return out
+}
+
 type classifyInputs struct {
 	declaredRoles  map[string][]string
 	declaredPublic map[string]string
-	mintedBy       map[string]*keyVaultProvenance
-	mintedPublic   map[string]string
-	knownDID       map[string]bool
-	deletedDID     map[string]bool
-	loginAccount   string
-	loginDID       string
+	// supersededRoles is what a retired key USED to be, read out of the log —
+	// keyed by account, and populated only for accounts current state cannot
+	// place.
+	supersededRoles map[string][]string
+	mintedBy        map[string]*keyVaultProvenance
+	mintedPublic    map[string]string
+	knownDID        map[string]bool
+	deletedDID      map[string]bool
+	loginAccount    string
+	loginDID        string
 }
 
 // classifyKey decides what ONE key is, and whether prune may touch it.
@@ -457,7 +564,12 @@ func classifyKey(account, ref string, in classifyInputs) keyLedgerEntry {
 			}
 		} else if in.knownDID[entry.DID] {
 			entry.Status = statusSuperseded
+			entry.Roles = in.supersededRoles[account]
 			entry.Reason = "the chain for this DID is in the local relay and no longer names this key — a rotation left it behind"
+			if len(entry.Roles) > 0 {
+				entry.Reason = "the chain for this DID is in the local relay and no longer names this key — a rotation retired it from " +
+					strings.Join(entry.Roles, ", ")
+			}
 		} else {
 			entry.Status = statusOrphan
 			entry.Reason = "no chain for " + entry.DID + " in the local relay"
@@ -611,6 +723,11 @@ func declaredBy(e keyLedgerEntry) string {
 	if e.Status != statusDeclared {
 		switch {
 		case e.Status == statusSuperseded:
+			// Which role a rotation retired is half of what an operator wants
+			// from this row, so it is on the row rather than one 'keys show' away.
+			if len(e.Roles) > 0 {
+				return identityLabel(e) + " — was " + strings.Join(e.Roles, ", ") + ", no longer current"
+			}
 			return identityLabel(e) + " — no longer current"
 		case e.DID != "":
 			return "none — was " + truncateMiddle(e.DID, 28)
@@ -722,7 +839,11 @@ func printKeyEntry(e keyLedgerEntry) {
 	}
 	fmt.Printf("  Status:    %s\n", e.Status)
 	if len(e.Roles) > 0 {
-		fmt.Printf("  Roles:     %s\n", strings.Join(e.Roles, ", "))
+		if e.Status == statusSuperseded {
+			fmt.Printf("  Roles:     %s — held until a rotation retired this key, not current\n", strings.Join(e.Roles, ", "))
+		} else {
+			fmt.Printf("  Roles:     %s\n", strings.Join(e.Roles, ", "))
+		}
 	}
 	if e.Deleted {
 		fmt.Printf("  Note:      the identity is deleted — deletion is not revocation, and 'identity restore' is real\n")

@@ -116,7 +116,8 @@ func newLoginCmd() *cobra.Command {
 			"its own chain's DfosAuthorizationServer entry, open the consent screen in a browser, and verify the " +
 			"signed challenge that comes back on a local listener. This machine asks under the loopback credential " +
 			"tier — a per-install client identity whose key control is proven at ask-time — so a scope that returns " +
-			"a credential has something to be issued to. Credentials land in ~/.dfos/credentials/, and nothing is " +
+			"a credential has something to be issued to. Credentials land in the credentials/ directory beside the " +
+			"config file — ~/.dfos/credentials/ by default, and beside DFOS_CONFIG wherever that points — and nothing is " +
 			"stored unless the signature verifies against a current authentication key of the signer's chain.\n\n" +
 			"--host names the API the credential is for, by registered name or by host. Its OpenAPI document's " +
 			"action catalog is read and presented, and what you select becomes the scope — asked for verbatim, " +

@@ -165,6 +165,11 @@ const (
 	SourceEnvContext      = "DFOS_CONTEXT"
 	SourceDefaultIdentity = "config default-identity"
 	SourceDefaultPeer     = "config default-peer"
+	// SourcePositionalTarget is what a verb reports when its subject was typed
+	// as a positional argument. It is not a tier OF the stack — it sits in front
+	// of the whole of it, because a target typed on the command line is the most
+	// explicit statement of intent available and nothing ambient may outrank it.
+	SourcePositionalTarget = "positional argument"
 )
 
 // Overrides carries the per-invocation selectors a command was given. One

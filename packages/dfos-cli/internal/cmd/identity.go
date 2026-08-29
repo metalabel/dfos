@@ -321,14 +321,18 @@ func newIdentityUpdateCmd() *cobra.Command {
 	var noVault bool
 
 	cmd := &cobra.Command{
-		Use:   "update",
+		Use:   "update [name|did]",
 		Short: "Update identity (rotate keys, set discovery services)",
-		Long: "Sign an identity update operation. Use --rotate-auth or --rotate-controller to mint new keys " +
+		Long: "Sign an identity update operation for the named identity, or — with no name — for the one the " +
+			"resolution stack resolves. A typed name or DID is the subject: it outranks --as, DFOS_AS, and " +
+			"default-identity, and the announce line says it came from the command line. " +
+			"Use --rotate-auth or --rotate-controller to mint new keys " +
 			"and rotate out the old ones. Rotation is sticky: replacements are drawn from the vault that " +
 			"minted this identity's CURRENT keys, so an identity stays on one seed unless --vault says " +
 			"otherwise. An identity whose keys came from no vault rotates into standalone keys. " +
 			"Use --service (repeatable) to REPLACE the discovery services set, or " +
 			"--clear-services to empty it. Services left unspecified are carried forward unchanged.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			settingServices := len(serviceSpecs) > 0 || clearServices
 			if !rotateAuth && !rotateController && !settingServices {
@@ -343,7 +347,11 @@ func newIdentityUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			_, chain, err := requireIdentity()
+			// The positional target, when typed, IS the identity — ahead of the
+			// whole resolution stack. Rotating a key is irreversible for the key
+			// it retires, so "which identity did that just apply to" may never be
+			// answered by an ambient default the operator did not name.
+			_, chain, err := requireIdentityTarget(args)
 			if err != nil {
 				return err
 			}
@@ -397,9 +405,21 @@ func newIdentityUpdateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			minter, err := newKeyMinter(rotationVault, boolCount(rotateAuth, rotateController))
-			if err != nil {
-				return err
+			// A minter is a RESERVATION against a vault's derivation counter, so
+			// it is constructed only when a key is actually being minted. An
+			// update that rotates nothing — a services-only change — mints
+			// nothing, and asking a vault to reserve zero indices is not a
+			// request it can serve: the guard in vault.Mint is right, and calling
+			// it unconditionally is what turned every services-only update on a
+			// vault-derived identity into an error about mint counts.
+			var minter *keyMinter
+			var vaultFingerprint string
+			if rotateAuth || rotateController {
+				minter, err = newKeyMinter(rotationVault, boolCount(rotateAuth, rotateController))
+				if err != nil {
+					return err
+				}
+				vaultFingerprint = minter.fingerprint
 			}
 			var mintedRecords []vault.MintedKey
 
@@ -488,7 +508,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 					}
 					out["vault"] = map[string]any{
 						"name":        rotationVault,
-						"fingerprint": minter.fingerprint,
+						"fingerprint": vaultFingerprint,
 						"indices":     indices,
 					}
 				}
@@ -504,7 +524,7 @@ func newIdentityUpdateCmd() *cobra.Command {
 				if rotationVault != "" && len(mintedRecords) > 0 {
 					for _, r := range mintedRecords {
 						fmt.Printf("  Vault:          %s [%s] at %s (%s) — via %s\n",
-							rotationVault, minter.fingerprint, vault.DerivationPath(r.Index), r.Role, rotationSource)
+							rotationVault, vaultFingerprint, vault.DerivationPath(r.Index), r.Role, rotationSource)
 					}
 				}
 				if servicesChanged {
@@ -1305,8 +1325,26 @@ func newIdentityRestoreCmd() *cobra.Command {
 	return cmd
 }
 
+// identityListEntry is one row of `identity list --json`. The operation log is
+// deliberately absent: a roster that inlines every base64 operation of every
+// chain is mostly bytes nobody asked for, and on a relay that has synced the
+// network it is the whole corpus rendered to answer "which identities are
+// here". The operation COUNT is the part a roster needs; the log itself is one
+// 'dfos identity log <did>' away, and --include-log emits the full stored shape
+// for a caller that wants everything in one document.
+type identityListEntry struct {
+	DID           string                 `json:"did"`
+	Name          string                 `json:"name,omitempty"`
+	HeadCID       string                 `json:"headCID"`
+	LastCreatedAt string                 `json:"lastCreatedAt"`
+	Operations    int                    `json:"operations"`
+	State         protocol.IdentityState `json:"state"`
+}
+
 func newIdentityListCmd() *cobra.Command {
-	return &cobra.Command{
+	var includeLog bool
+
+	cmd := &cobra.Command{
 		Use:     "list",
 		Short:   "List all known identities",
 		Aliases: []string{"ls"},
@@ -1337,29 +1375,65 @@ func newIdentityListCmd() *cobra.Command {
 			}
 
 			if jsonFlag {
-				outputJSON(chains)
+				if includeLog {
+					outputJSON(chains)
+					return nil
+				}
+				entries := make([]identityListEntry, 0, len(chains))
+				for i := range chains {
+					c := &chains[i]
+					entries = append(entries, identityListEntry{
+						DID:           c.DID,
+						Name:          config.FindIdentityName(cfg, c.DID),
+						HeadCID:       c.HeadCID,
+						LastCreatedAt: c.LastCreatedAt,
+						Operations:    len(c.Log),
+						State:         c.State,
+					})
+				}
+				outputJSON(entries)
 				return nil
 			}
 
 			fmt.Printf("%-10s %-36s %-6s %s\n", "NAME", "DID", "KEYS", "OPS")
+			unprobed := false
 			for _, chain := range chains {
 				name := config.FindIdentityName(cfg, chain.DID)
 				// countKeysInChain probes the OS keychain once per key, which
 				// is O(keys) slow — a list of many gossiped-in identities would
 				// hang. Only probe identities we track by name (ours); for the
-				// rest we don't hold keys, so show "-" and skip the lookups.
-				keysCol := "-"
+				// rest the count is not computed at all.
+				//
+				// That absence is marked "?", never "-": "-" reads as "holds no
+				// keys", and this machine may well hold keys this chain
+				// declares. The one fact established here is that no local name
+				// points at the identity, so no probe was run.
+				keysCol := "?"
 				if name != "" {
 					keysCol = fmt.Sprintf("%d/%d", countKeysInChain(&chain), len(distinctKeyIDs(&chain)))
 				} else {
 					name = "-"
+					unprobed = true
 				}
-				fmt.Printf("%-10s %-36s %-6s %d\n",
-					name, chain.DID, keysCol, len(chain.Log))
+				// Deletion is one fact and it reads the same everywhere: `keys
+				// list` marks a deleted identity's keys "(deleted)" and `whoami`
+				// reports "State: deleted", so the roster says it too rather
+				// than listing a deleted identity as if it were live.
+				state := ""
+				if chain.State.IsDeleted {
+					state = "  (deleted)"
+				}
+				fmt.Printf("%-10s %-36s %-6s %d%s\n",
+					name, chain.DID, keysCol, len(chain.Log), state)
+			}
+			if unprobed {
+				fmt.Printf("\n  ?  no local name registers this identity, so its keys were not probed — 'dfos identity fetch <did> --name <name>' registers one.\n")
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&includeLog, "include-log", false, "With --json, include each identity's full operation log (omitted by default; 'dfos identity log <did>' shows one)")
+	return cmd
 }
 
 func newIdentityShowCmd() *cobra.Command {
@@ -1893,7 +1967,11 @@ func newIdentityFetchCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "fetch <did|name>",
 		Short: "Download identity chain from peer into local relay",
-		Args:  cobra.ExactArgs(1),
+		Long: "Pull an identity's operation chain from a peer and ingest it into the local relay. The peer is " +
+			"taken from this command's --peer, else the global --relay (whose hidden alias is also --peer), else " +
+			"config default-peer. The two flags name the same thing at the same tier; the command-local one wins " +
+			"when both are given.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
 			did, err := resolveIdentityDID(target)
@@ -1957,8 +2035,21 @@ func newIdentityFetchCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Local name for this identity")
-	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to fetch from")
+	cmd.Flags().StringVar(&peerName, "peer", "", "Peer to fetch from — same tier as the global --relay, and wins when both are given")
 	return cmd
+}
+
+// identityRemoveResult is what `identity remove` reports. `remove` and `forget`
+// clear overlapping config state, so they report it in the same field names:
+// the caller of either learns whether a dangling default-identity or active
+// context was cleared, rather than having to re-read config.toml to find out.
+// `remove` drops a name and nothing else, so it carries no credential or
+// context-removal fields — forget's job, not this one's.
+type identityRemoveResult struct {
+	Removed                string `json:"removed"`
+	DID                    string `json:"did"`
+	ActiveContextCleared   bool   `json:"activeContextCleared"`
+	DefaultIdentityCleared bool   `json:"defaultIdentityCleared"`
 }
 
 func newIdentityRemoveCmd() *cobra.Command {
@@ -1973,6 +2064,7 @@ func newIdentityRemoveCmd() *cobra.Command {
 				return fmt.Errorf("identity '%s' not found in config", name)
 			}
 
+			result := identityRemoveResult{Removed: name, DID: idCfg.DID}
 			delete(cfg.Identities, name)
 			// Dropping the name that default-identity points at would leave the
 			// config tier naming something that no longer resolves, so it is
@@ -1980,19 +2072,27 @@ func newIdentityRemoveCmd() *cobra.Command {
 			// the removal of a dangling one.
 			if cfg.DefaultIdentity == name || cfg.DefaultIdentity == idCfg.DID {
 				cfg.DefaultIdentity = ""
+				result.DefaultIdentityCleared = true
 			}
 			if cfg.ActiveContext != "" {
 				parts := strings.SplitN(cfg.ActiveContext, "@", 2)
 				if len(parts) > 0 && parts[0] == name {
 					cfg.ActiveContext = ""
+					result.ActiveContextCleared = true
 				}
 			}
 			config.Save(cfg)
 
 			if jsonFlag {
-				outputJSON(map[string]string{"removed": name, "did": idCfg.DID})
+				outputJSON(result)
 			} else {
 				fmt.Printf("Removed identity name '%s' (%s) from config\n", name, idCfg.DID)
+				if result.DefaultIdentityCleared {
+					fmt.Println("  default-identity cleared because it pointed at the removed name.")
+				}
+				if result.ActiveContextCleared {
+					fmt.Println("  Active context cleared because it referenced the removed name.")
+				}
 				fmt.Printf("  Data remains in local relay. Keys remain in keychain.\n")
 			}
 			return nil
