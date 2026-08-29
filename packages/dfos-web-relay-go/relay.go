@@ -40,6 +40,12 @@ type Relay struct {
 	authority          string
 	proofWindowSeconds int64
 	proofSkewSeconds   int64
+	// openapi* cache the served OpenAPI document. Per-relay rather than
+	// package-level because the document self-describes: its `servers` names this
+	// relay's authority, so two relays in one process serve two documents.
+	openapiOnce sync.Once
+	openapiJSON []byte
+	openapiErr  error
 	// jtiCache is the replay cache for write-shaped proofs (ingestion, blob
 	// upload). Defaults to the in-memory per-process implementation; a
 	// multi-process deployment injects its own (RelayOptions.JtiCache).

@@ -48,6 +48,7 @@ import {
   redactNonPublicIdentityRow,
 } from './index-routes';
 import { ingestOperations, type AdmissionMode } from './ingest';
+import { selfDescribingDocument } from './openapi';
 import {
   credentialRevocationStatus,
   issuerRevocationList,
@@ -496,8 +497,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
   // stands between a client and the description of the surface it is about to
   // call. Registered only under the `{ document }` form — a `{ url }` relay
   // points elsewhere and serves nothing here.
+  //
+  // SELF-DESCRIBING: the served copy's `servers` names THIS relay's configured
+  // authority, so a client reading the document reaches this relay rather than
+  // whatever host the document was authored against. Built once here, not per
+  // request — the authority is construction-time configuration. See
+  // ./openapi.ts for why the canonical document names no host at all.
   if (openapiDocument !== undefined && openapiRoute !== undefined) {
-    app.get(openapiRoute, (c) => c.json(openapiDocument as Record<string, unknown>));
+    const servedDocument = selfDescribingDocument(openapiDocument, authority);
+    app.get(openapiRoute, (c) => c.json(servedDocument));
   }
 
   registerSigningRoutes({

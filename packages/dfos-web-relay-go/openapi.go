@@ -32,6 +32,14 @@ package relay
   (modulo the info.version line, which the release version-sync stamps on the
   canonical only) and names the one-line fix when they diverge.
 
+  THE DOCUMENT DESCRIBES THE FAMILY; THE SERVED COPY DESCRIBES THIS RELAY. The
+  canonical file names no `servers`, because there is no host it could name that
+  would be true of every relay serving that surface. This relay writes its own
+  configured Authority into the served copy's `servers`, so a client reading the
+  document resolves operations against THIS relay rather than against whatever
+  host the document was authored on. renderOpenAPI carries the full reasoning,
+  including why an unconfigured authority correctly yields no `servers` at all.
+
   YAML in, JSON out: the canonical file is YAML (readable, reviewable, diffable),
   while the served representation is JSON — every OpenAPI consumer reads JSON,
   and the route can then be a plain application/json GET with no content
@@ -49,7 +57,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -62,35 +70,85 @@ const openapiPath = "/openapi.json"
 //go:embed openapi.yaml
 var openapiYAML []byte
 
-var (
-	openapiOnce sync.Once
-	openapiJSON []byte
-	openapiErr  error
-)
+// loopbackHosts are the hosts reached in the clear. `api:` surfaces are HTTPS
+// surfaces — the CLI refuses to sign a proof for a plaintext request to
+// anything else — so the scheme inferred from a bare authority is https for
+// every host but these.
+var loopbackHosts = map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true, "[::1]": true}
 
-// openapiDocument returns the embedded description as JSON, converting once.
+// relayBaseURL is the absolute base URL a request to a relay at authority is
+// made against, or "" when there is no authority to describe.
+//
+// An authority is a bare host or host:port — that is what an identity proof
+// binds to — so the scheme has to be inferred. Loopback is served in the clear
+// during development; everything else is HTTPS, which is the only scheme a DFOS
+// proof may be sent under anyway.
+func relayBaseURL(authority string) string {
+	if authority == "" {
+		return ""
+	}
+	host := strings.ToLower(authority)
+	hostname := host
+	if strings.HasPrefix(host, "[") {
+		if end := strings.Index(host, "]"); end >= 0 {
+			hostname = host[:end+1]
+		}
+	} else if colon := strings.Index(host, ":"); colon >= 0 {
+		hostname = host[:colon]
+	}
+	if loopbackHosts[hostname] {
+		return "http://" + host
+	}
+	return "https://" + host
+}
+
+// renderOpenAPI converts the embedded description to the JSON this relay
+// serves. Called once per relay (openapiOnce), never per request.
 //
 // info.version is overwritten with the running relay's Version rather than the
 // canonical file's: the release version-sync stamps the canonical document, not
 // this copy, and a served document that reports a version this binary is not is
 // worse than no version at all. The well-known's `version` field reports the
 // same value, so the two meta surfaces always agree.
-func openapiDocument() ([]byte, error) {
-	openapiOnce.Do(func() {
-		var parsed any
-		if err := yaml.Unmarshal(openapiYAML, &parsed); err != nil {
-			openapiErr = err
-			return
-		}
-		document := jsonifyYAML(parsed)
-		if root, ok := document.(map[string]any); ok {
-			if info, ok := root["info"].(map[string]any); ok {
-				info["version"] = Version
-			}
-		}
-		openapiJSON, openapiErr = json.Marshal(document)
+//
+// SELF-DESCRIPTION. The canonical document carries no `servers` member — it
+// describes the surface every DFOS relay serves, not the address of any one of
+// them, and a hardcoded host is wrong for every deployment but the one it names.
+// The served copy writes `servers` from THIS relay's configured Authority, so a
+// client that reads the document reaches this relay. The authority is
+// configuration and never the request: Host, X-Forwarded-Host, and the request
+// URL are attacker-supplied, and a document that echoed one back would invite a
+// client to sign its next proof against a host of the attacker's choosing. With
+// no authority configured there is nothing honest to write, so the member stays
+// absent — and OpenAPI then resolves operations against the URL the document was
+// retrieved from, which for a self-served document is this relay either way.
+func renderOpenAPI(authority string) ([]byte, error) {
+	var parsed any
+	if err := yaml.Unmarshal(openapiYAML, &parsed); err != nil {
+		return nil, err
+	}
+	document := jsonifyYAML(parsed)
+	root, ok := document.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("openapi document is not a mapping")
+	}
+	if info, ok := root["info"].(map[string]any); ok {
+		info["version"] = Version
+	}
+	if base := relayBaseURL(authority); base != "" {
+		root["servers"] = []any{map[string]any{"url": base}}
+	} else {
+		delete(root, "servers")
+	}
+	return json.Marshal(document)
+}
+
+// openapiDocument returns the description this relay serves, converting once.
+func (r *Relay) openapiDocument() ([]byte, error) {
+	r.openapiOnce.Do(func() {
+		r.openapiJSON, r.openapiErr = renderOpenAPI(r.authority)
 	})
-	return openapiJSON, openapiErr
+	return r.openapiJSON, r.openapiErr
 }
 
 // jsonifyYAML makes a decoded YAML value JSON-marshalable. yaml.v3 decodes a
@@ -124,7 +182,7 @@ func jsonifyYAML(value any) any {
 // handleOpenAPI serves the relay's OpenAPI document. Ungated: a meta surface,
 // like the well-known that advertises it.
 func (r *Relay) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
-	document, err := openapiDocument()
+	document, err := r.openapiDocument()
 	if err != nil {
 		writeError(w, 500, "openapi document unavailable")
 		return

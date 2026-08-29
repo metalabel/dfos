@@ -5,12 +5,6 @@
     "version": "0.40.0",
     "description": "HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves\nidentity chains, content chains, countersignatures, and content blobs.\n\nTwo data planes:\n- **Proof plane** (public): signed chain operations, countersignatures\n- **Content plane** (authenticated): raw content blobs gated by API-AUTH identity proofs and DFOS credentials\n"
   },
-  "servers": [
-    {
-      "url": "http://localhost:3000",
-      "description": "Local development"
-    }
-  ],
   "paths": {
     "/.well-known/dfos-relay": {
       "get": {

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DFOS Web Relay
-  version: 0.38.0
+  version: 0.40.0
   description: |
     HTTP relay for the DFOS protocol. Receives, verifies, stores, and serves
     identity chains, content chains, countersignatures, and content blobs.
@@ -10,10 +10,16 @@ info:
     - **Proof plane** (public): signed chain operations, countersignatures
     - **Content plane** (authenticated): raw content blobs gated by API-AUTH identity proofs and DFOS credentials
 
-servers:
-  - url: http://localhost:3000
-    description: Local development
-
+# NO `servers` MEMBER, DELIBERATELY. This document describes the wire surface of
+# every DFOS relay, not the address of any one of them, so there is no host it
+# could name that would be true of the deployment serving it. OpenAPI already
+# says what to do about that: a document with no `servers` resolves its
+# operations against the URL the document itself was retrieved from, which for a
+# relay serving its own description at /openapi.json is exactly the right answer.
+# A reference relay that knows its own configured authority overwrites this
+# absence at serve time with a single entry naming itself; a consumer that
+# imports the committed artifact and serves it from its own origin gets the
+# default, and it is also right for them.
 paths:
   /.well-known/dfos-relay:
     get:

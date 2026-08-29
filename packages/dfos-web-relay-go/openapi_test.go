@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 const canonicalOpenAPIPath = "../dfos-web-relay/openapi.yaml"
@@ -87,6 +89,117 @@ func TestOpenAPIRouteServesJSONDocument(t *testing.T) {
 	}
 	if _, ok := document.Paths["/proof/v1/operations"]; !ok {
 		t.Fatalf("paths missing /proof/v1/operations: %v", keysOf(document.Paths))
+	}
+}
+
+// THE SERVED DOCUMENT DESCRIBES THIS RELAY. A hardcoded host in the canonical
+// document is wrong for every deployment but the one it names — a client that
+// read `http://localhost:3000` out of a document fetched from a real relay would
+// resolve every operation against localhost and reach nothing. The served copy's
+// `servers` therefore names the relay's own configured authority.
+func TestOpenAPIServersDescribesThisRelay(t *testing.T) {
+	for _, tc := range []struct {
+		authority string
+		want      string
+	}{
+		{"relay.example.com", "https://relay.example.com"},
+		{"Relay.Example.com:8443", "https://relay.example.com:8443"},
+		// loopback is the one authority served in the clear
+		{"localhost:3000", "http://localhost:3000"},
+		{"127.0.0.1:3000", "http://127.0.0.1:3000"},
+		{"[::1]:3000", "http://[::1]:3000"},
+	} {
+		t.Run(tc.authority, func(t *testing.T) {
+			r, err := NewRelay(RelayOptions{Store: NewMemoryStore(), Authority: tc.authority})
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := r.openapiDocument()
+			if err != nil {
+				t.Fatalf("render document: %v", err)
+			}
+			var document struct {
+				Servers []struct {
+					URL string `json:"url"`
+				} `json:"servers"`
+			}
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatalf("decode document: %v", err)
+			}
+			if len(document.Servers) != 1 || document.Servers[0].URL != tc.want {
+				t.Fatalf("servers = %+v, want one entry %q", document.Servers, tc.want)
+			}
+		})
+	}
+}
+
+// WITH NO AUTHORITY CONFIGURED there is nothing honest to write, and the member
+// is absent rather than guessed — OpenAPI then resolves operations against the
+// URL the document was retrieved from, which for a self-served document is this
+// relay. Absent, never null and never an empty array: a `servers` present but
+// empty is a document that describes no host at all.
+func TestOpenAPIOmitsServersWithoutAuthority(t *testing.T) {
+	r, err := NewRelay(RelayOptions{Store: NewMemoryStore()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := r.openapiDocument()
+	if err != nil {
+		t.Fatalf("render document: %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatalf("decode document: %v", err)
+	}
+	if _, present := document["servers"]; present {
+		t.Fatalf("servers = %v, want the member absent", document["servers"])
+	}
+}
+
+// The canonical document names no host — the absence the serve-time rewrite is
+// written on top of. If a `servers` block ever comes back into openapi.yaml,
+// every relay that cannot self-describe starts advertising it verbatim.
+func TestCanonicalOpenAPIDeclaresNoServers(t *testing.T) {
+	canonical, err := os.ReadFile(canonicalOpenAPIPath)
+	if err != nil {
+		t.Fatalf("read canonical openapi.yaml: %v", err)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(canonical, &document); err != nil {
+		t.Fatalf("parse canonical openapi.yaml: %v", err)
+	}
+	if _, present := document["servers"]; present {
+		t.Fatalf("canonical openapi.yaml declares servers = %v; the document describes the "+
+			"surface every relay serves, not the address of one — each relay writes its own",
+			document["servers"])
+	}
+}
+
+// The route serves what the document renderer produced, self-description
+// included — the rewrite has to reach the wire, not just the cache.
+func TestOpenAPIRouteServesTheSelfDescribedDocument(t *testing.T) {
+	r, err := NewRelay(RelayOptions{Store: NewMemoryStore(), Authority: "relay.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(r.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + openapiPath)
+	if err != nil {
+		t.Fatalf("GET %s: %v", openapiPath, err)
+	}
+	defer resp.Body.Close()
+	var document struct {
+		Servers []struct {
+			URL string `json:"url"`
+		} `json:"servers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&document); err != nil {
+		t.Fatalf("decode served document: %v", err)
+	}
+	if len(document.Servers) != 1 || document.Servers[0].URL != "https://relay.example.com" {
+		t.Fatalf("served servers = %+v, want one entry %q", document.Servers, "https://relay.example.com")
 	}
 }
 

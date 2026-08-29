@@ -113,6 +113,14 @@ export type AdmissionPolicy = (principal: string | null) => boolean | Promise<bo
  *   const relay = await createRelay({ store, openapi: { document } });
  *   ```
  *
+ *   THE SERVED COPY DESCRIBES THIS RELAY. The canonical document names no
+ *   `servers` — it describes the surface every relay serves, not the address of
+ *   one — and the served copy's is written from `authority`, so a client reading
+ *   it resolves operations against this deployment. With no `authority`
+ *   configured the member stays absent, and OpenAPI resolves against the URL the
+ *   document was fetched from, which is this relay either way. The caller's
+ *   document object is never mutated. See `./openapi.ts`.
+ *
  * The document is DISCOVERY, NEVER AUTHORITY — the routes, capability gates, and
  * auth rules the spec fixes govern regardless of what an advertised document
  * says, so nothing here is consulted when serving a request.
