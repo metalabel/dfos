@@ -377,6 +377,7 @@ dfos keys list                 # the whole manifest
 dfos keys show <key-id>        # one key: also accepts its public key or its full account
 dfos keys prune                # what removing the orphans would cost — removes nothing
 dfos keys prune --yes          # remove them
+dfos keys prove <code-or-uri>  # prove a key to a key-add ceremony
 ```
 
 The manifest is **derived**, not stored. Every column is folded on the spot out of state that already exists — the keystore backend, each vault's minted-key records, the identity chains in the local relay, and `login-client.json` — and no file records it. A cached list of keys is a list that can disagree with the keystore, and `prune` acts on what it reads.
@@ -388,21 +389,24 @@ Each key gets an **origin** (where its seed came from) and a **status** (what cu
 | `vault`        | a vault's minted-key record names it, with the derivation index that produced it                  |
 | `standalone`   | generated straight into the keystore; no vault record names it, so this keystore is its only copy |
 | `pending`      | held under a `pending:` account — an `identity create` interrupted before its DID existed         |
+| `candidate`    | held under a `candidate:` account — a key [`keys prove`](#proving-a-key-to-a-ceremony) presented  |
 | `login-client` | this installation's Sign In With DFOS client key                                                  |
 
-| Status                                    | Meaning                                                                                            |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `declared`                                | an identity chain in the local relay names it in a current role (`controller` / `auth` / `assert`) |
-| `superseded`                              | that identity's chain is local and no longer names the key — a rotation left it behind             |
-| `login-client`                            | infrastructure: the per-install sign-in client key                                                 |
-| `orphan`                                  | nothing in the local relay declares it and nothing else claims it                                  |
-| `unreadable` / `unnamed` / `unrecognized` | the key's status cannot be established from what this machine can see                              |
+| Status                                    | Meaning                                                                                                  |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `declared`                                | an identity chain in the local relay names it in a current role (`controller` / `auth` / `assert`)       |
+| `superseded`                              | that identity's chain is local and no longer names the key — a rotation left it behind                   |
+| `login-client`                            | infrastructure: the per-install sign-in client key                                                       |
+| `candidate`                               | presented to a key-add ceremony; the chain that adopts it is the ceremony operator's, not this machine's |
+| `orphan`                                  | nothing in the local relay declares it and nothing else claims it                                        |
+| `unreadable` / `unnamed` / `unrecognized` | the key's status cannot be established from what this machine can see                                    |
 
 A key with origin `vault` is derivable again from that vault's phrase, which is what [`dfos recover`](#recovery) does; a `standalone` key is not, and this keystore is its only copy.
 
-`prune` removes keys with status `orphan` and nothing else. It is a dry run until `--yes`, and it prints, per key, whether the seed is derivable again from a vault's recovery phrase or exists only in this keystore. Four rules bound it:
+`prune` removes keys with status `orphan` and nothing else. It is a dry run until `--yes`, and it prints, per key, whether the seed is derivable again from a vault's recovery phrase or exists only in this keystore. Five rules bound it:
 
 - **A key any local identity declares is never an orphan** — including a **deleted** identity's. Deletion is not revocation, and `identity restore` exists.
+- **A candidate is not an orphan.** A key proven to a key-add ceremony is claimed by a chain the ceremony operator custodies, which this machine may never hold; absence of a local declaration says nothing about it.
 - **Uncertainty is not an orphan.** A key whose status cannot be established is listed as skipped, with the reason, and left alone.
 - **The local relay's own key is out of reach by construction.** It lives in `relay.db`'s `relay_meta` table, not in the keystore, so a fold over the keystore cannot see it, list it, or delete it.
 - **Vault mnemonics are out of reach too.** They share the OS keychain service with key seeds, so the keystore drops them inside the enumerator that produces the list, and `prune` re-checks before every delete.
@@ -410,6 +414,31 @@ A key with origin `vault` is derivable again from that vault's phrase, which is 
 `identity forget` removes a local name and touches no key material, and it leaves the chain in the local relay — so a forgotten identity's keys still read as `declared`, and `prune` leaves them alone.
 
 What `keys list` can see depends on whether the active backend can enumerate itself. The file store lists its own directory. The macOS keychain is listed through `security dump-keychain`, filtered to the `dfos` service. The Linux secret-service and Windows backends expose no search at all: there, `keys list` reports the keys the local relay, the vaults, and the login client already name — every key in use, and no leftovers — and says on its first line that the listing is partial.
+
+### Proving a key to a ceremony
+
+A **key-add ceremony** is how a key held on this machine is added to an identity whose chain someone else custodies: the ceremony operator's own surface displays a code, and `dfos keys prove` is what completes it from the machine that actually holds a key. The envelope, its carriage, and the obligations on both sides are [KEY-PROOF](https://protocol.dfos.com/key-proof).
+
+```bash
+dfos keys prove app.example/ABCD2345                  # the short code an operator displays
+dfos keys prove 'https://app.example/…?ceremony=…&nonce=…'  # the carriage URI a QR code carries
+dfos keys prove app.example/ABCD2345 --key z6Mk…      # prove a key this machine already holds
+```
+
+Both carriage forms are accepted. A short code is `<authority>/<CODE>`, eight characters of `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` — the confusable glyphs are not in the alphabet — and it resolves with one `GET https://<authority>/.well-known/dfos-key-proof?code=<CODE>`. **One resolution per invocation**: the route is rate limited at the operator, a ceremony lives ten minutes, and a code that did not resolve is not going to. The resolved URI's authority must byte-equal the authority typed, and a resolution pointing anywhere else is refused out loud — that rule is what stops a code from redirecting a ceremony off the host the human named.
+
+By default the command **mints** the key it proves, from the default vault or `--vault` (`--no-vault` generates one straight into the keystore). That is the shape the ceremony is for: a new self-held key being added to an identity someone else custodies the chain for. `--key <public-key|key-id|account>` proves a key this machine already holds instead — signing a key proof is a keystore-level act and needs no vault and no chain.
+
+Two gates stand before the signature, and neither is skipped quietly:
+
+- **The audience is shown, and confirmed.** The completion endpoint's authority and the ceremony purpose print before anything is signed, and a terminal is asked to confirm. Audience binding is what makes a relayed challenge useless — a proof names the authority its human confirmed and is dead bytes everywhere else — and it only defends a human who saw the authority. `--quiet` does not suppress the disclosure; `--yes` is how a script asserts a human already checked it.
+- **One key, one DID.** Before signing, a named oracle relay is asked whether any identity has ever declared this key, through the same `key=` lookup [`dfos recover`](#recovery) scans with. Any answer that is not "nothing declares it" refuses: the lookup is has-ever-declared, its rows survive rotation and deletion, and one key in two chains publishes an irreversible public link between them. An oracle that cannot answer — no peer configured, a 501, an unreachable relay, one predating the `key=` filter — is a refusal too, never a silent skip. `--force-linked` is the explicit override for both cases, and it prints what it is overriding.
+
+A completion is posted once and is **never retried**. A verifier consumes the ceremony's nonce before it verifies the envelope, so a ceremony that fails verification is spent: the failure names what the operator said, distinguishes a refusal from a host that could not be reached, and points at minting a fresh code. The key survives the failure — it stays in the keystore, and `--key` re-presents that same key to the new ceremony rather than minting another.
+
+What goes on the wire is the JWS and the ceremony identifier. The envelope's four members are the nonce, the audience, the candidate's **public** key, and a timestamp; the private key stays in the keystore, and the payload has no member for content, intent, or authority to ride in.
+
+On completion the key is held under a `candidate:` account and reported by `keys list` with status `candidate`, which `prune` never removes. An operator that names the identity its ceremony added the key to gets the key filed under `<did>#<keyId>` instead, with the vault provenance recorded — and from then on signing resolves that identity and uses the key this device holds.
 
 ### Backends
 
