@@ -37,7 +37,7 @@ func newConfigListCmd() *cobra.Command {
 // configKeys are the writable keys, in the spelling `dfos config set` documents.
 // Dash and underscore forms both resolve here, so the CLI spelling and the TOML
 // key never diverge into two things a user has to remember.
-var configKeys = []string{"default-identity", "default-peer", "defaults.credential_ttl"}
+var configKeys = []string{"default-identity", "default-peer", "default-vault", "defaults.credential_ttl"}
 
 // normalizeConfigKey folds a key to its canonical dashed spelling.
 func normalizeConfigKey(key string) string {
@@ -64,6 +64,8 @@ func newConfigGetCmd() *cobra.Command {
 				value = cfg.DefaultIdentity
 			case "default-peer":
 				value = cfg.DefaultPeer
+			case "default-vault":
+				value = cfg.DefaultVault
 			case "defaults.credential_ttl":
 				if cfg.Defaults != nil {
 					value = cfg.Defaults.CredentialTTL
@@ -90,8 +92,11 @@ func newConfigSetCmd() *cobra.Command {
 		Use:   "set <key> <value>",
 		Short: "Set a config value",
 		Long: "Write one config value. `default-identity` and `default-peer` are the config tier of the " +
-			"resolution stack — the fallback consulted after --as/--relay and DFOS_AS/DFOS_RELAY. This " +
-			"command is the only thing that writes them.",
+			"resolution stack — the fallback consulted after --as/--relay and DFOS_AS/DFOS_RELAY. " +
+			"`default-vault` is the same tier for minting: the vault new keys are derived from when no " +
+			"--vault is given. This command is the only thing that writes them, with one exception: " +
+			"creating the first vault on a machine with none sets default-vault, because there is nothing " +
+			"there to displace.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key, value := normalizeConfigKey(args[0]), args[1]
@@ -103,6 +108,11 @@ func newConfigSetCmd() *cobra.Command {
 					return fmt.Errorf("unknown peer: %s (register it with 'dfos peer add %s <url>')", value, value)
 				}
 				cfg.DefaultPeer = value
+			case "default-vault":
+				if !getVaults().Has(value) {
+					return fmt.Errorf("no vault named '%s' (create one with 'dfos vault create %s')", value, value)
+				}
+				cfg.DefaultVault = value
 			case "defaults.credential_ttl":
 				if cfg.Defaults == nil {
 					cfg.Defaults = &config.DefaultsConfig{}

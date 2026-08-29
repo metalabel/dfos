@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/zalando/go-keyring"
+
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 )
 
 const serviceName = "dfos"
@@ -19,6 +21,11 @@ const serviceName = "dfos"
 type Store interface {
 	// GenerateKey generates a new ed25519 keypair and stores it.
 	GenerateKey(account string) (ed25519.PrivateKey, ed25519.PublicKey, error)
+	// PutKey stores a keypair derived elsewhere — today, from a vault's seed.
+	// The keystore remains the ONE place private material lives, so every
+	// downstream signing path is identical whether the key was generated here or
+	// derived from a mnemonic.
+	PutKey(account string, priv ed25519.PrivateKey) (ed25519.PublicKey, error)
 	// GetPrivateKey retrieves a private key by account.
 	GetPrivateKey(account string) (ed25519.PrivateKey, error)
 	// HasKey checks if a key exists.
@@ -35,7 +42,8 @@ type Store interface {
 //
 // Follows the gh CLI pattern:
 //   - Default: try OS keychain first
-//   - If keychain unavailable: fall back to file-based storage (~/.dfos/keys/)
+//   - If keychain unavailable: fall back to file-based storage (`keys/` inside
+//     the dfos config directory — `~/.dfos/keys/`, or wherever DFOS_CONFIG points)
 //   - DFOS_NO_KEYCHAIN=1: skip keychain, use file store directly
 func New() Store {
 	if os.Getenv("DFOS_NO_KEYCHAIN") != "" {
@@ -50,7 +58,7 @@ func newWithKeychainFallback() Store {
 	err := keyring.Set(serviceName, testAccount, "probe")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: OS keychain not available (%v)\n", err)
-		fmt.Fprintf(os.Stderr, "         Falling back to file-based key storage at ~/.dfos/keys/\n")
+		fmt.Fprintf(os.Stderr, "         Falling back to file-based key storage at %s/\n", defaultKeyDir())
 		return NewFileStore("")
 	}
 	keyring.Delete(serviceName, testAccount)
@@ -77,6 +85,16 @@ func (k *KeychainStore) GenerateKey(account string) (ed25519.PrivateKey, ed25519
 	}
 
 	return priv, pub, nil
+}
+
+func (k *KeychainStore) PutKey(account string, priv ed25519.PrivateKey) (ed25519.PublicKey, error) {
+	if len(priv) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("not an ed25519 private key: %d bytes", len(priv))
+	}
+	if err := keyring.Set(serviceName, account, hex.EncodeToString(priv.Seed())); err != nil {
+		return nil, fmt.Errorf("store key in keychain: %w", err)
+	}
+	return priv.Public().(ed25519.PublicKey), nil
 }
 
 func (k *KeychainStore) GetPrivateKey(account string) (ed25519.PrivateKey, error) {
@@ -111,7 +129,7 @@ func (k *KeychainStore) DeleteKey(account string) error {
 	return keyring.Delete(serviceName, account)
 }
 
-// --- File Store (~/.dfos/keys/) ---
+// --- File Store (<config dir>/keys/) ---
 
 // FileStore persists keys as individual files in a directory.
 // Each file is named by the account (with path-unsafe chars replaced)
@@ -121,13 +139,26 @@ type FileStore struct {
 	dir string
 }
 
-// NewFileStore creates a file-based keystore. If dir is empty, defaults to ~/.dfos/keys/.
+// NewFileStore creates a file-based keystore. If dir is empty, it defaults to a
+// `keys/` directory inside the dfos config directory — which is `~/.dfos/keys/`
+// as before, EXCEPT when DFOS_CONFIG points elsewhere.
+//
+// It resolves through config.ConfigDir() rather than os.UserHomeDir() because
+// the two disagreed: DFOS_CONFIG relocated config.toml and relay.db but left the
+// key store in the real home directory, so an invocation aimed at a scratch
+// directory still wrote keys into the operator's actual store. Isolation that
+// covers some of the state and not the keys is worse than none, because it reads
+// as isolation.
 func NewFileStore(dir string) *FileStore {
 	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".dfos", "keys")
+		dir = defaultKeyDir()
 	}
 	return &FileStore{dir: dir}
+}
+
+// defaultKeyDir is where keys live when nothing names a directory.
+func defaultKeyDir() string {
+	return filepath.Join(config.ConfigDir(), "keys")
 }
 
 func (f *FileStore) Backend() string { return "file (" + f.dir + ")" }
@@ -159,6 +190,19 @@ func (f *FileStore) GenerateKey(account string) (ed25519.PrivateKey, ed25519.Pub
 	}
 
 	return priv, pub, nil
+}
+
+func (f *FileStore) PutKey(account string, priv ed25519.PrivateKey) (ed25519.PublicKey, error) {
+	if len(priv) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("not an ed25519 private key: %d bytes", len(priv))
+	}
+	if err := f.ensureDir(); err != nil {
+		return nil, fmt.Errorf("create keys dir: %w", err)
+	}
+	if err := os.WriteFile(f.keyPath(account), []byte(hex.EncodeToString(priv.Seed())), 0o600); err != nil {
+		return nil, fmt.Errorf("write key file: %w", err)
+	}
+	return priv.Public().(ed25519.PublicKey), nil
 }
 
 func (f *FileStore) GetPrivateKey(account string) (ed25519.PrivateKey, error) {
@@ -223,6 +267,16 @@ func (m *MemoryStore) GenerateKey(account string) (ed25519.PrivateKey, ed25519.P
 	m.mu.Unlock()
 
 	return priv, pub, nil
+}
+
+func (m *MemoryStore) PutKey(account string, priv ed25519.PrivateKey) (ed25519.PublicKey, error) {
+	if len(priv) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("not an ed25519 private key: %d bytes", len(priv))
+	}
+	m.mu.Lock()
+	m.keys[account] = hex.EncodeToString(priv.Seed())
+	m.mu.Unlock()
+	return priv.Public().(ed25519.PublicKey), nil
 }
 
 func (m *MemoryStore) GetPrivateKey(account string) (ed25519.PrivateKey, error) {

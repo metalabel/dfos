@@ -33,8 +33,12 @@ Building an app with Sign In With DFOS? The setup guide is at <https://docs.dfos
 # add a relay
 dfos relay add local http://localhost:4444
 
-# create an identity (generates ed25519 keys; stored in the OS keychain,
-# or unencrypted in ~/.dfos/keys/ when no keychain is available)
+# create a vault — the seed new keys derive from. The 24-word phrase prints
+# once; write it down. It is the only copy.
+dfos vault create personal
+
+# create an identity (mints ed25519 keys from the vault; stored in the OS
+# keychain, or unencrypted in ~/.dfos/keys/ when no keychain is available)
 dfos identity create --name alice --peer local
 
 # set the standing defaults (the only thing that writes them)
@@ -157,8 +161,10 @@ DFOS_AS               Identity to act as (name or did:dfos:...)
 DFOS_RELAY            Peer to talk to (name)
 DFOS_IDENTITY         Deprecated alias of DFOS_AS
 DFOS_CONTEXT          Deprecated alias naming both halves (identity@peer)
-DFOS_CONFIG           Config file path (default: ~/.dfos/config.toml)
-DFOS_NO_KEYCHAIN      Skip OS keychain; use file store ~/.dfos/keys/ (unencrypted, 0600)
+DFOS_CONFIG           Config file path (default: ~/.dfos/config.toml). Keys,
+                      vaults, credentials, and relay.db all sit beside it.
+DFOS_NO_KEYCHAIN      Skip OS keychain; use file store ~/.dfos/keys/ and
+                      ~/.dfos/vaults/ (unencrypted, 0600)
 DFOS_NO_UPDATE_CHECK  Disable automatic version update checks
 ```
 
@@ -177,7 +183,11 @@ dfos content publish <id> --peer prod   # submit when ready
 
 | Command                     | Description                                             |
 | --------------------------- | ------------------------------------------------------- |
-| `identity create`           | Generate keys + sign genesis                            |
+| `vault create`              | Generate a seed vault; print its phrase once            |
+| `vault import`              | Adopt an existing BIP-39 phrase as a vault              |
+| `vault list`                | List vaults, fingerprints, and counters                 |
+| `vault show`                | Show one vault and the keys it minted                   |
+| `identity create`           | Mint keys from a vault + sign genesis                   |
 | `identity list`             | List all known identities                               |
 | `identity show`             | Show identity state                                     |
 | `identity keys`             | Show key state + keychain availability                  |

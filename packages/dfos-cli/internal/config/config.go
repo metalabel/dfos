@@ -21,6 +21,13 @@ type Config struct {
 	// two processes to race on.
 	DefaultIdentity string `toml:"default_identity,omitempty" json:"default_identity,omitempty"`
 	DefaultPeer     string `toml:"default_peer,omitempty" json:"default_peer,omitempty"`
+	// DefaultVault names the vault new key material is minted from when no
+	// --vault is given. It sits in the same tier and under the same discipline as
+	// the other two — `dfos config set` writes it and nothing else does — with
+	// ONE exception, documented at its writer: creating the first vault on a
+	// machine that has none may set it, because absence→presence is not a
+	// pointer two processes can race on.
+	DefaultVault string `toml:"default_vault,omitempty" json:"default_vault,omitempty"`
 	// ActiveContext is the removed mutable pointer of the `dfos use` era. It is
 	// parsed so an existing config.toml round-trips without losing the line, and
 	// it is never consulted by resolution. `dfos whoami` reports it as inert.

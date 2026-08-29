@@ -12,6 +12,7 @@ import (
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/statelock"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/vault"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
@@ -41,6 +42,11 @@ var (
 
 	// lazy-initialized local relay
 	localRelayInstance *localrelay.LocalRelay
+
+	// lazy-initialized vault store. Opening it probes the OS keychain, and most
+	// invocations never mint anything, so it is opened on first use rather than
+	// alongside the keystore in PersistentPreRunE.
+	vaultStore *vault.Store
 )
 
 // annNoStateLock marks a command that must NOT take the process-wide state
@@ -138,6 +144,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newWhoamiCmd())
 	root.AddCommand(newUseTombstoneCmd())
 	root.AddCommand(newIdentityCmd())
+	root.AddCommand(newVaultCmd())
 	root.AddCommand(newContentCmd())
 	root.AddCommand(newCredentialCmd())
 	root.AddCommand(newCredsCmd())
@@ -154,6 +161,14 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newSkillCmd())
 
 	return root
+}
+
+// getVaults returns the lazily-initialized vault store.
+func getVaults() *vault.Store {
+	if vaultStore == nil {
+		vaultStore = vault.Default()
+	}
+	return vaultStore
 }
 
 // getRelay returns the lazily-initialized local relay.

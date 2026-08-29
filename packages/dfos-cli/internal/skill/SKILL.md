@@ -107,11 +107,19 @@ dfos skill install --global      # write ~/.claude/skills/dfos/SKILL.md
   `--as <name|did>` → `DFOS_AS` → `default-identity` in config, and
   `--relay <name>` → `DFOS_RELAY` → `default-peer`. First answer wins; there is no
   mutable "current" pointer.
+- **Vault** — a named seed: a BIP-39 mnemonic, a fingerprint, and a derivation
+  counter, and nothing else. New keys derive from it at mint time
+  (`identity create`, `identity update --rotate-*`) along
+  `m/1684434803'/<index>'` by SLIP-0010 ed25519. Signing never consults a vault.
+  Nothing about a vault — the word, the phrase, the seed, the fingerprint —
+  reaches the wire, so identities minted from one seed are unlinkable to
+  everyone but their holder.
 
 ## Quick start — local-only
 
 ```bash
-dfos identity create --name alice          # generate keys + sign genesis (no relay needed)
+dfos vault create personal                 # seed the keys come from; prints the phrase once
+dfos identity create --name alice          # mint keys from the vault + sign genesis (no relay needed)
 dfos config set default-identity alice     # standing default (or pass --as alice per command)
 
 dfos content create - <<'EOF'
@@ -145,6 +153,7 @@ Config file: `~/.dfos/config.toml`.
 ```toml
 default_identity = "alice"
 default_peer = "prod"
+default_vault = "personal"
 
 [identities.alice]
 did = "did:dfos:..."
@@ -165,7 +174,12 @@ identity:  --as <name|did>  →  DFOS_AS     →  default-identity in config
 peer:      --relay <name>   →  DFOS_RELAY  →  default-peer in config
 ```
 
-The config tier is written by `dfos config set` and by nothing else, so parallel
+`default-vault` is the same tier for minting: the vault new keys derive from when
+no `--vault` names one. There is no environment tier for it.
+
+The config tier is written by `dfos config set` and by nothing else — with the
+single exception that creating the FIRST vault on a machine with none sets
+`default-vault` — so parallel
 agents each carrying their own `--as`/`DFOS_AS` never disturb one another.
 Commands that sign echo the resolved principal and the mechanism it came from to
 stderr (`Signing as alice (did:dfos:…) — via --as`) unless `--quiet`; a signing
@@ -181,11 +195,14 @@ the mechanism they alias.
 | `DFOS_IDENTITY`        | Deprecated alias of `DFOS_AS`                         |
 | `DFOS_CONTEXT`         | Deprecated alias naming both halves (`identity@peer`) |
 | `DFOS_CONFIG`          | Config file path (default `~/.dfos/config.toml`)      |
-| `DFOS_NO_KEYCHAIN`     | Force file-based key storage at `~/.dfos/keys/` (CI)  |
+| `DFOS_NO_KEYCHAIN`     | Force file-based key and mnemonic storage (CI)        |
 | `DFOS_NO_UPDATE_CHECK` | Disable the background version check                  |
 
 In headless/CI environments set `DFOS_NO_KEYCHAIN=1` to avoid interactive
-keychain prompts.
+keychain prompts. `DFOS_CONFIG` moves the whole of a machine's dfos state
+together — config, `relay.db`, credentials, vaults, and file-backed keys all sit
+beside the config file — so pointing it at a scratch directory isolates a run
+completely.
 
 ## Command map
 
@@ -202,6 +219,7 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
 `create` · `list` · `show` · `log` · `download` · `update` · `delete` ·
 `publish` · `fetch` · `verify` · `remove`
 
+**Vaults** (`dfos vault …`) — `create` · `import` · `list` · `show`
 **Credentials** (`dfos credential …`, alias `cred`) — `grant` · `revoke`
 **Sign-in** — `dfos login [name|did]` · cached records: `dfos creds list` · `show` · `rm`
 **Peers** (`dfos peer …`, alias `relay`) — `add` · `remove` · `list` · `info` · `gc`
@@ -216,6 +234,14 @@ current, or read [CLI.md](https://protocol.dfos.com/cli) for the full reference.
   credential to _download_ content you don't own. `--authorization <jws>` presents
   a **write** credential to _mutate_ content you don't own (`content update` /
   `content delete`). They are not interchangeable.
+- **A vault is a mint-time choice, never a signing one.** `--vault` (and
+  `default-vault`) affect only commands that create new key material:
+  `identity create` and `identity update --rotate-*`. Signing resolves the
+  identity, then uses whichever published auth key this device holds — it never
+  asks a vault anything. Passing `--vault` to a signing command does nothing.
+  Rotation is sticky to the vault that minted the identity's current keys, so
+  `default-vault` cannot quietly move an identity onto a different seed;
+  `--vault` on `identity update` overrides that.
 - **Services are full-state.** On `identity update`, `--service` (repeatable)
   **replaces the entire services set**; services you don't pass are **carried
   forward** unchanged; `--clear-services` empties the set. `--service` and
@@ -336,8 +362,16 @@ publish the moment you run them. Identity delete suspends signing and only
 The existing log remains for verification. Double-check the target and `--peer`
 first.
 
-**Key loss is unrecoverable but survivable — set up redundancy in advance.** There
-is no seed phrase or recovery flow. Availability is a multi-key story: an identity
+**Key custody is two separate stories — set both up in advance.**
+
+_Backup_ is the vault. Keys minted from a vault are described completely by its
+24-word phrase plus the fixed path `m/1684434803'/<index>'`, so the phrase written
+on paper is the backup. The phrase is the only copy of that seed: it exists on the
+machine that holds the vault and nowhere else. Keys created with `--no-vault`, or
+on a machine with no vault, have no phrase covering them and live only in the
+keystore.
+
+_Availability_ is a multi-key story, and a vault does not replace it: an identity
 holds up to 256 controller and 256 auth keys, and **a single controller key
 authorizes identity operations (1-of-N — no multisig or threshold)** while auth
 keys authenticate to relays. On a second device run `dfos identity device-pubkey` (private seed
