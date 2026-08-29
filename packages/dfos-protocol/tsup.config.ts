@@ -6,6 +6,7 @@ export default defineConfig({
     'crypto/index': 'src/crypto/index.ts',
     'chain/index': 'src/chain/index.ts',
     'credentials/index': 'src/credentials/index.ts',
+    'key-proof/index': 'src/key-proof/index.ts',
     'fold/index': 'src/fold/index.ts',
   },
   format: ['esm'],

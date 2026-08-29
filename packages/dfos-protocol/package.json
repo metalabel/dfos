@@ -29,6 +29,7 @@
     "./crypto": "./src/crypto/index.ts",
     "./chain": "./src/chain/index.ts",
     "./credentials": "./src/credentials/index.ts",
+    "./key-proof": "./src/key-proof/index.ts",
     "./fold": "./src/fold/index.ts"
   },
   "publishConfig": {
@@ -48,6 +49,10 @@
       "./credentials": {
         "import": "./dist/credentials/index.js",
         "types": "./dist/credentials/index.d.ts"
+      },
+      "./key-proof": {
+        "import": "./dist/key-proof/index.js",
+        "types": "./dist/key-proof/index.d.ts"
       },
       "./fold": {
         "import": "./dist/fold/index.js",

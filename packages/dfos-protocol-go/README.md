@@ -62,7 +62,10 @@ All protocol operations are covered:
 | `BuildRequestProof`      | Sign an API request proof                 |
 | `VerifyRequestProof`     | Verify an API request-proof envelope      |
 | `VerifyIdentityProof`    | Verify an API-AUTH identity proof         |
-| `Int64Ptr`               | Set explicit request-proof option values  |
+| `KeyProofSigningInput`   | Canonical KEY-PROOF signing bytes         |
+| `SignKeyProof`           | Sign a KEY-PROOF envelope                 |
+| `VerifyKeyProof`         | Verify a KEY-PROOF envelope (steps 1–5,7) |
+| `Int64Ptr`               | Set explicit proof-option values          |
 | `DocumentCID`            | Canonical dag-cbor encode and CIDv1 hash  |
 
 ## Tests
