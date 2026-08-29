@@ -6,15 +6,21 @@ package cmd
 // DFOS_NO_KEYCHAIN, so nothing here can reach the developer's own keystore.
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/vault"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
+	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 )
 
 // createStandaloneIdentity mints an identity whose keys come from no vault.
@@ -433,6 +439,150 @@ type blindStore struct {
 }
 
 func (b *blindStore) Entries() ([]keystore.Entry, error) { return nil, keystore.ErrNoEnumeration }
+
+// countingStore is a keystore that counts what is asked OF it. The ledger's
+// cost has to be a function of the keys this machine holds; a count that moves
+// when the local relay's corpus grows is the fold running the wrong way round.
+type countingStore struct {
+	*keystore.MemoryStore
+	has int
+	get int
+}
+
+func (c *countingStore) HasKey(account string) bool {
+	c.has++
+	return c.MemoryStore.HasKey(account)
+}
+
+func (c *countingStore) GetPrivateKey(account string) (ed25519.PrivateKey, error) {
+	c.get++
+	return c.MemoryStore.GetPrivateKey(account)
+}
+
+// syntheticChains is how many identities this machine holds no key for get
+// pushed into the local relay. It is well under a real backfilled store (tens of
+// thousands) and far past the point where an O(corpus) fold shows up.
+const syntheticChains = 5000
+
+// seedSyncedIdentities writes chains this machine holds no key for straight into
+// the store — what syncing from a relay that has followed the network leaves
+// behind. Each carries a log and three declared keys, so a fold over them pays
+// the JSON decode a real one does.
+func seedSyncedIdentities(t *testing.T, lr *localrelay.LocalRelay, n int) {
+	t.Helper()
+	if err := lr.Store.BeginWriteBatch(); err != nil {
+		t.Fatalf("begin write batch: %v", err)
+	}
+	for i := 0; i < n; i++ {
+		did := fmt.Sprintf("did:dfos:z%027d", i)
+		key := func(role string) protocol.MultikeyPublicKey {
+			return protocol.MultikeyPublicKey{
+				ID:                 role + "_" + strconv.Itoa(i),
+				Type:               "Multikey",
+				PublicKeyMultibase: fmt.Sprintf("z6Mk%044d", i),
+			}
+		}
+		log := make([]string, 0, 4)
+		for op := 0; op < 4; op++ {
+			log = append(log, strings.Repeat("x", 256))
+		}
+		chain := relay.StoredIdentityChain{
+			DID:           did,
+			Log:           log,
+			HeadCID:       fmt.Sprintf("bafy%040d", i),
+			LastCreatedAt: "2026-01-01T00:00:00.000Z",
+			State: protocol.IdentityState{
+				DID:            did,
+				ControllerKeys: []protocol.MultikeyPublicKey{key("controller")},
+				AuthKeys:       []protocol.MultikeyPublicKey{key("auth")},
+				AssertKeys:     []protocol.MultikeyPublicKey{key("assert")},
+			},
+		}
+		if err := lr.Store.PutIdentityChain(chain); err != nil {
+			_ = lr.Store.RollbackWriteBatch()
+			t.Fatalf("seed identity %d: %v", i, err)
+		}
+	}
+	if err := lr.Store.CommitWriteBatch(); err != nil {
+		t.Fatalf("commit seeded identities: %v", err)
+	}
+}
+
+// The ledger answers a question about the keys THIS MACHINE HOLDS. A local relay
+// that has synced the network holds tens of thousands of chains it holds no key
+// for, and the price of the answer must not track them: a fold that walks every
+// chain — and probes the keystore once per key any of them declares — turns a
+// four-key report into minutes of work. The count is the proof; the clock is the
+// symptom it was found by.
+func TestTheLedgerCostsTheKeysHeldNotTheChainsSynced(t *testing.T) {
+	storeA, _, lr := setupDevices(t)
+	createVault(t, "personal")
+	createIdentity(t, "alice", storeA)
+	createStandaloneIdentity(t, "bob", storeA)
+	plantKey(t, storeA, "pending:key_interrupted")
+	writeLoginClientFile(t, "did:dfos:loginclient", "key_login")
+	plantKey(t, storeA, loginClientAccount("key_login"))
+
+	counting := &countingStore{MemoryStore: storeA}
+	keys = counting
+	before, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("buildKeyLedger on an empty relay: %v", err)
+	}
+	baseHas, baseGet := counting.has, counting.get
+
+	seedSyncedIdentities(t, lr, syntheticChains)
+
+	counting.has, counting.get = 0, 0
+	start := time.Now()
+	after, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("buildKeyLedger on a synced relay: %v", err)
+	}
+	elapsed := time.Since(start)
+
+	if counting.has != baseHas || counting.get != baseGet {
+		t.Fatalf("the fold asked the keystore %d HasKey / %d GetPrivateKey with %d chains synced, "+
+			"and %d / %d with none — its cost tracks the corpus, not the keys held",
+			counting.has, counting.get, syntheticChains, baseHas, baseGet)
+	}
+	// A ceiling on the whole fold, not a benchmark: the shape this catches took
+	// over a minute on a real store, so anything near this bound is the bug back.
+	if elapsed > 2*time.Second {
+		t.Fatalf("building the ledger over %d synced chains took %s", syntheticChains, elapsed)
+	}
+
+	// Same answer, cheaper. The chains this machine holds no key for change
+	// nothing about what it holds.
+	beforeJSON, _ := json.Marshal(before)
+	afterJSON, _ := json.Marshal(after)
+	if string(beforeJSON) != string(afterJSON) {
+		t.Fatalf("the ledger changed when unrelated chains synced:\n before %s\n  after %s", beforeJSON, afterJSON)
+	}
+}
+
+// The cheap path must not cost the fallback its reach: a backend that cannot
+// list itself still finds every declared key by name, however many chains the
+// relay has synced.
+func TestABlindBackendStillFindsDeclaredKeysOnASyncedRelay(t *testing.T) {
+	storeA, _, lr := setupDevices(t)
+	did := createStandaloneIdentity(t, "alice", storeA)
+	seedSyncedIdentities(t, lr, 200)
+
+	keys = &blindStore{MemoryStore: storeA}
+	ledger, err := buildKeyLedger()
+	if err != nil {
+		t.Fatalf("buildKeyLedger: %v", err)
+	}
+	if ledger.Enumerated {
+		t.Fatal("a backend that cannot list itself reported a complete ledger")
+	}
+	chain, _ := localRelayInstance.Relay.GetIdentity(did)
+	entry := entryFor(t, ledger, did+"#"+chain.State.AuthKeys[0].ID)
+	if entry.Status != statusDeclared {
+		t.Fatalf("a declared key on a blind backend came back %q", entry.Status)
+	}
+}
 
 func TestKeysShowReportsOneKeyAndNeverItsSeed(t *testing.T) {
 	storeA, _, _ := setupDevices(t)

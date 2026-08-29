@@ -32,6 +32,7 @@ import (
 
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/keystore"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/vault"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/spf13/cobra"
@@ -137,37 +138,19 @@ func newKeysCmd() *cobra.Command {
 // --- the fold ---
 
 // buildKeyLedger derives the manifest. It reads; it writes nothing.
+//
+// The fold runs over the keys this machine HOLDS, and resolves outward from
+// each of them. It does not run over the identity chains in the local relay and
+// filter down: a relay that has synced the network holds tens of thousands of
+// chains this machine has no key for, and folding over them costs the whole
+// corpus — a full scan plus a JSON decode per chain — to answer a question about
+// four keys. Every held account already NAMES its DID (`<did>#<keyId>`), so the
+// declaring chain is a point lookup, and the work is O(keys held) either way the
+// store grows.
 func buildKeyLedger() (*keyLedger, error) {
 	lr, err := getRelay()
 	if err != nil {
 		return nil, fmt.Errorf("open local relay: %w", err)
-	}
-	chains, err := lr.Store.ListIdentityChains()
-	if err != nil {
-		return nil, fmt.Errorf("read identity chains from the local relay: %w", err)
-	}
-
-	// What the chains declare. `declaredRoles` is keyed by account
-	// (`<did>#<keyId>`) so a key bound to several roles is one entry with
-	// several roles, which is the common production shape.
-	declaredRoles := map[string][]string{}
-	declaredPublic := map[string]string{}
-	knownDID := map[string]bool{}
-	deletedDID := map[string]bool{}
-	for i := range chains {
-		chain := &chains[i]
-		knownDID[chain.DID] = true
-		deletedDID[chain.DID] = chain.State.IsDeleted
-		declare := func(set []protocol.MultikeyPublicKey, role string) {
-			for _, k := range set {
-				account := chain.DID + "#" + k.ID
-				declaredRoles[account] = append(declaredRoles[account], role)
-				declaredPublic[account] = k.PublicKeyMultibase
-			}
-		}
-		declare(chain.State.ControllerKeys, "controller")
-		declare(chain.State.AuthKeys, "auth")
-		declare(chain.State.AssertKeys, "assert")
 	}
 
 	// What the vaults minted. A record is written only after the operation that
@@ -199,21 +182,6 @@ func buildKeyLedger() (*keyLedger, error) {
 	// prefix is reserved for exactly this (see internal/cmd/login.go).
 	loginAccount, loginDID := readLoginClientAccount()
 
-	// Candidates: every account something else already knows to ask for. This is
-	// what makes the ledger work on a backend that cannot list itself.
-	candidates := make([]string, 0, len(declaredRoles)+len(mintedBy)+1)
-	for account := range declaredRoles {
-		candidates = append(candidates, account)
-	}
-	for account := range mintedBy {
-		if _, seen := declaredRoles[account]; !seen {
-			candidates = append(candidates, account)
-		}
-	}
-	if loginAccount != "" {
-		candidates = append(candidates, loginAccount)
-	}
-
 	ledger := &keyLedger{Backend: keys.Backend(), Enumerated: true}
 
 	// Held: what the backend says it has, plus every candidate it confirms.
@@ -223,6 +191,10 @@ func buildKeyLedger() (*keyLedger, error) {
 	}
 	var order []held
 	seen := map[string]bool{}
+	// unnamed records that enumeration proved something is there and could not
+	// say what it is called. A listing holding one does not account for
+	// everything the backend holds, even though it succeeded.
+	unnamed := false
 	if enumerator, ok := keys.(keystore.Enumerator); ok {
 		entries, err := enumerator.Entries()
 		// A backend that CANNOT list itself and one whose listing FAILED land in
@@ -237,6 +209,7 @@ func buildKeyLedger() (*keyLedger, error) {
 				key := e.Account
 				if key == "" {
 					key = "\x00ref:" + e.Ref
+					unnamed = true
 				}
 				if seen[key] {
 					continue
@@ -253,6 +226,35 @@ func buildKeyLedger() (*keyLedger, error) {
 		ledger.Limit = fmt.Sprintf("%s — this ledger lists the keys the local relay, the vaults, "+
 			"and the login client already name, and cannot see leftovers none of them mention", ledger.Limit)
 	}
+
+	// Candidates: accounts something else already knows to ask for, each probed
+	// with HasKey. This is what makes the ledger work on a backend that cannot
+	// list itself. The vaults' records and the login client name a handful
+	// between them, so they are always probed.
+	candidates := make([]string, 0, len(mintedBy)+1)
+	for account := range mintedBy {
+		candidates = append(candidates, account)
+	}
+	if loginAccount != "" {
+		candidates = append(candidates, loginAccount)
+	}
+	// The chains are the third namer, and the expensive one: naming what they
+	// declare means reading every chain in the local relay, and probing what they
+	// name means one HasKey per declared key across the whole synced corpus —
+	// tens of thousands of them on a relay that has followed the network, each a
+	// subprocess on a keychain-backed store. It buys exactly one thing: a held
+	// key the backend's own listing did not account for. So it runs when, and
+	// only when, the listing left something unaccounted for. When enumeration
+	// succeeded and named every entry, everything held is already in `seen` and
+	// this probe can add nothing — running it would be the same answer at the
+	// price of the corpus.
+	if !ledger.Enumerated || unnamed {
+		declared, err := declaredAccounts(lr)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, declared...)
+	}
 	sort.Strings(candidates)
 	for _, account := range candidates {
 		if seen[account] || !keys.HasKey(account) {
@@ -260,6 +262,50 @@ func buildKeyLedger() (*keyLedger, error) {
 		}
 		seen[account] = true
 		order = append(order, held{account: account, ref: account})
+	}
+
+	// What the chains declare — resolved outward from the held keys, one point
+	// lookup per DID they name, not a fold over every chain this relay has
+	// synced. `declaredRoles` is keyed by account (`<did>#<keyId>`) so a key
+	// bound to several roles is one entry with several roles, which is the common
+	// production shape.
+	declaredRoles := map[string][]string{}
+	declaredPublic := map[string]string{}
+	knownDID := map[string]bool{}
+	deletedDID := map[string]bool{}
+	resolved := map[string]bool{}
+	for _, h := range order {
+		if h.account == "" || strings.HasPrefix(h.account, loginClientAccountPrefix) ||
+			!strings.Contains(h.account, "#") {
+			continue
+		}
+		did := didFromKid(h.account)
+		if resolved[did] {
+			continue
+		}
+		resolved[did] = true
+		chain, err := lr.Store.GetIdentityChain(did)
+		if err != nil {
+			return nil, fmt.Errorf("read the identity chain for %s from the local relay: %w", did, err)
+		}
+		if chain == nil {
+			// No chain for this DID here. classifyKey reads that absence off
+			// knownDID and calls the key an orphan — the same answer the fold over
+			// every chain gave, reached without reading them.
+			continue
+		}
+		knownDID[chain.DID] = true
+		deletedDID[chain.DID] = chain.State.IsDeleted
+		declare := func(set []protocol.MultikeyPublicKey, role string) {
+			for _, k := range set {
+				account := chain.DID + "#" + k.ID
+				declaredRoles[account] = append(declaredRoles[account], role)
+				declaredPublic[account] = k.PublicKeyMultibase
+			}
+		}
+		declare(chain.State.ControllerKeys, "controller")
+		declare(chain.State.AuthKeys, "auth")
+		declare(chain.State.AssertKeys, "assert")
 	}
 
 	// Reading a seed is the expensive step on a keychain-backed store — one
@@ -298,6 +344,33 @@ func buildKeyLedger() (*keyLedger, error) {
 		return a.Account+a.Ref < b.Account+b.Ref
 	})
 	return ledger, nil
+}
+
+// declaredAccounts names every `<did>#<keyId>` the identity chains in the local
+// relay currently declare.
+//
+// This is the one O(whole synced corpus) read left in the fold, and it exists
+// for one caller: a backend that cannot account for what it holds, which has no
+// way to find a held key except by being handed a name and asked. Everything
+// else resolves outward from the keys themselves. See its call site for the
+// condition that gates it.
+func declaredAccounts(lr *localrelay.LocalRelay) ([]string, error) {
+	chains, err := lr.Store.ListIdentityChains()
+	if err != nil {
+		return nil, fmt.Errorf("read identity chains from the local relay: %w", err)
+	}
+	accounts := make([]string, 0, len(chains))
+	for i := range chains {
+		chain := &chains[i]
+		for _, set := range [][]protocol.MultikeyPublicKey{
+			chain.State.ControllerKeys, chain.State.AuthKeys, chain.State.AssertKeys,
+		} {
+			for _, k := range set {
+				accounts = append(accounts, chain.DID+"#"+k.ID)
+			}
+		}
+	}
+	return accounts, nil
 }
 
 // statusRank orders the report so the keys in use come first and the ones an
