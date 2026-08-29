@@ -2131,7 +2131,10 @@ func fetchIdentityFromPeerIfRequested(did string) {
 	}
 	c, _, err := getPeerClient(peerFlag)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: peer %q unavailable (%v); using local state\n", peerFlag, err)
+		// Not "unavailable": this also catches a peer that no longer serves the
+		// DID config pins it to, and calling that a reachability problem would
+		// bury the one thing the operator needs to see.
+		fmt.Fprintf(os.Stderr, "Warning: not reading from peer %q; using local state\n%v\n", peerFlag, err)
 		return
 	}
 	log, err := c.GetIdentityLog(did)

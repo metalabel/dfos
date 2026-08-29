@@ -42,6 +42,9 @@ func setupDevices(t *testing.T) (storeA, storeB *keystore.MemoryStore, lr *local
 	t.Setenv("DFOS_CONFIG", t.TempDir()+"/config.toml")
 	t.Setenv("DFOS_NO_KEYCHAIN", "1")
 	vaultStore = nil
+	// Pin verification is memoized for the life of the process; a test process
+	// runs many "processes" worth of invocations.
+	peerPinChecks = map[string]error{}
 
 	storeA = keystore.NewMemoryStore()
 	storeB = keystore.NewMemoryStore()
