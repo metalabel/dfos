@@ -968,6 +968,18 @@ describe('index v0', () => {
     const garbage = await req('/index/v0/identities?key=not-a-multibase-key%20%21');
     expect(garbage.status).toBe(200);
     expect((await json(garbage)).identities).toEqual([]);
+
+    // PRESENT-BUT-EMPTY is NO FILTER, not a filter that matches nothing. An
+    // empty key is not a key, and the Go twin reads this param with
+    // `query.Get`, which cannot distinguish `?key=` from an absent param — so
+    // unfiltered is the only posture both reference relays can hold. This
+    // twin used to presence-detect here and answer an empty page.
+    const emptyKey = await req('/index/v0/identities?key=&limit=1000');
+    expect(emptyKey.status).toBe(200);
+    const emptyKeyRows = (await json(emptyKey)).identities;
+    const unfilteredRows = (await json(await req('/index/v0/identities?limit=1000'))).identities;
+    expect(emptyKeyRows.length).toBeGreaterThan(0);
+    expect(emptyKeyRows).toEqual(unfilteredRows);
   });
 
   it('applies profile projection circuit breakers', async () => {

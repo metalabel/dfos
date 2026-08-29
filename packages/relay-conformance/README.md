@@ -43,6 +43,7 @@ Tests covering:
 - Revocation status routes (`/revocations/v1` — self-proving JWS answers, honest absence, malformed-param 400s, capability-gated, paginated issuer feed with `limit`/`after`/`next` cursor draining)
 - Signing mailbox (deposit authorization, subject polling, responses, declines, expiry, limits, and disabled-capability 501s)
 - Index queries (`/index/v0` — operation, artifact, identity, content, countersignature, credential, and credit projections with filters and pagination, plus the disabled-capability 501s)
+- The two key-addressed filters as one class — `signerKey=` on `/index/v0/operations` (every row kind including the bare-kid genesis, ingest-time freeze across a key rotation, AND-composition, pagination under both orderings) and `key=` on `/index/v0/identities` (has-ever-declared across all three key arrays, deleted chains still matching, rotation survival), both matched byte-for-byte as declared and both opaque (an unmatched value is an empty 200, never a 400). Both self-skip against a relay that does not implement the parameter, detected behaviorally — an unrecognized filter is dropped rather than rejected on these routes. The present-but-empty value is deliberately left to the parity harness instead: the specification is silent on it, so pinning it here would gate a third-party relay on an unstated posture
 
 ## Dependencies
 

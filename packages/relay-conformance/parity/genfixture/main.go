@@ -65,6 +65,38 @@ type Fixture struct {
 	// one countersignature (witnessed by user B). Drives the countersignatures
 	// route parity cases (/proof/v1/countersignatures).
 	QueryCountersignedCID string `json:"queryCountersignedCid"`
+
+	// --- signerKey= parity (/index/v0/operations) ---
+	//
+	// The multibase public keys are the strings the chains DECLARED, byte for
+	// byte — the same alphabet /index/v0/identities?key= matches, which is the
+	// reading both reference relays ship. A parity case that re-encoded them
+	// would not be testing what a client can actually paste between the two
+	// filters.
+	//
+	// QueryAuthKeyMultibase is A's key: it signs A's own genesis (with a BARE
+	// kid — the DID does not exist until the op is encoded), A's content
+	// create+update, A's profile content-create, A's artifact, and A's
+	// credential. QueryWitnessKeyMultibase is B's: B's genesis, B's credential,
+	// B's revocation, and the countersignature over A's content-create.
+	QueryAuthKeyMultibase    string `json:"queryAuthKeyMultibase"`
+	QueryWitnessKeyMultibase string `json:"queryWitnessKeyMultibase"`
+	// QueryAuthGenesisCID / QueryWitnessCountersignCID name two rows by CID so a
+	// parity assertion can prove the filter returned the GENESIS row (the
+	// bare-kid shape a `#`-splitting resolver silently drops) and the
+	// countersign row (which must index the WITNESS's key, never the
+	// countersigned op author's).
+	QueryAuthGenesisCID        string `json:"queryAuthGenesisCid"`
+	QueryWitnessCountersignCID string `json:"queryWitnessCountersignCid"`
+	// The rotation chain (user E): one identity, two keys. E1 signs the genesis
+	// and the update that rotates itself out; E2 — declared BY that update —
+	// signs the artifact that follows. `signerKey=` must partition those two row
+	// sets, which is the discriminating shape for a KEY-addressed filter: a
+	// DID-addressed one could not tell them apart. E1 also proves the ingest-time
+	// freeze — a key a later update rotated out still matches the rows it signed.
+	QueryRotationDID            string `json:"queryRotationDid"`
+	QueryRotatedOutKeyMultibase string `json:"queryRotatedOutKeyMultibase"`
+	QueryRotationKeyMultibase   string `json:"queryRotationKeyMultibase"`
 }
 
 // seededKey returns a deterministic ed25519 keypair from a single seed byte.
@@ -167,6 +199,37 @@ func identityDelete(did, prevCID, keyID, createdAt string, priv ed25519.PrivateK
 		"createdAt":            createdAt,
 	}
 	return signJWS("did:dfos:identity-op", kid, payload, priv)
+}
+
+// identityUpdate builds an update op that REPLACES the entire key set, signed
+// by a controller key of the state BEFORE the update (a DID-URL kid). That is
+// what rotates a key out: the op's own signer is the key the op removes, so the
+// update row itself is indexed under the ROTATED-OUT key.
+func identityUpdate(did, prevCID, signingKeyID, createdAt string, next dfos.MultikeyPublicKey, priv ed25519.PrivateKey) (token, opCID string) {
+	kid := did + "#" + signingKeyID
+	payload := map[string]any{
+		"version":              1,
+		"type":                 "update",
+		"previousOperationCID": prevCID,
+		"authKeys":             []dfos.MultikeyPublicKey{next},
+		"assertKeys":           []dfos.MultikeyPublicKey{next},
+		"controllerKeys":       []dfos.MultikeyPublicKey{next},
+		"createdAt":            createdAt,
+	}
+	return signJWS("did:dfos:identity-op", kid, payload, priv)
+}
+
+// artifactOp builds a pinned-createdAt artifact under an explicit DID-URL kid,
+// so a fixture can name WHICH key of an identity signed it.
+func artifactOp(did, kid, title, createdAt string, priv ed25519.PrivateKey) (token, cid string) {
+	payload := map[string]any{
+		"version":   1,
+		"type":      "artifact",
+		"did":       did,
+		"content":   map[string]any{"$schema": "test/v1", "title": title},
+		"createdAt": createdAt,
+	}
+	return signJWS("did:dfos:artifact", kid, payload, priv)
 }
 
 func profileArtifact(did, keyID string, priv ed25519.PrivateKey) (token, cid string) {
@@ -282,7 +345,7 @@ func main() {
 	// --- user A (seed 2) ---
 	aPriv, aPub := seededKey(2)
 	aKeyID := "key_userA00000000000000000000000"
-	aGenesis, aDID, _ := identityCreate(aPriv, aPub, aKeyID)
+	aGenesis, aDID, aGenesisCID := identityCreate(aPriv, aPub, aKeyID)
 	aKid := aDID + "#" + aKeyID
 
 	// --- user B (seed 3) ---
@@ -343,7 +406,7 @@ func main() {
 	// A witnesses nothing of its own; B (an already-ingested identity) attests to
 	// A's content-create op, so /proof/v1/countersignatures/{cCreateCID} returns
 	// exactly one countersignature on both twins.
-	bCountersign, _ := countersign(bDID, cCreateCID, bKid, pinnedTimeAt(4), bPriv)
+	bCountersign, bCountersignCID := countersign(bDID, cCreateCID, bKid, pinnedTimeAt(4), bPriv)
 
 	// --- user C (seed 4): genesis WITH a services set (DfosRelay + ContentAnchor
 	// + DfosAuthorizationServer) ---
@@ -367,6 +430,27 @@ func main() {
 	dGenesis, dDID, dCreateCID := identityCreate(dPriv, dPub, dKeyID)
 	dDelete, _ := identityDelete(dDID, dCreateCID, dKeyID, pinnedTimeAt(1), dPriv)
 
+	// --- user E (seeds 6/7): ONE identity, TWO keys — the rotation chain ---
+	//
+	// E1 signs the genesis (bare kid) and the update that rotates ITSELF out;
+	// E2, declared by that update, signs the artifact that follows. So
+	// `signerKey=E1` must return {genesis, update} and `signerKey=E2` exactly
+	// {artifact} — a partition no DID-addressed signer filter could produce, and
+	// the ingest-time-freeze property (a rotated-out key still matches the rows
+	// it signed) in the same corpus.
+	//
+	// Ordering is safe in one batch: both twins apply identity ops before
+	// artifacts and genesis before extensions, so E2 is current state by the time
+	// its artifact is verified.
+	ePriv, ePub := seededKey(6)
+	eNextPriv, eNextPub := seededKey(7)
+	eKeyID := "key_userE00000000000000000000000"
+	eNextKeyID := "key_userE20000000000000000000000"
+	eGenesis, eDID, eGenesisCID := identityCreate(ePriv, ePub, eKeyID)
+	eNextMK := dfos.NewMultikeyPublicKey(eNextKeyID, eNextPub)
+	eUpdate, _ := identityUpdate(eDID, eGenesisCID, eKeyID, pinnedTimeAt(1), eNextMK, ePriv)
+	eArtifact, _ := artifactOp(eDID, eDID+"#"+eNextKeyID, "signed after the rotation", pinnedTimeAt(2), eNextPriv)
+
 	fixture := Fixture{
 		RelayDID:        relayDID,
 		RelayProfileJWS: relayProfile,
@@ -389,6 +473,9 @@ func main() {
 			cGenesis,
 			dGenesis,
 			dDelete,
+			eGenesis,
+			eUpdate,
+			eArtifact,
 		},
 		Blobs: []FixtureBlob{
 			{ContentID: contentID, OperationCID: cUpdateCID, Body: contentBody},
@@ -405,6 +492,15 @@ func main() {
 		QueryRevokedCredentialCID: bCredCID,
 		QueryRevocationIssuerDID:  bDID,
 		QueryCountersignedCID:     cCreateCID,
+
+		QueryAuthKeyMultibase:      dfos.NewMultikeyPublicKey(aKeyID, aPub).PublicKeyMultibase,
+		QueryWitnessKeyMultibase:   dfos.NewMultikeyPublicKey(bKeyID, bPub).PublicKeyMultibase,
+		QueryAuthGenesisCID:        aGenesisCID,
+		QueryWitnessCountersignCID: bCountersignCID,
+
+		QueryRotationDID:            eDID,
+		QueryRotatedOutKeyMultibase: dfos.NewMultikeyPublicKey(eKeyID, ePub).PublicKeyMultibase,
+		QueryRotationKeyMultibase:   eNextMK.PublicKeyMultibase,
 	}
 
 	data, err := json.MarshalIndent(fixture, "", "  ")

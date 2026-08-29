@@ -802,9 +802,15 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
       return c.json({ error: 'invalid DID' }, 400);
     }
     // OPAQUE, DELIBERATELY UNVALIDATED: `key=` matches multibase public-key
-    // strings byte-for-byte against the has-ever-declared reverse index. A value
-    // no operation ever declared matches nothing — there is no key format to
-    // enforce here and therefore no 400, unlike the DID-shaped filters above.
+    // strings byte-for-byte against the has-ever-declared reverse index. A
+    // NON-EMPTY value no operation ever declared matches nothing — there is no
+    // key format to enforce here and therefore no 400, unlike the DID-shaped
+    // filters above. Spread on truthiness below, not on `!== undefined`: an
+    // empty `key=` is no filter, the same posture `signerKey=` on
+    // /index/v0/operations holds, rather than the present-but-empty filters that
+    // presence-detect elsewhere in this family. The Go twin reads this param
+    // with `query.Get`, which cannot distinguish `?key=` from an absent one at
+    // all, so no-filter is the only posture both reference relays can hold.
     const key = c.req.query('key');
     const nameContains = c.req.query('nameContains');
     const order = parseIndexOrder(c.req.query('order'));
@@ -816,7 +822,7 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     const rows = (
       await store.queryIndexIdentities({
         ...(did !== undefined ? { did } : {}),
-        ...(key !== undefined ? { key } : {}),
+        ...(key ? { key } : {}),
         ...(hasPublicProfile !== undefined ? { hasPublicProfile } : {}),
         ...(nameContains ? { nameContains } : {}),
         ...(order ? { order } : {}),
@@ -1045,9 +1051,9 @@ export const createRelay = async (options: RelayOptions): Promise<CreatedRelay> 
     // A key no accepted operation was signed with matches nothing — there is no
     // key format to enforce and therefore no 400, the `key=` posture on
     // /index/v0/identities. A PRESENT-BUT-EMPTY value applies NO filter (the
-    // truthiness check below), which is where this differs from the same route's
-    // `chainId=` presence check — an empty key is not a key, and both relay
-    // twins answer `?signerKey=` identically as an unfiltered page.
+    // truthiness check below) — the same posture `key=` holds, and where both
+    // differ from this route's `chainId=` presence check: an empty key is not a
+    // key, and both relay twins answer `?signerKey=` as an unfiltered page.
     const signerKey = c.req.query('signerKey');
     const order = parseIndexRecencyOrder(c.req.query('order'), 'ingestedAt.desc');
     if (order === null || order === undefined) return c.json({ error: 'invalid order' }, 400);

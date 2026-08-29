@@ -255,6 +255,46 @@ func postOperations(t *testing.T, base string, operations []string) *http.Respon
 	return resp
 }
 
+// postOperationsAccepted POSTs operations and asserts that EVERY ONE of them was
+// accepted, not merely that the request returned 200.
+//
+// This route reports its verdict PER OPERATION inside the body: a batch in which
+// every op was rejected still answers 200, because the request itself succeeded.
+// A helper that checks only the status code therefore cannot distinguish "the
+// relay holds these ops" from "the relay held its nose and dropped all of them",
+// and a test built on such a helper silently asserts nothing about the ops it
+// thinks it seeded. That is not hypothetical — it is exactly what
+// `revokeCredentialForResource` did until this helper replaced its status check.
+//
+// Use this anywhere a test SEEDS a corpus it will later query. Tests that
+// deliberately submit invalid ops and inspect the verdicts should keep calling
+// postOperations directly.
+func postOperationsAccepted(t *testing.T, base string, operations []string) {
+	t.Helper()
+	res := postOperations(t, base, operations)
+	body := readBody(t, res)
+	if res.StatusCode != 200 {
+		t.Fatalf("seed ingest: status %d, body: %s", res.StatusCode, body)
+	}
+	var parsed struct {
+		Results []struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("parse seed ingest verdicts: %v (body: %s)", err, body)
+	}
+	if len(parsed.Results) != len(operations) {
+		t.Fatalf("seed ingest returned %d verdicts for %d operations (body: %s)", len(parsed.Results), len(operations), body)
+	}
+	for i, r := range parsed.Results {
+		if r.Status != "new" && r.Status != "duplicate" {
+			t.Fatalf("seed operation %d was not accepted: status=%q error=%q (full body: %s)", i, r.Status, r.Error, body)
+		}
+	}
+}
+
 // getJSON performs a GET and decodes JSON.
 func getJSON(t *testing.T, url string, v any) *http.Response {
 	t.Helper()

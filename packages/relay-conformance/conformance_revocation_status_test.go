@@ -52,8 +52,16 @@ func revokeCredential(t *testing.T, base string, id identity) (credentialCID, re
 func revokeCredentialForResource(t *testing.T, base string, id identity, resource string) (credentialCID, revToken string) {
 	t.Helper()
 	issuerKid := id.did + "#" + id.auth.keyID
+	// aud MUST be "*". A relay ingests PUBLIC credentials as operations and
+	// silently declines to hold audience-scoped ones — they are bearer tokens
+	// their holder presents, not corpus a relay retains. This helper used to
+	// mint one for a fixed reader DID and check only the HTTP status, so the
+	// credential half of every seeded pair was REJECTED and nobody saw it: the
+	// revocation still landed (a revocation names a CID and does not require the
+	// relay to hold the credential), so the assertions below kept passing while
+	// exercising less than the helper's name claims.
 	cred, err := dfos.CreateCredential(
-		id.did, "did:dfos:somereader00000000000000000000", issuerKid, resource, "read",
+		id.did, "*", issuerKid, resource, "read",
 		5*time.Minute, id.auth.priv,
 	)
 	if err != nil {
@@ -66,11 +74,8 @@ func revokeCredentialForResource(t *testing.T, base string, id identity, resourc
 	credentialCID = credHeader.CID
 
 	revToken, _ = createRevocation(t, id.did, credentialCID, id.auth)
-	res := postOperations(t, base, []string{cred, revToken})
-	body := readBody(t, res)
-	if res.StatusCode != 200 {
-		t.Fatalf("credential+revocation ingest: status %d, body: %s", res.StatusCode, body)
-	}
+	// Per-operation verdicts, not just the status code — see postOperationsAccepted.
+	postOperationsAccepted(t, base, []string{cred, revToken})
 	return credentialCID, revToken
 }
 

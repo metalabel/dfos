@@ -58,6 +58,20 @@ type parityFixture struct {
 	QueryRevokedCredentialCID string              `json:"queryRevokedCredentialCid"`
 	QueryRevocationIssuerDID  string              `json:"queryRevocationIssuerDid"`
 	QueryCountersignedCID     string              `json:"queryCountersignedCid"`
+
+	// The two key-addressed filters — `signerKey=` on /index/v0/operations and
+	// `key=` on /index/v0/identities — speak the SAME alphabet: these are the
+	// multibase strings the fixture's chains declared, byte for byte, so a value
+	// found through one filter pastes straight into the other.
+	QueryAuthKeyMultibase      string `json:"queryAuthKeyMultibase"`
+	QueryWitnessKeyMultibase   string `json:"queryWitnessKeyMultibase"`
+	QueryAuthGenesisCID        string `json:"queryAuthGenesisCid"`
+	QueryWitnessCountersignCID string `json:"queryWitnessCountersignCid"`
+	// User E: one identity, two keys. E1 signs the genesis and the update that
+	// rotates it out; E2 signs the artifact after it.
+	QueryRotationDID            string `json:"queryRotationDid"`
+	QueryRotatedOutKeyMultibase string `json:"queryRotatedOutKeyMultibase"`
+	QueryRotationKeyMultibase   string `json:"queryRotationKeyMultibase"`
 }
 
 func loadParityEnv(t *testing.T) (tsURL, goURL string, fix parityFixture) {
@@ -371,6 +385,12 @@ func TestDualRelayParity(t *testing.T) {
 	publicReadRoute := "/index/v0/content?publicRead=true&limit=1000"
 	creditsRoute := "/index/v0/credits?contentId=" + url.QueryEscape(fix.QueryContentID) + "&limit=1000"
 	creditsDIDRoute := "/index/v0/credits?did=" + url.QueryEscape(fix.QueryRevocationIssuerDID) + "&limit=1000"
+	// `key=` on identities is the sibling of `signerKey=` on operations — the
+	// other key-addressed, byte-for-byte, opaque filter. The rotated-out variant
+	// is the has-ever-declared property: the key is gone from head state and the
+	// row must still come back, identically on both twins.
+	identityKeyRoute := "/index/v0/identities?key=" + url.QueryEscape(fix.QueryAuthKeyMultibase) + "&limit=1000"
+	identityRotatedKeyRoute := "/index/v0/identities?key=" + url.QueryEscape(fix.QueryRotatedOutKeyMultibase) + "&limit=1000"
 
 	routes := []string{
 		"/proof/v1/log?limit=1000",
@@ -389,6 +409,11 @@ func TestDualRelayParity(t *testing.T) {
 		"/index/v0/content?documentCID=" + fix.QueryDocumentCID + "&limit=1000",
 		"/index/v0/countersignatures?witness=" + fix.QueryRevocationIssuerDID + "&limit=1000",
 		"/index/v0/credentials?resource=chain:*&limit=1000",
+		identityKeyRoute,
+		identityRotatedKeyRoute,
+		// OPAQUE: a value no operation ever declared matches nothing on both
+		// twins — 200 with an empty page, never a 400.
+		"/index/v0/identities?key=" + url.QueryEscape("not-a-multibase-key !") + "&limit=1000",
 	}
 	// REGRESSION GUARD (index fan-out). The content-row expectations below pin a
 	// real shared relay defect that this gate caught on its first run and that
@@ -428,6 +453,10 @@ func TestDualRelayParity(t *testing.T) {
 		publicReadRoute:     fix.QueryContentID,
 		creditsRoute:        fix.QueryRevocationIssuerDID,
 		creditsDIDRoute:     fix.QueryContentID,
+		// A's declared key resolves back to A; E's ROTATED-OUT key still resolves
+		// to E, which is the has-ever-declared contract rather than head state.
+		identityKeyRoute:        fix.QueryDID,
+		identityRotatedKeyRoute: fix.QueryRotationDID,
 	}
 
 	for routeIndex, route := range routes {
@@ -497,6 +526,183 @@ func TestDualRelayParity(t *testing.T) {
 		})
 	}
 
+	// ---------------------------------------------------------------------
+	// KEY-ADDRESSED FILTER PARITY — `signerKey=` (/index/v0/operations) and
+	// `key=` (/index/v0/identities).
+	//
+	// These two filters are one class: both match a multibase public key
+	// BYTE-FOR-BYTE against strings the chains DECLARED, both are opaque (no
+	// format validation, no 400), and both must therefore answer identically on
+	// the two reference relays or a client cannot paste a key from one into the
+	// other. Every route here compares under ingestedAt normalization for
+	// operations (a relay-local receipt stamp can never byte-match) and strictly
+	// for identities.
+	// ---------------------------------------------------------------------
+	t.Run("key-addressed filters", func(t *testing.T) {
+		authKey := fix.QueryAuthKeyMultibase
+		witnessKey := fix.QueryWitnessKeyMultibase
+		rotatedOutKey := fix.QueryRotatedOutKeyMultibase
+		rotationKey := fix.QueryRotationKeyMultibase
+		if authKey == "" || witnessKey == "" || rotatedOutKey == "" || rotationKey == "" {
+			t.Fatal("fixture is missing the multibase key fields — regenerate it with parity/genfixture")
+		}
+
+		signerKeyRoute := func(key string, extra ...string) string {
+			route := "/index/v0/operations?signerKey=" + url.QueryEscape(key) + "&order=createdAt.desc&limit=1000"
+			for _, e := range extra {
+				route += "&" + e
+			}
+			return route
+		}
+
+		// PER-ROW-KIND. A's key signs its own GENESIS — the shape whose kid is a
+		// BARE key ID rather than a DID URL, which a resolver that only splits on
+		// "#" silently drops (the Go twin's builder caught exactly that in its own
+		// resolver). Asserting the genesis CID by name is what makes a twin that
+		// drops it fail here rather than diverge quietly.
+		t.Run("author key returns its genesis (bare-kid) row", func(t *testing.T) {
+			rows := compareOperationsRoute(t, tsURL, goURL, signerKeyRoute(authKey))
+			if !containsCID(rows, fix.QueryAuthGenesisCID) {
+				t.Fatalf("signerKey=<author> did not return the genesis row %s (rows: %v)", fix.QueryAuthGenesisCID, operationCIDs(rows))
+			}
+			if containsCID(rows, fix.QueryWitnessCountersignCID) {
+				t.Fatalf("signerKey=<author> leaked the witness's countersign row %s", fix.QueryWitnessCountersignCID)
+			}
+			genesisOnly := compareOperationsRoute(t, tsURL, goURL, signerKeyRoute(authKey, "kind=identity-op"))
+			if got := operationCIDs(genesisOnly); len(got) != 1 || got[0] != fix.QueryAuthGenesisCID {
+				t.Fatalf("signerKey=<author>&kind=identity-op = %v, want exactly [%s]", got, fix.QueryAuthGenesisCID)
+			}
+		})
+
+		// COUNTERSIGN indexes the WITNESS's key, never the countersigned op's
+		// author. B witnessed A's content-create; the row must answer to B.
+		t.Run("countersign row indexes the witness key", func(t *testing.T) {
+			rows := compareOperationsRoute(t, tsURL, goURL, signerKeyRoute(witnessKey))
+			if !containsCID(rows, fix.QueryWitnessCountersignCID) {
+				t.Fatalf("signerKey=<witness> did not return the countersign row %s (rows: %v)", fix.QueryWitnessCountersignCID, operationCIDs(rows))
+			}
+			only := compareOperationsRoute(t, tsURL, goURL, signerKeyRoute(witnessKey, "kind=countersign"))
+			if got := operationCIDs(only); len(got) != 1 || got[0] != fix.QueryWitnessCountersignCID {
+				t.Fatalf("signerKey=<witness>&kind=countersign = %v, want exactly [%s]", got, fix.QueryWitnessCountersignCID)
+			}
+		})
+
+		// ROTATION SURVIVAL + the key-addressed partition. One identity, two keys:
+		// rows signed by the key a later update rotated OUT still match it (the
+		// value is frozen at ingest, never re-resolved against head state), and the
+		// replacement key matches only what it actually signed. A DID-addressed
+		// signer filter could not separate these two sets at all.
+		t.Run("rotated-out key keeps its rows; the replacement key gets its own", func(t *testing.T) {
+			before := compareOperationsRoute(t, tsURL, goURL, signerKeyRoute(rotatedOutKey))
+			after := compareOperationsRoute(t, tsURL, goURL, signerKeyRoute(rotationKey))
+			if len(before) != 2 {
+				t.Fatalf("signerKey=<rotated-out> returned %d rows, want 2 (genesis + the update that rotated it out): %v", len(before), operationCIDs(before))
+			}
+			for _, row := range before {
+				if row.Kind != "identity-op" || row.ChainID != fix.QueryRotationDID {
+					t.Fatalf("signerKey=<rotated-out> row off-chain or wrong kind: %+v", row)
+				}
+			}
+			if len(after) != 1 || after[0].Kind != "artifact" || after[0].ChainID != fix.QueryRotationDID {
+				t.Fatalf("signerKey=<replacement> = %+v, want exactly the one artifact on %s", after, fix.QueryRotationDID)
+			}
+			for _, row := range before {
+				if row.CID == after[0].CID {
+					t.Fatalf("the two keys of one identity returned overlapping rows (%s)", row.CID)
+				}
+			}
+		})
+
+		// AND-COMPOSITION with the route's other filters, including an honestly
+		// empty contradiction (A's key never signed anything on B's chain).
+		t.Run("ANDs with kind= and chainId=", func(t *testing.T) {
+			onChain := compareOperationsRoute(t, tsURL, goURL,
+				signerKeyRoute(authKey, "chainId="+url.QueryEscape(fix.QueryContentID)))
+			if len(onChain) == 0 {
+				t.Fatalf("signerKey=<author>&chainId=<A's content> returned nothing")
+			}
+			for _, row := range onChain {
+				if row.ChainID != fix.QueryContentID || row.Kind != "content-op" {
+					t.Fatalf("composed filter leaked a row: %+v", row)
+				}
+			}
+			contradiction := compareOperationsRoute(t, tsURL, goURL,
+				signerKeyRoute(authKey, "chainId="+url.QueryEscape(fix.QueryRotationDID)))
+			if len(contradiction) != 0 {
+				t.Fatalf("signerKey=<author>&chainId=<E> returned %v, want an empty page", operationCIDs(contradiction))
+			}
+		})
+
+		// OPAQUE: no format validation, so no 400 — including for the two values a
+		// caller is most likely to paste by mistake, a valid kid and a valid DID.
+		// Both are well-formed protocol strings and neither is a public key.
+		t.Run("opaque garbage is an empty 200, never a 400", func(t *testing.T) {
+			for _, garbage := range []string{
+				"not-a-multibase-key !",
+				fix.QueryDID + "#" + fix.QueryAuthKeyID, // a valid kid
+				fix.QueryDID,                            // a valid DID
+				"z" + strings.Repeat("0", 40),
+			} {
+				route := signerKeyRoute(garbage)
+				rows := compareOperationsRoute(t, tsURL, goURL, route)
+				if len(rows) != 0 {
+					t.Fatalf("signerKey=%q returned %v, want an empty page", garbage, operationCIDs(rows))
+				}
+			}
+		})
+
+		// PRESENT-BUT-EMPTY IS NO FILTER, on BOTH key-addressed filters. Go reads
+		// these params with `query.Get`, which cannot distinguish `?signerKey=`
+		// from an absent param at all — so "unfiltered" is the only posture the
+		// two twins can both hold, and it is the one they now both ship. (`key=`
+		// on identities used to diverge here: the TS twin presence-detected and
+		// answered an empty page. These two cases are what pin the class.)
+		t.Run("an empty value is no filter at all", func(t *testing.T) {
+			for _, pair := range [][2]string{
+				{"/index/v0/operations?signerKey=&order=createdAt.desc&limit=1000",
+					"/index/v0/operations?order=createdAt.desc&limit=1000"},
+				{"/index/v0/identities?key=&limit=1000", "/index/v0/identities?limit=1000"},
+			} {
+				empty, unfiltered := pair[0], pair[1]
+				for name, base := range map[string]string{"ts": tsURL, "go": goURL} {
+					_, emptyBody := getBody(t, base+empty)
+					_, unfilteredBody := getBody(t, base+unfiltered)
+					if canonicalizeNormalized(t, emptyBody, "ingestedAt") != canonicalizeNormalized(t, unfilteredBody, "ingestedAt") {
+						t.Fatalf("%s: %s did not answer as the unfiltered page %s\n--- empty ---\n%s\n--- unfiltered ---\n%s",
+							name, empty, unfiltered, emptyBody, unfilteredBody)
+					}
+					if bytes.Contains(emptyBody, []byte(`"next"`)) && len(emptyBody) < 40 {
+						t.Fatalf("%s: %s returned a suspiciously empty page: %s", name, empty, emptyBody)
+					}
+				}
+				tsCanon := canonicalizeNormalized(t, mustBody(t, tsURL+empty), "ingestedAt")
+				goCanon := canonicalizeNormalized(t, mustBody(t, goURL+empty), "ingestedAt")
+				if tsCanon != goCanon {
+					t.Fatalf("PARITY MISMATCH on %s\n%s\n--- TS ---\n%s\n--- Go ---\n%s", empty, prettyDiff(tsCanon, goCanon), tsCanon, goCanon)
+				}
+			}
+		})
+
+		// PAGINATION under BOTH orderings. createdAt.desc is the author clock the
+		// fixture pins, so every page byte-compares across twins. ingestedAt.desc
+		// is each relay's OWN receipt clock — the page BOUNDARIES are legitimately
+		// relay-local there, so that ordering is walked per twin and compared as a
+		// row SET against the unpaged answer: it still proves the cursor drains the
+		// filtered feed exactly once, without asserting a cross-relay clock.
+		t.Run("pages a filtered feed under both orderings", func(t *testing.T) {
+			compareOperationsCursorWalk(t, tsURL, goURL,
+				"/index/v0/operations?signerKey="+url.QueryEscape(authKey)+"&order=createdAt.desc&limit=1")
+			want := operationCIDs(compareOperationsRoute(t, tsURL, goURL, signerKeyRoute(authKey)))
+			for name, base := range map[string]string{"ts": tsURL, "go": goURL} {
+				walked := walkOperationCIDs(t, base,
+					"/index/v0/operations?signerKey="+url.QueryEscape(authKey)+"&order=ingestedAt.desc&limit=1")
+				if strings.Join(walked, ",") != strings.Join(want, ",") {
+					t.Fatalf("%s: ingestedAt.desc walk of signerKey=<author> visited %v, want the unpaged set %v", name, walked, want)
+				}
+			}
+		})
+	})
+
 	// Cursor canonicality parity: non-canonical base64 variants of a
 	// well-formed cursor MUST be rejected identically by both twins. This exact
 	// divergence shipped (TS accepted padded/whitespace ordered cursors that Go
@@ -551,6 +757,157 @@ func TestDualRelayParity(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// operations-index parity helpers
+//
+// /index/v0/operations rows carry `ingestedAt`, a relay-local receipt stamp that
+// can never byte-match across two processes, so every comparison here runs under
+// canonicalizeNormalized with that one field neutralized. Row sets, ordering,
+// cursors, and every other field still byte-compare.
+// ---------------------------------------------------------------------------
+
+type parityOperationRow struct {
+	CID     string `json:"cid"`
+	Kind    string `json:"kind"`
+	ChainID string `json:"chainId"`
+}
+
+func mustBody(t *testing.T, url string) []byte {
+	t.Helper()
+	status, body := getBody(t, url)
+	if status != http.StatusOK {
+		t.Fatalf("GET %s: status %d, body %s", url, status, body)
+	}
+	return body
+}
+
+func operationCIDs(rows []parityOperationRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.CID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containsCID(rows []parityOperationRow, cid string) bool {
+	for _, row := range rows {
+		if row.CID == cid {
+			return true
+		}
+	}
+	return false
+}
+
+// compareOperationsRoute asserts both twins answer route with the same body and
+// returns the decoded rows, so a caller can additionally assert WHICH rows came
+// back — two twins that agree on an empty page agree about nothing.
+func compareOperationsRoute(t *testing.T, tsURL, goURL, route string) []parityOperationRow {
+	t.Helper()
+	tsBody := mustBody(t, tsURL+route)
+	goBody := mustBody(t, goURL+route)
+	tsCanon := canonicalizeNormalized(t, tsBody, "ingestedAt")
+	goCanon := canonicalizeNormalized(t, goBody, "ingestedAt")
+	if tsCanon != goCanon {
+		t.Fatalf("PARITY MISMATCH on %s\n%s\n--- TS (canonical) ---\n%s\n--- Go (canonical) ---\n%s",
+			route, prettyDiff(tsCanon, goCanon), tsCanon, goCanon)
+	}
+	var page struct {
+		Operations []parityOperationRow `json:"operations"`
+	}
+	if err := json.Unmarshal(tsBody, &page); err != nil {
+		t.Fatalf("parse %s: %v (body %s)", route, err, tsBody)
+	}
+	return page.Operations
+}
+
+// compareOperationsCursorWalk follows an operations cursor to exhaustion on both
+// relays and compares every page. Requiring two non-empty pages proves parity of
+// cursor generation AND resumption, not merely parity of the first page.
+func compareOperationsCursorWalk(t *testing.T, tsURL, goURL, routeBase string) {
+	t.Helper()
+	after := ""
+	nonEmptyPages := 0
+	for pageNumber := 1; ; pageNumber++ {
+		if pageNumber > 50 {
+			t.Fatal("operations cursor parity walk exceeded 50 pages")
+		}
+		route := routeBase
+		if after != "" {
+			route += "&after=" + url.QueryEscape(after)
+		}
+		tsBody := mustBody(t, tsURL+route)
+		goBody := mustBody(t, goURL+route)
+		tsCanon := canonicalizeNormalized(t, tsBody, "ingestedAt")
+		goCanon := canonicalizeNormalized(t, goBody, "ingestedAt")
+		if tsCanon != goCanon {
+			t.Fatalf("PARITY MISMATCH on operations cursor page %d (%s)\n%s\n--- TS ---\n%s\n--- Go ---\n%s",
+				pageNumber, route, prettyDiff(tsCanon, goCanon), tsCanon, goCanon)
+		}
+		var page struct {
+			Operations []json.RawMessage `json:"operations"`
+			Next       *string           `json:"next"`
+		}
+		if err := json.Unmarshal(tsBody, &page); err != nil {
+			t.Fatalf("parse operations cursor page %d: %v", pageNumber, err)
+		}
+		if len(page.Operations) > 0 {
+			nonEmptyPages++
+		}
+		if page.Next == nil {
+			break
+		}
+		if *page.Next == "" {
+			t.Fatalf("operations cursor page %d returned an empty next token", pageNumber)
+		}
+		after = *page.Next
+	}
+	if nonEmptyPages < 2 {
+		t.Fatalf("operations cursor parity walk had %d non-empty pages, want at least 2", nonEmptyPages)
+	}
+}
+
+// walkOperationCIDs drains a paginated operations feed on ONE relay and returns
+// the CIDs it visited, sorted. Used where the ordering key is a relay-local
+// clock, so the page boundaries are legitimately not comparable across twins but
+// the drained SET still must be.
+func walkOperationCIDs(t *testing.T, base, routeBase string) []string {
+	t.Helper()
+	after := ""
+	seen := map[string]bool{}
+	out := []string{}
+	for pageNumber := 1; ; pageNumber++ {
+		if pageNumber > 50 {
+			t.Fatalf("operations walk on %s exceeded 50 pages", base)
+		}
+		route := routeBase
+		if after != "" {
+			route += "&after=" + url.QueryEscape(after)
+		}
+		var page struct {
+			Operations []parityOperationRow `json:"operations"`
+			Next       *string              `json:"next"`
+		}
+		body := mustBody(t, base+route)
+		if err := json.Unmarshal(body, &page); err != nil {
+			t.Fatalf("parse %s: %v (body %s)", route, err, body)
+		}
+		for _, row := range page.Operations {
+			if seen[row.CID] {
+				t.Fatalf("operations walk on %s revisited %s", base, row.CID)
+			}
+			seen[row.CID] = true
+			out = append(out, row.CID)
+		}
+		if page.Next == nil {
+			break
+		}
+		after = *page.Next
+	}
+	sort.Strings(out)
+	return out
 }
 
 // prettyDiff returns the two canonical bodies for the failure message, trimmed
