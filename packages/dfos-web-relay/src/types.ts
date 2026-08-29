@@ -761,10 +761,23 @@ export interface RelayStore {
     limit: number;
   }): Promise<IndexCredentialRow[]>;
 
-  /** Page relay-held operations in non-authoritative recency order. */
+  /**
+   * Page relay-held operations in non-authoritative recency order.
+   *
+   * `signerKey` is the key-addressed actor filter: keep rows whose signature
+   * verified against this exact multibase public key AT INGEST. The value is the
+   * key the row's `kid` resolved to when the operation was accepted, stored
+   * verbatim as the identity chain declared it — resolution is never repeated at
+   * query time, and nothing here normalizes or re-encodes the string. Matched
+   * byte-for-byte as an opaque value (a key no accepted operation was signed
+   * with simply matches nothing; no format validation, no 400), and ANDed with
+   * the other filters. A row whose signer key did not resolve at ingest carries
+   * no key and therefore matches no `signerKey` value.
+   */
   queryIndexOperations(q: {
     kind?: OperationKind;
     chainId?: string;
+    signerKey?: string;
     orderedAfter?: IndexOrderedCursor;
     order: IndexRecencyOrder;
     limit: number;
@@ -802,6 +815,26 @@ export interface RelayStore {
    * deleted identity keeps its rows. `publicKeyMultibase` is stored verbatim.
    */
   putIndexIdentityKey(did: string, publicKeyMultibase: string, keyId: string): Promise<void>;
+  /**
+   * Record the public key ONE accepted operation's signature verified against —
+   * the stored column behind `signerKey=` on /index/v0/operations.
+   *
+   * Called once per accepted operation of every kind (identity-op, content-op,
+   * artifact, countersign, revocation, credential), keyed by the same operation
+   * CID the operation index row carries, with `publicKeyMultibase` stored
+   * VERBATIM as the identity chain declared it — the identical string
+   * `putIndexIdentityKey` records, so `key=` on /index/v0/identities and
+   * `signerKey=` here speak one alphabet.
+   *
+   * It is written at ingest precisely so the filter never re-decodes the corpus:
+   * the row retains what verification already computed. An operation whose
+   * signer key does not resolve records nothing, and the row then matches no
+   * `signerKey` value (it still enumerates unfiltered). A persistent store
+   * repopulates the column for a pre-existing corpus through its versioned
+   * projection rebuild, replaying the op log; the in-memory reference store's
+   * projection is born with the process and has no corpus to backfill.
+   */
+  putIndexOperationSignerKey(cid: string, publicKeyMultibase: string): Promise<void>;
   /**
    * Upsert a countersignature projection row by cid. The `witnessDID` column is
    * stored (never echoed in the row body) so witness-scoped queries stay O(page).

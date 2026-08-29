@@ -1644,6 +1644,219 @@ describe('index v0', () => {
     expect((await req('/index/v0/operations?after=not-a-cursor')).status).toBe(400);
   });
 
+  /**
+   * One corpus touching every row kind, with the two keys of one identity used
+   * for different ops (controller signs the genesis, auth key signs everything
+   * else) — the discriminating shape for a KEY-addressed filter: a DID-addressed
+   * one could not tell those two op sets apart.
+   */
+  const signerKeyCorpus = async () => {
+    const author = await createIdentity();
+    const witness = await createIdentity();
+    const content = await createContent(author, { $schema: 'example/signer-key' }, 10);
+    const artifact = await createArtifact(author, { $schema: 'example/signer-key-art' }, 11);
+    const credentialCID = await grantPublicRead(author, content.contentId);
+    await revokeGrant(author, credentialCID);
+    const { jwsToken: countersign } = await signCountersignature({
+      payload: {
+        version: 1,
+        type: 'countersign',
+        did: witness.did,
+        targetCID: content.operationCID,
+        createdAt: ts(12),
+      },
+      signer: witness.authKey.signer,
+      kid: `${witness.did}#${witness.authKey.keyId}`,
+    });
+    expect((await postOps([countersign])).status).toBe(200);
+    return { author, witness, content, artifact, credentialCID };
+  };
+
+  const operationsFor = async (query: string) =>
+    (await json(await req(`/index/v0/operations?${query}&limit=1000`))).operations as {
+      cid: string;
+      kind: string;
+      chainId: string;
+    }[];
+
+  const signerKeyQuery = (publicKeyMultibase: string) =>
+    `signerKey=${encodeURIComponent(publicKeyMultibase)}`;
+
+  it('filters operations by the key each signature resolved to at ingest', async () => {
+    const { author, witness, content, artifact } = await signerKeyCorpus();
+    const authorKey = author.authKey.key.publicKeyMultibase;
+    const controllerKey = author.controller.key.publicKeyMultibase;
+    const witnessKey = witness.authKey.key.publicKeyMultibase;
+
+    // the author's AUTH key signed four kinds; its CONTROLLER key signed only
+    // the genesis, so the two sets are disjoint under one DID
+    const byAuthorKey = await operationsFor(signerKeyQuery(authorKey));
+    expect(new Set(byAuthorKey.map((row) => row.kind))).toEqual(
+      new Set(['content-op', 'artifact', 'credential', 'revocation']),
+    );
+    expect(byAuthorKey.map((row) => row.cid)).toEqual(
+      expect.arrayContaining([content.operationCID, artifact.artifactCID]),
+    );
+
+    const byControllerKey = await operationsFor(signerKeyQuery(controllerKey));
+    expect(byControllerKey).toHaveLength(1);
+    expect(byControllerKey[0]).toMatchObject({ kind: 'identity-op', chainId: author.did });
+
+    const byWitnessKey = await operationsFor(signerKeyQuery(witnessKey));
+    expect(byWitnessKey).toHaveLength(1);
+    expect(byWitnessKey[0]).toMatchObject({
+      kind: 'countersign',
+      chainId: content.operationCID,
+    });
+
+    // the filter is a column, never a wire field — the row shape is unchanged
+    expect(byWitnessKey[0]).not.toHaveProperty('signerKey');
+    expect(Object.keys(byWitnessKey[0]!).sort()).toEqual([
+      'chainId',
+      'cid',
+      'createdAt',
+      'ingestedAt',
+      'kind',
+    ]);
+
+    // ANDs with kind= and chainId=
+    expect(await operationsFor(`${signerKeyQuery(authorKey)}&kind=artifact`)).toEqual([
+      expect.objectContaining({ cid: artifact.artifactCID }),
+    ]);
+    expect(
+      await operationsFor(
+        `${signerKeyQuery(authorKey)}&chainId=${encodeURIComponent(content.contentId)}`,
+      ),
+    ).toEqual([expect.objectContaining({ cid: content.operationCID })]);
+    // a contradictory AND is an empty page, not an error
+    expect(await operationsFor(`${signerKeyQuery(witnessKey)}&kind=artifact`)).toEqual([]);
+
+    // the store contract carries the filter, so an external store receives it
+    expect(
+      (
+        await store.queryIndexOperations({
+          signerKey: controllerKey,
+          order: 'ingestedAt.desc',
+          limit: 100,
+        })
+      ).map((row) => row.chainId),
+    ).toEqual([author.did]);
+  });
+
+  it('treats an unknown signerKey as opaque bytes: 200 with an empty page, never 400', async () => {
+    await signerKeyCorpus();
+    for (const garbage of ['not-a-multibase-key !', 'z6MkNOPE', '', ' ']) {
+      const res = await req(`/index/v0/operations?signerKey=${encodeURIComponent(garbage)}`);
+      expect(res.status).toBe(200);
+      const body = await json(res);
+      // a PRESENT-BUT-EMPTY value is no filter at all (the identities `key=`
+      // posture, and what the Go twin answers) — everything else matches nothing
+      if (garbage === '') expect(body.operations.length).toBeGreaterThan(0);
+      else expect(body.operations).toEqual([]);
+    }
+  });
+
+  it('pages a signerKey-filtered feed through the shared ordered envelope', async () => {
+    const { author } = await signerKeyCorpus();
+    const authorKey = author.authKey.key.publicKeyMultibase;
+    const all = await operationsFor(`${signerKeyQuery(authorKey)}&order=createdAt.desc`);
+    expect(all).toHaveLength(4);
+
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 4; page++) {
+      const body = await json(
+        await req(
+          `/index/v0/operations?${signerKeyQuery(authorKey)}&order=createdAt.desc&limit=1` +
+            (cursor ? `&after=${encodeURIComponent(cursor)}` : ''),
+        ),
+      );
+      expect(body.operations).toHaveLength(1);
+      seen.push(body.operations[0].cid);
+      cursor = body.next;
+      expect(cursor).toEqual(expect.any(String));
+    }
+    // every page holds one row of the filtered set, in the same order, no repeats
+    expect(seen).toEqual(all.map((row) => row.cid));
+    expect(new Set(seen).size).toBe(4);
+  });
+
+  it('freezes the resolved key at ingest, so a later rotation never moves a row', async () => {
+    const author = await createIdentity();
+    const content = await createContent(author, { $schema: 'example/rotation' }, 10);
+    const rotatedOutKey = author.authKey.key.publicKeyMultibase;
+
+    const replacement = makeKey();
+    const rotation: IdentityOperation = {
+      version: 1,
+      type: 'update',
+      previousOperationCID: author.operationCID,
+      authKeys: [replacement.key],
+      assertKeys: [],
+      controllerKeys: [author.controller.key],
+      createdAt: ts(20),
+    };
+    const { jwsToken } = await signIdentityOperation({
+      operation: rotation,
+      signer: author.controller.signer,
+      keyId: author.controller.keyId,
+      identityDID: author.did,
+    });
+    expect((await postOps([jwsToken])).status).toBe(200);
+
+    // the op was signed by a key the chain no longer declares — the row keeps
+    // the key its signature actually verified against, which is the whole point
+    // of storing the resolution rather than repeating it at query time
+    expect(await operationsFor(signerKeyQuery(rotatedOutKey))).toEqual([
+      expect.objectContaining({ cid: content.operationCID, kind: 'content-op' }),
+    ]);
+    // the replacement has signed nothing yet, so it matches nothing
+    expect(await operationsFor(signerKeyQuery(replacement.key.publicKeyMultibase))).toEqual([]);
+  });
+
+  /**
+   * The column is fully re-derivable from the operation log — the property a
+   * persistent store's versioned projection rebuild relies on when it backfills
+   * a pre-existing corpus. This in-memory store has no pre-existing corpus (its
+   * projection is born with the process), so the equivalent check is that a
+   * relay fed nothing but the log answers signerKey= identically.
+   */
+  it('re-derives the same signer keys from a replay of the operation log', async () => {
+    const { author, witness } = await signerKeyCorpus();
+    const log = await json(await req('/proof/v1/log?limit=1000'));
+    const tokens = (log.entries as { jwsToken: string }[]).map((entry) => entry.jwsToken);
+
+    const replayStore = new MemoryRelayStore();
+    const replayIdentity = await bootstrapRelayIdentity(replayStore);
+    const replay = await createRelay({
+      store: replayStore,
+      identity: replayIdentity,
+      authority: 'localhost',
+    });
+    const ingested = await replay.app.request('http://localhost/proof/v1/operations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operations: tokens }),
+    });
+    expect(ingested.status).toBe(200);
+
+    for (const key of [
+      author.authKey.key.publicKeyMultibase,
+      author.controller.key.publicKeyMultibase,
+      witness.authKey.key.publicKeyMultibase,
+    ]) {
+      const replayed = (await (
+        await replay.app.request(
+          `http://localhost/index/v0/operations?${signerKeyQuery(key)}&limit=1000`,
+        )
+      ).json()) as { operations: { cid: string }[] };
+      expect(replayed.operations.map((row) => row.cid).sort()).toEqual(
+        (await operationsFor(signerKeyQuery(key))).map((row) => row.cid).sort(),
+      );
+      expect(replayed.operations.length).toBeGreaterThan(0);
+    }
+  });
+
   it('enriches and filters the public credential index', async () => {
     const issuer = await createIdentity();
     const now = Math.floor(Date.now() / 1000);

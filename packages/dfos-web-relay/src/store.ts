@@ -182,6 +182,14 @@ export class MemoryRelayStore implements RelayStore {
   >();
   /** Relay-observed operation-log rows keyed by operation CID. */
   private indexOperationRows = new Map<string, IndexOperationRow>();
+  /**
+   * The multibase public key each accepted operation's signature verified
+   * against at ingest, keyed by operation CID — the stored `signerKey` column of
+   * the operation row, held beside the row rather than on it because the wire
+   * row is metadata-only (no signer field is served). An op whose signer key did
+   * not resolve has no entry, and therefore matches no `signerKey=` value.
+   */
+  private indexOperationSignerKeys = new Map<string, string>();
   /** Standalone artifact projection rows keyed by artifact cid. */
   private indexArtifactRows = new Map<string, IndexArtifactRow>();
 
@@ -639,6 +647,12 @@ export class MemoryRelayStore implements RelayStore {
     void keyId;
   }
 
+  async putIndexOperationSignerKey(cid: string, publicKeyMultibase: string): Promise<void> {
+    // stored VERBATIM — the filter is an opaque byte match, so nothing here
+    // normalizes, validates, or re-encodes the multibase string
+    this.indexOperationSignerKeys.set(cid, publicKeyMultibase);
+  }
+
   async putIndexCountersignatureRow(
     row: IndexCountersignatureQueryRow & { witnessDID: string },
   ): Promise<void> {
@@ -648,6 +662,7 @@ export class MemoryRelayStore implements RelayStore {
   async queryIndexOperations(q: {
     kind?: import('./types').OperationKind;
     chainId?: string;
+    signerKey?: string;
     orderedAfter?: IndexOrderedCursor;
     order: IndexRecencyOrder;
     limit: number;
@@ -655,7 +670,11 @@ export class MemoryRelayStore implements RelayStore {
     const rows = [...this.indexOperationRows.values()].filter(
       (row) =>
         (q.kind === undefined || row.kind === q.kind) &&
-        (q.chainId === undefined || row.chainId === q.chainId),
+        (q.chainId === undefined || row.chainId === q.chainId) &&
+        // opaque byte match against the key resolved AT INGEST — an unknown key
+        // matches nothing rather than erroring, and a row whose signer key never
+        // resolved matches no value at all
+        (q.signerKey === undefined || this.indexOperationSignerKeys.get(row.cid) === q.signerKey),
     );
     return pageOrderedRows(
       rows,
