@@ -10,7 +10,12 @@
 import { encodeEd25519Multikey } from '@metalabel/dfos-protocol/chain';
 import type { VerifiedIdentity } from '@metalabel/dfos-protocol/chain';
 import { describe, expect, it } from 'vitest';
-import { bodyFilterFromProbe, decideBodyFilter, KEY_PROBE_MULTIBASE } from '../src/lib/index-light';
+import {
+  bodyFilterFromProbe,
+  bodyFilterSupported,
+  KEY_PROBE_MULTIBASE,
+  supportedBodyFilterRelays,
+} from '../src/lib/index-light';
 import { toIdentityRows } from '../src/lib/index-raw';
 import {
   classesOf,
@@ -137,35 +142,52 @@ describe('bodyFilterFromProbe', () => {
   });
 });
 
-describe('decideBodyFilter', () => {
-  it('takes the first DEFINITIVE relay, mirroring query failover', () => {
-    expect(decideBodyFilter([{ status: 200, rows: 0 }])).toBe(true);
-    expect(decideBodyFilter([{ status: 200, rows: 3 }])).toBe(false);
-    expect(
-      decideBodyFilter([
-        { status: 0, rows: 0 },
-        { status: 501, rows: 0 },
-        { status: 200, rows: 0 },
-      ]),
-    ).toBe(true);
-    // an old relay FIRST loses to nothing behind it — it is the one that serves
-    expect(
-      decideBodyFilter([
-        { status: 200, rows: 5 },
-        { status: 200, rows: 0 },
-      ]),
-    ).toBe(false);
+// THE VERDICT IS A RELAY SET, NOT A YES. Index queries fail over relay by relay
+// and take the first 2xx from whoever answers, so "some relay supports it" cannot
+// gate the query: the relay that answers may not be the relay that was probed.
+describe('supportedBodyFilterRelays', () => {
+  const probe = (relay: string, status: number, rows: number) => ({ relay, status, rows });
+
+  it('keeps only the relays whose OWN probe said supported', () => {
+    expect(supportedBodyFilterRelays([probe('a', 200, 0)])).toEqual(['a']);
+    expect(supportedBodyFilterRelays([probe('a', 200, 3)])).toEqual([]);
   });
 
-  it('degrades to unsupported when nothing is definitive', () => {
-    expect(decideBodyFilter([])).toBe(false);
-    expect(decideBodyFilter([{ status: 0, rows: 0 }])).toBe(false);
+  it('excludes an old relay standing beside a good one — it must never be asked', () => {
+    // the bug this shape exists to make impossible: `a` ignores the filter and
+    // would answer an unfiltered page, and a failover would let it
+    expect(supportedBodyFilterRelays([probe('a', 200, 5), probe('b', 200, 0)])).toEqual(['b']);
+  });
+
+  it('excludes an INDETERMINATE relay rather than deferring to it', () => {
+    // unreachable at probe time says nothing about what it serves — and if it
+    // comes back up mid-session the failover would reach it. Not in the set.
     expect(
-      decideBodyFilter([
-        { status: 501, rows: 0 },
-        { status: 502, rows: 0 },
-      ]),
-    ).toBe(false);
+      supportedBodyFilterRelays([probe('a', 0, 0), probe('b', 501, 0), probe('c', 200, 0)]),
+    ).toEqual(['c']);
+  });
+
+  it('preserves configured order so failover still walks the preference', () => {
+    expect(
+      supportedBodyFilterRelays([probe('a', 200, 0), probe('b', 500, 0), probe('c', 204, 0)]),
+    ).toEqual(['a', 'c']);
+  });
+
+  it('degrades to the empty set when nothing is definitive', () => {
+    expect(supportedBodyFilterRelays([])).toEqual([]);
+    expect(supportedBodyFilterRelays([probe('a', 0, 0)])).toEqual([]);
+    expect(supportedBodyFilterRelays([probe('a', 501, 0), probe('b', 502, 0)])).toEqual([]);
+  });
+});
+
+describe('bodyFilterSupported — the UI gate over the set', () => {
+  it('holds null while the probe is in flight', () => {
+    expect(bodyFilterSupported(null)).toBeNull();
+  });
+
+  it('is supported only when some relay can actually be asked', () => {
+    expect(bodyFilterSupported(['https://r'])).toBe(true);
+    expect(bodyFilterSupported([])).toBe(false);
   });
 });
 

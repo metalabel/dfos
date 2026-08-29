@@ -21,6 +21,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { getClient } from './client';
 import type { OpKind } from './db';
 import { getDb } from './db-instance';
+import { clearDivergenceReport } from './divergence-store';
 import { fmtCount, short } from './format';
 import { getRelays } from './relays';
 import { getAutoSyncMinutes } from './settings';
@@ -106,6 +107,51 @@ export const getSyncState = (): SyncState => state;
  *  every subscriber re-reads its counts. Sync progress bumps this on its own. */
 export const markDbChanged = (): void => set({ dbEpoch: state.dbEpoch + 1 });
 
+// -----------------------------------------------------------------------------
+// THE WIPE GENERATION — a write fence for fire-and-forget writers
+//
+// A reset WIPES the store, and several writers here are fire-and-forget:
+// jitIndexChain runs off a detail view's fold, and the verify queue persists a
+// verdict after a network round trip. Either can be in flight when the wipe
+// lands, and a write that resolves afterwards repopulates a store the UI has
+// already reported as cleared — with, in the worst case, exactly the dropped
+// history a reset exists to forget. `resetLocalIndex` refusing while a full sync
+// holds the controller does nothing about these: they take no controller.
+//
+// So a background writer captures the generation BEFORE its awaits and hands it
+// to {@link writeIfCurrent}, which drops the write when a wipe has happened since.
+//
+// THIS IS NOT `dbEpoch`, deliberately. dbEpoch bumps on ANY local mutation — every
+// sync page, every JIT add — so fencing on it would make one background write
+// cancel another's, silently losing legitimate rows. The fence's question is
+// narrower and is the only one that matters: was the store I read my handle for
+// DESTROYED under me? Only a wipe answers yes.
+//
+// It is advisory in the strict sense — nothing stops a write already inside an
+// IndexedDB transaction — but it closes the window that actually happens: the
+// seconds between "this work started" and "its rows would land".
+// -----------------------------------------------------------------------------
+
+let wipeGeneration = 0;
+
+/** The wipe generation as it stands right now. A fire-and-forget writer reads
+ *  this before it starts and hands it back to {@link writeIfCurrent}. */
+export const currentDbGeneration = (): number => wipeGeneration;
+
+/**
+ * Run a local-index write only if the store has not been wiped since
+ * `generation` was read. Returns whether the write ran, so a caller can tell
+ * "wrote nothing" from "did not write".
+ */
+export const writeIfCurrent = async (
+  generation: number,
+  write: () => Promise<void>,
+): Promise<boolean> => {
+  if (generation !== wipeGeneration) return false;
+  await write();
+  return true;
+};
+
 export const subscribeSync = (fn: Listener): (() => void) => {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -173,6 +219,12 @@ export const startSync = async (trigger: 'manual' | 'auto' = 'manual'): Promise<
       set({ phase: 'idle', status: 'stopped' });
       return;
     }
+
+    // a run that ADDED operations changed the mirror the standing divergence
+    // verdict was about — the ops it sampled were not these — so retire it rather
+    // than let the home banner keep printing an answer to the old question. A run
+    // that added nothing left the corpus exactly as the verdict found it.
+    if (result.added > 0) clearDivergenceReport();
 
     const now = Date.now();
     persistLastSync(now);
@@ -271,16 +323,27 @@ export const isResolving = (): boolean => state.phase === 'resolving';
  * Best-effort and fire-and-forget: a failure here never blocks the view (the
  * page renders from the client fold regardless). On any real add it signals the
  * index changed so the local-index panel and home hero re-read their counts.
+ *
+ * FENCED ON THE WIPE GENERATION. The caller's fold is a network round trip and a
+ * reset can land inside it, so `generation` is the generation as it stood when
+ * that work BEGAN — the caller reads {@link currentDbGeneration} before its
+ * awaits and passes it here. When it is omitted the generation is read at entry,
+ * which still covers this function's own awaits (the db open, the write itself).
+ * A fenced-out write is dropped silently: the rows are a cache of a fold the view
+ * already has, and they land again on the next visit.
  */
 export const jitIndexChain = async (
   chainId: string,
   kind: OpKind,
   ops: { cid: string; jwsToken: string }[],
+  generation: number = currentDbGeneration(),
 ): Promise<void> => {
   try {
     const db = await getDb();
-    const { added } = await indexChainOps(db, chainId, kind, ops);
-    if (added > 0) markDbChanged();
+    await writeIfCurrent(generation, async () => {
+      const { added } = await indexChainOps(db, chainId, kind, ops);
+      if (added > 0) markDbChanged();
+    });
   } catch {
     // indexing is an optimization, never a correctness requirement
   }
@@ -306,7 +369,11 @@ const persistLastSync = (ms: number): void => {
  * describe a corpus that isn't there. Resetting is the only way back.
  *
  * Refuses while a run is in flight rather than wiping under it — the caller
- * stops the sync first (the reset control is disabled until then).
+ * stops the sync first (the reset control is disabled until then). That refusal
+ * only covers the FULL SYNC, which is the one writer holding the controller; the
+ * fire-and-forget writers (JIT chain indexing, verdict persistence) take no
+ * controller and are fenced instead — the generation bumps HERE, before the wipe,
+ * so any write already under way is dropped rather than landing behind it.
  *
  * `lastSyncAt` is cleared alongside the store, not merely zeroed in memory: a
  * surviving timestamp would tell auto-sync the emptied index is fresh and it
@@ -314,6 +381,9 @@ const persistLastSync = (ms: number): void => {
  */
 export const resetLocalIndex = async (): Promise<boolean> => {
   if (controller) return false;
+  // bump BEFORE the wipe: a writer whose rows would land after this point is
+  // writing into a store that is already, as far as the user is concerned, gone
+  wipeGeneration += 1;
   const db = await getDb();
   await db.wipe();
   try {

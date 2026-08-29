@@ -41,7 +41,12 @@ import { getClient } from './client';
 import { isOpKind, type ExplorerOp, type OpKind } from './db';
 import { getDb } from './db-instance';
 import { PAGE, useIndexPageStack, type IndexPage } from './index-light';
-import { fetchOperationsPage, type IndexOperationRow, type IndexRecency } from './index-raw';
+import {
+  fetchOperationsPage,
+  fetchSignerKeyOperationsPage,
+  type IndexOperationRow,
+  type IndexRecency,
+} from './index-raw';
 
 /** One operation row, ready to render. */
 export interface LogRow {
@@ -160,27 +165,38 @@ export const useIndexLog = (
  * disagrees with the ordering it is sorted by reads as broken. Both orderings are
  * served on this route.
  *
- * `enabled` carries TWO gates: a relay index must exist, and the serving relay
- * must honour `signerKey=` (`useIndexSignerKeyFilter` in ./index-light). A relay
- * predating the filter ignores it and answers with the unfiltered operations
- * feed, so running this ungated would present the whole log as this key's
- * signings.
+ * `enabled` carries TWO gates: a relay index must exist, and `relays` must be
+ * non-empty — the subset whose own probe said they honour `signerKey=`
+ * (`useIndexSignerKeyFilterRelays` in ./index-light). A relay predating the filter
+ * ignores it and answers with the unfiltered operations feed, so the query is sent
+ * ONLY to vetted relays, never to the configured set: the failover takes the first
+ * 2xx from whoever answers, and an unvetted answer here is the whole log presented
+ * as this key's signings. The relay set is part of the resetKey too — a query
+ * bound to different relays is a different query.
  */
 export const useSignerKeyLog = (
   enabled: boolean,
   signerKey: string,
+  relays: string[],
   cursor: string,
   onCursor: (cursor: string) => void,
 ): IndexPage<LogRow> =>
-  useIndexPageStack(enabled, `signer-key-log:${signerKey}`, cursor, onCursor, async (after) => {
-    const page = await fetchOperationsPage({
-      order: 'createdAt.desc',
-      signerKey,
-      ...(after ? { after } : {}),
-      limit: PAGE,
-    });
-    return { items: indexOpRows(page.items), next: page.next };
-  });
+  useIndexPageStack(
+    enabled,
+    `signer-key-log:${signerKey}:${relays.join(',')}`,
+    cursor,
+    onCursor,
+    async (after) => {
+      const page = await fetchSignerKeyOperationsPage({
+        order: 'createdAt.desc',
+        signerKey,
+        relays,
+        ...(after ? { after } : {}),
+        limit: PAGE,
+      });
+      return { items: indexOpRows(page.items), next: page.next };
+    },
+  );
 
 /**
  * Page the RELAY's global log forward from genesis. `cursor` is the position the

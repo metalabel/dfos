@@ -36,9 +36,16 @@
      either would make this the one surface in the explorer that fabricates claims
      about key custody. Both filters are specified as opaque matches that never
      400, so both are body-probed with a sentinel key (lib/index-light.ts,
-     `useIndexKeyFilter` / `useIndexSignerKeyFilter`); where a filter is not
-     honoured its lane says so and asks nothing. The two gates are INDEPENDENT —
-     a relay can serve one and not the other — so each lane carries its own.
+     `useIndexKeyFilterRelays` / `useIndexSignerKeyFilterRelays`).
+
+     THE PROBE'S ANSWER IS A SET OF RELAYS, NOT A YES. Index queries fail over
+     relay by relay and take the first 2xx from whoever answers, so "some relay
+     supports it" is not a safe gate: probe A as supported, have A be down, and
+     the query lands on old relay B and fabricates the whole page. So each lane
+     asks ONLY the relays that passed their own probe, and an empty set is the
+     unsupported state — the lane says so and asks nothing. The two sets are
+     INDEPENDENT (a relay can serve one filter and not the other), so each lane
+     carries its own.
 
   3. THE OP COUNT IS NOT THE IDENTITY'S OP COUNT. An index identity row's
      `opCount` counts that identity's whole chain, by any of its keys; on a key
@@ -56,10 +63,11 @@ import { OpLink, Pager, Panel, Pill, Term, TruncId } from '../components/ui';
 import { fmtAge, fmtCount, fmtStamp, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import {
+  bodyFilterSupported,
   indexListStateFor,
   useIndexCapable,
-  useIndexKeyFilter,
-  useIndexSignerKeyFilter,
+  useIndexKeyFilterRelays,
+  useIndexSignerKeyFilterRelays,
 } from '../lib/index-light';
 import { useIndexIdentitiesByKey } from '../lib/index-raw';
 import { signerOpCount, signerOpCountLabel } from '../lib/key-ops';
@@ -170,12 +178,18 @@ const KeyMatchRow = (props: { row: IndexIdentityRow; multibase: string }) => {
  */
 const DeclaredPanel = (props: { multibase: string; indexed: boolean | null }) => {
   const { indexed } = props;
-  // does the serving relay honour `key=`? An older relay IGNORES it and returns
-  // the UNFILTERED identity list — every row of which would be a fabricated match.
-  const keyFilter = useIndexKeyFilter();
+  // WHICH relays honour `key=`? An older relay IGNORES it and returns the
+  // UNFILTERED identity list — every row of which would be a fabricated match —
+  // so the lookup is sent only to the relays whose own probe cleared them, never
+  // to the configured set (which the failover would happily fall back onto).
+  const keyRelays = useIndexKeyFilterRelays();
+  const keyFilter = bodyFilterSupported(keyRelays);
   const [cursor, setCursor] = useHashParam('after');
   const enabled = indexed === true && keyFilter === true;
-  const page = useIndexIdentitiesByKey(enabled, props.multibase, { cursor, onCursor: setCursor });
+  const page = useIndexIdentitiesByKey(enabled, props.multibase, keyRelays ?? [], {
+    cursor,
+    onCursor: setCursor,
+  });
   // a disabled pager holds `loading: false`, so the raw state would settle on
   // `empty` and announce that no identity declared this key before anything had
   // been asked. Either gate answering NO returns its own panel below, so what
@@ -199,10 +213,10 @@ const DeclaredPanel = (props: { multibase: string; indexed: boolean | null }) =>
     return (
       <Panel title="identities" accent="warn" right={<span class="lbl">route unsupported</span>}>
         <span class="muted">
-          this relay does not support key lookup — it answered a key no chain can have declared with
-          a full page of identities, which means it ignores the <code>key=</code> filter rather than
-          applying it. Showing that page here would present every identity on the relay as one that
-          declared this key.
+          no configured relay supports key lookup. Each one either answered a key no chain can have
+          declared with a full page of identities — which means it ignores the <code>key=</code>{' '}
+          filter rather than applying it — or could not be reached to check. Asking one of them
+          anyway would present every identity it holds as one that declared this key.
         </span>
         <div class="ck-note" style={{ marginTop: 10 }}>
           The filter is served by <code>web-relay</code> 0.39.0 and later. Add a relay whose index
@@ -259,7 +273,7 @@ const DeclaredPanel = (props: { multibase: string; indexed: boolean | null }) =>
           {indexed === null
             ? 'checking relay capabilities…'
             : keyFilter === null
-              ? 'checking whether this relay supports key lookup…'
+              ? 'checking which relays support key lookup…'
               : 'asking the relay index which identities declared this key…'}
         </span>
       ) : state === 'empty' ? (
@@ -344,13 +358,16 @@ const SignedOpRow = (props: { row: LogRow }) => {
 const SignedPanel = (props: { multibase: string; indexed: boolean | null }) => {
   const { indexed } = props;
   // the same trap as `key=`, on the other route: a relay predating `signerKey=`
-  // ignores it and answers with the UNFILTERED operations feed.
-  const supported = useIndexSignerKeyFilter();
+  // ignores it and answers with the UNFILTERED operations feed. Same answer —
+  // ask only the relays that passed their own probe. The two sets are computed
+  // independently because a relay can serve one filter and not the other.
+  const signerRelays = useIndexSignerKeyFilterRelays();
+  const supported = bodyFilterSupported(signerRelays);
   // its own cursor param — the two lanes page independently, and one lane's
   // opaque cursor means nothing to the other's route
   const [cursor, setCursor] = useHashParam('sops');
   const enabled = indexed === true && supported === true;
-  const page = useSignerKeyLog(enabled, props.multibase, cursor, setCursor);
+  const page = useSignerKeyLog(enabled, props.multibase, signerRelays ?? [], cursor, setCursor);
   const state = indexListStateFor(enabled || null, page.loading, page.error, page.rows.length);
   const count = signerOpCount({
     indexed,
@@ -393,10 +410,10 @@ const SignedPanel = (props: { multibase: string; indexed: boolean | null }) => {
     return (
       <Panel title={title} accent="warn" right={<span class="lbl">route unsupported</span>}>
         <span class="muted">
-          this relay does not support signer lookup — it answered a key nothing can have signed with
-          a full page of operations, which means it ignores the <code>signerKey=</code> filter
-          rather than applying it. Showing that page here would present every operation on the relay
-          as one this key signed.
+          no configured relay supports signer lookup. Each one either answered a key nothing can
+          have signed with a full page of operations — which means it ignores the{' '}
+          <code>signerKey=</code> filter rather than applying it — or could not be reached to check.
+          Asking one of them anyway would present every operation it holds as one this key signed.
         </span>
         <div class="ck-note" style={{ marginTop: 10 }}>
           So this key’s signings cannot be counted here, and the{' '}
@@ -448,7 +465,7 @@ const SignedPanel = (props: { multibase: string; indexed: boolean | null }) => {
           {indexed === null
             ? 'checking relay capabilities…'
             : supported === null
-              ? 'checking whether this relay supports signer lookup…'
+              ? 'checking which relays support signer lookup…'
               : 'asking the relay index what this key has signed…'}
         </span>
       ) : state === 'empty' ? (

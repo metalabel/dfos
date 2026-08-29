@@ -82,7 +82,8 @@ export type SignerOpCount =
 export const signerOpCount = (args: {
   /** any configured relay advertises an index (null = still reading well-knowns). */
   indexed: boolean | null;
-  /** the serving relay honours `signerKey=` (null = probe in flight). */
+  /** at least one configured relay passed the `signerKey=` probe, so the query
+   *  has a vetted relay to run against (null = probe in flight). */
   supported: boolean | null;
   loading: boolean;
   error: boolean;

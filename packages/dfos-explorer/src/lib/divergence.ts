@@ -13,15 +13,26 @@
   So we ask, cheaply and directly: take a spread of operation CIDs the local
   index holds and fetch each one back from the configured relays.
 
-    every sampled op resolves            → aligned
-    an op is definitively ABSENT (404)   → diverged
-    anything we could not settle         → unknown
+    every sampled op comes back as itself → aligned
+    an op is definitively ABSENT (404)    → diverged
+    anything we could not settle          → unknown
 
   ABSENCE MUST BE DEFINITIVE. A timeout, a 5xx, a CORS failure, a 401/403 — none
   of those say the operation is gone, they say we could not look. Only a relay
   that answers, and answers "not found", is evidence; and it must be EVERY
   configured relay, because one relay's gap is not the corpus's. One inconclusive
   probe makes the whole check inconclusive rather than quietly reading as clean.
+
+  PRESENCE MUST BE DEFINITIVE TOO — the symmetric half, and the one that is easy
+  to get wrong. A 200 is not the operation; it is a response. An SPA host serving
+  index.html for every path answers 200 to every CID we could ever ask for, and a
+  check that reads presence off the status alone then calls every sample present
+  and reports ALIGNED — divergence detection switched off by a misconfigured host,
+  silently. So a 2xx must carry a body that PARSES and whose `cid` is the very
+  operation asked for (the shape `GET /proof/v1/operations/:cid` serves in both
+  relay implementations). A 2xx that does not is `unknown`: we could not look. It
+  is never `present`, and never `absent` either — a catch-all host has told us
+  nothing about whether the op exists.
 
   The verdict is advisory. It recommends a reset; it never performs one.
 
@@ -59,13 +70,39 @@ export interface DivergenceReport {
 const isDefiniteAbsence = (status: number): boolean => status === 404 || status === 410;
 
 /**
- * Fold one operation's per-relay HTTP statuses into an outcome. Status `0` means
- * the fetch never produced a response (network error / timeout / CORS) and is
- * therefore inconclusive, as are 401/403 (gated: it may well be there) and 5xx.
+ * What ONE relay's answer about ONE operation proves. `status` 0 means the fetch
+ * never produced a response (network error / timeout / CORS). `namesOp` is
+ * meaningful only on a 2xx: it is whether the body parsed AND identified itself as
+ * the operation asked for — see the header note on why a bare 2xx proves nothing.
  */
-export const classifyStatuses = (statuses: readonly number[]): ProbeOutcome => {
-  if (statuses.some((s) => s >= 200 && s < 300)) return 'present';
-  if (statuses.length > 0 && statuses.every(isDefiniteAbsence)) return 'absent';
+export interface RelayAnswer {
+  status: number;
+  namesOp: boolean;
+}
+
+/**
+ * Whether a `GET /proof/v1/operations/:cid` body is the operation we asked for.
+ * Both relay implementations serve `{ cid, jwsToken, chainType, chainId }`, so
+ * `cid` is the field that names it; an exact match is the check, because the CID
+ * is what we asked by. Anything else — an HTML page parsed as nothing, a JSON
+ * object with no `cid`, some other operation — is not an answer to this question.
+ * Pure, unit-tested.
+ */
+export const bodyNamesOperation = (body: unknown, cid: string): boolean => {
+  const named = (body as { cid?: unknown } | null | undefined)?.cid;
+  return typeof named === 'string' && named === cid;
+};
+
+/**
+ * Fold one operation's per-relay answers into an outcome. Presence needs a 2xx
+ * whose body names the operation; absence needs EVERY relay to have answered
+ * 404/410. Everything else — a 401/403 (gated: it may well be there), a 5xx, a
+ * network failure, a catch-all 200 that names nothing — is inconclusive. Pure,
+ * unit-tested.
+ */
+export const classifyAnswers = (answers: readonly RelayAnswer[]): ProbeOutcome => {
+  if (answers.some((a) => a.status >= 200 && a.status < 300 && a.namesOp)) return 'present';
+  if (answers.length > 0 && answers.every((a) => isDefiniteAbsence(a.status))) return 'absent';
   return 'unknown';
 };
 
@@ -109,16 +146,27 @@ export const sampleChainHeads = (chains: readonly ChainRollup[], size: number): 
   return out;
 };
 
-/** GET one operation from one relay, reporting only its status (0 = no answer). */
-const probeStatus = async (relay: string, cid: string, signal?: AbortSignal): Promise<number> => {
+/**
+ * GET one operation from one relay. A 2xx body is READ, not merely counted: only
+ * a body that parses and names this CID makes the answer evidence of presence. A
+ * non-2xx is reported by status alone — nothing in a 404's body would change what
+ * it means, and it is the status the absence rule reads.
+ */
+const probeRelay = async (
+  relay: string,
+  cid: string,
+  signal?: AbortSignal,
+): Promise<RelayAnswer> => {
   try {
     const res = await fetch(`${relay}${PROOF}/operations/${encodeURIComponent(cid)}`, {
       mode: 'cors',
       signal: signal ?? AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    return res.status;
+    if (res.status < 200 || res.status >= 300) return { status: res.status, namesOp: false };
+    const body: unknown = await res.json().catch(() => null);
+    return { status: res.status, namesOp: bodyNamesOperation(body, cid) };
   } catch {
-    return 0;
+    return { status: 0, namesOp: false };
   }
 };
 
@@ -129,8 +177,8 @@ export const probeOp = async (
   signal?: AbortSignal,
 ): Promise<ProbeOutcome> => {
   if (relays.length === 0) return 'unknown';
-  const statuses = await Promise.all(relays.map((relay) => probeStatus(relay, cid, signal)));
-  return classifyStatuses(statuses);
+  const answers = await Promise.all(relays.map((relay) => probeRelay(relay, cid, signal)));
+  return classifyAnswers(answers);
 };
 
 /**
