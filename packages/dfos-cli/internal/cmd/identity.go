@@ -1771,7 +1771,12 @@ func newIdentityKeysCmd() *cobra.Command {
 					ID        string   `json:"id"`
 					Roles     []string `json:"roles"`
 					PublicKey string   `json:"publicKey"`
-					Keychain  bool     `json:"keychain"`
+					// held, not "keychain": the flag says this machine's keystore
+					// holds the private half, and the keystore is whichever backend
+					// is in use — under DFOS_NO_KEYCHAIN it is a file store, and a
+					// field named for one backend would report true from another.
+					// The human table's column says HELD for the same reason.
+					Held bool `json:"held"`
 				}
 				items := make([]keyInfo, 0, len(rows))
 				for _, r := range rows {
