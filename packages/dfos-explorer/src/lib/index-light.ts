@@ -28,11 +28,14 @@
 import type { IndexContentRow, IndexIdentityRow, IndexOrder } from '@metalabel/dfos-client';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { getClient } from './client';
+import { PAGE_ROWS } from './paging';
 import { getRelays } from './relays';
 
 /** Per-page size for every index surface — small enough to read, paged with a
- *  real prev/next off the relay's `next` cursor (no whole-corpus scroll). */
-export const PAGE = 25;
+ *  real prev/next off the relay's `next` cursor (no whole-corpus scroll). Held
+ *  equal to lib/paging.ts's `PAGE_ROWS` so a keyset-paged table and a
+ *  client-paged one are the same height. */
+export const PAGE = PAGE_ROWS;
 
 /**
  * Whether any configured relay advertises the index capability. `null` while the

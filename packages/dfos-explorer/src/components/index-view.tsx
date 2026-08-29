@@ -14,9 +14,10 @@ import { short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
 import { foldIndexChain, type FoldedIndex, type IndexEntry } from '../lib/index-fold';
 import type { OpRow } from '../lib/op-rows';
+import { useClientPager } from '../lib/paging';
 import { getRelays } from '../lib/relays';
 import { dispatchInput, routeFor } from '../lib/resolve-input';
-import { OpLink, Panel, Pill, Term } from './ui';
+import { ClientPager, OpLink, Panel, Pill, Term } from './ui';
 
 const RefLink = (props: { refValue: string }) => {
   const target = dispatchInput(props.refValue);
@@ -55,6 +56,11 @@ export const IndexPanel = (props: { contentId: string; rows: OpRow[] }) => {
     };
   }, [props.contentId, props.rows]);
 
+  // the fold is materialized whole in the tab — an index chain can carry any
+  // number of refs, so the map pages here rather than rendering all of it
+  const entries = folded ? sortEntries(folded.entries) : [];
+  const page = useClientPager(entries);
+
   return (
     <Panel
       title={
@@ -88,28 +94,35 @@ export const IndexPanel = (props: { contentId: string; rows: OpRow[] }) => {
           {folded.entries.size === 0 ? (
             <span class="muted">the fold resolves to an empty map</span>
           ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>ref</th>
-                  <th>label</th>
-                  <th>order</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortEntries(folded.entries).map(([key, entry]) => (
-                  <tr key={key}>
-                    <td>
-                      <RefLink refValue={key} />
-                    </td>
-                    <td>
-                      {typeof entry.label === 'string' ? entry.label : <span class="muted">—</span>}
-                    </td>
-                    <td class="muted">{typeof entry.order === 'number' ? entry.order : '—'}</td>
+            <>
+              <table>
+                <thead>
+                  <tr>
+                    <th>ref</th>
+                    <th>label</th>
+                    <th>order</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {page.rows.map(([key, entry]) => (
+                    <tr key={key}>
+                      <td>
+                        <RefLink refValue={key} />
+                      </td>
+                      <td>
+                        {typeof entry.label === 'string' ? (
+                          entry.label
+                        ) : (
+                          <span class="muted">—</span>
+                        )}
+                      </td>
+                      <td class="muted">{typeof entry.order === 'number' ? entry.order : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <ClientPager page={page} noun="entries" />
+            </>
           )}
           {folded.gaps.length > 0 ? (
             <div class="ck-note" style={{ marginTop: 8 }}>

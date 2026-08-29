@@ -22,11 +22,21 @@ import { useEffect, useState } from 'preact/hooks';
 import { Check, Checks } from '../components/checks';
 import { ContentChip } from '../components/content-chip';
 import { ProvenancePanel } from '../components/provenance';
-import { DidLink, KidLink, Panel, Pill, Related, Term, TruncId } from '../components/ui';
+import {
+  ClientPager,
+  DidLink,
+  KidLink,
+  Panel,
+  Pill,
+  Related,
+  Term,
+  TruncId,
+} from '../components/ui';
 import { getClient } from '../lib/client';
 import { getDb } from '../lib/db-instance';
 import { fmtUnixDate, short } from '../lib/format';
 import { GLOSSARY } from '../lib/glossary';
+import { useClientPager } from '../lib/paging';
 import { fetchOpRaw, probeRevocationFeeds, type RevocationFeedProbe } from '../lib/relay-raw';
 import { getRelays } from '../lib/relays';
 import { NotFound } from './not-found';
@@ -374,41 +384,7 @@ export const Credential = (props: { cid: string }) => {
         </Checks>
       </Panel>
 
-      <Panel
-        title="grants"
-        right={
-          <span class="lbl">
-            <Term word="attenuations" def={GLOSSARY['attenuation'] ?? ''} /> · resource → action
-          </span>
-        }
-      >
-        <table>
-          <thead>
-            <tr>
-              <th>resource</th>
-              <th>action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {p.att.map((a, i) => (
-              <tr key={i}>
-                <td>
-                  <ResourceLabel resource={a.resource} />
-                </td>
-                <td>
-                  {String(a.action)
-                    .split(',')
-                    .map((x) => (
-                      <span key={x} class="k-role">
-                        {x.trim()}
-                      </span>
-                    ))}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Panel>
+      <GrantsPanel att={p.att} />
 
       <Panel title="validity" right={<span class="lbl">temporal</span>}>
         <div class="kv">
@@ -554,6 +530,51 @@ export const Credential = (props: { cid: string }) => {
 
       {resolved ? <ProvenancePanel provenance={resolved.provenance} /> : null}
     </>
+  );
+};
+
+/** The credential's attenuations. Its own component because the view above it
+ *  bails early while it is still deciding whether the token is a credential at
+ *  all, and a pager is a hook — so the table owns its own state down here. */
+const GrantsPanel = (props: { att: readonly { resource: string; action: unknown }[] }) => {
+  const page = useClientPager(props.att);
+  return (
+    <Panel
+      title="grants"
+      right={
+        <span class="lbl">
+          <Term word="attenuations" def={GLOSSARY['attenuation'] ?? ''} /> · resource → action
+        </span>
+      }
+    >
+      <table>
+        <thead>
+          <tr>
+            <th>resource</th>
+            <th>action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {page.rows.map((a, i) => (
+            <tr key={i}>
+              <td>
+                <ResourceLabel resource={a.resource} />
+              </td>
+              <td>
+                {String(a.action)
+                  .split(',')
+                  .map((x) => (
+                    <span key={x} class="k-role">
+                      {x.trim()}
+                    </span>
+                  ))}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <ClientPager page={page} noun="grants" />
+    </Panel>
   );
 };
 
