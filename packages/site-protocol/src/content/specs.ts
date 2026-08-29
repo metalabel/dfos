@@ -155,6 +155,19 @@ export const specs: SpecEntry[] = [
     nav: { tier: 'secondary' },
   },
   {
+    slug: '/key-proof',
+    title: 'Key Proof',
+    tile: 'Challenge-bound key possession proofs &mdash; closed payload, audience-bound, single-shot',
+    llms: 'Single-shot key possession-and-consent proofs for ceremonies — the closed four-member envelope, audience binding, and the ceremony purpose registry',
+    metaDescription:
+      'DFOS Key Proof — challenge-bound, audience-bound key possession proofs with a closed payload and a registered typ per ceremony purpose.',
+    source: '../../specs/KEY-PROOF.md',
+    grid: 'auth',
+    chip: '0.x',
+    llmsSection: 'specifications',
+    nav: { label: 'Key Proof', tier: 'secondary' },
+  },
+  {
     slug: '/signing',
     title: 'Signing',
     tile: 'Sign-request envelopes, signer obligations, and relay-hosted mailboxes',
