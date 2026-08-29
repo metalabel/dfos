@@ -275,6 +275,98 @@ func putIndexIdentityKeysFromOp(did string, jwsToken string, store Store) {
 	}
 }
 
+// signerKeyForOperation resolves the multibase public key ONE accepted operation
+// was signed with — the value the operation-log row retains as the substrate for
+// /index/v0/operations?signerKey=. Returns "" when the key cannot be resolved,
+// which the stores persist as NULL and no filter value ever matches.
+//
+// Uniform across every row kind, because the JWS header is: a countersign
+// resolves to the witness's key, a credential to the issuer's, a revocation to
+// its signer's, an artifact to the artifact signer's, a content-op to the actual
+// signer (a delegate, not necessarily the chain creator), and an identity-op to
+// the controlling key that signed it (self-declared in the same op at genesis).
+// There is no per-kind branch to get wrong.
+//
+// KEY-ADDRESSED, AND THE STRING IS THE DECLARED ONE. Verification resolves a kid
+// to raw ed25519 bytes; this walks the same path but returns the
+// publicKeyMultibase exactly as the identity chain declared it, rather than
+// re-encoding the resolved bytes. Under canonical multikey encoding the two
+// coincide — but the declared string is the alphabet /index/v0/identities?key=
+// matches, so a key found there can be pasted into signerKey= here and hit.
+//
+// Mirrors CreateKeyResolver's search order (current state, then the historical
+// declarations in the chain log) rather than reusing it, because the resolver
+// returns decoded bytes and the multibase rendering is what the index stores. A
+// rotated-out key still resolves: the row is a fact about the past.
+func signerKeyForOperation(jwsToken string, store Store) string {
+	header, payload, err := dfos.DecodeJWSUnsafe(jwsToken)
+	if err != nil || header == nil {
+		return ""
+	}
+	hashIdx := strings.Index(header.Kid, "#")
+	if hashIdx < 0 {
+		// An identity GENESIS signs with a bare key ID, not a DID URL — the DID
+		// does not exist until the op that declares it. Its signing key is
+		// therefore declared inline in the same payload the header points into,
+		// which is exactly what verification resolves against. No store lookup:
+		// the op is self-describing.
+		if header.Kid == "" || payload == nil {
+			return ""
+		}
+		for _, declared := range identityKeysDeclaredBy(payload) {
+			if declared.KeyID == header.Kid {
+				return declared.PublicKey
+			}
+		}
+		return ""
+	}
+	did := header.Kid[:hashIdx]
+	keyID := header.Kid[hashIdx+1:]
+	if keyID == "" {
+		return ""
+	}
+
+	identity, err := store.GetIdentityChain(did)
+	if err != nil || identity == nil {
+		return ""
+	}
+
+	// fast path: the key is still in head state
+	for _, class := range [][]dfos.MultikeyPublicKey{
+		identity.State.ControllerKeys, identity.State.AuthKeys, identity.State.AssertKeys,
+	} {
+		for _, k := range class {
+			if k.ID == keyID {
+				return k.PublicKeyMultibase
+			}
+		}
+	}
+
+	// slow path: a rotated-out key, recoverable only from the declarations
+	for _, token := range identity.Log {
+		_, payload, err := dfos.DecodeJWSUnsafe(token)
+		if err != nil || payload == nil {
+			continue
+		}
+		for _, declared := range identityKeysDeclaredBy(payload) {
+			if declared.KeyID == keyID {
+				return declared.PublicKey
+			}
+		}
+	}
+	return ""
+}
+
+// appendOperationToLog is the single write path into the operation log: it
+// resolves the accepted operation's signer key and hands the completed entry to
+// the store. Every ingest path routes through here rather than calling
+// store.AppendToLog directly, so the signer key can never be resolved at one
+// call site and forgotten at another.
+func appendOperationToLog(store Store, entry LogEntry) error {
+	entry.SignerKey = signerKeyForOperation(entry.JWSToken, store)
+	return store.AppendToLog(entry)
+}
+
 // collectIndexDirtyAfterOp collects the rows ONE accepted operation dirties into
 // the batch's dirty set. Called from the single ingest choke point
 // (IngestOperations) in dependency order, right after each op is applied to the
@@ -602,7 +694,50 @@ func rebuildIndexProjectionRows(store Store, rebuildable RebuildableIndexStore, 
 		}
 	}
 
+	if err := rebuildOperationLogSignerKeys(store, rebuildable, logger); err != nil {
+		return err
+	}
+
 	return rebuildable.SetIndexProjectionVersion(IndexProjectionVersion)
+}
+
+// rebuildOperationLogSignerKeys backfills the signer key on operation-log rows
+// that carry none — every row on a corpus ingested before the column existed.
+//
+// Runs LAST and in place. The identity chains it resolves against are read
+// directly from the authoritative tables, not from the projection, so ordering
+// against the passes above is not a dependency — but the operation log is the
+// authoritative record, never a projection table, so this is a targeted UPDATE
+// of the missing column rather than the clear-and-re-derive the other passes do.
+//
+// A row that still does not resolve (an identity chain this relay no longer
+// holds, a malformed kid) is left NULL and stays invisible to signerKey= — the
+// filter's honest answer is "this relay cannot say", not a wrong key.
+func rebuildOperationLogSignerKeys(store Store, rebuildable RebuildableIndexStore, logger *slog.Logger) error {
+	pending, err := rebuildable.ListOperationLogEntriesMissingSignerKey()
+	if err != nil {
+		return err
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	resolved := 0
+	for i, entry := range pending {
+		signerKey := signerKeyForOperation(entry.JWSToken, store)
+		if signerKey == "" {
+			continue
+		}
+		if err := rebuildable.SetOperationLogSignerKey(entry.CID, signerKey); err != nil {
+			return err
+		}
+		resolved++
+		if (i+1)%rebuildProgressEvery == 0 {
+			logger.Info("index projection: rebuilt operation signer keys", "count", i+1, "total", len(pending))
+		}
+	}
+	logger.Info("index projection: operation signer keys backfilled",
+		"resolved", resolved, "unresolved", len(pending)-resolved)
+	return nil
 }
 
 // maintainIndexAfterBlob maintains the index projection after a document blob

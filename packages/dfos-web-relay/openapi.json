@@ -1926,7 +1926,7 @@
       "get": {
         "operationId": "indexOperations",
         "summary": "Relay-held operation recency feed (non-authoritative index)",
-        "description": "Metadata-only browse ordering over accepted operations. createdAt is\nauthor-claimed (credential iat normalized to ISO 8601); ingestedAt is\nrelay-observed. Rows never include JWS tokens or payloads. The reference\nstores do not retain indexed signer metadata, so signer is deliberately\nnot a filter.\n",
+        "description": "Metadata-only browse ordering over accepted operations. createdAt is\nauthor-claimed (credential iat normalized to ISO 8601); ingestedAt is\nrelay-observed. Rows never include JWS tokens or payloads. signerKey\nfilters by the public key the row's signature verified against at\ningest; a DID-addressed signer filter is not defined here.\n",
         "tags": [
           "Index"
         ],
@@ -1956,6 +1956,15 @@
               "type": "string"
             },
             "description": "Exact operation-log routing identifier match"
+          },
+          {
+            "name": "signerKey",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exact multibase public-key match against the key this operation's signature verified against at ingest. Matched byte-for-byte, with no format validation: a string no accepted operation was signed with is a 200 with an empty page, never a 400. Key-addressed, not DID-addressed."
           },
           {
             "name": "order",

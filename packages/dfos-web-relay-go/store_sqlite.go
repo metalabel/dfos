@@ -55,7 +55,13 @@ CREATE TABLE IF NOT EXISTS operation_log (
 	kind TEXT NOT NULL,
 	chain_id TEXT NOT NULL,
 	created_at TEXT NOT NULL,
-	ingested_at TEXT NOT NULL
+	ingested_at TEXT NOT NULL,
+	-- The multibase public key this operation's signature verified against,
+	-- resolved at ingest. NULLABLE on purpose: a row whose key did not resolve —
+	-- and every row a pre-signerKey relay wrote, until the projection rebuild
+	-- backfills it — carries NULL, and an equality predicate never matches NULL, so
+	-- an unresolved row is invisible to the filter while still browsable unfiltered.
+	signer_key TEXT
 );
 
 CREATE TABLE IF NOT EXISTS blobs (
@@ -370,6 +376,10 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		{"operations", "ingested_at"},
 		{"operation_log", "created_at"},
 		{"operation_log", "ingested_at"},
+		// Added by CREATE TABLE only on a fresh database; an in-place upgrade needs
+		// the column here. Pre-existing rows stay NULL until the versioned
+		// projection rebuild backfills them (rebuildOperationLogSignerKeys).
+		{"operation_log", "signer_key"},
 		{"countersignatures", "created_at"},
 		{"countersignatures", "ingested_at"},
 		{"index_countersign", "created_at"},
@@ -401,6 +411,7 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		"CREATE INDEX IF NOT EXISTS idx_operation_log_ingested ON operation_log(ingested_at, cid)",
 		"CREATE INDEX IF NOT EXISTS idx_operation_log_kind ON operation_log(kind, ingested_at, cid)",
 		"CREATE INDEX IF NOT EXISTS idx_operation_log_chain ON operation_log(chain_id, ingested_at, cid)",
+		"CREATE INDEX IF NOT EXISTS idx_operation_log_signer ON operation_log(signer_key, ingested_at, cid)",
 		"CREATE INDEX IF NOT EXISTS idx_index_countersign_created ON index_countersign(witness_did, created_at, cid)",
 		"CREATE INDEX IF NOT EXISTS idx_index_countersign_ingested ON index_countersign(witness_did, ingested_at, cid)",
 		"CREATE INDEX IF NOT EXISTS idx_index_countersign_relation ON index_countersign(witness_did, relation, cid)",
@@ -1642,6 +1653,13 @@ func (s *SQLiteStore) QueryIndexOperations(q IndexOperationQuery) ([]indexOperat
 		where = append(where, "chain_id = ?")
 		args = append(args, *q.ChainID)
 	}
+	if q.SignerKey != "" {
+		// Opaque byte match, mirroring the identity family's key= posture: a string
+		// no accepted operation was signed with simply matches nothing. A row whose
+		// signer key never resolved is NULL here, and NULL = ? is never true.
+		where = append(where, "signer_key = ?")
+		args = append(args, q.SignerKey)
+	}
 	if q.OrderedAfter != nil {
 		column := "ingested_at"
 		if q.Order == "createdAt.desc" {
@@ -1742,7 +1760,40 @@ func (s *SQLiteStore) ClearIndexProjection() error {
 			return err
 		}
 	}
+	// operation_log is deliberately absent: it is the authoritative record a
+	// rebuild reads FROM, not a projection row it may truncate. Its one index
+	// column, signer_key, is filled in place instead — see
+	// ListOperationLogEntriesMissingSignerKey.
 	return nil
+}
+
+func (s *SQLiteStore) ListOperationLogEntriesMissingSignerKey() ([]LogEntry, error) {
+	rows, err := s.readerDB().Query(
+		"SELECT cid, jws_token, kind, chain_id FROM operation_log WHERE signer_key IS NULL OR signer_key = '' ORDER BY seq ASC",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entries := []LogEntry{}
+	for rows.Next() {
+		var e LogEntry
+		if err := rows.Scan(&e.CID, &e.JWSToken, &e.Kind, &e.ChainID); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}
+
+func (s *SQLiteStore) SetOperationLogSignerKey(cid string, signerKey string) error {
+	if signerKey == "" {
+		return nil // still unresolvable — leave the row NULL rather than stamping ""
+	}
+	_, err := s.writerDB().Exec(
+		"UPDATE operation_log SET signer_key = ? WHERE cid = ?", signerKey, cid,
+	)
+	return err
 }
 
 // ---------------------------------------------------------------------------
@@ -1770,9 +1821,16 @@ func (s *SQLiteStore) AppendToLog(entry LogEntry) error {
 	// append-only and one op appends one row, so the first row is the receipt —
 	// a repeat carries no new information, and failing the write would turn a
 	// harmless repeat into a persistence error that fails the whole ingest.
+	// An unresolved signer key stores as NULL, not "": `signer_key = ?` never
+	// matches NULL, so the row is invisible to signerKey= while staying browsable
+	// unfiltered — and NULL is the predicate the rebuild backfill selects on.
+	var signerKey any
+	if entry.SignerKey != "" {
+		signerKey = entry.SignerKey
+	}
 	_, err := s.writerDB().Exec(
-		"INSERT OR IGNORE INTO operation_log (cid, jws_token, kind, chain_id, created_at, ingested_at) VALUES (?, ?, ?, ?, ?, ?)",
-		entry.CID, entry.JWSToken, entry.Kind, entry.ChainID, createdAt, ingestedAt,
+		"INSERT OR IGNORE INTO operation_log (cid, jws_token, kind, chain_id, created_at, ingested_at, signer_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		entry.CID, entry.JWSToken, entry.Kind, entry.ChainID, createdAt, ingestedAt, signerKey,
 	)
 	return err
 }

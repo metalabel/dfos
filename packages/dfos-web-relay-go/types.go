@@ -349,6 +349,18 @@ type LogEntry struct {
 	JWSToken string `json:"jwsToken"`
 	Kind     string `json:"kind"`
 	ChainID  string `json:"chainId"`
+	// SignerKey is the multibase public key this operation's signature verified
+	// against, resolved at ingest by appendOperationToLog and persisted on the
+	// operation-log row as the substrate for /index/v0/operations?signerKey=.
+	//
+	// json:"-" ON PURPOSE: the proof-plane /proof/v1/log entry shape is a wire
+	// contract both reference relays serve byte-identically, and the signer key
+	// is index metadata, not proof — the JWS in the same entry already carries
+	// the kid a reader can resolve itself. A peer's log page therefore decodes
+	// with SignerKey empty, and the receiving relay re-resolves it against its
+	// own store when it ingests, which is the correct behavior anyway: the value
+	// is what THIS relay's verification computed.
+	SignerKey string `json:"-"`
 }
 
 // RelayStats is optional operational telemetry a store MAY compute for the well-known.
@@ -727,8 +739,14 @@ type IndexCredentialQuery struct {
 
 // IndexOperationQuery is the always-time-ordered filter over accepted operations.
 type IndexOperationQuery struct {
-	Kind         string
-	ChainID      *string
+	Kind    string
+	ChainID *string
+	// SignerKey is "" for no filter; otherwise an opaque multibase public key
+	// matched byte-for-byte against the key the row's signature verified against
+	// at ingest. Same posture as IndexIdentityQuery.Key: no format validation, so
+	// a string no accepted operation was signed with is an empty page, not a 400.
+	// A row with no resolved signer key matches no value.
+	SignerKey    string
 	OrderedAfter *indexOrderedCursor
 	Order        string
 	Limit        int
@@ -760,4 +778,13 @@ type RebuildableIndexStore interface {
 	// ClearIndexProjection truncates all projection rows so a rebuild starts from
 	// a clean slate (a schema change may have altered row shape).
 	ClearIndexProjection() error
+	// ListOperationLogEntriesMissingSignerKey returns the operation-log rows that
+	// carry no resolved signer key, as (CID, JWSToken) pairs — the backfill input
+	// for /index/v0/operations?signerKey= on a corpus ingested before the column
+	// existed. NOT part of ClearIndexProjection: the operation log is the
+	// authoritative record a rebuild reads FROM, never a projection table it
+	// truncates, so the signer key is filled in place on rows that lack it.
+	ListOperationLogEntriesMissingSignerKey() ([]LogEntry, error)
+	// SetOperationLogSignerKey stamps one operation-log row's resolved signer key.
+	SetOperationLogSignerKey(cid string, signerKey string) error
 }
