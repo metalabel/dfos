@@ -11,6 +11,7 @@ import (
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/client"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/config"
 	"github.com/metalabel/dfos/packages/dfos-cli/internal/localrelay"
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/vault"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	relay "github.com/metalabel/dfos/packages/dfos-web-relay-go"
 	"github.com/spf13/cobra"
@@ -51,10 +52,17 @@ func newIdentityCreateCmd() *cobra.Command {
 	var name string
 	var peerName string
 	var serviceSpecs []string
+	var vaultFlag string
+	var noVault bool
 
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a new identity (generate keys + sign genesis)",
+		Short: "Create a new identity (mint keys + sign genesis)",
+		Long: "Mint a controller key and an auth key and sign a genesis operation with them. The keys are " +
+			"derived from a vault — --vault, else default-vault — so the vault's recovery phrase covers " +
+			"them. With no vault selected, or with --no-vault, the keys are generated standalone and exist " +
+			"only in the keystore. Nothing about the vault is published: the genesis carries public keys " +
+			"and nothing else.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if name == "" {
 				return fmt.Errorf("--name is required")
@@ -70,24 +78,37 @@ func newIdentityCreateCmd() *cobra.Command {
 				return fmt.Errorf("identity name '%s' already exists", name)
 			}
 
+			vaultName, vaultSource, err := resolveVault(vaultFlag, noVault)
+			if err != nil {
+				return err
+			}
+
 			lr, err := getRelay()
 			if err != nil {
 				return err
 			}
 
-			// generate controller key
-			controllerKeyID := protocol.GenerateKeyID()
-			controllerPriv, controllerPub, err := keys.GenerateKey("pending:" + controllerKeyID)
+			// Mint both keys from the vault in one reservation, so an identity's
+			// controller and auth keys land on consecutive indices and a scan that
+			// finds one finds the other.
+			minter, err := newKeyMinter(vaultName, 2)
 			if err != nil {
-				return fmt.Errorf("generate controller key: %w", err)
+				return err
+			}
+
+			// controller key
+			controllerKeyID := protocol.GenerateKeyID()
+			controllerPriv, controllerPub, controllerIndex, err := minter.next("pending:" + controllerKeyID)
+			if err != nil {
+				return fmt.Errorf("mint controller key: %w", err)
 			}
 			controllerMK := protocol.NewMultikeyPublicKey(controllerKeyID, controllerPub)
 
-			// generate auth key
+			// auth key
 			authKeyID := protocol.GenerateKeyID()
-			_, authPub, err := keys.GenerateKey("pending:" + authKeyID)
+			_, authPub, authIndex, err := minter.next("pending:" + authKeyID)
 			if err != nil {
-				return fmt.Errorf("generate auth key: %w", err)
+				return fmt.Errorf("mint auth key: %w", err)
 			}
 			authMK := protocol.NewMultikeyPublicKey(authKeyID, authPub)
 
@@ -140,6 +161,20 @@ func newIdentityCreateCmd() *cobra.Command {
 				publishedTo = append(publishedTo, rn)
 			}
 
+			// Record which derivation indices became which published keys. This is
+			// LOCAL provenance only — it is what `whoami` reports and what a
+			// rotation reads to stay on the seed that minted the current keys. It
+			// is written after the operation succeeds, so the trail describes keys
+			// that actually exist in a chain.
+			if vaultName != "" {
+				if err := getVaults().Record(vaultName,
+					vault.MintedKey{Index: controllerIndex, DID: did, KeyID: controllerKeyID, Role: "controller", PublicKey: controllerMK.PublicKeyMultibase},
+					vault.MintedKey{Index: authIndex, DID: did, KeyID: authKeyID, Role: "auth", PublicKey: authMK.PublicKeyMultibase},
+				); err != nil {
+					return fmt.Errorf("record vault provenance: %w", err)
+				}
+			}
+
 			// Register the name in config only after all operations succeed.
 			// Creating an identity does NOT select it: nothing follows "last
 			// created", because a default that moves on its own is a default an
@@ -151,7 +186,7 @@ func newIdentityCreateCmd() *cobra.Command {
 			}
 
 			if jsonFlag {
-				outputJSON(map[string]any{
+				out := map[string]any{
 					"did":           did,
 					"name":          name,
 					"operationCID":  opCID,
@@ -159,13 +194,27 @@ func newIdentityCreateCmd() *cobra.Command {
 					"authKey":       authKeyID,
 					"services":      len(services),
 					"publishedTo":   publishedTo,
-				})
+				}
+				if vaultName != "" {
+					out["vault"] = map[string]any{
+						"name":            vaultName,
+						"fingerprint":     minter.fingerprint,
+						"controllerIndex": controllerIndex,
+						"authIndex":       authIndex,
+					}
+				}
+				outputJSON(out)
 			} else {
 				fmt.Printf("Identity created:\n")
 				fmt.Printf("  Name:           %s\n", name)
 				fmt.Printf("  DID:            %s\n", did)
 				fmt.Printf("  Controller key: %s  (%s)\n", controllerKeyID, keys.Backend())
 				fmt.Printf("  Auth key:       %s  (%s)\n", authKeyID, keys.Backend())
+				if vaultName != "" {
+					fmt.Printf("  Vault:          %s [%s] at %s and %s — via %s\n",
+						vaultName, minter.fingerprint,
+						vault.DerivationPath(controllerIndex), vault.DerivationPath(authIndex), vaultSource)
+				}
 				if len(services) > 0 {
 					fmt.Printf("  Services:       %d\n", len(services))
 				}
@@ -175,9 +224,14 @@ func newIdentityCreateCmd() *cobra.Command {
 					fmt.Printf("  Status:         local only. Use 'dfos identity publish' to push to a peer.\n")
 				}
 				fmt.Printf("  Sign as it:     --as %s, DFOS_AS=%s, or 'dfos config set default-identity %s'\n", name, name, name)
-				fmt.Fprintf(os.Stderr, "\nWarning: key loss is unrecoverable. There is no seed phrase, backup, or recovery flow.\n")
-				fmt.Fprintf(os.Stderr, "         If you lose these keys (%s), control of this identity is gone for good.\n", keys.Backend())
-				fmt.Fprintf(os.Stderr, "         Availability is a multi-key story, not a recovery one: register additional keys (e.g. on another device) with 'dfos identity add-key' while you still hold a controller key, so no single key loss is fatal.\n")
+				if vaultName == "" {
+					fmt.Fprintf(os.Stderr, "\nWarning: these keys are standalone. They exist in %s and nowhere else.\n", keys.Backend())
+					fmt.Fprintf(os.Stderr, "         Lose them and control of this identity is gone for good.\n")
+					fmt.Fprintf(os.Stderr, "         Mint from a vault ('dfos vault create <name>') so a written-down phrase covers the keys, and register additional keys (e.g. on another device) with 'dfos identity add-key' while you still hold a controller key, so no single key loss is fatal.\n")
+				} else {
+					fmt.Fprintf(os.Stderr, "\nThese keys derive from vault '%s'. Its recovery phrase is the only copy: if it is not written down, write it down now with 'dfos vault show %s --reveal-mnemonic'.\n", vaultName, vaultName)
+					fmt.Fprintf(os.Stderr, "Availability is still a multi-key story: register additional keys (e.g. on another device) with 'dfos identity add-key' while you still hold a controller key.\n")
+				}
 			}
 			return nil
 		},
@@ -185,7 +239,76 @@ func newIdentityCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Human-readable name for this identity (required)")
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
 	cmd.Flags().StringArrayVar(&serviceSpecs, "service", nil, "Discovery service entry as key=value list (repeatable), e.g. id=relay,type=DfosRelay,endpoint=https://relay.dfos.com")
+	cmd.Flags().StringVar(&vaultFlag, "vault", "", "Mint the keys from this vault (default: config default-vault)")
+	cmd.Flags().BoolVar(&noVault, "no-vault", false, "Generate standalone keys, from no vault")
 	return cmd
+}
+
+// keyMinter is the one place a private key comes into existence. It hands out
+// keys either from a vault's reserved indices or from the keystore's own
+// generator, and either way the key lands in the keystore under the account the
+// caller names — so nothing downstream has to know or care where it came from.
+//
+// Reserving all of an operation's indices up front means a vault's counter moves
+// exactly once per command, and the indices an operation consumes are contiguous.
+type keyMinter struct {
+	vaultName   string
+	fingerprint string
+	derived     []vault.Derived
+	used        int
+}
+
+func newKeyMinter(vaultName string, count int) (*keyMinter, error) {
+	m := &keyMinter{vaultName: vaultName}
+	if vaultName == "" {
+		return m, nil
+	}
+	meta, err := getVaults().Load(vaultName)
+	if err != nil {
+		return nil, err
+	}
+	derived, err := getVaults().Mint(vaultName, count)
+	if err != nil {
+		return nil, err
+	}
+	m.fingerprint = meta.Fingerprint
+	m.derived = derived
+	return m, nil
+}
+
+// next produces the next key and stores it under account. The index it returns
+// is meaningful only for a vault-backed minter; a standalone key has no index
+// and reports 0, which callers gate on vaultName rather than on the number.
+func (m *keyMinter) next(account string) (ed25519.PrivateKey, ed25519.PublicKey, uint32, error) {
+	if m.vaultName == "" {
+		priv, pub, err := keys.GenerateKey(account)
+		return priv, pub, 0, err
+	}
+	if m.used >= len(m.derived) {
+		return nil, nil, 0, fmt.Errorf("vault '%s' reserved %d key(s) and a %d%s was asked for", m.vaultName, len(m.derived), m.used+1, ordinalSuffix(m.used+1))
+	}
+	d := m.derived[m.used]
+	m.used++
+	pub, err := keys.PutKey(account, d.Private)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	return d.Private, pub, d.Index, nil
+}
+
+func ordinalSuffix(n int) string {
+	switch {
+	case n%100 >= 11 && n%100 <= 13:
+		return "th"
+	case n%10 == 1:
+		return "st"
+	case n%10 == 2:
+		return "nd"
+	case n%10 == 3:
+		return "rd"
+	default:
+		return "th"
+	}
 }
 
 func newIdentityUpdateCmd() *cobra.Command {
@@ -194,12 +317,17 @@ func newIdentityUpdateCmd() *cobra.Command {
 	var rotateController bool
 	var serviceSpecs []string
 	var clearServices bool
+	var vaultFlag string
+	var noVault bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Update identity (rotate keys, set discovery services)",
-		Long: "Sign an identity update operation. Use --rotate-auth or --rotate-controller to generate new keys " +
-			"and rotate out the old ones. Use --service (repeatable) to REPLACE the discovery services set, or " +
+		Long: "Sign an identity update operation. Use --rotate-auth or --rotate-controller to mint new keys " +
+			"and rotate out the old ones. Rotation is sticky: replacements are drawn from the vault that " +
+			"minted this identity's CURRENT keys, so an identity stays on one seed unless --vault says " +
+			"otherwise. An identity whose keys came from no vault rotates into standalone keys. " +
+			"Use --service (repeatable) to REPLACE the discovery services set, or " +
 			"--clear-services to empty it. Services left unspecified are carried forward unchanged.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			settingServices := len(serviceSpecs) > 0 || clearServices
@@ -259,24 +387,48 @@ func newIdentityUpdateCmd() *cobra.Command {
 				servicesChanged = true
 			}
 
+			// Rotation is sticky to the seed that minted the identity's current
+			// keys. That is the whole of the rule: a vault is a mint-time choice,
+			// and an identity that already came out of one keeps coming out of it,
+			// so its recovery phrase does not silently stop covering it. Note that
+			// default-vault is NOT consulted here — it would quietly move an
+			// identity onto a different seed the moment someone changed a default.
+			rotationVault, rotationSource, err := resolveRotationVault(chain, vaultFlag, noVault)
+			if err != nil {
+				return err
+			}
+			minter, err := newKeyMinter(rotationVault, boolCount(rotateAuth, rotateController))
+			if err != nil {
+				return err
+			}
+			var mintedRecords []vault.MintedKey
+
 			if rotateAuth {
 				newAuthKeyID := protocol.GenerateKeyID()
-				_, newAuthPub, err := keys.GenerateKey(chain.DID + "#" + newAuthKeyID)
+				_, newAuthPub, index, err := minter.next(chain.DID + "#" + newAuthKeyID)
 				if err != nil {
-					return fmt.Errorf("generate new auth key: %w", err)
+					return fmt.Errorf("mint new auth key: %w", err)
 				}
-				newAuthKeys = []protocol.MultikeyPublicKey{protocol.NewMultikeyPublicKey(newAuthKeyID, newAuthPub)}
+				newAuthMK := protocol.NewMultikeyPublicKey(newAuthKeyID, newAuthPub)
+				newAuthKeys = []protocol.MultikeyPublicKey{newAuthMK}
 				rotatedKeys = append(rotatedKeys, "auth:"+newAuthKeyID)
+				mintedRecords = append(mintedRecords, vault.MintedKey{
+					Index: index, DID: chain.DID, KeyID: newAuthKeyID, Role: "auth", PublicKey: newAuthMK.PublicKeyMultibase,
+				})
 			}
 
 			if rotateController {
 				newControllerKeyID := protocol.GenerateKeyID()
-				_, newControllerPub, err := keys.GenerateKey(chain.DID + "#" + newControllerKeyID)
+				_, newControllerPub, index, err := minter.next(chain.DID + "#" + newControllerKeyID)
 				if err != nil {
-					return fmt.Errorf("generate new controller key: %w", err)
+					return fmt.Errorf("mint new controller key: %w", err)
 				}
-				newControllerKeys = []protocol.MultikeyPublicKey{protocol.NewMultikeyPublicKey(newControllerKeyID, newControllerPub)}
+				newControllerMK := protocol.NewMultikeyPublicKey(newControllerKeyID, newControllerPub)
+				newControllerKeys = []protocol.MultikeyPublicKey{newControllerMK}
 				rotatedKeys = append(rotatedKeys, "controller:"+newControllerKeyID)
+				mintedRecords = append(mintedRecords, vault.MintedKey{
+					Index: index, DID: chain.DID, KeyID: newControllerKeyID, Role: "controller", PublicKey: newControllerMK.PublicKeyMultibase,
+				})
 			}
 
 			jwsToken, opCID, err := protocol.SignIdentityUpdateWithServices(
@@ -314,6 +466,12 @@ func newIdentityUpdateCmd() *cobra.Command {
 				}
 			}
 
+			if rotationVault != "" && len(mintedRecords) > 0 {
+				if err := getVaults().Record(rotationVault, mintedRecords...); err != nil {
+					return fmt.Errorf("record vault provenance: %w", err)
+				}
+			}
+
 			if jsonFlag {
 				out := map[string]any{
 					"did":          chain.DID,
@@ -323,6 +481,17 @@ func newIdentityUpdateCmd() *cobra.Command {
 				if servicesChanged {
 					out["services"] = len(services)
 				}
+				if rotationVault != "" && len(mintedRecords) > 0 {
+					indices := make([]uint32, 0, len(mintedRecords))
+					for _, r := range mintedRecords {
+						indices = append(indices, r.Index)
+					}
+					out["vault"] = map[string]any{
+						"name":        rotationVault,
+						"fingerprint": minter.fingerprint,
+						"indices":     indices,
+					}
+				}
 				outputJSON(out)
 			} else {
 				fmt.Printf("Identity updated:\n")
@@ -331,6 +500,12 @@ func newIdentityUpdateCmd() *cobra.Command {
 				fmt.Printf("  Operations:     %d\n", len(chain.Log)+1)
 				for _, rk := range rotatedKeys {
 					fmt.Printf("  New key:        %s\n", rk)
+				}
+				if rotationVault != "" && len(mintedRecords) > 0 {
+					for _, r := range mintedRecords {
+						fmt.Printf("  Vault:          %s [%s] at %s (%s) — via %s\n",
+							rotationVault, minter.fingerprint, vault.DerivationPath(r.Index), r.Role, rotationSource)
+					}
 				}
 				if servicesChanged {
 					fmt.Printf("  Services:       %d (replaced)\n", len(services))
@@ -343,11 +518,47 @@ func newIdentityUpdateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&peerName, "peer", "", "Push to this peer immediately")
-	cmd.Flags().BoolVar(&rotateAuth, "rotate-auth", false, "Generate new auth key and rotate out old one(s)")
-	cmd.Flags().BoolVar(&rotateController, "rotate-controller", false, "Generate new controller key and rotate out old one(s)")
+	cmd.Flags().BoolVar(&rotateAuth, "rotate-auth", false, "Mint a new auth key and rotate out old one(s)")
+	cmd.Flags().BoolVar(&rotateController, "rotate-controller", false, "Mint a new controller key and rotate out old one(s)")
 	cmd.Flags().StringArrayVar(&serviceSpecs, "service", nil, "Discovery service entry as key=value list (repeatable); REPLACES the entire services set")
 	cmd.Flags().BoolVar(&clearServices, "clear-services", false, "Empty the discovery services set")
+	cmd.Flags().StringVar(&vaultFlag, "vault", "", "Mint the replacements from this vault instead of the one that minted the current keys")
+	cmd.Flags().BoolVar(&noVault, "no-vault", false, "Rotate into standalone keys, from no vault")
 	return cmd
+}
+
+// resolveRotationVault answers which seed a rotation's replacement keys come
+// from. --vault wins, --no-vault forces standalone, and otherwise the answer is
+// whichever vault minted a key this identity currently publishes.
+//
+// Controller keys are checked before auth keys because the controller set is the
+// authority over the identity; if the two disagree (one seed's controller key,
+// another's auth key), the controller's seed is the identity's home.
+func resolveRotationVault(chain *relay.StoredIdentityChain, vaultFlag string, noVault bool) (name, source string, err error) {
+	if noVault || vaultFlag != "" {
+		return resolveVault(vaultFlag, noVault)
+	}
+	var keyIDs []string
+	for _, k := range chain.State.ControllerKeys {
+		keyIDs = append(keyIDs, k.ID)
+	}
+	for _, k := range chain.State.AuthKeys {
+		keyIDs = append(keyIDs, k.ID)
+	}
+	if meta, ok := getVaults().FindMintingVault(chain.DID, keyIDs); ok {
+		return meta.Name, "the vault that minted this identity's keys", nil
+	}
+	return "", "", nil
+}
+
+func boolCount(bs ...bool) int {
+	n := 0
+	for _, b := range bs {
+		if b {
+			n++
+		}
+	}
+	return n
 }
 
 // roleKeyCap is the maximum number of keys a single role set may hold. The

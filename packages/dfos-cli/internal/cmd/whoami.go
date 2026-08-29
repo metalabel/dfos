@@ -12,8 +12,10 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/metalabel/dfos/packages/dfos-cli/internal/vault"
 	protocol "github.com/metalabel/dfos/packages/dfos-protocol-go"
 	"github.com/spf13/cobra"
 )
@@ -25,6 +27,18 @@ type whoamiSigningKey struct {
 	PublishedAll int    `json:"publishedAuthKeys"`
 	Held         int    `json:"heldAuthKeys"`
 	Reason       string `json:"reason,omitempty"`
+	// Vault is where this key came from, when a vault minted it. It is local
+	// provenance: an answer to "which phrase, at which index, covers this key",
+	// not an input to anything. Signing resolved this key without asking a vault
+	// a thing, and none of this is ever published.
+	Vault *whoamiVault `json:"vault,omitempty"`
+}
+
+type whoamiVault struct {
+	Name        string `json:"name"`
+	Fingerprint string `json:"fingerprint"`
+	Index       uint32 `json:"index"`
+	Path        string `json:"derivationPath"`
 }
 
 type whoamiCredential struct {
@@ -94,6 +108,17 @@ func newWhoamiCmd() *cobra.Command {
 						}
 					}
 					result.SigningKey.Available = result.SigningKey.KID != ""
+					if result.SigningKey.Available {
+						keyID := result.SigningKey.KID[strings.Index(result.SigningKey.KID, "#")+1:]
+						if meta, rec, ok := getVaults().FindMinted(chain.DID, keyID); ok {
+							result.SigningKey.Vault = &whoamiVault{
+								Name:        meta.Name,
+								Fingerprint: meta.Fingerprint,
+								Index:       rec.Index,
+								Path:        vault.DerivationPath(rec.Index),
+							}
+						}
+					}
 					if !result.SigningKey.Available {
 						result.SigningKey.Reason = fmt.Sprintf("this device holds none of the %d published auth key(s)",
 							result.SigningKey.PublishedAll)
@@ -162,6 +187,11 @@ func printWhoami(r whoamiResult, ctxErr, credErr error) {
 		fmt.Printf("Signing key: %s (%s)\n", r.SigningKey.KID, r.SigningKey.Backend)
 		if r.SigningKey.PublishedAll > 1 {
 			fmt.Printf("  Held:      %d of %d published auth key(s)\n", r.SigningKey.Held, r.SigningKey.PublishedAll)
+		}
+		if v := r.SigningKey.Vault; v != nil {
+			fmt.Printf("  Vault:     %s [%s] at %s\n", v.Name, v.Fingerprint, v.Path)
+		} else {
+			fmt.Printf("  Vault:     none — this key was generated standalone\n")
 		}
 	} else if r.Identity == nil {
 		fmt.Printf("Signing key: none — no identity selected (backend %s)\n", r.SigningKey.Backend)

@@ -43,7 +43,10 @@ cd packages/dfos-cli && make build
 ## Quickstart
 
 ```bash
-# create your identity
+# create the seed your keys derive from, and write the phrase down
+dfos vault create personal
+
+# create your identity — its keys are minted from that vault
 dfos identity create --name myname
 
 # publish your first post — every signing command names the identity it acts as
@@ -78,7 +81,7 @@ The CLI is designed for both human operators and AI agents. Every command that p
 
 ```
 ┌──────────────────────────┐
-│     OS Keychain          │  Ed25519 private key seeds
+│     OS Keychain          │  Ed25519 private key seeds + vault mnemonics
 │  (never on disk)         │  macOS Keychain / Linux secret-service / Windows Credential Manager
 └──────────┬───────────────┘
            │
@@ -86,6 +89,7 @@ The CLI is designed for both human operators and AI agents. Every command that p
 │   ~/.dfos/               │  Configuration + local relay
 │   ├── config.toml        │  Peers, identities, static defaults
 │   ├── credentials/       │  Login credentials, one file per subject DID
+│   ├── vaults/            │  Vault metadata — fingerprint, counter, minted keys
 │   └── relay.db           │  SQLite — chains, operations, blobs
 └──────────┬───────────────┘
            │
@@ -98,11 +102,14 @@ The CLI is designed for both human operators and AI agents. Every command that p
 
 The CLI embeds a full relay locally — the same SQLite-backed relay that runs as a network service via `dfos serve`. Every CLI command reads and writes to this local relay. Running `dfos serve` exposes it over HTTP with peer sync, gossip, and read-through.
 
-The CLI has three layers of state:
+The CLI has four layers of state:
 
-- **OS Keychain**: private key material only. One entry per Ed25519 key, keyed by `dfos` service + `did:dfos:xxx#key_yyy` account. Hex-encoded 32-byte seed. Never written to disk.
+- **OS Keychain**: secret material only. One entry per Ed25519 key, keyed by `dfos` service + `did:dfos:xxx#key_yyy` account, holding a hex-encoded 32-byte seed; one entry per vault, keyed by `vault:<name>`, holding its mnemonic. Never written to disk.
 - **Local relay** (`~/.dfos/relay.db`): SQLite database storing identity chains, content chains, operations, countersignatures, and blobs. Both chains you own (have private keys for) and chains you've fetched from relays.
+- **Vault metadata** (`~/.dfos/vaults/`): one `0600` TOML per vault — its fingerprint, its derivation counter, and which index minted which published key. No secret; the mnemonic is in the keychain.
 - **Config** (`~/.dfos/config.toml`): peer URLs, identity names, and the static defaults the resolution stack falls back to. Nothing writes it as a side effect of another command.
+
+`DFOS_CONFIG` names the config file, and everything on disk sits beside it: point it at another directory and the relay database, the credentials, the vaults, and the file-backed keys all move with it.
 
 ---
 
@@ -151,6 +158,7 @@ no identity to sign with — name one:
 ```toml
 default_identity = "alice"
 default_peer = "local"
+default_vault = "personal"
 
 [relays.local]
 url = "http://localhost:4444"
@@ -171,8 +179,11 @@ credential_ttl = "24h"
 ```bash
 dfos config set default-identity alice     # or a bare did:dfos: identifier
 dfos config set default-peer prod          # the peer must already be registered
+dfos config set default-vault personal     # the vault must already exist
 dfos config get default-identity
 ```
+
+`default-vault` is the same tier for minting that `default-identity` is for signing: the fallback when no `--vault` names one. `dfos config set` is the only thing that writes it, with the one exception that creating the first vault on a machine with none sets it.
 
 An `active_context` line left over from an earlier configuration is inert: resolution never reads it, and `dfos whoami` reports it as such.
 
@@ -187,13 +198,83 @@ $ dfos whoami
 Identity:    alice (did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar)
   Via:       config default-identity
 Signing key: did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar#key_8fh3n2 (keychain)
+  Vault:     personal [1c9b28e4] at m/1684434803'/1'
 Credentials: 1 stored in /Users/you/.dfos/credentials
   * did:dfos:zhkrrzrd7z623ha8tt7dt699de8r3ar  aud did:dfos:cv7n8vkvr64cctf3294h9k4eanhff8z  valid
 Peer:        prod (https://relay.dfos.com)
   Via:       config default-peer
 ```
 
-Each section has an explicit negative state rather than an omission: `none selected` for an unresolved identity or peer, `not held` with the reason when this device holds none of the identity's published auth keys, `none stored` for an empty credential store. `--json` emits the whole report as one document. whoami reads only — it signs nothing and writes nothing.
+Each section has an explicit negative state rather than an omission: `none selected` for an unresolved identity or peer, `not held` with the reason when this device holds none of the identity's published auth keys, `none stored` for an empty credential store, and `none — this key was generated standalone` for a signing key no vault minted. The `Vault:` line is local provenance: it says which phrase and which index cover the key being signed with, and it played no part in resolving that key. `--json` emits the whole report as one document. whoami reads only — it signs nothing and writes nothing.
+
+---
+
+## Vaults
+
+A vault is a named seed, and that is the whole of it: a name, a BIP-39 mnemonic, a fingerprint, and a derivation counter. It binds no identity, scopes no configuration, and holds no peers. Its one job is to be the source new key material is derived from, at the one moment that matters — mint time.
+
+```bash
+dfos vault create personal          # generate a 24-word phrase, print it once
+dfos vault import recovered         # adopt a phrase you already hold (read from stdin)
+dfos vault list                     # names, fingerprints, counters, the default marker
+dfos vault show personal            # one vault and every key it minted
+```
+
+### What a vault touches, and what it does not
+
+Choosing a seed is a **mint-time** concern. `identity create` and `identity update --rotate-*` derive their new keys from a vault; nothing else consults one. Signing in particular does not: it resolves the identity, intersects that identity's published auth keys with the keys this device holds, and signs with what it finds. A vault fingerprint recorded next to a minted key is provenance for the operator, never an input to resolution.
+
+Nothing about a vault reaches the wire. The word "vault", the mnemonic, the seed, and the fingerprint stay on the machine that holds them — no operation payload, no signed message, and no request to a peer carries any of them. An identity minted from a vault publishes public keys and nothing else, exactly like one that was not. Two identities minted from one seed are unlinkable to everyone but their holder, and that property holds only because none of this local state leaks upward.
+
+### Selecting a vault
+
+New key material comes from `--vault <name>`, and otherwise from `default-vault` in config. There is no environment tier and no "last used": a seed is the most consequential choice the CLI makes, so it is made explicitly or from a value written into config on purpose.
+
+```bash
+dfos identity create --name alice                  # mints from default-vault
+dfos identity create --name alias --vault burner   # mints from a named vault
+dfos identity create --name detached --no-vault    # standalone keys, from no seed
+```
+
+With no vault selected — none exists, no default is set, or `--no-vault` is passed — keys are generated straight into the keystore and exist only there. Those keys are legal and complete; what they lack is a phrase that covers them.
+
+`dfos config set default-vault <name>` writes the default, and it is the only thing that writes it, with one exception: creating the **first** vault on a machine that has none sets it, because there is nothing there to displace.
+
+Rotation is sticky. `identity update --rotate-auth` and `--rotate-controller` draw their replacements from the vault that minted the identity's **current** keys, so an identity stays on one seed and its phrase does not silently stop covering it. `default-vault` is not consulted — that would move an identity onto a different seed the moment someone changed a default. `--vault` overrides the stickiness; an identity whose keys came from no vault rotates into standalone keys.
+
+### Derivation
+
+Keys derive by SLIP-0010 for ed25519, hardened at every level, from the BIP-39 seed of the vault's mnemonic (PBKDF2-HMAC-SHA512, 2048 iterations, no passphrase). The path is:
+
+```
+m / 1684434803' / <index>'
+```
+
+`1684434803` is `0x64666f73` — the four ASCII bytes of `dfos`. The index is a single flat counter per vault, dense and ascending from 0, incremented once per key regardless of role: an `identity create` consumes two consecutive indices (controller, then auth) and a rotation consumes one per rotated key. An index consumed by an operation that then failed is burned rather than reused, because a gap costs nothing and handing one index to two identities costs everything.
+
+This path is fixed. A vault's mnemonic and this path are together the full description of every key the vault minted, so any SLIP-0010 ed25519 implementation derives the same keys from the same words.
+
+### Storage
+
+| Piece                                        | Location                                  | Protection                          |
+| -------------------------------------------- | ----------------------------------------- | ----------------------------------- |
+| Mnemonic                                     | OS keychain, account `vault:<name>`       | whatever the host keychain provides |
+| Mnemonic (keychain unavailable)              | `~/.dfos/vaults/<name>.seed`, mode `0600` | filesystem permissions              |
+| Metadata (fingerprint, counter, minted keys) | `~/.dfos/vaults/<name>.toml`, mode `0600` | filesystem permissions              |
+
+The mnemonic follows the same probe-and-fall-back rule as the keystore: the OS keychain when one is reachable, a `0600` file when it is not, and the file store directly under `DFOS_NO_KEYCHAIN`. The metadata file holds no secret — a fingerprint and a list of public key ids — and is readable by hand.
+
+The fingerprint is the first four bytes of SHA-256 over the seed's SLIP-0010 master key, hex-encoded. It identifies the **seed**, so two vaults holding the same phrase under different names fingerprint identically.
+
+### Seeing the phrase
+
+`vault create` prints the mnemonic once, to **stderr**, fenced and numbered. It never goes to stdout and never into `--json` output, so a redirected or piped invocation does not write a seed into a file by accident.
+
+`vault show` does not print it. `vault show <name> --reveal-mnemonic` does, behind a typed confirmation — the vault's own name, not a `y` — because the phrase then lives in that terminal's scrollback and in anything recording the session. Under `--json`, the reveal flag is the only thing that puts a `mnemonic` field in the document.
+
+`vault import` reads the phrase from stdin — a prompt at a terminal, a piped line otherwise. It is never an argument: argv lands in shell history and is readable in the process list. The words are checked against the BIP-39 English wordlist and their checksum before anything is stored.
+
+A vault's phrase is the only copy of its seed. There is no second copy on any machine, with any relay, or at Metalabel.
 
 ---
 
@@ -203,12 +284,14 @@ Each section has an explicit negative state rather than an omission: `none selec
 
 ### Backends
 
-The CLI stores each Ed25519 seed under an account key of the form `did:dfos:xxx#key_yyy`. There are two storage backends:
+The CLI stores each Ed25519 seed under an account key of the form `did:dfos:xxx#key_yyy`. This is true whether the key was derived from a vault or generated standalone: the keystore is the one place private key material lives, so every signing path is identical regardless of where the key came from. There are two storage backends:
 
 | Backend     | Location                | When used                                          |
 | ----------- | ----------------------- | -------------------------------------------------- |
 | OS keychain | system keychain/keyring | default, when an OS keychain is reachable          |
 | File store  | `~/.dfos/keys/`         | keychain probe fails, or `DFOS_NO_KEYCHAIN` is set |
+
+The file store lives inside the config directory, so `DFOS_CONFIG` relocates the keys along with `config.toml`, `relay.db`, and the vaults — pointing it at a scratch directory isolates all of this machine's dfos state, not part of it.
 
 On startup the CLI probes the OS keychain with a test write/read/delete cycle (the gh CLI pattern). If the probe succeeds, keys go in the keychain. If it fails — which is the common case on headless Linux, containers, and CI where no keychain daemon is running — the CLI prints a warning to stderr and **falls back to the file store**. Setting `DFOS_NO_KEYCHAIN` to any non-empty value skips the probe and uses the file store directly.
 
@@ -246,6 +329,7 @@ The CLI discovers which keys belong to which identity by querying the identity's
 - With the keychain backend, seeds are held by the OS keychain; with the file store backend, seeds are written **unencrypted** to `~/.dfos/keys/` at mode `0600` (see threat model above)
 - `identity keys` shows key presence/absence, never key material
 - After key rotation, old keys remain in the active backend (needed for historical chain re-verification) but are no longer used for new operations
+- A vault-minted key is stored exactly like a generated one; what the vault adds is a written-down phrase that, with the documented derivation path, describes the same key
 
 ---
 

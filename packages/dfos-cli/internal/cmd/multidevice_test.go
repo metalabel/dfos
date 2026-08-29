@@ -37,7 +37,11 @@ func setupDevices(t *testing.T) (storeA, storeB *keystore.MemoryStore, lr *local
 
 	// isolate config.Save — DFOS_CONFIG is the config.toml file path, and
 	// ConfigDir() is its parent, so point it at a file inside a temp dir.
+	// Vaults live under the same directory, so this isolates them too; the
+	// keychain is skipped outright so no test can reach the developer's own.
 	t.Setenv("DFOS_CONFIG", t.TempDir()+"/config.toml")
+	t.Setenv("DFOS_NO_KEYCHAIN", "1")
+	vaultStore = nil
 
 	storeA = keystore.NewMemoryStore()
 	storeB = keystore.NewMemoryStore()
@@ -71,6 +75,7 @@ func setupDevices(t *testing.T) (storeA, storeB *keystore.MemoryStore, lr *local
 		localRelayInstance = nil
 		cfg = nil
 		keys = nil
+		vaultStore = nil
 		identityFlag, asFlag, relayFlag = prevID, prevAs, prevRelay
 		peerFlag, ctxFlag = prevPeer, prevCtx
 		jsonFlag, quietFlag, signerAnnounced = prevJSON, prevQuiet, prevAnnounced
